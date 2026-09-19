@@ -53,6 +53,15 @@ defmodule Raxol.MCP.Client do
   `GenServer.call` timed out left its entry behind forever. An HTTP transport
   has no exit status at all.
 
+  ## Recovery
+
+  A connect that fails, and a handshake that fails, both land the client in
+  `:closed` carrying the reason and schedule a retry whose delay starts at
+  `:reconnect_ms` (1 s) and doubles to one minute. Nothing here stops the
+  process: `start_link/1` links the CALLER, so a `{:stop, _}` would take the
+  agent down over one bad spec. A session the origin rejects mid-flight fails
+  that one request and is re-established in place, on the same handle.
+
   ## Tool Namespacing
 
   Tools are namespaced with the server name prefix: `mcp__<server>__<tool>`.
@@ -97,7 +106,9 @@ defmodule Raxol.MCP.Client do
     queue_limit: 8,
     declared_concurrency: nil,
     call_timeout: 30_000,
-    init_timeout: 60_000
+    init_timeout: 60_000,
+    reconnect_ms: 1_000,
+    backoff_ms: nil
   ]
 
   @type t :: %__MODULE__{
@@ -125,11 +136,15 @@ defmodule Raxol.MCP.Client do
           queue_limit: non_neg_integer(),
           declared_concurrency: Transport.concurrency() | nil,
           call_timeout: pos_integer(),
-          init_timeout: pos_integer()
+          init_timeout: pos_integer(),
+          reconnect_ms: pos_integer(),
+          backoff_ms: pos_integer() | nil
         }
 
   @default_call_timeout 30_000
   @default_init_timeout 60_000
+  @default_reconnect_ms 1_000
+  @max_reconnect_ms 60_000
   @default_queue_limit 8
   @default_pool_size 8
 
@@ -223,7 +238,8 @@ defmodule Raxol.MCP.Client do
       declared_concurrency: declared_concurrency(config),
       queue_limit: Map.get(config, :queue_limit, @default_queue_limit),
       call_timeout: Map.get(config, :call_timeout, @default_call_timeout),
-      init_timeout: Map.get(config, :init_timeout, @default_init_timeout)
+      init_timeout: Map.get(config, :init_timeout, @default_init_timeout),
+      reconnect_ms: reconnect_ms(config)
     }
 
     {:ok, state, {:continue, :connect}}
@@ -241,17 +257,13 @@ defmodule Raxol.MCP.Client do
   # answers `{:connect_failed, reason}`. That is a non-`:not_ready` error, which
   # `poll_tools/5` fails open on immediately instead of burning its whole
   # readiness budget (`mcp_bundle.ex:213-227`).
+  #
+  # `:closed` is not final, and that half was missing. Nothing retried, and a
+  # live process is one a supervisor will not restart, so a DNS blip or a
+  # breaker that happened to be open at boot removed that upstream until the VM
+  # was restarted. The client retries itself instead.
   @impl GenServer
-  def handle_continue(:connect, state) do
-    case state.transport.connect(state.config) do
-      {:ok, handle} ->
-        {:noreply, start_session(state, handle)}
-
-      {:error, reason} ->
-        Logger.warning("[MCP.Client] Server #{state.name} could not connect: #{inspect(reason)}")
-        {:noreply, %{state | status: :closed, config: nil, error: reason}}
-    end
-  end
+  def handle_continue(:connect, state), do: {:noreply, connect(state)}
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(:list_tools, _from, %{status: :ready, tools: tools} = state)
@@ -298,6 +310,9 @@ defmodule Raxol.MCP.Client do
     {:noreply, expire(state, id)}
   end
 
+  # Scheduled only by `schedule_reconnect/2`, so only from `:closed`.
+  def handle_manager_info(:reconnect, state), do: {:noreply, connect(state)}
+
   # Nothing to decode with. A client whose connect failed still receives
   # whatever its own connect attempt left in the mailbox, and handing `nil` to
   # a transport would crash a process that is already reporting its failure
@@ -334,8 +349,9 @@ defmodule Raxol.MCP.Client do
   # A modern-era origin is specified not to answer `initialize`, so offering one
   # would leave this client in `:initializing` forever.
   #
-  # `:config` is dropped once the transport holds what it needs, because it
-  # carries resolved credentials and a GenServer crash report prints state.
+  # `:config` is RETAINED, because a retry has to have something to dial. It
+  # carries resolved credentials and a GenServer crash report prints state, so
+  # the `Inspect` implementation at the bottom of this file redacts it.
   defp start_session(state, handle) do
     {kind, session} = state.transport.session(handle)
     concurrency = state.declared_concurrency || session.concurrency
@@ -344,7 +360,6 @@ defmodule Raxol.MCP.Client do
     state = %{
       state
       | handle: handle,
-        config: nil,
         version: session.version,
         concurrency: concurrency,
         in_flight_cap: cap
@@ -356,14 +371,65 @@ defmodule Raxol.MCP.Client do
     end
   end
 
-  defp send_initialize(state) do
+  defp connect(state) do
+    case state.transport.connect(state.config) do
+      {:ok, handle} ->
+        start_session(%{state | error: nil, backoff_ms: nil}, handle)
+
+      {:error, reason} ->
+        Logger.warning("[MCP.Client] Server #{state.name} could not connect: #{inspect(reason)}")
+
+        schedule_reconnect(state, reason)
+    end
+  end
+
+  # The delay doubles to a cap, so a permanently-down origin costs one connect
+  # a minute rather than a hot loop. Until one succeeds the client answers
+  # every call `{:connect_failed, reason}`, which is what it answered before.
+  defp schedule_reconnect(state, reason) do
+    delay = next_backoff(state)
+
+    Logger.debug(fn -> "[MCP.Client] Server #{state.name} retrying connect in #{delay} ms" end)
+
+    Process.send_after(self(), :reconnect, delay)
+    %{state | status: :closed, handle: nil, error: reason, backoff_ms: delay}
+  end
+
+  defp next_backoff(%{backoff_ms: nil} = state), do: state.reconnect_ms
+  defp next_backoff(%{backoff_ms: delay}), do: min(delay * 2, @max_reconnect_ms)
+
+  # A zero or negative delay would turn the retry into a hot loop, which is
+  # the failure the backoff exists to prevent, so it is not a configuration.
+  defp reconnect_ms(config) do
+    case Map.get(config, :reconnect_ms, @default_reconnect_ms) do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _invalid -> @default_reconnect_ms
+    end
+  end
+
+  defp send_initialize(state), do: issue_initialize(%{state | status: :initializing})
+
+  # A RE-handshake keeps the session `:ready`. The initialize occupies an
+  # in-flight slot, and a legacy origin's cap is one, so a request arriving
+  # during it queues and then dispatches on the new session -- where
+  # `:initializing` would refuse it outright as `{:not_ready, :initializing}`.
+  defp rehandshake(%{handle: nil} = state), do: state
+
+  defp rehandshake(state) do
+    case state.transport.session(state.handle) do
+      {:handshake, _profile} -> issue_initialize(state)
+      {:ready, _profile} -> state
+    end
+  end
+
+  defp issue_initialize(state) do
     params = %{
       protocolVersion: state.version,
       capabilities: %{},
       clientInfo: %{name: "raxol", version: RaxolMcp.version()}
     }
 
-    {state, call} = new_call(%{state | status: :initializing}, :init, "initialize", params, [])
+    {state, call} = new_call(state, :init, "initialize", params, [])
     dispatch(state, call)
   end
 
@@ -569,9 +635,19 @@ defmodule Raxol.MCP.Client do
       {:ok, _entry} ->
         {entry, state} = pop_pending(state, id)
         reply(entry.from, {:error, reason})
-        drain(state)
+        state |> recover(reason) |> drain()
     end
   end
+
+  # A rejected session is the one failure the transport cannot repair alone: it
+  # can forget the dead session id, but minting a new one is a handshake and
+  # the handshake lives here. Before this the client failed the request like
+  # any other and left the handle session-less, so every later request went out
+  # with no `mcp-session-id`; the origin answered 404 to all of them, and a 404
+  # is neither a failover reason nor a breaker failure. The client was wedged
+  # for the lifetime of the node.
+  defp recover(state, :session_rejected), do: rehandshake(state)
+  defp recover(state, _reason), do: state
 
   defp expire(state, id) do
     case Map.fetch(state.pending, id) do
@@ -644,10 +720,11 @@ defmodule Raxol.MCP.Client do
 
     if state.handle, do: state.transport.close(state.handle)
 
+    # Recovered the same way a failed connect is: a handshake that timed out is
+    # transient as often as not, and staying closed forever was the same hole.
     state
-    |> Map.put(:handle, nil)
     |> flush_queue({:error, {:initialization_failed, reason}})
-    |> then(&%{&1 | status: :closed, error: {:initialization_failed, reason}})
+    |> schedule_reconnect({:initialization_failed, reason})
   end
 
   # The per-connection revision. A peer that answers with a revision this
@@ -712,5 +789,26 @@ defmodule Raxol.MCP.Client do
 
   defp via(name, registry) do
     {:via, Registry, {registry, {:mcp_client, name}}}
+  end
+end
+
+defimpl Inspect, for: Raxol.MCP.Client do
+  import Inspect.Algebra
+
+  # The spec is retained so a failed connect can be retried, and a GenServer
+  # crash report prints its state. A spec carries resolved credentials -- a
+  # bearer header, a subprocess environment -- so none of it renders.
+  def inspect(client, opts) do
+    redacted = %{
+      name: client.name,
+      status: client.status,
+      version: client.version,
+      error: client.error,
+      pending: map_size(client.pending),
+      queued: client.queued,
+      config: if(client.config, do: "[redacted]")
+    }
+
+    concat(["#Raxol.MCP.Client<", to_doc(redacted, opts), ">"])
   end
 end

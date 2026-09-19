@@ -228,7 +228,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       refute Enum.any?(methods(observations()), &(&1 == "server/discover"))
     end
 
-    test "a rejected session re-probes the era once and fails the request" do
+    test "a rejected session re-probes once, re-handshakes, and works again" do
       tables = tables()
       state = ReferenceServer.state(:legacy, [])
       client = start_client!(spec(ReferenceServer.seam(Legacy, state), tables))
@@ -244,12 +244,40 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       # The re-probe runs in a monitored task, so its observation is awaited
       # rather than drained: draining would race the task.
       assert_receive {:reference_server, %{method: "server/discover"}}, 1_000
-      _first_reprobe = observations()
 
-      # Exactly once: the client now holds no session and no round trip has
-      # succeeded since, so the next 404 is a 404 and not another re-probe.
-      assert {:error, {:http, 404}} = Client.call_tool(client, "echo", %{})
-      refute Enum.any?(methods(observations()), &(&1 == "server/discover"))
+      # The rejection also re-handshakes, and that half was missing: the
+      # transport can forget a dead session id but only the client can mint a
+      # new one. Without it every later request went out with no
+      # `mcp-session-id`, the origin answered 404 to all of them, and
+      # `{:http, 404}` is neither a failover reason nor a breaker failure --
+      # the client was wedged for the lifetime of the node.
+      assert {:ok, _result} = Client.call_tool(client, "echo", %{})
+      assert "initialize" in methods(observations())
+    end
+
+    test "a client whose first connect failed serves a later request" do
+      # The connect ran once. On failure the client sat in `:closed` forever,
+      # and a live process is one its supervisor will not restart, so a DNS
+      # blip or an inherited open breaker at boot removed that upstream until
+      # the VM was restarted.
+      tables = tables()
+      inner = modern()
+      refusals = :counters.new(1, [])
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "server/discover" and :counters.get(refusals, 1) == 0 do
+          :counters.add(refusals, 1, 1)
+          {:error, {:transport, :econnrefused}}
+        else
+          inner.(vetted, request, opts)
+        end
+      end
+
+      client = start_client!(spec(seam, tables, reconnect_ms: 10))
+
+      await_ready(client)
+      assert :counters.get(refusals, 1) == 1
+      assert {:ok, [%{name: "echo"}]} = Client.list_tools(client)
     end
 
     test "a successful round trip restores the ability to re-probe" do

@@ -37,6 +37,7 @@ defmodule Raxol.MCP.ToolDef do
           | :invalid_callback_arity
           | :missing_input_schema
           | :invalid_input_schema
+          | :invalid_fault_classifier
 
   @doc """
   Builds a validated tool definition.
@@ -47,7 +48,13 @@ defmodule Raxol.MCP.ToolDef do
   - `:description` -- string, non-empty.
   - `:callback` -- 1-arity function (receives the arguments map).
   - `:input_schema` (or `:inputSchema`) -- map with at minimum `:type` /
-    `"type"` set to `"object"`.
+    `"object"`.
+
+  Optional:
+
+  - `:fault?` -- 1-arity function taking the `reason` of an `{:error, reason}`
+    this tool returns and answering whether it is an availability fault. See
+    `Raxol.MCP.Registry`'s "Which errors open a circuit".
 
   Returns `{:ok, def}` (a map matching `Raxol.MCP.Registry.tool_def()`)
   or `{:error, [validation_error()]}`.
@@ -59,6 +66,7 @@ defmodule Raxol.MCP.ToolDef do
     callback = Keyword.get(opts, :callback)
     schema = Keyword.get(opts, :input_schema) || Keyword.get(opts, :inputSchema)
     annotations = Keyword.get(opts, :annotations)
+    fault = Keyword.get(opts, :fault?)
 
     errors =
       []
@@ -66,6 +74,7 @@ defmodule Raxol.MCP.ToolDef do
       |> validate_description(description)
       |> validate_callback(callback)
       |> validate_schema(schema)
+      |> validate_fault(fault)
       |> Enum.reverse()
 
     case errors do
@@ -77,7 +86,7 @@ defmodule Raxol.MCP.ToolDef do
           callback: callback
         }
 
-        {:ok, put_annotations(tool, annotations)}
+        {:ok, tool |> put_annotations(annotations) |> put_fault(fault)}
 
       errors ->
         {:error, errors}
@@ -109,20 +118,13 @@ defmodule Raxol.MCP.ToolDef do
   """
   @spec validate(map()) :: :ok | {:error, [validation_error()]}
   def validate(%{} = map) do
-    name = Map.get(map, :name) || Map.get(map, "name")
-    description = Map.get(map, :description) || Map.get(map, "description")
-    callback = Map.get(map, :callback)
-
-    schema =
-      Map.get(map, :inputSchema) || Map.get(map, "inputSchema") ||
-        Map.get(map, :input_schema)
-
     errors =
       []
-      |> validate_name(name)
-      |> validate_description(description)
-      |> validate_callback(callback)
-      |> validate_schema(schema)
+      |> validate_name(either(map, :name))
+      |> validate_description(either(map, :description))
+      |> validate_callback(Map.get(map, :callback))
+      |> validate_schema(schema_of(map))
+      |> validate_fault(Map.get(map, :fault?))
 
     case errors do
       [] -> :ok
@@ -135,6 +137,12 @@ defmodule Raxol.MCP.ToolDef do
   # ---------------------------------------------------------------------------
   # Internals
   # ---------------------------------------------------------------------------
+
+  # A hand-built tool map may be keyed either way: atoms from Elixir callers,
+  # strings from a decoded manifest.
+  defp either(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+
+  defp schema_of(map), do: either(map, :inputSchema) || Map.get(map, :input_schema)
 
   defp validate_name(errors, name) when is_binary(name) and byte_size(name) > 0,
     do: errors
@@ -152,6 +160,12 @@ defmodule Raxol.MCP.ToolDef do
     do: [:invalid_callback_arity | errors]
 
   defp validate_callback(errors, _), do: [:missing_callback | errors]
+
+  # Absent is legal: the registry's default is to count every error as a
+  # fault. A value that is not a 1-arity function is a typo, not a policy.
+  defp validate_fault(errors, nil), do: errors
+  defp validate_fault(errors, fun) when is_function(fun, 1), do: errors
+  defp validate_fault(errors, _), do: [:invalid_fault_classifier | errors]
 
   defp validate_schema(errors, %{} = schema) do
     type = Map.get(schema, :type) || Map.get(schema, "type")
@@ -199,4 +213,7 @@ defmodule Raxol.MCP.ToolDef do
 
   defp put_annotations(tool, nil), do: tool
   defp put_annotations(tool, annotations), do: Map.put(tool, :annotations, annotations)
+
+  defp put_fault(tool, nil), do: tool
+  defp put_fault(tool, fault), do: Map.put(tool, :fault?, fault)
 end
