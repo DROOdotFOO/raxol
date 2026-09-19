@@ -330,4 +330,51 @@ defmodule Raxol.REPL.SandboxTest do
       assert :ok = Sandbox.check("Definitely.Not.Loaded.run()", :standard)
     end
   end
+
+  # Every clause in the checker decides safety from a module NAME. `import`,
+  # `alias`, `require` and `use` decide which module a name reaches, so they
+  # sit underneath the check rather than inside it: at `:strict`, the level
+  # documented as safe for anonymous exposure, `import System; cmd("id", [])`
+  # and `alias :os, as: Enum; Enum.cmd(~c"id")` both returned `:ok` and both
+  # executed as the node's OS user (#1045).
+  describe "name rebinding cannot reach a denied module" do
+    test "import lets a denied call through as a bare local call" do
+      for level <- [:standard, :strict] do
+        assert {:error, violations} =
+                 Sandbox.check(~s|import System; cmd("id", [])|, level)
+
+        assert Enum.any?(violations, &String.contains?(&1, "import"))
+      end
+    end
+
+    test "alias rebinds a whitelisted name onto a denied module" do
+      for level <- [:standard, :strict] do
+        assert {:error, violations} =
+                 Sandbox.check(~s|alias :os, as: Enum; Enum.cmd(~c"id")|, level)
+
+        assert Enum.any?(violations, &String.contains?(&1, "alias"))
+      end
+    end
+
+    test "require and use are refused for the same reason" do
+      for code <- ["require Logger", "use GenServer"],
+          level <- [:standard, :strict] do
+        assert {:error, _violations} = Sandbox.check(code, level)
+      end
+    end
+
+    test "none still allows them -- it is the local-terminal level" do
+      assert :ok = Sandbox.check(~s|import System; cmd("id", [])|, :none)
+    end
+
+    test "code that names its modules in full is unaffected" do
+      for code <- [
+            "Enum.map([1, 2], & &1 * 2)",
+            ~s|String.upcase("hi")|,
+            "x = 1; x + 2"
+          ] do
+        assert :ok = Sandbox.check(code, :strict)
+      end
+    end
+  end
 end

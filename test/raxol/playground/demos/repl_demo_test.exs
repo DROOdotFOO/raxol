@@ -1,7 +1,17 @@
 defmodule Raxol.Playground.Demos.ReplDemoTest do
-  use ExUnit.Case, async: true
+  # `evaluation_enabled?/0` reads process-global state (an env var and the
+  # application environment), so these cannot run concurrently with a test
+  # that sets it the other way.
+  use ExUnit.Case, async: false
 
   alias Raxol.Playground.Demos.ReplDemo
+
+  setup do
+    # Evaluation is off by default (#1045); the tests below exercise the
+    # enabled deployment.
+    Application.put_env(:raxol, :repl_exposed, true)
+    on_exit(fn -> Application.delete_env(:raxol, :repl_exposed) end)
+  end
 
   defp key(char) when is_binary(char) do
     %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: char}}
@@ -12,7 +22,10 @@ defmodule Raxol.Playground.Demos.ReplDemoTest do
   end
 
   defp ctrl_key(char) do
-    %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: char, ctrl: true}}
+    %Raxol.Core.Events.Event{
+      type: :key,
+      data: %{key: :char, char: char, ctrl: true}
+    }
   end
 
   defp type_string(model, string) do
@@ -149,6 +162,51 @@ defmodule Raxol.Playground.Demos.ReplDemoTest do
       model = ReplDemo.init(nil)
       view = ReplDemo.view(model)
       assert is_map(view) or is_list(view)
+    end
+  end
+
+  # The playground's HTTP gallery serves every catalog entry at `/demos/:demo`
+  # with no auth, and this demo evaluates submitted Elixir with the node's full
+  # authority. Whether a deployment allows that is a deployment decision, and
+  # the default is no (#1045).
+  describe "evaluation gate" do
+    setup do
+      Application.delete_env(:raxol, :repl_exposed)
+      System.delete_env("RAXOL_REPL_EXPOSED")
+      :ok
+    end
+
+    test "is off when no deployment turned it on" do
+      refute ReplDemo.evaluation_enabled?()
+    end
+
+    test "Enter reports the flag instead of evaluating" do
+      model = ReplDemo.init(nil) |> type_string("x = 41 + 1")
+      {model, _} = ReplDemo.update(key(:enter), model)
+
+      output_text =
+        Enum.map_join(model.output, "\n", fn {text, _kind} -> text end)
+
+      assert output_text =~ "disabled"
+      assert output_text =~ "RAXOL_REPL_EXPOSED"
+      refute output_text =~ "42"
+      # Nothing ran, so nothing bound.
+      assert model.evaluator.bindings == []
+    end
+
+    test "the banner says so before anything is typed" do
+      model = ReplDemo.init(nil)
+      assert Enum.any?(model.output, fn {text, _} -> text =~ "disabled" end)
+    end
+
+    test "either the env var or the application key turns it on" do
+      System.put_env("RAXOL_REPL_EXPOSED", "true")
+      assert ReplDemo.evaluation_enabled?()
+      System.delete_env("RAXOL_REPL_EXPOSED")
+
+      Application.put_env(:raxol, :repl_exposed, true)
+      assert ReplDemo.evaluation_enabled?()
+      Application.delete_env(:raxol, :repl_exposed)
     end
   end
 end
