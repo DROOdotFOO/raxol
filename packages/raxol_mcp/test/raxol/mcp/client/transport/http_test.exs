@@ -244,6 +244,14 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       assert [{{:origin, @origin}, :closed, _failures, _opened_at}] = :ets.tab2list(breakers)
     end
 
+    test "a table key that is not one of the three is refused, not substituted" do
+      # The singular is the plausible typo, and answering it with the
+      # process-wide table is the failure this whole pair of tests is about.
+      config = legacy() |> spec(%{breaker: CircuitBreaker.new(:breakers)}) |> Map.new()
+
+      assert_raise ArgumentError, ~r/:breaker/, fn -> Transport.Http.connect(config) end
+    end
+
     test "a verdict past its TTL is re-probed, and one inside it is not" do
       tables = tables()
       seam = legacy()

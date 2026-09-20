@@ -137,6 +137,10 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     @bound_keys [:max_bytes, :deadline_ms, :chunk_timeout_ms, :connect_timeout_ms]
 
+    # A spec may name any subset of these; the rest come from the process-wide
+    # tables. Nothing else is a table.
+    @table_keys [:eras, :breakers, :reservations]
+
     @impl Raxol.MCP.Client.Transport
     def connect(config) do
       # Dialling is the side effect, so the provenance gate is asked HERE and
@@ -756,16 +760,31 @@ if Code.ensure_loaded?(Mint.HTTP) do
     # is what `Raxol.Web3.Backend.Tron` asks for -- so a partial map fills its
     # gaps from the process-wide tables instead of being ignored. Ignoring it
     # sent the transport's breaker verdicts to a table nobody read.
+    #
+    # A key that is not one of the three is a typo for one that is, and
+    # answering that with the process-wide table would be the same silent
+    # substitution in a smaller disguise, so it raises at connect instead.
     defp tables(config) do
       case Map.get(config, :tables) do
         %{eras: _eras, breakers: _breakers, reservations: _reservations} = tables ->
           tables
 
         %{} = partial ->
-          Map.merge(Tables.ensure_started(), Map.take(partial, [:eras, :breakers, :reservations]))
+          Map.merge(Tables.ensure_started(), vetted_tables(partial))
 
         _absent ->
           Tables.ensure_started()
+      end
+    end
+
+    defp vetted_tables(partial) do
+      case Map.keys(partial) -- @table_keys do
+        [] ->
+          partial
+
+        unknown ->
+          raise ArgumentError,
+                ":tables has no #{inspect(unknown)}, only #{inspect(@table_keys)}"
       end
     end
 
