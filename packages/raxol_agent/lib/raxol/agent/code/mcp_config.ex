@@ -17,6 +17,17 @@ defmodule Raxol.Agent.Code.McpConfig do
   and returns the declared servers. The surface uses this to discover and
   list configured servers (`/mcp`).
 
+  An entry the loader cannot run is not dropped on the floor: `load_all/1`
+  returns it in a `skipped` list with a reason, so `/mcp` and `/inspect`
+  show it instead of leaving the operator to wonder why a server named in
+  the file never appears. One reason per fault, so the rendered text sends
+  the operator to the line of the config that is actually wrong:
+  `:unsupported_transport` is an entry naming a `url` (or a `type` of
+  `http`/`sse`), which the Claude Code format allows but this bridge
+  cannot start (only stdio commands); `:no_command` is an object with no
+  `command` key; `:command_not_string` is a `command` that is not a
+  string; `:not_an_object` is an entry that is not an object at all.
+
   ## Scope
 
   This loads the config; `Raxol.Agent.Code.McpLoader` bridges the servers
@@ -32,14 +43,25 @@ defmodule Raxol.Agent.Code.McpConfig do
           env: map()
         }
 
-  @doc """
-  Load MCP servers from `<dir>/.mcp.json`.
+  @type skip_reason ::
+          :unsupported_transport
+          | :no_command
+          | :command_not_string
+          | :not_an_object
+  @type skipped :: {String.t(), skip_reason()}
 
-  Returns `{:ok, servers}` (possibly empty), `:none` when there is no file,
-  or `{:error, reason}` for an unreadable/invalid file.
+  @doc """
+  Load MCP servers from `<dir>/.mcp.json`, keeping the entries that cannot
+  be bridged.
+
+  Returns `{:ok, servers, skipped}`, `:none` when there is no file, or
+  `{:error, reason}` for an unreadable/invalid file. `skipped` pairs each
+  refused entry's name with a `t:skip_reason/0`, sorted by name, so a
+  surface can show it next to the servers that loaded.
   """
-  @spec load(String.t()) :: {:ok, [server()]} | :none | {:error, term()}
-  def load(dir) do
+  @spec load_all(String.t()) ::
+          {:ok, [server()], [skipped()]} | :none | {:error, term()}
+  def load_all(dir) do
     path = Path.join(dir, ".mcp.json")
 
     case File.read(path) do
@@ -58,8 +80,8 @@ defmodule Raxol.Agent.Code.McpConfig do
     case Jason.decode(binary) do
       {:ok, json} when is_map(json) ->
         case Map.get(json, "mcpServers") do
-          servers when is_map(servers) -> {:ok, parse(servers)}
-          _absent -> {:ok, []}
+          servers when is_map(servers) -> parse(servers)
+          _absent -> {:ok, [], []}
         end
 
       {:ok, _other} ->
@@ -71,10 +93,12 @@ defmodule Raxol.Agent.Code.McpConfig do
   end
 
   defp parse(servers) do
-    servers
-    |> Enum.map(&parse_server/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.sort_by(& &1.name)
+    {parsed, skipped} =
+      servers
+      |> Enum.map(&parse_server/1)
+      |> Enum.split_with(&is_map/1)
+
+    {:ok, Enum.sort_by(parsed, & &1.name), Enum.sort_by(skipped, &elem(&1, 0))}
   end
 
   defp parse_server({name, %{"command" => command} = spec})
@@ -87,7 +111,18 @@ defmodule Raxol.Agent.Code.McpConfig do
     }
   end
 
-  defp parse_server(_other), do: nil
+  # A `url` entry (Claude Code's `http`/`sse` servers) is a valid config the
+  # bridge cannot start; every other command-less shape is a broken entry.
+  defp parse_server({name, %{} = spec}) when is_binary(name) do
+    {name, skip_reason(spec)}
+  end
+
+  defp parse_server({name, _other}), do: {name, :not_an_object}
+
+  defp skip_reason(%{"url" => url}) when is_binary(url), do: :unsupported_transport
+  defp skip_reason(%{"type" => type}) when type in ["http", "sse"], do: :unsupported_transport
+  defp skip_reason(%{"command" => _not_a_string}), do: :command_not_string
+  defp skip_reason(_spec), do: :no_command
 
   defp string_list(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
   defp string_list(_other), do: []

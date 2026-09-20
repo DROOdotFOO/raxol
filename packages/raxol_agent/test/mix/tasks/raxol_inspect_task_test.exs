@@ -61,6 +61,20 @@ defmodule Mix.Tasks.Raxol.InspectTaskTest do
     assert out =~ "sessions:"
   end
 
+  test "an ESC in a .mcp.json key cannot forge a row on the terminal", ctx do
+    File.write!(
+      Path.join(ctx.cwd, ".mcp.json"),
+      Jason.encode!(%{
+        "mcpServers" => %{"ev\e[2Jil" => %{"command" => "npx"}}
+      })
+    )
+
+    out = capture_io(fn -> Mix.Tasks.Raxol.Inspect.run([]) end)
+
+    refute out =~ "\e"
+    assert out =~ "ev[2Jil → npx"
+  end
+
   test "--json prints one decodable JSON object", ctx do
     out = capture_io(fn -> Mix.Tasks.Raxol.Inspect.run(["--json"]) end)
 
