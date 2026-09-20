@@ -36,10 +36,16 @@ config :raxol, Raxol.Repo,
 # LiteLLM) doesn't take the whole app down with :eaddrinuse. The probe
 # binds the same interface with no SO_REUSEADDR as the endpoint itself
 # binds -- a truthful free/busy read, not a false positive.
-# Loopback by default, because Tidewave's `project_eval` evaluates Elixir in
-# the running node. `RAXOL_DEV_BIND_IP` still lets Docker, WSL, and VM users
-# expose the health endpoint, but Tidewave is not mounted when that address is
-# non-loopback.
+# Loopback by default, because Tidewave's `project_eval` evaluates arbitrary
+# Elixir in the running node and this endpoint has no authentication at all.
+# Setting `RAXOL_DEV_BIND_IP` to a non-loopback address therefore exposes
+# `/health` and nothing else: Tidewave is not mounted, and `/tidewave/mcp`
+# 404s. Tidewave's own `allow_remote_access: true` would be the other way to
+# reach MCP from Docker, WSL, or a VM, but that turns a route-level 403 into
+# the only thing standing between the local network and remote code
+# execution in the dev node; not mounting the plug removes the route
+# instead. Reach MCP from a container by forwarding a port to the loopback
+# bind rather than by widening it.
 dev_bind_ip =
   case System.get_env("RAXOL_DEV_BIND_IP", "127.0.0.1")
        |> String.to_charlist()
@@ -56,6 +62,9 @@ dev_bind_loopback? =
   case dev_bind_ip do
     {127, _, _, _} -> true
     {0, 0, 0, 0, 0, 0, 0, 1} -> true
+    # ::ffff:127.0.0.1 -- an IPv4-mapped loopback bind is still loopback, and
+    # Tidewave's own `is_local?/1` accepts it.
+    {0, 0, 0, 0, 0, 65535, 32512, _} -> true
     _ -> false
   end
 
@@ -87,12 +96,13 @@ resolve_dev_port = fn ->
   end
 end
 
-# This root endpoint exists only for local development and Tidewave. It pins
-# Cowboy because the root project declares `plug_cowboy`; the separately
-# deployed playground endpoint under `web/` pins and limits its own listener.
-# Tidewave is mounted only for loopback binds, so widening
-# `RAXOL_DEV_BIND_IP` exposes the health endpoint without exposing
-# `project_eval`.
+# This root endpoint exists only for local development and Tidewave. Phoenix
+# 1.8 defaults `adapter:` to Cowboy2Adapter purely for backwards
+# compatibility and carries a TODO to flip that default to Bandit in 2.0
+# (`Phoenix.Endpoint.Supervisor`); no lock in this repo contains `bandit`, so
+# naming Cowboy keeps a Phoenix major bump from silently repointing this
+# endpoint at an absent dependency. The separately deployed playground
+# endpoint under `web/` pins and limits its own listener.
 config :raxol, Raxol.Endpoint,
   adapter: Phoenix.Endpoint.Cowboy2Adapter,
   http: [

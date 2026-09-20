@@ -11,11 +11,25 @@ defmodule Raxol.Endpoint do
 
   # Tidewave must be placed before request body parsing. The dev configuration
   # disables this mount entirely when RAXOL_DEV_BIND_IP is non-loopback.
-  if Application.compile_env(:raxol, Raxol.Endpoint, [])[:tidewave_project_eval] &&
+  #
+  # Read the single key by path, not the whole endpoint config: the full
+  # keyword list carries `port:`, which config/dev.exs probes for a free
+  # socket on every config evaluation. Recording that value would mark this
+  # module stale whenever the probe landed elsewhere, and make a
+  # `--no-compile` boot raise a compile-env mismatch.
+  if Application.compile_env(
+       :raxol,
+       [Raxol.Endpoint, :tidewave_project_eval],
+       false
+     ) &&
        Code.ensure_loaded?(Tidewave) do
     plug Tidewave
   end
 
+  # Only bounds requests that fall through Tidewave, which is every route
+  # this endpoint itself serves: `/health` and the 404 handler. Tidewave's
+  # router parses its own `/mcp` (Plug.Parsers default, 8 MB) and `/upload`
+  # (200 MB) before this plug is reached.
   plug Plug.Parsers,
     parsers: [:json],
     pass: ["*/*"],
