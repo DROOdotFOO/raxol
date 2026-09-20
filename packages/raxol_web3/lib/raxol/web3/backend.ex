@@ -469,6 +469,31 @@ defmodule Raxol.Web3.Backend do
   @spec required() :: keyword(non_neg_integer())
   def required, do: @required
 
+  # -- composing the request ---------------------------------------------------
+
+  @doc """
+  Add one header to a `Raxol.Web3.HTTP` option list, keeping the operator's.
+
+  Every backend documents `:http_opts` as forwarded unchanged, and
+  `Keyword.put(opts, :headers, [mine])` does not forward it: it discards the
+  list. That is not theoretical. An RBAC-gated Splice Scan instance answered
+  403 on the two party-scoped reads and 200 on everything else, because the
+  GET reads left the operator's headers alone and the POST reads replaced
+  them, and the same shape sits on every path that has a content type or a
+  credential to add.
+
+  The backend's own header wins on a name collision, and there is exactly one
+  of it afterwards: two `content-type` headers is a request some servers
+  refuse outright. Comparison is on the name as written, because every name
+  this package composes is lower-case and so is every name it replaces.
+  """
+  @spec put_header(keyword(), {String.t(), String.t()}) :: keyword()
+  def put_header(opts, {name, _value} = header) do
+    Keyword.update(opts, :headers, [header], fn headers ->
+      [header | Enum.reject(headers, fn {supplied, _value} -> supplied == name end)]
+    end)
+  end
+
   # -- reading an upstream row -------------------------------------------------
 
   @doc """

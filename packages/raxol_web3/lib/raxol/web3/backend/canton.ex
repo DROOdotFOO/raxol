@@ -515,7 +515,7 @@ defmodule Raxol.Web3.Backend.Canton do
     opts =
       state
       |> scan_opts(path, request, class)
-      |> with_content_type()
+      |> Backend.put_header(@content_type)
 
     state
     |> url(path, %{})
@@ -577,35 +577,12 @@ defmodule Raxol.Web3.Backend.Canton do
   # The credential is composed into a header here, per call, and nowhere else.
   # It is not in the cache options, because `raw_request/2` is not cached, and
   # it is not in any error term, because none of them carries a header.
+  # `Backend.put_header/2` rather than a `Keyword.put`, so an operator's own
+  # headers reach an RBAC-gated instance instead of being dropped.
   defp ccscan_opts(state) do
-    credential = {state.ccscan_auth_header, "Bearer " <> state.ccscan_key}
-
     state.http_opts
     |> Keyword.put_new(:rate_limit, @rate_limit)
-    |> Keyword.update(
-      :headers,
-      [credential],
-      &[credential | drop_header(&1, state.ccscan_auth_header)]
-    )
-  end
-
-  # The operator's own `:headers` survive. `:http_opts` is documented as
-  # forwarded unchanged, and replacing the list dropped every header an
-  # RBAC-gated Scan instance needs, so the GET reads kept them and these two
-  # POST reads answered 403 for party-scoped reads alone.
-  defp with_content_type(opts) do
-    Keyword.update(
-      opts,
-      :headers,
-      [@content_type],
-      &[@content_type | drop_header(&1, "content-type")]
-    )
-  end
-
-  # An operator who set the same header keeps one of it rather than two: a
-  # duplicate `content-type` is a request some servers refuse outright.
-  defp drop_header(headers, name) do
-    Enum.reject(headers, fn {header, _value} -> header == name end)
+    |> Backend.put_header({state.ccscan_auth_header, "Bearer " <> state.ccscan_key})
   end
 
   # The one recognised body shape this backend declares. `account_required` was

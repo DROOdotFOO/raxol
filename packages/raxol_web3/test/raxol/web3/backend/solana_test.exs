@@ -111,7 +111,7 @@ defmodule Raxol.Web3.Backend.SolanaTest do
   defp catalog, do: %{"portal_list_networks" => fixture("sqd_list_networks.sse")}
 
   defp handle(source, responses, opts) do
-    http_opts = [{:exchange, serving(responses)} | unmetered()]
+    http_opts = [{:exchange, serving(responses)} | unmetered()] ++ Keyword.take(opts, [:headers])
 
     {:ok, handle} =
       Solana.new(
@@ -428,6 +428,22 @@ defmodule Raxol.Web3.Backend.SolanaTest do
                Backend.call(handle, :get_transaction, ["0xdeadbeef" <> String.duplicate("0", 60)])
 
       assert [] == requested_tools()
+    end
+
+    test "an operator's own header survives the RPC POST, beside the content type" do
+      # `:http_opts` is documented as forwarded unchanged, and this path
+      # replaced the header list rather than merging into it, so a deployment
+      # pointing this handle at its own gated node lost the credential it
+      # carries in a header. `Raxol.Web3.Backend.CantonTest` asserts the same
+      # property on the other backend that composes a header.
+      operator = {"x-node-authorization", "operator-value"}
+      handle = rpc(%{"getTransaction" => fixture("rpc_transaction.json")}, headers: [operator])
+
+      assert {:ok, _transaction} = Backend.call(handle, :get_transaction, [@signature])
+
+      assert [request] = drain()
+      assert operator in request.headers
+      assert {"content-type", "application/json"} in request.headers
     end
   end
 

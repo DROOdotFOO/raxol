@@ -380,6 +380,8 @@ defmodule Raxol.Web3.Backend.Solana do
   # A guess. SQD publishes no rate limit anywhere, and the survey records that.
   @sqd_rate_limit [capacity: 10, refill_per_second: 2.0]
 
+  @content_type {"content-type", "application/json"}
+
   # A judgement: the upstream maximum is 1000 and one page should stay small.
   @page_limit 100
 
@@ -757,7 +759,11 @@ defmodule Raxol.Web3.Backend.Solana do
     opts =
       state.http_opts
       |> Keyword.put_new(:rate_limit, @rpc_rate_limit)
-      |> Keyword.put(:headers, [{"content-type", "application/json"}])
+      # `Backend.put_header/2` rather than a `Keyword.put`: `:http_opts` is
+      # documented as forwarded unchanged, and a deployment pointing this
+      # handle at its own gated node carries the credential for it in a
+      # header there.
+      |> Backend.put_header(@content_type)
       |> cache_opts(state, {method, params}, class)
       |> classified()
 
