@@ -90,6 +90,19 @@ defmodule Raxol.Agent.Code.McpConfigTest do
     refute Map.has_key?(broken, :url)
   end
 
+  test "a named entry whose body is not an object is kept for refusal too", %{dir: dir} do
+    # The shape a hand-edited file grows -- `"intel": "https://..."` instead
+    # of an object. Dropping it here put a name in the file that appeared
+    # nowhere in `/mcp`.
+    write(dir, Jason.encode!(%{"mcpServers" => %{"intel" => "https://x/mcp", "10" => 7}}))
+
+    assert {:ok, [ten, intel]} = McpConfig.load(dir)
+    assert intel.name == "intel"
+    assert ten.name == "10"
+    refute Map.has_key?(intel, :command)
+    refute Map.has_key?(intel, :url)
+  end
+
   test "only positive integer prices are prices, and any price means metered", %{dir: dir} do
     write(
       dir,

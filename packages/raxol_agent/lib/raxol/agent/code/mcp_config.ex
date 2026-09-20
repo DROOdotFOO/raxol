@@ -60,6 +60,15 @@ defmodule Raxol.Agent.Code.McpConfig do
       against that fixed set (never `String.to_atom/1` on file input).
       Absent means the transport picks its own per-era default.
 
+  An entry the bridge cannot run is not dropped on the floor. A `url` entry
+  (Claude Code's `http`/`sse` server) is no longer refused at all -- ADR-0037
+  bridges it -- and every other malformed shape is still parsed and returned,
+  so `Raxol.Agent.McpBundle` refuses it by name with a reason
+  (`:no_command_or_url`, `:command_and_url`, or an allowlist refusal) and
+  `/mcp` shows `✗ name (failed: reason)` instead of leaving the operator to
+  wonder why a server named in the file never appears. Only a non-string name
+  is dropped here: it names nothing to refuse.
+
   ## Scope
 
   This loads the config; `Raxol.Agent.Code.McpLoader` bridges the servers into
@@ -94,8 +103,14 @@ defmodule Raxol.Agent.Code.McpConfig do
   @doc """
   Load MCP servers from `<dir>/.mcp.json`, tagged `source: :workspace`.
 
-  Returns `{:ok, servers}` (possibly empty), `:none` when there is no file,
-  or `{:error, reason}` for an unreadable/invalid file.
+  @doc \"""
+  Load MCP servers from `<dir>/.mcp.json`, keeping the entries that cannot
+  be bridged.
+
+  Returns `{:ok, servers, skipped}`, `:none` when there is no file, or
+  `{:error, reason}` for an unreadable/invalid file. `skipped` pairs each
+  refused entry's name with a `t:skip_reason/0`, sorted by name, so a
+  surface can show it next to the servers that loaded.
   """
   @spec load(String.t()) :: {:ok, [server()]} | :none | {:error, term()}
   def load(dir) do
@@ -166,13 +181,20 @@ defmodule Raxol.Agent.Code.McpConfig do
     |> Enum.sort_by(& &1.name)
   end
 
-  # A named object is a server declaration even when its keys are wrong: the
-  # refusal is worth more to the operator than the silence. Only a non-string
-  # name or a non-object body names nothing at all.
+  # A named entry is a server declaration even when its body is wrong: the
+  # refusal is worth more to the operator than the silence. A named non-object
+  # -- `"intel": "https://..."`, the shape a hand-edited file grows -- carries
+  # neither `:command` nor `:url`, so `Raxol.Agent.McpBundle` refuses it as
+  # `:no_command_or_url` and `/mcp` names it. Only a non-string name names
+  # nothing at all.
   defp parse_server({name, spec}, source) when is_binary(name) and is_map(spec) do
     %{name: name, source: source}
     |> put_stdio(spec)
     |> put_remote(spec)
+  end
+
+  defp parse_server({name, _other}, source) when is_binary(name) do
+    %{name: name, source: source}
   end
 
   defp parse_server(_other, _source), do: nil

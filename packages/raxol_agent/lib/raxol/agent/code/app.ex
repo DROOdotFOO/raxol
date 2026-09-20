@@ -687,7 +687,7 @@ defmodule Raxol.Agent.Code.App do
           actions: model.actions ++ result.tools
       }
 
-      {put_status(model, mcp_loaded_line(result)), []}
+      {put_status(model, mcp_tools_line(result)), []}
     else
       {model, []}
     end
@@ -736,13 +736,13 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+  defp mcp_tools_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
 
-  defp mcp_loaded_line(%{tools: tools, connected: connected, failed: []}) do
+  defp mcp_tools_line(%{tools: tools, connected: connected, failed: []}) do
     "mcp: #{length(tools)} tools from #{length(connected)} servers"
   end
 
-  defp mcp_loaded_line(%{tools: tools, failed: failed}) do
+  defp mcp_tools_line(%{tools: tools, failed: failed}) do
     names =
       Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
 

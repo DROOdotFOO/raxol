@@ -314,10 +314,36 @@ defmodule Raxol.Agent.Code.App.Commands do
 
   defp mcp_text(%{mcp_servers: servers} = model) do
     Enum.map_join(servers, "\n", fn s ->
-      "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
-        "#{s.command} #{Enum.join(s.args, " ")}"
+      "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  #{target_text(s)}" <>
+        failure_text(model.mcp_status, s.name)
     end)
   end
+
+  # What the entry declares, which is what the operator has to fix when it
+  # does not start: a command line, a URL, or neither. An entry naming
+  # neither is kept by the loader precisely so it appears here rather than
+  # vanishing between the file and this list; `Raxol.Agent.McpBundle` then
+  # supplies the reason through `failure_text/2`.
+  defp target_text(%{command: command} = server) when is_binary(command) do
+    String.trim("#{command} #{Enum.join(Map.get(server, :args, []), " ")}")
+  end
+
+  defp target_text(%{url: url}) when is_binary(url), do: url
+  defp target_text(_server), do: "(no command or url)"
+
+  # `✗` is a server that started and failed, so it carries its reason here
+  # rather than being a mark with no explanation. An entry the bridge refused
+  # before starting -- no command, no url, a host the operator never
+  # allowlisted -- comes back through the same `failed` list, so one
+  # vocabulary covers both.
+  defp failure_text(%{failed: failed}, name) do
+    case Enum.find(failed, fn {n, _reason} -> to_string(n) == name end) do
+      nil -> ""
+      {_n, reason} -> "  (failed: #{inspect(reason, limit: 3)})"
+    end
+  end
+
+  defp failure_text(_status, _name), do: ""
 
   defp server_mark(:loading, _name), do: "…"
   defp server_mark(nil, _name), do: "○"

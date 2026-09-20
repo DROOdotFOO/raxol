@@ -276,11 +276,21 @@ defmodule Raxol.Agent.Code.Inspection do
             keys -> "  (env: #{Enum.join(keys, ", ")})"
           end
 
-        "  #{s.name} → #{Enum.join([s.command | s.args], " ")}#{env}"
+        "  #{s.name} → #{server_target(s)}#{env}"
       end)
 
     ["mcp servers (.mcp.json):" | rows]
   end
+
+  # A remote server has no command, and an entry the loader kept for refusal
+  # has neither. Naming what it declares is what makes this snapshot usable
+  # for "why did that server not start".
+  defp server_target(%{command: command} = server) when is_binary(command) do
+    Enum.join([command | server.args], " ")
+  end
+
+  defp server_target(%{url: url}) when is_binary(url), do: url
+  defp server_target(_server), do: "(no command or url)"
 
   defp render_skills(%{provider: nil}),
     do: "skills: disabled (no :skills_provider configured)"

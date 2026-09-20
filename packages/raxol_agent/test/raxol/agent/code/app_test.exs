@@ -2390,6 +2390,80 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "✗ ghost"
     end
 
+    test "a url mcp server reaches the bridge and names its endpoint in /mcp" do
+      # It used to be reported as skipped: `http`/`sse` was a transport this
+      # bridge could not start. ADR-0037 bridges it, so the entry is a server
+      # like any other and the row names the endpoint rather than a command.
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{
+                "remote" => %{"type" => "http", "url" => "https://mcp.example/"},
+                "fs" => %{"command" => "npx", "args" => []}
+              }
+            })
+        })
+
+      test_pid = self()
+
+      model =
+        new_model(
+          cwd: dir,
+          mcp_loader: fn servers, ref, app ->
+            send(test_pid, {:mcp_spawned, servers, ref, app})
+          end
+        )
+
+      assert model.status_line =~ "2 MCP servers"
+
+      {model, []} = App.update(key("x"), model)
+      assert_received {:mcp_spawned, spawned, ref, _app}
+      assert Enum.map(spawned, & &1.name) == ["fs", "remote"]
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__ls",
+        invoke: fn _params, _context -> :ok end
+      }
+
+      result = %{tools: [tool], connected: [:fs], failed: [], janitor: nil}
+
+      {model, []} =
+        App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      assert model.status_line == "mcp: 1 tools from 1 servers"
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "● fs  →  npx"
+      assert model.notice =~ "remote  →  https://mcp.example/"
+    end
+
+    test "an entry naming neither a command nor a url is listed, then refused by name" do
+      # The entry is parsed rather than dropped precisely so it appears here:
+      # a name in `.mcp.json` that shows up nowhere was the bug.
+      dir =
+        config_cwd(%{
+          ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}})
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      assert [%{name: "broken"}] = model.mcp_servers
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "broken  →  (no command or url)"
+      refute model.notice =~ "no MCP servers configured"
+
+      # And the bundle's refusal carries the reason onto the same row.
+      model = %{
+        model
+        | mcp_status: %{connected: [], failed: [{:broken, :no_command_or_url}], tools: 0}
+      }
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "✗ broken  →  (no command or url)  (failed: :no_command_or_url)"
+    end
+
     test "the tool authorizer gates a sensitive Dynamic MCP tool" do
       auth = App.tool_authorizer(self())
 

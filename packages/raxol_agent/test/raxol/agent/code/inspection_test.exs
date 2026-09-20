@@ -73,6 +73,23 @@ defmodule Raxol.Agent.Code.InspectionTest do
     refute Inspection.render(snapshot) =~ "sekret-value"
   end
 
+  test "mcp entries the bridge cannot run are still named in the snapshot", ctx do
+    File.write!(
+      Path.join(ctx.cwd, ".mcp.json"),
+      ~s({"mcpServers": {"remote": {"type": "http", "url": "https://mcp.example/"},
+          "broken": {"args": []}, "fs": {"command": "npx"}}})
+    )
+
+    snapshot = Inspection.gather(ctx.cwd, sessions_dir: ctx.sessions_dir)
+
+    assert Enum.map(snapshot.mcp_servers.servers, & &1.name) == ["broken", "fs", "remote"]
+
+    text = Inspection.render(snapshot)
+    assert text =~ "  fs → npx"
+    assert text =~ "  remote → https://mcp.example/"
+    assert text =~ "  broken → (no command or url)"
+  end
+
   test "render covers every section in one readable block", ctx do
     File.write!(
       Path.join(ctx.cwd, ".raxol/config.json"),
