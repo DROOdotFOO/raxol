@@ -57,14 +57,22 @@
 # names and creates the directory in the same step, and it is 0700 from the
 # moment it exists, so there is no window in which the path is known and
 # unowned. Explicit paths get the same guarantee: one `mkdir -m 700` both
-# refuses an existing entry (including a symlink) and claims the new directory
-# atomically.
+# refuses an existing entry (including a symlink) and claims the new
+# directory atomically. A relative explicit path is resolved against the
+# CALLER's working directory before that mkdir, because everything after it
+# runs from the repository root. That single mkdir carries no `-p`, so the
+# PARENT of an explicit path must already exist: a bare `git worktree add`
+# would create leading directories, and this script will not.
 #
 # `sync <path>` transactionally re-seeds an EXISTING worktree of this
 # repository -- after a dependency bump in this checkout, say. It refuses the
 # source checkout and anything that is not a worktree of this repo. Concurrent
-# seeds of one target are serialized, and every old cache remains available
-# for rollback until every replacement has landed.
+# seeds of one target are serialized by a lock directory in that worktree's
+# private git directory, and every old cache remains available for rollback
+# until every replacement has landed. A lock whose recorded owner process is
+# gone (an uninterruptible kill leaves one behind, because no EXIT trap runs)
+# is reclaimed automatically; one held by a live process is refused, naming
+# the lock path so it can be cleared by hand.
 #
 # TRUST BOUNDARY. The seed is a COPY of whatever is in the source checkout,
 # not a fetch: the seeded worktree never runs `deps.get`, so Hex's checksum
@@ -83,10 +91,11 @@
 # `_build`/`deps` replacement destinations in the target are REFUSED rather
 # than followed.
 #
-# `add` refuses the seed on manifest drift (exit 3): the worktree does not
-# exist yet, so `--fresh` is a correct and cheap answer. `sync` warns and
-# proceeds, because carrying NEW manifests and their caches from this checkout
-# into an existing worktree is what `sync` is for.
+# `add` refuses the seed on manifest drift (exit 3) and unwinds the worktree
+# it had to check out in order to read those manifests, so `--fresh` is a
+# cheap answer: it is the same cold `git worktree add`, one refusal later.
+# `sync` warns and proceeds, because carrying NEW manifests and their caches
+# from this checkout into an existing worktree is what `sync` is for.
 #
 # So this is a single-user workstation helper. It is NOT for a shared box or
 # a CI runner, where every worktree must fetch and verify its own
@@ -262,7 +271,14 @@ release_seed_lock() {
 
 seed_exit_handler() {
   local status="$1" cleanup_status=0
-  trap - EXIT HUP INT TERM
+  trap - EXIT
+
+  # Ignore, rather than clear, the handled signals: the invariant documented
+  # above is that a handled signal rolls back partial changes, and a cleared
+  # trap lets a second Ctrl-C kill this shell mid-`rm -rf`/`mv` with the
+  # default disposition -- staging directories left behind, no residue
+  # report, and a caller that removes the worktree with them inside.
+  trap '' HUP INT TERM
 
   if ((SEED_TXN_ACTIVE == 1)); then
     rollback_seed_transaction || cleanup_status=1
@@ -275,25 +291,83 @@ seed_exit_handler() {
   exit "$status"
 }
 
+# An interrupted seed also leaves `.raxol-seed.*` staging directories behind,
+# and those untracked directories are enough to make `worktree.sh rm` refuse.
+# Each can hold the ONLY surviving copy of a cache under its `previous`
+# entry, so name them instead of deleting them.
+report_stale_seed_staging() {
+  local target="$1" entry stale=()
+
+  shopt -s nullglob
+  for entry in "$target"/.raxol-seed.* "$target"/packages/*/.raxol-seed.*; do
+    stale+=("$entry")
+  done
+  shopt -u nullglob
+
+  ((${#stale[@]} == 0)) ||
+    printf 'worktree: leftover cache staging directories in %s (%s); each may hold the only copy of a cache under its "previous" entry, and they make "rm" refuse while they exist\n' \
+      "$target" "${stale[*]}" >&2
+}
+
+# The EXIT trap cannot run on SIGKILL, an OOM kill, or a power loss, so an
+# interrupted seed can leave the lock directory behind with no process
+# holding it. The recorded owner pid is what makes that recoverable: a pid
+# that no longer exists cannot be seeding anything, so reclaim the lock
+# loudly rather than refuse every later seed forever. An owner that cannot
+# be read or parsed is NOT reclaimed; the refusal names the path instead, so
+# the decision stays with a human.
+reclaim_stale_seed_lock() {
+  local lock="$1" target="$2" owner=""
+
+  [[ -f "$lock/owner" && ! -L "$lock/owner" ]] || return 1
+
+  # A partial last line is still assigned, so a failed read with a value is
+  # usable; a failed read with nothing is an owner we cannot identify.
+  if ! read -r owner <"$lock/owner" && [[ -z "$owner" ]]; then
+    return 1
+  fi
+
+  [[ "$owner" =~ ^[0-9]+$ ]] || return 1
+  ((owner != $$)) || return 1
+  ! kill -0 "$owner" 2>/dev/null || return 1
+
+  rm -f -- "$lock/owner" || return 1
+  rmdir -- "$lock" || return 1
+
+  printf 'worktree: reclaimed the stale cache seed lock %s (owner pid %s is gone)\n' \
+    "$lock" "$owner" >&2
+  report_stale_seed_staging "$target"
+  return 0
+}
+
 acquire_seed_lock() {
-  local target="$1" git_dir candidate lock_status=0
+  local target="$1" git_dir candidate lock_status=0 attempt
 
   git_dir="$(git -C "$target" rev-parse --git-dir)" ||
     die "cannot locate the git directory for $target"
   git_dir="$(cd "$target" && cd "$git_dir" && pwd -P)"
   candidate="$git_dir/raxol-cache-seed.lock"
 
-  # Defer signals across the mkdir/state-record boundary. Otherwise a signal
-  # delivered after mkdir succeeds but before SEED_LOCK is assigned can leave
-  # an unowned lock that every later sync mistakes for an active one.
-  defer_seed_signals
-  mkdir -m 700 -- "$candidate" || lock_status=$?
-  ((lock_status != 0)) || SEED_LOCK="$candidate"
-  resume_seed_signals
+  for attempt in 1 2; do
+    lock_status=0
+
+    # Defer signals across the mkdir/state-record boundary. Otherwise a signal
+    # delivered after mkdir succeeds but before SEED_LOCK is assigned can leave
+    # an unowned lock that every later sync mistakes for an active one.
+    defer_seed_signals
+    mkdir -m 700 -- "$candidate" || lock_status=$?
+    ((lock_status != 0)) || SEED_LOCK="$candidate"
+    resume_seed_signals
+
+    ((lock_status != 0)) || break
+    ((attempt == 1)) || break
+    [[ -d "$candidate" ]] || break
+    reclaim_stale_seed_lock "$candidate" "$target" || break
+  done
 
   if ((lock_status != 0)); then
     if [[ -d "$candidate" ]]; then
-      die "another cache seed is already active for $target (lock: $candidate)"
+      die "another cache seed is already active for $target (lock: $candidate); its owner pid is either alive or unreadable, so if nothing is seeding that worktree, remove the lock directory by hand and check $target for leftover .raxol-seed.* staging directories, which also make 'rm' refuse"
     fi
 
     die "could not acquire the cache seed lock for $target at $candidate"
@@ -453,10 +527,16 @@ check_dependency_manifests() {
 
   ((${#mismatched[@]} > 0)) || return 0
 
-  local edited_here=() differs_there=() detail=() advice=""
+  local edited_here=() differs_there=() detail=() advice="" worktree_status=""
 
   for rel in "${mismatched[@]}"; do
-    if [[ -n "$(git -C "$repo_root" status --porcelain -- "$rel" 2>/dev/null)" ]]; then
+    # A swallowed failure here would report every mismatch as "committed
+    # differently in the target" and advise the caller to change the wrong
+    # side of the drift.
+    worktree_status="$(git -C "$repo_root" status --porcelain -- "$rel")" ||
+      die "cannot ask git whether $rel is modified in $repo_root"
+
+    if [[ -n "$worktree_status" ]]; then
       edited_here+=("$rel")
     else
       differs_there+=("$rel")
@@ -575,17 +655,29 @@ path_identity() {
   esac
 }
 
+# A branch this invocation created is removed with it, but only when the ref
+# still proves to be that one: see the comment on the deletion below.
+branch_is_checked_out() {
+  local branch="$1" listing=""
+
+  if ! listing="$(git -C "$repo_root" worktree list --porcelain)"; then
+    printf 'worktree: could not list worktrees; treating branch %s as in use\n' "$branch" >&2
+    return 0
+  fi
+
+  [[ $'\n'"$listing"$'\n' == *$'\n'"branch refs/heads/$branch"$'\n'* ]]
+}
+
 # Undo only the directory instance this call atomically created, and report
 # every residue. In particular, never hand an unverified caller path to
 # `git worktree remove --force`, because that command deletes recursively.
-# A newly created branch is also removed when git created the ref before a
-# later checkout failure.
 unwind_add() {
-  local path="$1" branch="$2" created_path="$3" branch_existed="$4"
-  local expected_identity="$5" current_identity="" path_owned=0
+  local path="$1" branch="$2" branch_existed="$3"
+  local expected_identity="$4" from_commit="$5"
+  local current_identity="" path_owned=0 ref_oid=""
   local registration_failed=0 target_common="" source_common residue=()
 
-  if ((created_path == 1)) && [[ -e "$path" && ! -L "$path" ]]; then
+  if [[ -e "$path" && ! -L "$path" ]]; then
     if current_identity="$(path_identity "$path")" &&
       [[ "$current_identity" == "$expected_identity" ]]; then
       path_owned=1
@@ -623,8 +715,19 @@ unwind_add() {
     fi
   fi
 
-  if ((branch_existed == 0)) && git show-ref --verify --quiet "refs/heads/$branch"; then
-    if ! git branch -D -- "$branch"; then
+  # `branch_existed` was sampled BEFORE `git worktree add -b`, so "absent
+  # then, present now" does not prove THIS invocation created the ref: a
+  # concurrent add of the same branch samples absent too, and the loser's
+  # unwind would force-delete the winner's branch. Delete only a ref that
+  # still points exactly where this call would have created it and that no
+  # worktree has checked out. Anything else is residue, not garbage.
+  if ((branch_existed == 0)) &&
+    ref_oid="$(git rev-parse --verify --quiet "refs/heads/$branch^{commit}")"; then
+    if [[ "$ref_oid" != "$from_commit" ]]; then
+      residue+=("branch $branch (at $ref_oid, not the $from_commit this add would have created; left alone)")
+    elif branch_is_checked_out "$branch"; then
+      residue+=("branch $branch (still checked out in another worktree; left alone)")
+    elif ! git branch -D -- "$branch"; then
       residue+=("branch $branch")
     fi
   fi
@@ -639,7 +742,7 @@ cmd_add() {
   local branch="${1:-}"
   shift || true
   local path="" from="HEAD" from_commit="" created_identity=""
-  local from_given=0 fresh=0 created_path=0
+  local from_given=0 fresh=0
 
   case "$branch" in
     -h | --help) help ;;
@@ -709,13 +812,24 @@ cmd_add() {
 
     path="$(mktemp -d "$tmpdir/raxol-$(slug "$branch").XXXXXXXX")" ||
       die "could not create a private worktree directory under $tmpdir"
-    created_path=1
   else
+    # Resolve the caller's path against the CALLER's working directory
+    # BEFORE touching the filesystem. Everything after this runs from
+    # $repo_root, so a relative path left alone would name one directory
+    # here -- the one claimed at 0700 -- and a different one to `git
+    # worktree add`, the seed, and the printed `cd`.
+    local explicit_parent explicit_parent_resolved
+
+    explicit_parent="$(dirname -- "$path")"
+    explicit_parent_resolved="$(cd "$explicit_parent" 2>/dev/null && pwd -P)" ||
+      die "no such directory $explicit_parent; an explicit worktree path is claimed with a single 'mkdir' and its parent must already exist"
+
+    path="$explicit_parent_resolved/$(basename -- "$path")"
+
     # Create the explicit destination ourselves with its final permissions.
     # The single mkdir is both the existence check and the atomic claim.
     mkdir -m 700 -- "$path" ||
       die "cannot atomically create private worktree directory $path"
-    created_path=1
   fi
 
   created_identity="$(path_identity "$path")" ||
@@ -732,7 +846,7 @@ cmd_add() {
   fi
 
   if ((status != 0)); then
-    unwind_add "$path" "$branch" "$created_path" "$branch_existed" "$created_identity" ||
+    unwind_add "$path" "$branch" "$branch_existed" "$created_identity" "$from_commit" ||
       cleanup_status=$?
     ((cleanup_status == 0)) ||
       printf 'worktree: add failed and cleanup left reported residue\n' >&2
@@ -746,7 +860,7 @@ cmd_add() {
 
     if ((status != 0)); then
       cleanup_status=0
-      unwind_add "$path" "$branch" "$created_path" "$branch_existed" "$created_identity" ||
+      unwind_add "$path" "$branch" "$branch_existed" "$created_identity" "$from_commit" ||
         cleanup_status=$?
 
       if ((cleanup_status == 0)); then

@@ -165,9 +165,16 @@ fall back to `/tmp`; the printed `cd` line identifies the chosen path. The
 point is not an unguessable name, since
 mktemp's entropy is libc's business, but that the directory is 0700 from the
 moment it exists. Explicit paths get the same invariant: one `mkdir -m 700`
-both refuses an existing file or symlink and claims the path atomically.
+both refuses an existing file or symlink and claims the path atomically. A
+relative explicit path is resolved against your shell's working directory
+before that `mkdir`, and because the claim is a single `mkdir` with no `-p`,
+its parent directory must already exist (a bare `git worktree add` would
+create leading directories; this does not).
 `sync` serializes seeds per target and retains every replaced cache until the
 whole seed commits, so errors and handled signals roll back partial changes.
+A seed killed uninterruptibly leaves its lock directory behind; the next seed
+reclaims it once the recorded owner pid is gone, and a lock held by a live
+process is refused with the path to clear by hand.
 
 ### Install paths
 
