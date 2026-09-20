@@ -44,8 +44,13 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
     args = Map.get(config, :args, [])
     env = Map.get(config, :env, [])
 
-    port = Port.open({:spawn_executable, find_executable(command)}, port_opts(args, env))
-    {:ok, %__MODULE__{port: port, command: command}}
+    # Spawning is the side effect, so the provenance gate is asked HERE and
+    # not only by whoever assembled the spec: a workspace `.mcp.json` command
+    # is arbitrary local code from a file a clone carried.
+    with :ok <- Raxol.MCP.Client.Transport.permit(config, command) do
+      port = Port.open({:spawn_executable, find_executable(command)}, port_opts(args, env))
+      {:ok, %__MODULE__{port: port, command: command}}
+    end
   catch
     # `Port.open/2` signals a missing or unexecutable command as an ERROR with
     # a bare POSIX atom, not an exception struct, so the atom is kept as the
@@ -71,8 +76,31 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
     {:handshake, %{version: Protocol.mcp_protocol_version(), concurrency: :stateless}}
   end
 
+  # A pipe write has no round trip to wait for, so a notification is finished
+  # the moment `Port.command/2` returns. The client holds an in-flight entry
+  # for it either way, so say so -- through the same mailbox every other
+  # transport event arrives on, which keeps it ordered behind anything the
+  # port has already delivered.
   @impl Raxol.MCP.Client.Transport
+  def send(%__MODULE__{port: port} = handle, {:notify, id}, request) when is_port(port) do
+    with {:ok, handle} <- write(handle, nil, request) do
+      Kernel.send(self(), {port, {:settled, id}})
+      {:ok, handle}
+    end
+  end
+
   def send(%__MODULE__{port: port} = handle, id, request) when is_port(port) do
+    write(handle, id, request)
+  end
+
+  def send(%__MODULE__{}, _id, _request), do: {:error, :not_connected}
+
+  # Nothing to cancel: the write already happened, and a late reply for an id
+  # the client has forgotten is dropped by `with_pending/3`.
+  @impl Raxol.MCP.Client.Transport
+  def cancel(%__MODULE__{} = handle, _id), do: handle
+
+  defp write(%__MODULE__{port: port} = handle, id, request) do
     case encode(id, request) do
       {:ok, data} ->
         Port.command(port, data)
@@ -86,8 +114,6 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
   catch
     :error, reason -> {:error, {:port_failed, reason}}
   end
-
-  def send(%__MODULE__{}, _id, _request), do: {:error, :not_connected}
 
   @impl Raxol.MCP.Client.Transport
   def close(%__MODULE__{port: port}) when is_port(port) do
@@ -112,6 +138,10 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
 
   def decode_info(%__MODULE__{port: port} = handle, {port, {:exit_status, code}}) do
     {:closed, {:server_exited, code}, %{handle | port: nil, buffer: ""}}
+  end
+
+  def decode_info(%__MODULE__{port: port} = handle, {port, {:settled, id}}) do
+    {:settled, id, handle}
   end
 
   def decode_info(%__MODULE__{}, _message), do: :ignore

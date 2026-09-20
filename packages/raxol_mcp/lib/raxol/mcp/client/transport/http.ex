@@ -55,7 +55,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
     closed and carries no upstream text, no query string and no
     caller-influenced host:
 
-        {:blocked, :invalid_url | :address} | :dns_failed | :breaker_open
+        {:blocked, :invalid_url | :address | :source} | :dns_failed | :breaker_open
         | {:http, status} | {:redirect_refused, status} | {:too_large, limit}
         | {:timeout, :connect | :chunk | :deadline} | {:transport, atom()}
         | :session_rejected | {:task_down, atom()}
@@ -83,6 +83,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
     alias Raxol.Core.Outbound
     alias Raxol.MCP.CircuitBreaker
     alias Raxol.MCP.Client.Era
+    alias Raxol.MCP.Client.Reservation
     alias Raxol.MCP.Client.SSE
     alias Raxol.MCP.Client.Tables
     alias Raxol.MCP.Client.Transport.Http.Exchange
@@ -138,7 +139,12 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     @impl Raxol.MCP.Client.Transport
     def connect(config) do
-      with {:ok, vetted} <- vet(config) do
+      # Dialling is the side effect, so the provenance gate is asked HERE and
+      # not only by whoever assembled the spec: for a workspace-sourced
+      # server, the tool list this connect fetches is what lands in the
+      # model's context.
+      with :ok <- Raxol.MCP.Client.Transport.permit(config, Map.fetch!(config, :url)),
+           {:ok, vetted} <- vet(config) do
         handle = %__MODULE__{
           name: Map.get(config, :name),
           vetted: vetted,
@@ -191,6 +197,27 @@ if Code.ensure_loaded?(Mint.HTTP) do
       :ok
     end
 
+    # The client's request timer fired while this task was still working. Its
+    # `pending` entry is already gone, so `capacity?/1` will admit the next
+    # queued request: the task has to go with the entry, or a `:serialized`
+    # session ends up with two requests on the wire at once. `drop_task/2`
+    # demonitors with `:flush`, so the kill produces no `:DOWN` to decode.
+    @impl Raxol.MCP.Client.Transport
+    def cancel(%__MODULE__{} = handle, id) do
+      case Enum.find(handle.tasks, fn {_ref, task} -> cancels?(task, id) end) do
+        {ref, task} ->
+          Process.exit(task.pid, :kill)
+          drop_task(handle, ref)
+
+        nil ->
+          handle
+      end
+    end
+
+    defp cancels?(%{kind: :probe}, _id), do: false
+    defp cancels?(%{id: {:notify, id}}, id), do: true
+    defp cancels?(%{id: task_id}, id), do: task_id == id
+
     # The monitor reference identifies the task, so membership is checked
     # before the outcome is applied. `drop_task/2` hands back the handle
     # unchanged for a reference it does not know and the outcome was still
@@ -233,6 +260,10 @@ if Code.ensure_loaded?(Mint.HTTP) do
           Logger.warning("[MCP.Client.Http] #{handle.name} era re-probe died")
           {:messages, [], %{handle | tasks: tasks}}
 
+        {%{id: {:notify, id}}, tasks} ->
+          Logger.warning("[MCP.Client.Http] #{handle.name} notification task died")
+          {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
+
         {%{id: id}, tasks} when is_integer(id) ->
           {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
 
@@ -258,24 +289,21 @@ if Code.ensure_loaded?(Mint.HTTP) do
           # success between them still re-probes exactly once, instead of once
           # per rejected request.
           handle = %{handle | reprobed?: false}
-          {:messages, messages, remember_session(handle, session_id)}
+          delivered(messages, id, remember_session(handle, session_id))
 
         :session_rejected ->
           reprobe(handle, id)
 
-        {:error, reason} when is_integer(id) ->
-          {:failed, id, reason, handle}
-
         {:error, reason} ->
-          # A notification has no pending entry to fail, so the failure is
-          # logged rather than swallowed.
-          Logger.warning(
-            "[MCP.Client.Http] #{handle.name} notification failed: #{inspect(reason)}"
-          )
-
-          {:messages, [], handle}
+          fail(handle, id, reason)
       end
     end
+
+    # A notification's POST has an in-flight slot and no reply to deliver, so
+    # its completion is the settle. Its body is not a response to anything
+    # (the spec gives a notification none), so nothing is decoded from it.
+    defp delivered(_messages, {:notify, id}, handle), do: {:settled, id, handle}
+    defp delivered(messages, _id, handle), do: {:messages, messages, handle}
 
     # -- the target policy -------------------------------------------------------
 
@@ -433,8 +461,24 @@ if Code.ensure_loaded?(Mint.HTTP) do
       %{handle | tasks: Map.put(handle.tasks, ref, %{id: nil, pid: pid, kind: :probe})}
     end
 
+    # A notification has no caller to answer, but it does hold an in-flight
+    # slot, and dropping the failure silently would leave the client holding
+    # that slot until the request timer fired. Reported under its tracking
+    # id, and logged, because nothing downstream will.
+    defp fail(handle, {:notify, id}, reason) do
+      Logger.warning("[MCP.Client.Http] #{handle.name} notification failed: #{inspect(reason)}")
+
+      {:failed, id, reason, handle}
+    end
+
     defp fail(handle, id, reason) when is_integer(id), do: {:failed, id, reason, handle}
-    defp fail(handle, _id, _reason), do: {:messages, [], handle}
+
+    # A bare `nil` id: a notification nothing is tracking.
+    defp fail(handle, _id, reason) do
+      Logger.warning("[MCP.Client.Http] #{handle.name} notification failed: #{inspect(reason)}")
+
+      {:messages, [], handle}
+    end
 
     # -- metering ----------------------------------------------------------------
 
@@ -446,7 +490,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
           :ok
 
         :priced ->
-          if Map.get(request, :reservation), do: :ok, else: {:error, :unmetered_call}
+          consume(handle, Map.get(request, :reservation))
 
         :unknown ->
           Logger.warning(
@@ -459,6 +503,20 @@ if Code.ensure_loaded?(Mint.HTTP) do
     end
 
     defp meter(_handle, _request), do: :ok
+
+    # Truthiness was the whole check, so any caller of the public
+    # `Client.call_tool/4` could pass `reservation: "anything"` and this
+    # transport could not tell a live reservation from a settled, refused or
+    # invented one -- a nominal gate on the function that issues the request.
+    # A handle is minted by `Raxol.Agent.McpSpendHook` against a budget and
+    # SPENT here: a literal, a replay and one past its TTL are all as absent
+    # as no handle at all.
+    defp consume(handle, token) do
+      case Reservation.consume(handle.tables.reservations, token) do
+        :ok -> :ok
+        :error -> {:error, :unmetered_call}
+      end
+    end
 
     defp price(%__MODULE__{metered: false}, _tool), do: :free
 
@@ -582,6 +640,10 @@ if Code.ensure_loaded?(Mint.HTTP) do
       Jason.encode_to_iodata!(Protocol.notification(method, params))
     end
 
+    # Tracked by the client, id-less on the wire: nothing answers a
+    # notification, so it must not carry a JSON-RPC id.
+    defp encode({:notify, _id}, request), do: encode(nil, request)
+
     defp encode(id, %{method: method, params: params}) do
       Jason.encode_to_iodata!(Protocol.request(id, method, params))
     end
@@ -691,7 +753,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     defp tables(config) do
       case Map.get(config, :tables) do
-        %{eras: _eras, breakers: _breakers} = tables -> tables
+        %{eras: _eras, breakers: _breakers, reservations: _reservations} = tables -> tables
         _absent -> Tables.ensure_started()
       end
     end

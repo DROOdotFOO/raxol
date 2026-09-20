@@ -39,6 +39,13 @@ defmodule Raxol.Agent.OperatorFile do
   0664 did nothing wrong and needs to be told which file to chmod rather than
   left wondering why their allowlist stopped applying.
 
+  The PARENT directory is checked on the same terms, because the file's mode
+  alone is not the control: `trusted?/1` stats the file and the read opens it
+  a syscall later, so in a directory another account may write they rename
+  their own file into place in between and the bytes read are not the bytes
+  vetted. A sticky directory (`/tmp` is 1777) is accepted whoever owns it,
+  since a rename there is already refused to everyone but the file's owner.
+
   On Windows neither test carries meaning (no useful uid, no POSIX mode
   bits), so only the path rule applies there.
   """
@@ -49,12 +56,16 @@ defmodule Raxol.Agent.OperatorFile do
 
   @base ".raxol"
   @group_other_write 0o022
+  @sticky 0o1000
 
   @type refusal ::
           :no_home
           | {:not_owned, non_neg_integer()}
           | {:group_or_other_writable, non_neg_integer()}
           | {:not_a_regular_file, atom()}
+          | {:dir_not_owned, non_neg_integer()}
+          | {:dir_group_or_other_writable, non_neg_integer()}
+          | {:not_a_directory, atom()}
           | {:stat_failed, File.posix()}
           | {:read_failed, File.posix()}
 
@@ -154,11 +165,55 @@ defmodule Raxol.Agent.OperatorFile do
   """
   @spec trusted?(String.t()) :: :ok | {:error, refusal() | :enoent}
   def trusted?(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :regular} = stat} -> vet(stat)
-      {:ok, %File.Stat{type: type}} -> {:error, {:not_a_regular_file, type}}
+    with :ok <- trusted_dir?(Path.dirname(path)) do
+      case File.stat(path) do
+        {:ok, %File.Stat{type: :regular} = stat} -> vet(stat)
+        {:ok, %File.Stat{type: type}} -> {:error, {:not_a_regular_file, type}}
+        {:error, :enoent} -> {:error, :enoent}
+        {:error, reason} -> {:error, {:stat_failed, reason}}
+      end
+    end
+  end
+
+  # The directory is the other half of the control, and it was missing. This
+  # module stats the file and then `read_file/2` OPENS it, two syscalls apart:
+  # in a directory another account may write, they rename their own file into
+  # place between the two and the bytes we read are not the bytes we vetted.
+  # A directory nobody else may write closes that window.
+  #
+  # The sticky bit closes it too, and is checked first: `/tmp` is 1777 and
+  # root-owned, and a rename there is refused to anyone but the file's owner,
+  # so an override pointing into a shared temp directory is as safe as one in
+  # `~/.raxol` and need not be refused for its mode or its owner.
+  defp trusted_dir?(dir) do
+    case File.stat(dir) do
+      {:ok, %File.Stat{type: :directory} = stat} -> vet_dir(stat)
+      {:ok, %File.Stat{type: type}} -> {:error, {:not_a_directory, type}}
+      # No directory means no file: absent, not refused.
       {:error, :enoent} -> {:error, :enoent}
       {:error, reason} -> {:error, {:stat_failed, reason}}
+    end
+  end
+
+  defp vet_dir(%File.Stat{uid: dir_uid, mode: mode}) do
+    permissions = band(mode, 0o7777)
+    owner = uid()
+
+    cond do
+      match?({:win32, _}, :os.type()) ->
+        :ok
+
+      band(permissions, @sticky) != 0 ->
+        :ok
+
+      owner != :unknown and dir_uid != owner ->
+        {:error, {:dir_not_owned, dir_uid}}
+
+      band(permissions, @group_other_write) != 0 ->
+        {:error, {:dir_group_or_other_writable, band(permissions, 0o777)}}
+
+      true ->
+        :ok
     end
   end
 
@@ -249,6 +304,20 @@ defmodule Raxol.Agent.OperatorFile do
 
   defp explain({:not_a_regular_file, type}),
     do: "is a #{type}, not a regular file."
+
+  defp explain({:dir_not_owned, dir_uid}),
+    do:
+      "sits in a directory owned by uid #{dir_uid}, not #{uid()}, and without the sticky bit. " <>
+        "Its owner can replace this file between the check and the read; move the control into " <>
+        "a directory you own."
+
+  defp explain({:dir_group_or_other_writable, permissions}),
+    do:
+      "sits in a directory with mode #{octal(permissions)} and no sticky bit — another account " <>
+        "may rename a file of their own over this one. chmod 700 the directory."
+
+  defp explain({:not_a_directory, type}),
+    do: "sits in a #{type}, not a directory."
 
   defp explain({:stat_failed, reason}),
     do: "cannot be inspected: #{:file.format_error(reason)}."

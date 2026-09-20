@@ -59,15 +59,50 @@ defmodule Raxol.Agent.Backend.Credentials do
   agent reads. All three cases fall through to env vars, and the last is
   silent: a container configured entirely by environment never had a store
   to lose.
+
+  Reading is where that fall-through belongs. `put/2` and `delete/1` refuse
+  instead, because a refusal they folded into `%{}` would be written back.
   """
   @spec load() :: %{optional(String.t()) => ref_entry()}
   def load do
-    with file when is_binary(file) <- path(),
-         {:ok, raw} <- OperatorFile.read_path(file, @label),
-         {:ok, decoded} when is_map(decoded) <- Jason.decode(raw) do
-      Enum.reduce(decoded, %{}, &put_sanitized/2)
-    else
-      _ -> %{}
+    case load_store() do
+      {:ok, store} -> store
+      {:error, _refused} -> %{}
+    end
+  end
+
+  # The store in three states, because the WRITERS have to tell them apart.
+  # `{:ok, map}` covers a present store and an absent one alike: an absent
+  # control grants nothing, and writing the first entry into it is the point.
+  # `{:error, reason}` is a store `OperatorFile` refused.
+  #
+  # Refused is not empty. A `providers.json` created by hand at 0664 (umask
+  # 002, the Ubuntu default with user private groups) is refused on READ and
+  # is still writable by its owner, so folding that refusal into `%{}` -- as
+  # `load/0` must, for the resolver -- and then writing the result back
+  # replaced every other provider reference in the file with the one being
+  # stored, and chmodded it 600 on the way out. The read hardening became
+  # data loss.
+  @spec load_store() :: {:ok, %{optional(String.t()) => ref_entry()}} | {:error, term()}
+  defp load_store do
+    case path() do
+      nil -> {:error, :no_home}
+      file -> read_store(file)
+    end
+  end
+
+  defp read_store(file) do
+    case OperatorFile.read_path(file, @label) do
+      {:ok, raw} -> {:ok, decode_store(raw)}
+      :none -> {:ok, %{}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp decode_store(raw) do
+    case Jason.decode(raw) do
+      {:ok, decoded} when is_map(decoded) -> Enum.reduce(decoded, %{}, &put_sanitized/2)
+      _malformed -> %{}
     end
   end
 
@@ -114,6 +149,11 @@ defmodule Raxol.Agent.Backend.Credentials do
   `attrs` accepts `:op_ref`, `:model`, and `:base_url`; a raw key is refused
   here on purpose (this store never holds secrets). The file is written with
   owner-only (`0600`) permissions.
+
+  `{:error, reason}` when the store already on disk cannot be READ -- a mode
+  or an owner `Raxol.Agent.OperatorFile` refuses -- and nothing is written in
+  that case. The alternative is destroying the references that file holds,
+  since a store refused for its mode is still writable by its owner.
   """
   @spec put(atom() | String.t(), keyword() | map()) :: :ok | {:error, term()}
   def put(harness, attrs) do
@@ -122,15 +162,24 @@ defmodule Raxol.Agent.Backend.Credentials do
     if map_size(entry) == 0 do
       {:error, :empty_entry}
     else
-      updated = Map.put(load(), to_string(harness), entry)
-      write(updated)
+      with {:ok, store} <- load_store() do
+        store |> Map.put(to_string(harness), entry) |> write()
+      end
     end
   end
 
-  @doc "Remove a provider's stored reference entry."
+  @doc """
+  Remove a provider's stored reference entry.
+
+  Refuses on the same terms as `put/2`: a store that could not be read is not
+  rewritten, so `{:error, reason}` here leaves that entry, and every other
+  one, on disk.
+  """
   @spec delete(atom() | String.t()) :: :ok | {:error, term()}
   def delete(harness) do
-    load() |> Map.delete(to_string(harness)) |> write()
+    with {:ok, store} <- load_store() do
+      store |> Map.delete(to_string(harness)) |> write()
+    end
   end
 
   # No home and no `$RAXOL_PROVIDERS` is a refusal, not a temp-path write: a

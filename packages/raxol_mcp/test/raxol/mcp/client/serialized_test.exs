@@ -21,7 +21,11 @@ defmodule Raxol.MCP.Client.SerializedTest do
   @public {93, 184, 216, 34}
 
   defp tables do
-    %{eras: :ets.new(:eras, [:set, :public]), breakers: CircuitBreaker.new(:breakers)}
+    %{
+      eras: :ets.new(:eras, [:set, :public]),
+      breakers: CircuitBreaker.new(:breakers),
+      reservations: Raxol.MCP.Client.Reservation.new(:reservations)
+    }
   end
 
   defp resolver do
@@ -58,12 +62,14 @@ defmodule Raxol.MCP.Client.SerializedTest do
     :exit, _reason -> :ok
   end
 
-  defp await_ready(client, tries \\ 200) do
-    case Client.status(client) do
-      %{status: :ready} = status -> status
-      %{status: _other} when tries > 0 -> Process.sleep(5) && await_ready(client, tries - 1)
-      %{status: other} -> flunk("client never became ready, stuck in #{inspect(other)}")
-    end
+  # Readiness is an event the client answers; polling for it in a sleep loop
+  # can only observe a state it has already left. The handshake is not over
+  # at `:ready` either -- `notifications/initialized` is a POST, and it holds
+  # the single in-flight slot a serialized session has -- so the settle is
+  # part of the wait.
+  defp await_ready(client) do
+    assert {:ok, _ready} = Client.await_ready(client, 5_000)
+    await_drained(client)
   end
 
   defp await_drained(client, tries \\ 200) do
@@ -187,20 +193,46 @@ defmodule Raxol.MCP.Client.SerializedTest do
 
       assert %{pending: 0, queued: 0} = Client.status(client)
 
-      # The gate was never opened, so a still-blocked task would wake at its own
-      # deadline and touch this test's ETS tables after the test process has
-      # taken them down with it. Killed rather than released: there is nothing
-      # left to observe.
-      kill_gated()
+      # Every dispatched exchange was stopped with its entry, so nothing is
+      # left blocked on the gate to wake at its own deadline and touch this
+      # test's ETS tables afterwards. This test used to kill them by hand,
+      # which hid the fact that the client was leaving them running.
+      for pid <- gated(), do: refute(Process.alive?(pid))
     end
 
-    defp kill_gated do
+    test "an expired request's exchange is stopped, not left on the wire" do
+      # The entry left `pending` on expiry while its transport task kept
+      # running, and `capacity?/1` then admitted the next queued request
+      # beside it: two concurrent requests on a session whose cap is one.
+      # Reachable with defaults, because one exchange's wall time -- the dial
+      # plus the read deadline plus a chunk overshoot -- can exceed
+      # `call_timeout`. The caller being answered is therefore not enough;
+      # the work has to be gone.
+      client =
+        start_client!(gated_seam(self()),
+          concurrency: :serialized,
+          queue_limit: 2,
+          call_timeout: 100
+        )
+
+      release_handshake()
+      await_ready(client)
+
+      caller = Task.async(fn -> Client.call_tool(client, "echo", %{}, timeout: 10_000) end)
+
+      assert_receive {:in_flight, exchange}, 2_000
+      ref = Process.monitor(exchange)
+
+      assert Task.await(caller, 10_000) == {:error, :timeout}
+      assert_receive {:DOWN, ^ref, :process, ^exchange, :killed}, 2_000
+      assert %{pending: 0, queued: 0} = Client.status(client)
+    end
+
+    defp gated(pids \\ []) do
       receive do
-        {:in_flight, pid} ->
-          Process.exit(pid, :kill)
-          kill_gated()
+        {:in_flight, pid} -> gated([pid | pids])
       after
-        0 -> :ok
+        0 -> pids
       end
     end
   end

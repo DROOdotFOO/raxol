@@ -94,14 +94,40 @@ if Code.ensure_loaded?(Mint.HTTP) do
     Options: `:port` (defaults to the vetted URI's port), `:connect_timeout_ms`,
     `:deadline_ms`, `:chunk_timeout_ms`, `:max_bytes`, and `:transport_opts`
     for a test's own trust store. The connection is closed on every path.
+
+    The deadline is computed HERE, before the dial, and what reaches
+    `BoundedExchange.run/3` is what is left of it. `BoundedExchange`'s
+    moduledoc says the deadline is taken at entry so the send counts against
+    it; starting that clock after the connect made the real wall bound
+    `connect_timeout_ms x addresses + deadline_ms + chunk_timeout_ms`, which
+    was stated nowhere and, at the defaults, exceeded the client's 30 s
+    `call_timeout`. Each connect attempt is clamped to the remaining budget
+    for the same reason, so the bound is `deadline_ms` plus at most one
+    `chunk_timeout_ms` of read overshoot.
     """
     @spec run(vetted(), request(), keyword()) :: {:ok, response()} | {:error, reason()}
     def run(vetted, request, opts \\ []) do
+      opts = Keyword.put_new_lazy(opts, :deadline_at, fn -> now_ms() + deadline_ms(opts) end)
+
       case connect(vetted, opts) do
-        {:ok, conn} -> BoundedExchange.run(conn, request, opts)
+        {:ok, conn} -> BoundedExchange.run(conn, request, remaining(opts))
         {:error, reason} -> {:error, reason}
       end
     end
+
+    defp deadline_ms(opts) do
+      Keyword.get(opts, :deadline_ms, BoundedExchange.default_deadline_ms())
+    end
+
+    # What is left for the exchange. Zero is a real answer: `BoundedExchange`
+    # refuses to put a request on the wire against a spent budget, which is
+    # the point of handing it one.
+    defp remaining(opts) do
+      left = max(Keyword.fetch!(opts, :deadline_at) - now_ms(), 0)
+      Keyword.put(opts, :deadline_ms, left)
+    end
+
+    defp now_ms, do: System.monotonic_time(:millisecond)
 
     @doc """
     Connect to the first reachable vetted address, presenting `hostname` as the
@@ -111,6 +137,10 @@ if Code.ensure_loaded?(Mint.HTTP) do
     for a name and which pinning would otherwise lose. Public so that the dial
     can be tested against a real local TLS listener, which the reject set
     refuses to let the guarded path reach.
+
+    `:deadline_at` (a monotonic millisecond stamp, set by `run/3`) clamps
+    every attempt: N addresses at `connect_timeout_ms` each would otherwise
+    exceed the whole exchange's budget before a byte was sent.
     """
     @spec connect(vetted(), keyword()) :: {:ok, Mint.HTTP.t()} | {:error, reason()}
     def connect(%{addresses: [], hostname: _hostname}, _opts), do: {:error, :no_addresses}
@@ -125,10 +155,10 @@ if Code.ensure_loaded?(Mint.HTTP) do
           hostname: hostname,
           protocols: [:http1],
           mode: :passive,
-          transport_opts: Keyword.put(transport_opts, :timeout, timeout)
+          transport_opts: transport_opts
         ]
 
-        try_each(addresses, port, connect_opts, [])
+        try_each(addresses, port, connect_opts, {timeout, Keyword.get(opts, :deadline_at)}, [])
       end
     end
 
@@ -136,18 +166,40 @@ if Code.ensure_loaded?(Mint.HTTP) do
     # timeouts is a connect timeout; anything else reports the LAST attempt,
     # collapsed to an atom so that no address, port or peer detail rides out in
     # the error term. `failures` is newest-first, so the head is that attempt.
-    defp try_each([], _port, _opts, [{_address, reason} | _earlier] = failures) do
+    defp try_each([], _port, _opts, _budget, [{_address, reason} | _earlier] = failures) do
       if Enum.all?(failures, fn {_address, reason} -> timeout?(reason) end),
         do: {:error, {:timeout, :connect}},
         else: {:error, {:transport, transport_atom(reason)}}
     end
 
-    defp try_each([address | rest], port, opts, failures) do
-      case Mint.HTTP.connect(:https, address, port, opts) do
-        {:ok, conn} -> {:ok, conn}
-        {:error, reason} -> try_each(rest, port, opts, [{address, reason} | failures])
+    defp try_each([address | rest], port, opts, budget, failures) do
+      case attempt(budget) do
+        # The exchange's budget is gone, so there is no point dialling the
+        # remaining addresses: the read loop would refuse to send anyway.
+        :expired ->
+          {:error, {:timeout, :connect}}
+
+        {:ok, timeout} ->
+          opts = Keyword.put(opts, :transport_opts, timed(opts, timeout))
+
+          case Mint.HTTP.connect(:https, address, port, opts) do
+            {:ok, conn} -> {:ok, conn}
+            {:error, reason} -> try_each(rest, port, opts, budget, [{address, reason} | failures])
+          end
       end
     end
+
+    defp attempt({timeout, nil}), do: {:ok, timeout}
+
+    defp attempt({timeout, deadline_at}) do
+      case deadline_at - now_ms() do
+        remaining when remaining <= 0 -> :expired
+        remaining -> {:ok, min(timeout, remaining)}
+      end
+    end
+
+    defp timed(opts, timeout),
+      do: opts |> Keyword.fetch!(:transport_opts) |> Keyword.put(:timeout, timeout)
 
     defp transport_atom(%Mint.TransportError{reason: reason}), do: transport_atom(reason)
     defp transport_atom(%Mint.HTTPError{reason: reason}), do: transport_atom(reason)

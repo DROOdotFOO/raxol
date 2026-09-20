@@ -119,6 +119,27 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       assert log =~ "mode 0666"
       assert :none = Credentials.fetch(:openai)
     end
+
+    # The read hardening turned into data loss: a refusal folded into `%{}`
+    # by `load/0` was written straight back, so one `/login` replaced every
+    # other provider reference in the file with the new entry (and chmodded
+    # it 600 on the way out). A refused store is still writable by its owner;
+    # 0664 is what umask 002 produces.
+    test "a store another account may rewrite is not overwritten", %{path: path} do
+      contents = Jason.encode!(%{"openai" => %{"op_ref" => "op://Vault/OpenAI/key"}})
+      File.write!(path, contents)
+      File.chmod!(path, 0o664)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:group_or_other_writable, 0o664}} =
+                 Credentials.put(:anthropic, op_ref: "op://Vault/Anthropic/key")
+
+        assert {:error, {:group_or_other_writable, 0o664}} = Credentials.delete(:openai)
+      end)
+
+      assert File.read!(path) == contents
+      assert Bitwise.band(File.stat!(path).mode, 0o777) == 0o664
+    end
   end
 
   describe "read_ref/1" do
