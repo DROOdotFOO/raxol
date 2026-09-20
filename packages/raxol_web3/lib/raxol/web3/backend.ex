@@ -469,6 +469,68 @@ defmodule Raxol.Web3.Backend do
   @spec required() :: keyword(non_neg_integer())
   def required, do: @required
 
+  # -- reading an upstream row -------------------------------------------------
+
+  @doc """
+  A monetary figure as a non-negative integer, or a decode failure naming it.
+
+  `balance`, `value`, `fee` and `amount` are `non_neg_integer()` in the shapes
+  above, so a figure that is not one is a body that is not what it claimed
+  rather than a number to round down. `Integer.parse/1` on its own answers 1
+  for `"1.5"` and 1 for `"1e18"` and -5 for `"-5"`, which on a payments
+  surface is an error of eighteen orders of magnitude reported as a balance.
+  The whole binary has to be a non-negative integer or the read fails.
+
+  `nil` passes through, because an absent figure is a fact the shapes carry.
+  The tag names the FIELD and never the value, so nothing upstream travels in
+  the error, and `{:decode_failed, _}` is the half of the split the router
+  fails over on: a sibling source may hold a well-formed copy of the same row.
+  """
+  @spec money(term(), atom()) ::
+          {:ok, non_neg_integer() | nil} | {:error, {:decode_failed, atom()}}
+  def money(nil, _field), do: {:ok, nil}
+  def money(value, _field) when is_integer(value) and value >= 0, do: {:ok, value}
+
+  def money(value, field) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number >= 0 -> {:ok, number}
+      _invalid -> {:error, {:decode_failed, field}}
+    end
+  end
+
+  def money(_value, field), do: {:error, {:decode_failed, field}}
+
+  @doc """
+  Normalize every row of a page, stopping at the first row that will not read.
+
+  `rows` is whatever the upstream put where a list belongs, so a non-list is
+  itself a decode failure rather than something to iterate: `Enum.map/2` over
+  a map or a string raises, and a raise inside a normalizer is the failure
+  mode this exists to remove. A row the mapper refuses fails the page for the
+  same reason, because a page quietly missing the row nobody could read is a
+  wrong answer rather than a partial one.
+
+  `tag` is a closed atom naming the row kind, never the row.
+  """
+  @spec map_rows(term(), (term() -> {:ok, item} | {:error, error()}), atom()) ::
+          {:ok, [item]} | {:error, error()}
+        when item: var
+  def map_rows(rows, mapper, _tag) when is_list(rows) and is_function(mapper, 1) do
+    rows
+    |> Enum.reduce_while({:ok, []}, fn row, {:ok, acc} ->
+      case mapper.(row) do
+        {:ok, mapped} -> {:cont, {:ok, [mapped | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, mapped} -> {:ok, Enum.reverse(mapped)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def map_rows(_rows, _mapper, tag), do: {:error, {:decode_failed, tag}}
+
   defp required?(callback), do: Keyword.has_key?(@required, callback)
 
   defp exported?(module, callback) do

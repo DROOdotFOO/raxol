@@ -29,6 +29,12 @@ defmodule Raxol.Web3.Serialize do
   milliseconds, a byte limit, a status, an origin id. There is no message
   field, because there is no text to put in one, which is the property ADR-0038
   decision 6 spends its rules on.
+
+  A variant whose datum is itself a variant renders as a nested `%{code:,
+  detail:}` rather than flattening: `{:invalid_cursor, {:unknown_endpoint,
+  :address_logs}}` says which of the two things went wrong with the cursor,
+  and collapsing it to one code made a bad cursor indistinguishable from a
+  generic failure.
   """
 
   # The families the tagged reference can name. Each of the five has a backend
@@ -85,6 +91,21 @@ defmodule Raxol.Web3.Serialize do
 
   def error({code, detail}) when is_atom(code) and is_binary(detail) do
     %{code: Atom.to_string(code), detail: detail}
+  end
+
+  # A nested variant, rendered as a nested shape rather than collapsed. The
+  # taxonomy has them: `Raxol.Web3.Cursor.reason/0` carries
+  # `{:unknown_endpoint, atom}` and `{:unexpected_key, binary}`, and both
+  # arrive wrapped as `{:invalid_cursor, _}`, so the generic fallthrough below
+  # rendered "a cursor named an endpoint this origin does not serve" and "the
+  # read failed" as the same `%{code: "error"}`. The nesting is one level
+  # deep, which is as deep as the taxonomy goes, and every leaf is an atom, an
+  # integer or a string this package minted: a cursor's keys come out of a
+  # payload it MAC-verified, so no upstream text reaches here.
+  def error({code, {inner, detail}})
+      when is_atom(code) and is_atom(inner) and
+             (is_integer(detail) or is_atom(detail) or is_binary(detail)) do
+    %{code: Atom.to_string(code), detail: %{code: Atom.to_string(inner), detail: detail}}
   end
 
   def error(code) when is_atom(code), do: %{code: Atom.to_string(code), detail: nil}

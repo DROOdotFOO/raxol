@@ -782,11 +782,14 @@ defmodule Raxol.Web3.Backend.TronTest do
     test "a read that mints no cursor refuses one" do
       # The node source answers token balances from one account record, so it
       # has no page two. Answering page one again for a cursor it never minted
-      # would be indistinguishable from a walk that ended.
+      # would be indistinguishable from a walk that ended. `:wrong_scope` is
+      # the reason for it, the same one the Solana backend mints for the same
+      # case, and it is a `Raxol.Web3.Cursor.reason/0` variant rather than an
+      # endpoint atom naming an endpoint no cursor is scoped to.
       handle = stateful(:trongrid, %{"getAccountInfo" => "trongrid_account_info.sse"})
       held = offset_cursor(25)
 
-      assert {:error, {:invalid_cursor, {:unknown_endpoint, :tron_account_info}}} =
+      assert {:error, {:invalid_cursor, :wrong_scope}} =
                Tron.token_balances(state(handle), {:tron, @base58}, cursor: held)
 
       assert calls() == []

@@ -124,6 +124,15 @@ defmodule Raxol.Web3.Backend.JSONRPC do
   @log_window 2_000
   @log_lookback 10_000
 
+  # `0x` plus twenty bytes, either case. The same table and the same walk as
+  # `Raxol.Web3.Backend.Blockscout`, because it is the same address shape.
+  @hex_digits Enum.concat([?0..?9, ?a..?f, ?A..?F])
+
+  # `:http_opts` is an operator's own keyword list and may carry an
+  # authorization header, so it is not something `inspect/1` may render: a
+  # handle reaches an operator through `Raxol.Web3.Router.candidates/3`, and a
+  # crash anywhere below formats the struct whole into a log line.
+  @derive {Inspect, except: [:http_opts]}
   @enforce_keys [:chain_ref, :chain_id, :url]
   defstruct [
     :chain_ref,
@@ -278,8 +287,9 @@ defmodule Raxol.Web3.Backend.JSONRPC do
     with {:ok, address} <- evm_address(account_ref),
          {:ok, window} <- window(state, Keyword.get(opts, :cursor)),
          {:ok, logs} <-
-           RPC.logs(state.url, filter(address, window), logs_opts(state, address, window)) do
-      {:ok, %{items: Enum.map(logs, &log/1), next: next_cursor(state, window)}}
+           RPC.logs(state.url, filter(address, window), logs_opts(state, address, window)),
+         {:ok, items} <- Backend.map_rows(logs, &log/1, :log_row) do
+      {:ok, %{items: items, next: next_cursor(state, window)}}
     end
   end
 
@@ -464,22 +474,34 @@ defmodule Raxol.Web3.Backend.JSONRPC do
          height: height,
          hash: body["hash"],
          timestamp: timestamp(body["timestamp"]),
-         transactions_count: length(Map.get(body, "transactions", [])),
+         # A node that put something other than a list where the transaction
+         # list belongs is a body that is not what it claimed, and `length/1`
+         # on it raises rather than failing over.
+         transactions_count: body |> Map.get("transactions") |> count(),
          miner: address_ref(body["miner"])
        }}
     end
   end
 
-  defp log(item) do
-    %{
-      address: item["address"],
-      topics: item |> Map.get("topics", []) |> Enum.reject(&is_nil/1),
-      data: item["data"],
-      block: quantity(item["blockNumber"]),
-      transaction: item["transactionHash"],
-      index: quantity(item["logIndex"])
-    }
+  defp count(list) when is_list(list), do: length(list)
+  defp count(_other), do: nil
+
+  defp log(item) when is_map(item) do
+    {:ok,
+     %{
+       address: item["address"],
+       topics: item |> Map.get("topics") |> rows_of() |> Enum.reject(&is_nil/1),
+       data: item["data"],
+       block: quantity(item["blockNumber"]),
+       transaction: item["transactionHash"],
+       index: quantity(item["logIndex"])
+     }}
   end
+
+  defp log(_item), do: {:error, {:decode_failed, :log_row}}
+
+  defp rows_of(value) when is_list(value), do: value
+  defp rows_of(_other), do: []
 
   # No receipt is a transaction the node holds but has not mined, which the
   # contract calls `:pending`. A mined receipt with no `status` field is
@@ -548,7 +570,27 @@ defmodule Raxol.Web3.Backend.JSONRPC do
     end
   end
 
-  defp evm_address({:evm, address}) when is_binary(address), do: {:ok, address}
+  # The one place a caller's account reference becomes a JSON-RPC parameter,
+  # so the FORMAT is checked here rather than at the tool boundary: validation
+  # sits on the function that performs the side effect.
+  # `Raxol.Web3.Serialize.account_ref/1` builds `{:evm, value}` out of
+  # anything a tool argument prefixes with `"evm:"`, and `Jason.encode!/1`
+  # RAISES on a binary that is not valid UTF-8, so an address-shaped check is
+  # what keeps a tool argument from crashing the read. Case is carried through
+  # rather than normalized: an EIP-55 checksum is the caller's own typo
+  # protection. `Raxol.Web3.Backend.Blockscout` checks the same shape.
+  defp evm_address({:evm, address}) when is_binary(address) do
+    if evm_address?(address),
+      do: {:ok, address},
+      else: {:error, {:unsupported_account_ref, :not_an_address}}
+  end
+
   defp evm_address({tag, _value}), do: {:error, {:unsupported_account_ref, tag}}
   defp evm_address(_other), do: {:error, {:unsupported_account_ref, :unknown}}
+
+  defp evm_address?("0x" <> hex) when byte_size(hex) == 40 do
+    hex |> :binary.bin_to_list() |> Enum.all?(&(&1 in @hex_digits))
+  end
+
+  defp evm_address?(_other), do: false
 end

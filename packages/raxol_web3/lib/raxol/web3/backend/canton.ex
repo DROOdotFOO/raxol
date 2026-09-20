@@ -209,6 +209,14 @@ defmodule Raxol.Web3.Backend.Canton do
   alias Raxol.Web3.Origin
   alias Raxol.Web3.TTL
 
+  # The struct carries a credential, so it declares what `inspect/1` may show.
+  # `Raxol.Agent.Code.ExecutorConfig` is the precedent. It is load-bearing
+  # rather than tidy: `Raxol.Web3.Router.candidates/3` hands these handles to
+  # an operator, and a `FunctionClauseError` anywhere below formats the whole
+  # struct into a crash log, which is how the ccscan key would reach one.
+  # `:http_opts` is out for the same reason: it is an operator's own keyword
+  # list and may carry an authorization header for an RBAC-gated Scan.
+  @derive {Inspect, except: [:ccscan_key, :http_opts]}
   @enforce_keys [:chain_ref, :scan_url]
   defstruct [
     :chain_ref,
@@ -288,6 +296,8 @@ defmodule Raxol.Web3.Backend.Canton do
   # The refill is a guess, the capacity is derived. See "Rate limits" above.
   @rate_limit [capacity: 4, refill_per_second: 0.2]
 
+  @content_type {"content-type", "application/json"}
+
   @optional_callbacks_declared [:get_transaction, :account_info, :token_balances, :raw_request]
 
   @doc """
@@ -315,11 +325,13 @@ defmodule Raxol.Web3.Backend.Canton do
   """
   @spec new(Backend.chain_ref(), keyword()) :: {:ok, Backend.t()} | {:error, term()}
   def new(chain_ref, opts \\ []) do
-    with {:ok, canonical} <- Map.fetch(@chain_refs, chain_ref) |> ok_or(chain_ref) do
+    with {:ok, canonical} <- Map.fetch(@chain_refs, chain_ref) |> ok_or(chain_ref),
+         {:ok, scan_url} <- base_url(opts, :scan_url, @default_scan_url),
+         {:ok, ccscan_url} <- base_url(opts, :ccscan_url, @default_ccscan_url) do
       state = %__MODULE__{
         chain_ref: canonical,
-        scan_url: opts |> Keyword.get(:scan_url, @default_scan_url) |> String.trim_trailing("/"),
-        ccscan_url: Keyword.get(opts, :ccscan_url, @default_ccscan_url),
+        scan_url: scan_url,
+        ccscan_url: ccscan_url,
         ccscan_key: Keyword.get(opts, :ccscan_key),
         migration_id: Keyword.get(opts, :migration_id),
         ccscan_auth_header: Keyword.get(opts, :ccscan_auth_header, "authorization"),
@@ -328,6 +340,28 @@ defmodule Raxol.Web3.Backend.Canton do
       }
 
       {:ok, {__MODULE__, state}}
+    end
+  end
+
+  # Validated at construction rather than at the first read: `scan_origin_id/1`
+  # is `URI.new!/1` on the Scan base and `health_key/1` reaches it, so a URL
+  # that is not one raised inside a router ordering candidates instead of
+  # failing the handle that carried it. The scheme is fixed because
+  # `Raxol.Web3.HTTP` vets `schemes: [:https]` and refuses anything else on
+  # the way out anyway.
+  defp base_url(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      url when is_binary(url) -> checked_url(String.trim_trailing(url, "/"), key)
+      _other -> {:error, {:invalid_base_url, key}}
+    end
+  end
+
+  defp checked_url(url, key) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: "https", host: host}} when is_binary(host) and host != "" -> {:ok, url}
+      {:ok, %URI{scheme: "https"}} -> {:error, {:invalid_base_url, :host}}
+      {:ok, %URI{}} -> {:error, {:invalid_base_url, :scheme}}
+      {:error, _part} -> {:error, {:invalid_base_url, key}}
     end
   end
 
@@ -421,7 +455,7 @@ defmodule Raxol.Web3.Backend.Canton do
          {:ok, snapshot} <- snapshot(state),
          request = Map.put(snapshot, "owner_party_ids", [party]),
          {:ok, body} <- post(state, :holdings_summary, request, :account) do
-      {:ok, account(party, body)}
+      account(party, body)
     end
   end
 
@@ -431,7 +465,7 @@ defmodule Raxol.Web3.Backend.Canton do
          {:ok, request} <- holdings_request(state, party, Keyword.get(opts, :cursor)),
          {:ok, symbol} <- amulet_names(state),
          {:ok, body} <- post(state, :holdings_state, request, :list) do
-      {:ok, holdings_page(state, request, body, symbol)}
+      holdings_page(state, request, body, symbol)
     end
   end
 
@@ -481,7 +515,7 @@ defmodule Raxol.Web3.Backend.Canton do
     opts =
       state
       |> scan_opts(path, request, class)
-      |> Keyword.put(:headers, [{"content-type", "application/json"}])
+      |> with_content_type()
 
     state
     |> url(path, %{})
@@ -544,9 +578,34 @@ defmodule Raxol.Web3.Backend.Canton do
   # It is not in the cache options, because `raw_request/2` is not cached, and
   # it is not in any error term, because none of them carries a header.
   defp ccscan_opts(state) do
+    credential = {state.ccscan_auth_header, "Bearer " <> state.ccscan_key}
+
     state.http_opts
     |> Keyword.put_new(:rate_limit, @rate_limit)
-    |> Keyword.put(:headers, [{state.ccscan_auth_header, "Bearer " <> state.ccscan_key}])
+    |> Keyword.update(
+      :headers,
+      [credential],
+      &[credential | drop_header(&1, state.ccscan_auth_header)]
+    )
+  end
+
+  # The operator's own `:headers` survive. `:http_opts` is documented as
+  # forwarded unchanged, and replacing the list dropped every header an
+  # RBAC-gated Scan instance needs, so the GET reads kept them and these two
+  # POST reads answered 403 for party-scoped reads alone.
+  defp with_content_type(opts) do
+    Keyword.update(
+      opts,
+      :headers,
+      [@content_type],
+      &[@content_type | drop_header(&1, "content-type")]
+    )
+  end
+
+  # An operator who set the same header keeps one of it rather than two: a
+  # duplicate `content-type` is a request some servers refuse outright.
+  defp drop_header(headers, name) do
+    Enum.reject(headers, fn {header, _value} -> header == name end)
   end
 
   # The one recognised body shape this backend declares. `account_required` was
@@ -591,7 +650,7 @@ defmodule Raxol.Web3.Backend.Canton do
   defp dso(state), do: get(state, :dso, %{}, :catalog)
 
   defp tick_duration_ms(body) do
-    case get_in(body, ["latest_mining_round", "contract", "payload", "tickDuration"]) do
+    case dig(body, ["latest_mining_round", "contract", "payload", "tickDuration"]) do
       %{"microseconds" => micros} -> div_or_nil(int(micros), 1000)
       _absent -> nil
     end
@@ -693,11 +752,18 @@ defmodule Raxol.Web3.Backend.Canton do
   # would report a party as holding nothing while its holdings were one page
   # further on.
   defp holdings_page(state, request, body, symbol) do
-    %{
-      items: body |> Map.get("created_events", []) |> Enum.map(&token_balance(&1, symbol)),
-      next: next_cursor(state, request, body["next_page_token"])
-    }
+    with {:ok, rows} <- page_rows(body["created_events"]),
+         {:ok, items} <- Backend.map_rows(rows, &token_balance(&1, symbol), :token_balance_row) do
+      {:ok, %{items: items, next: next_cursor(state, request, body["next_page_token"])}}
+    end
   end
+
+  # An absent list is an empty page, and a list-shaped key holding something
+  # else is a body that is not what it claimed rather than a page with no
+  # rows: an empty page would report a party as holding nothing.
+  defp page_rows(nil), do: {:ok, []}
+  defp page_rows(rows) when is_list(rows), do: {:ok, rows}
+  defp page_rows(_other), do: {:error, {:decode_failed, :page}}
 
   defp next_cursor(_state, _request, nil), do: nil
 
@@ -720,20 +786,21 @@ defmodule Raxol.Web3.Backend.Canton do
   # -- normalization -----------------------------------------------------------
 
   defp account(party, body) do
-    summary = body |> Map.get("summaries", []) |> List.first()
+    summary = body |> field("summaries") |> rows_of() |> List.first()
 
-    %{
-      ref: {:party, party},
-      # `nil` and not `0` for an absent summary: see the moduledoc.
-      balance: summary && amulet(summary["total_coin_holdings"]),
-      # A party holds no code and there is nothing to verify.
-      contract?: false,
-      verified?: false,
-      # Self-asserted by whoever allocated the party, and not unique.
-      name: party_name(party),
-      ens: nil
-      # `:kind` is omitted, not nil: Canton has no account-kind taxonomy.
-    }
+    {:ok,
+     %{
+       ref: {:party, party},
+       # `nil` and not `0` for an absent summary: see the moduledoc.
+       balance: summary && amulet(field(summary, "total_coin_holdings")),
+       # A party holds no code and there is nothing to verify.
+       contract?: false,
+       verified?: false,
+       # Self-asserted by whoever allocated the party, and not unique.
+       name: party_name(party),
+       ens: nil
+       # `:kind` is omitted, not nil: Canton has no account-kind taxonomy.
+     }}
   end
 
   # Thin on purpose: a Daml update carries no single sender, recipient, value or
@@ -756,11 +823,12 @@ defmodule Raxol.Web3.Backend.Canton do
   end
 
   defp root_choice(body) do
-    events = Map.get(body, "events_by_id", %{})
+    events = body |> field("events_by_id") |> object()
 
     body
-    |> Map.get("root_event_ids", [])
-    |> Enum.find_value(fn id -> exercised_choice(Map.get(events, id)) end)
+    |> field("root_event_ids")
+    |> rows_of()
+    |> Enum.find_value(fn id -> exercised_choice(field(events, id)) end)
   end
 
   defp exercised_choice(%{"event_type" => "exercised_event", "choice" => choice})
@@ -774,19 +842,22 @@ defmodule Raxol.Web3.Backend.Canton do
   # digit; the accrued holding fee is a party-level figure and is not netted out
   # here. `template_id` is the asset's identity on this chain, which is a Daml
   # template rather than a contract address.
-  defp token_balance(event, names) do
-    %{
-      token: %{
-        address: event["template_id"],
-        symbol: names.symbol,
-        name: names.name,
-        decimals: @amulet_decimals,
-        type: event["package_name"]
-      },
-      amount: event |> get_in(["create_arguments", "amount", "initialAmount"]) |> amulet(),
-      token_id: event["contract_id"]
-    }
+  defp token_balance(event, names) when is_map(event) do
+    {:ok,
+     %{
+       token: %{
+         address: event["template_id"],
+         symbol: names.symbol,
+         name: names.name,
+         decimals: @amulet_decimals,
+         type: event["package_name"]
+       },
+       amount: event |> dig(["create_arguments", "amount", "initialAmount"]) |> amulet(),
+       token_id: event["contract_id"]
+     }}
   end
+
+  defp token_balance(_event, _names), do: {:error, {:decode_failed, :token_balance_row}}
 
   # Reported in the smallest unit, the way wei and lamports are. A figure with
   # more than ten fractional digits is a shape change rather than a rounding
@@ -846,9 +917,29 @@ defmodule Raxol.Web3.Backend.Canton do
     end
   end
 
-  defp party({:party, id}) when is_binary(id) and id != "", do: {:ok, id}
+  # A party id travels in a JSON request body, and `Jason.encode!/1` RAISES on
+  # a binary that is not valid UTF-8, so the charset is checked here, on the
+  # function that composes the request, rather than left to the encoder.
+  defp party({:party, id}) when is_binary(id) and id != "" do
+    if String.valid?(id), do: {:ok, id}, else: {:error, {:unsupported_account_ref, :party}}
+  end
+
   defp party({tag, _value}), do: {:error, {:unsupported_account_ref, tag}}
   defp party(_other), do: {:error, {:unsupported_account_ref, :unknown}}
+
+  # `get_in/2` and the `[]` access syntax raise on the way through anything
+  # that is not a map, and every value on the way through belongs to the
+  # upstream. These read a wrong-typed value as an absent one instead.
+  defp dig(value, path), do: Enum.reduce(path, value, fn key, inner -> field(inner, key) end)
+
+  defp field(map, key) when is_map(map), do: Map.get(map, key)
+  defp field(_other, _key), do: nil
+
+  defp object(value) when is_map(value), do: value
+  defp object(_other), do: %{}
+
+  defp rows_of(value) when is_list(value), do: value
+  defp rows_of(_other), do: []
 
   defp ok_or({:ok, _value} = ok, _reason), do: ok
   defp ok_or(:error, reason), do: {:error, {:unsupported_chain, reason}}

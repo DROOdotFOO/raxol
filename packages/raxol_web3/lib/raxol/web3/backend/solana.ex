@@ -199,6 +199,33 @@ defmodule Raxol.Web3.Backend.Solana do
   returned: a transaction the node has not confirmed is indistinguishable from
   one that never existed, and both are `{:upstream_refused, :not_found}`.
 
+  ## Which commitment each read is taken at
+
+  The level is per read rather than per handle, and on this chain it is a
+  correctness question rather than a tuning knob: a `confirmed` transaction is
+  one a supermajority has voted on and a fork can still drop, and a
+  `finalized` one cannot be dropped.
+
+  | Read | Commitment |
+  | ---- | ---------- |
+  | `get_transaction/2` | `confirmed` |
+  | `list_transactions/3` | `confirmed` |
+  | `account_info/2` | `finalized` |
+  | `token_balances/3` | `finalized` |
+  | `block_height/1` | `processed` for `height`, `finalized` for `finalized_height` |
+  | `get_block/2` | the node's own default, which is `finalized` |
+
+  The two transaction reads are `confirmed` deliberately. A signature the
+  cluster has confirmed but not yet finalized belongs to a transaction that
+  exists, and reporting it as absent for as long as finality takes would make
+  a payment unreadable in exactly the window a caller asks about it. The cost
+  is that `status: :success` here is not settlement: a caller that settles on
+  one compares the transaction's `block` against `block_height/1`'s
+  `finalized_height`, which is the number reported for this purpose.
+
+  The two account reads are `finalized` for the mirror-image reason: a
+  balance that a fork can revoke is not a balance to act on.
+
   ## Networks are resolved at runtime, never hardcoded
 
   The survey records SQD's README, docs and changelog disagreeing about
@@ -292,6 +319,11 @@ defmodule Raxol.Web3.Backend.Solana do
   alias Raxol.Web3.Origin
   alias Raxol.Web3.TTL
 
+  # `:http_opts` is an operator's own keyword list and may carry an
+  # authorization header, so it is not something `inspect/1` may render: a
+  # handle reaches an operator through `Raxol.Web3.Router.candidates/3`, and a
+  # crash anywhere below formats the struct whole into a log line.
+  @derive {Inspect, except: [:http_opts]}
   @enforce_keys [:chain_ref, :source, :url, :network]
   defstruct [:chain_ref, :source, :url, :network, http_opts: [], cache?: true]
 
@@ -369,6 +401,10 @@ defmodule Raxol.Web3.Backend.Solana do
 
   @parsed_config %{"encoding" => "jsonParsed", "commitment" => "finalized"}
 
+  # `confirmed` rather than `finalized`, deliberately, and the moduledoc's
+  # commitment table says so with its reason: a transaction the cluster has
+  # confirmed exists, and answering `not_found` until it finalizes would hide
+  # it during the window a caller most needs to read it.
   @transaction_config %{
     "encoding" => "json",
     "commitment" => "confirmed",
@@ -408,11 +444,12 @@ defmodule Raxol.Web3.Backend.Solana do
   def new(chain_ref, opts \\ []) do
     with {:ok, canonical} <- canonical(chain_ref),
          {:ok, chain} <- Map.fetch(@chains, canonical) |> ok_or({:unsupported_chain, chain_ref}),
-         {:ok, source} <- source(Keyword.get(opts, :source, :sqd)) do
+         {:ok, source} <- source(Keyword.get(opts, :source, :sqd)),
+         {:ok, url} <- base_url(Keyword.get(opts, :url), endpoint(source, chain)) do
       state = %__MODULE__{
         chain_ref: canonical,
         source: source,
-        url: Keyword.get(opts, :url, endpoint(source, chain)),
+        url: url,
         network: Keyword.get(opts, :network, chain.network),
         http_opts: Keyword.get(opts, :http_opts, []),
         cache?: Keyword.get(opts, :cache, true)
@@ -466,7 +503,8 @@ defmodule Raxol.Web3.Backend.Solana do
   end
 
   def chain_info(%__MODULE__{source: :rpc} = state) do
-    with {:ok, body} <- rpc(state, "getEpochInfo", [@finalized], :chain_stats) do
+    with {:ok, body} when is_map(body) <-
+           rpc(state, "getEpochInfo", [@finalized], :chain_stats) do
       {:ok,
        %{
          chain_ref: state.chain_ref,
@@ -477,6 +515,9 @@ defmodule Raxol.Web3.Backend.Solana do
          total_transactions: body["transactionCount"],
          total_addresses: nil
        }}
+    else
+      {:ok, _other} -> {:error, {:decode_failed, :epoch_info}}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -504,13 +545,21 @@ defmodule Raxol.Web3.Backend.Solana do
 
   # -- optional, on the RPC source only ----------------------------------------
 
+  @doc """
+  One transaction by signature, read at `confirmed`.
+
+  See the moduledoc's commitment table: this is the level at which a
+  just-landed transaction is readable, and it is not settlement. A caller
+  that settles compares the returned `block` against `block_height/1`'s
+  `finalized_height`.
+  """
   @impl Backend
   def get_transaction(%__MODULE__{source: :rpc} = state, signature) when is_binary(signature) do
     with {:ok, checked} <- base58(signature, 43, 90),
          {:ok, body} <- rpc(state, "getTransaction", [checked, @transaction_config], :transaction) do
       case body do
         nil -> {:error, {:upstream_refused, :not_found}}
-        body -> {:ok, transaction(body)}
+        body -> transaction(body)
       end
     end
   end
@@ -524,24 +573,30 @@ defmodule Raxol.Web3.Backend.Solana do
   def account_info(%__MODULE__{source: :rpc} = state, account_ref) do
     with {:ok, pubkey} <- pubkey(account_ref),
          {:ok, account} <- rpc(state, "getAccountInfo", [pubkey, @account_config], :account) do
-      case value(account) do
-        nil ->
-          {:error, {:upstream_refused, :not_found}}
-
-        info ->
-          {:ok,
-           %{
-             ref: {:solana, pubkey},
-             balance: info["lamports"],
-             contract?: info["executable"] == true,
-             verified?: false,
-             name: nil,
-             ens: nil,
-             kind: kind(info)
-           }}
+      case account do
+        %{"value" => nil} -> {:error, {:upstream_refused, :not_found}}
+        %{"value" => info} -> account_record(pubkey, info)
+        _envelope -> {:error, {:decode_failed, :account}}
       end
     end
   end
+
+  defp account_record(pubkey, info) when is_map(info) do
+    with {:ok, balance} <- Backend.money(info["lamports"], :balance) do
+      {:ok,
+       %{
+         ref: {:solana, pubkey},
+         balance: balance,
+         contract?: info["executable"] == true,
+         verified?: false,
+         name: nil,
+         ens: nil,
+         kind: kind(info)
+       }}
+    end
+  end
+
+  defp account_record(_pubkey, _info), do: {:error, {:decode_failed, :account}}
 
   @impl Backend
   def token_balances(%__MODULE__{source: :rpc} = state, account_ref, opts \\ []) do
@@ -553,24 +608,42 @@ defmodule Raxol.Web3.Backend.Solana do
              "getTokenAccountsByOwner",
              [pubkey, %{"programId" => @token_program}, @parsed_config],
              :list
-           ) do
-      items = body |> value() |> List.wrap() |> Enum.map(&token_balance/1)
-
+           ),
+         {:ok, rows} <- token_accounts(body),
+         {:ok, items} <- Backend.map_rows(rows, &token_balance/1, :token_balance_row) do
       {:ok, %{items: items, next: nil}}
     end
   end
 
+  # The envelope's `value` is the list of token accounts. A body carrying
+  # something else where the list belongs is a decode failure rather than a
+  # wallet holding nothing: an empty page would answer "no tokens" for a
+  # response nobody could read, and the router fails over on the first.
+  defp token_accounts(%{"value" => nil}), do: {:ok, []}
+  defp token_accounts(%{"value" => accounts}) when is_list(accounts), do: {:ok, accounts}
+  defp token_accounts(_other), do: {:error, {:decode_failed, :token_accounts}}
+
+  @doc """
+  One page of an account's signatures, read at `confirmed`.
+
+  The same level, and the same caveat, as `get_transaction/2`: see the
+  moduledoc's commitment table.
+  """
   @impl Backend
   def list_transactions(%__MODULE__{source: :rpc} = state, account_ref, opts \\ []) do
     with {:ok, pubkey} <- pubkey(account_ref),
          {:ok, params} <- cursor_params(state, Keyword.get(opts, :cursor)),
          {:ok, body} <-
-           rpc(state, "getSignaturesForAddress", [pubkey, page_config(params)], :list) do
-      items = List.wrap(body)
-
-      {:ok, %{items: Enum.map(items, &signature_row/1), next: next_cursor(state, items)}}
+           rpc(state, "getSignaturesForAddress", [pubkey, page_config(params)], :list),
+         {:ok, rows} <- signature_rows(body),
+         {:ok, items} <- Backend.map_rows(rows, &signature_row/1, :signature_row) do
+      {:ok, %{items: items, next: next_cursor(state, rows)}}
     end
   end
+
+  defp signature_rows(nil), do: {:ok, []}
+  defp signature_rows(rows) when is_list(rows), do: {:ok, rows}
+  defp signature_rows(_other), do: {:error, {:decode_failed, :signatures}}
 
   @impl Backend
   def get_block(%__MODULE__{source: :rpc} = state, slot) do
@@ -588,7 +661,8 @@ defmodule Raxol.Web3.Backend.Solana do
 
     with {:ok, payload} <- sqd(state, "portal_list_networks", arguments, :catalog) do
       payload
-      |> Map.get("items", [])
+      |> Map.get("items")
+      |> rows_of()
       |> Enum.find_value(&match_network(&1, state.network))
       |> case do
         nil -> {:error, {:unsupported_chain, state.network}}
@@ -600,7 +674,7 @@ defmodule Raxol.Web3.Backend.Solana do
   # The aliases come from the live response rather than from a table here, so
   # `solana`, `sol` and `solana-beta` resolve without this module tracking them.
   defp match_network(%{"network" => name} = item, wanted) when is_binary(name) do
-    if name == wanted or wanted in Map.get(item, "aliases", []) do
+    if name == wanted or wanted in rows_of(Map.get(item, "aliases")) do
       %{network: name, real_time?: item["real_time"] == true}
     end
   end
@@ -784,55 +858,68 @@ defmodule Raxol.Web3.Backend.Solana do
 
   # -- normalization -----------------------------------------------------------
 
-  defp transaction(body) do
-    meta = Map.get(body, "meta") || %{}
-    message = get_in(body, ["transaction", "message"]) || %{}
+  defp transaction(body) when is_map(body) do
+    meta = body |> Map.get("meta") |> object()
+    message = body |> dig(["transaction", "message"]) |> object()
 
-    %{
-      hash: body |> get_in(["transaction", "signatures"]) |> first(),
-      status: status(meta["err"]),
-      block: body["slot"],
-      timestamp: unix(body["blockTime"]),
-      from: message |> Map.get("accountKeys") |> first() |> account_ref(),
-      to: nil,
-      value: nil,
-      fee: meta["fee"],
-      method: nil
-    }
+    with {:ok, fee} <- Backend.money(meta["fee"], :fee) do
+      {:ok,
+       %{
+         hash: body |> dig(["transaction", "signatures"]) |> first(),
+         status: status(meta["err"]),
+         block: body["slot"],
+         timestamp: unix(body["blockTime"]),
+         from: message |> Map.get("accountKeys") |> first() |> account_ref(),
+         to: nil,
+         value: nil,
+         fee: fee,
+         method: nil
+       }}
+    end
   end
 
-  defp signature_row(item) do
-    %{
-      hash: item["signature"],
-      status: status(item["err"]),
-      block: item["slot"],
-      timestamp: unix(item["blockTime"]),
-      from: nil,
-      to: nil,
-      value: nil,
-      fee: nil,
-      method: nil
-    }
+  defp transaction(_body), do: {:error, {:decode_failed, :transaction}}
+
+  defp signature_row(item) when is_map(item) do
+    {:ok,
+     %{
+       hash: item["signature"],
+       status: status(item["err"]),
+       block: item["slot"],
+       timestamp: unix(item["blockTime"]),
+       from: nil,
+       to: nil,
+       value: nil,
+       fee: nil,
+       method: nil
+     }}
   end
 
-  defp token_balance(item) do
-    info = get_in(item, ["account", "data", "parsed", "info"]) || %{}
-    amount = Map.get(info, "tokenAmount") || %{}
+  defp signature_row(_item), do: {:error, {:decode_failed, :signature_row}}
 
-    %{
-      token: %{
-        address: info["mint"],
-        # A validator serves no token registry, so a symbol and a name are
-        # absent rather than guessed from a mint address.
-        symbol: nil,
-        name: nil,
-        decimals: amount["decimals"],
-        type: get_in(item, ["account", "data", "program"])
-      },
-      amount: int(amount["amount"]),
-      token_id: nil
-    }
+  defp token_balance(item) when is_map(item) do
+    info = item |> dig(["account", "data", "parsed", "info"]) |> object()
+    amount = info |> Map.get("tokenAmount") |> object()
+
+    with {:ok, parsed} <- Backend.money(amount["amount"], :amount) do
+      {:ok,
+       %{
+         token: %{
+           address: info["mint"],
+           # A validator serves no token registry, so a symbol and a name are
+           # absent rather than guessed from a mint address.
+           symbol: nil,
+           name: nil,
+           decimals: amount["decimals"],
+           type: dig(item, ["account", "data", "program"])
+         },
+         amount: parsed,
+         token_id: nil
+       }}
+    end
   end
+
+  defp token_balance(_item), do: {:error, {:decode_failed, :token_balance_row}}
 
   defp block_result({:ok, body}, slot) when is_map(body) do
     {:ok,
@@ -848,6 +935,10 @@ defmodule Raxol.Web3.Backend.Solana do
   # A skipped slot is a success with no block in it, and the nil hash is what
   # says so: a produced block always carries a blockhash.
   defp block_result({:ok, nil}, slot), do: {:ok, skipped(slot)}
+  # A result that is neither a block nor `null` is a body that is not what it
+  # claimed. It was a missing clause, which raised `FunctionClauseError` and
+  # carried the upstream value into the message rather than failing over.
+  defp block_result({:ok, _other}, _slot), do: {:error, {:decode_failed, :block}}
   defp block_result({:rpc_error, -32_009}, slot), do: {:ok, skipped(slot)}
   defp block_result({:rpc_error, code}, _slot), do: {:error, {:upstream_refused, rpc_class(code)}}
   defp block_result({:error, _reason} = error, _slot), do: error
@@ -868,9 +959,6 @@ defmodule Raxol.Web3.Backend.Solana do
   defp status(nil), do: :success
   defp status(_error), do: :reverted
 
-  defp value(%{"value" => value}), do: value
-  defp value(_other), do: nil
-
   defp account_ref(pubkey) when is_binary(pubkey), do: {:solana, pubkey}
   defp account_ref(_absent), do: nil
 
@@ -880,18 +968,29 @@ defmodule Raxol.Web3.Backend.Solana do
   defp count(list) when is_list(list), do: length(list)
   defp count(_other), do: nil
 
-  defp int(value) when is_integer(value), do: value
+  # `get_in/2` and the `[]` access syntax raise on the way through anything
+  # that is not a map, and every value on the way through belongs to the
+  # upstream. These read a wrong-typed value as an absent one instead.
+  defp dig(value, path), do: Enum.reduce(path, value, fn key, inner -> field(inner, key) end)
 
-  defp int(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {number, _rest} -> number
-      :error -> nil
+  defp field(map, key) when is_map(map), do: Map.get(map, key)
+  defp field(_other, _key), do: nil
+
+  defp object(value) when is_map(value), do: value
+  defp object(_other), do: %{}
+
+  defp rows_of(value) when is_list(value), do: value
+  defp rows_of(_other), do: []
+
+  # `DateTime.from_unix!/2` raises on a value outside the calendar's range,
+  # and `blockTime` is the upstream's integer rather than one of ours.
+  defp unix(seconds) when is_integer(seconds) do
+    case DateTime.from_unix(seconds) do
+      {:ok, datetime} -> datetime
+      {:error, _reason} -> nil
     end
   end
 
-  defp int(_other), do: nil
-
-  defp unix(seconds) when is_integer(seconds), do: DateTime.from_unix!(seconds)
   defp unix(_other), do: nil
 
   # -- ingest ------------------------------------------------------------------
@@ -908,12 +1007,36 @@ defmodule Raxol.Web3.Backend.Solana do
   defp endpoint(:sqd, chain), do: chain.sqd_url
   defp endpoint(:rpc, chain), do: chain.rpc_url
 
+  # Validated at construction rather than at the first read: `origin_id/1` is
+  # `URI.new!/1` on this value, `health_key/1` reaches it, and a router
+  # ordering candidates called that before any request went out. So a URL
+  # that is not one failed the router rather than the handle that carried it.
+  # `Raxol.Web3.Backend.Aztec.new/2` refuses the same three ways, and the
+  # scheme is fixed because `Raxol.Web3.HTTP` vets `schemes: [:https]` and
+  # would refuse anything else on the way out anyway.
+  defp base_url(nil, default), do: {:ok, default}
+
+  defp base_url(url, _default) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: "https", host: host}} when is_binary(host) and host != "" -> {:ok, url}
+      {:ok, %URI{scheme: "https"}} -> {:error, {:invalid_base_url, :host}}
+      {:ok, %URI{}} -> {:error, {:invalid_base_url, :scheme}}
+      {:error, _part} -> {:error, {:invalid_base_url, :url}}
+    end
+  end
+
+  defp base_url(_other, _default), do: {:error, {:invalid_base_url, :type}}
+
   defp pubkey({:solana, value}), do: base58(value, 32, 44)
   defp pubkey({tag, _value}), do: {:error, {:unsupported_account_ref, tag}}
   defp pubkey(_other), do: {:error, {:unsupported_account_ref, :unknown}}
 
+  # Bytes rather than codepoints: `to_charlist/1` RAISES on a binary that is
+  # not valid UTF-8, and this one arrives as a tool argument. The alphabet is
+  # ASCII, so the two readings agree on every value that could be an address
+  # and differ only on the ones this refuses.
   defp base58(value, min, max) when is_binary(value) do
-    characters = to_charlist(value)
+    characters = :binary.bin_to_list(value)
 
     if length(characters) in min..max and Enum.all?(characters, &(&1 in @base58)) do
       {:ok, value}

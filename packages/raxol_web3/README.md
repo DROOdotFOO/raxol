@@ -92,6 +92,10 @@ balances and a signature-cursor walk. A skipped slot is a success with a nil
 hash rather than an error. An account carries its `kind`, because a token
 account's lamport balance is its rent-exempt reserve and a caller reading it
 as a wallet balance would be wrong by design.
+Transaction reads are taken at `confirmed` and account reads at `finalized`,
+per read rather than per handle, and the moduledoc carries the table and the
+reason: a confirmed transaction exists and a fork can still drop it, so
+`status: :success` is readable but is not settlement.
 
 `Raxol.Web3.Backend.Tron`: three handles, TronGrid MCP, SQD Portal and
 TronScan MCP, with declared concurrency per source (`:pooled`, `:stateless`,
