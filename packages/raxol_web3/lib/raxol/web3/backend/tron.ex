@@ -117,6 +117,7 @@ defmodule Raxol.Web3.Backend.Tron do
   alias Raxol.MCP.Client
   alias Raxol.MCP.Client.Era
   alias Raxol.Web3.Backend
+  alias Raxol.Web3.Backend.SQD
   alias Raxol.Web3.Cache
   alias Raxol.Web3.Cursor
   alias Raxol.Web3.MCPCall
@@ -709,41 +710,24 @@ defmodule Raxol.Web3.Backend.Tron do
   # SQD announces a refusal as a nested object with a machine-readable code,
   # and it puts that object in both places a tool result can carry one: an
   # `isError: true` result, and a plain result whose payload is the object.
-  # The code is read in both arms because it is the same refusal in both.
-  # Reading it only on the plain arm was the bug: both RECORDED refusals from
-  # this source carry `isError: true`, so every one of them collapsed to
-  # `{:upstream_refused, :unknown}` and became final, while
-  # `Raxol.Web3.Backend.Solana` read the same portal's `unknown_network` as a
-  # chain this source does not serve and failed over.
+  # The code is read in both arms because it is the same refusal in both,
+  # and reading one arm only was the bug: both RECORDED refusals from this
+  # source carry `isError: true`, so every one of them collapsed to
+  # `{:upstream_refused, :unknown}` and became final.
+  #
+  # The reading itself is `Raxol.Web3.Backend.SQD`'s rather than this
+  # module's, because `Raxol.Web3.Backend.Solana` reads the same endpoint and
+  # the two copies of this had already disagreed twice: once about
+  # `unknown_network` and once about which arm carries the object. One
+  # endpoint, one reading.
   defp sqd_result(state, payload) do
-    case sqd_code(payload) do
+    case SQD.refusal(payload, network_name(state)) do
       nil -> payload_result(payload)
-      code -> {:error, sqd_class(state, code)}
+      reason -> {:error, reason}
     end
   end
 
-  # An `isError: true` result is a refusal whatever its payload turns out to
-  # say, so one we cannot read the code off is still an error.
-  defp sqd_refusal(state, payload) do
-    case sqd_code(payload) do
-      nil -> {:upstream_refused, :unknown}
-      code -> sqd_class(state, code)
-    end
-  end
-
-  defp sqd_code(%{"error" => %{"code" => code}}) when is_binary(code), do: code
-  defp sqd_code(_other), do: nil
-
-  # The same codes `Raxol.Web3.Backend.Solana` reads off the same portal,
-  # mapped the same way. `unknown_network` is the load-bearing one: it says
-  # this source does not serve this network, which a sibling source may, so it
-  # is `{:unsupported_chain, _}` and the router moves on to TronGrid or
-  # TronScan. As `{:upstream_refused, :not_found}` it was final, and a read
-  # died on the archive while both other sources were healthy.
-  defp sqd_class(state, "unknown_network"), do: {:unsupported_chain, network_name(state)}
-  defp sqd_class(_state, "unauthorized"), do: {:upstream_refused, :auth}
-  defp sqd_class(_state, "rate_limited"), do: {:upstream_refused, :rate_limit}
-  defp sqd_class(_state, _other), do: {:upstream_refused, :unknown}
+  defp sqd_refusal(state, payload), do: SQD.announced(payload, network_name(state))
 
   # Every reason `Raxol.MCP.Client` produces, mapped onto the closed taxonomy in
   # `Raxol.Web3.Backend`. Nothing upstream travels: a JSON-RPC error contributes

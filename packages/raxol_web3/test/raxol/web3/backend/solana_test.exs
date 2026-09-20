@@ -298,6 +298,18 @@ defmodule Raxol.Web3.Backend.SolanaTest do
 
       assert {:error, {:upstream_refused, :unknown}} = Backend.call(handle, :chain_info)
     end
+
+    test "a refusal in a plain result is read, not handed back as a body" do
+      # This endpoint can announce a refusal with isError, and it can announce
+      # one as a plain result whose payload IS the error object.
+      # `Raxol.Web3.Backend.Tron` reads both arms off the same endpoint, and
+      # reading one arm here meant a keyless read came back as a successful
+      # body: the operator was told the archive returned garbage rather than
+      # that this deployment holds no credential.
+      handle = sqd(%{"portal_get_network_info" => sse(%{"error" => %{"code" => "unauthorized"}})})
+
+      assert {:error, {:upstream_refused, :auth}} = Backend.call(handle, :chain_info)
+    end
   end
 
   describe "block_height/1" do
@@ -912,6 +924,26 @@ defmodule Raxol.Web3.Backend.SolanaTest do
 
       tools = requested_tools()
       assert "portal_list_networks" in tools
+      assert "getEpochInfo" in tools
+    end
+
+    test "a credential the archive wants and this deployment lacks walks on" do
+      # `unauthorized` is a fact about the SOURCE, not about the question: the
+      # node holds no credential and answers anyway. Reading it as
+      # `{:upstream_refused, :unknown}` made it final, so a keyless archive
+      # read died with a healthy node sitting behind it, while the identical
+      # read on `Raxol.Web3.Backend.Tron` failed over.
+      router =
+        router_pair(
+          %{"portal_get_network_info" => sse_error(%{"error" => %{"code" => "unauthorized"}})},
+          %{"getEpochInfo" => fixture("rpc_epoch_info.json")}
+        )
+
+      assert {:ok, info} = Router.call(router, @mainnet, :chain_info)
+      assert info.total_blocks == 424_994_262
+
+      tools = requested_tools()
+      assert "portal_get_network_info" in tools
       assert "getEpochInfo" in tools
     end
 
