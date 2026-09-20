@@ -20,7 +20,9 @@ if Code.ensure_loaded?(Mint.HTTP) do
         ceiling.
       * **A wall-clock deadline** (`:deadline_ms`, default 20 s), computed once
         at entry so the request send counts against it, and re-checked before
-        every `recv`.
+        every `recv`. A caller that dials first passes the REMAINING budget:
+        `Raxol.MCP.Client.Transport.Http.Exchange` computes the deadline
+        before its connect, so the dial counts against it too.
       * **Per-`recv` silence** (`:chunk_timeout_ms`, default 10 s), which bounds
         a peer that stops talking mid-response.
 
@@ -28,7 +30,14 @@ if Code.ensure_loaded?(Mint.HTTP) do
     makes the two timeouts distinguishable rather than merged: a timeout on a
     clamped wait is `{:timeout, :deadline}`, a timeout on a full chunk wait is
     `{:timeout, :chunk}`. Total overshoot past the deadline is bounded by one
-    chunk timeout.
+    chunk timeout, so the worst case is `deadline_ms + chunk_timeout_ms`.
+
+    ## Every reason is an atom
+
+    A reason returned from here is `{:too_large, limit}`,
+    `{:timeout, :chunk | :deadline}` or `{:transport, atom()}` -- never a raw
+    Mint struct. Mint's `{:invalid_header_value, name, value}` carries the
+    offending header VALUE, and this module's callers log their reasons.
 
     ## Why the loop, and not a stream callback
 
@@ -97,7 +106,16 @@ if Code.ensure_loaded?(Mint.HTTP) do
     @type reason ::
             {:too_large, pos_integer()}
             | {:timeout, :chunk | :deadline}
-            | {:transport, term()}
+            | {:transport, atom()}
+
+    @doc """
+    The default wall-clock deadline, in milliseconds.
+
+    Public because a caller that dials before calling `run/3` starts this
+    clock itself, and it has to be the same number.
+    """
+    @spec default_deadline_ms() :: pos_integer()
+    def default_deadline_ms, do: @default_deadline_ms
 
     @doc """
     Send `request` on `conn` and read the response under the four bounds.
@@ -129,7 +147,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
              Map.get(request, :body)
            ) do
         {:ok, conn, ref} -> read(conn, ref, Response.new(), bounds)
-        {:error, conn, reason} -> close(conn, {:error, {:transport, reason}})
+        {:error, conn, reason} -> close(conn, {:error, transport_error(reason)})
       end
     end
 
@@ -188,7 +206,28 @@ if Code.ensure_loaded?(Mint.HTTP) do
     # so the wait itself has to say which one it was.
     defp transport_reason(%Mint.TransportError{reason: :timeout}, true), do: {:timeout, :deadline}
     defp transport_reason(%Mint.TransportError{reason: :timeout}, false), do: {:timeout, :chunk}
-    defp transport_reason(reason, _clamped?), do: {:transport, reason}
+    defp transport_reason(reason, _clamped?), do: transport_error(reason)
+
+    # The reason is collapsed to a tag, the way the connect side already
+    # collapses its own. A raw Mint error is not a closed taxonomy: an
+    # `%Mint.HTTPError{reason: {:invalid_header_value, name, value}}` carries
+    # the FULL header value, so a resolved `authorization` with one
+    # non-printable byte in it -- a trailing newline out of `${env:VAR}`, or
+    # UTF-8 -- rode `inspect/1` into a `Logger.warning`, into the `failed`
+    # list `/mcp` renders, and into the caller's error term. A TLS alert's
+    # `{:tls_alert, {name, charlist}}` is peer text for the same reason.
+    defp transport_error(%Mint.TransportError{reason: reason}), do: transport_error(reason)
+    defp transport_error(%Mint.HTTPError{reason: reason}), do: transport_error(reason)
+    defp transport_error(reason) when is_atom(reason), do: {:transport, reason}
+
+    defp transport_error(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
+      case elem(reason, 0) do
+        tag when is_atom(tag) -> {:transport, tag}
+        _untagged -> {:transport, :unknown}
+      end
+    end
+
+    defp transport_error(_other), do: {:transport, :unknown}
 
     defp close(conn, result) do
       _ = Mint.HTTP.close(conn)

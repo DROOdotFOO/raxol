@@ -63,9 +63,12 @@ defmodule Raxol.Agent.McpSpendHook do
   ## Units
 
   A declared price is an integer in whatever unit the run budget counts, and
-  it is the operator's figure rather than a measurement. It is settled as the
-  actual cost, because per-call billing has no post-hoc actual to discover:
-  the price IS the cost once the call happened.
+  it is the operator's figure rather than a measurement. A call that happened
+  is settled at that price, because per-call billing has no post-hoc actual
+  to discover: the price IS the cost once the call happened. A call that did
+  not happen settles 0 -- see `charged/2`, which is what keeps a
+  `{:error, :busy}` or a refused metering gate from charging a run budget for
+  a request that never left the node.
   """
 
   @behaviour Raxol.Agent.ToolCall.Hook
@@ -139,11 +142,34 @@ defmodule Raxol.Agent.McpSpendHook do
   end
 
   defp run_reserved(gate, cost_ref, price, inner) do
-    case SpendGate.around(gate, cost_ref, price, fn -> {price, inner.(cost_ref)} end) do
+    # The handle the transport sees is minted here, once per invocation, and
+    # the transport spends it. The `cost_ref` stays what the spend ledger
+    # keys on: it is derived from the model's tool-use id, so it is a value
+    # the model can influence and never a credential to reach a priced tool
+    # with. `Raxol.MCP.Client.Reservation` says what the handle defends.
+    handle = Raxol.MCP.Client.Reservation.mint()
+
+    case SpendGate.around(gate, cost_ref, price, fn -> charged(price, inner.(handle)) end) do
       {:ok, result} -> result
       {:error, {:reserve_refused, _reason}} = refused -> refused
     end
   end
+
+  # What the run budget is charged. Per-call billing has no post-hoc actual to
+  # discover, so a call that HAPPENED settles at the declared price -- a
+  # tool-level `isError` result included, since the origin served it.
+  #
+  # An error is not a call. The transport refuses `:unmetered_call` and
+  # `{:unknown_price, _}` with no request built, answers `{:error, :busy}`
+  # when the in-flight window is full, `:breaker_open` for a quarantined
+  # origin, and `{:error, :timeout}` for a request it gave up on. Settling the
+  # full price for those charged the run budget for work no origin will bill,
+  # which is what the moduledoc above promises not to do.
+  defp charged(price, {:ok, _result} = result), do: {price, result}
+  defp charged(_price, {:error, _reason} = result), do: {0, result}
+  # A shape neither this hook nor the client produced is not evidence that
+  # nothing happened, so it is charged rather than waived.
+  defp charged(price, other), do: {price, other}
 
   @doc """
   Run a remote tool's request under whatever reservation this hook left on the

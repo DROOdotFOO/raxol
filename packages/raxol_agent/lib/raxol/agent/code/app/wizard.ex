@@ -226,11 +226,7 @@ defmodule Raxol.Agent.Code.App.Wizard do
   defp save_key_to_op(%{wizard: %{harness: harness, key: key}} = model) do
     case model.op_saver.(harness, key) do
       {:ok, ref} ->
-        _ = Raxol.Agent.Backend.Credentials.put(harness, op_ref: ref)
-
-        model
-        |> close_wizard()
-        |> App.notice("saved #{harness} key to 1Password (#{ref})")
+        stored(model, harness, ref, Raxol.Agent.Backend.Credentials.put(harness, op_ref: ref))
 
       {:error, reason} ->
         model
@@ -240,6 +236,23 @@ defmodule Raxol.Agent.Code.App.Wizard do
         )
     end
   end
+
+  # The 1Password item exists either way; what can still fail is recording the
+  # reference to it. `Credentials.put/2` refuses a store it could not read
+  # rather than rewriting it with one entry, so the operator is told the key
+  # is saved but unreferenced -- not left to discover a silently unusable
+  # provider on the next launch.
+  defp stored(model, harness, ref, :ok),
+    do: model |> close_wizard() |> App.notice("saved #{harness} key to 1Password (#{ref})")
+
+  defp stored(model, harness, ref, {:error, reason}),
+    do:
+      model
+      |> close_wizard()
+      |> App.notice(
+        "saved #{harness} key to 1Password (#{ref}) but could not record the reference: " <>
+          "#{inspect(reason)}"
+      )
 
   defp decline_save(%{wizard: %{harness: harness}} = model),
     do:

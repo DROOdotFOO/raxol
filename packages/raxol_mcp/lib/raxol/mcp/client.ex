@@ -97,6 +97,7 @@ defmodule Raxol.MCP.Client do
     :version,
     :error,
     pending: %{},
+    waiters: [],
     queue: nil,
     queued: 0,
     next_id: 1,
@@ -122,11 +123,12 @@ defmodule Raxol.MCP.Client do
           error: term() | nil,
           pending: %{
             pos_integer() => %{
-              from: GenServer.from() | :init,
+              from: GenServer.from() | :init | :notify,
               method: String.t(),
               timer: reference() | nil
             }
           },
+          waiters: [{GenServer.from(), reference()}],
           queue: :queue.queue() | nil,
           queued: non_neg_integer(),
           next_id: pos_integer(),
@@ -147,6 +149,21 @@ defmodule Raxol.MCP.Client do
   @max_reconnect_ms 60_000
   @default_queue_limit 8
   @default_pool_size 8
+
+  # `await_ready/2` answers its own timeout, so the surrounding
+  # `GenServer.call` must outlive it: the reply is the answer, not an exit.
+  @await_slack_ms 1_000
+
+  # Bounds on what a remote `tools/list` may put into this process's state.
+  # Far above any real server's catalog; they exist to stop a hostile one.
+  @max_tools 256
+  @max_name_bytes 128
+  @max_description_bytes 8_192
+
+  # What a tool name may contain. The namespaced form the agent renders is
+  # `mcp__<server>__<tool>`, and a provider's own function-name rule is
+  # narrower than this, so anything outside it could not be offered anyway.
+  @tool_name_re ~r/\A[A-Za-z0-9_.\-]{1,#{@max_name_bytes}}\z/
 
   # -- Client API ---------------------------------------------------------------
 
@@ -198,6 +215,21 @@ defmodule Raxol.MCP.Client do
   @spec status(GenServer.server()) :: map()
   def status(server) do
     GenServer.call(server, :status)
+  end
+
+  @doc """
+  Block until the session is usable, or `timeout` passes.
+
+  `{:ok, status}` once the handshake has round-tripped (immediately, for an
+  era that has none), or `{:error, {:not_ready, status}}` when the budget
+  passes first. A client that is retrying a failed connect keeps the caller
+  waiting rather than answering for the state it is passing through, which
+  is the whole point: readiness is an event, and polling `status/1` in a
+  sleep loop is a race dressed up as a test helper.
+  """
+  @spec await_ready(GenServer.server(), timeout()) :: {:ok, map()} | {:error, term()}
+  def await_ready(server, timeout \\ @default_init_timeout) do
+    GenServer.call(server, {:await_ready, timeout}, timeout + @await_slack_ms)
   end
 
   @doc "Stop the MCP server and client."
@@ -292,22 +324,25 @@ defmodule Raxol.MCP.Client do
   end
 
   def handle_manager_call(:status, _from, state) do
-    info = %{
-      name: state.name,
-      status: state.status,
-      version: state.version,
-      concurrency: state.concurrency,
-      tools: if(state.tools, do: length(state.tools), else: nil),
-      pending: map_size(state.pending),
-      queued: state.queued
-    }
+    {:reply, status_info(state), state}
+  end
 
-    {:reply, info, state}
+  def handle_manager_call({:await_ready, _timeout}, _from, %{status: :ready} = state) do
+    {:reply, {:ok, status_info(state)}, state}
+  end
+
+  def handle_manager_call({:await_ready, timeout}, from, state) do
+    timer = Process.send_after(self(), {:await_timeout, from}, timeout)
+    {:noreply, %{state | waiters: [{from, timer} | state.waiters]}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:request_timeout, id}, state) do
     {:noreply, expire(state, id)}
+  end
+
+  def handle_manager_info({:await_timeout, from}, state) do
+    {:noreply, expire_waiter(state, from)}
   end
 
   # Scheduled only by `schedule_reconnect/2`, so only from `:closed`.
@@ -326,6 +361,12 @@ defmodule Raxol.MCP.Client do
 
       {:failed, id, reason, handle} ->
         {:noreply, fail_request(%{state | handle: handle}, id, reason)}
+
+      # A request that completed with nothing to deliver: a notification's
+      # POST. It holds an in-flight slot like any other request, so the slot
+      # is released here rather than when its timer fires.
+      {:settled, id, handle} ->
+        {:noreply, settle(%{state | handle: handle}, id)}
 
       {:closed, reason, handle} ->
         {:noreply, close_session(%{state | handle: handle}, reason)}
@@ -367,8 +408,45 @@ defmodule Raxol.MCP.Client do
 
     case kind do
       :handshake -> send_initialize(state)
-      :ready -> %{state | status: :ready}
+      :ready -> become_ready(state)
     end
+  end
+
+  # Readiness is the event `await_ready/2` parks on. Everything that makes a
+  # session usable goes through here so a waiter cannot be left behind by one
+  # of the two paths that reach `:ready`.
+  defp become_ready(state) do
+    info = status_info(%{state | status: :ready})
+
+    Enum.each(state.waiters, fn {from, timer} ->
+      cancel(timer)
+      reply(from, {:ok, info})
+    end)
+
+    %{state | status: :ready, waiters: []}
+  end
+
+  defp expire_waiter(state, from) do
+    case Enum.split_with(state.waiters, fn {waiter, _timer} -> waiter == from end) do
+      {[{^from, _timer}], rest} ->
+        reply(from, {:error, {:not_ready, state.status}})
+        %{state | waiters: rest}
+
+      {[], _rest} ->
+        state
+    end
+  end
+
+  defp status_info(state) do
+    %{
+      name: state.name,
+      status: state.status,
+      version: state.version,
+      concurrency: state.concurrency,
+      tools: if(state.tools, do: length(state.tools), else: nil),
+      pending: map_size(state.pending),
+      queued: state.queued
+    }
   end
 
   defp connect(state) do
@@ -416,10 +494,23 @@ defmodule Raxol.MCP.Client do
   defp rehandshake(%{handle: nil} = state), do: state
 
   defp rehandshake(state) do
-    case state.transport.session(state.handle) do
-      {:handshake, _profile} -> issue_initialize(state)
-      {:ready, _profile} -> state
+    # `Transport.Http.session/1` answers `{:handshake, _}` from the era
+    # alone, so it cannot say that an initialize is already in flight. An
+    # origin restart that 404s N `:pooled` calls at once (cap 8) issued N
+    # initializes and minted N sessions, N-1 of them orphaned on the origin.
+    # One handshake repairs the session for all of them.
+    if handshaking?(state) do
+      state
+    else
+      case state.transport.session(state.handle) do
+        {:handshake, _profile} -> issue_initialize(state)
+        {:ready, _profile} -> state
+      end
     end
+  end
+
+  defp handshaking?(state) do
+    Enum.any?(state.pending, fn {_id, entry} -> entry.method == "initialize" end)
   end
 
   defp issue_initialize(state) do
@@ -433,18 +524,25 @@ defmodule Raxol.MCP.Client do
     dispatch(state, call)
   end
 
+  # A session the peer closed under us. Every waiting caller is answered,
+  # and then the client RETRIES: a stdio server that died mid-session left a
+  # live process no supervisor restarts, which is the hole the reconnect was
+  # added to close and this path did not use.
   defp close_session(state, reason) do
     Logger.warning("[MCP.Client] Server #{state.name} closed: #{inspect(reason)}")
 
-    state =
-      Enum.reduce(Map.keys(state.pending), state, fn id, acc ->
-        {entry, acc} = pop_pending(acc, id)
-        reply(entry.from, {:error, reason})
-        acc
-      end)
+    state
+    |> fail_pending(reason)
+    |> flush_queue({:error, reason})
+    |> schedule_reconnect(reason)
+  end
 
-    state = flush_queue(state, {:error, reason})
-    %{state | status: :closed}
+  defp fail_pending(state, reason) do
+    Enum.reduce(Map.keys(state.pending), state, fn id, acc ->
+      {entry, acc} = pop_pending(acc, id)
+      reply(entry.from, {:error, reason})
+      acc
+    end)
   end
 
   # -- Private: admission, dispatch and the bounded queue ----------------------
@@ -534,6 +632,11 @@ defmodule Raxol.MCP.Client do
     end
   end
 
+  # A notification carries no JSON-RPC id on the wire, but it IS a request in
+  # flight: one POST on the session, which is why it holds a `pending` entry
+  # and an in-flight slot. The transport is told both at once -- encode it
+  # id-less, report its outcome under this id.
+  defp send_id(%{from: :notify, id: id}), do: {:notify, id}
   defp send_id(%{id: id}), do: id
 
   defp drain(state) do
@@ -649,17 +752,24 @@ defmodule Raxol.MCP.Client do
   defp recover(state, :session_rejected), do: rehandshake(state)
   defp recover(state, _reason), do: state
 
+  # An expiry removes the entry, but the WORK does not stop by itself: an
+  # HTTP transport still has a task holding a socket, and `capacity?/1` would
+  # then admit the next queued request beside it -- two concurrent requests
+  # on a `:serialized` session, the exact fan-out the cap exists to prevent.
+  # Reachable with defaults, because one exchange's wall time (the dial, plus
+  # the deadline, plus a chunk overshoot) can exceed `call_timeout`. So the
+  # transport is told to drop the work with the entry.
   defp expire(state, id) do
     case Map.fetch(state.pending, id) do
       {:ok, %{method: "initialize"} = entry} ->
         state = %{state | pending: Map.delete(state.pending, id)}
         reply(entry.from, {:error, :timeout})
-        fail_initialization(state, :timeout)
+        state |> cancel_work(id) |> fail_initialization(:timeout)
 
       {:ok, entry} ->
         state = %{state | pending: Map.delete(state.pending, id)}
         reply(entry.from, {:error, :timeout})
-        drain(state)
+        state |> cancel_work(id) |> drain()
 
       :error ->
         expire_queued(state, id)
@@ -677,16 +787,35 @@ defmodule Raxol.MCP.Client do
     end
   end
 
+  defp cancel_work(%{handle: nil} = state, _id), do: state
+
+  defp cancel_work(state, id),
+    do: %{state | handle: state.transport.cancel(state.handle, id)}
+
+  # A request that finished with nothing to deliver: the `notifications/
+  # initialized` POST. Its slot is released here, which is the point of
+  # giving it an entry at all.
+  defp settle(state, id) do
+    case Map.fetch(state.pending, id) do
+      {:ok, _entry} ->
+        {_entry, state} = pop_pending(state, id)
+        drain(state)
+
+      :error ->
+        state
+    end
+  end
+
   defp handle_result(result, "initialize", _from, state) when is_map(result) do
     server_info = Map.get(result, "serverInfo", %{})
     Logger.info("[MCP.Client] Server #{state.name} initialized: #{inspect(server_info)}")
 
-    state = %{state | status: :ready, version: negotiated(state, result)}
+    state = become_ready(%{state | version: negotiated(state, result)})
     send_notification(state, "notifications/initialized", %{})
   end
 
   defp handle_result(%{"tools" => tools}, "tools/list", from, state) when is_list(tools) do
-    parsed_tools = Enum.map(tools, &parse_tool/1)
+    parsed_tools = parse_tools(tools, state)
     reply(from, {:ok, parsed_tools})
     %{state | tools: parsed_tools}
   end
@@ -720,9 +849,16 @@ defmodule Raxol.MCP.Client do
 
     if state.handle, do: state.transport.close(state.handle)
 
+    # Every waiting caller is answered, not only the queued ones. A
+    # re-handshake at `:ready` runs beside live requests, and leaving their
+    # entries behind held in-flight slots -- the whole window, on a
+    # `:serialized` session -- across the reconnect, so each of those callers
+    # waited out its full `call_timeout` for a session that no longer exists.
+    #
     # Recovered the same way a failed connect is: a handshake that timed out is
     # transient as often as not, and staying closed forever was the same hole.
     state
+    |> fail_pending({:initialization_failed, reason})
     |> flush_queue({:error, {:initialization_failed, reason}})
     |> schedule_reconnect({:initialization_failed, reason})
   end
@@ -746,21 +882,23 @@ defmodule Raxol.MCP.Client do
     end
   end
 
+  # Notifications go through the same admission path as any other request.
+  # One was issued as a bare transport write with no `pending` entry, so it
+  # did not count against `in_flight_cap`: the bundle's `tools/list`
+  # dispatched while the `notifications/initialized` POST was still in
+  # flight, which is two concurrent requests on a `:serialized` session at
+  # the exact moment the policy exists to prevent them. There is no reply to
+  # correlate, so the transport settles the entry instead.
   defp send_notification(state, method, params) do
-    case state.transport.send(state.handle, nil, %{method: method, params: params}) do
-      {:ok, handle} ->
-        %{state | handle: handle}
-
-      {:error, reason} ->
-        Logger.warning(
-          "[MCP.Client] Server #{state.name} notification #{method} failed: #{inspect(reason)}"
-        )
-
-        state
-    end
+    {state, call} = new_call(state, :notify, method, params, [])
+    dispatch(state, call)
   end
 
   defp reply(:init, _response), do: :ok
+
+  # A notification has no caller. Its entry exists for the in-flight window,
+  # and a failure is logged by whoever reports it.
+  defp reply(:notify, _response), do: :ok
   defp reply(from, response), do: GenServer.reply(from, response)
 
   # -- Private: Helpers ---------------------------------------------------------
@@ -779,13 +917,74 @@ defmodule Raxol.MCP.Client do
     end
   end
 
-  defp parse_tool(tool_map) do
+  # A `tools/list` answer is upstream data, and it was mapped straight into
+  # this GenServer's state: a non-map entry raised `BadMapError` HERE, taking
+  # the client and every linked caller with it, and neither the number of
+  # tools nor the size of a name was bounded, so a 2 MiB list became prompt
+  # context on every turn. The shape is therefore decided at the boundary it
+  # arrives through.
+  #
+  # A bad entry is dropped rather than failing the list: one malformed tool
+  # on an otherwise working server is not a reason to offer the agent none of
+  # them. The count of dropped entries is logged; their content is not.
+  defp parse_tools(tools, state) do
+    {kept, over_cap} = Enum.split(tools, @max_tools)
+    parsed = Enum.flat_map(kept, &parse_tool/1)
+    dropped = length(kept) - length(parsed) + length(over_cap)
+
+    if dropped > 0 do
+      Logger.warning(
+        "[MCP.Client] Server #{state.name} listed #{length(tools)} tools; dropped #{dropped} " <>
+          "(unusable name, or past the #{@max_tools} cap)"
+      )
+    end
+
+    parsed
+  end
+
+  defp parse_tool(tool_map) when is_map(tool_map) do
+    case Map.get(tool_map, "name") do
+      name when is_binary(name) ->
+        if Regex.match?(@tool_name_re, name),
+          do: [built_tool(name, tool_map)],
+          else: []
+
+      _unusable ->
+        []
+    end
+  end
+
+  defp parse_tool(_not_a_map), do: []
+
+  defp built_tool(name, tool_map) do
     %{
-      name: Map.get(tool_map, "name", ""),
-      description: Map.get(tool_map, "description", ""),
-      input_schema: Map.get(tool_map, "inputSchema", %{})
+      name: name,
+      description: bounded(Map.get(tool_map, "description")),
+      input_schema: schema(Map.get(tool_map, "inputSchema"))
     }
   end
+
+  # A memory bound on the client's own state, not a context bound: the
+  # model-facing cap (and the truncation marker that goes with it) is
+  # `Raxol.Agent.Action.Dynamic`'s, at a quarter of this.
+  defp bounded(description) when is_binary(description) do
+    if byte_size(description) <= @max_description_bytes,
+      do: description,
+      else: valid_prefix(binary_part(description, 0, @max_description_bytes))
+  end
+
+  defp bounded(_not_text), do: ""
+
+  # `binary_part/3` can halve a multi-byte codepoint, and an invalid UTF-8
+  # string fails JSON encoding on the way to the provider.
+  defp valid_prefix(binary) do
+    if String.valid?(binary),
+      do: binary,
+      else: valid_prefix(binary_part(binary, 0, byte_size(binary) - 1))
+  end
+
+  defp schema(schema) when is_map(schema), do: schema
+  defp schema(_not_a_schema), do: %{}
 
   defp via(name, registry) do
     {:via, Registry, {registry, {:mcp_client, name}}}

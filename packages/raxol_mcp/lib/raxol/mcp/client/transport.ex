@@ -20,8 +20,23 @@ defmodule Raxol.MCP.Client.Transport do
   A stdio transport ignores the id on the way out: one pipe carries every
   request and the id only matters on the way back.
 
-  An id of `nil` is a notification. Nothing correlates a notification, so a
-  transport that cannot deliver one reports it and no pending entry is failed.
+  `{:notify, id}` is a notification: encoded with no JSON-RPC id, because
+  nothing answers one, and reported under `id` all the same. It is still a
+  request in flight -- one POST on the session -- so the client holds an
+  entry for it and the transport says when it is done. A bare `nil` id is
+  the same notification with nothing tracking it, which no in-tree caller
+  uses any more.
+
+  ## Why `cancel/2` exists
+
+  The client's own `call_timeout` can expire while the transport is still
+  working: an HTTP exchange's wall time is the dial plus the read deadline
+  plus a chunk overshoot, which together exceed the default 30 s. The entry
+  leaves `pending` at that point, so without `cancel/2` the next queued
+  request is admitted BESIDE a task that is still holding a socket -- two
+  concurrent requests on a `:serialized` session. `cancel/2` drops the work
+  for one id and returns the handle; for a transport with nothing to cancel
+  it is the identity.
 
   ## Why the request is a map rather than `iodata()`
 
@@ -44,14 +59,16 @@ defmodule Raxol.MCP.Client.Transport do
   the origin's era implies (ADR-0037 decision 6). A spec that declares
   `:concurrency` overrides the last of those.
 
-  ## Why `decode_info/2` has a `:closed` arm
+  ## Why `decode_info/2` has `:closed` and `:settled` arms
 
   ADR-0037 lists three returns. A fourth is forced by the code the same
   decision requires to keep working unchanged: `{:exit_status, code}` fails
   EVERY pending entry and marks the session closed (`client.ex:236-244` before
   this change), which neither `{:messages, _, _}` nor a single-id
-  `{:failed, id, _, _}` can express. `:ignore` preserves the catch-all clause
-  that was at `client.ex:246`.
+  `{:failed, id, _, _}` can express. A fifth, `{:settled, id, handle}`, is
+  what a notification's completion is: a request that finished with nothing
+  to deliver, whose in-flight slot must still be released. `:ignore`
+  preserves the catch-all clause that was at `client.ex:246`.
   """
 
   @typedoc "Opaque per-connection transport state, threaded back through every call."
@@ -78,12 +95,14 @@ defmodule Raxol.MCP.Client.Transport do
 
   @callback connect(config :: map()) :: {:ok, handle()} | {:error, term()}
   @callback session(handle()) :: session()
-  @callback send(handle(), pos_integer() | nil, request()) ::
+  @callback send(handle(), pos_integer() | nil | {:notify, pos_integer()}, request()) ::
               {:ok, handle()} | {:error, term()}
+  @callback cancel(handle(), pos_integer() | {:notify, pos_integer()}) :: handle()
   @callback close(handle()) :: :ok
   @callback decode_info(handle(), message :: term()) ::
               {:messages, [binary()], handle()}
               | {:failed, pos_integer(), term(), handle()}
+              | {:settled, pos_integer(), handle()}
               | {:closed, term(), handle()}
               | :ignore
 
@@ -91,6 +110,40 @@ defmodule Raxol.MCP.Client.Transport do
   @http_exchange Raxol.MCP.Client.Transport.Http.Exchange
   @http_read Raxol.MCP.BoundedExchange
   @stdio_transport Raxol.MCP.Client.Transport.Stdio
+
+  @doc """
+  Whether a spec of this provenance may reach `target` -- the URL a remote
+  spec dials, or the command a stdio spec spawns.
+
+  A spec carries `:source` (`:user` when absent: a spec assembled in code is
+  the operator's own program) and, for anything else, a `:permit` function of
+  arity one that answers `:ok` or an error for that target. The rule the
+  function enforces is not this package's to know: `Raxol.Agent.McpHosts`
+  owns it, because the allowlist it reads is an operator file in `~/.raxol`
+  and `.mcp.json` is parsed one layer up.
+
+  This is asked INSIDE each `connect/1`, not only by the caller that built
+  the spec. `Raxol.Agent.McpBundle` asks first, for the operator-facing
+  refusal; a future caller that maps a workspace spec straight to
+  `Raxol.MCP.Client.start_link/1` gets the check anyway, because the socket
+  and the subprocess are here.
+
+  A refusal is `{:blocked, :source}` whatever the gate said. The gate's own
+  reason names the host or the command, which this package's closed error
+  taxonomy does not carry, and the caller that supplied the gate has already
+  logged it.
+  """
+  @spec permit(map(), term()) :: :ok | {:error, {:blocked, :source}}
+  def permit(config, target) do
+    case {Map.get(config, :source, :user), Map.get(config, :permit)} do
+      {:user, _no_gate_needed} -> :ok
+      {_untrusted, gate} when is_function(gate, 1) -> collapse(gate.(target))
+      {_untrusted, _ungated} -> {:error, {:blocked, :source}}
+    end
+  end
+
+  defp collapse(:ok), do: :ok
+  defp collapse({:error, _refused}), do: {:error, {:blocked, :source}}
 
   @doc """
   Pick the transport a spec asks for: `:command` XOR `:url`.

