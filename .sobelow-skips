@@ -1,0 +1,57 @@
+# Sobelow findings accepted by exact fingerprint. Loaded because `.sobelow-conf`
+# sets `skip: true`; the gate itself fails on anything high or medium that is
+# not listed here. Entry format is `rule,path:line,fingerprint`, and the
+# fingerprint covers the rule, the flagged expression, the path and the LINE,
+# so moving one of these calls re-reports it. That is intended: a moved call is
+# a call worth re-reading. Refresh with
+# `mix sobelow --threshold high --skip --mark-skip-all` and justify anything new
+# here before committing it.
+#
+# Why each of the 13 is accepted:
+#
+# Config.CSP web/lib/raxol_playground_web/router.ex:10
+#   The :browser pipeline sets put_secure_browser_headers but no
+#   Content-Security-Policy. Real gap, and not a CI change: the playground is a
+#   LiveView app and needs a policy it can actually run under. Pre-existing.
+#
+# Config.HTTPS config/prod.exs:0
+#   The root app's prod config declares a Repo and plain terminal settings and
+#   no Phoenix endpoint at all; the playground endpoint lives under web/ with
+#   its own config. Sobelow reports the absence of force_ssl at line 0, so
+#   there is no call site here to fix.
+#
+# Traversal.FileModule web/lib/raxol_playground_web/controllers/capabilities_controller.ex:56
+#   serve_text/3 is only ever called with the module attributes @llms_txt_path
+#   and @llms_full_path (lines 49 and 52). No route reaches that argument.
+#   False positive from per-function analysis.
+#
+# Misc.BinToTerm lib/raxol/benchmark/storage.ex:107 252 387
+#   Benchmark baselines and snapshots this repo wrote itself, under
+#   @baseline_path / @snapshot_path. Not reachable from a request.
+#
+# Misc.BinToTerm lib/raxol/debug/time_travel.ex:353
+#   Decodes a debug recording produced in-process by the same session.
+#
+# Misc.BinToTerm lib/raxol/ui/components/dashboard/layout_persistence.ex:92
+#   Already passes [:safe]. Sobelow flags :erlang.binary_to_term regardless of
+#   its options, so this one cannot be fixed in source.
+#
+# Misc.BinToTerm lib/raxol/ui/visual_test.ex:317
+#   Reads a baseline snapshot written by the visual test harness in this repo.
+#
+# Misc.BinToTerm lib/raxol/workflow/checkpoint/saver/postgrex.ex:344 345 369 370
+#   Decodes checkpoint state and metadata columns that the same node encoded
+#   with term_to_binary on the way in. Not user-supplied.
+Config.CSP: Missing Content-Security-Policy,web/lib/raxol_playground_web/router.ex:10,397B572
+Config.HTTPS: HTTPS Not Enabled,config/prod.exs:0,2B5C077
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/benchmark/storage.ex:107,4C91A42
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/benchmark/storage.ex:252,3E40422
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/benchmark/storage.ex:387,6FE2361
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/debug/time_travel.ex:353,453A432
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/ui/components/dashboard/layout_persistence.ex:92,474ECBF
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/ui/visual_test.ex:317,58A5FDF
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/workflow/checkpoint/saver/postgrex.ex:344,584F19C
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/workflow/checkpoint/saver/postgrex.ex:345,3FA824E
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/workflow/checkpoint/saver/postgrex.ex:369,59A0FFE
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/raxol/workflow/checkpoint/saver/postgrex.ex:370,40870E9
+Traversal.FileModule: Directory Traversal in `File.read`,web/lib/raxol_playground_web/controllers/capabilities_controller.ex:56,1A90B45

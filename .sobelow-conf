@@ -1,0 +1,37 @@
+# Sobelow scan configuration. `mix sobelow` reads this file automatically, and
+# CI passes `--config` explicitly in .github/workflows/security.yml and
+# .github/workflows/ci-unified.yml.
+#
+# `exit:` is why the file exists. Sobelow's default is "None", which makes the
+# task halt 0 no matter what it finds (Sobelow.exit_with_status/0 in v0.15.0).
+# Until this file landed, `--config` was a no-op because no .sobelow-conf
+# existed, so both jobs above could only fail on a CRASH of the scanner: every
+# High, Medium and Low finding reported success. There is no command Sobelow
+# accepts that sets a threshold without either this file or an explicit
+# `--exit`, and a threshold that lives only in a workflow file is one a local
+# `mix sobelow` run does not share.
+#
+# :medium rather than :low, deliberately. Confidence here is Sobelow's own
+# reading of how close a value is to attacker control. The tree holds 247 low
+# findings and 0 medium ones; the low set is almost entirely File operations on
+# paths this terminal framework builds itself (config dirs, snapshots, the
+# updater's download dir). Reaching :low means pinning 247 fingerprints, and a
+# Sobelow fingerprint includes the line number, so any edit above one of them
+# resurrects it and turns the gate red for an unrelated reason. A gate that
+# cries wolf on every refactor is the gate people switch off. High and medium
+# are the levels where Sobelow could not rule out a user-controlled value
+# reaching the sink, and nothing at those levels is exempt going forward: the
+# 13 pre-existing high findings are pinned individually in `.sobelow-skips`,
+# each with the reason it is accepted, and a fourteenth fails the build.
+#
+# Raising this to :low is welcome once the low set is triaged. Lowering the
+# gate back to "None", or dropping `skip:`, silently disarms it.
+#
+# `skip: true` is what loads `.sobelow-skips`. Without it the fingerprint file
+# is inert and the 13 accepted findings fail every run.
+[
+  exit: :medium,
+  skip: true,
+  format: "compact",
+  verbose: false
+]

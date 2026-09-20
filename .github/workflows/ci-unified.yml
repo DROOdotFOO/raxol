@@ -883,14 +883,21 @@ jobs:
       - name: Fetch dependencies
         run: mix deps.get
 
+      # Both steps blocking. `ci-status` requires this job, and `CI Status` is
+      # the only required check on master, so a soft failure here is a merge
+      # with a known-vulnerable dependency. The previous `|| true` on both,
+      # plus `continue-on-error` on Sobelow, left the job unable to report
+      # anything but success.
       - name: Check for vulnerable dependencies
-        run: |
-          mix deps.audit || true
-      
+        run: mix deps.audit
+
+      # `--config` loads `.sobelow-conf`, which sets `exit: :medium`. Without
+      # that file Sobelow halts 0 on every finding and only a crash of the
+      # scanner fails this step. Read `.sobelow-conf` before touching this:
+      # dropping `--config` does not weaken the gate, since the file is read
+      # automatically, but deleting the file disarms it silently.
       - name: Run Sobelow security check
-        run: |
-          mix sobelow --config || true
-        continue-on-error: true
+        run: mix sobelow --config
 
   # ========================================
   # Cross-Platform Testing
@@ -1149,8 +1156,17 @@ jobs:
           # Dialyzer is deliberately absent: nightly.yml enforces that ratchet;
           # this workflow exposes the same reference-toolchain result without
           # making the expensive job part of the aggregate PR status.
+          #
+          # `security` is NOT in that category, whatever the wording here used
+          # to say. This branch printed a warning and no `exit 1`, and
+          # `CI Status` is the only required check on master, so run
+          # 35515982213 went green with the security job skipped. A vulnerable
+          # dependency or a Sobelow finding turned one job red and merged
+          # anyway. It exits like every other gate now.
           if [ "${{ needs.security.result }}" != "success" ]; then
-            echo "⚠️ Security scan found issues (non-blocking)"
+            echo "❌ Security scan failed"
+            echo "   Reproduce: mix deps.audit && mix sobelow --config"
+            exit 1
           fi
-          
+
           echo "✅ All required checks passed!"
