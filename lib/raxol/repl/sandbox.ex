@@ -2,12 +2,33 @@ defmodule Raxol.REPL.Sandbox do
   @moduledoc """
   AST-based safety checker for REPL code evaluation.
 
-  Scans Elixir code for potentially dangerous operations before evaluation.
-  Three strictness levels:
+  ## Not a security boundary
+
+  This is a MITIGATION. It raises the cost of the obvious attempts; it does not
+  confine anything. A gap in it reaches the OS user the BEAM node runs as, with
+  that node's full authority: its file handles, its network, its signing keys if
+  it has any. Read the trust-boundary section of `Raxol.REPL.Evaluator` before
+  putting this in front of input you do not trust.
+
+  Why it cannot be a boundary: every clause decides safety from a module NAME,
+  resolved statically from the submitted AST. Anything that changes which module
+  a name reaches at runtime sits underneath the check rather than inside it,
+  which is why `import`, `alias`, `require` and `use` are refused outright
+  rather than resolved (#1045). Each such form found so far has been a
+  CVE-class hole on an anonymous surface, and the checker's own history is the
+  argument against trusting it: computed receivers, `Module.concat/1`
+  alias resolution, and the bare-name capture forms of `apply` and `spawn` were
+  each `:ok` at `:strict` until they were not.
+
+  What actually keeps an untrusted caller away from the evaluator is the
+  deployment flag, `Raxol.Core.Boundary.Evaluation.exposed?/0`. A node with that
+  flag set is a node you have decided may run submitted code.
+
+  ## Levels
 
   - `:none` -- allow everything (explicit trusted-local launcher opt-in)
   - `:standard` -- deny destructive and process-creation operations (`check/1` default)
-  - `:strict` -- whitelist-only (default for every REPL launcher)
+  - `:strict` -- whitelist-only (the level every served launch gets)
 
       iex> Sandbox.check("Enum.map([1,2], & &1 * 2)")
       :ok
@@ -264,6 +285,38 @@ defmodule Raxol.REPL.Sandbox do
 
   defp check_node({:send, _, args}, _level) when is_list(args) do
     ["send is not allowed (message sending to arbitrary processes)"]
+  end
+
+  # A capture writes the same local call with `args == nil`: `&apply/3` parses
+  # as `{:&, _, [{:/, _, [{:apply, _, nil}, 3]}]}`, so the `is_list(args)`
+  # guards on the `apply`, `send` and spawn clauses skip the inner node and it
+  # falls through to the catch-all. `(&apply/3).(:os, :cmd, ...)` and
+  # `Enum.map([f], &spawn/1)` therefore returned `:ok` at `:strict`, the level
+  # documented as safe for anonymous exposure, and both do exactly what the
+  # unwrapped call would (#1045 review).
+  #
+  # The denial belongs on the capture form, not on the name: a bare
+  # `{:apply, _, nil}` on its own is a VARIABLE named `apply`, which is
+  # harmless. Qualified captures (`&:os.cmd/1`, `&File.read!/1`) already fail
+  # the module clauses above, because their inner node is a dot call whose
+  # `args` IS a list.
+  defp check_node({:&, _, [{:/, _, [{name, _, _ctx}, arity]}]}, _level)
+       when is_atom(name) and is_integer(arity) do
+    cond do
+      name == :apply ->
+        ["&apply/#{arity} is not allowed (dynamic function application)"]
+
+      name == :send ->
+        [
+          "&send/#{arity} is not allowed (message sending to arbitrary processes)"
+        ]
+
+      spawn_function?(name) ->
+        ["&#{name}/#{arity} is not allowed (process spawning)"]
+
+      true ->
+        []
+    end
   end
 
   # Module directives can rename or import a denied API before calling it:

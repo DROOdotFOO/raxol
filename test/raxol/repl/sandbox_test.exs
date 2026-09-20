@@ -429,4 +429,51 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
   end
+
+  # A capture writes the same local call with `args == nil`, so the
+  # `is_list(args)` guards on the `apply`, `send` and spawn clauses skipped it
+  # and the node fell through to the catch-all. `(&apply/3).(:os, :cmd, ...)`
+  # and `Enum.map([f], &spawn/1)` both returned `:ok` at `:strict` and both do
+  # exactly what the unwrapped call would (#1045 review).
+  describe "the capture form of a denied local reaches no further than the call" do
+    for {code, reason} <- [
+          {"(&apply/3).(:os, :cmd, [~c\"id\"])",
+           "dynamic function application"},
+          {"f = &apply/3", "dynamic function application"},
+          {"&send/2", "message sending"},
+          {"Enum.map([fn -> 1 end], &spawn/1)", "process spawning"},
+          {"&spawn_link/1", "process spawning"},
+          {"&spawn_monitor/1", "process spawning"}
+        ] do
+      test "strict refuses #{code}" do
+        assert {:error, violations} = Sandbox.check(unquote(code), :strict)
+
+        assert Enum.any?(violations, &String.contains?(&1, unquote(reason))),
+               "expected a #{unquote(reason)} violation, got #{inspect(violations)}"
+      end
+    end
+
+    test "a qualified capture of a denied module is still refused" do
+      for code <- ["&:os.cmd/1", "&File.read!/1", "&Kernel.apply/3"] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} was allowed"
+      end
+    end
+
+    # The denial belongs on the capture form, not on the name: these are the
+    # shapes that must keep working, including a variable that happens to be
+    # called `apply`.
+    test "ordinary captures and a variable named apply still pass" do
+      for code <- [
+            "&Enum.map/2",
+            "Enum.map([1, 2], &(&1 * 2))",
+            "apply = 1; apply + 1"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "none still allows the capture form" do
+      assert :ok = Sandbox.check("(&apply/3).(:os, :cmd, [~c\"id\"])", :none)
+    end
+  end
 end
