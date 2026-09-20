@@ -313,6 +313,7 @@ defmodule Raxol.Web3.Backend.Solana do
   @behaviour Raxol.Web3.Backend
 
   alias Raxol.Web3.Backend
+  alias Raxol.Web3.Backend.SQD
   alias Raxol.Web3.Cursor
   alias Raxol.Web3.HTTP
   alias Raxol.Web3.MCPCall
@@ -711,30 +712,22 @@ defmodule Raxol.Web3.Backend.Solana do
       |> cache_opts(state, {tool, arguments}, class)
 
     case MCPCall.call(state.url, tool, arguments, opts) do
-      {:ok, payload} -> {:ok, payload}
-      {:tool_error, payload} -> {:error, sqd_refusal(payload, state)}
+      {:ok, payload} -> sqd_result(payload, state)
+      {:tool_error, payload} -> {:error, SQD.announced(payload, state.network)}
       {:error, _reason} = error -> error
     end
   end
 
-  # The payload's error code, never its prose, and the same four codes
-  # `Raxol.Web3.Backend.Tron` reads off the same portal, mapped the same way.
-  # Three of them are facts about the SOURCE rather than about the question,
-  # so the router walks on, which is the whole point of assembling this
-  # backend as `[sqd, rpc]`: a credential this deployment does not hold and a
-  # budget this origin has spent are both answerable by the node. Reading
-  # `unauthorized` and `rate_limited` as `:unknown` made them final, so a
-  # keyless archive read died while a healthy node sat behind it.
-  #
-  # An unclassified code stays final, because that is our own request being
-  # wrong and a sibling would answer it the same way. `invalid_request`, the
-  # windowless account query, is the measured case.
-  defp sqd_refusal(payload, state) do
-    case dig(payload, ["error", "code"]) do
-      "unknown_network" -> {:unsupported_chain, state.network}
-      "unauthorized" -> {:upstream_refused, :auth}
-      "rate_limited" -> {:upstream_refused, :rate_limit}
-      _ours -> {:upstream_refused, :unknown}
+  # Both arms are read, because this endpoint has two places to put a refusal
+  # and `Raxol.Web3.Backend.Tron` reads both. That is the invariant now: one
+  # endpoint, two backends, one reading, in `Raxol.Web3.Backend.SQD`. A plain
+  # result carrying an error object used to come back here as a successful
+  # body, so a keyless read was reported as a decode failure or an empty
+  # catalog rather than as the missing credential it was.
+  defp sqd_result(payload, state) do
+    case SQD.refusal(payload, state.network) do
+      nil -> {:ok, payload}
+      reason -> {:error, reason}
     end
   end
 

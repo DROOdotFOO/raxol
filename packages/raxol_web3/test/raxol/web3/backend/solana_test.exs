@@ -298,6 +298,18 @@ defmodule Raxol.Web3.Backend.SolanaTest do
 
       assert {:error, {:upstream_refused, :unknown}} = Backend.call(handle, :chain_info)
     end
+
+    test "a refusal in a plain result is read, not handed back as a body" do
+      # This endpoint can announce a refusal with isError, and it can announce
+      # one as a plain result whose payload IS the error object.
+      # `Raxol.Web3.Backend.Tron` reads both arms off the same endpoint, and
+      # reading one arm here meant a keyless read came back as a successful
+      # body: the operator was told the archive returned garbage rather than
+      # that this deployment holds no credential.
+      handle = sqd(%{"portal_get_network_info" => sse(%{"error" => %{"code" => "unauthorized"}})})
+
+      assert {:error, {:upstream_refused, :auth}} = Backend.call(handle, :chain_info)
+    end
   end
 
   describe "block_height/1" do
