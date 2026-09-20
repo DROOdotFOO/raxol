@@ -241,29 +241,18 @@ defmodule Raxol.Web3.RPC do
       })
 
     url
-    |> HTTP.post(body, opts |> put_header(@json_header) |> classified())
+    |> HTTP.post(body, opts |> Backend.put_header(@json_header) |> classified())
     |> handle_response()
   end
 
-  # Merge, never replace. `:http_opts` is documented as forwarded unchanged,
-  # and `Keyword.put(:headers, ...)` dropped whatever the operator configured:
-  # a node behind RBAC or an API key is reached only by that header, so every
-  # read through this module (which is every read `Raxol.Web3.Backend.JSONRPC`
-  # performs, plus `Blockscout.read_contract/2`) answered 401 or 403.
-  #
+  # Header composition is `Raxol.Web3.Backend.put_header/2`: merge, never
+  # replace. `:http_opts` is documented as forwarded unchanged, and
+  # `Keyword.put(:headers, ...)` dropped whatever the operator configured, so
+  # a node reached only by an RBAC or API-key header answered 401 or 403 on
+  # every read through this module (which is every read
+  # `Raxol.Web3.Backend.JSONRPC` performs, plus `Blockscout.read_contract/2`).
   # Ours wins a name collision and there is exactly one of it afterwards: some
-  # servers refuse a duplicate `content-type` outright. The comparison is on
-  # the name as written because everything this package composes is lower
-  # case.
-  #
-  # This duplicates `Raxol.Web3.Backend.put_header/2`, which lands on a
-  # sibling branch and which this call site collapses onto once both are
-  # merged.
-  defp put_header(opts, {name, _value} = header) do
-    Keyword.update(opts, :headers, [header], fn headers ->
-      [header | Enum.reject(headers, fn {supplied, _value} -> supplied == name end)]
-    end)
-  end
+  # servers refuse a duplicate `content-type` outright.
 
   # A node announces every refusal it has inside a 200, so the cache stage
   # cannot tell a result from a refusal by status and has to be told. Without
