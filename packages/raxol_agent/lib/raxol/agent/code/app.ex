@@ -134,7 +134,7 @@ defmodule Raxol.Agent.Code.App do
     # match `%{jail: true}` instead of re-deciding what counts as jailed.
     jail? = Keyword.get(options, :jail, false) not in [nil, false]
     {hooks, hooks_note} = load_hooks(cwd, jail?)
-    {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
+    {mcp_servers, mcp_skipped, mcp_note} = load_mcp(cwd, jail?)
     {lsp_pool, lsp_note} = start_lsp(cwd, jail?, options)
     {project_context, project_note} = load_project_context(cwd, jail?)
 
@@ -162,6 +162,7 @@ defmodule Raxol.Agent.Code.App do
       jail: jail?,
       hooks: hooks,
       mcp_servers: mcp_servers,
+      mcp_skipped: mcp_skipped,
       lsp_pool: lsp_pool,
       project_context: project_context
     })
@@ -441,16 +442,25 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp load_mcp(_cwd, true), do: {[], "mcp servers disabled (jailed session)"}
+  defp load_mcp(_cwd, true), do: {[], [], "mcp servers disabled (jailed session)"}
 
+  # Entries the bridge cannot run (a `url` server, a broken entry) ride
+  # along as `mcp_skipped`, so `/mcp` lists them with a reason instead of
+  # leaving a server named in the file silently absent.
   defp load_mcp(cwd, _jail?) do
-    case Raxol.Agent.Code.McpConfig.load(cwd) do
-      {:ok, []} -> {[], nil}
-      {:ok, servers} -> {servers, "#{length(servers)} MCP servers"}
-      :none -> {[], nil}
-      {:error, reason} -> {[], "mcp config error: #{inspect(reason)}"}
+    case Raxol.Agent.Code.McpConfig.load_all(cwd) do
+      {:ok, [], []} -> {[], [], nil}
+      {:ok, servers, skipped} -> {servers, skipped, mcp_note(servers, skipped)}
+      :none -> {[], [], nil}
+      {:error, reason} -> {[], [], "mcp config error: #{inspect(reason)}"}
     end
   end
+
+  defp mcp_note(servers, []), do: "#{length(servers)} MCP servers"
+  defp mcp_note([], skipped), do: "#{length(skipped)} MCP servers skipped"
+
+  defp mcp_note(servers, skipped),
+    do: "#{length(servers)} MCP servers · #{length(skipped)} skipped"
 
   # A language server is arbitrary code execution on the workspace, twice
   # over: `.raxol/lsp.json` names the binary, and the binary itself runs
@@ -666,7 +676,7 @@ defmodule Raxol.Agent.Code.App do
           actions: model.actions ++ result.tools
       }
 
-      {put_status(model, mcp_loaded_line(result)), []}
+      {put_status(model, mcp_loaded_line(result, model.mcp_skipped)), []}
     else
       {model, []}
     end
@@ -702,18 +712,27 @@ defmodule Raxol.Agent.Code.App do
     end)
   end
 
-  defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+  # The boot status line promised a skipped count (`mcp_note/2`); this fold
+  # overwrites that line, so the count rides along or it survives exactly
+  # one frame in any session that has a stdio server to load.
+  defp mcp_loaded_line(result, skipped),
+    do: mcp_tools_line(result) <> skipped_suffix(skipped)
 
-  defp mcp_loaded_line(%{tools: tools, connected: connected, failed: []}) do
+  defp mcp_tools_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+
+  defp mcp_tools_line(%{tools: tools, connected: connected, failed: []}) do
     "mcp: #{length(tools)} tools from #{length(connected)} servers"
   end
 
-  defp mcp_loaded_line(%{tools: tools, failed: failed}) do
+  defp mcp_tools_line(%{tools: tools, failed: failed}) do
     names =
       Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
 
     "mcp: #{length(tools)} tools · failed: #{names}"
   end
+
+  defp skipped_suffix([]), do: ""
+  defp skipped_suffix(skipped), do: " · #{length(skipped)} skipped"
 
   # Fire the armed launch validation on the first update (dispatcher process).
   defp maybe_launch_validation(%{pending_validation: nil} = model), do: model
