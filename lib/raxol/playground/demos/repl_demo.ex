@@ -1,11 +1,11 @@
 defmodule Raxol.Playground.Demos.ReplDemo do
   @moduledoc """
-  Playground demo: interactive Elixir REPL.
+  Playground demo: AST-checked interactive Elixir REPL.
 
   Evaluation runs submitted code with the node's full authority and is opt-in
   per deployment (`Raxol.Core.Boundary.Evaluation`). `Raxol.REPL.Sandbox` runs
-  in front of it at `:strict`, but that checker is a mitigation, not a trust
-  boundary — see `check_and_eval/2`.
+  in front of it, but that checker is a mitigation, not a trust boundary: see
+  `check_and_eval/2`.
   """
   use Raxol.Core.Runtime.Application
 
@@ -20,6 +20,13 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   @box_height 16
   @max_history Raxol.Core.Defaults.history_limit()
   @eval_timeout Raxol.Core.Defaults.timeout_ms()
+
+  # The level every served launch gets: whitelist-only, never `Sandbox`'s own
+  # `:standard` blocklist default. Only a direct local terminal launch may ask
+  # for a different one (see `sandbox_level/2`), because a level relaxed for
+  # one operator's own terminal must not be able to follow an anonymously
+  # served surface.
+  @default_sandbox_level :strict
 
   # Sized for the deployment, not for a developer's laptop. An enabled
   # deployment may serve this demo over SSH, where the playground allows 50
@@ -85,12 +92,16 @@ defmodule Raxol.Playground.Demos.ReplDemo do
     # Decided once, at launch. Re-reading process-global state per keystroke
     # would let a mid-session config change flip an already-served surface.
     eval_allowed = evaluation_enabled?(context)
+    local = local_operator_launch?(context)
+    opts = context_options(context)
 
     %{
       input: "",
       cursor: 0,
       evaluator: Evaluator.new(),
       eval_allowed: eval_allowed,
+      sandbox_level: sandbox_level(opts, local),
+      eval_timeout: eval_timeout(opts, local),
       output: [{banner(eval_allowed), :info}],
       output_offset: 0,
       input_history: [],
@@ -103,6 +114,37 @@ defmodule Raxol.Playground.Demos.ReplDemo do
 
   defp banner(false),
     do: "# Raxol REPL -- evaluation is disabled on this deployment"
+
+  # `mix raxol.repl`'s `--sandbox` and `--timeout` arrive here: options given
+  # to `Raxol.start_link/2` reach `init/1` in the runtime's context map. Read
+  # per instance rather than from application env, because the playground
+  # starts this demo with `init(nil)`.
+  defp context_options(%{options: options}) when is_list(options), do: options
+  defp context_options(_context), do: []
+
+  # Only a direct local terminal launch may move these. A served app supplies
+  # its own options too (`Raxol.SSH.Server`'s `:app_opts` and `:tenant_opts`
+  # land in the same list), so honouring `:sandbox` unconditionally would let
+  # an anonymously served surface ask for `:none`, and honouring `:timeout`
+  # would let it hold a scheduler for as long as it liked. The
+  # `local_operator_launch?/1` gate is the same one evaluation itself uses.
+  defp sandbox_level(opts, true) do
+    case Keyword.get(opts, :sandbox) do
+      level when level in [:none, :standard, :strict] -> level
+      _ -> @default_sandbox_level
+    end
+  end
+
+  defp sandbox_level(_opts, false), do: @default_sandbox_level
+
+  defp eval_timeout(opts, true) do
+    case Keyword.get(opts, :timeout) do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _ -> @eval_timeout
+    end
+  end
+
+  defp eval_timeout(_opts, false), do: @eval_timeout
 
   @impl true
   def update(message, model) do
@@ -207,18 +249,20 @@ defmodule Raxol.Playground.Demos.ReplDemo do
 
   defp eval_input(model), do: check_and_eval(model, String.trim(model.input))
 
-  # `:strict` is the whitelist-only level rather than the default `:standard`
-  # blocklist, and it is a MITIGATION, not the trust boundary. Every clause in
-  # the checker decides safety from a module NAME, while `import`, `alias`,
-  # `require` and `use` decide which module a name reaches, so they sit
-  # underneath the check: at `:strict`, `import System; cmd(...)`,
+  # `model.sandbox_level` is `@default_sandbox_level` for every served launch
+  # and whatever `mix raxol.repl --sandbox` asked for on a local terminal.
+  #
+  # Whichever level it is, this checker is a MITIGATION, not the trust
+  # boundary. Every clause in it decides safety from a module NAME, while
+  # `import`, `alias`, `require` and `use` decide which module a name reaches,
+  # so they sit underneath the check: at `:strict`, `import System; cmd(...)`,
   # `alias :os, as: Enum` and the bare-name capture forms of `apply`/`spawn`
-  # all pass (asserted in `test/raxol/repl/sandbox_test.exs`). What actually
-  # keeps an anonymous caller away from the evaluator is the deployment flag
-  # above; this check only raises the cost of the obvious attempts. Do not
-  # enable evaluation on a node whose authority matters.
+  # all pass (asserted in `test/raxol/repl/sandbox_test.exs`). What keeps an
+  # anonymous caller away from the evaluator is the deployment flag, not this;
+  # the check only raises the cost of the obvious attempts. Do not enable
+  # evaluation on a node whose authority matters.
   defp check_and_eval(model, code) do
-    case Sandbox.check(code, :strict) do
+    case Sandbox.check(code, model.sandbox_level) do
       :ok ->
         do_eval(model, code)
 
@@ -231,7 +275,7 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   # snippet:start
   defp do_eval(model, code) do
     case Evaluator.eval(model.evaluator, code,
-           timeout: @eval_timeout,
+           timeout: model.eval_timeout,
            max_heap_bytes: @eval_max_heap_bytes,
            max_result_bytes: @eval_max_output_bytes
          ) do

@@ -38,6 +38,58 @@ defmodule Raxol.Playground.Demos.ReplDemoTest do
   end
 
   describe "init/1" do
+    test "defaults all supported contexts to strict" do
+      for context <- [nil, %{}, %{options: []}] do
+        model = ReplDemo.init(context)
+
+        assert model.sandbox_level == :strict
+        assert model.eval_timeout == Raxol.Core.Defaults.timeout_ms()
+      end
+    end
+
+    test "a local terminal launch gets the sandbox and timeout it asked for" do
+      for sandbox <- [:none, :standard, :strict] do
+        model =
+          ReplDemo.init(%{
+            options: [local_operator: true, sandbox: sandbox, timeout: 250]
+          })
+
+        assert model.sandbox_level == sandbox
+        assert model.eval_timeout == 250
+      end
+    end
+
+    # `Raxol.SSH.Server`'s `:app_opts` and `:tenant_opts` land in the same
+    # option list, so honouring these unconditionally would let an anonymously
+    # served surface ask for `:none` (no check at all) or hold a scheduler for
+    # as long as it liked. A served launch keeps the defaults whatever it asks
+    # for.
+    test "a served launch cannot lower the level or raise the timeout" do
+      for env <- [:ssh, :liveview, :telegram, :agent, :gateway] do
+        model =
+          ReplDemo.init(%{
+            options: [
+              local_operator: true,
+              environment: env,
+              sandbox: :none,
+              timeout: 600_000
+            ]
+          })
+
+        assert model.sandbox_level == :strict, "#{env} lowered the level"
+
+        assert model.eval_timeout == Raxol.Core.Defaults.timeout_ms(),
+               "#{env} raised the timeout"
+      end
+    end
+
+    test "options without the local opt-in are ignored" do
+      model = ReplDemo.init(%{options: [sandbox: :none, timeout: 600_000]})
+
+      assert model.sandbox_level == :strict
+      assert model.eval_timeout == Raxol.Core.Defaults.timeout_ms()
+    end
+
     test "returns initial model" do
       model = ReplDemo.init(nil)
       assert model.input == ""
