@@ -1,5 +1,5 @@
 defmodule Raxol.Playground.Demos.ReplDemoTest do
-  # `evaluation_enabled?/0` reads process-global state (an env var and the
+  # `evaluation_enabled?/1` reads process-global state (an env var and the
   # application environment), so these cannot run concurrently with a test
   # that sets it the other way.
   use ExUnit.Case, async: false
@@ -9,8 +9,8 @@ defmodule Raxol.Playground.Demos.ReplDemoTest do
   setup do
     # Evaluation is off by default (#1045); the tests below exercise the
     # enabled deployment.
-    Application.put_env(:raxol, :repl_exposed, true)
-    on_exit(fn -> Application.delete_env(:raxol, :repl_exposed) end)
+    Application.put_env(:raxol_core, :repl_exposed, true)
+    on_exit(fn -> Application.delete_env(:raxol_core, :repl_exposed) end)
   end
 
   defp key(char) when is_binary(char) do
@@ -171,7 +171,7 @@ defmodule Raxol.Playground.Demos.ReplDemoTest do
   # the default is no (#1045).
   describe "evaluation gate" do
     setup do
-      Application.delete_env(:raxol, :repl_exposed)
+      Application.delete_env(:raxol_core, :repl_exposed)
       System.delete_env("RAXOL_REPL_EXPOSED")
       :ok
     end
@@ -204,9 +204,76 @@ defmodule Raxol.Playground.Demos.ReplDemoTest do
       assert ReplDemo.evaluation_enabled?()
       System.delete_env("RAXOL_REPL_EXPOSED")
 
-      Application.put_env(:raxol, :repl_exposed, true)
+      Application.put_env(:raxol_core, :repl_exposed, true)
       assert ReplDemo.evaluation_enabled?()
-      Application.delete_env(:raxol, :repl_exposed)
+      Application.delete_env(:raxol_core, :repl_exposed)
+    end
+
+    test "an unrecognised flag value leaves evaluation off" do
+      for value <- ["1", "TRUE", "true ", "yes", ""] do
+        System.put_env("RAXOL_REPL_EXPOSED", value)
+        refute ReplDemo.evaluation_enabled?(), "#{inspect(value)} enabled it"
+      end
+
+      System.delete_env("RAXOL_REPL_EXPOSED")
+      Application.put_env(:raxol_core, :repl_exposed, "true")
+      refute ReplDemo.evaluation_enabled?()
+      Application.delete_env(:raxol_core, :repl_exposed)
+    end
+
+    # `mix raxol.repl` is the operator's own terminal: the code runs as the
+    # person who typed it, so it does not need the deployment flag.
+    test "a direct local terminal launch evaluates without the flag" do
+      context = %{options: [local_operator: true]}
+      assert ReplDemo.evaluation_enabled?(context)
+
+      model = ReplDemo.init(context) |> type_string("41 + 1")
+      {model, _} = ReplDemo.update(key(:enter), model)
+
+      output_text =
+        Enum.map_join(model.output, "\n", fn {text, _kind} -> text end)
+
+      assert output_text =~ "42"
+      refute output_text =~ "disabled"
+    end
+
+    # The whole point of keying the opt-in on `:environment`: a served app's
+    # own options must not be able to claim a local launch. SSH and LiveView
+    # both set `:environment` ahead of any app-supplied options.
+    test "a remote surface cannot grant itself the local opt-in" do
+      for env <- [:ssh, :liveview, :telegram, :agent, :gateway] do
+        context = %{options: [local_operator: true, environment: env]}
+
+        refute ReplDemo.evaluation_enabled?(context),
+               "#{inspect(env)} self-granted evaluation"
+
+        model = ReplDemo.init(context) |> type_string("41 + 1")
+        {model, _} = ReplDemo.update(key(:enter), model)
+
+        output_text =
+          Enum.map_join(model.output, "\n", fn {text, _kind} -> text end)
+
+        assert output_text =~ "disabled"
+        refute output_text =~ "42"
+      end
+    end
+
+    test "the launch decision is fixed at init, not re-read per keystroke" do
+      model = ReplDemo.init(nil)
+      refute model.eval_allowed
+
+      # A deployment flipped after this surface was already served must not
+      # retroactively enable the session that was started closed.
+      Application.put_env(:raxol_core, :repl_exposed, true)
+      on_exit(fn -> Application.delete_env(:raxol_core, :repl_exposed) end)
+
+      {model, _} = ReplDemo.update(key(:enter), type_string(model, "41 + 1"))
+
+      output_text =
+        Enum.map_join(model.output, "\n", fn {text, _kind} -> text end)
+
+      assert output_text =~ "disabled"
+      refute output_text =~ "42"
     end
   end
 end

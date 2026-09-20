@@ -1,7 +1,15 @@
 defmodule Raxol.Playground.Demos.ReplDemo do
-  @moduledoc "Playground demo: interactive Elixir REPL with sandboxed evaluation."
+  @moduledoc """
+  Playground demo: interactive Elixir REPL.
+
+  Evaluation runs submitted code with the node's full authority and is opt-in
+  per deployment (`Raxol.Core.Boundary.Evaluation`). `Raxol.REPL.Sandbox` runs
+  in front of it at `:strict`, but that checker is a mitigation, not a trust
+  boundary — see `check_and_eval/2`.
+  """
   use Raxol.Core.Runtime.Application
 
+  alias Raxol.Core.Boundary.Evaluation
   alias Raxol.REPL.{Evaluator, Sandbox}
 
   import Raxol.Playground.DemoHelpers,
@@ -13,12 +21,12 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   @max_history Raxol.Core.Defaults.history_limit()
   @eval_timeout Raxol.Core.Defaults.timeout_ms()
 
-  # Sized for the deployment, not for a developer's laptop. This demo is the
-  # only strict-sandbox caller and it is served anonymously over SSH, where the
-  # playground allows 50 concurrent connections on a 1GB machine -- the
-  # evaluator's own 64MB default would let a handful of sessions exhaust it
-  # between them. Small enough that a session cannot hurt its neighbours;
-  # generous for anything a REPL demo legitimately computes.
+  # Sized for the deployment, not for a developer's laptop. An enabled
+  # deployment may serve this demo over SSH, where the playground allows 50
+  # concurrent connections on a 1GB machine -- the evaluator's own 64MB default
+  # would let a handful of sessions exhaust it between them. Small enough that
+  # a session cannot hurt its neighbours; generous for anything a REPL demo
+  # legitimately computes.
   @eval_max_heap_bytes 8 * 1024 * 1024
   @eval_max_output_bytes 256 * 1024
   @max_bindings 8
@@ -27,9 +35,10 @@ defmodule Raxol.Playground.Demos.ReplDemo do
 
   @disabled_message "Evaluation is disabled on this deployment. " <>
                       "The evaluator runs submitted code with the node's full " <>
-                      "authority, so it is opt-in: set RAXOL_REPL_EXPOSED=true " <>
-                      "(or config :raxol, :repl_exposed, true) on a node that " <>
-                      "holds no keys."
+                      "authority, so it is opt-in: set " <>
+                      Evaluation.env_var() <>
+                      "=true (or config :raxol_core, :repl_exposed, true) on " <>
+                      "a node that holds no keys."
 
   # Anonymous surfaces route straight to this demo: the playground's HTTP
   # gallery serves every catalog entry at `/demos/:demo` through the `:browser`
@@ -37,43 +46,63 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   # suspended in August. Evaluation is therefore opt-in per deployment rather
   # than on by default (#1045).
   #
-  # The flag is the one `Raxol.Payments.Deployment.assert_signing_isolated!/0`
-  # already reads: turning this REPL on is exactly the condition that makes a
-  # signing node refuse to boot, so the two halves of that rule can no longer
-  # disagree about whether a deployment exposes an evaluator.
+  # The deployment flag is `Raxol.Core.Boundary.Evaluation.exposed?/0`, which
+  # is also the flag `Raxol.Payments.Deployment.assert_signing_isolated!/0`
+  # reads. Turning this REPL on is therefore exactly the condition that makes
+  # a signing node refuse to boot; the two halves of that rule read one
+  # predicate and cannot disagree.
+  #
+  # A direct local launch (`mix raxol.repl`) is the one case that does not need
+  # the deployment flag: the operator started the evaluator in their own
+  # terminal, so they are already the authority it would run as. That opt-in is
+  # accepted ONLY at `environment: :terminal`. It cannot be self-granted by a
+  # remote surface: `Raxol.SSH.Session.lifecycle_opts/4` places
+  # `environment: :ssh` ahead of the served app's `:app_opts`/`:tenant_opts`
+  # precisely so a served app cannot shadow it, and the web gallery starts
+  # every demo with `environment: :liveview`.
   @doc """
-  Whether this deployment allows the playground REPL to evaluate code.
+  Whether this launch of the REPL demo may evaluate code.
 
-  Off unless `RAXOL_REPL_EXPOSED=true` or `config :raxol, :repl_exposed, true`.
-  The demo renders either way; with evaluation off, Enter reports the flag
-  rather than running the input.
+  True when the deployment opted in (`RAXOL_REPL_EXPOSED=true` or
+  `config :raxol_core, :repl_exposed, true`), or when a local terminal launch
+  passed `local_operator: true`. The demo renders either way; with evaluation
+  off, Enter reports the flag rather than running the input.
   """
-  @spec evaluation_enabled?() :: boolean()
-  def evaluation_enabled? do
-    System.get_env("RAXOL_REPL_EXPOSED") == "true" or
-      Application.get_env(:raxol, :repl_exposed, false) == true
+  @spec evaluation_enabled?(map() | nil) :: boolean()
+  def evaluation_enabled?(context \\ nil) do
+    Evaluation.exposed?() or local_operator_launch?(context)
   end
 
+  defp local_operator_launch?(%{options: options}) when is_list(options) do
+    Keyword.get(options, :local_operator, false) == true and
+      Keyword.get(options, :environment, :terminal) == :terminal
+  end
+
+  defp local_operator_launch?(_context), do: false
+
   @impl true
-  def init(_context) do
+  def init(context) do
+    # Decided once, at launch. Re-reading process-global state per keystroke
+    # would let a mid-session config change flip an already-served surface.
+    eval_allowed = evaluation_enabled?(context)
+
     %{
       input: "",
       cursor: 0,
       evaluator: Evaluator.new(),
-      output: [{banner(), :info}],
+      eval_allowed: eval_allowed,
+      output: [{banner(eval_allowed), :info}],
       output_offset: 0,
       input_history: [],
       history_index: nil
     }
   end
 
-  defp banner do
-    if evaluation_enabled?() do
-      "# Raxol REPL -- type Elixir expressions, Enter to eval"
-    else
-      "# Raxol REPL -- evaluation is disabled on this deployment"
-    end
-  end
+  defp banner(true),
+    do: "# Raxol REPL -- type Elixir expressions, Enter to eval"
+
+  defp banner(false),
+    do: "# Raxol REPL -- evaluation is disabled on this deployment"
 
   @impl true
   def update(message, model) do
@@ -172,19 +201,23 @@ defmodule Raxol.Playground.Demos.ReplDemo do
 
   defp eval_input(%{input: ""} = model), do: model
 
-  defp eval_input(model) do
-    code = String.trim(model.input)
-
-    if evaluation_enabled?() do
-      check_and_eval(model, code)
-    else
-      append_output(model, code, @disabled_message, :error)
-    end
+  defp eval_input(%{eval_allowed: false} = model) do
+    append_output(model, String.trim(model.input), @disabled_message, :error)
   end
 
+  defp eval_input(model), do: check_and_eval(model, String.trim(model.input))
+
+  # `:strict` is the whitelist-only level rather than the default `:standard`
+  # blocklist, and it is a MITIGATION, not the trust boundary. Every clause in
+  # the checker decides safety from a module NAME, while `import`, `alias`,
+  # `require` and `use` decide which module a name reaches, so they sit
+  # underneath the check: at `:strict`, `import System; cmd(...)`,
+  # `alias :os, as: Enum` and the bare-name capture forms of `apply`/`spawn`
+  # all pass (asserted in `test/raxol/repl/sandbox_test.exs`). What actually
+  # keeps an anonymous caller away from the evaluator is the deployment flag
+  # above; this check only raises the cost of the obvious attempts. Do not
+  # enable evaluation on a node whose authority matters.
   defp check_and_eval(model, code) do
-    # An enabled deployment still runs submitted code at the whitelist-only
-    # strict level -- never the default standard blocklist.
     case Sandbox.check(code, :strict) do
       :ok ->
         do_eval(model, code)

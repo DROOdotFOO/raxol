@@ -106,24 +106,33 @@ defmodule Raxol.Payments.Deployment do
   Raise in production when a signing node also exposes the interactive REPL.
 
   Evaluating code on a node that holds signing keys is a capability-escape
-  surface (see `Raxol.REPL.Sandbox`): keep the REPL and the wallet on separate
-  nodes. A deployment that exposes the REPL sets `RAXOL_REPL_EXPOSED=true` (or
-  `config :raxol_payments, :repl_exposed, true`); a signing deployment calls
-  this at boot to refuse that co-location.
+  surface (see `Raxol.REPL.Sandbox`, whose checker is a mitigation and not a
+  boundary): keep the REPL and the wallet on separate nodes.
+
+  The flag is `Raxol.Core.Boundary.Evaluation.exposed?/0` -- the SAME predicate
+  `Raxol.Playground.Demos.ReplDemo` consults before it evaluates anything, so
+  the permissive and restrictive halves of this rule cannot disagree. Anything
+  that lets that demo evaluate makes this assertion refuse the co-location.
   """
   @spec assert_signing_isolated!() :: :ok
   def assert_signing_isolated! do
     if production?() and repl_exposed?() do
       raise ArgumentError,
             "This node holds signing keys and also exposes the interactive REPL " <>
-              "(RAXOL_REPL_EXPOSED=true). Move the REPL to a node that cannot sign."
+              "(#{Raxol.Core.Boundary.Evaluation.env_var()}=true). Move the REPL " <>
+              "to a node that cannot sign."
     end
 
     :ok
   end
 
+  # The legacy `config :raxol_payments, :repl_exposed` key is still honoured so
+  # an existing signing deployment that set it does not silently start booting.
+  # It is deliberately NOT part of the canonical predicate: honouring it here
+  # only ever refuses more co-locations, whereas teaching the demo about it
+  # would enable more evaluation. The asymmetry is the safe direction.
   defp repl_exposed? do
-    System.get_env("RAXOL_REPL_EXPOSED") == "true" or
+    Raxol.Core.Boundary.Evaluation.exposed?() or
       Application.get_env(:raxol_payments, :repl_exposed, false) == true
   end
 end
