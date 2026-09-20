@@ -261,6 +261,32 @@ defmodule Raxol.REPL.Sandbox do
     ["receive is not allowed (message interception)"]
   end
 
+  # `import`, `alias`, `require` and `use` decide WHICH module a name reaches,
+  # and every clause above decides safety FROM that name, so these four forms
+  # sit underneath the whole check rather than inside it. `import System` turns
+  # the following `cmd("id", [])` into a bare local call that matches no clause
+  # at all; `alias :os, as: Enum` rebinds a whitelisted name onto a denied
+  # module, so the checker approves a call the runtime then dispatches to
+  # `:os.cmd/1`. Both returned `:ok` at `:strict` -- the level documented as
+  # safe for anonymous exposure -- which is CVE-class on a network surface
+  # (#1045).
+  #
+  # Re-checking after alias resolution would mean carrying a `Macro.Env`
+  # through the walk and re-deriving what the evaluator is going to do with it.
+  # Refusing the four forms is the same guarantee in one clause, and costs
+  # sandboxed code nothing it can express another way: the whitelist is written
+  # in full module names, and full module names still work.
+  #
+  # `:none` -- the local-terminal level -- never reaches any clause here;
+  # `check/2` returns `:ok` for it before the walk starts.
+  defp check_node({kind, _, args}, _level)
+       when kind in [:import, :alias, :require, :use] and is_list(args) do
+    [
+      "#{kind} is not allowed " <>
+        "(it rebinds the module names this checker resolves statically)"
+    ]
+  end
+
   defp check_node({kind, _, _}, _level)
        when kind in [:defmodule, :defprotocol, :defimpl] do
     ["#{kind} is not allowed (runtime module definition)"]

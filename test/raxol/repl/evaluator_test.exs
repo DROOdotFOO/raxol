@@ -315,6 +315,12 @@ defmodule Raxol.REPL.EvaluatorTest do
     # Driven through `CaptureIO` directly with the IO protocol, because no
     # Elixir expression makes `io_lib` hang: the wedge is a property of the
     # expander, and the request shape is what `:io.format/2` sends.
+    # The `:DOWN` below is a scheduling event, so the window is a hang
+    # detector rather than a deadline: `@tag timeout:` is what fails a real
+    # wedge, and a loaded runner that takes two seconds to deliver a monitor
+    # message is not the bug under test (it failed at the suite's 1s default
+    # on macos-latest in run 35517528499).
+    @tag timeout: 30_000
     test "an expander that never answers does not wedge the capture server" do
       before = capture_server_count()
       test_pid = self()
@@ -353,7 +359,7 @@ defmodule Raxol.REPL.EvaluatorTest do
       # its owner does.
       ref = Process.monitor(capture)
       Process.exit(owner, :brutal_kill)
-      assert_receive {:DOWN, ^ref, :process, ^capture, :normal}
+      assert_receive {:DOWN, ^ref, :process, ^capture, :normal}, 10_000
       assert capture_server_count() == before
     end
 

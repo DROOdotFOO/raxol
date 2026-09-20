@@ -83,5 +83,37 @@ defmodule Raxol.Payments.DeploymentTest do
       System.put_env("RAXOL_REPL_EXPOSED", "true")
       assert :ok = Deployment.assert_signing_isolated!()
     end
+
+    # The permissive half of this rule (`Raxol.Playground.Demos.ReplDemo`) and
+    # the restrictive half (here) must read ONE predicate. They did not before
+    # #1045's review: the demo read `config :raxol, :repl_exposed`, this read
+    # `config :raxol_payments, :repl_exposed`, and configuring the former
+    # enabled anonymous evaluation while a signing node still booted.
+    test "the canonical config key alone refuses the co-location" do
+      {app, key} = Raxol.Core.Boundary.Evaluation.config_key()
+      Application.put_env(:raxol_payments, :deployment, :production)
+      Application.put_env(app, key, true)
+      on_exit(fn -> Application.delete_env(app, key) end)
+
+      assert Raxol.Core.Boundary.Evaluation.exposed?()
+
+      assert_raise ArgumentError, ~r/exposes the interactive REPL/, fn ->
+        Deployment.assert_signing_isolated!()
+      end
+    end
+
+    # Kept honoured so an existing signing deployment that set it does not
+    # silently start booting. It is not part of the canonical predicate,
+    # because honouring it here only ever refuses more co-locations.
+    test "the legacy raxol_payments key still refuses the co-location" do
+      Application.put_env(:raxol_payments, :deployment, :production)
+      Application.put_env(:raxol_payments, :repl_exposed, true)
+
+      refute Raxol.Core.Boundary.Evaluation.exposed?()
+
+      assert_raise ArgumentError, ~r/exposes the interactive REPL/, fn ->
+        Deployment.assert_signing_isolated!()
+      end
+    end
   end
 end
