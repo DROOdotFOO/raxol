@@ -717,12 +717,23 @@ defmodule Raxol.Web3.Backend.Solana do
     end
   end
 
-  # The payload's error code, never its prose. `unknown_network` is a source
-  # error the router fails over on; anything else is our own request being
-  # wrong, which a sibling source would answer the same way, so it is final.
+  # The payload's error code, never its prose, and the same four codes
+  # `Raxol.Web3.Backend.Tron` reads off the same portal, mapped the same way.
+  # Three of them are facts about the SOURCE rather than about the question,
+  # so the router walks on, which is the whole point of assembling this
+  # backend as `[sqd, rpc]`: a credential this deployment does not hold and a
+  # budget this origin has spent are both answerable by the node. Reading
+  # `unauthorized` and `rate_limited` as `:unknown` made them final, so a
+  # keyless archive read died while a healthy node sat behind it.
+  #
+  # An unclassified code stays final, because that is our own request being
+  # wrong and a sibling would answer it the same way. `invalid_request`, the
+  # windowless account query, is the measured case.
   defp sqd_refusal(payload, state) do
-    case get_in(payload, ["error", "code"]) do
+    case dig(payload, ["error", "code"]) do
       "unknown_network" -> {:unsupported_chain, state.network}
+      "unauthorized" -> {:upstream_refused, :auth}
+      "rate_limited" -> {:upstream_refused, :rate_limit}
       _ours -> {:upstream_refused, :unknown}
     end
   end

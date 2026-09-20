@@ -915,6 +915,26 @@ defmodule Raxol.Web3.Backend.SolanaTest do
       assert "getEpochInfo" in tools
     end
 
+    test "a credential the archive wants and this deployment lacks walks on" do
+      # `unauthorized` is a fact about the SOURCE, not about the question: the
+      # node holds no credential and answers anyway. Reading it as
+      # `{:upstream_refused, :unknown}` made it final, so a keyless archive
+      # read died with a healthy node sitting behind it, while the identical
+      # read on `Raxol.Web3.Backend.Tron` failed over.
+      router =
+        router_pair(
+          %{"portal_get_network_info" => sse_error(%{"error" => %{"code" => "unauthorized"}})},
+          %{"getEpochInfo" => fixture("rpc_epoch_info.json")}
+        )
+
+      assert {:ok, info} = Router.call(router, @mainnet, :chain_info)
+      assert info.total_blocks == 424_994_262
+
+      tools = requested_tools()
+      assert "portal_get_network_info" in tools
+      assert "getEpochInfo" in tools
+    end
+
     test "the primary answers a required callback when it can, and the node is not asked" do
       router =
         router_pair(
