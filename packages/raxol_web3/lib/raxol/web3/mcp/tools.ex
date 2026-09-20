@@ -48,6 +48,7 @@ defmodule Raxol.Web3.MCP.Tools do
   """
 
   alias Raxol.MCP.Registry
+  alias Raxol.Web3.HTTP
   alias Raxol.Web3.Router
   alias Raxol.Web3.Serialize
 
@@ -205,11 +206,21 @@ defmodule Raxol.Web3.MCP.Tools do
   The argument is the SERIALIZED term, because that is what a callback here
   returns: `Raxol.Web3.Serialize.error/1` renders `{:upstream_refused,
   :not_found}` as `%{code: "upstream_refused", detail: :not_found}`, so the
-  one class that splits on its detail is read that way.
+  two classes that split on their detail are read that way.
+
+  `{:http, status}` is the second of them. A backend that cannot classify a
+  status hands it through as-is, and Blockscout answers an unknown hash with
+  a plain `404`: five of those from one client opened the tool for every
+  client of it. `Raxol.Web3.HTTP.unhealthy_status?/1` is the split, and it is
+  called rather than restated so that a status which fails over in
+  `Raxol.Web3.Router` is the same status that counts here.
   """
   @spec fault?(term()) :: boolean()
   def fault?(%{code: "upstream_refused", detail: detail}),
     do: detail not in [:not_found, :unknown]
+
+  def fault?(%{code: "http", detail: status}) when is_integer(status),
+    do: HTTP.unhealthy_status?(status)
 
   def fault?(%{code: code}), do: code not in @answers
 
@@ -259,11 +270,21 @@ defmodule Raxol.Web3.MCP.Tools do
   # the failure mode of guessing wrong is a required argument reported missing
   # when it was supplied.
   defp dispatch(router, callback, arg_spec, arguments) do
-    with {:ok, chain} <- fetch(arguments, "chain"),
+    with {:ok, chain} <- chain_ref(arguments),
          {:ok, args} <- build_args(callback, arg_spec, arguments) do
       call(router, chain, callback, args)
     else
       {:error, reason} -> {:error, Serialize.error(reason)}
+    end
+  end
+
+  # A chain reference is a CAIP-2 string, and `Raxol.Web3.Router.call/4` looks
+  # it up in a map: a number or a list would answer `{:error, :no_backend}`,
+  # which tells a model its chain is unrouted when what it actually sent was
+  # the wrong type.
+  defp chain_ref(arguments) do
+    with {:ok, chain} <- fetch(arguments, "chain") do
+      if is_binary(chain), do: {:ok, chain}, else: {:error, {:invalid_argument, "chain"}}
     end
   end
 
@@ -274,25 +295,56 @@ defmodule Raxol.Web3.MCP.Tools do
     end
   end
 
-  defp build_args(:chain_info, _spec, _arguments), do: {:ok, []}
-  defp build_args(:block_height, _spec, _arguments), do: {:ok, []}
+  # Every argument is type-checked here, on the function that builds the call,
+  # and not left to `inputSchema`: neither `Raxol.MCP.Server` nor
+  # `Raxol.MCP.Registry` enforces a schema, so the type of an argument is
+  # whatever the peer sent. Unchecked, `{"account": 123}` reached
+  # `Raxol.Web3.Serialize.account_ref/1`, which is guarded `when
+  # is_binary(value)`, and the `FunctionClauseError` it raised was rendered
+  # into the tool result a model reads AND recorded as a fault against the
+  # tool's breaker. `{:invalid_argument, name}` is in `@answers`, so it is
+  # neither.
+  #
+  # One gate rather than a check inside each clause below, because a clause
+  # added later cannot forget to call this one.
+  defp build_args(callback, spec, arguments) do
+    with :ok <- check_types(spec, arguments), do: build(callback, spec, arguments)
+  end
 
-  defp build_args(:get_transaction, _spec, arguments) do
+  # Only `:string` is checked here. The one `:integer` argument is `number`,
+  # whose accepted set is deliberately wider than the schema says (a tag, a
+  # `0x` quantity, a decimal string) and is decided by `block_ref/1`, which
+  # returns the same closed error for everything outside it.
+  defp check_types(spec, arguments) do
+    Enum.reduce_while(spec, :ok, fn {name, type, _required?, _doc}, :ok ->
+      case {type, get(arguments, name)} do
+        {_type, nil} -> {:cont, :ok}
+        {:string, value} when is_binary(value) -> {:cont, :ok}
+        {:string, _other} -> {:halt, {:error, {:invalid_argument, name}}}
+        {_other_type, _value} -> {:cont, :ok}
+      end
+    end)
+  end
+
+  defp build(:chain_info, _spec, _arguments), do: {:ok, []}
+  defp build(:block_height, _spec, _arguments), do: {:ok, []}
+
+  defp build(:get_transaction, _spec, arguments) do
     with {:ok, hash} <- fetch(arguments, "hash"), do: {:ok, [hash]}
   end
 
-  defp build_args(:resolve_name, _spec, arguments) do
+  defp build(:resolve_name, _spec, arguments) do
     with {:ok, name} <- fetch(arguments, "name"), do: {:ok, [name]}
   end
 
-  defp build_args(:get_block, _spec, arguments) do
+  defp build(:get_block, _spec, arguments) do
     with {:ok, number} <- fetch(arguments, "number"),
          {:ok, block} <- block_ref(number) do
       {:ok, [block]}
     end
   end
 
-  defp build_args(:read_contract, _spec, arguments) do
+  defp build(:read_contract, _spec, arguments) do
     with {:ok, to} <- fetch(arguments, "to"),
          {:ok, data} <- fetch(arguments, "data") do
       call = %{to: to, data: data}
@@ -301,14 +353,14 @@ defmodule Raxol.Web3.MCP.Tools do
     end
   end
 
-  defp build_args(callback, _spec, arguments)
+  defp build(callback, _spec, arguments)
        when callback in [:account_info, :contract_metadata] do
     with {:ok, account} <- fetch(arguments, "account") do
       {:ok, [Serialize.account_ref(account)]}
     end
   end
 
-  defp build_args(callback, _spec, arguments)
+  defp build(callback, _spec, arguments)
        when callback in [
               :list_transactions,
               :token_balances,
