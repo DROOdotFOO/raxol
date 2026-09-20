@@ -5,9 +5,10 @@ defmodule Raxol.Core.Boundary.Path do
   escape *before* any syscall touches the target.
 
   This is the centralized seed of the "same gap, four patches" boundary
-  (PR #569 thread 2). It is one of **two** boundary confinements — the other is
-  `Raxol.Core.Boundary.TermText` (terminal-injection). They share a threat
-  narrative but nothing else, so they are two functions, not one.
+  (PR #569 thread 2). It is one of **three** boundary confinements — the others
+  are `Raxol.Core.Boundary.TermText` (terminal-injection) and
+  `Raxol.Core.Boundary.Evaluation` (code-evaluation exposure). They share a
+  threat narrative but nothing else, so they are separate functions, not one.
 
   Seeded from the proven `Raxol.AgentClientProtocol.Client.FsSandbox.resolve/2`
   (leaf-symlink *and* symlinked-ancestor resolution, cycle-guarded, rejecting

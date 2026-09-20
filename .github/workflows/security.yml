@@ -175,6 +175,11 @@ jobs:
       # vendored assets use narrow rule-scoped allowlists. The scanner version
       # is pinned below so that allowlist syntax is part of the enforced gate.
       #
+      # Those allowlists are load-bearing ONLY because `GITLEAKS_VERSION` is
+      # pinned at the Gitleaks step below. At the action's default version they
+      # are never parsed and the sentence above is false. Read that comment
+      # before changing the pin.
+      #
       # `--only-verified` on TruffleHog for the same reason: unverified
       # high-entropy matches in signing test vectors are not credentials, and
       # only a verified live secret should be able to stop a merge.
@@ -230,6 +235,30 @@ jobs:
           GITLEAKS_VERSION: 8.30.1
           # Repo-scoped config; without it this job cannot pass. See above.
           GITLEAKS_CONFIG: .gitleaks.toml
+          # Pinned exactly, not to a floating major, and not left unset. The
+          # action defaults to gitleaks 8.24.3 (`process.env.GITLEAKS_VERSION
+          # || "8.24.3"` in gitleaks-action v3 `src/index.js`), and the
+          # top-level plural `[[allowlists]]` table that `.gitleaks.toml` uses
+          # only reached the config parser in gitleaks 8.25.0. 8.24.x models
+          # the global allowlist as one singular `[allowlist]` struct with no
+          # `targetRules`, so it parses our file, binds no allowlist, and
+          # scans as if the file declared none. The legacy singular form that
+          # 8.24.3 does read is in turn refused outright by 8.30.1, so there
+          # is no config that satisfies both -- the version has to be pinned.
+          #
+          # Measured on this repo (working tree, `gitleaks dir . -c
+          # .gitleaks.toml` against the same config with the `[[allowlists]]`
+          # blocks deleted):
+          #   8.30.1 -> 59 findings with, 76 without: 17 suppressed
+          #   8.24.3 -> 76 findings with, 76 without:  0 suppressed
+          # Full-history `detect` reports the same findings on both versions,
+          # so the pin moves the allowlists from inert to honoured without
+          # otherwise changing this gate's verdict on existing history.
+          #
+          # Bumping this is a behaviour change to a blocking gate. Re-run that
+          # two-config comparison and confirm the suppression count is still
+          # non-zero before raising the version.
+          GITLEAKS_VERSION: "8.30.1"
 
   npm-audit:
     name: NPM Security Audit

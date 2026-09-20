@@ -73,7 +73,7 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 - More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
 - i18n: wire the present `gettext` through surface rendering, extract locale files.
 - Agent Client Protocol adapter: shipped. `bin/raxol-acp` / `mix raxol.acp` / `raxol acp` serve the coding agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`, the full toolset with every sensitive Action gated on a `session/request_permission` round trip) for editors that spawn an agent. Distinct from `raxol_earn`.
-- Expose the sandboxed REPL as an agent action for scripted single-turn tool pipelines.
+- Expose the AST-checked REPL as an agent action for scripted single-turn tool pipelines. The checker is a mitigation, not a boundary (see `Raxol.REPL.Sandbox`), so this needs a node that already opted into evaluation and holds no keys.
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
 
