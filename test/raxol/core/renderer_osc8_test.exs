@@ -33,6 +33,15 @@ defmodule Raxol.Core.RendererOSC8Test do
     |> then(&Renderer.apply_diff(Renderer.render_diff(blank, &1)))
   end
 
+  # `Buffer.write_at/5` splits text into graphemes; a raw byte or a bare C1
+  # has to be planted directly to reach the emitter as its own cell, which
+  # is exactly how `String.graphemes/1` on invalid UTF-8 delivers one.
+  defp put_cell_char(buffer, x, char) do
+    [line] = buffer.lines
+    cells = List.update_at(line.cells, x, &%{&1 | char: char})
+    %{buffer | lines: [%{line | cells: cells}]}
+  end
+
   describe "View DSL link: attribute" do
     test "Text.new/2 carries the link onto the element" do
       el = Text.new("0x7f3a", link: "https://basescan.org/tx/0x7f3a")
@@ -62,6 +71,28 @@ defmodule Raxol.Core.RendererOSC8Test do
         |> LayoutEngine.apply_layout(%{width: 20, height: 1})
 
       assert non_binary.link == ""
+    end
+
+    # `MarkdownRenderer`'s link pattern puts the raw `](target)` an LLM wrote
+    # straight onto `:link`, so the scheme is as untrusted as the bytes.
+    test "layout drops a link whose scheme is not http, https or mailto" do
+      for target <- [
+            "file:///etc/hosts",
+            "x-apple.systempreferences:com.apple.preference.security",
+            "example.com/path"
+          ] do
+        [positioned] =
+          Components.text(content: "open", link: target)
+          |> LayoutEngine.apply_layout(%{width: 20, height: 1})
+
+        assert positioned.link == "", "#{target} survived as a link"
+      end
+
+      [kept] =
+        Components.text(content: "open", link: "mailto:a@example.com")
+        |> LayoutEngine.apply_layout(%{width: 20, height: 1})
+
+      assert kept.link == "mailto:a@example.com"
     end
   end
 
@@ -149,6 +180,56 @@ defmodule Raxol.Core.RendererOSC8Test do
     test "a URL that is entirely control bytes emits no hyperlink at all" do
       refute String.contains?(linked_output("\e[2J\r" <> <<0x7F>>), "\e]8")
     end
+
+    # OSC 8 hands the URL to the desktop's URL handler: a `file:` or
+    # `x-apple.systempreferences:` target reads a local path or launches an
+    # application. The label text still renders, it just is not clickable.
+    test "only http, https and mailto become clickable" do
+      for url <- [
+            "file:///etc/hosts",
+            "javascript:alert(1)",
+            "example.com/path"
+          ] do
+        out = linked_output(url)
+
+        refute String.contains?(out, "\e]8"),
+               "#{url} became a link: #{inspect(out)}"
+
+        assert String.contains?(out, "tx"),
+               "#{url} lost its label: #{inspect(out)}"
+      end
+
+      assert String.contains?(
+               linked_output("mailto:a@example.com"),
+               osc8_open("mailto:a@example.com")
+             )
+    end
+
+    # The diff's `{:write, text}` run is POSITIONAL and carries no `\e[2K`,
+    # so a deleted cell both shifts the rest of the row left and strands the
+    # previous frame's glyph at the tail. Each cell must keep its column.
+    test "a disallowed cell mid-row keeps the columns after it" do
+      for {name, char} <- [
+            {"C1 CSI (U+009B)", "\u009B"},
+            {"raw 8-bit CSI", <<0x9B>>},
+            {"bidi override (U+202E)", "\u202E"}
+          ] do
+        blank = Buffer.create_blank_buffer(5, 1)
+
+        poisoned =
+          blank
+          |> Buffer.write_at(0, 0, "ab", %{})
+          |> put_cell_char(2, char)
+          |> Buffer.write_at(3, 0, "cd", %{})
+
+        out = Renderer.apply_diff(Renderer.render_diff(blank, poisoned))
+
+        assert out =~ "ab cd", "#{name}: #{inspect(out)}"
+
+        refute out =~ "abcd",
+               "#{name} shifted the row one column left: #{inspect(out)}"
+      end
+    end
   end
 
   describe "display text confinement" do
@@ -167,10 +248,12 @@ defmodule Raxol.Core.RendererOSC8Test do
 
     test "non-binary display content fails closed" do
       refute Renderer.apply_diff([
-               {:write, %{unsafe: "\e]52;c;payload\a"}, %{hyperlink: "https://example.com"}}
+               {:write, %{unsafe: "\e]52;c;payload\a"},
+                %{hyperlink: "https://example.com"}}
              ]) =~ "\e]8"
     end
   end
+
   describe "render_to_ansi/1 OSC 8 emission" do
     test "wraps linked cells and closes the link" do
       url = "https://example.com/x"

@@ -60,11 +60,8 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   expanded case also passes `block.outcome` through for `:tool_call`'s
   status derivation (see `BodyProvider.mount/3`'s `:outcome` option).
 
-  Terminal confinement belongs to the output paths that consume this view:
-  `Raxol.Harness.Surface.ViewText.lines/3` for the append/paint-authority
-  path, and the terminal renderers for the normal layout path. Keeping it
-  there preserves every mounted component shape without walking and
-  rebuilding the tree here on every frame.
+  Terminal confinement belongs to the output paths that consume this view;
+  see `Raxol.Core.Boundary.TermText`'s "Where confinement happens".
   """
   @spec render(Block.t(), map()) :: map()
   def render(block, context \\ %{})

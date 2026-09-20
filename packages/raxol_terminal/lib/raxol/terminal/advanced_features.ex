@@ -400,10 +400,15 @@ defmodule Raxol.Terminal.AdvancedFeatures do
 
   defp build_osc8_params(_options), do: ""
 
+  # `URI.encode/1` keeps the sub-delimiters, and two of them are structural
+  # here: OSC 8 is `ESC ] 8 ; params ; URI ST` with `:`-separated params, so
+  # a tooltip carrying `;` or `:` closes the param list early and the
+  # terminal parses the rest as a different URI. Encoding down to the
+  # unreserved set leaves no byte that can end a param or the param list.
   defp maybe_add_param(params, key, value) do
     case terminal_text(value) do
       "" -> params
-      value -> ["#{key}=#{URI.encode(value)}" | params]
+      value -> ["#{key}=#{encode_param(value)}" | params]
     end
   end
 
@@ -415,7 +420,7 @@ defmodule Raxol.Terminal.AdvancedFeatures do
       if key == "" or value == "" do
         acc
       else
-        ["#{URI.encode(key)}=#{URI.encode(value)}" | acc]
+        ["#{encode_param(key)}=#{encode_param(value)}" | acc]
       end
     end)
   end
@@ -424,8 +429,13 @@ defmodule Raxol.Terminal.AdvancedFeatures do
 
   defp terminal_text(value), do: TermText.sanitize(value, allow: [])
 
-  defp progress_value(value) when is_integer(value) and value in 0..100,
-    do: Integer.to_string(value)
+  defp encode_param(value), do: URI.encode(value, &URI.char_unreserved?/1)
+
+  # OSC 9;4 carries a percentage, so a value outside 0..100 has no
+  # representation. Clamping keeps the sequence well-formed; returning ""
+  # emitted an OSC 9;4 with an empty percentage field.
+  defp progress_value(value) when is_integer(value),
+    do: Integer.to_string(min(max(value, 0), 100))
 
   defp progress_value(_value), do: ""
 

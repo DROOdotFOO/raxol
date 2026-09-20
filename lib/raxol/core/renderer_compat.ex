@@ -108,7 +108,9 @@ defmodule Raxol.Core.Renderer do
     |> chunk_by_style()
     |> Enum.map_join("", fn {style, chars} ->
       ansi_prefix = Style.to_ansi(style)
-      text = chars |> Enum.reverse() |> Enum.map_join("", &terminal_text/1)
+
+      text =
+        chars |> Enum.reverse() |> Enum.map_join("", &TermText.sanitize_cell/1)
 
       styled =
         case ansi_prefix do
@@ -194,7 +196,7 @@ defmodule Raxol.Core.Renderer do
 
   defp flush_run(ops, run_start, run_chars, y, _cells) do
     reversed_chars = Enum.reverse(run_chars)
-    text = Enum.map_join(reversed_chars, "", &binary_text(&1.char))
+    text = Enum.map_join(reversed_chars, "", &TermText.sanitize_cell(&1.char))
     style = List.first(reversed_chars) |> Map.get(:style, %{})
 
     # ops is built reversed and flipped once at the end; prepend write
@@ -212,6 +214,12 @@ defmodule Raxol.Core.Renderer do
     "\e[#{y + 1};#{x + 1}H"
   end
 
+  # `terminal_text/1` still runs here: `{:write, text, style}` is a public
+  # `apply_diff/1` input, so a caller that builds ops by hand gets the same
+  # confinement. On a diff-produced run it is a no-op -- `flush_run/5` has
+  # already confined each CELL, which is what keeps a positional run its
+  # original width. Deleting bytes here would shorten the run without a
+  # `\e[2K`, leaving the previous frame's glyph stranded at the tail.
   defp operation_to_ansi({:write, text, style}) do
     text = terminal_text(text)
     ansi_prefix = Style.to_ansi(style)
@@ -236,17 +244,19 @@ defmodule Raxol.Core.Renderer do
   # exactly as before.
   #
   # URL and displayed text are confined at this sink, immediately before
-  # bytes are assembled into OSC 8. `terminal_text/1` runs before SGR is
-  # added, so framework-owned styling remains intact while untrusted cell
-  # content cannot terminate the hyperlink or open another control string.
-  # `allow: []` is deliberate: a cell run and a URL are both single-row
-  # tokens, so no C0 byte is meaningful here. Non-binaries become `""`.
+  # bytes are assembled into OSC 8. Cell text is confined by
+  # `TermText.sanitize_cell/1` before SGR is added, so framework-owned
+  # styling remains intact while untrusted cell content cannot terminate the
+  # hyperlink or open another control string. The URL goes through
+  # `TermText.sanitize_url/1`: no C0 byte is meaningful in a single-row
+  # token, and only http/https/mailto may become clickable. Non-binaries
+  # become `""`, which reads as "no link".
   defp maybe_wrap_hyperlink("", _style), do: ""
 
   defp maybe_wrap_hyperlink(content, style) when is_map(style) do
     case Map.get(style, :hyperlink) do
       url when is_binary(url) ->
-        wrap_hyperlink(content, TermText.sanitize(url, allow: []))
+        wrap_hyperlink(content, TermText.sanitize_url(url))
 
       _ ->
         content
@@ -254,8 +264,6 @@ defmodule Raxol.Core.Renderer do
   end
 
   defp terminal_text(value), do: TermText.sanitize(value, allow: [])
-  defp binary_text(value) when is_binary(value), do: value
-  defp binary_text(_value), do: ""
 
   defp wrap_hyperlink(content, ""), do: content
 

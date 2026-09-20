@@ -254,10 +254,8 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
   end
 
   # Markdown performs component-level normalization before parsing so control
-  # bytes cannot affect delimiter handling. It is not the final terminal
-  # boundary: normal terminal output is confined by
-  # `Raxol.Core.Boundary.TermText` at its emitters, while the append path is
-  # confined by `Raxol.Harness.Surface.ViewText`.
+  # bytes cannot affect delimiter handling. It is not the terminal boundary:
+  # see `Raxol.Core.Boundary.TermText`'s "Where confinement happens".
 
   # --- provisional close (render-only closing of incomplete constructs) ----
 

@@ -37,12 +37,11 @@ defmodule Raxol.Agent.Code.App do
   (`notice/2`, `put_status/2`) and in the view (`display_text/1`), because
   `notice:` and `status_line:` are also written directly in a dozen places.
 
-  Transcript nodes remain ordinary view data. The normal terminal pipeline
-  confines cell text and propagated links at its emitters through
-  `Raxol.Core.Boundary.TermText`; replay/export text is confined by
-  `Raxol.Agent.Code.Replay`; and the append/paint-authority surface sanitizes
-  while flattening through `Raxol.Harness.Surface.ViewText`. This module does
-  not walk and rebuild every projected block on every frame.
+  Transcript nodes remain ordinary view data: this module does not walk and
+  rebuild every projected block on every frame. See
+  `Raxol.Core.Boundary.TermText`'s "Where confinement happens" for the sinks
+  that confine them, including `Raxol.Agent.Code.Replay` for replay/export
+  text.
 
   ## The loop
 

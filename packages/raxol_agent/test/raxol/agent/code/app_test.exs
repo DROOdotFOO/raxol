@@ -1,10 +1,3 @@
-unless Code.ensure_loaded?(Raxol.Test.CrossTerminal.SequenceScanner) do
-  Code.require_file(
-    "../../../../../../test/support/cross_terminal/sequence_scanner.ex",
-    __DIR__
-  )
-end
-
 defmodule Raxol.Agent.Code.AppTest do
   use ExUnit.Case, async: false
 
@@ -1823,6 +1816,22 @@ defmodule Raxol.Agent.Code.AppTest do
       noticed = App.notice(new_model(), "disabled" <> <<0x202E::utf8>> <> "delbane")
 
       assert noticed.notice == "disableddelbane"
+    end
+
+    # The chrome (notice, status strip, approval footer) stripped bidi
+    # overrides while the transcript tree did not, so an approval line could
+    # be made to read as its opposite (Trojan Source, CWE-451) on the same
+    # screen as a footer that could not. Both ends share one deny set now.
+    test "a bidi override cannot reverse transcript text at the terminal" do
+      poison = "denied" <> <<0x202E::utf8>> <> "dewolla"
+
+      model =
+        Enum.reduce(message_turn("t1", poison), new_model(), &send_ev(&2, &1))
+
+      output = terminal_output(model)
+
+      refute output =~ <<0x202E::utf8>>
+      assert visible_terminal_text(output) =~ "denied"
     end
 
     test "iodata is accepted where the view used to tolerate it" do

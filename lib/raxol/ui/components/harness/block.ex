@@ -93,11 +93,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   present.
 
   Terminal confinement is deliberately not implemented by walking this
-  rendered tree. The normal terminal pipeline sanitizes cell text and OSC 8
-  URLs at its emitters, while the append/paint-authority path sanitizes as
-  `Raxol.Harness.Surface.ViewText.lines/3` flattens the tree. Keeping those
-  boundaries at their sinks avoids rebuilding every transcript node on every
-  frame. `search_text/2` remains the raw match corpus (see its @doc).
+  rendered tree; see `Raxol.Core.Boundary.TermText`'s "Where confinement
+  happens". `search_text/2` remains the raw match corpus (see its @doc).
 
   ## The completion row (design creed: evidence, never a success toast)
 
@@ -426,12 +423,10 @@ defmodule Raxol.UI.Components.Harness.Block do
   Never raises: any unexpected internal shape falls back to a one-line
   placeholder rather than crashing the caller.
 
-  Untrusted content is confined at the two output sinks rather than by
-  rebuilding this view tree: the normal terminal renderers pass cell text and
-  OSC 8 URLs through `Raxol.Core.Boundary.TermText`, and
-  `Raxol.Harness.Surface.ViewText.lines/3` sanitizes while flattening the
-  append/paint-authority path. This keeps truncation and styling semantics in
-  this renderer unchanged and avoids a second full-tree copy per frame.
+  Untrusted content is confined at the output sinks rather than by
+  rebuilding this view tree, which keeps truncation and styling semantics
+  here unchanged; see `Raxol.Core.Boundary.TermText`'s "Where confinement
+  happens".
   """
   @spec render(t(), map()) :: map()
   def render(block, context \\ %{})

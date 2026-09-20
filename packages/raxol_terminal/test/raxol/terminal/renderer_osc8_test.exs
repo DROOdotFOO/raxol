@@ -146,6 +146,65 @@ defmodule Raxol.Terminal.RendererOSC8Test do
     test "a URL that is entirely control bytes emits no hyperlink at all" do
       refute String.contains?(rendered("\e[2J\r" <> <<0x7F>>), "\e]8")
     end
+
+    # OSC 8 hands the URL to the desktop's URL handler, so a scheme outside
+    # http/https/mailto turns a Markdown link an LLM wrote into a local file
+    # read or an application launch. The label still renders; it just is not
+    # clickable.
+    test "only http, https and mailto become clickable" do
+      for url <- [
+            "file:///etc/hosts",
+            "x-apple.systempreferences:com.apple.preference.security",
+            "javascript:alert(1)",
+            "example.com/path"
+          ] do
+        out = rendered(url)
+
+        refute String.contains?(out, "\e]8"), "#{url} became a link: #{inspect(out)}"
+        assert String.contains?(out, "go"), "#{url} lost its label: #{inspect(out)}"
+      end
+
+      for url <- ["https://ok.example", "http://ok.example", "mailto:a@example.com"] do
+        assert String.contains?(rendered(url), osc8_open(url))
+      end
+    end
+  end
+
+  describe "a cell that cannot be emitted keeps its column" do
+    defp rendered_row(chars) do
+      buffer = ScreenBuffer.new(length(chars), 1)
+      [row] = buffer.cells
+
+      cells =
+        row
+        |> Enum.zip(chars)
+        |> Enum.map(fn {cell, char} -> %{cell | char: char, style: %{}} end)
+
+      %{buffer | cells: [cells]} |> Renderer.new() |> Renderer.render()
+    end
+
+    # The grid is POSITIONAL. Dropping a cell instead of blanking it pulls
+    # every cell to its right one column left for the rest of the row, and
+    # nothing downstream repaints the victim: box borders, table columns and
+    # the approval line come apart around one hostile byte.
+    test "a disallowed cell mid-row does not shift the cells after it" do
+      for {name, char} <- [
+            {"C1 CSI (U+009B)", "\u009B"},
+            {"raw 8-bit CSI", <<0x9B>>},
+            {"bidi override (U+202E)", "\u202E"},
+            {"NUL", <<0>>},
+            {"DEL", <<0x7F>>}
+          ] do
+        out = rendered_row(["a", "b", char, "c", "d"])
+
+        assert String.length(out) == 5, "#{name}: #{inspect(out)}"
+        assert String.at(out, 3) == "c", "#{name}: #{inspect(out)}"
+        assert String.at(out, 4) == "d", "#{name}: #{inspect(out)}"
+
+        refute String.contains?(out, char),
+               "#{name} survived onto the row: #{inspect(out)}"
+      end
+    end
   end
 
   describe "display text confinement" do

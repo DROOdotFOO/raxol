@@ -6,6 +6,12 @@ defmodule Raxol.Test.CrossTerminal.SequenceScanner do
 
   Purpose: assert that what Raxol *emits* stays within what a target
   terminal can *interpret* — without needing the terminal.
+
+  It lives in `raxol_core`'s `lib` rather than a `test/support` directory
+  because the suites that need it span separate Mix projects (the root app
+  and `raxol_agent`), and a dependency's `test/support` is not on the
+  dependent's compile path. One compiled module beats a relative
+  `Code.require_file/2` reaching across the monorepo, or a second copy.
   """
 
   @type token ::

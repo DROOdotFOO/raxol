@@ -211,7 +211,7 @@ defmodule Raxol.Agent.Code.Replay do
   end
 
   defp prompt_of(%{payload: payload}) when is_map(payload),
-    do: terminal_text(Map.get(payload, "prompt") || Map.get(payload, :prompt))
+    do: binary_or_empty(Map.get(payload, "prompt") || Map.get(payload, :prompt))
 
   defp prompt_of(_event), do: ""
 
@@ -228,12 +228,12 @@ defmodule Raxol.Agent.Code.Replay do
     do: ["[reasoning] " <> text_of(block)]
 
   defp block_lines(%Block{kind: :tool_call} = block) do
-    name = terminal_text(block.content[:name] || "tool")
+    name = binary_or_empty(block.content[:name] || "tool")
     ["[tool] #{name}#{outcome_note(block.outcome)}"]
   end
 
   defp block_lines(%Block{kind: :approval} = block),
-    do: ["[approval] #{terminal_text(block.content[:name])}"]
+    do: ["[approval] #{binary_or_empty(block.content[:name])}"]
 
   defp block_lines(%Block{kind: :diff} = block),
     do: ["[diff] " <> text_of(block)]
@@ -242,16 +242,33 @@ defmodule Raxol.Agent.Code.Replay do
     do: ["[#{inspect(block.raw_kind)}] " <> text_of(block)]
 
   defp text_of(%Block{content: content}),
-    do: terminal_text(content[:text])
+    do: binary_or_empty(content[:text])
 
   defp transcript_body([]), do: "(no replayable events)"
 
   defp transcript_body(lines),
     do: lines |> Enum.join("\n") |> String.trim_leading()
 
-  defp sanitize_transcript(text), do: TermText.sanitize(text, allow: [?\n])
-  defp terminal_text(value) when is_binary(value), do: value
-  defp terminal_text(_value), do: ""
+  # Per LINE, not once over the joined transcript. `TermText`'s string
+  # scanner consumes an OSC/DCS/APC/PM/SOS body until BEL or ST, so ONE
+  # unterminated `ESC ]` anywhere in any tool result -- `ls --hyperlink`, a
+  # colored `git diff` cut off at a byte cap -- swallowed every later turn
+  # of `/export`, `/transcript` and the share page. Splitting first bounds
+  # the loss to the line that carries the escape, and keeps the scanner's
+  # intermediate code point list one line long instead of one transcript
+  # long (5 MB took 605 ms as a single pass).
+  #
+  # TAB is allowed: this is a plain-text file read with `less` and a share
+  # page body, not a terminal control stream, and TAB is not an injection
+  # primitive. `\n` is the split delimiter, restored by the join.
+  defp sanitize_transcript(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map_join("\n", &TermText.sanitize(&1, allow: [?\t]))
+  end
+
+  defp binary_or_empty(value) when is_binary(value), do: value
+  defp binary_or_empty(_value), do: ""
 
   defp outcome_note(%{exit_code: nil, duration_ms: nil}), do: ""
 

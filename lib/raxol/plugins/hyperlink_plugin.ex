@@ -76,9 +76,15 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
     end
   end
 
+  # The output chunk is the app's OWN terminal stream: SGR runs, cursor
+  # moves, `\r\n` row joins. Sanitizing it as if it were untrusted text
+  # stripped all of that from every chunk that happened to mention a URL.
+  # Only the captured URL is untrusted here, and only it is confined (in
+  # `create_hyperlink/1`); the regex below cannot capture ESC, so no escape
+  # sequence can reach the OSC 8 target through it either.
   @impl Raxol.Plugins.Plugin
   def handle_output(plugin_state, event) do
-    output = event |> extract_output_data() |> TermText.sanitize()
+    output = extract_output_data(event)
 
     # Find URLs using a simple regex (could be more robust)
     url_regex = ~r{(https?://[\w./?=&\-]+)}
