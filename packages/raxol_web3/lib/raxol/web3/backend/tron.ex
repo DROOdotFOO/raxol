@@ -300,13 +300,14 @@ defmodule Raxol.Web3.Backend.Tron do
     %{id: {Client, name}, start: {Client, :start_link, [spec]}}
   end
 
-  # The era verdict belongs to the client, because it is the client's cached
-  # decision about a protocol revision and means nothing here. The breaker is
-  # this package's, so the health the transport records on the request path is
-  # the health `Raxol.Web3.Router` orders candidates by; two tables would give
-  # the router a second opinion it could not see the first of.
+  # The era verdict and the spend reservations belong to the client, so only
+  # the breaker is named here and the transport fills the other two from the
+  # process-wide set. The breaker is this package's, so the health the
+  # transport records on the request path is the health `Raxol.Web3.Router`
+  # orders candidates by; two tables would give the router a second opinion it
+  # could not see the first of.
   defp default_tables do
-    %{eras: Raxol.MCP.Client.Tables.ensure_started().eras, breakers: Tables.breakers()}
+    %{breakers: Tables.breakers()}
   end
 
   @doc "The name `client_spec/2` labels a source's client with by default."

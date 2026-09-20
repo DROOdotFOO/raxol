@@ -77,6 +77,23 @@ defmodule Raxol.Web3.Backend.TronTest do
     end
   end
 
+  # The transport probes an origin it holds no era verdict for with
+  # `server/discover`, and all three of these upstreams answer it the way a
+  # legacy server does: JSON-RPC -32601. Answering it here rather than
+  # pre-seeding alone is what keeps a cache miss -- a fresh table, an expired
+  # TTL, a session-rejected re-probe -- a mapped verdict instead of a crash in
+  # the seam.
+  defp answer(%{"method" => "server/discover", "id" => id}, _context) do
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => id,
+        "error" => %{"code" => -32_601, "message" => "Method not found"}
+      })
+
+    {:ok, %{status: 200, headers: [{"content-type", "application/json"}], body: body}}
+  end
+
   defp answer(%{"method" => "initialize", "id" => id}, context) do
     {:ok,
      %{

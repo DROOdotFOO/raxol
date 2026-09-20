@@ -225,6 +225,25 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       assert methods(observations()) == ["tools/list"]
     end
 
+    test "a caller that names only one table still gets the one it named" do
+      # A spec may own one table and not the other two -- `Raxol.Web3` supplies
+      # the breaker its router reads and shares the rest -- and the whole map
+      # used to be dropped unless all three keys were present. The verdict and
+      # the breaker then went to the process-wide tables, where the caller's
+      # pre-seeding was unread and its health checks saw nothing.
+      eras = :ets.new(:eras, [:set, :public])
+      breakers = CircuitBreaker.new(:breakers)
+
+      start_client!(spec(legacy(), %{eras: eras})) |> await_ready()
+      assert Era.verdict(eras, @key) == {:ok, :legacy}
+
+      start_client!(spec(legacy(), %{breakers: breakers})) |> await_ready()
+
+      # `check/3` answers `:closed` for a key it has never seen, so the row
+      # itself is the evidence that this table is the one being written.
+      assert [{{:origin, @origin}, :closed, _failures, _opened_at}] = :ets.tab2list(breakers)
+    end
+
     test "a verdict past its TTL is re-probed, and one inside it is not" do
       tables = tables()
       seam = legacy()

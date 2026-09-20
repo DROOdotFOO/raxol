@@ -751,10 +751,21 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     # -- configuration -----------------------------------------------------------
 
+    # A supplied table is never discarded. The three keys are independent -- a
+    # caller may own the breaker and not care which era cache it shares, which
+    # is what `Raxol.Web3.Backend.Tron` asks for -- so a partial map fills its
+    # gaps from the process-wide tables instead of being ignored. Ignoring it
+    # sent the transport's breaker verdicts to a table nobody read.
     defp tables(config) do
       case Map.get(config, :tables) do
-        %{eras: _eras, breakers: _breakers, reservations: _reservations} = tables -> tables
-        _absent -> Tables.ensure_started()
+        %{eras: _eras, breakers: _breakers, reservations: _reservations} = tables ->
+          tables
+
+        %{} = partial ->
+          Map.merge(Tables.ensure_started(), Map.take(partial, [:eras, :breakers, :reservations]))
+
+        _absent ->
+          Tables.ensure_started()
       end
     end
 
