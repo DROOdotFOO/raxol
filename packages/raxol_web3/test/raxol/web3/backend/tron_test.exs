@@ -116,32 +116,34 @@ defmodule Raxol.Web3.Backend.TronTest do
     send(context.owner, {:called, tool, arguments, reference})
     hold(context.owner, reference, context.hold_ms)
 
-    case route(context.routes, tool, arguments) do
-      {:ok, {:error, reason}} ->
-        {:error, reason}
+    routed(route(context.routes, tool, arguments), tool, id, context)
+  end
 
-      {:ok, {:status, status}} ->
-        {:ok, %{status: status, headers: [], body: ""}}
+  # What a route resolves to: a client-level failure, a bare status, a recorded
+  # body, or the name of a recording to read.
+  defp routed({:ok, {:error, reason}}, _tool, _id, _context), do: {:error, reason}
 
-      {:ok, {:body, body}} ->
-        {:ok,
-         %{
-           status: 200,
-           headers: [{"content-type", "text/event-stream"}],
-           body: frame(body, id, context.spacer)
-         }}
+  defp routed({:ok, {:status, status}}, _tool, _id, _context) do
+    {:ok, %{status: status, headers: [], body: ""}}
+  end
 
-      {:ok, name} when is_binary(name) ->
-        {:ok,
-         %{
-           status: 200,
-           headers: [{"content-type", "text/event-stream"}],
-           body: frame(fixture(name), id, context.spacer)
-         }}
+  defp routed({:ok, {:body, body}}, _tool, id, context), do: streamed(body, id, context)
 
-      :error ->
-        flunk("no recorded response for tool #{tool}")
-    end
+  defp routed({:ok, name}, _tool, id, context) when is_binary(name) do
+    name |> fixture() |> streamed(id, context)
+  end
+
+  defp routed(:error, tool, _id, _context) do
+    flunk("no recorded response for tool #{tool}")
+  end
+
+  defp streamed(body, id, context) do
+    {:ok,
+     %{
+       status: 200,
+       headers: [{"content-type", "text/event-stream"}],
+       body: frame(body, id, context.spacer)
+     }}
   end
 
   # Only a `tools/call` is bracketed, so the handshake does not appear in the

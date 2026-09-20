@@ -355,25 +355,7 @@ defmodule Raxol.MCP.Client do
   def handle_manager_info(_message, %{handle: nil} = state), do: {:noreply, state}
 
   def handle_manager_info(message, state) do
-    case state.transport.decode_info(state.handle, message) do
-      {:messages, lines, handle} ->
-        {:noreply, Enum.reduce(lines, %{state | handle: handle}, &handle_line/2)}
-
-      {:failed, id, reason, handle} ->
-        {:noreply, fail_request(%{state | handle: handle}, id, reason)}
-
-      # A request that completed with nothing to deliver: a notification's
-      # POST. It holds an in-flight slot like any other request, so the slot
-      # is released here rather than when its timer fires.
-      {:settled, id, handle} ->
-        {:noreply, settle(%{state | handle: handle}, id)}
-
-      {:closed, reason, handle} ->
-        {:noreply, close_session(%{state | handle: handle}, reason)}
-
-      :ignore ->
-        {:noreply, state}
-    end
+    {:noreply, apply_decoded(state, state.transport.decode_info(state.handle, message))}
   end
 
   @impl GenServer
@@ -680,6 +662,28 @@ defmodule Raxol.MCP.Client do
   end
 
   # -- Private: message handling -----------------------------------------------
+
+  # One arm of `Transport.decode_info/2`'s return per clause: the transport
+  # says what it made of the message, and the state transition that arm names
+  # is applied here rather than inside the clause that reads the mailbox.
+  defp apply_decoded(state, {:messages, lines, handle}) do
+    Enum.reduce(lines, %{state | handle: handle}, &handle_line/2)
+  end
+
+  defp apply_decoded(state, {:failed, id, reason, handle}) do
+    fail_request(%{state | handle: handle}, id, reason)
+  end
+
+  # A request that completed with nothing to deliver: a notification's POST.
+  # It holds an in-flight slot like any other request, so the slot is released
+  # here rather than when its timer fires.
+  defp apply_decoded(state, {:settled, id, handle}), do: settle(%{state | handle: handle}, id)
+
+  defp apply_decoded(state, {:closed, reason, handle}) do
+    close_session(%{state | handle: handle}, reason)
+  end
+
+  defp apply_decoded(state, :ignore), do: state
 
   defp handle_line(line, state) do
     case Protocol.decode(line) do

@@ -450,16 +450,14 @@ defmodule Raxol.Web3.Backend.Tron do
 
   @impl Backend
   def get_transaction(%__MODULE__{source: :trongrid} = state, hash) when is_binary(hash) do
-    with {:ok, body} <- call(state, "getTransactionById", %{"value" => hash}, :transaction),
-         {:ok, transaction} <- trongrid_transaction(body) do
-      {:ok, transaction}
+    with {:ok, body} <- call(state, "getTransactionById", %{"value" => hash}, :transaction) do
+      trongrid_transaction(body)
     end
   end
 
   def get_transaction(%__MODULE__{source: :tronscan} = state, hash) when is_binary(hash) do
-    with {:ok, body} <- call(state, "getTransactionDetail", %{"hash" => hash}, :transaction),
-         {:ok, transaction} <- tronscan_transaction(body) do
-      {:ok, transaction}
+    with {:ok, body} <- call(state, "getTransactionDetail", %{"hash" => hash}, :transaction) do
+      tronscan_transaction(body)
     end
   end
 
@@ -883,26 +881,31 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp trongrid_list_transaction(item) when is_map(item) do
     contract = contract_call(item)
-    raw_fee = item |> field("ret") |> rows_of() |> List.first() |> field("fee")
 
     with {:ok, value} <- Backend.money(contract["amount"] || contract["call_value"], :value),
-         {:ok, fee} <- Backend.money(raw_fee, :fee) do
-      {:ok,
-       %{
-         hash: item["txID"],
-         status: contract_status(item),
-         block: int(item["blockNumber"]),
-         timestamp: epoch_ms(item["block_timestamp"]),
-         from: ref(contract["owner_address"]),
-         to: ref(counterparty(contract)),
-         value: value,
-         fee: fee,
-         method: item |> field("raw_data") |> field("contract") |> contract_type()
-       }}
+         {:ok, fee} <- Backend.money(ret_fee(item), :fee) do
+      {:ok, trongrid_transaction_row(item, contract, value, fee)}
     end
   end
 
   defp trongrid_list_transaction(_item), do: {:error, {:decode_failed, :transaction_row}}
+
+  # A listed transaction answers its own block and its own fee, which is why
+  # this row is wider than the one `trongrid_transaction/1` can build out of
+  # `getTransactionById` alone.
+  defp trongrid_transaction_row(item, contract, value, fee) do
+    %{
+      hash: item["txID"],
+      status: contract_status(item),
+      block: int(item["blockNumber"]),
+      timestamp: epoch_ms(item["block_timestamp"]),
+      from: ref(contract["owner_address"]),
+      to: ref(counterparty(contract)),
+      value: value,
+      fee: fee,
+      method: item |> field("raw_data") |> field("contract") |> contract_type()
+    }
+  end
 
   defp tronscan_transaction(body) when is_map(body) do
     with {:ok, fee} <- Backend.money(body |> field("cost") |> field("fee"), :fee) do
@@ -1054,30 +1057,41 @@ defmodule Raxol.Web3.Backend.Tron do
   defp trongrid_token_transfer(_item), do: {:error, {:decode_failed, :token_transfer_row}}
 
   defp tronscan_token_transfer(item) when is_map(item) do
-    info = item |> field("tokenInfo") |> object()
-    {address, _token_id} = token_identity(info["tokenId"])
-
     with {:ok, amount} <- Backend.money(item["amount"], :amount) do
-      {:ok,
-       %{
-         token: %{
-           address: address,
-           symbol: presence(info["tokenAbbr"]),
-           name: presence(info["tokenName"]),
-           decimals: int(info["tokenDecimal"]),
-           type: token_type(info["tokenType"], info["tokenId"])
-         },
-         amount: amount,
-         from: ref(item["transferFromAddress"]),
-         to: ref(item["transferToAddress"]),
-         block: int(item["block"]),
-         timestamp: epoch_ms(item["timestamp"]),
-         transaction: item["transactionHash"]
-       }}
+      {:ok, tronscan_transfer_row(item, amount)}
     end
   end
 
   defp tronscan_token_transfer(_item), do: {:error, {:decode_failed, :token_transfer_row}}
+
+  defp tronscan_transfer_row(item, amount) do
+    %{
+      token: tronscan_transfer_token(item),
+      amount: amount,
+      from: ref(item["transferFromAddress"]),
+      to: ref(item["transferToAddress"]),
+      block: int(item["block"]),
+      timestamp: epoch_ms(item["timestamp"]),
+      transaction: item["transactionHash"]
+    }
+  end
+
+  # A transfer describes the token it moves under `tokenInfo`, with the same
+  # keys a balance row spells at its top level, so the identity split and the
+  # symbol/name/decimals triple are read here rather than beside the fields
+  # that belong to the transfer itself.
+  defp tronscan_transfer_token(item) do
+    info = item |> field("tokenInfo") |> object()
+    {address, _token_id} = token_identity(info["tokenId"])
+
+    %{
+      address: address,
+      symbol: presence(info["tokenAbbr"]),
+      name: presence(info["tokenName"]),
+      decimals: int(info["tokenDecimal"]),
+      type: token_type(info["tokenType"], info["tokenId"])
+    }
+  end
 
   # The native asset has neither an address nor an asset id, a TRC-10 has an id
   # and no address, and a TRC-20 has an address and no id. One function so the
@@ -1129,6 +1143,12 @@ defmodule Raxol.Web3.Backend.Tron do
   defp ret_status("SUCCESS"), do: :success
   defp ret_status(nil), do: :pending
   defp ret_status(_reverted), do: :reverted
+
+  # The fee of a listed transaction lives in the same first `ret` entry that
+  # carries the `contractRet` `contract_status/1` reads.
+  defp ret_fee(item) do
+    item |> field("ret") |> rows_of() |> List.first() |> field("fee")
+  end
 
   defp sqd_indexer(body) do
     indexing = body |> field("indexing") |> object()

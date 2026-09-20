@@ -7,10 +7,10 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
   alias Raxol.MCP.CircuitBreaker
   alias Raxol.MCP.Client
   alias Raxol.MCP.Client.Era
-  alias Raxol.MCP.Client.Reservation
   alias Raxol.MCP.Client.ReferenceServer
   alias Raxol.MCP.Client.ReferenceServer.Legacy
   alias Raxol.MCP.Client.ReferenceServer.Modern
+  alias Raxol.MCP.Client.Reservation
   alias Raxol.MCP.Client.Transport
 
   # ADR-0037 validation items 3, 4, 6, 7 and the transport half of 9. The two

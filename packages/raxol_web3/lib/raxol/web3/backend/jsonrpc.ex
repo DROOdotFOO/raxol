@@ -286,9 +286,7 @@ defmodule Raxol.Web3.Backend.JSONRPC do
   def get_logs(%__MODULE__{} = state, account_ref, opts \\ []) do
     with {:ok, address} <- evm_address(account_ref),
          {:ok, window} <- window(state, Keyword.get(opts, :cursor)),
-         {:ok, logs} <-
-           RPC.logs(state.url, filter(address, window), logs_opts(state, address, window)),
-         {:ok, items} <- Backend.map_rows(logs, &log/1, :log_row) do
+         {:ok, items} <- log_rows(state, address, window) do
       {:ok, %{items: items, next: next_cursor(state, window)}}
     end
   end
@@ -436,6 +434,16 @@ defmodule Raxol.Web3.Backend.JSONRPC do
       "fromBlock" => RPC.encode_quantity(from),
       "toBlock" => RPC.encode_quantity(to)
     }
+  end
+
+  # One window's rows. The filter and the cache class are derived from the same
+  # window, so the fetch and the row mapping stay together and `get_logs/3`
+  # reads one `{:ok, items}` per page.
+  defp log_rows(state, address, window) do
+    with {:ok, logs} <-
+           RPC.logs(state.url, filter(address, window), logs_opts(state, address, window)) do
+      Backend.map_rows(logs, &log/1, :log_row)
+    end
   end
 
   defp next_cursor(_state, %{to: to, walk_to: walk_to}) when to >= walk_to, do: nil

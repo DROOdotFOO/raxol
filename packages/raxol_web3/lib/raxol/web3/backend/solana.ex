@@ -445,20 +445,10 @@ defmodule Raxol.Web3.Backend.Solana do
   """
   @spec new(Backend.chain_ref(), keyword()) :: {:ok, Backend.t()} | {:error, term()}
   def new(chain_ref, opts \\ []) do
-    with {:ok, canonical} <- canonical(chain_ref),
-         {:ok, chain} <- Map.fetch(@chains, canonical) |> ok_or({:unsupported_chain, chain_ref}),
+    with {:ok, canonical, chain} <- canonical_chain(chain_ref),
          {:ok, source} <- source(Keyword.get(opts, :source, :sqd)),
          {:ok, url} <- base_url(Keyword.get(opts, :url), endpoint(source, chain)) do
-      state = %__MODULE__{
-        chain_ref: canonical,
-        source: source,
-        url: url,
-        network: Keyword.get(opts, :network, chain.network),
-        http_opts: Keyword.get(opts, :http_opts, []),
-        cache?: Keyword.get(opts, :cache, true)
-      }
-
-      {:ok, {__MODULE__, state}}
+      {:ok, {__MODULE__, handle_state(canonical, chain, source, url, opts)}}
     end
   end
 
@@ -506,21 +496,24 @@ defmodule Raxol.Web3.Backend.Solana do
   end
 
   def chain_info(%__MODULE__{source: :rpc} = state) do
-    with {:ok, body} when is_map(body) <-
-           rpc(state, "getEpochInfo", [@finalized], :chain_stats) do
-      {:ok,
-       %{
-         chain_ref: state.chain_ref,
-         average_block_time_ms: nil,
-         # `blockHeight` is a count of blocks produced, which is what this
-         # field means. The slot count is `block_height/1`'s answer.
-         total_blocks: body["blockHeight"],
-         total_transactions: body["transactionCount"],
-         total_addresses: nil
-       }}
-    else
-      {:ok, _other} -> {:error, {:decode_failed, :epoch_info}}
-      {:error, _reason} = error -> error
+    case rpc(state, "getEpochInfo", [@finalized], :chain_stats) do
+      {:ok, body} when is_map(body) ->
+        {:ok,
+         %{
+           chain_ref: state.chain_ref,
+           average_block_time_ms: nil,
+           # `blockHeight` is a count of blocks produced, which is what this
+           # field means. The slot count is `block_height/1`'s answer.
+           total_blocks: body["blockHeight"],
+           total_transactions: body["transactionCount"],
+           total_addresses: nil
+         }}
+
+      {:ok, _other} ->
+        {:error, {:decode_failed, :epoch_info}}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -634,13 +627,20 @@ defmodule Raxol.Web3.Backend.Solana do
   """
   @impl Backend
   def list_transactions(%__MODULE__{source: :rpc} = state, account_ref, opts \\ []) do
-    with {:ok, pubkey} <- pubkey(account_ref),
-         {:ok, params} <- cursor_params(state, Keyword.get(opts, :cursor)),
-         {:ok, body} <-
-           rpc(state, "getSignaturesForAddress", [pubkey, page_config(params)], :list),
-         {:ok, rows} <- signature_rows(body),
+    with {:ok, rows} <- signature_page(state, account_ref, Keyword.get(opts, :cursor)),
          {:ok, items} <- Backend.map_rows(rows, &signature_row/1, :signature_row) do
       {:ok, %{items: items, next: next_cursor(state, rows)}}
+    end
+  end
+
+  # The upstream rows, not the decoded items: `next_cursor/2` reads the
+  # signature off the last row as the upstream wrote it.
+  defp signature_page(state, account_ref, cursor) do
+    with {:ok, pubkey} <- pubkey(account_ref),
+         {:ok, params} <- cursor_params(state, cursor),
+         {:ok, body} <-
+           rpc(state, "getSignaturesForAddress", [pubkey, page_config(params)], :list) do
+      signature_rows(body)
     end
   end
 
@@ -1005,6 +1005,14 @@ defmodule Raxol.Web3.Backend.Solana do
 
   # -- ingest ------------------------------------------------------------------
 
+  defp canonical_chain(chain_ref) do
+    with {:ok, canonical} <- canonical(chain_ref),
+         {:ok, chain} <-
+           Map.fetch(@chains, canonical) |> ok_or({:unsupported_chain, chain_ref}) do
+      {:ok, canonical, chain}
+    end
+  end
+
   defp canonical(chain_ref) when is_binary(chain_ref) do
     Map.fetch(@chain_aliases, chain_ref) |> ok_or({:unsupported_chain, chain_ref})
   end
@@ -1036,6 +1044,17 @@ defmodule Raxol.Web3.Backend.Solana do
   end
 
   defp base_url(_other, _default), do: {:error, {:invalid_base_url, :type}}
+
+  defp handle_state(chain_ref, chain, source, url, opts) do
+    %__MODULE__{
+      chain_ref: chain_ref,
+      source: source,
+      url: url,
+      network: Keyword.get(opts, :network, chain.network),
+      http_opts: Keyword.get(opts, :http_opts, []),
+      cache?: Keyword.get(opts, :cache, true)
+    }
+  end
 
   defp pubkey({:solana, value}), do: base58(value, 32, 44)
   defp pubkey({tag, _value}), do: {:error, {:unsupported_account_ref, tag}}

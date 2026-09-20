@@ -242,42 +242,49 @@ if Code.ensure_loaded?(Mint.HTTP) do
     # has recorded whatever the response said about the origin's health.
     def decode_info(%__MODULE__{} = handle, {:mcp_http_probe, ref, result}) do
       case Map.get(handle.tasks, ref) do
-        %{kind: :probe} ->
-          handle = drop_task(handle, ref)
-
-          case classify(result, handle) do
-            {:ok, handle} -> {:messages, [], handle}
-            {:error, _reason} -> {:messages, [], handle}
-          end
-
-        _unknown ->
-          :ignore
+        %{kind: :probe} -> probe_verdict(drop_task(handle, ref), result)
+        _unknown -> :ignore
       end
     end
 
     def decode_info(%__MODULE__{} = handle, {:DOWN, ref, :process, _pid, reason}) do
       case Map.pop(handle.tasks, ref) do
-        {nil, _tasks} ->
-          :ignore
-
-        {%{kind: :probe}, tasks} ->
-          Logger.warning("[MCP.Client.Http] #{handle.name} era re-probe died")
-          {:messages, [], %{handle | tasks: tasks}}
-
-        {%{id: {:notify, id}}, tasks} ->
-          Logger.warning("[MCP.Client.Http] #{handle.name} notification task died")
-          {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
-
-        {%{id: id}, tasks} when is_integer(id) ->
-          {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
-
-        {%{id: nil}, tasks} ->
-          Logger.warning("[MCP.Client.Http] #{handle.name} notification task died")
-          {:messages, [], %{handle | tasks: tasks}}
+        {nil, _tasks} -> :ignore
+        {task, tasks} -> task_down(handle, task, tasks, reason)
       end
     end
 
     def decode_info(%__MODULE__{}, _message), do: :ignore
+
+    defp probe_verdict(handle, result) do
+      case classify(result, handle) do
+        {:ok, handle} -> {:messages, [], handle}
+        {:error, _reason} -> {:messages, [], handle}
+      end
+    end
+
+    # A dead task releases its in-flight slot under the same three id shapes
+    # `fail/3` answers: a tracked notification and a request are reported so
+    # the client can release the entry, an untracked notification has nobody
+    # to answer and only leaves `tasks`.
+    defp task_down(handle, %{kind: :probe}, tasks, _reason) do
+      Logger.warning("[MCP.Client.Http] #{handle.name} era re-probe died")
+      {:messages, [], %{handle | tasks: tasks}}
+    end
+
+    defp task_down(handle, %{id: {:notify, id}}, tasks, reason) do
+      Logger.warning("[MCP.Client.Http] #{handle.name} notification task died")
+      {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
+    end
+
+    defp task_down(handle, %{id: id}, tasks, reason) when is_integer(id) do
+      {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
+    end
+
+    defp task_down(handle, %{id: nil}, tasks, _reason) do
+      Logger.warning("[MCP.Client.Http] #{handle.name} notification task died")
+      {:messages, [], %{handle | tasks: tasks}}
+    end
 
     defp apply_outcome(handle, id, outcome) do
       case outcome do

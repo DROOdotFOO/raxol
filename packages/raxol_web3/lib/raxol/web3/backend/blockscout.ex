@@ -441,22 +441,25 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
     with {:ok, value} <- Backend.money(item["value"], :value),
          {:ok, paid} <- Backend.money(fee["value"], :fee) do
-      {:ok,
-       %{
-         hash: item["hash"],
-         status: status(item["status"]),
-         block: int(item["block_number"]),
-         timestamp: timestamp(item["timestamp"]),
-         from: address_ref(item["from"]),
-         to: address_ref(item["to"]),
-         value: value,
-         fee: paid,
-         method: item["method"]
-       }}
+      {:ok, normalized_transaction(item, value, paid)}
     end
   end
 
   defp transaction(_item), do: {:error, {:decode_failed, :transaction}}
+
+  defp normalized_transaction(item, value, paid) do
+    %{
+      hash: item["hash"],
+      status: status(item["status"]),
+      block: int(item["block_number"]),
+      timestamp: timestamp(item["timestamp"]),
+      from: address_ref(item["from"]),
+      to: address_ref(item["to"]),
+      value: value,
+      fee: paid,
+      method: item["method"]
+    }
+  end
 
   defp token_balance(item) when is_map(item) do
     with {:ok, amount} <- Backend.money(item["value"], :amount) do
