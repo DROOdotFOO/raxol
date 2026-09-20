@@ -5,8 +5,6 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   """
   require Logger
 
-  alias Raxol.Core.Runtime.Log
-
   alias Raxol.Terminal.Cursor.Movement
 
   import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
@@ -28,14 +26,12 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   Handles GenServer call for setting cursor position.
   """
   def handle_set_position(state, row, col) do
-    Raxol.Core.Runtime.Log.debug(
-      "Setting cursor position from {#{state.row}, #{state.col}} to {#{row}, #{col}}"
-    )
+    Logger.debug("Setting cursor position from {#{state.row}, #{state.col}} to {#{row}, #{col}}")
 
     new_state = %{state | row: row, col: col, position: {row, col}}
 
     # Debug: log the new state
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "New cursor state: row=#{new_state.row}, col=#{new_state.col}, position=#{inspect(new_state.position)}"
     )
 
@@ -317,7 +313,7 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   Handles GenServer call for unknown requests.
   """
   def handle_unknown_request(request, state) do
-    Log.warning("Unknown request: #{inspect(request)}")
+    Logger.warning("Unknown request: #{inspect(request)}")
     {{:error, :unknown_request}, state}
   end
 

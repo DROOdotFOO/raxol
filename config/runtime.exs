@@ -71,12 +71,17 @@ if config_env() == :prod do
     config :raxol_earn, accounting_enabled: accounting_enabled
   end
 
+  # TERMINAL_LOG_LEVEL sets the Logger level for the WHOLE node, not just the
+  # terminal: everything the release logs is filtered by it. "warn" is kept as
+  # an alias for :warning because Logger still accepts it and operators had it
+  # set before this key reached Logger.
   logger_levels = %{
     "all" => :all,
     "debug" => :debug,
     "info" => :info,
     "notice" => :notice,
     "warning" => :warning,
+    "warn" => :warning,
     "error" => :error,
     "critical" => :critical,
     "alert" => :alert,

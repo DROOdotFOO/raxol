@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
 
   require Logger
 
-  alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Commands.Executor
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State
@@ -20,7 +19,7 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
           | {:incomplete, Emulator.t(), State.t()}
   def handle(emulator, %State{state: :csi_intermediate} = parser_state, input) do
     Logger.debug(
-      "CSIIntermediateState.handle: input=#{inspect(input)}, params_buffer=#{inspect(parser_state.params_buffer)}, intermediates_buffer=#{inspect(parser_state.intermediates_buffer)}"
+      "CSIIntermediateState.handle: input_bytes=#{byte_size(input)}, params_buffer=#{inspect(parser_state.params_buffer)}, intermediates_buffer=#{inspect(parser_state.intermediates_buffer)}"
     )
 
     dispatch_input(input, emulator, parser_state)
@@ -129,7 +128,7 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
         final_byte: nil
     }
 
-    Log.debug(
+    Logger.debug(
       "CSIIntermediateState.handle_final_byte: executed command, returning to ground state"
     )
 
@@ -137,7 +136,7 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
   end
 
   defp handle_can_sub(emulator, parser_state, rest) do
-    Raxol.Core.Runtime.Log.debug("Ignoring CAN/SUB byte in CSI Intermediate")
+    Logger.debug("Ignoring CAN/SUB byte in CSI Intermediate")
     next_parser_state = %{parser_state | state: :ground}
     {:continue, emulator, next_parser_state, rest}
   end
@@ -149,9 +148,8 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
   end
 
   defp handle_unhandled_byte(emulator, parser_state, unhandled_byte, rest) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "Unhandled byte #{unhandled_byte} in CSI Intermediate state, returning to ground.",
-      %{}
+    Logger.warning(
+      "Unhandled byte #{unhandled_byte} in CSI Intermediate state, returning to ground."
     )
 
     next_parser_state = %{parser_state | state: :ground}

@@ -4,6 +4,8 @@ defmodule Raxol.Terminal.Input.CoreHandler do
   Manages the main input buffer and cursor state.
   """
 
+  require Logger
+
   alias Raxol.Terminal.ModeManager
   alias Raxol.Terminal.TerminalParser, as: Parser
 
@@ -67,8 +69,8 @@ defmodule Raxol.Terminal.Input.CoreHandler do
         :ok
 
       _ ->
-        Raxol.Core.Runtime.Log.debug(
-          "[InputHandler] Parser.parse_chunk returned remaining input: #{inspect(remaining_input_chunk)}"
+        Logger.debug(
+          "[InputHandler] Parser.parse_chunk returned #{byte_size(remaining_input_chunk)} bytes of remaining input"
         )
     end
 

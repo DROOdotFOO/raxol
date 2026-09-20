@@ -164,7 +164,7 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
       data_string = "unknown_request"
 
       log =
-        capture_log(fn ->
+        capture_log([level: :warning], fn ->
           updated_emulator =
             case DCSHandler.handle_dcs(
                    emulator,
@@ -183,12 +183,10 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
           assert updated_emulator == emulator
         end)
 
-      # In test mode with error-level logging, warning messages may not be captured.
-      # When present, the payload must remain redacted.
-      if log != "" do
-        assert log =~ "Unhandled DECRQSS request type (payload redacted)"
-        refute log =~ "unknown_request"
-      end
+      # The rejected request must never reach the log: pinning the level above
+      # keeps the warning captured, so this cannot pass on an empty log.
+      assert log =~ "DECRQSS"
+      refute log =~ "unknown_request"
     end
   end
 

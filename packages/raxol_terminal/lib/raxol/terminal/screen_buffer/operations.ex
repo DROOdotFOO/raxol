@@ -194,7 +194,7 @@ defmodule Raxol.Terminal.ScreenBuffer.Operations do
 
     result = clear_region(buffer, x, y, width - x, 1)
 
-    Raxol.Core.Runtime.Log.debug("[Operations.clear_to_end_of_line] operation complete")
+    Logger.debug("[Operations.clear_to_end_of_line] operation complete")
 
     result
   end

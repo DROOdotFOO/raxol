@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Commands.Executor do
 
   require Logger
 
-  alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Commands.CommandsParser, as: Parser
   alias Raxol.Terminal.Commands.CSIHandler
   alias Raxol.Terminal.Commands.DCSHandler
@@ -184,12 +183,12 @@ defmodule Raxol.Terminal.Commands.Executor do
   end
 
   defp log_and_return_result({:error, reason}) do
-    Log.error("Executor error: #{inspect(reason)}")
+    Logger.error("Executor error: #{inspect(reason)}")
     {:error, reason}
   end
 
   defp log_and_return_result({:error, reason, emulator}) do
-    Log.error("Executor error: #{inspect(reason)}")
+    Logger.error("Executor error: #{inspect(reason)}")
     emulator
   end
 
@@ -202,10 +201,7 @@ defmodule Raxol.Terminal.Commands.Executor do
   end
 
   defp log_unknown_csi(final_byte) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "Unknown CSI command: #{inspect(final_byte)}",
-      %{}
-    )
+    Logger.warning("Unknown CSI command: #{inspect(final_byte)}")
   end
 
   @spec execute_osc_command(Emulator.t(), String.t()) :: Emulator.t()
@@ -232,13 +228,22 @@ defmodule Raxol.Terminal.Commands.Executor do
       dispatch_osc_command(emulator, ps_code, pt)
     else
       _ ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "OSC: Unexpected command format (payload redacted)",
-          %{}
+        # Only the Ps field failed to parse, and it is bounded: log a short
+        # prefix of it so the line names what was rejected without echoing
+        # the Pt payload (which may carry an OSC 52 clipboard blob).
+        Logger.warning(
+          "OSC: Unexpected command format; ps=#{inspect(osc_ps_prefix(command_string))}, #{byte_size(command_string)} bytes (payload redacted)"
         )
 
         {:error, :malformed_osc, emulator}
     end
+  end
+
+  @osc_ps_log_bytes 8
+
+  defp osc_ps_prefix(command_string) do
+    ps = hd(:binary.split(command_string, ";"))
+    binary_part(ps, 0, min(byte_size(ps), @osc_ps_log_bytes))
   end
 
   defp dispatch_osc_command(emulator, ps_code, pt) do
@@ -349,10 +354,7 @@ defmodule Raxol.Terminal.Commands.Executor do
         # DCS command with intermediates - need to pass final byte
         case final_byte do
           nil ->
-            Raxol.Core.Runtime.Log.warning_with_context(
-              "DCS: No final byte found; params=#{inspect(params_buffer)}",
-              %{}
-            )
+            Logger.warning("DCS: No final byte found; params=#{inspect(params_buffer)}")
 
             {:error, :malformed_dcs, emulator}
 

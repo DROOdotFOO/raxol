@@ -98,9 +98,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, %{state | raster_attrs: new_attrs})
 
       {:error, reason, _} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Error parsing Raster Attributes: #{inspect(reason)}. Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Error parsing Raster Attributes: #{inspect(reason)}. Skipping."
         )
 
         parse(rest, state)
@@ -135,9 +134,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         handle_color_selection(params, remaining_data, state)
 
       {:error, reason, _} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Error parsing Color Definition: #{inspect(reason)}. Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Error parsing Color Definition: #{inspect(reason)}. Skipping."
         )
 
         parse(rest, state)
@@ -163,19 +161,15 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
             })
 
           {:error, reason} ->
-            Raxol.Core.Runtime.Log.warning_with_context(
-              "Sixel Parser: Invalid color definition (payload redacted): #{inspect(reason)}. Skipping.",
-              %{}
+            Logger.warning(
+              "Sixel Parser: Invalid color definition ##{inspect(pc)}: #{inspect(reason)}. Skipping."
             )
 
             parse(remaining_data, state)
         end
 
       false ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Invalid color index (payload redacted). Skipping.",
-          %{}
-        )
+        Logger.warning("Sixel Parser: Invalid color index ##{inspect(pc)}. Skipping.")
 
         parse(remaining_data, state)
     end
@@ -192,9 +186,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, %{state | color_index: 0})
 
       _ ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Unexpected color definition params (payload redacted). Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Unexpected params for Color Definition: #{inspect(params)}. Skipping."
         )
 
         parse(remaining_data, state)
@@ -206,10 +199,9 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
       {:ok, [pn], remaining_data} when pn > 0 ->
         parse(remaining_data, %{state | repeat_count: pn})
 
-      {:ok, [_pn], remaining_data} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Invalid repeat count (payload redacted). Skipping repeat command.",
-          %{}
+      {:ok, [pn], remaining_data} ->
+        Logger.warning(
+          "Sixel Parser: Invalid repeat count found (!#{inspect(pn)}). Skipping repeat command."
         )
 
         parse(remaining_data, state)
@@ -218,9 +210,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, state)
 
       {:error, reason, _} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Error parsing Repeat Command: #{inspect(reason)}. Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Error parsing Repeat Command: #{inspect(reason)}. Skipping."
         )
 
         parse(rest, state)

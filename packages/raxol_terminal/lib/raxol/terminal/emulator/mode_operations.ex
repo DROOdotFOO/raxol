@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
   """
   require Logger
 
-  alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Emulator
 
   @type emulator :: Emulator.t()
@@ -17,13 +16,13 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
   def set_mode(emulator, mode) do
     Logger.debug("ModeOperations.set_mode called with mode=#{inspect(mode)}")
 
-    Log.debug("ModeOperations.set_mode: about to call ModeManager.set_mode")
+    Logger.debug("ModeOperations.set_mode: about to call ModeManager.set_mode")
 
     result = Raxol.Terminal.ModeManager.set_mode(emulator, [mode])
 
     case result do
       {:ok, new_emulator} ->
-        Log.debug("ModeOperations.set_mode: returning {:ok, new_emulator}")
+        Logger.debug("ModeOperations.set_mode: returning {:ok, new_emulator}")
 
         {:ok, new_emulator}
 
@@ -43,13 +42,13 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
   def reset_mode(emulator, mode) do
     Logger.debug("ModeOperations.reset_mode called with mode=#{inspect(mode)}")
 
-    Log.debug("ModeOperations.reset_mode: about to call ModeManager.reset_mode")
+    Logger.debug("ModeOperations.reset_mode: about to call ModeManager.reset_mode")
 
     result = Raxol.Terminal.ModeManager.reset_mode(emulator, [mode])
 
     case result do
       {:ok, new_emulator} ->
-        Log.debug("ModeOperations.reset_mode: returning {:ok, new_emulator}")
+        Logger.debug("ModeOperations.reset_mode: returning {:ok, new_emulator}")
 
         {:ok, new_emulator}
 

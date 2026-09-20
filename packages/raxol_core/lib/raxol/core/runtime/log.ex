@@ -15,7 +15,10 @@ defmodule Raxol.Core.Runtime.Log do
 
   ## Usage
 
-  Instead of using Logger directly or IO.puts, use this module:
+  One call style per module: a module that can `require Logger` uses the
+  `Logger` macros for every plain level call in that file (the macro skips
+  building the message when the level is disabled), and every other module
+  uses this one.
 
       # Basic logging
       Log.info("User authenticated successfully")
@@ -24,12 +27,6 @@ defmodule Raxol.Core.Runtime.Log do
       # With context
       Log.info("Processing request", %{user_id: 123, action: :login})
       Log.error("Validation failed", %{errors: errors, input: input})
-
-      # A zero-arity fun defers message rendering until the level is enabled.
-      # In modules that can `require Logger`, prefer the Logger macros on hot
-      # paths so even the callback closure is avoided.
-      Log.debug(fn -> "Parsed \#{inspect(byte)} in state \#{state}" end)
-      Log.debug(fn -> "Parsed \#{inspect(byte)}" end, %{state: state})
 
       # Performance timing
       Log.time_info("Database query", fn ->
@@ -75,17 +72,8 @@ defmodule Raxol.Core.Runtime.Log do
 
   @doc """
   Logs a debug message.
-
-  `msg` is either iodata or a zero-arity fun returning iodata. The fun form is
-  evaluated only when the `:debug` level is enabled. Code that can
-  `require Logger` should prefer `Logger.debug/1` on hot paths; its macro also
-  avoids allocating a callback closure while debug logging is disabled.
-
-      Log.debug("starting up")
-      Log.debug(fn -> "byte \#{inspect(byte)}" end)
-
   """
-  @spec debug(iodata() | (-> iodata())) :: :ok
+  @spec debug(iodata()) :: :ok
   def debug(msg), do: log(:debug, msg)
 
   def warning(msg), do: log(:warn, msg)
@@ -101,13 +89,7 @@ defmodule Raxol.Core.Runtime.Log do
     Logger.bare_log(level, with_context(msg, context))
   end
 
-  # `msg` may be a zero-arity fun; preserve it through formatting so
-  # `Logger.bare_log/2` controls whether it is evaluated.
   defp with_context(msg, nil), do: msg
-
-  defp with_context(msg, context) when is_function(msg, 0) do
-    fn -> [msg.(), " | Context: ", inspect(context)] end
-  end
 
   defp with_context(msg, context), do: [msg, " | Context: ", inspect(context)]
 
@@ -282,32 +264,15 @@ defmodule Raxol.Core.Runtime.Log do
     })
   end
 
-  defp format_module_message(module, msg) when is_function(msg, 0) do
-    module_name = module |> Module.split() |> List.last()
-    fn -> ["[", module_name, "] ", msg.()] end
-  end
-
   defp format_module_message(module, msg) do
     module_name = module |> Module.split() |> List.last()
     ["[", module_name, "] ", msg]
   end
 
-  defp format_console_message(msg, nil) when is_function(msg, 0) do
-    fn -> ["[CONSOLE] ", msg.()] end
-  end
-
   defp format_console_message(msg, nil), do: ["[CONSOLE] ", msg]
-
-  defp format_console_message(msg, context) when is_function(msg, 0) do
-    fn -> ["[CONSOLE] ", msg.(), " | ", inspect(context)] end
-  end
 
   defp format_console_message(msg, context),
     do: ["[CONSOLE] ", msg, " | ", inspect(context)]
-
-  defp format_timed_message(msg, duration_us) when is_function(msg, 0) do
-    fn -> [msg.(), " (", format_duration(duration_us), ")"] end
-  end
 
   defp format_timed_message(msg, duration_us) do
     [msg, " (", format_duration(duration_us), ")"]

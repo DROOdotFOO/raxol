@@ -73,7 +73,7 @@ defmodule Raxol.Terminal.Commands.Screen do
         0 ->
           result = Operations.clear_to_end_of_line(buffer_with_cursor)
 
-          Raxol.Core.Runtime.Log.debug("[Screen.clear_line] After clear_to_end_of_line operation")
+          Logger.debug("[Screen.clear_line] After clear_to_end_of_line operation")
 
           result
 
@@ -87,10 +87,7 @@ defmodule Raxol.Terminal.Commands.Screen do
 
         # Unknown mode, do nothing
         _ ->
-          Raxol.Core.Runtime.Log.warning_with_context(
-            "Unknown clear line mode: #{mode}",
-            %{}
-          )
+          Logger.warning("Unknown clear line mode: #{mode}")
 
           buffer
       end

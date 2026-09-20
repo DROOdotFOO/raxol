@@ -16,7 +16,6 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
 
   require Logger
 
-  alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Commands.CSIHandler.Cursor
   alias Raxol.Terminal.Emulator
 
@@ -47,12 +46,12 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
       _ ->
         # Default to 1 for invalid amounts
         {:ok, updated_emulator} = Cursor.handle_command(emulator, [1], "A")
-        Log.debug("Cursor moved up by 1 (default)")
+        Logger.debug("Cursor moved up by 1 (default)")
         {:ok, updated_emulator}
     end
   rescue
     error ->
-      Log.error("Cursor up movement failed: #{inspect(error)}")
+      Logger.error("Cursor up movement failed: #{inspect(error)}")
       # Return original emulator on error
       {:ok, emulator}
   end
@@ -72,7 +71,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator}
   rescue
     error ->
-      Log.error("Cursor down movement failed: #{inspect(error)}")
+      Logger.error("Cursor down movement failed: #{inspect(error)}")
       {:ok, emulator}
   end
 
@@ -91,7 +90,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator}
   rescue
     error ->
-      Log.error("Cursor forward movement failed: #{inspect(error)}")
+      Logger.error("Cursor forward movement failed: #{inspect(error)}")
       {:ok, emulator}
   end
 
@@ -110,7 +109,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator}
   rescue
     error ->
-      Log.error("Cursor backward movement failed: #{inspect(error)}")
+      Logger.error("Cursor backward movement failed: #{inspect(error)}")
       {:ok, emulator}
   end
 
@@ -131,7 +130,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     handle_cursor_position_direct(emulator, row, col)
   rescue
     error ->
-      Log.error("Cursor position from params failed: #{inspect(error)}")
+      Logger.error("Cursor position from params failed: #{inspect(error)}")
 
       {:ok, emulator}
   end
@@ -178,7 +177,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator}
   rescue
     error ->
-      Log.error("Cursor position direct failed: #{inspect(error)}")
+      Logger.error("Cursor position direct failed: #{inspect(error)}")
       {:ok, emulator}
   end
 
@@ -196,7 +195,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     handle_cursor_position_direct(emulator, current_row, target_col)
   rescue
     error ->
-      Log.error("Cursor column positioning failed: #{inspect(error)}")
+      Logger.error("Cursor column positioning failed: #{inspect(error)}")
       {:ok, emulator}
   end
 
@@ -214,7 +213,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     handle_cursor_position_direct(emulator, target_row, current_col)
   rescue
     error ->
-      Log.error("Cursor row positioning failed: #{inspect(error)}")
+      Logger.error("Cursor row positioning failed: #{inspect(error)}")
       {:ok, emulator}
   end
 
