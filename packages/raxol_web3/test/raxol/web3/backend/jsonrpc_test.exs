@@ -630,6 +630,67 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
     end
   end
 
+  describe "the headers an RPC post carries" do
+    # A seam of its own, because `serving/1` reports the decoded body and this
+    # is the one question asked about the request's headers.
+    defp recording_seam(result) do
+      fn _vetted, request, _opts ->
+        send(self(), {:headers, request.headers})
+
+        body = %{
+          "jsonrpc" => "2.0",
+          "id" => Jason.decode!(request.body)["id"],
+          "result" => result
+        }
+
+        {:ok, %{status: 200, headers: [], body: Jason.encode!(body)}}
+      end
+    end
+
+    defp authed(headers) do
+      {:ok, handle} =
+        JSONRPC.new("eip155:4663",
+          url: "https://authed-node.test/",
+          http_opts:
+            [{:exchange, recording_seam(result("chain_id"))}, {:headers, headers}] ++ unmetered(),
+          cache: false
+        )
+
+      handle
+    end
+
+    test "an operator-supplied header survives the JSON content type" do
+      # `:http_opts` is documented as forwarded unchanged, and
+      # `Raxol.Web3.RPC` replaced the list rather than merging it: a node
+      # behind RBAC or an API key is reached only by the header the operator
+      # configured, so every read through this backend answered 401 while the
+      # configuration looked right.
+      handle = authed([{"authorization", "Bearer operator-token"}])
+
+      assert {:ok, "0x1237"} =
+               Backend.call(handle, :raw_request, [%{method: "eth_chainId", params: []}])
+
+      assert_receive {:headers, headers}
+      assert {"authorization", "Bearer operator-token"} in headers
+      assert {"content-type", "application/json"} in headers
+    end
+
+    test "the backend's content type wins a collision, and there is one of it" do
+      # A duplicate `content-type` is refused outright by some servers, and a
+      # JSON-RPC body is JSON whatever the operator wrote in its place.
+      handle = authed([{"content-type", "text/plain"}, {"x-api-key", "k"}])
+
+      assert {:ok, "0x1237"} =
+               Backend.call(handle, :raw_request, [%{method: "eth_chainId", params: []}])
+
+      assert_receive {:headers, headers}
+      assert {"x-api-key", "k"} in headers
+
+      assert Enum.filter(headers, fn {name, _value} -> name == "content-type" end) ==
+               [{"content-type", "application/json"}]
+    end
+  end
+
   describe "the response cache" do
     # Own URLs, because the cache is per node and keyed by origin.
     test "a repeated account read is served from the cache" do
