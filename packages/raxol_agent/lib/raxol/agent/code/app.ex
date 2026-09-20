@@ -675,7 +675,7 @@ defmodule Raxol.Agent.Code.App do
           actions: model.actions ++ result.tools
       }
 
-      {put_status(model, mcp_loaded_line(result)), []}
+      {put_status(model, mcp_loaded_line(result, model.mcp_skipped)), []}
     else
       {model, []}
     end
@@ -711,18 +711,27 @@ defmodule Raxol.Agent.Code.App do
     end)
   end
 
-  defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+  # The boot status line promised a skipped count (`mcp_note/2`); this fold
+  # overwrites that line, so the count rides along or it survives exactly
+  # one frame in any session that has a stdio server to load.
+  defp mcp_loaded_line(result, skipped),
+    do: mcp_tools_line(result) <> skipped_suffix(skipped)
 
-  defp mcp_loaded_line(%{tools: tools, connected: connected, failed: []}) do
+  defp mcp_tools_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+
+  defp mcp_tools_line(%{tools: tools, connected: connected, failed: []}) do
     "mcp: #{length(tools)} tools from #{length(connected)} servers"
   end
 
-  defp mcp_loaded_line(%{tools: tools, failed: failed}) do
+  defp mcp_tools_line(%{tools: tools, failed: failed}) do
     names =
       Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
 
     "mcp: #{length(tools)} tools · failed: #{names}"
   end
+
+  defp skipped_suffix([]), do: ""
+  defp skipped_suffix(skipped), do: " · #{length(skipped)} skipped"
 
   # Fire the armed launch validation on the first update (dispatcher process).
   defp maybe_launch_validation(%{pending_validation: nil} = model), do: model

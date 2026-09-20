@@ -321,25 +321,51 @@ defmodule Raxol.Agent.Code.App.Commands do
     rows =
       Enum.map(servers, fn s ->
         "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
-          "#{s.command} #{Enum.join(s.args, " ")}"
+          "#{s.command} #{Enum.join(s.args, " ")}" <>
+          failure_text(model.mcp_status, s.name)
       end)
 
     Enum.join(rows ++ skipped_rows(model), "\n")
   end
 
+  # The other half of the refusal vocabulary: `✗` is a server that started
+  # and failed, so it carries its reason here rather than being a mark with
+  # no explanation next to a `⊘` row that has one.
+  defp failure_text(%{failed: failed}, name) do
+    case Enum.find(failed, fn {n, _reason} -> to_string(n) == name end) do
+      nil -> ""
+      {_n, reason} -> "  (failed: #{inspect(reason, limit: 3)})"
+    end
+  end
+
+  defp failure_text(_status, _name), do: ""
+
   # Entries `.mcp.json` names that the bridge never started, with the reason,
   # so the operator sees them here rather than hunting for a config bug.
+  # `⊘` is "never tried", distinct from `✗` ("tried and failed"). Bounded by
+  # the cap the loader bounds launches with: a file with 10k broken entries
+  # is otherwise a 10k-row notice, re-rendered every frame.
   defp skipped_rows(model) do
-    model
-    |> Map.get(:mcp_skipped, [])
-    |> Enum.map(fn {name, reason} -> "✗ #{name}  →  skipped: #{skip_text(reason)}" end)
+    {shown, rest} =
+      Enum.split(model.mcp_skipped, Raxol.Agent.Code.McpLoader.max_servers())
+
+    rows =
+      Enum.map(shown, fn {name, reason} ->
+        "⊘ #{name}  →  skipped: #{skip_text(reason)}"
+      end)
+
+    case rest do
+      [] -> rows
+      more -> rows ++ ["  … and #{length(more)} more skipped"]
+    end
   end
 
   defp skip_text(:unsupported_transport),
-    do: "url servers are not bridged; only stdio commands start"
+    do: "http/sse transport is not bridged; only stdio commands start"
 
-  defp skip_text(:invalid_spec), do: "entry has no command"
-  defp skip_text(other), do: inspect(other)
+  defp skip_text(:no_command), do: "entry has no command"
+  defp skip_text(:command_not_string), do: "command is not a string"
+  defp skip_text(:not_an_object), do: "entry is not an object"
 
   defp server_mark(:loading, _name), do: "…"
   defp server_mark(nil, _name), do: "○"

@@ -20,10 +20,13 @@ defmodule Raxol.Agent.Code.McpConfig do
   An entry the loader cannot run is not dropped on the floor: `load_all/1`
   returns it in a `skipped` list with a reason, so `/mcp` and `/inspect`
   show it instead of leaving the operator to wonder why a server named in
-  the file never appears. Two reasons exist. `:unsupported_transport` is an
-  entry that names a `url` (or a `type` of `http`/`sse`): the Claude Code
-  format allows those, but this bridge only starts stdio commands.
-  `:invalid_spec` is anything else without a string `command`.
+  the file never appears. One reason per fault, so the rendered text sends
+  the operator to the line of the config that is actually wrong:
+  `:unsupported_transport` is an entry naming a `url` (or a `type` of
+  `http`/`sse`), which the Claude Code format allows but this bridge
+  cannot start (only stdio commands); `:no_command` is an object with no
+  `command` key; `:command_not_string` is a `command` that is not a
+  string; `:not_an_object` is an entry that is not an object at all.
 
   ## Scope
 
@@ -40,23 +43,12 @@ defmodule Raxol.Agent.Code.McpConfig do
           env: map()
         }
 
-  @type skip_reason :: :unsupported_transport | :invalid_spec
+  @type skip_reason ::
+          :unsupported_transport
+          | :no_command
+          | :command_not_string
+          | :not_an_object
   @type skipped :: {String.t(), skip_reason()}
-
-  @doc """
-  Load MCP servers from `<dir>/.mcp.json`.
-
-  Returns `{:ok, servers}` (possibly empty), `:none` when there is no file,
-  or `{:error, reason}` for an unreadable/invalid file. Entries the bridge
-  cannot run are left out; `load_all/1` reports them.
-  """
-  @spec load(String.t()) :: {:ok, [server()]} | :none | {:error, term()}
-  def load(dir) do
-    case load_all(dir) do
-      {:ok, servers, _skipped} -> {:ok, servers}
-      other -> other
-    end
-  end
 
   @doc """
   Load MCP servers from `<dir>/.mcp.json`, keeping the entries that cannot
@@ -125,11 +117,12 @@ defmodule Raxol.Agent.Code.McpConfig do
     {name, skip_reason(spec)}
   end
 
-  defp parse_server({name, _other}), do: {to_string(name), :invalid_spec}
+  defp parse_server({name, _other}), do: {name, :not_an_object}
 
   defp skip_reason(%{"url" => url}) when is_binary(url), do: :unsupported_transport
   defp skip_reason(%{"type" => type}) when type in ["http", "sse"], do: :unsupported_transport
-  defp skip_reason(_spec), do: :invalid_spec
+  defp skip_reason(%{"command" => _not_a_string}), do: :command_not_string
+  defp skip_reason(_spec), do: :no_command
 
   defp string_list(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
   defp string_list(_other), do: []

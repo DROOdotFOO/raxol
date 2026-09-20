@@ -23,7 +23,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       })
     )
 
-    assert {:ok, [alpha, zeta]} = McpConfig.load(dir)
+    assert {:ok, [alpha, zeta], []} = McpConfig.load_all(dir)
     assert alpha.name == "alpha"
     assert alpha.command == "uvx"
     assert alpha.args == ["a"]
@@ -32,22 +32,17 @@ defmodule Raxol.Agent.Code.McpConfigTest do
   end
 
   test "returns :none when there is no file", %{dir: dir} do
-    assert :none = McpConfig.load(dir)
+    assert :none = McpConfig.load_all(dir)
   end
 
   test "a valid object with no servers is empty, not an error", %{dir: dir} do
     write(dir, Jason.encode!(%{"other" => true}))
-    assert {:ok, []} = McpConfig.load(dir)
+    assert {:ok, [], []} = McpConfig.load_all(dir)
   end
 
   test "errors on invalid json", %{dir: dir} do
     write(dir, "{bad")
-    assert {:error, :invalid_json} = McpConfig.load(dir)
-  end
-
-  test "a server missing a command is dropped", %{dir: dir} do
-    write(dir, Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}}))
-    assert {:ok, []} = McpConfig.load(dir)
+    assert {:error, :invalid_json} = McpConfig.load_all(dir)
   end
 
   describe "load_all/1" do
@@ -72,7 +67,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       assert {:ok, [], [{"typed", :unsupported_transport}]} = McpConfig.load_all(dir)
     end
 
-    test "any other entry without a string command is :invalid_spec", %{dir: dir} do
+    test "each shape the bridge cannot run reports its own reason", %{dir: dir} do
       write(
         dir,
         Jason.encode!(%{
@@ -86,22 +81,10 @@ defmodule Raxol.Agent.Code.McpConfigTest do
 
       assert {:ok, [],
               [
-                {"bad-command", :invalid_spec},
-                {"no-command", :invalid_spec},
-                {"not-an-object", :invalid_spec}
+                {"bad-command", :command_not_string},
+                {"no-command", :no_command},
+                {"not-an-object", :not_an_object}
               ]} = McpConfig.load_all(dir)
-    end
-
-    test "nothing skipped is an empty list, and load/1 agrees on the servers", %{dir: dir} do
-      write(dir, Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx"}}}))
-      assert {:ok, [%{name: "fs"}] = servers, []} = McpConfig.load_all(dir)
-      assert {:ok, ^servers} = McpConfig.load(dir)
-    end
-
-    test "returns :none and errors the same way load/1 does", %{dir: dir} do
-      assert :none = McpConfig.load_all(dir)
-      write(dir, "{bad")
-      assert {:error, :invalid_json} = McpConfig.load_all(dir)
     end
   end
 end

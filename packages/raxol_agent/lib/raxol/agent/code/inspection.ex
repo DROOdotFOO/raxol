@@ -287,9 +287,10 @@ defmodule Raxol.Agent.Code.Inspection do
     ["mcp servers (.mcp.json):" | rows ++ skipped_rows]
   end
 
-  defp skip_reason_text(:unsupported_transport), do: "url server, not bridged"
-  defp skip_reason_text(:invalid_spec), do: "no command"
-  defp skip_reason_text(other), do: inspect(other)
+  defp skip_reason_text(:unsupported_transport), do: "http/sse transport, not bridged"
+  defp skip_reason_text(:no_command), do: "no command"
+  defp skip_reason_text(:command_not_string), do: "command not a string"
+  defp skip_reason_text(:not_an_object), do: "not an object"
 
   defp render_skills(%{provider: nil}),
     do: "skills: disabled (no :skills_provider configured)"

@@ -85,13 +85,13 @@ defmodule Raxol.Agent.Code.InspectionTest do
     assert [%{name: "fs"}] = snapshot.mcp_servers.servers
 
     assert snapshot.mcp_servers.skipped == [
-             %{name: "broken", reason: :invalid_spec},
+             %{name: "broken", reason: :no_command},
              %{name: "remote", reason: :unsupported_transport}
            ]
 
     text = Inspection.render(snapshot)
     assert text =~ "  fs → npx"
-    assert text =~ "  remote → skipped (url server, not bridged)"
+    assert text =~ "  remote → skipped (http/sse transport, not bridged)"
     assert text =~ "  broken → skipped (no command)"
   end
 
