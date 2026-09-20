@@ -54,6 +54,37 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert reason =~ "timed out"
     end
 
+    test "an evaluation that traps exits still dies at its timeout" do
+      # The timeout used to signal `:brutal_kill`, which is an ordinary
+      # trappable reason: `Process.flag(:trap_exit, true)` turned it into a
+      # message, and the evaluation kept running with full node authority after
+      # `eval/3` had already reported the timeout and demonitored it. `:kill`
+      # is the only reason the VM delivers untrappably.
+      #
+      # The evaluation reports its own pid through a registered name because
+      # `eval/3` does not return it: what is asserted is that THAT process is
+      # gone, not merely that the caller stopped waiting for it.
+      Process.register(self(), :repl_trapped_eval_probe)
+
+      code = """
+      Process.flag(:trap_exit, true)
+      send(:repl_trapped_eval_probe, {:eval_pid, self()})
+      Process.sleep(:infinity)
+      """
+
+      assert {:error, reason, _eval} =
+               Evaluator.eval(Evaluator.new(), code, timeout: 100)
+
+      assert reason =~ "timed out"
+
+      assert_received {:eval_pid, eval_pid}
+
+      # Fires immediately with `:noproc` if it is already dead, and on the kill
+      # otherwise -- so this waits for the death rather than timing it.
+      ref = Process.monitor(eval_pid)
+      assert_receive {:DOWN, ^ref, :process, ^eval_pid, _reason}, 2_000
+    end
+
     test "kills evaluation that exceeds its heap budget" do
       eval = Evaluator.new()
 
@@ -199,7 +230,7 @@ defmodule Raxol.REPL.EvaluatorTest do
 
     test "a killed evaluation leaves no capture server behind" do
       # Cleanup lives in an `after` block, which does NOT run when the process
-      # is killed by `Process.exit(pid, :brutal_kill)` on timeout or by the VM
+      # is killed by `Process.exit(pid, :kill)` on timeout or by the VM
       # on a max_heap_size breach -- the two paths hostile input is designed to
       # take. `CaptureIO` is started unlinked, so each of those orphaned one
       # server holding up to the output limit, on an anonymous SSH surface.
@@ -315,6 +346,12 @@ defmodule Raxol.REPL.EvaluatorTest do
     # Driven through `CaptureIO` directly with the IO protocol, because no
     # Elixir expression makes `io_lib` hang: the wedge is a property of the
     # expander, and the request shape is what `:io.format/2` sends.
+    # The `:DOWN` below is a scheduling event, so the window is a hang
+    # detector rather than a deadline: `@tag timeout:` is what fails a real
+    # wedge, and a loaded runner that takes two seconds to deliver a monitor
+    # message is not the bug under test (it failed at the suite's 1s default
+    # on macos-latest in run 35517528499).
+    @tag timeout: 30_000
     test "an expander that never answers does not wedge the capture server" do
       before = capture_server_count()
       test_pid = self()
@@ -353,7 +390,7 @@ defmodule Raxol.REPL.EvaluatorTest do
       # its owner does.
       ref = Process.monitor(capture)
       Process.exit(owner, :brutal_kill)
-      assert_receive {:DOWN, ^ref, :process, ^capture, :normal}
+      assert_receive {:DOWN, ^ref, :process, ^capture, :normal}, 10_000
       assert capture_server_count() == before
     end
 

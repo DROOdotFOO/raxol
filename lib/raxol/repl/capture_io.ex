@@ -45,11 +45,17 @@ defmodule Raxol.REPL.CaptureIO do
 
   Unlinked is not unattached. The caller is MONITORED, and the server stops
   when it goes: an `after` block does not run when the evaluation is killed by
-  `Process.exit(pid, :brutal_kill)` on timeout, or by the VM on a
+  `Process.exit(pid, :kill)` on timeout, or by the VM on a
   `max_heap_size` breach -- which are the two paths hostile input is meant to
   take. Without the monitor each of them orphaned one capture server holding up
-  to `limit` bytes, forever, on a surface served anonymously over SSH. Stopping
-  on `:DOWN` is a normal exit, so it still produces no crash report.
+  to `limit` bytes, forever, on the anonymously served playground demo.
+  Stopping on `:DOWN` is a normal exit, so it still produces no crash report.
+
+  That this leak mattered on an anonymous surface is not an endorsement of
+  running the evaluator on one. This cap, like the evaluator's others, is a
+  resource bound on one process and not a security boundary: what stands in
+  front of that surface is `Raxol.REPL.Sandbox`'s `:strict` AST allowlist,
+  applied by the caller. See `Raxol.REPL.Evaluator`'s "Trust boundary" section.
   """
   @spec start(pos_integer(), keyword()) :: {:ok, pid()}
   def start(limit, opts \\ []) when is_integer(limit) and limit > 0 do

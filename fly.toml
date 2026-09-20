@@ -18,6 +18,14 @@ kill_signal = 'SIGTERM'
   PHX_HOST = 'raxol.io'
   PORT = '8080'
   RAXOL_MODE = 'minimal'
+  # RAXOL_REPL_EXPOSED is deliberately absent, and this app must never set it.
+  # The HTTPS gallery serves every catalog demo at /demos/:demo with no auth,
+  # and the REPL demo evaluates submitted Elixir with the node's full
+  # authority -- the same exposure the SSH playground was suspended for, over
+  # a surface that was never suspended. With the flag unset the demo renders
+  # and refuses to evaluate. Setting it here would also make any node running
+  # Raxol.Payments.Deployment.assert_signing_isolated!/0 refuse to boot, which
+  # is the intended relationship, not an accident.
   # The anonymous SSH playground (port 2222) is deliberately absent: it was
   # suspended 2026-08-26 after review found it reachable, unauthenticated, on
   # the app's dedicated IPv6. Re-enabling it is a separate, explicit decision

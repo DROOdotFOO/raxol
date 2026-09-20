@@ -42,7 +42,7 @@ defmodule Raxol do
   * `Raxol.Swarm.Discovery` - Distributed node discovery (libcluster + Tailscale)
   * `Raxol.Debug.TimeTravel` - Snapshot-based time-travel debugging
   * `Raxol.Recording.Recorder` - Session recording in Asciinema v2 format
-  * `Raxol.REPL.Evaluator` - Sandboxed code evaluation with persistent bindings
+  * `Raxol.REPL.Evaluator` - In-process code evaluation with persistent bindings and resource caps (not a security boundary)
   * `Raxol.Sensor.Fusion` - Sensor polling, batching, and weighted averaging
 
   ## OTP Features

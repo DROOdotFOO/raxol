@@ -3,12 +3,13 @@ defmodule Raxol.Core.Boundary.TermText do
   Terminal-injection confinement: neutralize ESC/ANSI/control bytes in
   untrusted text *before* it reaches the terminal renderer.
 
-  One of the two centralized boundary confinements (PR #569 thread 2); the
-  other is `Raxol.Core.Boundary.Path` (path-traversal). This one has byte-stream
-  semantics — a total function over binaries, no filesystem, never errors, never
-  passes a dangerous byte through. It enforces the repo rule "never embed raw
-  ANSI codes in strings passed to `text()`" *at the untrusted boundary* instead
-  of trusting upstream.
+  One of the three centralized boundary confinements (PR #569 thread 2); the
+  others are `Raxol.Core.Boundary.Path` (path-traversal) and
+  `Raxol.Core.Boundary.Evaluation` (code-evaluation exposure). This one has
+  byte-stream semantics — a total function over binaries, no filesystem, never
+  errors, never passes a dangerous byte through. It enforces the repo rule
+  "never embed raw ANSI codes in strings passed to `text()`" *at the untrusted
+  boundary* instead of trusting upstream.
 
   ## What `sanitize/2` strips
 
