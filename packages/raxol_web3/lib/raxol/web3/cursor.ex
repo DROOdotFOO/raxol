@@ -54,6 +54,11 @@ defmodule Raxol.Web3.Cursor do
 
   @version "v1"
 
+  # The digest `mac/1` signs with, and the size every signature it produces
+  # has, read off the same digest rather than written down twice.
+  @digest :sha256
+  @mac_size :crypto.hash_info(@digest).size
+
   # Measured from live responses on 2026-09-13, minus `items_count`. An
   # endpoint absent from this table cannot mint or accept a cursor at all,
   # which is deliberate: `/api/v2/search` paginates with nulls and bracketed
@@ -182,7 +187,8 @@ defmodule Raxol.Web3.Cursor do
     case String.split(cursor, ".") do
       [@version, payload, signature] ->
         case Base.url_decode64(signature, padding: false) do
-          {:ok, mac} -> {:ok, @version <> "." <> payload, mac}
+          {:ok, mac} when byte_size(mac) == @mac_size -> {:ok, @version <> "." <> payload, mac}
+          {:ok, _wrong_size} -> {:error, :bad_signature}
           :error -> {:error, :malformed}
         end
 
@@ -194,6 +200,16 @@ defmodule Raxol.Web3.Cursor do
   defp verify(signed, mac) do
     # Constant time, because a cursor is attacker-supplied and a byte-at-a-time
     # comparison leaks the signature one byte at a time.
+    #
+    # The SIZE is `split/1`'s business rather than this function's, because
+    # `:crypto.hash_equals/2` raises `badarg` on two binaries of different
+    # sizes instead of answering false. A model-supplied cursor carrying a
+    # one-byte signature therefore raised out of `decode/3`, and
+    # `Raxol.MCP.Registry.invoke_with_breaker/3` turned that raise into a
+    # model-visible exception term plus a breaker failure: the closed taxonomy
+    # this module documents was bypassed by the one input class it exists for.
+    # By here the two binaries are the same size, and the comparison is the
+    # only thing left to do.
     if :crypto.hash_equals(mac(signed), mac), do: :ok, else: {:error, :bad_signature}
   end
 
@@ -234,5 +250,5 @@ defmodule Raxol.Web3.Cursor do
     Map.take(params, Map.get(@allowed, endpoint, []))
   end
 
-  defp mac(signed), do: :crypto.mac(:hmac, :sha256, Tables.cursor_key(), signed)
+  defp mac(signed), do: :crypto.mac(:hmac, @digest, Tables.cursor_key(), signed)
 end

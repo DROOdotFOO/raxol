@@ -162,13 +162,46 @@ defmodule Raxol.Web3.DialTest do
 
       assert [{{0, 0, 0, 0, 0, 0, 0, 1}, _}, {{127, 0, 0, 1}, _}] = failures
     end
+
+    test "an exhausted budget abandons the rest of the list instead of paying per address" do
+      # `:timeout` bounds ONE attempt, and a vetted list carries every A and
+      # AAAA answer the host gave: six is typical for the hosts this package
+      # targets, so a black-holed upstream cost six connect timeouts before
+      # the caller's read deadline had even started. No socket is opened
+      # here, which is the point: with nothing left, nothing is attempted.
+      assert {:error, {:budget_exhausted, []}} =
+               Dial.connect(
+                 [{192, 0, 2, 1}, {192, 0, 2, 2}, {192, 0, 2, 3}],
+                 "pinned.test",
+                 port: 443,
+                 timeout: 5_000,
+                 budget_ms: 0
+               )
+    end
+
+    test "a budget that is not spent does not get in the way of a connection" do
+      {:ok, endpoint} = TLSEndpoint.start(sans: [~c"pinned.test"])
+
+      assert {:ok, conn} =
+               connect(endpoint, [{127, 0, 0, 1}], "pinned.test", budget_ms: 5_000)
+
+      request(conn)
+      assert_receive {:tls_endpoint, %{sni: "pinned.test"}}, 5_000
+    end
   end
 
   describe "transport options that would weaken the handshake" do
     test "are refused rather than merged, and no socket is opened" do
       {:ok, endpoint} = TLSEndpoint.start(sans: [~c"pinned.test"])
 
-      for key <- [:verify, :verify_fun, :server_name_indication, :customize_hostname_check] do
+      for key <- [
+            :verify,
+            :verify_fun,
+            :server_name_indication,
+            :customize_hostname_check,
+            :partial_chain,
+            :versions
+          ] do
         assert {:error, {:forbidden_transport_opts, [^key]}} =
                  Dial.connect([{127, 0, 0, 1}], "pinned.test",
                    port: endpoint.port,

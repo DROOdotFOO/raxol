@@ -70,11 +70,20 @@ defmodule Raxol.Web3.Dial do
 
   # Each of these either replaces a value Mint derives from `:hostname`, or
   # weakens verification outright.
+  #
+  # `:partial_chain` and `:versions` are defence in depth rather than a fix:
+  # neither is reachable through `Raxol.Web3.HTTP`, which refuses
+  # `:transport_opts` outright. `:partial_chain` lets a caller declare an
+  # intermediate trusted and so accept a chain that does not reach a root,
+  # and `:versions` can put TLS 1.0 back on the wire. Both belong on the
+  # same list as `:verify` for the same reason.
   @forbidden_transport_opts [
     :server_name_indication,
     :customize_hostname_check,
     :verify,
-    :verify_fun
+    :verify_fun,
+    :partial_chain,
+    :versions
   ]
 
   @type address :: :inet.ip_address()
@@ -84,6 +93,7 @@ defmodule Raxol.Web3.Dial do
           | {:not_an_address, term()}
           | {:forbidden_transport_opts, [atom()]}
           | {:dial_failed, [{address(), term()}]}
+          | {:budget_exhausted, [{address(), term()}]}
 
   @doc """
   Connect to the first reachable address, presenting `hostname` as the identity.
@@ -101,7 +111,15 @@ defmodule Raxol.Web3.Dial do
     * `:timeout` - per-address connect timeout in milliseconds, default `5000`.
       Authoritative: a `:timeout` inside `:transport_opts` is overwritten with
       it, so the budget cannot be widened from two places at once.
-    * `:transport_opts` - passed to `:ssl`, minus the four keys above. A test
+    * `:budget_ms` - the total across every address, default `:infinity`.
+      `:timeout` alone bounds one attempt, and a vetted list carries every A
+      and AAAA answer the host gave, so a black-holed host costs
+      `:timeout * length(addresses)` before the caller's read deadline has
+      even started. With a budget, each attempt gets
+      `min(:timeout, what is left)` and the rest of the list is abandoned as
+      `{:budget_exhausted, failures}` when nothing is. `Raxol.Web3.HTTP`
+      always passes one, computed from its own end-to-end deadline.
+    * `:transport_opts` - passed to `:ssl`, minus the six keys above. A test
       supplies its own `:cacerts` here.
 
   """
@@ -122,22 +140,47 @@ defmodule Raxol.Web3.Dial do
         hostname: hostname,
         protocols: [:http1],
         mode: :passive,
-        transport_opts: Keyword.put(transport_opts, :timeout, timeout)
+        transport_opts: transport_opts
       ]
 
-      try_each(addresses, port, connect_opts, [])
+      try_each(addresses, port, connect_opts, timeout, deadline(opts), [])
     end
   end
 
-  defp try_each([], _port, _opts, failures),
+  defp try_each([], _port, _opts, _timeout, _deadline, failures),
     do: {:error, {:dial_failed, Enum.reverse(failures)}}
 
-  defp try_each([address | rest], port, opts, failures) do
-    case Mint.HTTP.connect(:https, address, port, opts) do
-      {:ok, conn} -> {:ok, conn}
-      {:error, reason} -> try_each(rest, port, opts, [{address, reason} | failures])
+  defp try_each([address | rest], port, opts, timeout, deadline, failures) do
+    case attempt_timeout(timeout, deadline) do
+      0 ->
+        {:error, {:budget_exhausted, Enum.reverse(failures)}}
+
+      attempt ->
+        case Mint.HTTP.connect(:https, address, port, with_timeout(opts, attempt)) do
+          {:ok, conn} ->
+            {:ok, conn}
+
+          {:error, reason} ->
+            try_each(rest, port, opts, timeout, deadline, [{address, reason} | failures])
+        end
     end
   end
+
+  defp deadline(opts) do
+    case Keyword.get(opts, :budget_ms, :infinity) do
+      :infinity -> :infinity
+      ms when is_integer(ms) and ms >= 0 -> now_ms() + ms
+    end
+  end
+
+  defp attempt_timeout(timeout, :infinity), do: timeout
+  defp attempt_timeout(timeout, deadline), do: min(timeout, max(deadline - now_ms(), 0))
+
+  defp with_timeout(opts, timeout) do
+    Keyword.update!(opts, :transport_opts, &Keyword.put(&1, :timeout, timeout))
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   # A name reaching this function is a caller that skipped the vet, so it fails
   # closed rather than being resolved here as a convenience. `:inet` address

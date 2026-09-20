@@ -86,6 +86,38 @@ defmodule Raxol.Web3.CursorTest do
         assert {:error, :malformed} = Cursor.decode(bad, @origin, :address_transactions)
       end
     end
+
+    test "a signature of the wrong length is refused, not raised on" do
+      # `:crypto.hash_equals/2` raises `badarg` when the two binaries differ
+      # in size, and the second one here is whatever the caller's third
+      # dot-segment Base64-decoded to. A model that truncated or padded a
+      # cursor therefore got an exception out of `decode/3` rather than this
+      # taxonomy, and `Raxol.MCP.Registry` rendered it as model-visible
+      # exception text plus a breaker failure.
+      [version, payload, _signature] =
+        @upstream |> Cursor.encode(@origin, :address_transactions) |> String.split(".")
+
+      for bytes <- [1, 16, 31, 33, 64] do
+        signature = Base.url_encode64(:binary.copy(<<0>>, bytes), padding: false)
+        cursor = Enum.join([version, payload, signature], ".")
+
+        assert {:error, :bad_signature} =
+                 Cursor.decode(cursor, @origin, :address_transactions),
+               "a #{bytes}-byte signature was not refused"
+      end
+    end
+
+    test "a signature that is not base64 is malformed rather than unsigned" do
+      [version, payload, _signature] =
+        @upstream |> Cursor.encode(@origin, :address_transactions) |> String.split(".")
+
+      for garbage <- ["!!!!", "not base64 at all", "+/==", "é"] do
+        cursor = Enum.join([version, payload, garbage], ".")
+
+        assert {:error, :malformed} = Cursor.decode(cursor, @origin, :address_transactions),
+               "#{inspect(garbage)} was not refused as malformed"
+      end
+    end
   end
 
   describe "scope binding" do
