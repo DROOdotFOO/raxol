@@ -9,13 +9,6 @@
 # kept in ExUnit. It measures the real `Raxol.Terminal.Buffer`, not the
 # `Raxol.Core.Buffer` compatibility shim measured by buffer_benchmark.exs.
 #
-# MERGE ENFORCEMENT
-#
-# The `buffer-gate` job fails on either non-zero exit and `ci-status` reads that
-# job's result. `CI Status` is a required status check on `master`
-# (`strict: false`), so a breach blocks an ordinary merge. Branch protection
-# has `enforce_admins` disabled, so an administrator can bypass the check.
-#
 # WHAT THE GATE MEASURES
 #
 # Fixtures are built before each timed sweep. `Buffer.new/1`, coordinates,
@@ -29,33 +22,49 @@
 # pass's result is checked and then discarded before the next pass, so the
 # process never retains a list of large result buffers.
 #
-# Throughput budgets have roughly 5x headroom over the ubuntu-latest evidence
-# below. They are blow-up detectors, not a promise that a 2x regression will
-# fail. The 500x500 read row was removed: `get_cell/3` rebuilds a
+# Throughput budgets are blow-up detectors, not a promise that a 2x
+# regression will fail. Against the ubuntu-latest evidence below they hold
+# between 4.08x and 9.32x, not the uniform 5x an earlier version of this
+# header claimed; ACCEPTED FLAKE FLOOR explains why the two narrow rows stay
+# where they are. The 500x500 read row was removed: `get_cell/3` rebuilds a
 # `ScreenBuffer`, making that row allocation/GC noise rather than a plausible
 # guard on a lookup regression.
 #
-# The row-rebuild canary is concrete. Replacing the single pair of
-# `List.update_at/3` calls in `set_cell/4` with ten identical pairs makes the
-# timed operation perform ten target-row rebuilds per write. The 200x100 fill
-# budget is five times the observed single-rebuild cost (1.52 -> 7.60
-# us/cell), so N=10 breaches that row by construction. Fixture work cannot
-# dilute the canary because it is outside the timer.
+# The row-rebuild canary is concrete and is measured, not assumed. Replacing
+# the single pair of `List.update_at/3` calls in `set_cell/4` with ten
+# identical pairs makes the timed operation perform ten target-row rebuilds
+# per write. On this harness that multiplied the 200x100 fill row by 12.7x
+# (1.91 -> 24.30 us/cell, measured on an M1 with 8 schedulers on
+# 2026-09-20); the multiplier is a property of `set_cell/4` rather than of
+# the host. Applied to the 0.94 us/cell ubuntu-latest observation below it
+# predicts about 12 us/cell against the 7.6 ceiling, so N=10 breaches the
+# 200x100 fill row with roughly 1.6x to spare. It is not a general-purpose
+# canary: the same edit multiplied the 80x24 fill row by only 5.2x
+# (0.94 -> 4.92 us/cell), which would stay under that row's 4.1 ceiling on
+# ubuntu-latest. Fixture work cannot dilute the canary because it is outside
+# the timer.
 #
 # Memory has two meanings:
 #
 #   flat bytes/cell  `:erts_debug.flat_size/1`, with sharing expanded
 #   heap bytes/cell  `:erts_debug.size_shared/1`, with sharing counted once
 #
-# Both are pure functions of the retained filled buffer. No elapsed-time
-# assertion is involved. The heap row is omitted at 500x500 because the two
-# smaller sizes already cover per-cell sharing. Before sizing, dead timed
-# results are garbage-collected; only the retained fixture is measured.
+# Both are pure functions of the retained filled buffer: they walk the term,
+# so no elapsed time and no garbage-collection timing enters either number.
+# The heap row is omitted at 500x500 because the two smaller sizes already
+# cover per-cell sharing.
 #
 # The 460 and 244 B/cell ceilings are independent limits, not formulas derived
 # from the current result. They catch, respectively, an added `%Cell{}` field
 # (456.29 -> 472.29) and loss of sharing in its attributes (240.25 -> 352.25).
 # Do not ratchet either ceiling mechanically when an implementation changes.
+#
+# Those two ceilings sit only 0.8% and 1.5% over the observed values, which
+# is deterministic today but encodes the OTP 29 x86_64 term layout of
+# `%Cell{}`. If an OTP or architecture bump in an unrelated toolchain PR
+# moves the observed figures, re-record the provenance block from a green
+# run on the new toolchain and say that the toolchain moved it; do not
+# ratchet the ceiling up by the difference to make the gate green.
 #
 # MEASUREMENT INTEGRITY
 #
@@ -76,37 +85,70 @@
 #
 # BUDGET PROVENANCE
 #
-# measured_at      2026-09-15T19:49:36Z
-# measured_at_sha  2f5516477
-# workflow_run     35015431487
-# workflow_job     104539040437
-# runner           ubuntu-latest (Ubuntu 24.04.5, x86_64, 4 schedulers)
-# runtime          OTP 29.0.3, Elixir 1.20.2, MIX_ENV=test
+# measured_at      2026-09-16T16:24:43Z
+# measured_at_sha  fe4744c
+# workflow_run     35118537486
+# workflow_job     104876564996
+# runner           ubuntu-latest (x86_64-pc-linux-gnu, 4 schedulers)
+# runtime          OTP 29, Elixir 1.20.2, MIX_ENV=test
 # command          MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs
 #
-# The run log is the review evidence. Each throughput ceiling is five times
-# the observed value, rounded up to one decimal:
+# The run log is the review evidence. This is a green run of this branch on
+# the harness that ships here, with fixture construction outside the timed
+# region. The ceilings are NOT five times these values and were not derived
+# from them: they come from run 35015431487 on the older harness, which
+# timed fixture construction as well, and they are unchanged. Only the
+# observation and headroom columns were re-recorded.
 #
 #   size      metric             observed   budget   headroom
-#   80x24     fill us/cell           0.81      4.1      5.06x
-#   80x24     read us/get_cell       0.79      4.0      5.06x
-#   80x24     scroll us/op           1.23      6.2      5.04x
-#   200x100   fill us/cell           1.52      7.6      5.00x
-#   200x100   read us/get_cell       1.64      8.2      5.00x
-#   200x100   scroll us/op           3.25     16.3      5.02x
-#   500x500   fill us/cell           4.13     20.7      5.01x
-#   500x500   scroll us/op          11.40     57.0      5.00x
+#   80x24     fill us/cell           0.44      4.1      9.32x
+#   80x24     read us/get_cell       0.77      4.0      5.19x
+#   80x24     scroll us/op           1.00      6.2      6.20x
+#   200x100   fill us/cell           0.94      7.6      8.09x
+#   200x100   read us/get_cell       2.01      8.2      4.08x
+#   200x100   scroll us/op           2.87     16.3      5.68x
+#   500x500   fill us/cell           3.11     20.7      6.66x
+#   500x500   scroll us/op          12.75     57.0      4.47x
 #
-# Memory was 456.29/456.09/456.03 flat B/cell and 240.25/240.08 heap
-# B/cell. Those budgets preserve the independent field-growth and
-# sharing-loss limits above rather than applying the timing multiplier.
+# Memory in the same run was 456.29/456.09/456.03 flat B/cell and
+# 240.25/240.08 heap B/cell, identical to run 35015431487 and to a local M1
+# run: the two sizing functions are pure and the fixture is fixed, so those
+# rows do not drift between runs or hosts. Their budgets preserve the
+# independent field-growth and sharing-loss limits above rather than
+# applying a timing multiplier.
 #
-# The provenance run predates moving fixture construction out of the timed
-# region. Its throughput observations therefore include strictly more work
-# than the rows now measure, making the ceilings conservative. Replace this
-# provenance only with retained ubuntu-latest log evidence from the current
-# harness; never rebaseline by copying one green run into both observation
-# and budget.
+# The timing rows do drift. Read and scroll were untouched by moving fixture
+# construction out of the timer, yet they still differ between the two green
+# runs (200x100 read 1.64 -> 2.01, +22%; 500x500 scroll 11.40 -> 12.75,
+# +12%). Treat one run as evidence of an order of magnitude, not of a stable
+# number. Replace this provenance only with retained ubuntu-latest log
+# evidence from the current harness; never rebaseline by copying one green
+# run into both observation and budget, and when a budget does move, name
+# the observation that moved it.
+#
+# ACCEPTED FLAKE FLOOR
+#
+# Two rows carry less headroom than the rest: 200x100 read at 4.08x and
+# 500x500 scroll at 4.47x. Both ceilings are deliberately left alone. Raising
+# them to 5x of the observations above would rebaseline a budget from a
+# single green run, which the rule above forbids, and would spend real
+# sensitivity on the two rows that have the most of it.
+#
+# 4x is therefore the accepted floor for this table, not 5x. Because each row
+# is the median of five contiguous timed windows, a false FAIL on those two
+# rows needs three of the five windows stalled past 4x, or a runner that is
+# sustained more than 4x slower. A noisy neighbour on ubuntu-latest typically
+# costs 1.3x-3x on a window, which the median absorbs. If a green master run
+# ever reports one of these rows above 4x its recorded observation, re-record
+# the provenance from that run and decide from two runs, never from the run
+# that failed.
+#
+# The read row is the one to distrust first. `get_cell/3` rebuilds a whole
+# `ScreenBuffer` per lookup at every size, so the row is allocation-bound and
+# tracks host load rather than lookup cost: a local M1 reported 2.29 and 7.10
+# us/get_cell at 200x100 when otherwise idle, and 17.08 to 26.11 on the same
+# machine at load averages of 27 to 49. A FAIL on that row must be reproduced
+# on an unloaded runner before anyone calls it a regression.
 #
 # BUDGET CHANGES
 #
@@ -115,6 +157,9 @@
 # 2026-09-16  replaced M1 stand-ins with run 35015431487; set timing ceilings
 #             to ~5x that ubuntu-latest evidence; removed the inert 500x500
 #             read row; kept memory ceilings independent
+# 2026-09-20  re-recorded the observations from run 35118537486 on the
+#             shipped harness. No budget moved; headroom is 4.08x-9.32x, and
+#             4x is stated as the accepted floor
 defmodule BufferGate do
   @moduledoc false
 
@@ -156,6 +201,14 @@ defmodule BufferGate do
   @flat_words_per_cell_floor 40
   @heap_words_per_cell_floor 16
 
+  # `median_pass/3` reports the element at div(@passes, 2) of the sorted
+  # timings, which is the UPPER of the two middle values when the count is
+  # even -- a biased number, not a median. Refuse to load rather than report
+  # it.
+  rem(@passes, 2) == 1 ||
+    raise "@passes must be odd; got #{@passes}. An even count makes " <>
+            "median_pass/3 report the upper middle timing, not the median."
+
   @alphabet for c <- ?a..?z, do: <<c>>
   @scroll_steps Enum.to_list(1..@scroll_reps)
   @wordsize :erlang.system_info(:wordsize)
@@ -166,9 +219,11 @@ defmodule BufferGate do
 
     print_header()
 
+    # Rows print as they are measured rather than in one block at the end, so
+    # a superlinear regression that runs into the job's timeout still leaves
+    # the completed rows in the log.
     rows = Enum.flat_map(@budgets, &measure(&1, style))
 
-    Enum.each(rows, &print_row/1)
     verdict(rows)
   end
 
@@ -217,6 +272,11 @@ defmodule BufferGate do
     {fill_ns, filled} = measure_fill(width, height, style)
     positive!(fill_ns, "#{label} fill")
 
+    fill_row =
+      emit(
+        {label, "fill us/cell", fill_ns / 1000 / cells, budget.fill_us_per_cell}
+      )
+
     read_rows = read_rows(budget, filled, width, height, label)
 
     scroll_ns =
@@ -228,9 +288,17 @@ defmodule BufferGate do
 
     positive!(scroll_ns, "#{label} scroll")
 
-    # Timed fill and scroll results have been discarded. Collect them before
-    # walking the retained fixture so large rows do not carry dead buffers
-    # into the memory measurement.
+    scroll_row =
+      emit(
+        {label, "scroll us/op", scroll_ns / 1000 / @scroll_reps,
+         budget.scroll_us_per_op}
+      )
+
+    # `flat_size/1` and `size_shared/1` walk the retained term, so collecting
+    # cannot change what they return. This collect only drops the discarded
+    # timed buffers from the process heap before walking a 250k-cell fixture,
+    # keeping the gate's own footprint down; no row below depends on it or on
+    # when it runs.
     :erlang.garbage_collect()
     flat_words = :erts_debug.flat_size(filled)
 
@@ -242,16 +310,16 @@ defmodule BufferGate do
           "that is not a filled buffer"
       )
 
-    [
-      {label, "fill us/cell", fill_ns / 1000 / cells, budget.fill_us_per_cell}
-    ] ++
-      read_rows ++
-      [
-        {label, "scroll us/op", scroll_ns / 1000 / @scroll_reps,
-         budget.scroll_us_per_op},
+    flat_row =
+      emit(
         {label, "flat bytes/cell", flat_words * @wordsize / cells,
          budget.flat_bytes_per_cell}
-      ] ++ heap_row(budget, filled, flat_words, label, cells)
+      )
+
+    [fill_row] ++
+      read_rows ++
+      [scroll_row, flat_row] ++
+      heap_row(budget, filled, flat_words, label, cells)
   end
 
   defp measure_fill(width, height, style) do
@@ -276,6 +344,9 @@ defmodule BufferGate do
          height,
          label
        ) do
+    # 37 and 53 are coprime to every width (80, 200) and height (24, 100)
+    # read here, so the 256 samples walk both axes instead of collapsing onto
+    # a handful of rows or columns.
     coordinates =
       for i <- 0..(@read_samples - 1) do
         {rem(i * 37, width), rem(i * 53, height)}
@@ -285,7 +356,7 @@ defmodule BufferGate do
     positive!(read_ns, "#{label} read")
 
     [
-      {label, "read us/get_cell", read_ns / 1000 / @read_samples, budget}
+      emit({label, "read us/get_cell", read_ns / 1000 / @read_samples, budget})
     ]
   end
 
@@ -310,8 +381,10 @@ defmodule BufferGate do
       )
 
     [
-      {label, "heap bytes/cell", heap_words * @wordsize / cells,
-       budget.heap_bytes_per_cell}
+      emit(
+        {label, "heap bytes/cell", heap_words * @wordsize / cells,
+         budget.heap_bytes_per_cell}
+      )
     ]
   end
 
@@ -460,6 +533,13 @@ defmodule BufferGate do
           {_output, status} -> "unknown (git exit #{status})"
         end
     end
+  end
+
+  # Print a row the moment its measurement lands, then hand it to the caller
+  # for the final verdict.
+  defp emit(row) do
+    print_row(row)
+    row
   end
 
   defp print_row({label, metric, measured, budget}) do

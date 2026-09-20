@@ -599,9 +599,9 @@ jobs:
   #
   # `mix run` propagates the script's exit status, and its flushing shutdown
   # uses status 1 for a budget breach and 2 when it could not measure. Either
-  # fails this job. `ci-status` reads this result and is the required
-  # `CI Status` check on master, so a breach blocks ordinary merges; branch
-  # protection does not enforce the check for administrators.
+  # fails this job, and `ci-status` aggregates this job's result; whether the
+  # resulting `CI Status` check is required for a merge is a branch-protection
+  # setting that lives outside this repo.
   buffer-gate:
     name: Buffer performance gate
     needs: [setup, compile]

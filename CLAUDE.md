@@ -68,25 +68,22 @@ their median, and the unstable 500x500 read case is deliberately absent.
 The script prints a PASS/FAIL table and stops cleanly with status 1 on a
 breach or status 2 when an integrity check cannot vouch for the measurement.
 
-The `buffer-gate` job in `.github/workflows/ci-unified.yml runs the script in
+The `buffer-gate` job in `.github/workflows/ci-unified.yml` runs the script in
 applicable push and pull-request workflows. It restores dependency/build
 cache state without saving PR-produced state, then verifies the committed
 lock with `mix deps.get --check-locked`. The job fails on either non-zero
-status and `ci-status` reads its result. `CI Status` is a required check on
-`master` (`strict: false`), so a breach blocks an ordinary merge.
-`enforce_admins` is disabled, so an administrator can bypass the check.
+status and the `ci-status` aggregate job fails when it does.
 
 Two properties are load-bearing:
 
-- **The budgets state their evidence and sensitivity.** Timing ceilings are
-  roughly 5x the observed ubuntu-latest values recorded in the script's
-  provenance block. They catch a blow-up, not a small slowdown. With setup
-  excluded from timing, the documented N=10 target-row rebuild canary performs
-  ten rebuilds per write against a five-baseline-cost ceiling and breaches the
-  200x100 fill row. Flat and sharing-aware memory ceilings are
-  independent limits chosen to catch field growth and sharing loss; they are
-  not mechanically derived from the current result and must not be ratcheted
-  with it.
+- **The budgets state their evidence and sensitivity.** Timing ceilings sit
+  between 4.1x and 9.3x the observed ubuntu-latest values recorded in the
+  script's provenance block, which also states the accepted floor and what
+  the N=10 row-rebuild canary measures against the 200x100 fill ceiling.
+  They catch a blow-up, not a small slowdown. Flat and sharing-aware memory
+  ceilings are independent limits chosen to catch field growth and sharing
+  loss; they are not mechanically derived from the current result and must
+  not be ratcheted with it.
 - **It cannot pass without measuring.** `Buffer.scroll/2` rescues its own
   failures and returns the buffer unchanged, so every timed result is checked
   for shape and cumulative movement. Timed fill results are read back at five

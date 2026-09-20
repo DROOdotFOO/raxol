@@ -26,9 +26,9 @@ MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs
 fill/read/scroll throughput and per-cell memory against the budgets and
 ubuntu-latest provenance declared at the top of the file. It stops with
 status 1 on a breach and status 2 on an invalid measurement. The
-`buffer-gate` job feeds the required `CI Status` check on `master`, so either
-status blocks an ordinary merge; administrators can bypass that check.
-Read the gate's sensitivity and budget-change rules before changing a number.
+`buffer-gate` job in `.github/workflows/ci-unified.yml` runs it and the
+`ci-status` aggregate job fails when that job fails. Read the gate's
+sensitivity and budget-change rules before changing a number.
 
 ## Suites
 
