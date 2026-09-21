@@ -54,6 +54,49 @@ CI gates the same thing in two places, both in the `format` job: the root
 Every package is covered, so `cd packages/<pkg> && mix format` is a no-op on a
 clean tree. If it rewrites files, that is a real diff and not drift.
 
+### Performance gates
+
+```bash
+MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs  # buffer throughput + memory
+```
+
+`bench/core/buffer_gate.exs` is the repo's buffer performance gate. It
+measures `Raxol.Terminal.Buffer` fill (`set_cell/4`), read (`get_cell/3`),
+scroll (`scroll/2`) and per-cell memory at 80x24, 200x100 and 500x500. Fixture
+construction is outside the timed regions, five timing passes are reduced to
+their median, and the unstable 500x500 read case is deliberately absent.
+The script prints a PASS/FAIL table and stops cleanly with status 1 on a
+breach or status 2 when an integrity check cannot vouch for the measurement.
+
+The `buffer-gate` job in `.github/workflows/ci-unified.yml` runs the script in
+applicable push and pull-request workflows. It restores dependency/build
+cache state without saving PR-produced state, then verifies the committed
+lock with `mix deps.get --check-locked`. The job fails on either non-zero
+status and the `ci-status` aggregate job fails when it does.
+
+Two properties are load-bearing:
+
+- **The budgets state their evidence and sensitivity.** Timing ceilings sit
+  between 4.1x and 9.3x the observed ubuntu-latest values recorded in the
+  script's provenance block, which also states the accepted floor and what
+  the N=10 row-rebuild canary measures against the 200x100 fill ceiling.
+  They catch a blow-up, not a small slowdown. Flat and sharing-aware memory
+  ceilings are independent limits chosen to catch field growth and sharing
+  loss; they are not mechanically derived from the current result and must
+  not be ratcheted with it.
+- **It cannot pass without measuring.** `Buffer.scroll/2` rescues its own
+  failures and returns the buffer unchanged, so every timed result is checked
+  for shape and cumulative movement. Timed fill results are read back at five
+  positions. Durations must be positive. Fixed flat-size and sharing-aware
+  floors distinguish a populated buffer from a shared blank grid without
+  deriving the floor from the `%Cell{}` shape being guarded. Integrity
+  failures stop with status 2, which is not a pass.
+
+`bench/core/buffer_benchmark.exs` remains a Benchee report over the
+`Raxol.Core.Buffer` compatibility shim, not a gate on the real buffer. The
+`memory-regression` matrix in `.github/workflows/regression-testing.yml` has
+no buffer scenario and renders findings as a `[WARN]` PR comment.
+
 ### Running examples
 
 ```bash
@@ -451,6 +494,9 @@ Key rules:
   stack, and nothing has to be measured.
 - Throughput and allocation budgets live in `bench/` and the
   regression-testing workflow, never in the suite.
+  `bench/core/buffer_gate.exs` is the worked example: budgets with a stated
+  headroom factor and a provenance block, a non-zero exit, and a CI job that
+  fails on a breach. See "Performance gates" above.
 
 ### Naming conventions
 
