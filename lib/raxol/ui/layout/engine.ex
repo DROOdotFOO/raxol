@@ -8,6 +8,8 @@ defmodule Raxol.UI.Layout.Engine do
   * Managing the layout pipeline
   """
 
+  alias Raxol.Core.Boundary.TermText
+
   alias Raxol.UI.Layout.{
     CSSGrid,
     Elements,
@@ -248,7 +250,7 @@ defmodule Raxol.UI.Layout.Engine do
         fg: Map.get(attrs_map, :fg),
         bg: Map.get(attrs_map, :bg),
         style: style_map,
-        link: Map.get(attrs_map, :link),
+        link: sanitize_link(Map.get(attrs_map, :link)),
         # Pass original attributes through, let Renderer handle styling
         attrs: Map.put(attrs_map, :original_type, type)
       }
@@ -291,7 +293,7 @@ defmodule Raxol.UI.Layout.Engine do
         fg: Map.get(element, :fg),
         bg: Map.get(element, :bg),
         style: style_map,
-        link: Map.get(element, :link),
+        link: sanitize_link(Map.get(element, :link)),
         attrs: %{
           style: style_map,
           id: Map.get(element, :id),
@@ -1385,4 +1387,13 @@ defmodule Raxol.UI.Layout.Engine do
   defp get_checkbox_text(false), do: "[ ]"
 
   # --- End Measurement Logic ---
+  # `:link` reaches here straight off an LLM's Markdown --
+  # `MarkdownRenderer`'s `@builtin_pattern` puts the raw `](target)` on the
+  # node -- so the scheme is as untrusted as the bytes.
+  # `TermText.sanitize_url/1` confines both and returns `""` for anything
+  # outside http/https/mailto, which every emitter reads as "no link": the
+  # label text still renders, `[open](file:///etc/hosts)` just is not
+  # clickable.
+  defp sanitize_link(nil), do: nil
+  defp sanitize_link(value), do: TermText.sanitize_url(value)
 end

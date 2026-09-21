@@ -253,15 +253,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
     end
   end
 
-  # Untrusted (e.g. LLM-generated) markdown must never carry a raw C0/C1
-  # control byte, DEL, or -- critically -- an ESC (`\e`) out of this
-  # module: an embedded ESC/OSC sequence would reach the terminal
-  # renderer as if it were a real control sequence (cursor move, screen
-  # clear, a fake window-title write), which is exactly the "never embed
-  # raw ANSI in text()" rule this codebase enforces at the View-DSL
-  # boundary. `TextUtil.sanitize_controls/1` is the shared trust boundary
-  # every harness component routes untrusted text through, so this and
-  # `Block`'s own interpolation sites can never drift apart.
+  # Markdown performs component-level normalization before parsing so control
+  # bytes cannot affect delimiter handling. It is not the terminal boundary:
+  # see `Raxol.Core.Boundary.TermText`'s "Where confinement happens".
 
   # --- provisional close (render-only closing of incomplete constructs) ----
 
