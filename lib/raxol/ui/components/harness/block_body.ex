@@ -39,8 +39,8 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   `render/2` wraps the mounted view and the completion row(s) in one
   `Components.column/1` (unfaded -- `%{dim: true}` only, no prominence
   threading through this seam, kept simple per T5's own scope). A block
-  with no `:completion` key mounts and renders exactly as before, no
-  wrapping at all -- byte-identical to today's render.
+  with no `:completion` key mounts and renders exactly as before, with no
+  wrapping at all.
 
   This unit renders into a plain view map, same as every component in this
   package (`Raxol.View.Components`-shaped, buffer-testable without a real
@@ -59,6 +59,9 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   case) and to `BodyProvider.mount/3` (expanded case) unchanged; the
   expanded case also passes `block.outcome` through for `:tool_call`'s
   status derivation (see `BodyProvider.mount/3`'s `:outcome` option).
+
+  Terminal confinement belongs to the output paths that consume this view;
+  see `Raxol.Core.Boundary.TermText`'s "Where confinement happens".
   """
   @spec render(Block.t(), map()) :: map()
   def render(block, context \\ %{})

@@ -73,6 +73,51 @@ defmodule Raxol.Agent.Code.ReplayTest do
     assert text =~ "hello again"
   end
 
+  test "replay and export transcript text strip terminal control sequences" do
+    poison = "safe\e[2J\e]52;c;payload\a\r\n\t tail"
+    base = tmp_dir()
+
+    seed_journal(
+      base,
+      "sess-hostile",
+      message_turn("t1", "prompt " <> poison, "answer " <> poison)
+    )
+
+    {:ok, text} = Replay.run("sess-hostile", base_dir: base)
+
+    assert text =~ "prompt safe"
+    assert text =~ "answer safe"
+    assert text =~ "tail"
+    refute text =~ "\e"
+    refute text =~ "\a"
+    refute text =~ "\r"
+    # TAB survives: the export is a plain-text file read with `less` and a
+    # share page body, not a terminal control stream.
+    assert text =~ "\t tail"
+  end
+
+  # `TermText`'s OSC/DCS/APC scan runs to BEL or ST, so one unterminated
+  # `ESC ]` -- `ls --hyperlink`, a colored `git diff` cut off at a byte cap --
+  # used to swallow every LATER turn of the export, not just its own line.
+  test "an unterminated OSC costs only the rest of its own line" do
+    base = tmp_dir()
+
+    seed_journal(
+      base,
+      "sess-osc",
+      message_turn("t1", "first prompt", "keep\e]8;;http://x eaten") ++
+        message_turn("t2", "second prompt", "later answer")
+    )
+
+    {:ok, text} = Replay.run("sess-osc", base_dir: base)
+
+    assert text =~ "keep"
+    refute text =~ "eaten"
+    assert text =~ "> second prompt"
+    assert text =~ "later answer"
+    refute text =~ "\e"
+  end
+
   test "to_offset replays a prefix by journal offset" do
     base = tmp_dir()
 

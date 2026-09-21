@@ -35,12 +35,13 @@ defmodule Raxol.Agent.Code.App do
   an external server. The app's CHROME -- the notice box, the status strip,
   the approval footer -- is control-byte stripped both at the setters
   (`notice/2`, `put_status/2`) and in the view (`display_text/1`), because
-  `notice:` and `status_line:` are also written by direct struct update in a
-  dozen places. The TRANSCRIPT is not: `transcript/1` renders projected
-  blocks through `Raxol.UI.Components.Harness.Block.render/2`, which is not
-  wrapped, so assistant and tool output reach the terminal as produced.
-  That is a renderer-level gap for every surface that does not go through
-  `Raxol.Harness.Surface.ViewText.lines/3`.
+  `notice:` and `status_line:` are also written directly in a dozen places.
+
+  Transcript nodes remain ordinary view data: this module does not walk and
+  rebuild every projected block on every frame. See
+  `Raxol.Core.Boundary.TermText`'s "Where confinement happens" for the sinks
+  that confine them, including `Raxol.Agent.Code.Replay` for replay/export
+  text.
 
   ## The loop
 
@@ -133,7 +134,7 @@ defmodule Raxol.Agent.Code.App do
     # match `%{jail: true}` instead of re-deciding what counts as jailed.
     jail? = Keyword.get(options, :jail, false) not in [nil, false]
     {hooks, hooks_note} = load_hooks(cwd, jail?)
-    {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
+    {mcp_servers, mcp_skipped, mcp_note} = load_mcp(cwd, jail?)
     {lsp_pool, lsp_note} = start_lsp(cwd, jail?, options)
     {project_context, project_note} = load_project_context(cwd, jail?)
 
@@ -161,6 +162,7 @@ defmodule Raxol.Agent.Code.App do
       jail: jail?,
       hooks: hooks,
       mcp_servers: mcp_servers,
+      mcp_skipped: mcp_skipped,
       lsp_pool: lsp_pool,
       project_context: project_context
     })
@@ -440,16 +442,25 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp load_mcp(_cwd, true), do: {[], "mcp servers disabled (jailed session)"}
+  defp load_mcp(_cwd, true), do: {[], [], "mcp servers disabled (jailed session)"}
 
+  # Entries the bridge cannot run (a `url` server, a broken entry) ride
+  # along as `mcp_skipped`, so `/mcp` lists them with a reason instead of
+  # leaving a server named in the file silently absent.
   defp load_mcp(cwd, _jail?) do
-    case Raxol.Agent.Code.McpConfig.load(cwd) do
-      {:ok, []} -> {[], nil}
-      {:ok, servers} -> {servers, "#{length(servers)} MCP servers"}
-      :none -> {[], nil}
-      {:error, reason} -> {[], "mcp config error: #{inspect(reason)}"}
+    case Raxol.Agent.Code.McpConfig.load_all(cwd) do
+      {:ok, [], []} -> {[], [], nil}
+      {:ok, servers, skipped} -> {servers, skipped, mcp_note(servers, skipped)}
+      :none -> {[], [], nil}
+      {:error, reason} -> {[], [], "mcp config error: #{inspect(reason)}"}
     end
   end
+
+  defp mcp_note(servers, []), do: "#{length(servers)} MCP servers"
+  defp mcp_note([], skipped), do: "#{length(skipped)} MCP servers skipped"
+
+  defp mcp_note(servers, skipped),
+    do: "#{length(servers)} MCP servers · #{length(skipped)} skipped"
 
   # A language server is arbitrary code execution on the workspace, twice
   # over: `.raxol/lsp.json` names the binary, and the binary itself runs
@@ -665,7 +676,7 @@ defmodule Raxol.Agent.Code.App do
           actions: model.actions ++ result.tools
       }
 
-      {put_status(model, mcp_loaded_line(result)), []}
+      {put_status(model, mcp_loaded_line(result, model.mcp_skipped)), []}
     else
       {model, []}
     end
@@ -701,18 +712,27 @@ defmodule Raxol.Agent.Code.App do
     end)
   end
 
-  defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+  # The boot status line promised a skipped count (`mcp_note/2`); this fold
+  # overwrites that line, so the count rides along or it survives exactly
+  # one frame in any session that has a stdio server to load.
+  defp mcp_loaded_line(result, skipped),
+    do: mcp_tools_line(result) <> skipped_suffix(skipped)
 
-  defp mcp_loaded_line(%{tools: tools, connected: connected, failed: []}) do
+  defp mcp_tools_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+
+  defp mcp_tools_line(%{tools: tools, connected: connected, failed: []}) do
     "mcp: #{length(tools)} tools from #{length(connected)} servers"
   end
 
-  defp mcp_loaded_line(%{tools: tools, failed: failed}) do
+  defp mcp_tools_line(%{tools: tools, failed: failed}) do
     names =
       Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
 
     "mcp: #{length(tools)} tools · failed: #{names}"
   end
+
+  defp skipped_suffix([]), do: ""
+  defp skipped_suffix(skipped), do: " · #{length(skipped)} skipped"
 
   # Fire the armed launch validation on the first update (dispatcher process).
   defp maybe_launch_validation(%{pending_validation: nil} = model), do: model
@@ -1819,11 +1839,15 @@ defmodule Raxol.Agent.Code.App do
   end
 
   # In-flight streaming text (the live tail), one dim line per open item.
+  # Like sealed transcript blocks, it is ordinary view data and is confined
+  # by the terminal output sink.
   defp tail_lines(tail) when is_map(tail) do
     tail
     |> Map.values()
     |> Enum.map(fn %{chunks: chunks} ->
-      text(chunks |> Enum.reverse() |> Enum.join(""), style: [:dim])
+      text(chunks |> Enum.reverse() |> Enum.join(""),
+        style: [:dim]
+      )
     end)
   end
 
@@ -1885,22 +1909,12 @@ defmodule Raxol.Agent.Code.App do
   defp cursor(%{running?: true}), do: ""
   defp cursor(_model), do: "▌"
 
-  # The renderer-side control-byte boundary for this app's CHROME (the
-  # notice box, the status strip, the approval footer). `notice/2` and
-  # `put_status/2` sanitize too, but a dozen call sites write `notice:` and
-  # `status_line:` by direct struct update, and a tool name reaches the
-  # footer without passing through either -- so the check also sits on the
-  # last thing before `text/2`, where nothing can route around it.
-  #
-  # The transcript is NOT covered: `transcript/1` renders projected blocks
-  # through `Block.render/2`, which this module does not wrap, so assistant
-  # and tool output still reach the terminal with control bytes intact. That
-  # is a renderer-level gap for every surface that does not go through
-  # `Raxol.Harness.Surface.ViewText.lines/3`, tracked separately; chrome is
-  # fixed here because a forged prompt or status line impersonates the app
-  # itself.
+  # App chrome is sanitized before it becomes view data because a forged
+  # approval prompt or status line impersonates the app itself. The terminal
+  # emitter remains the final boundary for the ordinary transcript tree.
+  # Non-binary values fail closed instead of being returned unchanged.
   defp display_text(text) when is_binary(text), do: ViewText.sanitize_line(text)
-  defp display_text(other), do: other
+  defp display_text(_other), do: ""
 
   # -- helpers ----------------------------------------------------------------
 

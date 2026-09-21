@@ -424,7 +424,7 @@ defmodule Raxol.MixProject do
     Multi-surface application runtime for Elixir. One TEA module renders to
     terminal, browser (LiveView), SSH, and MCP (agents). 30+ widgets, flexbox +
     CSS grid, AI agent runtime, distributed swarm with CRDTs, time-travel
-    debugging, session recording, sandboxed REPL, and agentic commerce.
+    debugging, session recording, an AST-checked REPL, and agentic commerce.
     """
   end
 

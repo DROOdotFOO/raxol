@@ -72,6 +72,58 @@ defmodule Raxol.REPL.SandboxTest do
       assert Enum.any?(violations, &String.contains?(&1, ":erlang.halt"))
     end
 
+    # A spawned process is not the evaluation, so `Evaluator`'s timeout (which
+    # signals one pid) and its per-process heap cap do not reach it. Cover the
+    # API families instead of one representative name per module: every entry
+    # below can create work that outlives the evaluation that started it.
+    test "denies process creation and scheduling variants" do
+      for code <- [
+            "Task.async(fn -> :ok end)",
+            "Task.async_stream([1], fn value -> value end)",
+            "Task.start(fn -> :ok end)",
+            "Task.start_link(fn -> :ok end)",
+            "Task.Supervisor.async_nolink(TaskSupervisor, fn -> :ok end)",
+            "Task.Supervisor.start_child(TaskSupervisor, fn -> :ok end)",
+            "Agent.start(fn -> 0 end)",
+            "Agent.start_link(fn -> 0 end)",
+            "GenServer.start(MyServer, :ok)",
+            "GenServer.start_link(MyServer, :ok)",
+            "Supervisor.start_link([], strategy: :one_for_one)",
+            "DynamicSupervisor.start_link(strategy: :one_for_one)",
+            "PartitionSupervisor.start_link(child_spec: Task.Supervisor, name: Parts)",
+            "Registry.start_link(keys: :unique, name: MyRegistry)",
+            "spawn_opt(fn -> :ok end, [])",
+            ":erlang.spawn(fn -> :ok end)",
+            ":erlang.spawn_link(fn -> :ok end)",
+            ":erlang.spawn_monitor(fn -> :ok end)",
+            ":erlang.spawn_opt(fn -> :ok end, [])",
+            ":erlang.spawn_request(fn -> :ok end)",
+            ":proc_lib.spawn(fn -> :ok end)",
+            ":proc_lib.start(MyModule, :init, [])",
+            ":gen.start(:gen_server, :nolink, MyServer, :ok, [])",
+            ":gen_event.start()",
+            ":gen_statem.start(MyCallback, :ok, [])",
+            ":gen_server.start(MyServer, :ok, [])",
+            ":supervisor.start_link(MySupervisor, :ok)",
+            ":timer.apply_after(10, Kernel, :send, [self(), :ok])"
+          ] do
+        assert {:error, [_ | _]} = Sandbox.check(code, :standard),
+               "#{code} was allowed at :standard"
+      end
+    end
+
+    test "denies aliases and imports that hide process APIs" do
+      for code <- [
+            "alias Task, as: T; T.async(fn -> :ok end)",
+            "import Task; async(fn -> :ok end)",
+            "require Task; Task.async(fn -> :ok end)",
+            "use Task"
+          ] do
+        assert {:error, [_ | _]} = Sandbox.check(code, :standard),
+               "#{code} bypassed the standard policy"
+      end
+    end
+
     test "reports syntax errors" do
       {:error, violations} = Sandbox.check("def +++")
       assert Enum.any?(violations, &String.contains?(&1, "Syntax error"))
@@ -328,6 +380,100 @@ defmodule Raxol.REPL.SandboxTest do
     test "an unknown module is allowed at standard, as before" do
       # It is not on the denylist, and there is no such module to dispatch to.
       assert :ok = Sandbox.check("Definitely.Not.Loaded.run()", :standard)
+    end
+  end
+
+  # Every clause in the checker decides safety from a module NAME. `import`,
+  # `alias`, `require` and `use` decide which module a name reaches, so they
+  # sit underneath the check rather than inside it: at `:strict`, the level
+  # documented as safe for anonymous exposure, `import System; cmd("id", [])`
+  # and `alias :os, as: Enum; Enum.cmd(~c"id")` both returned `:ok` and both
+  # executed as the node's OS user (#1045).
+  describe "name rebinding cannot reach a denied module" do
+    test "import lets a denied call through as a bare local call" do
+      for level <- [:standard, :strict] do
+        assert {:error, violations} =
+                 Sandbox.check(~s|import System; cmd("id", [])|, level)
+
+        assert Enum.any?(violations, &String.contains?(&1, "import"))
+      end
+    end
+
+    test "alias rebinds a whitelisted name onto a denied module" do
+      for level <- [:standard, :strict] do
+        assert {:error, violations} =
+                 Sandbox.check(~s|alias :os, as: Enum; Enum.cmd(~c"id")|, level)
+
+        assert Enum.any?(violations, &String.contains?(&1, "alias"))
+      end
+    end
+
+    test "require and use are refused for the same reason" do
+      for code <- ["require Logger", "use GenServer"],
+          level <- [:standard, :strict] do
+        assert {:error, _violations} = Sandbox.check(code, level)
+      end
+    end
+
+    test "none still allows them -- it is the local-terminal level" do
+      assert :ok = Sandbox.check(~s|import System; cmd("id", [])|, :none)
+    end
+
+    test "code that names its modules in full is unaffected" do
+      for code <- [
+            "Enum.map([1, 2], & &1 * 2)",
+            ~s|String.upcase("hi")|,
+            "x = 1; x + 2"
+          ] do
+        assert :ok = Sandbox.check(code, :strict)
+      end
+    end
+  end
+
+  # A capture writes the same local call with `args == nil`, so the
+  # `is_list(args)` guards on the `apply`, `send` and spawn clauses skipped it
+  # and the node fell through to the catch-all. `(&apply/3).(:os, :cmd, ...)`
+  # and `Enum.map([f], &spawn/1)` both returned `:ok` at `:strict` and both do
+  # exactly what the unwrapped call would (#1045 review).
+  describe "the capture form of a denied local reaches no further than the call" do
+    for {code, reason} <- [
+          {"(&apply/3).(:os, :cmd, [~c\"id\"])",
+           "dynamic function application"},
+          {"f = &apply/3", "dynamic function application"},
+          {"&send/2", "message sending"},
+          {"Enum.map([fn -> 1 end], &spawn/1)", "process spawning"},
+          {"&spawn_link/1", "process spawning"},
+          {"&spawn_monitor/1", "process spawning"}
+        ] do
+      test "strict refuses #{code}" do
+        assert {:error, violations} = Sandbox.check(unquote(code), :strict)
+
+        assert Enum.any?(violations, &String.contains?(&1, unquote(reason))),
+               "expected a #{unquote(reason)} violation, got #{inspect(violations)}"
+      end
+    end
+
+    test "a qualified capture of a denied module is still refused" do
+      for code <- ["&:os.cmd/1", "&File.read!/1", "&Kernel.apply/3"] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} was allowed"
+      end
+    end
+
+    # The denial belongs on the capture form, not on the name: these are the
+    # shapes that must keep working, including a variable that happens to be
+    # called `apply`.
+    test "ordinary captures and a variable named apply still pass" do
+      for code <- [
+            "&Enum.map/2",
+            "Enum.map([1, 2], &(&1 * 2))",
+            "apply = 1; apply + 1"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "none still allows the capture form" do
+      assert :ok = Sandbox.check("(&apply/3).(:os, :cmd, [~c\"id\"])", :none)
     end
   end
 end
