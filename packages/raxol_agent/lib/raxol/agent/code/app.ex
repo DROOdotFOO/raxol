@@ -135,7 +135,7 @@ defmodule Raxol.Agent.Code.App do
     # match `%{jail: true}` instead of re-deciding what counts as jailed.
     jail? = Keyword.get(options, :jail, false) not in [nil, false]
     {hooks, hooks_note} = load_hooks(cwd, jail?)
-    {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
+    {mcp_servers, mcp_skipped, mcp_note} = load_mcp(cwd, jail?)
     {lsp_pool, lsp_note} = start_lsp(cwd, jail?, options)
     {project_context, project_note} = load_project_context(cwd, jail?)
 
@@ -162,6 +162,7 @@ defmodule Raxol.Agent.Code.App do
       cwd: cwd,
       jail: jail?,
       hooks: hooks,
+      mcp_skipped: mcp_skipped,
       mcp_servers: mcp_servers,
       lsp_pool: lsp_pool,
       project_context: project_context
@@ -481,6 +482,12 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  defp mcp_note(servers, []), do: "#{length(servers)} MCP servers"
+  defp mcp_note([], skipped), do: "#{length(skipped)} MCP servers skipped"
+
+  defp mcp_note(servers, skipped),
+    do: "#{length(servers)} MCP servers · #{length(skipped)} skipped"
+
   # A language server is arbitrary code execution on the workspace, twice
   # over: `.raxol/lsp.json` names the binary, and the binary itself runs
   # project code to answer anything (rust-analyzer executes `build.rs`,
@@ -695,7 +702,7 @@ defmodule Raxol.Agent.Code.App do
           actions: model.actions ++ result.tools
       }
 
-      {put_status(model, mcp_tools_line(result)), []}
+      {put_status(model, mcp_loaded_line(result, model.mcp_skipped)), []}
     else
       {model, []}
     end
@@ -744,6 +751,9 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  defp mcp_loaded_line(result, skipped),
+    do: mcp_tools_line(result) <> skipped_suffix(skipped)
+
   defp mcp_tools_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
 
   defp mcp_tools_line(%{tools: tools, connected: connected, failed: []}) do
@@ -756,6 +766,9 @@ defmodule Raxol.Agent.Code.App do
 
     "mcp: #{length(tools)} tools · failed: #{names}"
   end
+
+  defp skipped_suffix([]), do: ""
+  defp skipped_suffix(skipped), do: " · #{length(skipped)} skipped"
 
   # Fire the armed launch validation on the first update (dispatcher process).
   defp maybe_launch_validation(%{pending_validation: nil} = model), do: model
