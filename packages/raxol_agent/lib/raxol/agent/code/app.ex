@@ -460,6 +460,7 @@ defmodule Raxol.Agent.Code.App do
 
     {workspace, workspace_skipped, workspace_note} =
       mcp_source(fn -> McpConfig.load_all(cwd) end, "workspace")
+
     servers = user ++ workspace
     skipped = user_skipped ++ workspace_skipped
 
