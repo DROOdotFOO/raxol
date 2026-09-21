@@ -292,20 +292,19 @@ defmodule Raxol.Agent.Code.Inspection do
     ["mcp servers (.mcp.json):" | rows ++ skipped_rows]
   end
 
-  defp skip_reason_text(:unsupported_transport), do: "type is http/sse but no url"
-  defp skip_reason_text(:no_command), do: "neither a command nor a url"
-  defp skip_reason_text(:command_not_string), do: "command is not a string"
-  defp skip_reason_text(:not_an_object), do: "entry is not an object"
-
-  # A remote server has no command, and an entry the loader kept for refusal
-  # has neither. Naming what it declares is what makes this snapshot usable
-  # for "why did that server not start".
-  defp server_target(%{command: command} = server) when is_binary(command) do
-    Enum.join([command | server.args], " ")
-  end
+  # A remote server carries no command, so joining `[s.command | s.args]`
+  # raised on it. Naming what the entry declares is what makes this snapshot
+  # usable for "why did that server not start".
+  defp server_target(%{command: command} = server) when is_binary(command),
+    do: Enum.join([command | server.args], " ")
 
   defp server_target(%{url: url}) when is_binary(url), do: url
   defp server_target(_server), do: "(no command or url)"
+
+  defp skip_reason_text(:unsupported_transport), do: "type is http/sse but no url"
+  defp skip_reason_text(:no_command), do: "neither a command nor a url"
+  defp skip_reason_text(:command_not_string), do: "command not a string"
+  defp skip_reason_text(:not_an_object), do: "not an object"
 
   defp render_skills(%{provider: nil}),
     do: "skills: disabled (no :skills_provider configured)"
