@@ -2497,13 +2497,13 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "✗ ghost"
     end
 
-    test "a url mcp server is reported as skipped, not silently absent" do
+    test "a typed entry naming no url is reported as skipped, not silently absent" do
       dir =
         config_cwd(%{
           ".mcp.json" =>
             Jason.encode!(%{
               "mcpServers" => %{
-                "remote" => %{"type" => "http", "url" => "https://mcp.example/"},
+                "typed" => %{"type" => "sse"},
                 "fs" => %{"command" => "npx", "args" => []}
               }
             })
@@ -2519,10 +2519,10 @@ defmodule Raxol.Agent.Code.AppTest do
           end
         )
 
-      assert model.mcp_skipped == [{"remote", :unsupported_transport}]
+      assert model.mcp_skipped == [{"typed", :unsupported_transport}]
       assert model.status_line =~ "1 MCP servers · 1 skipped"
 
-      # Only the stdio server reaches the bridge.
+      # Only the entry that names a transport reaches the bridge.
       {model, []} = App.update(key("x"), model)
       assert_received {:mcp_spawned, [%{name: "fs"}], ref, _app}
 
@@ -2543,7 +2543,25 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "● fs  →  npx"
 
       assert model.notice =~
-               "⊘ remote  →  skipped: http/sse transport is not bridged"
+               "⊘ typed  →  skipped: type is http/sse but the entry names no url"
+    end
+
+    test "a url mcp server is bridged and /mcp names its endpoint" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"remote" => %{"url" => "https://mcp.example/"}}
+            })
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      assert model.mcp_skipped == []
+      assert [%{name: "remote", url: "https://mcp.example/"}] = model.mcp_servers
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "remote  →  https://mcp.example/"
     end
 
     test "a .mcp.json with only skipped entries still shows them in /mcp" do
@@ -2558,7 +2576,7 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.status_line =~ "1 MCP servers skipped"
 
       {model, []} = submit(model, "/mcp")
-      assert model.notice =~ "⊘ broken  →  skipped: entry has no command"
+      assert model.notice =~ "⊘ broken  →  skipped: entry names neither a command nor a url"
       refute model.notice =~ "no MCP servers configured"
     end
 

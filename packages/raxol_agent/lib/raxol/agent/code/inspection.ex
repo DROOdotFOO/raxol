@@ -283,7 +283,7 @@ defmodule Raxol.Agent.Code.Inspection do
             keys -> "  (env: #{Enum.join(keys, ", ")})"
           end
 
-        "  #{s.name} → #{Enum.join([s.command | s.args], " ")}#{env}"
+        "  #{s.name} → #{server_target(s)}#{env}"
       end)
 
     skipped_rows =
@@ -292,8 +292,17 @@ defmodule Raxol.Agent.Code.Inspection do
     ["mcp servers (.mcp.json):" | rows ++ skipped_rows]
   end
 
-  defp skip_reason_text(:unsupported_transport), do: "http/sse transport, not bridged"
-  defp skip_reason_text(:no_command), do: "no command"
+  # A remote server carries no command, so joining `[s.command | s.args]`
+  # raised on it. Naming what the entry declares is what makes this snapshot
+  # usable for "why did that server not start".
+  defp server_target(%{command: command} = server) when is_binary(command),
+    do: Enum.join([command | server.args], " ")
+
+  defp server_target(%{url: url}) when is_binary(url), do: url
+  defp server_target(_server), do: "(no command or url)"
+
+  defp skip_reason_text(:unsupported_transport), do: "type is http/sse but no url"
+  defp skip_reason_text(:no_command), do: "neither a command nor a url"
   defp skip_reason_text(:command_not_string), do: "command not a string"
   defp skip_reason_text(:not_an_object), do: "not an object"
 

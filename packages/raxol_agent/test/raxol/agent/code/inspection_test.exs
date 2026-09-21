@@ -73,26 +73,28 @@ defmodule Raxol.Agent.Code.InspectionTest do
     refute Inspection.render(snapshot) =~ "sekret-value"
   end
 
-  test "mcp entries the bridge cannot run are listed as skipped", ctx do
+  test "a remote entry is listed by its url; only unrunnable entries are skipped", ctx do
     File.write!(
       Path.join(ctx.cwd, ".mcp.json"),
       ~s({"mcpServers": {"remote": {"type": "http", "url": "https://mcp.example/"},
-          "broken": {"args": []}, "fs": {"command": "npx"}}})
+          "typed": {"type": "sse"}, "broken": {"args": []}, "fs": {"command": "npx"}}})
     )
 
     snapshot = Inspection.gather(ctx.cwd, sessions_dir: ctx.sessions_dir)
 
-    assert [%{name: "fs"}] = snapshot.mcp_servers.servers
+    assert [%{name: "fs"}, %{name: "remote", url: "https://mcp.example/"}] =
+             snapshot.mcp_servers.servers
 
     assert snapshot.mcp_servers.skipped == [
              %{name: "broken", reason: :no_command},
-             %{name: "remote", reason: :unsupported_transport}
+             %{name: "typed", reason: :unsupported_transport}
            ]
 
     text = Inspection.render(snapshot)
     assert text =~ "  fs → npx"
-    assert text =~ "  remote → skipped (http/sse transport, not bridged)"
-    assert text =~ "  broken → skipped (no command)"
+    assert text =~ "  remote → https://mcp.example/"
+    assert text =~ "  typed → skipped (type is http/sse but no url)"
+    assert text =~ "  broken → skipped (neither a command nor a url)"
   end
 
   test "render covers every section in one readable block", ctx do
