@@ -53,6 +53,7 @@ defmodule Raxol.Terminal.Renderer do
   ```
   """
 
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Terminal.ScreenBuffer
 
   @type t :: %__MODULE__{
@@ -210,19 +211,30 @@ defmodule Raxol.Terminal.Renderer do
 
   # Render a run of cells (all sharing one hyperlink) into SGR-styled text:
   # batched groups consecutive same-style cells, individual emits one at a time.
+  #
+  # `TermText.sanitize_cell/1`, not `TermText.sanitize/2`: the screen grid is
+  # POSITIONAL, so a disallowed cell must be blanked, never deleted. Deleting
+  # it shifts every cell to its right one column left for the rest of the row
+  # -- box borders, table columns, the approval line. Blanking is also what
+  # the cell-write boundary `Backends.sanitize_char/1` does, so the two ends
+  # of the cell path agree. It costs one integer test per cell instead of a
+  # per-cell binary scan into a codepoint list.
   defp render_style_runs(cells, theme, true) do
     cells
     |> Enum.chunk_by(& &1.style)
     |> Enum.map_join("", fn same_style ->
       style = hd(same_style).style
-      chars = Enum.map_join(same_style, "", & &1.char)
+      chars = Enum.map_join(same_style, "", &TermText.sanitize_cell(&1.char))
       apply_sgr(build_ansi_prefix(style, theme), chars)
     end)
   end
 
   defp render_style_runs(cells, theme, _individual) do
     Enum.map_join(cells, "", fn cell ->
-      apply_sgr(build_ansi_prefix(cell.style, theme), cell.char)
+      apply_sgr(
+        build_ansi_prefix(cell.style, theme),
+        TermText.sanitize_cell(cell.char)
+      )
     end)
   end
 
@@ -255,15 +267,30 @@ defmodule Raxol.Terminal.Renderer do
   # one. Bare form `ESC ] 8 ; ; URL ST  <content>  ESC ] 8 ; ; ST`; clickable in
   # OSC 8-aware terminals (iTerm2, kitty, WezTerm), ignored elsewhere. SGR may
   # vary inside; the link spans the whole run.
+  #
+  # URL and displayed text are confined at this sink, immediately before
+  # bytes are assembled into OSC 8. Cell text passes through
+  # `TermText.sanitize_cell/1` before framework-owned SGR is added; the URL
+  # goes through `TermText.sanitize_url/1`, which drops every C0 byte (both
+  # values are single-row tokens) and every scheme outside http/https/mailto
+  # -- a dropped URL renders its label as ordinary text. Non-binary terminal
+  # content fails closed as `""`.
+  defp maybe_wrap_hyperlink("", _style), do: ""
+
   defp maybe_wrap_hyperlink(content, style) do
     case hyperlink_url(style) do
-      url when is_binary(url) and url != "" ->
-        "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
+      url when is_binary(url) ->
+        wrap_hyperlink(content, TermText.sanitize_url(url))
 
       _ ->
         content
     end
   end
+
+  defp wrap_hyperlink(content, ""), do: content
+
+  defp wrap_hyperlink(content, url),
+    do: "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
 
   defp hyperlink_url(%{__struct__: _} = style), do: Map.get(style, :hyperlink)
   defp hyperlink_url(style) when is_map(style), do: Map.get(style, :hyperlink)

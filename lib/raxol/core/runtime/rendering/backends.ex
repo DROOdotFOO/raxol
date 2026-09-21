@@ -7,6 +7,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   separate from the GenServer lifecycle.
   """
 
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Terminal.ScreenBuffer
 
   # --- Backend Dispatch ---
@@ -391,7 +392,17 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   # under incremental rendering corrupt its row and bleed onto the next, and
   # unlike the old clear-every-frame path nothing repaints the victim row. Blank
   # it at the write boundary so the invalid cell is unrepresentable downstream.
-  defp sanitize_char(<<c::utf8>>) when c < 0x20 or c == 0x7F, do: " "
+  #
+  # `TermText.sanitize_cell/1` owns the rule (see its "Where confinement
+  # happens" section): the local `<<c::utf8>>` guard this replaced missed C1
+  # controls, bidi overrides, and the single raw bytes `String.graphemes/1`
+  # hands back for invalid UTF-8 -- each of which then reached the emitter as
+  # an unrepresentable cell. A non-binary char is left alone: the writer
+  # reads `nil` as "default blank", and `""` from here would silently drop
+  # the column instead.
+  defp sanitize_char(char) when is_binary(char),
+    do: TermText.sanitize_cell(char)
+
   defp sanitize_char(char), do: char
 
   # Pull a tagged `{:hyperlink, url}` entry out of the cell attrs list; the

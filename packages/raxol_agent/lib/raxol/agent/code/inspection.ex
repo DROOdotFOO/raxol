@@ -99,16 +99,22 @@ defmodule Raxol.Agent.Code.Inspection do
     end
   end
 
+  # Skipped entries (an `http`/`sse` entry naming no url, a broken entry) are
+  # part of the snapshot: the file names them, so the inspection must too.
   defp mcp_section(cwd) do
-    case McpConfig.load(cwd) do
+    case McpConfig.load_all(cwd) do
       :none ->
-        %{status: :none, servers: []}
+        %{status: :none, servers: [], skipped: []}
 
-      {:ok, servers} ->
-        %{status: :ok, servers: Enum.map(servers, &redact_server/1)}
+      {:ok, servers, skipped} ->
+        %{
+          status: :ok,
+          servers: Enum.map(servers, &redact_server/1),
+          skipped: Enum.map(skipped, fn {name, reason} -> %{name: name, reason: reason} end)
+        }
 
       {:error, reason} ->
-        %{status: :error, error: inspect(reason), servers: []}
+        %{status: :error, error: inspect(reason), servers: [], skipped: []}
     end
   end
 
@@ -265,9 +271,10 @@ defmodule Raxol.Agent.Code.Inspection do
   defp render_mcp(%{status: :error, error: error}),
     do: "mcp servers (.mcp.json): ERROR #{error}"
 
-  defp render_mcp(%{servers: []}), do: "mcp servers (.mcp.json): none declared"
+  defp render_mcp(%{servers: [], skipped: []}),
+    do: "mcp servers (.mcp.json): none declared"
 
-  defp render_mcp(%{servers: servers}) do
+  defp render_mcp(%{servers: servers, skipped: skipped}) do
     rows =
       Enum.map(servers, fn s ->
         env =
@@ -279,8 +286,16 @@ defmodule Raxol.Agent.Code.Inspection do
         "  #{s.name} → #{server_target(s)}#{env}"
       end)
 
-    ["mcp servers (.mcp.json):" | rows]
+    skipped_rows =
+      Enum.map(skipped, fn s -> "  #{s.name} → skipped (#{skip_reason_text(s.reason)})" end)
+
+    ["mcp servers (.mcp.json):" | rows ++ skipped_rows]
   end
+
+  defp skip_reason_text(:unsupported_transport), do: "type is http/sse but no url"
+  defp skip_reason_text(:no_command), do: "neither a command nor a url"
+  defp skip_reason_text(:command_not_string), do: "command is not a string"
+  defp skip_reason_text(:not_an_object), do: "entry is not an object"
 
   # A remote server has no command, and an entry the loader kept for refusal
   # has neither. Naming what it declares is what makes this snapshot usable

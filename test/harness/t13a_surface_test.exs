@@ -1197,5 +1197,24 @@ defmodule Raxol.Harness.T13aSurfaceTest do
       assert joined =~ "home"
       assert joined =~ "injected"
     end
+
+    test "mixed map and tuple leaves preserve valid text and drop non-binary content" do
+      view = %{
+        type: :column,
+        children: [
+          {:text, "tuple\e]52;c;payload\atail", %{}},
+          %{type: :text, content: "map", style: %{}},
+          {:text, %{unsafe: "\e]52;c;payload\a"}, %{}}
+        ]
+      }
+
+      lines = ViewText.lines(view, 100, :plain)
+
+      assert length(lines) == 2
+      assert Enum.any?(lines, &String.contains?(&1, "tuple"))
+      assert Enum.any?(lines, &String.contains?(&1, "map"))
+      refute Enum.any?(lines, &String.contains?(&1, "\e"))
+      refute Enum.any?(lines, &String.contains?(&1, "\a"))
+    end
   end
 end

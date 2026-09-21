@@ -35,12 +35,13 @@ defmodule Raxol.Agent.Code.App do
   an external server. The app's CHROME -- the notice box, the status strip,
   the approval footer -- is control-byte stripped both at the setters
   (`notice/2`, `put_status/2`) and in the view (`display_text/1`), because
-  `notice:` and `status_line:` are also written by direct struct update in a
-  dozen places. The TRANSCRIPT is not: `transcript/1` renders projected
-  blocks through `Raxol.UI.Components.Harness.Block.render/2`, which is not
-  wrapped, so assistant and tool output reach the terminal as produced.
-  That is a renderer-level gap for every surface that does not go through
-  `Raxol.Harness.Surface.ViewText.lines/3`.
+  `notice:` and `status_line:` are also written directly in a dozen places.
+
+  Transcript nodes remain ordinary view data: this module does not walk and
+  rebuild every projected block on every frame. See
+  `Raxol.Core.Boundary.TermText`'s "Where confinement happens" for the sinks
+  that confine them, including `Raxol.Agent.Code.Replay` for replay/export
+  text.
 
   ## The loop
 
@@ -444,32 +445,39 @@ defmodule Raxol.Agent.Code.App do
   # A jailed session gets neither file: the workspace one names a command to
   # execute, and the user-level one holds the HOST operator's credentials,
   # which a tenant has no claim on.
-  defp load_mcp(_cwd, true), do: {[], "mcp servers disabled (jailed session)"}
+  defp load_mcp(_cwd, true), do: {[], [], "mcp servers disabled (jailed session)"}
 
   # User-level servers FIRST: `McpLoader.admit/1` keeps the first server of
   # each name, so a workspace `.mcp.json` cannot shadow one of the operator's
   # own by reusing its name.
+  #
+  # Entries the bridge cannot run (an `http`/`sse` entry naming no url, a
+  # broken entry) ride along as `mcp_skipped`, so `/mcp` lists them with a
+  # reason instead of leaving a server named in the file silently absent.
   defp load_mcp(cwd, _jail?) do
-    {user, user_note} = mcp_source(&McpConfig.load_user/0, "user")
-    {workspace, workspace_note} = mcp_source(fn -> McpConfig.load(cwd) end, "workspace")
+    {user, user_skipped, user_note} = mcp_source(&McpConfig.load_user/0, "user")
+
+    {workspace, workspace_skipped, workspace_note} =
+      mcp_source(fn -> McpConfig.load_all(cwd) end, "workspace")
     servers = user ++ workspace
+    skipped = user_skipped ++ workspace_skipped
 
     note =
       [user_note, workspace_note]
       |> Enum.reject(&is_nil/1)
       |> case do
-        [] -> if servers == [], do: nil, else: "#{length(servers)} MCP servers"
+        [] -> if servers == [] and skipped == [], do: nil, else: mcp_note(servers, skipped)
         errors -> Enum.join(errors, "; ")
       end
 
-    {servers, note}
+    {servers, skipped, note}
   end
 
   defp mcp_source(load, label) do
     case load.() do
-      {:ok, servers} -> {servers, nil}
-      :none -> {[], nil}
-      {:error, reason} -> {[], "#{label} mcp config error: #{inspect(reason)}"}
+      {:ok, servers, skipped} -> {servers, skipped, nil}
+      :none -> {[], [], nil}
+      {:error, reason} -> {[], [], "#{label} mcp config error: #{inspect(reason)}"}
     end
   end
 
@@ -1870,11 +1878,15 @@ defmodule Raxol.Agent.Code.App do
   end
 
   # In-flight streaming text (the live tail), one dim line per open item.
+  # Like sealed transcript blocks, it is ordinary view data and is confined
+  # by the terminal output sink.
   defp tail_lines(tail) when is_map(tail) do
     tail
     |> Map.values()
     |> Enum.map(fn %{chunks: chunks} ->
-      text(chunks |> Enum.reverse() |> Enum.join(""), style: [:dim])
+      text(chunks |> Enum.reverse() |> Enum.join(""),
+        style: [:dim]
+      )
     end)
   end
 
@@ -1936,22 +1948,12 @@ defmodule Raxol.Agent.Code.App do
   defp cursor(%{running?: true}), do: ""
   defp cursor(_model), do: "▌"
 
-  # The renderer-side control-byte boundary for this app's CHROME (the
-  # notice box, the status strip, the approval footer). `notice/2` and
-  # `put_status/2` sanitize too, but a dozen call sites write `notice:` and
-  # `status_line:` by direct struct update, and a tool name reaches the
-  # footer without passing through either -- so the check also sits on the
-  # last thing before `text/2`, where nothing can route around it.
-  #
-  # The transcript is NOT covered: `transcript/1` renders projected blocks
-  # through `Block.render/2`, which this module does not wrap, so assistant
-  # and tool output still reach the terminal with control bytes intact. That
-  # is a renderer-level gap for every surface that does not go through
-  # `Raxol.Harness.Surface.ViewText.lines/3`, tracked separately; chrome is
-  # fixed here because a forged prompt or status line impersonates the app
-  # itself.
+  # App chrome is sanitized before it becomes view data because a forged
+  # approval prompt or status line impersonates the app itself. The terminal
+  # emitter remains the final boundary for the ordinary transcript tree.
+  # Non-binary values fail closed instead of being returned unchanged.
   defp display_text(text) when is_binary(text), do: ViewText.sanitize_line(text)
-  defp display_text(other), do: other
+  defp display_text(_other), do: ""
 
   # -- helpers ----------------------------------------------------------------
 

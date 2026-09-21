@@ -27,20 +27,16 @@ defmodule Raxol.UI.Components.Harness.TextUtil do
 
   def truncate_to_width(text, _width), do: text
 
-  # `\n` and `\t` are the only control characters ever meaningful in
-  # rendered harness text, so both are kept; everything else in C0
-  # (`0x00-0x1F` minus those two), DEL (`0x7F`), and C1 (`0x80-0x9F`) is
-  # removed.
+  # Historical component normalization keeps LF, TAB, and CR. It is not the
+  # terminal boundary: see `Raxol.Core.Boundary.TermText`'s "Where
+  # confinement happens".
   @control_chars_pattern ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x{0080}-\x{009F}]/u
 
   @doc """
-  Strips every C0/C1 control byte, DEL, and ESC from `text` except `\\n`
-  and `\\t`. The single trust boundary for control-byte stripping shared by
-  every harness component that hands model-supplied text (tool args,
-  approval referents, message bodies, ...) to `Components.text()` --
-  callers must route untrusted text through this rather than duplicating
-  the pattern, so an embedded ESC/OSC sequence can never reach the
-  terminal renderer disguised as real content.
+  Strips C0/C1 controls and DEL from binary component text, retaining
+  `\\n`, `\\t`, and the historical `\\r` behavior encoded by the pattern.
+  This is component-level normalization, not the terminal trust boundary;
+  see `Raxol.Core.Boundary.TermText`'s "Where confinement happens".
   """
   @spec sanitize_controls(String.t()) :: String.t()
   def sanitize_controls(text) when is_binary(text),

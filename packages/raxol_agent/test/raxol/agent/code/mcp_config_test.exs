@@ -26,7 +26,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       })
     )
 
-    assert {:ok, [alpha, zeta]} = McpConfig.load(dir)
+    assert {:ok, [alpha, zeta], []} = McpConfig.load_all(dir)
     assert alpha.name == "alpha"
     assert alpha.command == "uvx"
     assert alpha.args == ["a"]
@@ -35,17 +35,17 @@ defmodule Raxol.Agent.Code.McpConfigTest do
   end
 
   test "returns :none when there is no file", %{dir: dir} do
-    assert :none = McpConfig.load(dir)
+    assert :none = McpConfig.load_all(dir)
   end
 
   test "a valid object with no servers is empty, not an error", %{dir: dir} do
     write(dir, Jason.encode!(%{"other" => true}))
-    assert {:ok, []} = McpConfig.load(dir)
+    assert {:ok, [], []} = McpConfig.load_all(dir)
   end
 
   test "errors on invalid json", %{dir: dir} do
     write(dir, "{bad")
-    assert {:error, :invalid_json} = McpConfig.load(dir)
+    assert {:error, :invalid_json} = McpConfig.load_all(dir)
   end
 
   test "a workspace remote entry survives with its url, headers and provenance", %{dir: dir} do
@@ -61,7 +61,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       })
     )
 
-    assert {:ok, [intel]} = McpConfig.load(dir)
+    assert {:ok, [intel], []} = McpConfig.load_all(dir)
     assert intel.url == "https://mcp.example.com/v1"
     assert intel.headers == [{"Authorization", "Bearer literal"}, {"X-Account", "acct"}]
     assert intel.source == :workspace
@@ -76,31 +76,9 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       })
     )
 
-    assert {:ok, [both]} = McpConfig.load(dir)
+    assert {:ok, [both], []} = McpConfig.load_all(dir)
     assert both.command == "npx"
     assert both.url == "https://x/mcp"
-  end
-
-  test "an entry with neither a command nor a url is kept for refusal, not dropped", %{dir: dir} do
-    write(dir, Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}}))
-
-    assert {:ok, [broken]} = McpConfig.load(dir)
-    assert broken.name == "broken"
-    refute Map.has_key?(broken, :command)
-    refute Map.has_key?(broken, :url)
-  end
-
-  test "a named entry whose body is not an object is kept for refusal too", %{dir: dir} do
-    # The shape a hand-edited file grows -- `"intel": "https://..."` instead
-    # of an object. Dropping it here put a name in the file that appeared
-    # nowhere in `/mcp`.
-    write(dir, Jason.encode!(%{"mcpServers" => %{"intel" => "https://x/mcp", "10" => 7}}))
-
-    assert {:ok, [ten, intel]} = McpConfig.load(dir)
-    assert intel.name == "intel"
-    assert ten.name == "10"
-    refute Map.has_key?(intel, :command)
-    refute Map.has_key?(intel, :url)
   end
 
   test "only positive integer prices are prices, and any price means metered", %{dir: dir} do
@@ -116,7 +94,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       })
     )
 
-    assert {:ok, [intel]} = McpConfig.load(dir)
+    assert {:ok, [intel], []} = McpConfig.load_all(dir)
     assert intel.prices == %{"lookup" => 150}
     assert intel.metered == true
   end
@@ -132,7 +110,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       })
     )
 
-    assert {:ok, [a, b]} = McpConfig.load(dir)
+    assert {:ok, [a, b], []} = McpConfig.load_all(dir)
     assert a.concurrency == :serialized
     refute Map.has_key?(b, :concurrency)
   end
@@ -155,7 +133,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
     end)
 
     assert McpConfig.user_path() == path
-    assert {:ok, [intel]} = McpConfig.load_user()
+    assert {:ok, [intel], []} = McpConfig.load_user()
     assert intel.source == :user
   end
 
@@ -199,7 +177,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       System.put_env("HOME", dir)
 
       assert McpConfig.user_path() == Path.join([dir, ".raxol", "mcp.json"])
-      assert {:ok, [intel]} = McpConfig.load_user()
+      assert {:ok, [intel], []} = McpConfig.load_user()
       assert intel.source == :user
     end
 
@@ -225,6 +203,48 @@ defmodule Raxol.Agent.Code.McpConfigTest do
         end)
 
       assert log =~ "mode 0666"
+    end
+  end
+
+  describe "load_all/1" do
+    test "a url server is bridged, not skipped", %{dir: dir} do
+      write(
+        dir,
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "remote" => %{"type" => "http", "url" => "https://mcp.example/sse"},
+            "local" => %{"command" => "uvx", "args" => ["a"]}
+          }
+        })
+      )
+
+      assert {:ok, [%{name: "local"}, %{name: "remote", url: "https://mcp.example/sse"}], []} =
+               McpConfig.load_all(dir)
+    end
+
+    test "a typed http or sse entry without a url is unsupported transport", %{dir: dir} do
+      write(dir, Jason.encode!(%{"mcpServers" => %{"typed" => %{"type" => "sse"}}}))
+      assert {:ok, [], [{"typed", :unsupported_transport}]} = McpConfig.load_all(dir)
+    end
+
+    test "each shape the bridge cannot run reports its own reason", %{dir: dir} do
+      write(
+        dir,
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "no-command" => %{"args" => ["x"]},
+            "bad-command" => %{"command" => 42},
+            "not-an-object" => "npx"
+          }
+        })
+      )
+
+      assert {:ok, [],
+              [
+                {"bad-command", :command_not_string},
+                {"no-command", :no_command},
+                {"not-an-object", :not_an_object}
+              ]} = McpConfig.load_all(dir)
     end
   end
 end
