@@ -182,7 +182,7 @@ Typing, Enter, plan-mode toggles, and backspace are accepted only when the agent
 | `/find <text>` | Case-insensitive search over the transcript blocks (first 8 matches) |
 | `/logout [provider]` | Disconnect the session's provider; with a name, also forget its stored credential reference |
 | `/share` | Mint a read-only share link for this session |
-| `/mcp` | List MCP servers configured in `.mcp.json` |
+| `/mcp` | List MCP servers configured in `.mcp.json`, including the entries the bridge cannot run and why |
 | `/hooks` | Show pre/post/stop hook counts |
 | `/inspect` | Show every config source in use: provider resolution and why, the repo pin, hook rules, MCP servers, skills roots, session store (same output as `mix raxol.inspect`) |
 
@@ -536,10 +536,15 @@ Two optional per-project files, both read from `<cwd>/`:
   live toolset as `mcp__<server>__<tool>`, sensitive by default: each call is
   approval-gated like any mutating tool, and plan mode denies them outright since an
   external tool's effects are unknown. `/mcp` shows per-server connection state
-  (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
-  a note, never fatal. At most 16 servers load per config, and server names are held to
+  (`●` connected, `✗` started and failed with its reason, `…` loading); a server that
+  fails to start is skipped with a note, never fatal. An entry the bridge never tries
+  gets `⊘` and the reason: a `url` server (`"type": "http"` or `"sse"`, which the
+  format allows but only stdio commands start here), an entry with no `command`, a
+  `command` that is not a string, or an entry that is not an object. At most 16
+  servers load per config, and server names are held to
   `[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}` (each one interns an atom and spawns a subprocess);
-  refusals show up in `/mcp` alongside connection failures.
+  refusals show up in `/mcp` alongside connection failures, and the `⊘` rows are
+  capped at the same 16 with an `… and N more skipped` line.
 
 ### Remote servers, credentials and provenance
 

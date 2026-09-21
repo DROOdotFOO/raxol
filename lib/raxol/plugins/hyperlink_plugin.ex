@@ -5,6 +5,7 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
 
   @behaviour Raxol.Plugins.Plugin
   @behaviour Raxol.Plugins.LifecycleBehaviour
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Plugins.Plugin
 
   # Require Raxol.Core.Runtime.Log for logging macros
@@ -75,6 +76,12 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
     end
   end
 
+  # The output chunk is the app's OWN terminal stream: SGR runs, cursor
+  # moves, `\r\n` row joins. Sanitizing it as if it were untrusted text
+  # stripped all of that from every chunk that happened to mention a URL.
+  # Only the captured URL is untrusted here, and only it is confined (in
+  # `create_hyperlink/1`); the regex below cannot capture ESC, so no escape
+  # sequence can reach the OSC 8 target through it either.
   @impl Raxol.Plugins.Plugin
   def handle_output(plugin_state, event) do
     output = extract_output_data(event)
@@ -183,9 +190,11 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
   end
 
   defp create_hyperlink(url) do
-    # OSC 8 escape sequence for hyperlinks
-    # Format: \e]8;;URL\e\\text\e]8;;\e\\
-    "\e]8;;#{url}\e\\#{url}\e]8;;\e\\"
+    url = TermText.sanitize(url, allow: [])
+
+    if url == "",
+      do: "",
+      else: "\e]8;;#{url}\e\\#{url}\e]8;;\e\\"
   end
 
   @doc """

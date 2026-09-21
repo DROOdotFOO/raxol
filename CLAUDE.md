@@ -54,6 +54,49 @@ CI gates the same thing in two places, both in the `format` job: the root
 Every package is covered, so `cd packages/<pkg> && mix format` is a no-op on a
 clean tree. If it rewrites files, that is a real diff and not drift.
 
+### Performance gates
+
+```bash
+MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs  # buffer throughput + memory
+```
+
+`bench/core/buffer_gate.exs` is the repo's buffer performance gate. It
+measures `Raxol.Terminal.Buffer` fill (`set_cell/4`), read (`get_cell/3`),
+scroll (`scroll/2`) and per-cell memory at 80x24, 200x100 and 500x500. Fixture
+construction is outside the timed regions, five timing passes are reduced to
+their median, and the unstable 500x500 read case is deliberately absent.
+The script prints a PASS/FAIL table and stops cleanly with status 1 on a
+breach or status 2 when an integrity check cannot vouch for the measurement.
+
+The `buffer-gate` job in `.github/workflows/ci-unified.yml` runs the script in
+applicable push and pull-request workflows. It restores dependency/build
+cache state without saving PR-produced state, then verifies the committed
+lock with `mix deps.get --check-locked`. The job fails on either non-zero
+status and the `ci-status` aggregate job fails when it does.
+
+Two properties are load-bearing:
+
+- **The budgets state their evidence and sensitivity.** Timing ceilings sit
+  between 4.1x and 9.3x the observed ubuntu-latest values recorded in the
+  script's provenance block, which also states the accepted floor and what
+  the N=10 row-rebuild canary measures against the 200x100 fill ceiling.
+  They catch a blow-up, not a small slowdown. Flat and sharing-aware memory
+  ceilings are independent limits chosen to catch field growth and sharing
+  loss; they are not mechanically derived from the current result and must
+  not be ratcheted with it.
+- **It cannot pass without measuring.** `Buffer.scroll/2` rescues its own
+  failures and returns the buffer unchanged, so every timed result is checked
+  for shape and cumulative movement. Timed fill results are read back at five
+  positions. Durations must be positive. Fixed flat-size and sharing-aware
+  floors distinguish a populated buffer from a shared blank grid without
+  deriving the floor from the `%Cell{}` shape being guarded. Integrity
+  failures stop with status 2, which is not a pass.
+
+`bench/core/buffer_benchmark.exs` remains a Benchee report over the
+`Raxol.Core.Buffer` compatibility shim, not a gate on the real buffer. The
+`memory-regression` matrix in `.github/workflows/regression-testing.yml` has
+no buffer scenario and renders findings as a `[WARN]` PR comment.
+
 ### Running examples
 
 ```bash
@@ -139,6 +182,42 @@ the first root compile is ~22s and a package suite runs without a `deps.get`
 at all. The app's own beams DO recompile (Mix manifests are keyed by absolute
 source path, which is also why a `MIX_BUILD_PATH` shared between worktrees
 recompiles anyway, and would have two worktrees writing the same manifests).
+
+That speed is bought with trust: the seed is a COPY of this checkout's
+`deps`/`_build`, the new worktree never runs `deps.get`, so Hex checksum
+verification never happens there and one hand-patched dependency here
+propagates into every worktree made afterwards. It is a single-user
+workstation helper, not something for a shared box or a CI runner, where
+every worktree must fetch and verify its own dependencies. `worktree.sh add
+BRANCH --fresh` skips seeding for exactly that case.
+
+`add` refuses to seed when dependency manifests differ between this checkout
+and the branch: `mix.lock` covers fetched dependencies, while root and package
+`mix.exs` files also catch path-dependency changes that do not move a lock
+(exit 3, and the message says which side moved). `sync` warns and re-seeds
+instead of refusing, because carrying bumped manifests from here into an
+existing worktree is what `sync` is for. Symlinked manifest read paths,
+package directories, and `_build`/`deps` replacement destinations in the
+target are refused rather than followed. None of this is an integrity check:
+it says the two checkouts agree on dependency manifests, not that the copied
+bytes are what Hex published. Only `--fresh` gets you that.
+
+With no path argument the worktree lands in an atomic `mktemp -d` directory
+under `TMPDIR`. Empty or unresolvable values, and values resolving to `/`,
+fall back to `/tmp`; the printed `cd` line identifies the chosen path. The
+point is not an unguessable name, since
+mktemp's entropy is libc's business, but that the directory is 0700 from the
+moment it exists. Explicit paths get the same invariant: one `mkdir -m 700`
+both refuses an existing file or symlink and claims the path atomically. A
+relative explicit path is resolved against your shell's working directory
+before that `mkdir`, and because the claim is a single `mkdir` with no `-p`,
+its parent directory must already exist (a bare `git worktree add` would
+create leading directories; this does not).
+`sync` serializes seeds per target and retains every replaced cache until the
+whole seed commits, so errors and handled signals roll back partial changes.
+A seed killed uninterruptibly leaves its lock directory behind; the next seed
+reclaims it once the recorded owner pid is gone, and a lock held by a live
+process is refused with the path to clear by hand.
 
 ### Install paths
 
@@ -451,6 +530,9 @@ Key rules:
   stack, and nothing has to be measured.
 - Throughput and allocation budgets live in `bench/` and the
   regression-testing workflow, never in the suite.
+  `bench/core/buffer_gate.exs` is the worked example: budgets with a stated
+  headroom factor and a provenance block, a non-zero exit, and a CI job that
+  fails on a breach. See "Performance gates" above.
 
 ### Naming conventions
 

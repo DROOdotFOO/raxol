@@ -597,6 +597,58 @@ jobs:
           mix test test/raxol/terminal/input_protocol_canary_test.exs \
             --only input_protocol_canary
 
+  # Buffer fill/read/scroll throughput and per-cell memory. This is the only
+  # buffer performance check in the repo that fails a job: the
+  # `memory-regression` matrix in regression-testing.yml has no buffer
+  # scenario and renders its findings as a `[WARN]` PR comment, which is a
+  # report, not a gate.
+  #
+  # `mix run` propagates the script's exit status, and its flushing shutdown
+  # uses status 1 for a budget breach and 2 when it could not measure. Either
+  # fails this job, and `ci-status` aggregates this job's result; whether the
+  # resulting `CI Status` check is required for a merge is a branch-protection
+  # setting that lives outside this repo.
+  buffer-gate:
+    name: Buffer performance gate
+    needs: [setup, compile]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ needs.setup.outputs.elixir-version }}
+          otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
+
+      # PR code may consume the setup job's cache but must never publish cache
+      # state under a trusted key.
+      - name: Restore cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            deps
+            _build
+            .raxol_cache
+          key: ${{ needs.setup.outputs.cache-key }}
+
+      - name: Install hex and rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Check locked dependencies
+        run: mix deps.get --check-locked
+
+      # --no-start: the gate measures a pure data structure, and booting the
+      # application puts a supervision tree, the endpoint and telemetry
+      # handlers on the same schedulers.
+      - name: Run buffer performance gate
+        run: mix run --no-start bench/core/buffer_gate.exs
+
   test-integration:
     name: Integration Tests
     needs: [setup, compile]
@@ -889,14 +941,21 @@ jobs:
       - name: Fetch dependencies
         run: mix deps.get
 
+      # Both steps blocking. `ci-status` requires this job, and `CI Status` is
+      # the only required check on master, so a soft failure here is a merge
+      # with a known-vulnerable dependency. The previous `|| true` on both,
+      # plus `continue-on-error` on Sobelow, left the job unable to report
+      # anything but success.
       - name: Check for vulnerable dependencies
-        run: |
-          mix deps.audit || true
-      
+        run: mix deps.audit
+
+      # `--config` loads `.sobelow-conf`, which sets `exit: :medium`. Without
+      # that file Sobelow halts 0 on every finding and only a crash of the
+      # scanner fails this step. Read `.sobelow-conf` before touching this:
+      # dropping `--config` does not weaken the gate, since the file is read
+      # automatically, but deleting the file disarms it silently.
       - name: Run Sobelow security check
-        run: |
-          mix sobelow --config || true
-        continue-on-error: true
+        run: mix sobelow --config
 
   # ========================================
   # Cross-Platform Testing
@@ -1051,7 +1110,7 @@ jobs:
           mix coveralls.json --import-cover cover/**/*.coverdata
       
       - name: Upload to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./cover/excoveralls.json
@@ -1105,6 +1164,7 @@ jobs:
         test-unit,
         package-tests,
         input-canary,
+        buffer-gate,
         credo,
         security
       ]
@@ -1145,6 +1205,13 @@ jobs:
             exit 1
           fi
 
+          if [ "${{ needs.buffer-gate.result }}" != "success" ]; then
+            echo "❌ Buffer performance gate failed"
+            echo "   Reproduce: MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs"
+            echo "   Budgets and their headroom are declared at the top of that file."
+            exit 1
+          fi
+
           if [ "${{ needs.credo.result }}" != "success" ]; then
             echo "❌ Credo count rose above the baseline"
             echo "   Reproduce: ./scripts/check-quality-ratchet.sh --gate credo"
@@ -1155,8 +1222,17 @@ jobs:
           # Dialyzer is deliberately absent: nightly.yml enforces that ratchet;
           # this workflow exposes the same reference-toolchain result without
           # making the expensive job part of the aggregate PR status.
+          #
+          # `security` is NOT in that category, whatever the wording here used
+          # to say. This branch printed a warning and no `exit 1`, and
+          # `CI Status` is the only required check on master, so run
+          # 35515982213 went green with the security job skipped. A vulnerable
+          # dependency or a Sobelow finding turned one job red and merged
+          # anyway. It exits like every other gate now.
           if [ "${{ needs.security.result }}" != "success" ]; then
-            echo "⚠️ Security scan found issues (non-blocking)"
+            echo "❌ Security scan failed"
+            echo "   Reproduce: mix deps.audit && mix sobelow --config"
+            exit 1
           fi
-          
+
           echo "✅ All required checks passed!"

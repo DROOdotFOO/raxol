@@ -310,14 +310,71 @@ defmodule Raxol.Agent.Code.App.Commands do
   defp mcp_text(%{mcp_servers: [], jail: true}),
     do: "MCP servers are disabled in a jailed session"
 
-  defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
+  defp mcp_text(%{mcp_servers: []} = model) do
+    case skipped_rows(model) do
+      [] -> "no MCP servers configured (.mcp.json)"
+      rows -> Enum.join(rows, "\n")
+    end
+  end
 
   defp mcp_text(%{mcp_servers: servers} = model) do
-    Enum.map_join(servers, "\n", fn s ->
-      "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
-        "#{s.command} #{Enum.join(s.args, " ")}"
-    end)
+    rows =
+      Enum.map(servers, fn s ->
+        "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
+          server_target(s) <>
+          failure_text(model.mcp_status, s.name)
+      end)
+
+    Enum.join(rows ++ skipped_rows(model), "\n")
   end
+
+  # Two transports, two targets: a stdio server is the command line it runs,
+  # a remote server is the endpoint it dials. Reading `:command` from either
+  # shape raised on the remote one, which carries no such key.
+  defp server_target(%{command: command} = server),
+    do: "#{command} #{Enum.join(Map.get(server, :args, []), " ")}"
+
+  defp server_target(%{url: url}), do: url
+  defp server_target(_server), do: "(no transport)"
+
+  # The other half of the refusal vocabulary: `✗` is a server that started
+  # and failed, so it carries its reason here rather than being a mark with
+  # no explanation next to a `⊘` row that has one.
+  defp failure_text(%{failed: failed}, name) do
+    case Enum.find(failed, fn {n, _reason} -> to_string(n) == name end) do
+      nil -> ""
+      {_n, reason} -> "  (failed: #{inspect(reason, limit: 3)})"
+    end
+  end
+
+  defp failure_text(_status, _name), do: ""
+
+  # Entries `.mcp.json` names that the bridge never started, with the reason,
+  # so the operator sees them here rather than hunting for a config bug.
+  # `⊘` is "never tried", distinct from `✗` ("tried and failed"). Bounded by
+  # the cap the loader bounds launches with: a file with 10k broken entries
+  # is otherwise a 10k-row notice, re-rendered every frame.
+  defp skipped_rows(model) do
+    {shown, rest} =
+      Enum.split(model.mcp_skipped, Raxol.Agent.Code.McpLoader.max_servers())
+
+    rows =
+      Enum.map(shown, fn {name, reason} ->
+        "⊘ #{name}  →  skipped: #{skip_text(reason)}"
+      end)
+
+    case rest do
+      [] -> rows
+      more -> rows ++ ["  … and #{length(more)} more skipped"]
+    end
+  end
+
+  defp skip_text(:unsupported_transport),
+    do: "type is http/sse but the entry names no url"
+
+  defp skip_text(:no_command), do: "entry names neither a command nor a url"
+  defp skip_text(:command_not_string), do: "command is not a string"
+  defp skip_text(:not_an_object), do: "entry is not an object"
 
   defp server_mark(:loading, _name), do: "…"
   defp server_mark(nil, _name), do: "○"

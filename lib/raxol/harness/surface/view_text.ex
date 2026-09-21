@@ -40,7 +40,7 @@ defmodule Raxol.Harness.Surface.ViewText do
       byte-identical to plain -- neutral by default, matching every
       harness Component's own "absent prominence = zero change" contract.
 
-  ## This module is the trust boundary: sanitize content here, not downstream
+  ## The trust boundary for the paint-authority path
 
   Every string this module flattens can originate from an untrusted
   source -- a fixture's tool-call output, an LLM's streamed response, a
@@ -82,6 +82,10 @@ defmodule Raxol.Harness.Surface.ViewText do
        `FlatAuthority` documents: a reader sees something was stripped
        rather than an invisible, silently-swallowed injection.
 
+  This boundary is specific to the authority path; see
+  `Raxol.Core.Boundary.TermText`'s "Where confinement happens" for the full
+  sink map and for the deny set this module shares with it.
+
   **This is complementary to, not a substitute for, `FlatAuthority`'s own
   scrub** (a module-enforced flat scrub). Two
   independent layers, two independent jobs: `FlatAuthority.append_sealed/2`
@@ -98,6 +102,7 @@ defmodule Raxol.Harness.Surface.ViewText do
   the hole the other was never responsible for closing.
   """
 
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.UI.TextMeasure
 
   @type mode :: :plain | :styled
@@ -132,11 +137,11 @@ defmodule Raxol.Harness.Surface.ViewText do
   same as every other line here -- this module has never supported
   per-segment styling within one line, and `style_line/2` has no
   `:background` handling regardless, so the cursor-highlight run's style
-  is dropped the same way it always would be). Any other `children:` shape
-  (including a MIX of tuples and maps) falls through to the normal
-  recursive walk unchanged.
+  is dropped the same way it always was). Any other `children:` shape is
+  processed recursively; tuple leaves are retained as individual text
+  leaves rather than silently dropped.
   """
-  @spec lines(map() | [map()], non_neg_integer(), mode()) :: [String.t()]
+  @spec lines(term(), non_neg_integer(), mode()) :: [String.t()]
   def lines(view, width, mode \\ :plain) when is_integer(width) do
     view
     |> collect([])
@@ -156,6 +161,12 @@ defmodule Raxol.Harness.Surface.ViewText do
   defp collect(views, acc) when is_list(views) do
     Enum.reduce(views, acc, &collect/2)
   end
+
+  # A tuple outside an all-tuple run (for example in a mixed children list)
+  # is still a valid text leaf. Non-binary content intentionally misses this
+  # clause and contributes no terminal bytes.
+  defp collect({:text, content, style}, acc) when is_binary(content),
+    do: add_lines(acc, content, style)
 
   defp collect(%{type: :text, content: content} = node, acc)
        when is_binary(content) do
@@ -222,14 +233,13 @@ defmodule Raxol.Harness.Surface.ViewText do
   already consumed every `\\n` as the line-split delimiter before this runs.
 
   Also stripped: the bidi and zero-width FORMAT characters, which need no
-  control byte to lie about what a line says. U+202A-202E and U+2066-2069
-  reorder rendered text (Trojan Source, CWE-451), so
-  `"disabled in a hosted session"` can be made to read as its opposite with
-  nothing an ESC filter would catch; U+200B, U+200E-200F, U+00AD,
-  U+2028-2029 and U+FEFF hide or re-break content the reader is being asked
-  to trust. ZWJ (U+200D) and ZWNJ (U+200C) are kept: they join emoji
-  sequences and carry meaning in Indic and Perso-Arabic scripts, and they
-  reorder nothing.
+  control byte to lie about what a line says. The deny set is
+  `Raxol.Core.Boundary.TermText.strip_codepoint?/2` -- see that module's
+  "What `sanitize/2` strips" for the full list and the reasoning. This path
+  keeps its own scanner (not `TermText.sanitize/2`) only because `\\t` is
+  allowed here and a lone raw high byte is dropped rather than replaced with
+  `U+FFFD`; the SET of denied code points is shared, so the two can no
+  longer drift.
 
   Public: this is the ONE sanitize implementation every caller of untrusted
   single-line content shares -- `add_lines/3` above, and
@@ -255,21 +265,17 @@ defmodule Raxol.Harness.Surface.ViewText do
 
   defp sanitize(<<_byte, rest::binary>>, acc), do: sanitize(rest, acc)
 
-  # C0 (minus tab, handled above), DEL, C1, then the format characters that
-  # can misrepresent a line: soft hyphen, zero-width space, LRM/RLM, the
-  # LRE/RLE/PDF/LRO/RLO embedding-override block, LS/PS, the LRI/RLI/FSI/PDI
-  # isolates, and BOM-as-ZWNBSP.
+  # `\t` is handled by the clause above, so nothing else is allowed through
+  # here. The set itself lives in `TermText`: two sanitizers with two lists
+  # is how an `:approval` block's action text ended up reversible while the
+  # footer prompt on the same screen did not.
   #
-  # ZWJ (U+200D) and ZWNJ (U+200C) are deliberately KEPT: they are ordinary
-  # content, not formatting -- ZWJ joins emoji sequences and both carry
-  # meaning in Indic and Perso-Arabic scripts -- so stripping them would
-  # corrupt legitimate text to no security end. They reorder nothing.
-  defp strip?(cp) do
-    cp < 0x20 or cp == 0x7F or (cp >= 0x80 and cp <= 0x9F) or cp == 0x00AD or
-      cp == 0x200B or cp == 0x200E or cp == 0x200F or
-      (cp >= 0x2028 and cp <= 0x202E) or (cp >= 0x2066 and cp <= 0x2069) or
-      cp == 0xFEFF
-  end
+  # Printable ASCII short-circuits locally. It is almost every code point on
+  # a sealed frame, and this runs per code point per row per frame; the guard
+  # cannot disagree with the shared set because `TermText` denies nothing in
+  # `0x20..0x7E`.
+  defp strip?(cp) when cp >= 0x20 and cp < 0x7F, do: false
+  defp strip?(cp), do: TermText.strip_codepoint?(cp, [])
 
   # -- width truncation (plain content only, before any styling) ---------
 

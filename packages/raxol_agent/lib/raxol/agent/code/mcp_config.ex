@@ -25,11 +25,12 @@ defmodule Raxol.Agent.Code.McpConfig do
 
   Both forms of an entry are parsed. A `command` entry is a local stdio
   subprocess; a `url` entry is a remote HTTP server (ADR-0037). An entry
-  carrying both keys, or neither, is still returned and is refused later, with
-  a named reason, by `Raxol.Agent.McpBundle`: the reason to parse it at all is
-  that an operator then sees a refusal in `/mcp` instead of a server that
-  silently vanished. Nothing here is dropped except an entry whose name is not
-  a string or whose body is not an object, neither of which names a server.
+  carrying both keys is still returned and is refused later, with a named
+  reason, by `Raxol.Agent.McpBundle`: the reason to parse it at all is that an
+  operator then sees a refusal in `/mcp` instead of a server that silently
+  vanished. An entry carrying neither names no transport at all, so it comes
+  back as a `skipped` pair instead of a server. Nothing here is dropped
+  except an entry whose name is not a string, which names nothing.
 
   ## Provenance is part of the parse
 
@@ -60,6 +61,17 @@ defmodule Raxol.Agent.Code.McpConfig do
       against that fixed set (never `String.to_atom/1` on file input).
       Absent means the transport picks its own per-era default.
 
+  An entry the loader cannot run is not dropped on the floor: `load_all/1`
+  and `load_user/0` return it in a `skipped` list with a reason, so `/mcp`
+  and `/inspect` show it instead of leaving the operator to wonder why a
+  server named in the file never appears. One reason per fault, so the
+  rendered text sends the operator to the line of the config that is
+  actually wrong: `:unsupported_transport` is an entry whose `type` is
+  `http`/`sse` but which names no `url` to connect to; `:no_command` is an
+  object naming neither `command` nor `url`; `:command_not_string` is a
+  `command` that is not a string; `:not_an_object` is an entry that is not
+  an object at all.
+
   ## Scope
 
   This loads the config; `Raxol.Agent.Code.McpLoader` bridges the servers into
@@ -88,25 +100,37 @@ defmodule Raxol.Agent.Code.McpConfig do
           optional(:concurrency) => :stateless | :pooled | :serialized
         }
 
-  @doc """
-  Load MCP servers from `<dir>/.mcp.json`, tagged `source: :workspace`.
+  @type skip_reason ::
+          :unsupported_transport
+          | :no_command
+          | :command_not_string
+          | :not_an_object
 
-  Returns `{:ok, servers}` (possibly empty), `:none` when there is no file,
-  or `{:error, reason}` for an unreadable/invalid file.
+  @type skipped :: {String.t(), skip_reason()}
+
+  @doc """
+  Load MCP servers from `<dir>/.mcp.json`, tagged `source: :workspace`,
+  keeping the entries that cannot be bridged.
+
+  Returns `{:ok, servers, skipped}`, `:none` when there is no file, or
+  `{:error, reason}` for an unreadable/invalid file. `skipped` pairs each
+  refused entry's name with a `t:skip_reason/0`, sorted by name, so a
+  surface can show it next to the servers that loaded.
   """
-  @spec load(String.t()) :: {:ok, [server()]} | :none | {:error, term()}
-  def load(dir) do
+  @spec load_all(String.t()) ::
+          {:ok, [server()], [skipped()]} | :none | {:error, term()}
+  def load_all(dir) do
     read_config(Path.join(dir, @workspace_filename), :workspace)
   end
 
   @doc """
   Load the operator's own MCP servers, tagged `source: :user`.
 
-  Same format and same return shape as `load/1`, read from `user_path/0`.
+  Same format and same return shape as `load_all/1`, read from `user_path/0`.
   This is the file whose header references resolve, so it lives outside every
   workspace by construction.
   """
-  @spec load_user() :: {:ok, [server()]} | :none | {:error, term()}
+  @spec load_user() :: {:ok, [server()], [skipped()]} | :none | {:error, term()}
   def load_user do
     read_config(user_path(), :user)
   end
@@ -139,8 +163,8 @@ defmodule Raxol.Agent.Code.McpConfig do
     case Jason.decode(binary) do
       {:ok, json} when is_map(json) ->
         case Map.get(json, "mcpServers") do
-          servers when is_map(servers) -> {:ok, parse(servers, source)}
-          _absent -> {:ok, []}
+          servers when is_map(servers) -> parse(servers, source)
+          _absent -> {:ok, [], []}
         end
 
       {:ok, _other} ->
@@ -152,20 +176,35 @@ defmodule Raxol.Agent.Code.McpConfig do
   end
 
   defp parse(servers, source) do
-    servers
-    |> Enum.map(&parse_server(&1, source))
-    |> Enum.reject(&is_nil/1)
-    |> Enum.sort_by(& &1.name)
+    {parsed, skipped} =
+      servers
+      |> Enum.map(&parse_server(&1, source))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.split_with(&is_map/1)
+
+    {:ok, Enum.sort_by(parsed, & &1.name), Enum.sort_by(skipped, &elem(&1, 0))}
   end
 
-  # A named object is a server declaration even when its keys are wrong: the
-  # refusal is worth more to the operator than the silence. Only a non-string
-  # name or a non-object body names nothing at all.
+  # A named object is a server declaration even when its keys are wrong, as
+  # long as it names a transport: an entry carrying both `command` and `url`
+  # is still returned and refused by name at `Raxol.Agent.McpBundle`, because
+  # the ambiguity is the operator's to resolve. An entry naming neither names
+  # nothing to start, so it rides back as `{name, reason}` instead.
   defp parse_server({name, spec}, source) when is_binary(name) and is_map(spec) do
-    %{name: name, source: source}
-    |> put_stdio(spec)
-    |> put_remote(spec)
+    server =
+      %{name: name, source: source}
+      |> put_stdio(spec)
+      |> put_remote(spec)
+
+    if Map.has_key?(server, :command) or Map.has_key?(server, :url) do
+      server
+    else
+      {name, skip_reason(spec)}
+    end
   end
+
+  defp parse_server({name, _not_an_object}, _source) when is_binary(name),
+    do: {name, :not_an_object}
 
   defp parse_server(_other, _source), do: nil
 
@@ -198,6 +237,16 @@ defmodule Raxol.Agent.Code.McpConfig do
   defp put_concurrency(server, "pooled"), do: Map.put(server, :concurrency, :pooled)
   defp put_concurrency(server, "serialized"), do: Map.put(server, :concurrency, :serialized)
   defp put_concurrency(server, _other), do: server
+
+  # An entry that names neither transport names nothing the bridge can start,
+  # so it rides back as a reason rather than as a server: `/mcp` and
+  # `/inspect` then show the line of the config that is actually wrong.
+  # `type: "http" | "sse"` declares a remote server and then fails to name
+  # its `url`; a non-string `command` is a broken stdio entry; anything else
+  # simply has no transport key at all.
+  defp skip_reason(%{"type" => type}) when type in ["http", "sse"], do: :unsupported_transport
+  defp skip_reason(%{"command" => _not_a_string}), do: :command_not_string
+  defp skip_reason(_spec), do: :no_command
 
   defp headers(%{} = headers) do
     headers

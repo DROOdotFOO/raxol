@@ -35,7 +35,7 @@ subdirectories hold narrower tooling.
 | `check_journal_goldens.exs` | Harness journal golden check |
 | `check_domains.sh` | Domain and DNS checks |
 | `install.sh` | The `curl \| bash` installer served from raxol.io |
-| `worktree.sh` | Adds a parallel git worktree with `deps`/`_build` cloned from this checkout (no cold dependency build) |
+| `worktree.sh` | Adds a private 0700 parallel git worktree with transactionally cloned `deps`/`_build` caches. Workstation-only: seeding skips Hex verification, rejects symlinked seed paths, checks lock and path-dependency manifests, and `--fresh` opts out. An explicit path (relative ones resolve against your shell's cwd) is claimed with one `mkdir`, so its parent must already exist |
 | `gen_homebrew_formula.sh` | Emits the Homebrew tap formula |
 | `run_live_gates.sh` | The stablecoin cross-chain go-live matrix |
 | `smoke-test.sh` | Post-deploy smoke test |

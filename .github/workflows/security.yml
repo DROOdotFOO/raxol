@@ -129,15 +129,26 @@ jobs:
           mix deps.clean --unused
           mix deps.get
 
+      # Blocking, and no fallback. Both halves of the old command were
+      # decorative: `--config` did nothing because no `.sobelow-conf` existed,
+      # and Sobelow's default `exit` of "None" halts 0 on every finding, so
+      # only a crash of the scanner could fail this step. The `|| mix sobelow
+      # --skip` retry re-ran the identical scan, since the repo then had
+      # neither a skips file nor a single `# sobelow_skip` marker, and
+      # `continue-on-error` discarded whatever was left.
+      #
+      # `.sobelow-conf` now sets `exit: :medium` and `skip: true`, so a new
+      # high or medium finding fails here. The 13 accepted pre-existing
+      # findings are pinned by exact fingerprint in `.sobelow-skips`, each
+      # with its justification; nothing is exempt by rule or by path.
+      #
+      # No `mix archive.install hex sobelow` fallback either. sobelow is a
+      # real dependency (mix.exs), and the archive form installs the escript
+      # without its deps, which is how the mix_audit fallback above came to
+      # crash on every run while reporting success. Fail loudly if the dep is
+      # missing.
       - name: Run Sobelow
-        run: |
-          # Install Sobelow if not in deps
-          if ! mix help sobelow &>/dev/null; then
-            mix archive.install hex sobelow --force
-          fi
-          
-          mix sobelow --config || mix sobelow --skip
-        continue-on-error: true
+        run: mix sobelow --config
 
   semgrep:
     name: Semgrep Security Scan
@@ -232,7 +243,6 @@ jobs:
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_VERSION: 8.30.1
           # Repo-scoped config; without it this job cannot pass. See above.
           GITLEAKS_CONFIG: .gitleaks.toml
           # Pinned exactly, not to a floating major, and not left unset. The
