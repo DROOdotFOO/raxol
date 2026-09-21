@@ -283,6 +283,35 @@ defmodule Raxol.Plugins.PluginSystemTest do
         HyperlinkPlugin.handle_output(updated_plugin, "Hello, World!")
     end
 
+    test "hyperlink paths cannot inject a second OSC sequence" do
+      {:ok, plugin} = HyperlinkPlugin.init()
+
+      {:ok, plugin, input_output} =
+        HyperlinkPlugin.handle_input(
+          plugin,
+          "link https://example.com\e]52;c;payload\a\r\n"
+        )
+
+      assert input_output =~ "\e]8;;https://example.com\e\\"
+      refute input_output =~ "\e]52"
+      refute input_output =~ "\a"
+      refute input_output =~ "\r"
+      refute input_output =~ "\n"
+
+      # The output chunk is the app's OWN terminal stream (SGR, cursor
+      # moves, `\r\n`), so it is NOT sanitized -- only the captured URL is.
+      # What has to hold here is that the injected OSC 52 cannot be absorbed
+      # into the OSC 8 target.
+      {:ok, _plugin, terminal_output} =
+        HyperlinkPlugin.handle_output(
+          plugin,
+          "Visit https://example.com\e]52;c;payload\a\r\n"
+        )
+
+      assert terminal_output =~ "\e]8;;https://example.com\e\\"
+      assert terminal_output =~ "\r\n"
+    end
+
     test "Hyperlink Plugin processes output via PluginManager" do
       {:ok, manager_struct} = Raxol.Plugins.Manager.new()
 

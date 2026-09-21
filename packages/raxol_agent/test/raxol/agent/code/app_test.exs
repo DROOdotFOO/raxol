@@ -5,6 +5,11 @@ defmodule Raxol.Agent.Code.AppTest do
   alias Raxol.Agent.Code.App.Commands
   alias Raxol.Agent.Contract
   alias Raxol.Core.Events.Event
+  alias Raxol.Core.Runtime.Rendering.Backends
+  alias Raxol.Terminal.Renderer, as: TerminalRenderer
+  alias Raxol.Test.CrossTerminal.SequenceScanner
+  alias Raxol.UI.Layout.Engine, as: LayoutEngine
+  alias Raxol.UI.Renderer, as: UIRenderer
 
   # A runner that does not spawn a real turn: it returns a live, inert pid
   # (so interrupt has something to kill) and never touches the network.
@@ -1679,15 +1684,47 @@ defmodule Raxol.Agent.Code.AppTest do
       assert noticed.notice == "first\nsec[2Jond"
     end
 
-    # Everything `App.view/1` would put on screen, as one string.
+    # Raw view-tree text is useful for the chrome checks below. Transcript
+    # confinement is asserted separately through the real layout, cell, and
+    # terminal-renderer path.
     defp view_text(model) do
       model |> App.view() |> node_text() |> Enum.join("\n")
     end
 
-    defp node_text(%{type: :text, content: content}) when is_binary(content), do: [content]
+    defp node_text(%{type: :text, content: content} = node) when is_binary(content),
+      do: [content | node_links(node)]
+
     defp node_text(%{children: children}), do: node_text(children)
     defp node_text(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &node_text/1)
     defp node_text(_other), do: []
+
+    defp node_links(node) do
+      case Map.get(node, :style) do
+        style when is_map(style) ->
+          style |> Map.take([:link, :hyperlink]) |> Map.values() |> Enum.filter(&is_binary/1)
+
+        _no_style ->
+          []
+      end
+    end
+
+    defp terminal_output(model) do
+      cells =
+        model
+        |> App.view()
+        |> LayoutEngine.apply_layout(%{width: 200, height: 100})
+        |> UIRenderer.render_to_cells()
+
+      buffer = Backends.apply_cells_to_buffer(cells, %{width: 200, height: 100})
+      buffer |> TerminalRenderer.new() |> TerminalRenderer.render()
+    end
+
+    defp visible_terminal_text(output) do
+      output
+      |> SequenceScanner.scan()
+      |> Enum.filter(&match?({:text, _}, &1))
+      |> Enum.map_join("", fn {:text, text} -> text end)
+    end
 
     # The setters are not the only writers: a dozen call sites assign
     # `notice:` and `status_line:` by direct struct update (a resumed
@@ -1718,10 +1755,83 @@ defmodule Raxol.Agent.Code.AppTest do
       assert screen =~ "Allow read_file"
     end
 
+    @view_poison "\e[2J\e[?1049h\e]52;c;cHduZWQ=\a\u009B2J\rOVERWRITE\b" <>
+                   <<0x7F>>
+
+    @terminal_injections [
+      {"screen clear", "\e[2J"},
+      {"alternate screen", "\e[?1049h"},
+      {"OSC 52", "\e]52"},
+      {"BEL", "\a"},
+      {"C1 CSI (U+009B)", "\u009B"},
+      {"CR", "\r"},
+      {"BS", "\b"},
+      {"DEL", <<0x7F>>}
+    ]
+
+    defp refute_terminal_injections(output) do
+      for {name, bytes} <- @terminal_injections do
+        refute String.contains?(output, bytes),
+               "#{name} survived onto the rendered terminal"
+      end
+    end
+
+    # Exercise the complete normal frame path. The view tree remains ordinary
+    # component data; the terminal renderer is the narrow trusted sink.
+    test "a hostile assistant message cannot reach the terminal through the transcript" do
+      poison = "hello " <> @view_poison <> " world"
+
+      model =
+        Enum.reduce(message_turn("t1", poison), new_model(), &send_ev(&2, &1))
+
+      output = terminal_output(model)
+
+      visible = visible_terminal_text(output)
+      assert visible =~ "hello"
+      assert visible =~ "world"
+      refute_terminal_injections(output)
+    end
+
+    test "the streaming tail is confined by the same terminal sink" do
+      poison = "streaming " <> @view_poison <> " on"
+
+      model =
+        Enum.reduce(
+          [
+            tev("t1", 1, :turn_started, %{prompt: "ask"}),
+            tev("t1", 2, :item_started, %{item_id: "i1", item_type: :message}),
+            tev("t1", 3, :item_delta, %{item_id: "i1", chunk: poison})
+          ],
+          new_model(),
+          &send_ev(&2, &1)
+        )
+
+      output = terminal_output(model)
+
+      assert visible_terminal_text(output) =~ "streaming"
+      refute_terminal_injections(output)
+    end
+
     test "a bidi override cannot reverse a notice" do
       noticed = App.notice(new_model(), "disabled" <> <<0x202E::utf8>> <> "delbane")
 
       assert noticed.notice == "disableddelbane"
+    end
+
+    # The chrome (notice, status strip, approval footer) stripped bidi
+    # overrides while the transcript tree did not, so an approval line could
+    # be made to read as its opposite (Trojan Source, CWE-451) on the same
+    # screen as a footer that could not. Both ends share one deny set now.
+    test "a bidi override cannot reverse transcript text at the terminal" do
+      poison = "denied" <> <<0x202E::utf8>> <> "dewolla"
+
+      model =
+        Enum.reduce(message_turn("t1", poison), new_model(), &send_ev(&2, &1))
+
+      output = terminal_output(model)
+
+      refute output =~ <<0x202E::utf8>>
+      assert visible_terminal_text(output) =~ "denied"
     end
 
     test "iodata is accepted where the view used to tolerate it" do
@@ -2385,6 +2495,87 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.status_line =~ "failed: ghost"
       {model, []} = submit(model, "/mcp")
       assert model.notice =~ "✗ ghost"
+    end
+
+    test "a url mcp server is reported as skipped, not silently absent" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{
+                "remote" => %{"type" => "http", "url" => "https://mcp.example/"},
+                "fs" => %{"command" => "npx", "args" => []}
+              }
+            })
+        })
+
+      test_pid = self()
+
+      model =
+        new_model(
+          cwd: dir,
+          mcp_loader: fn servers, ref, app ->
+            send(test_pid, {:mcp_spawned, servers, ref, app})
+          end
+        )
+
+      assert model.mcp_skipped == [{"remote", :unsupported_transport}]
+      assert model.status_line =~ "1 MCP servers · 1 skipped"
+
+      # Only the stdio server reaches the bridge.
+      {model, []} = App.update(key("x"), model)
+      assert_received {:mcp_spawned, [%{name: "fs"}], ref, _app}
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__ls",
+        invoke: fn _params, _context -> :ok end
+      }
+
+      result = %{tools: [tool], connected: [:fs], failed: [], janitor: nil}
+
+      {model, []} =
+        App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      # The load result overwrites the boot line: the count survives it.
+      assert model.status_line == "mcp: 1 tools from 1 servers · 1 skipped"
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "● fs  →  npx"
+
+      assert model.notice =~
+               "⊘ remote  →  skipped: http/sse transport is not bridged"
+    end
+
+    test "a .mcp.json with only skipped entries still shows them in /mcp" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}})
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      assert model.mcp_servers == []
+      assert model.status_line =~ "1 MCP servers skipped"
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "⊘ broken  →  skipped: entry has no command"
+      refute model.notice =~ "no MCP servers configured"
+    end
+
+    test "/mcp bounds the skipped rows by the same cap that bounds launches" do
+      cap = Raxol.Agent.Code.McpLoader.max_servers()
+      entries = for i <- 1..(cap + 4), into: %{}, do: {"e#{i}", %{}}
+
+      dir = config_cwd(%{".mcp.json" => Jason.encode!(%{"mcpServers" => entries})})
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      assert length(model.mcp_skipped) == cap + 4
+
+      {model, []} = submit(model, "/mcp")
+      rows = String.split(model.notice, "\n")
+
+      assert length(rows) == cap + 1
+      assert List.last(rows) =~ "… and 4 more skipped"
     end
 
     test "the tool authorizer gates a sensitive Dynamic MCP tool" do

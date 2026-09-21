@@ -23,7 +23,7 @@ defmodule Raxol.Agent.Code.McpConfigTest do
       })
     )
 
-    assert {:ok, [alpha, zeta]} = McpConfig.load(dir)
+    assert {:ok, [alpha, zeta], []} = McpConfig.load_all(dir)
     assert alpha.name == "alpha"
     assert alpha.command == "uvx"
     assert alpha.args == ["a"]
@@ -32,21 +32,59 @@ defmodule Raxol.Agent.Code.McpConfigTest do
   end
 
   test "returns :none when there is no file", %{dir: dir} do
-    assert :none = McpConfig.load(dir)
+    assert :none = McpConfig.load_all(dir)
   end
 
   test "a valid object with no servers is empty, not an error", %{dir: dir} do
     write(dir, Jason.encode!(%{"other" => true}))
-    assert {:ok, []} = McpConfig.load(dir)
+    assert {:ok, [], []} = McpConfig.load_all(dir)
   end
 
   test "errors on invalid json", %{dir: dir} do
     write(dir, "{bad")
-    assert {:error, :invalid_json} = McpConfig.load(dir)
+    assert {:error, :invalid_json} = McpConfig.load_all(dir)
   end
 
-  test "a server missing a command is dropped", %{dir: dir} do
-    write(dir, Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}}))
-    assert {:ok, []} = McpConfig.load(dir)
+  describe "load_all/1" do
+    test "reports a url server as skipped with :unsupported_transport", %{dir: dir} do
+      write(
+        dir,
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "remote" => %{"type" => "http", "url" => "https://mcp.example/sse"},
+            "local" => %{"command" => "uvx", "args" => ["a"]}
+          }
+        })
+      )
+
+      assert {:ok, [%{name: "local"}], [{"remote", :unsupported_transport}]} =
+               McpConfig.load_all(dir)
+    end
+
+    test "a typed http or sse entry without a url is still unsupported transport",
+         %{dir: dir} do
+      write(dir, Jason.encode!(%{"mcpServers" => %{"typed" => %{"type" => "sse"}}}))
+      assert {:ok, [], [{"typed", :unsupported_transport}]} = McpConfig.load_all(dir)
+    end
+
+    test "each shape the bridge cannot run reports its own reason", %{dir: dir} do
+      write(
+        dir,
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "no-command" => %{"args" => ["x"]},
+            "bad-command" => %{"command" => 42},
+            "not-an-object" => "npx"
+          }
+        })
+      )
+
+      assert {:ok, [],
+              [
+                {"bad-command", :command_not_string},
+                {"no-command", :no_command},
+                {"not-an-object", :not_an_object}
+              ]} = McpConfig.load_all(dir)
+    end
   end
 end

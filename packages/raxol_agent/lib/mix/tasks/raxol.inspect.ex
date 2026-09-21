@@ -29,6 +29,7 @@ defmodule Mix.Tasks.Raxol.Inspect do
   use Mix.Task
 
   alias Raxol.Agent.Code.Inspection
+  alias Raxol.Harness.Surface.ViewText
 
   @switches [json: :boolean, help: :boolean]
   @aliases [h: :help]
@@ -65,8 +66,18 @@ defmodule Mix.Tasks.Raxol.Inspect do
     if json? do
       IO.puts(Jason.encode!(snapshot))
     else
-      IO.puts(Inspection.render(snapshot))
+      IO.puts(sanitize(Inspection.render(snapshot)))
     end
+  end
+
+  # `.mcp.json`, `.raxol/hooks.json` and the instruction files come with the
+  # clone, so a key or a command in one can carry an ESC and forge a row on
+  # the operator's terminal. Same strip the TUI's `/inspect` gets through
+  # `App.notice/2`; `--json` is already escaped by Jason.
+  defp sanitize(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map_join("\n", &ViewText.sanitize_line/1)
   end
 
   defp usage_error(message) do

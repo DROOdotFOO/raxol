@@ -92,6 +92,10 @@ defmodule Raxol.UI.Components.Harness.Block do
   and `cost` are all `nil`; otherwise it renders only the fields that are
   present.
 
+  Terminal confinement is deliberately not implemented by walking this
+  rendered tree; see `Raxol.Core.Boundary.TermText`'s "Where confinement
+  happens". `search_text/2` remains the raw match corpus (see its @doc).
+
   ## The completion row (design creed: evidence, never a success toast)
 
   `content[:completion]` -- set by `Raxol.Harness.Projection.BlockBuilder.
@@ -418,6 +422,11 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   Never raises: any unexpected internal shape falls back to a one-line
   placeholder rather than crashing the caller.
+
+  Untrusted content is confined at the output sinks rather than by
+  rebuilding this view tree, which keeps truncation and styling semantics
+  here unchanged; see `Raxol.Core.Boundary.TermText`'s "Where confinement
+  happens".
   """
   @spec render(t(), map()) :: map()
   def render(block, context \\ %{})
@@ -616,9 +625,10 @@ defmodule Raxol.UI.Components.Harness.Block do
     * `:diff` -- `content.old` and `content.new` (`summary/1` already
       carries the path).
 
-  No sanitization happens here: `Raxol.Harness.Surface.ViewText.lines/3`
-  is the ONE trust boundary for control-byte stripping and display-width
-  truncation (see that module's moduledoc). Pure; never raises,
+  No sanitization happens here, deliberately: this is the raw corpus used for
+  matching, not display. A caller that puts a `search_text/2` result on screen
+  owns confinement at its output boundary, because a match offset into a
+  sanitized string would not point at the same grapheme. Pure; never raises,
   regardless of `content`'s shape.
 
   ## Bounding the work (`max_graphemes`)

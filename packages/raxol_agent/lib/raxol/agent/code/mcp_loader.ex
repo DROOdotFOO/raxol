@@ -30,6 +30,13 @@ defmodule Raxol.Agent.Code.McpLoader do
   @max_servers 16
   @server_name_re ~r/\A[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\z/
 
+  @doc """
+  The most servers one `.mcp.json` may load. Public so a surface bounds
+  what it renders by the same number this module bounds what it starts.
+  """
+  @spec max_servers() :: pos_integer()
+  def max_servers, do: @max_servers
+
   @type result :: %{
           tools: [struct()],
           connected: [term()],
