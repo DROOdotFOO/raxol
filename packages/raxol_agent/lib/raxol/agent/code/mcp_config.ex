@@ -213,6 +213,7 @@ defmodule Raxol.Agent.Code.McpConfig do
 
   defp parse_server({name, _not_an_object}, _source) when is_binary(name),
     do: {name, :not_an_object}
+
   defp parse_server(_other, _source), do: nil
 
   defp put_stdio(server, %{"command" => command} = spec) when is_binary(command) do

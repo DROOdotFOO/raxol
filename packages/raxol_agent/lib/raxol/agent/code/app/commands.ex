@@ -310,7 +310,12 @@ defmodule Raxol.Agent.Code.App.Commands do
   defp mcp_text(%{mcp_servers: [], jail: true}),
     do: "MCP servers are disabled in a jailed session"
 
-  defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
+  defp mcp_text(%{mcp_servers: []} = model) do
+    case skipped_rows(model) do
+      [] -> "no MCP servers configured (.mcp.json)"
+      rows -> Enum.join(rows, "\n")
+    end
+  end
 
   defp mcp_text(%{mcp_servers: servers} = model) do
     rows =
