@@ -96,6 +96,26 @@ defmodule Raxol.Web3.HTTPTest do
       # call paying for the same failed lookup.
       assert failures(host) == 1
     end
+
+    test "a resolver that did not answer does not spend the origin's breaker" do
+      host = "servfail.example"
+      unanswered = fn _charlist, _family -> {:error, :timeout} end
+
+      # Same answer to this caller, and the router still fails over on it.
+      assert {:error, {:dns_failed, id}} =
+               HTTP.get("https://#{host}/x",
+                 resolver: unanswered,
+                 exchange: refusing_seam()
+               )
+
+      assert id == origin_id(host)
+
+      # But our resolver not answering is evidence about us, not the origin.
+      # Five of these inside 30 seconds must not quarantine a healthy upstream
+      # for every other caller.
+      assert failures(host) == 0
+      assert breaker_state(host) == :closed
+    end
   end
 
   describe "the token bucket runs before the socket" do

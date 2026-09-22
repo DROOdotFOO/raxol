@@ -268,6 +268,26 @@ defmodule Raxol.Web3.Backend.AztecTest do
       assert info.total_addresses == nil
     end
 
+    test "a number that only partly parses fails the read instead of being truncated" do
+      # `Integer.parse/1` answers `{1, ".5e18"}`, `{1, "e18"}`, `{0, "x1f"}`
+      # and `{12, "abc"}` for the first four, so accepting `{number, _rest}`
+      # handed a caller 1, 1, 0 and 12 as an average block time. A wrong
+      # number is worse than no number: nothing downstream can tell it apart
+      # from a real one.
+      for probe <- ["1.5e18", "1e18", "0x1f", "12abc", true] do
+        handle =
+          handle(%{
+            "/l2/info" => fixture("info.json"),
+            "/l2/stats/average-block-time" => Jason.encode!(probe),
+            "/l2/stats/total-tx-effects" => fixture("total_tx_effects.json")
+          })
+
+        assert {:error, {:decode_failed, :average_block_time_ms}} =
+                 Backend.call(handle, :chain_info),
+               "#{inspect(probe)} was accepted"
+      end
+    end
+
     test "a source pointed at another network is refused before its counters are read" do
       handle = handle(%{"/l2/info" => ~s({"l2NetworkId":"TESTNET","l1ChainId":11155111})})
 

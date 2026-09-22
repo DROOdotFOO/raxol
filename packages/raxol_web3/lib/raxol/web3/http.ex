@@ -327,19 +327,42 @@ defmodule Raxol.Web3.HTTP do
   defp vet_error(:invalid_url, _url, _opts), do: {:blocked, :invalid_url}
   defp vet_error({:blocked_address, _host}, _url, _opts), do: {:blocked, :address}
 
-  defp vet_error({:dns_failed, _host}, url, opts) do
-    # A host that does not resolve is an unhealthy origin, so it trips the
-    # breaker and the router fails over, rather than every call paying for the
-    # same lookup.
+  # `:nxdomain` is the resolver ANSWERING that the name has no address in
+  # either family, which makes the origin unusable rather than momentarily
+  # unreachable: it trips the breaker so the router fails over and every other
+  # caller stops paying for the same lookup.
+  #
+  # `{:lookup_failed, _}` is our own resolver not answering. It is evidence
+  # about us, not about the origin, and a breaker slot spent on it quarantines
+  # a healthy upstream for every caller for 30 seconds over a SERVFAIL we
+  # caused. This call still fails and the router still fails over — failover
+  # reads `{:dns_failed, _}` — but the origin's health record is untouched.
+  # The reason itself is dropped from the returned term because the taxonomy in
+  # `Raxol.Web3.Backend` names an origin and nothing else, so it is logged
+  # rather than swallowed.
+  defp vet_error({:dns_failed, {_host, reason}}, url, opts) do
     case URI.new(url) do
       {:ok, %URI{host: host} = uri} when is_binary(host) and host != "" ->
         origin_id = Origin.id(uri)
-        CircuitBreaker.record_failure(Tables.breakers(), {:origin, origin_id}, breaker_opts(opts))
+        record_dns_failure(reason, origin_id, opts)
         {:dns_failed, origin_id}
 
       _unparseable ->
         {:blocked, :invalid_url}
     end
+  end
+
+  defp record_dns_failure(:nxdomain, origin_id, opts) do
+    CircuitBreaker.record_failure(Tables.breakers(), {:origin, origin_id}, breaker_opts(opts))
+  end
+
+  defp record_dns_failure({:lookup_failed, reason}, origin_id, _opts) do
+    Logger.debug(fn ->
+      "raxol_web3: DNS lookup for origin #{origin_id} did not answer " <>
+        "(#{inspect(reason)}); not recorded against the origin's health"
+    end)
+
+    :ok
   end
 
   # -- stage 2: the token bucket -----------------------------------------------
