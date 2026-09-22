@@ -40,6 +40,7 @@ roots=(
   packages/raxol_telegram/lib
   packages/raxol_watch/lib
   packages/raxol_payments/lib
+  packages/raxol_web3/lib
   packages/raxol_sensor/lib
   packages/raxol_symphony/lib
 )

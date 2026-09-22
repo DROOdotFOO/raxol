@@ -97,6 +97,45 @@ defmodule Raxol.Agent.Code.InspectionTest do
     assert text =~ "  broken → skipped (neither a command nor a url)"
   end
 
+  test "a remote url enters the snapshot as an endpoint, never with its secrets", ctx do
+    # Same contract the env block has: NAMES only. A url carries credentials
+    # as often as an env block does, and this snapshot is meant to be pasted.
+    File.write!(
+      Path.join(ctx.cwd, ".mcp.json"),
+      ~s({"mcpServers": {"remote": {"url": "https://user:s3cret@mcp.example:8443/mcp?api_key=sk-live-42"}}})
+    )
+
+    snapshot = Inspection.gather(ctx.cwd, sessions_dir: ctx.sessions_dir)
+
+    assert [%{name: "remote", url: "https://mcp.example:8443/mcp"}] =
+             snapshot.mcp_servers.servers
+
+    refute inspect(snapshot) =~ "s3cret"
+    refute inspect(snapshot) =~ "sk-live-42"
+    refute Inspection.render(snapshot) =~ "s3cret"
+    refute Inspection.render(snapshot) =~ "sk-live-42"
+  end
+
+  test "a newline in a server name cannot forge a row in the rendered snapshot", ctx do
+    File.write!(
+      Path.join(ctx.cwd, ".mcp.json"),
+      ~s({"mcpServers": {"fs\\n  evil → npx": {"command": "npx"}}})
+    )
+
+    snapshot = Inspection.gather(ctx.cwd, sessions_dir: ctx.sessions_dir)
+
+    assert [%{name: name}] = snapshot.mcp_servers.servers
+    refute name =~ "\n"
+
+    rows =
+      snapshot
+      |> Inspection.render()
+      |> String.split("\n")
+      |> Enum.filter(&String.contains?(&1, "evil"))
+
+    assert length(rows) == 1
+  end
+
   test "render covers every section in one readable block", ctx do
     File.write!(
       Path.join(ctx.cwd, ".raxol/config.json"),

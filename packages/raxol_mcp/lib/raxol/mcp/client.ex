@@ -258,8 +258,24 @@ defmodule Raxol.MCP.Client do
 
   # -- Server Callbacks ---------------------------------------------------------
 
+  # Exits are TRAPPED, and the subprocess is why. `Raxol.Agent.Code.McpLoader`'s
+  # janitor ends a session with `Process.exit(client_pid, :shutdown)` on the
+  # documented assumption that it reaps the client, its linked port and the OS
+  # server with it. It reaped only the first two: a non-trapping process never
+  # runs `terminate/2`, closing a port closes the child's stdio and nothing
+  # else, and every `npx`/`uvx` server that does not exit on stdin EOF survived
+  # -- one orphan per session, forever, on a long-lived host.
+  #
+  # Trapping makes that signal a message, so `terminate/2` runs and
+  # `Transport.Stdio.close/1` gets to signal the child. It also makes every
+  # OTHER linked exit a message, which the `{:EXIT, _, _}` clauses below turn
+  # back into the termination an untrapped process would have had: without
+  # them this client would outlive the process that started it, which is a
+  # bigger leak than the one being closed.
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(config) do
+    Process.flag(:trap_exit, true)
+
     state = %__MODULE__{
       name: Map.fetch!(config, :name),
       transport: Map.fetch!(config, :transport),
@@ -348,6 +364,27 @@ defmodule Raxol.MCP.Client do
   # Scheduled only by `schedule_reconnect/2`, so only from `:closed`.
   def handle_manager_info(:reconnect, state), do: {:noreply, connect(state)}
 
+  # A linked PORT is the transport's business: it already reports the child's
+  # death as `{:exit_status, _}` through `decode_info/2` and the client
+  # reconnects, so the signal that follows it is noise. `:normal` from a
+  # process is what an untrapped client ignored too.
+  def handle_manager_info({:EXIT, port, _reason}, state) when is_port(port) do
+    {:noreply, state}
+  end
+
+  def handle_manager_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+
+  # The owner died, or asked this client to. `start_link/1` links the CALLER,
+  # so an untrapped client went with it; now it has to stop itself, and
+  # `terminate/2` -- the whole reason exits are trapped -- runs on the way out.
+  #
+  # An unrecognised reason is wrapped rather than propagated verbatim so a
+  # session crash is not re-reported as an MCP client crash: the client did
+  # nothing wrong, and `{:shutdown, _}` is the form GenServer does not log.
+  def handle_manager_info({:EXIT, _pid, reason}, state) do
+    {:stop, stop_reason(reason), state}
+  end
+
   # Nothing to decode with. A client whose connect failed still receives
   # whatever its own connect attempt left in the mailbox, and handing `nil` to
   # a transport would crash a process that is already reporting its failure
@@ -358,6 +395,9 @@ defmodule Raxol.MCP.Client do
     {:noreply, apply_decoded(state, state.transport.decode_info(state.handle, message))}
   end
 
+  # Reached for every exit now that they are trapped, which is the point:
+  # `Transport.Stdio.close/1` is where the OS server is signalled, and it runs
+  # inside the 5 s a supervisor's default worker shutdown allows.
   @impl GenServer
   def terminate(_reason, %{transport: transport, handle: handle}) when not is_nil(handle) do
     transport.close(handle)
@@ -365,6 +405,14 @@ defmodule Raxol.MCP.Client do
   end
 
   def terminate(_reason, _state), do: :ok
+
+  # `:shutdown` and `{:shutdown, _}` are the reasons GenServer treats as an
+  # orderly stop and does not log. Anything else came from the owner's own
+  # crash, and re-raising it here would print a second, misleading report
+  # naming this client.
+  defp stop_reason(:shutdown), do: :shutdown
+  defp stop_reason({:shutdown, _detail} = reason), do: reason
+  defp stop_reason(reason), do: {:shutdown, {:owner_exited, reason}}
 
   # -- Private: session lifecycle ----------------------------------------------
 
@@ -603,9 +651,19 @@ defmodule Raxol.MCP.Client do
       {:error, reason} ->
         cancel(call.timer)
         reply(call.from, {:error, reason})
-        state
+        dispatch_failed(state, call, reason)
     end
   end
+
+  # An initialize has no caller -- `reply(:init, _)` is a no-op -- so a send
+  # that failed left the client in `:initializing` with no pending entry, no
+  # timer and no reconnect scheduled. Every later call then answered
+  # `{:not_ready, :initializing}` for the lifetime of the node, and
+  # `McpBundle.poll_tools/5` spent its entire readiness budget on it. A
+  # handshake that never reached the wire is a failed initialization like any
+  # other, and that path closes the handle and retries.
+  defp dispatch_failed(state, %{from: :init}, reason), do: fail_initialization(state, reason)
+  defp dispatch_failed(state, _call, _reason), do: state
 
   defp request(call) do
     case Keyword.get(call.opts, :reservation) do
@@ -690,6 +748,14 @@ defmodule Raxol.MCP.Client do
       {:ok, message} ->
         handle_message(message, state)
 
+      # A shape this client does not speak -- a batch, a bare scalar -- is not
+      # the same event as a server writing a log banner to a stdio pipe, and
+      # it leaves whichever caller was waiting on it to time out. Reported at
+      # warning, with the shape and not the payload.
+      {:error, {:unsupported_message, kind}} ->
+        Logger.warning("[MCP.Client] Server #{state.name} sent an unsupported #{kind} message")
+        state
+
       {:error, _reason} ->
         Logger.debug("[MCP.Client] Ignoring non-JSON line: #{String.slice(line, 0, 100)}")
         state
@@ -708,8 +774,41 @@ defmodule Raxol.MCP.Client do
     end)
   end
 
+  # A request the SERVER started: `id` + `method`. This client declares no
+  # capabilities at `initialize`, so a conformant peer sends none -- but
+  # `elicitation/create` and `sampling/createMessage` arrive from peers that
+  # send them anyway, and dropping one leaves the SERVER blocked on a response
+  # that is never coming while the session looks healthy from both ends.
+  # Method-not-found is the answer the JSON-RPC spec gives an unimplemented
+  # method, and it is an answer.
+  defp handle_message(%{id: id, method: method}, state) when is_binary(method) do
+    refuse(state, id, method)
+  end
+
+  # A notification. Nothing answers one, by definition.
   defp handle_message(%{method: _}, state), do: state
-  defp handle_message(_message, state), do: state
+
+  defp handle_message(_message, state) do
+    Logger.debug("[MCP.Client] Server #{state.name} sent a message with no id, result or method")
+    state
+  end
+
+  defp refuse(state, id, method) do
+    response = Protocol.error_response(id, Protocol.method_not_found(), "Method not found")
+
+    case state.transport.respond(state.handle, method, response) do
+      {:ok, handle} ->
+        %{state | handle: handle}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[MCP.Client] Server #{state.name} sent an unsolicited request this client " <>
+            "could not refuse: #{inspect(reason)}"
+        )
+
+        state
+    end
+  end
 
   defp with_pending(state, id, callback) do
     case Map.fetch(state.pending, id) do
@@ -816,6 +915,16 @@ defmodule Raxol.MCP.Client do
 
     state = become_ready(%{state | version: negotiated(state, result)})
     send_notification(state, "notifications/initialized", %{})
+  end
+
+  # An `initialize` answered with something that is not a result object --
+  # `{"result":"ok"}` is the measured shape -- fails the guard above and used
+  # to reach the generic clause at the bottom, which replies to `:init`. That
+  # is a no-op, so the client sat in `:initializing` forever and answered
+  # `{:not_ready, :initializing}` to everything. An unusable handshake answer
+  # is an initialization failure, and that path closes the handle and retries.
+  defp handle_result(_result, "initialize", _from, state) do
+    fail_initialization(state, {:invalid_response, "initialize"})
   end
 
   defp handle_result(%{"tools" => tools}, "tools/list", from, state) when is_list(tools) do

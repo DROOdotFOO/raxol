@@ -167,14 +167,36 @@ defmodule Raxol.MCP.Protocol do
     [Jason.encode!(message), "\n"]
   end
 
-  @doc "Decode a JSON string into a message map with atom keys for known fields."
+  @doc """
+  Decode a JSON string into a message map with atom keys for known fields.
+
+  A decode that is not a JSON OBJECT is `{:error, {:unsupported_message, kind}}`
+  rather than an exception. `Jason.decode/1` answers any JSON value, and
+  `normalize/1` fed one straight to `Map.pop/2`: a `[{"id":1}]` batch response
+  -- legal JSON-RPC 2.0 -- a bare `123`, `"hello"` or `true` each raised
+  `BadMapError` inside whatever process read the line. For the client that is
+  `handle_continue(:connect)` (through the era probe's `jsonrpc_error/1`) and
+  `handle_manager_info/2`, so a payload from an arbitrary HTTPS origin or an
+  SSE frame took the client down its `start_link` link to the loader -- the
+  outcome `client.ex` keeps every connect failure out of `{:stop, _}` to
+  prevent.
+  """
   @spec decode(String.t()) :: {:ok, map()} | {:error, term()}
   def decode(json) do
     case Jason.decode(json) do
-      {:ok, decoded} -> {:ok, normalize(decoded)}
+      {:ok, decoded} when is_map(decoded) -> {:ok, normalize(decoded)}
+      {:ok, other} -> {:error, {:unsupported_message, kind(other)}}
       error -> error
     end
   end
+
+  # Named by SHAPE, not content: the value came from an upstream and the error
+  # term is one of the places ADR-0033 section 7 says a credential leaks.
+  defp kind(value) when is_list(value), do: :batch
+  defp kind(value) when is_binary(value), do: :string
+  defp kind(value) when is_number(value), do: :number
+  defp kind(value) when is_boolean(value), do: :boolean
+  defp kind(nil), do: :null
 
   # -- Predicates ---------------------------------------------------------------
 
@@ -211,10 +233,15 @@ defmodule Raxol.MCP.Protocol do
     |> normalize_key("error", :error)
   end
 
+  # Key PRESENCE, not truthiness. `Map.pop/2` answering `nil` cannot tell
+  # `{"result":null}` -- a well-formed JSON-RPC success with a null result --
+  # from a message with no `result` at all, so the key was ERASED and the
+  # response matched no clause in `Raxol.MCP.Client.handle_message/2`: no
+  # reply, no log, and the caller blocked for its full `call_timeout`.
   defp normalize_key(map, string_key, atom_key) do
-    case Map.pop(map, string_key) do
-      {nil, map} -> map
-      {value, map} -> Map.put(map, atom_key, value)
+    case map do
+      %{^string_key => value} -> map |> Map.delete(string_key) |> Map.put(atom_key, value)
+      _absent -> map
     end
   end
 end

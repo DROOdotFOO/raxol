@@ -180,16 +180,19 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
   @impl Backend
   def chain_info(%__MODULE__{} = state) do
-    with {:ok, body} <- get(state, "/api/v2/stats", %{}, :chain_stats) do
+    with {:ok, body} <- get(state, "/api/v2/stats", %{}, :chain_stats),
+         {:ok, blocks} <- int(body["total_blocks"], :total_blocks),
+         {:ok, transactions} <- int(body["total_transactions"], :total_transactions),
+         {:ok, addresses} <- int(body["total_addresses"], :total_addresses) do
       {:ok,
        %{
          chain_ref: state.chain_ref,
          average_block_time_ms: body["average_block_time"],
          # A count of indexed blocks, not a height. Reading it as one is the
          # mistake ADR-0038 records: use `block_height/1`.
-         total_blocks: int(body["total_blocks"]),
-         total_transactions: int(body["total_transactions"]),
-         total_addresses: int(body["total_addresses"])
+         total_blocks: blocks,
+         total_transactions: transactions,
+         total_addresses: addresses
        }}
     end
   end
@@ -265,13 +268,15 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
   @impl Backend
   def get_block(%__MODULE__{} = state, number) do
-    with {:ok, body} <- get(state, "/api/v2/blocks/#{segment(number)}", %{}, :block) do
+    with {:ok, body} <- get(state, "/api/v2/blocks/#{segment(number)}", %{}, :block),
+         {:ok, height} <- int(body["height"], :height),
+         {:ok, count} <- int(body["transactions_count"], :transactions_count) do
       {:ok,
        %{
-         height: int(body["height"]),
+         height: height,
          hash: body["hash"],
          timestamp: timestamp(body["timestamp"]),
-         transactions_count: int(body["transactions_count"]),
+         transactions_count: count,
          miner: address_ref(body["miner"])
        }}
     end
@@ -440,18 +445,19 @@ defmodule Raxol.Web3.Backend.Blockscout do
     fee = item |> field("fee") |> object()
 
     with {:ok, value} <- Backend.money(item["value"], :value),
-         {:ok, paid} <- Backend.money(fee["value"], :fee) do
-      {:ok, normalized_transaction(item, value, paid)}
+         {:ok, paid} <- Backend.money(fee["value"], :fee),
+         {:ok, block} <- int(item["block_number"], :block_number) do
+      {:ok, normalized_transaction(item, value, paid, block)}
     end
   end
 
   defp transaction(_item), do: {:error, {:decode_failed, :transaction}}
 
-  defp normalized_transaction(item, value, paid) do
+  defp normalized_transaction(item, value, paid, block) do
     %{
       hash: item["hash"],
       status: status(item["status"]),
-      block: int(item["block_number"]),
+      block: block,
       timestamp: timestamp(item["timestamp"]),
       from: address_ref(item["from"]),
       to: address_ref(item["to"]),
@@ -462,8 +468,9 @@ defmodule Raxol.Web3.Backend.Blockscout do
   end
 
   defp token_balance(item) when is_map(item) do
-    with {:ok, amount} <- Backend.money(item["value"], :amount) do
-      {:ok, %{token: token(item["token"]), amount: amount, token_id: item["token_id"]}}
+    with {:ok, amount} <- Backend.money(item["value"], :amount),
+         {:ok, token} <- token(item["token"]) do
+      {:ok, %{token: token, amount: amount, token_id: item["token_id"]}}
     end
   end
 
@@ -472,14 +479,16 @@ defmodule Raxol.Web3.Backend.Blockscout do
   defp token_transfer(item) when is_map(item) do
     total = item |> field("total") |> object()
 
-    with {:ok, amount} <- Backend.money(total["value"], :amount) do
+    with {:ok, amount} <- Backend.money(total["value"], :amount),
+         {:ok, token} <- token(item["token"]),
+         {:ok, block} <- int(item["block_number"], :block_number) do
       {:ok,
        %{
-         token: token(item["token"]),
+         token: token,
          amount: amount,
          from: address_ref(item["from"]),
          to: address_ref(item["to"]),
-         block: int(item["block_number"]),
+         block: block,
          timestamp: timestamp(item["timestamp"]),
          transaction: item["transaction_hash"]
        }}
@@ -489,42 +498,55 @@ defmodule Raxol.Web3.Backend.Blockscout do
   defp token_transfer(_item), do: {:error, {:decode_failed, :token_transfer_row}}
 
   defp log(item) when is_map(item) do
-    {:ok,
-     %{
-       address: item |> field("address") |> field("hash"),
-       topics: item |> field("topics") |> rows_of() |> Enum.reject(&is_nil/1),
-       data: item["data"],
-       block: int(item["block_number"]),
-       transaction: item["transaction_hash"],
-       index: int(item["index"])
-     }}
+    with {:ok, block} <- int(item["block_number"], :block_number),
+         {:ok, index} <- int(item["index"], :index) do
+      {:ok,
+       %{
+         address: item |> field("address") |> field("hash"),
+         topics: item |> field("topics") |> rows_of() |> Enum.reject(&is_nil/1),
+         data: item["data"],
+         block: block,
+         transaction: item["transaction_hash"],
+         index: index
+       }}
+    end
   end
 
   defp log(_item), do: {:error, {:decode_failed, :log_row}}
 
   defp nft(item) when is_map(item) do
-    {:ok,
-     %{
-       token: token(item["token"]),
-       token_id: item["id"],
-       name: item |> field("metadata") |> field("name"),
-       image_url: item["image_url"]
-     }}
+    with {:ok, token} <- token(item["token"]) do
+      {:ok,
+       %{
+         token: token,
+         token_id: item["id"],
+         name: item |> field("metadata") |> field("name"),
+         image_url: item["image_url"]
+       }}
+    end
   end
 
   defp nft(_item), do: {:error, {:decode_failed, :nft_row}}
 
+  # `decimals` is the one field here that silently rewrites an amount: a
+  # caller renders `amount / 10 ** decimals`, so a token declaring "18abc"
+  # read as 18 would have been luck and read as 1 is a 10^17 error in what a
+  # user is shown. It fails the row like any other unreadable field.
   defp token(token) when is_map(token) do
-    %{
-      address: token["address_hash"] || token["address"],
-      symbol: token["symbol"],
-      name: token["name"],
-      decimals: int(token["decimals"]),
-      type: token["type"]
-    }
+    with {:ok, decimals} <- int(token["decimals"], :decimals) do
+      {:ok,
+       %{
+         address: token["address_hash"] || token["address"],
+         symbol: token["symbol"],
+         name: token["name"],
+         decimals: decimals,
+         type: token["type"]
+       }}
+    end
   end
 
-  defp token(_absent), do: %{address: nil, symbol: nil, name: nil, decimals: nil, type: nil}
+  defp token(_absent),
+    do: {:ok, %{address: nil, symbol: nil, name: nil, decimals: nil, type: nil}}
 
   defp match_name(%{"ens_info" => %{"name" => name}, "address_hash" => hash}, name)
        when is_binary(hash),
@@ -563,7 +585,9 @@ defmodule Raxol.Web3.Backend.Blockscout do
     end
   end
 
-  defp latest_height(%{"items" => [%{"height" => height} | _rest]}), do: {:ok, int(height)}
+  defp latest_height(%{"items" => [%{"height" => height} | _rest]}),
+    do: int(height, :height)
+
   defp latest_height(_body), do: {:error, {:decode_failed, :blocks}}
 
   defp chain_id("eip155:" <> id) do
@@ -613,17 +637,26 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
   defp evm_address?(_other), do: false
 
-  defp int(nil), do: nil
-  defp int(value) when is_integer(value), do: value
+  # A partial parse is a WRONG number, not a missing one, and this one fed
+  # block heights, log indexes and a token's DECIMALS -- the exponent every
+  # amount beside it is read through. `Integer.parse/1` answers `{1, ".5e18"}`
+  # for "1.5e18", `{1, "e18"}` for "1e18", `{0, "x1f"}` for "0x1f" and
+  # `{12, "abc"}` for "12abc", so taking `{number, _rest}` turned each of
+  # those into a small plausible integer a caller reads as data. The whole
+  # value parses or the read fails, which is what every other backend in this
+  # package already required and what `Backend.money/2` requires of the
+  # amounts themselves. `nil` stays `nil`: absent is not malformed.
+  defp int(nil, _field), do: {:ok, nil}
+  defp int(value, _field) when is_integer(value), do: {:ok, value}
 
-  defp int(value) when is_binary(value) do
+  defp int(value, field) when is_binary(value) do
     case Integer.parse(value) do
-      {number, _rest} -> number
-      :error -> nil
+      {number, ""} -> {:ok, number}
+      _unparseable -> {:error, {:decode_failed, field}}
     end
   end
 
-  defp int(_other), do: nil
+  defp int(_other, field), do: {:error, {:decode_failed, field}}
 
   defp float(value) when is_number(value), do: value * 1.0
 

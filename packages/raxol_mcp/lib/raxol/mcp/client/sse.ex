@@ -95,24 +95,43 @@ defmodule Raxol.MCP.Client.SSE do
   @doc """
   The data payloads of every complete frame, in order, plus the remainder.
 
-  This is the shape a response body wants: one JSON string per frame, with
+  This is the shape a LIVE stream wants: one JSON string per frame, with
   keepalives and frames that carry only an `event:` dropped rather than
-  surfacing as empty messages.
+  surfacing as empty messages, and the unterminated tail handed back so the
+  next chunk can be prepended to it.
   """
   @spec payloads(binary()) :: {[binary()], binary()}
   def payloads(bytes) when is_binary(bytes) do
     {frames, remainder} = split_frames(bytes)
+    {Enum.flat_map(frames, &frame_payload/1), remainder}
+  end
 
-    payloads =
-      Enum.flat_map(frames, fn frame ->
-        case parse_frame(frame) do
-          {:ok, %{data: ""}} -> []
-          {:ok, %{data: data}} -> [data]
-          {:error, :no_data} -> []
-        end
-      end)
+  @doc """
+  The data payloads of a COMPLETE body, including a final frame the sender
+  never terminated.
 
-    {payloads, remainder}
+  A one-shot HTTP response body is all the bytes there will ever be, so an
+  unterminated tail is the last frame rather than a partial one waiting for
+  more. Taking only `payloads/1`'s frames there discarded the WHOLE response
+  from any server that omits the trailing blank line -- a single-response body
+  is exactly the case where it is easiest to omit -- with no reply and no log,
+  stalling the caller for its full `call_timeout`.
+
+      iex> Raxol.MCP.Client.SSE.complete_payloads("data: 1\\n\\ndata: 2")
+      ["1", "2"]
+  """
+  @spec complete_payloads(binary()) :: [binary()]
+  def complete_payloads(bytes) when is_binary(bytes) do
+    {payloads, remainder} = payloads(bytes)
+    payloads ++ frame_payload(remainder)
+  end
+
+  defp frame_payload(frame) do
+    case parse_frame(frame) do
+      {:ok, %{data: ""}} -> []
+      {:ok, %{data: data}} -> [data]
+      {:error, :no_data} -> []
+    end
   end
 
   # A field line is `name` `:` optional-space `value`. The space after the

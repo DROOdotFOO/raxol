@@ -105,6 +105,78 @@ defmodule Raxol.Core.OutboundTest do
       assert {:ok, _vetted} = Outbound.vet("https://[2606:4700:4700::1111]/")
     end
 
+    test "refuses the ranges that exist only on paper" do
+      for {label, url} <- [
+            {"IETF protocol assignments", "https://192.0.0.1/"},
+            {"TEST-NET-1", "https://192.0.2.5/"},
+            {"TEST-NET-2", "https://198.51.100.5/"},
+            {"TEST-NET-3", "https://203.0.113.5/"},
+            {"benchmarking", "https://198.18.0.1/"},
+            {"benchmarking, upper half", "https://198.19.255.254/"},
+            {"6to4 relay anycast", "https://192.88.99.1/"},
+            {"v6 discard-only", "https://[100::1]/"},
+            {"v6 benchmarking", "https://[2001:2::1]/"},
+            {"v6 documentation", "https://[2001:db8::1]/"}
+          ] do
+        assert {:error, {:blocked_address, _host}} = Outbound.vet(url),
+               "#{label} was not refused"
+      end
+    end
+
+    test "the neighbours of those ranges are still reachable" do
+      # Each range above sits inside a larger public block, so a clause written
+      # one octet or one group too wide would be invisible against the
+      # refusals and would quietly blacklist real hosts.
+      for address <- [
+            {192, 0, 1, 1},
+            {192, 0, 3, 1},
+            {198, 51, 99, 1},
+            {203, 0, 114, 1},
+            {198, 17, 0, 1},
+            {198, 20, 0, 1},
+            {192, 88, 98, 1},
+            {0x100, 0, 0, 1, 0, 0, 0, 1},
+            {0x2001, 3, 0, 0, 0, 0, 0, 1},
+            {0x2001, 0xDB9, 0, 0, 0, 0, 0, 1}
+          ] do
+        refute Outbound.blocked?(address), "#{inspect(address)} was refused"
+      end
+    end
+
+    test "the generic IPv6 clause stays LAST, or the specific ones stop being reached" do
+      # Every address here is answered `false` by the generic bitmask rule, so
+      # each is refused ONLY because its own clause is matched first. Moving
+      # the generic clause above them makes `2002:a9fe:a9fe::` — a working
+      # route to the cloud metadata address — reachable, and nothing about the
+      # table's shape would look wrong afterwards.
+      generic? = fn {a, b, _c, _d, _e, _f, _g, _h} ->
+        Bitwise.band(a, 0xFE00) == 0xFC00 or
+          Bitwise.band(a, 0xFFC0) == 0xFE80 or
+          Bitwise.band(a, 0xFFC0) == 0xFEC0 or
+          Bitwise.band(a, 0xFF00) == 0xFF00 or
+          (a == 0x2001 and b == 0)
+      end
+
+      for address <- [
+            {0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 0},
+            {0x2002, 0x7F00, 1, 0, 0, 0, 0, 0},
+            {0x64, 0xFF9B, 0, 0, 0, 0, 0xA9FE, 0xA9FE},
+            {0x64, 0xFF9B, 1, 0, 0, 0, 0x7F00, 1},
+            {0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE},
+            {0, 0, 0, 0, 0xFFFF, 0, 0xA9FE, 0xA9FE},
+            {0, 0, 0, 0, 0, 0, 0, 1},
+            {0x100, 0, 0, 0, 0, 0, 0, 0},
+            {0x2001, 0x2, 0, 0, 0, 0, 0, 1},
+            {0x2001, 0xDB8, 0, 0, 0, 0, 0, 1}
+          ] do
+        refute generic?.(address),
+               "#{inspect(address)} no longer needs a clause ahead of the generic one"
+
+        assert Outbound.blocked?(address),
+               "#{inspect(address)} reached the generic clause first"
+      end
+    end
+
     test "anything that is not an address tuple fails closed" do
       for not_an_address <- [nil, :inet, "127.0.0.1", {1, 2, 3}, {1, 2, 3, 4, 5}] do
         assert Outbound.blocked?(not_an_address),
@@ -139,15 +211,75 @@ defmodule Raxol.Core.OutboundTest do
     end
 
     test "no answer in either family is a DNS failure, not a block" do
-      assert {:error, {:dns_failed, "nowhere.example"}} =
+      assert {:error, {:dns_failed, {"nowhere.example", :nxdomain}}} =
                Outbound.vet("https://nowhere.example/", resolver: failing_resolver())
+    end
+
+    test "a family whose lookup FAILED refuses the host, even when the other answered" do
+      # The attack: a nameserver that SERVFAILs the A query and answers AAAA
+      # chose which half of its own records the policy got to judge. Mapping
+      # the error to an empty list made that byte-identical to a host with no
+      # A record, so the vet passed on the AAAA alone.
+      split = fn
+        _charlist, :inet -> {:error, :servfail}
+        _charlist, :inet6 -> {:ok, [{0x2606, 0x4700, 0, 0, 0, 0, 0, 1}]}
+      end
+
+      assert {:error, {:dns_failed, {"half.example", {:lookup_failed, :servfail}}}} =
+               Outbound.vet("https://half.example/", resolver: split)
+    end
+
+    test "a family with NO record is not a failed lookup, so a v4-only host still resolves" do
+      # `:inet.getaddrs/3` answers `{:error, :nxdomain}` for a family a host
+      # has no record in, which is every v4-only host's AAAA lookup. Failing
+      # closed on that reason would refuse most of the internet.
+      v4_only = fn
+        _charlist, :inet -> {:ok, [{93, 184, 216, 34}]}
+        _charlist, :inet6 -> {:error, :nxdomain}
+      end
+
+      assert {:ok, %{addresses: [{93, 184, 216, 34}]}} =
+               Outbound.vet("https://v4only.example/", resolver: v4_only)
+    end
+
+    test "the reason survives, so a resolver hiccup is not a host that does not exist" do
+      # `Raxol.Web3.HTTP` trips an origin's breaker on `{:dns_failed, _}`. A
+      # transient timeout and a nonexistent host arriving as the same term is
+      # what makes that decision unmakeable.
+      timing_out = fn _charlist, _family -> {:error, :timeout} end
+
+      assert {:error, {:dns_failed, {_host, {:lookup_failed, :timeout}}}} =
+               Outbound.vet("https://flaky.example/", resolver: timing_out)
+    end
+  end
+
+  describe "the port policy" do
+    test "refuses a port nothing serves HTTP on, so a vetted fetch is not a port prober" do
+      # Every other rule here judges the ADDRESS, so `https://<public
+      # host>:22/` passes all of them and the connect result then reports
+      # whether 22 is open. The port is model-chosen in
+      # `Raxol.Agent.Actions.Fetch`.
+      for port <- [22, 25, 3306, 6379, 9200, 11_211] do
+        assert {:error, :invalid_url} = Outbound.vet("https://93.184.216.34:#{port}/"),
+               "port #{port} was not refused"
+      end
+    end
+
+    test "allows the ports HTTP is served on, and an explicit list overrides them" do
+      for port <- [80, 443, 8080, 8443] do
+        assert {:ok, _vetted} = Outbound.vet("https://93.184.216.34:#{port}/"),
+               "port #{port} was refused"
+      end
+
+      assert {:ok, %{uri: %URI{port: 9443}}} =
+               Outbound.vet("https://93.184.216.34:9443/", ports: [9443])
     end
   end
 
   describe "the returned addresses" do
-    test "carries every vetted answer in resolution order, A before AAAA" do
+    test "duplicates are dropped and the families interleave, so a cap cannot starve v6" do
       answers = %{
-        inet: [{93, 184, 216, 34}, {93, 184, 216, 35}],
+        inet: [{93, 184, 216, 34}, {93, 184, 216, 34}, {93, 184, 216, 35}],
         inet6: [{0x2606, 0x4700, 0, 0, 0, 0, 0, 1}]
       }
 
@@ -155,9 +287,47 @@ defmodule Raxol.Core.OutboundTest do
 
       assert vetted.addresses == [
                {93, 184, 216, 34},
-               {93, 184, 216, 35},
-               {0x2606, 0x4700, 0, 0, 0, 0, 0, 1}
+               {0x2606, 0x4700, 0, 0, 0, 0, 0, 1},
+               {93, 184, 216, 35}
              ]
+    end
+
+    test "the dial list is capped, because each address costs a caller one connect timeout" do
+      # `Raxol.Web3.Dial` gives EACH address the full connect timeout (5000ms),
+      # so an uncapped list is a multiplier a hostile authoritative nameserver
+      # sets: 64 padded answers is 64 serial connects behind one call. The v6
+      # answer survives the cut because the families interleave.
+      answers = %{
+        inet: for(n <- 1..64, do: {93, 184, 216, n}),
+        inet6: [{0x2606, 0x4700, 0, 0, 0, 0, 0, 1}]
+      }
+
+      assert {:ok, vetted} = Outbound.vet("https://padded.example/", resolver: resolver(answers))
+
+      assert length(vetted.addresses) == 8
+      assert {0x2606, 0x4700, 0, 0, 0, 0, 0, 1} in vetted.addresses
+    end
+
+    test "a v6-only host keeps a full dial list rather than losing to the interleave" do
+      answers = %{inet: [], inet6: for(n <- 1..12, do: {0x2606, 0x4700, 0, 0, 0, 0, 0, n})}
+
+      assert {:ok, vetted} = Outbound.vet("https://v6many.example/", resolver: resolver(answers))
+
+      assert length(vetted.addresses) == 8
+      assert Enum.all?(vetted.addresses, &(tuple_size(&1) == 8))
+    end
+
+    test "every answer is still judged, including the ones the cap drops" do
+      # The cap bounds the DIAL list, not the check. Capping first would let a
+      # padded RRset carry a blocked address past the policy by parking it
+      # beyond the cut, which is a weaker rule than the one stated.
+      answers = %{
+        inet: for(n <- 1..64, do: {93, 184, 216, n}) ++ [{169, 254, 169, 254}],
+        inet6: []
+      }
+
+      assert {:error, {:blocked_address, "padded.example"}} =
+               Outbound.vet("https://padded.example/", resolver: resolver(answers))
     end
 
     test "is what a pinning caller dials, so a resolver that changes its answer is not consulted twice" do
@@ -215,6 +385,27 @@ defmodule Raxol.Core.OutboundTest do
       assert {:ok, [{93, 184, 216, 34}]} = Outbound.resolve("93.184.216.34", exploding)
       assert {:ok, [{0, 0, 0, 0, 0, 0, 0, 1}]} = Outbound.resolve("[::1]", exploding)
     end
+
+    test "tells a name with no records apart from a lookup that did not answer" do
+      assert {:error, :nxdomain} =
+               Outbound.resolve("nowhere.example", fn _charlist, _family ->
+                 {:error, :nxdomain}
+               end)
+
+      assert {:error, {:lookup_failed, :timeout}} =
+               Outbound.resolve("slow.example", fn _charlist, _family -> {:error, :timeout} end)
+    end
+
+    test "returns what the resolver said, uncapped and undeduplicated" do
+      # The cap and the dedupe belong to `vet/2`, after the reject check has
+      # seen every answer. Moving them here would bound the list the policy is
+      # applied to, which is the one thing the cap must not do.
+      padded = for n <- 1..20, do: {93, 184, 216, n}
+      answers = %{inet: padded ++ padded, inet6: []}
+
+      assert {:ok, addresses} = Outbound.resolve("many.example", resolver(answers))
+      assert length(addresses) == 40
+    end
   end
 
   describe "the resolution budget" do
@@ -232,7 +423,7 @@ defmodule Raxol.Core.OutboundTest do
         {:ok, []}
       end
 
-      assert {:error, {:dns_failed, "slow.example"}} =
+      assert {:error, {:dns_failed, {"slow.example", :nxdomain}}} =
                Outbound.vet("https://slow.example/", resolver: recording, timeout_ms: 250)
 
       assert_received {:budget, :inet, v4_timeout}

@@ -12,6 +12,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
   alias Raxol.MCP.Client.ReferenceServer.Modern
   alias Raxol.MCP.Client.Reservation
   alias Raxol.MCP.Client.Transport
+  alias Raxol.MCP.Protocol
 
   # ADR-0037 validation items 3, 4, 6, 7 and the transport half of 9. The two
   # reference servers live in `lib/` (ADR-0033 section 3's convention: a
@@ -180,6 +181,34 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
   defp tool(name) do
     %{"name" => name, "description" => name, "inputSchema" => %{"type" => "object"}}
+  end
+
+  # The same server, reframed as an SSE body whose final frame the sender never
+  # terminated -- which is what a one-shot response from a server that omits
+  # the trailing blank line is.
+  defp unterminated(inner) do
+    fn vetted, request, opts ->
+      case inner.(vetted, request, opts) do
+        {:ok, %{body: body} = response} ->
+          {:ok,
+           %{response | headers: [{"content-type", "text/event-stream"}], body: "data: " <> body}}
+
+        other ->
+          other
+      end
+    end
+  end
+
+  # What the spec says a POST carrying only a JSON-RPC response is answered
+  # with: 202, no body. The request itself is reported here, because the
+  # reference servers observe the method and a response has none.
+  defp accepting do
+    test_pid = self()
+
+    fn _vetted, request, _opts ->
+      Kernel.send(test_pid, {:posted, request})
+      {:ok, %{status: 202, headers: [], body: ""}}
+    end
   end
 
   describe "the era probe" do
@@ -924,6 +953,60 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
       assert {:ok, [%{name: "echo"}]} = Client.list_tools(sse)
       assert {:ok, [%{name: "echo"}]} = Client.list_tools(json)
+    end
+
+    test "an SSE body with no terminating blank line is still an answer" do
+      # A one-shot response body is every byte there will be, so an
+      # unterminated tail is the last frame rather than a partial one. Taking
+      # only the terminated frames discarded the WHOLE response from a server
+      # that omits the final blank line -- with no reply and no log, so the
+      # caller blocked for its full `call_timeout`.
+      client = start_client!(spec(unterminated(modern(framing: :json)), tables()))
+
+      assert {:ok, [%{name: "echo"}]} = Client.list_tools(client)
+    end
+  end
+
+  describe "answering a request the server started" do
+    test "posts the JSON-RPC response the client owes" do
+      handle = %{handle!(legacy(), tables()) | exchange: accepting()}
+      _probe = observations()
+
+      response =
+        Protocol.error_response(9001, Protocol.method_not_found(), "Method not found")
+
+      assert {:ok, handle} = Transport.Http.respond(handle, "elicitation/create", response)
+      assert_receive {:posted, posted}, 1_000
+
+      assert Jason.decode!(IO.iodata_to_binary(posted.body)) == %{
+               "jsonrpc" => "2.0",
+               "id" => 9001,
+               "error" => %{"code" => -32_601, "message" => "Method not found"}
+             }
+
+      # A response-only POST is answered 202 with no body, so it settles with
+      # nothing to deliver and leaves no task behind.
+      assert_receive {:mcp_http, ref, nil, outcome}, 1_000
+
+      assert {:messages, [], handle} =
+               Transport.Http.decode_info(handle, {:mcp_http, ref, nil, outcome})
+
+      assert handle.tasks == %{}
+    end
+
+    test "routes it on the method it answers, for a modern origin" do
+      # The modern era requires `Mcp-Method` on every post, and a response's
+      # routing key is the method it answers -- which is the whole reason
+      # `respond/3` takes one.
+      handle = %{handle!(modern(), tables()) | exchange: accepting()}
+      _probe = observations()
+
+      response = Protocol.error_response(9001, Protocol.method_not_found(), "Method not found")
+      assert {:ok, _handle} = Transport.Http.respond(handle, "sampling/createMessage", response)
+
+      assert_receive {:posted, posted}, 1_000
+      assert header(posted, "mcp-method") == "sampling/createMessage"
+      assert header(posted, "mcp-name") == "sampling/createMessage"
     end
   end
 

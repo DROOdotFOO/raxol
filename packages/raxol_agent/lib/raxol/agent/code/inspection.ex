@@ -110,7 +110,10 @@ defmodule Raxol.Agent.Code.Inspection do
         %{
           status: :ok,
           servers: Enum.map(servers, &redact_server/1),
-          skipped: Enum.map(skipped, fn {name, reason} -> %{name: name, reason: reason} end)
+          skipped:
+            Enum.map(skipped, fn {name, reason} ->
+              %{name: one_line(name), reason: reason}
+            end)
         }
 
       {:error, reason} ->
@@ -120,18 +123,48 @@ defmodule Raxol.Agent.Code.Inspection do
 
   # NAMES only, never values: `.mcp.json` env values and header values may
   # hold tokens, and this output is meant to be read and pasted.
+  #
+  # A url was the hole in that: it was copied out verbatim, and a url is the
+  # commonest place an MCP credential lives -- `https://user:token@host/mcp`
+  # and `?api_key=sk-...` are both ordinary MCP configuration. It is now cut
+  # down to what identifies the server, by `endpoint/1`.
+  #
+  # The name is workspace content too, and nothing has checked its charset at
+  # this point (the loader's check applies to servers it ADMITS, which is a
+  # later and narrower set). A `\n` in it forged a whole extra row in the
+  # rendered snapshot, so newlines become spaces here.
   defp redact_server(server) do
     %{
-      name: server.name,
+      name: one_line(server.name),
       source: Map.get(server, :source, :workspace),
       command: Map.get(server, :command),
       args: Map.get(server, :args, []),
       env_keys: server |> Map.get(:env, %{}) |> Map.keys() |> Enum.sort(),
-      url: Map.get(server, :url),
+      url: endpoint(Map.get(server, :url)),
       header_names: server |> Map.get(:headers, []) |> Enum.map(&elem(&1, 0)),
       metered: Map.get(server, :metered, false)
     }
   end
+
+  defp one_line(name) when is_binary(name), do: String.replace(name, ~r/[\r\n]+/, " ")
+  defp one_line(name), do: name
+
+  # Scheme, host, port and path: enough for an operator to recognize which
+  # server this is, with userinfo and the query string dropped rather than
+  # masked, so there is nothing left to un-mask.
+  defp endpoint(nil), do: nil
+
+  defp endpoint(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host} = uri} when is_binary(scheme) and is_binary(host) ->
+        URI.to_string(%URI{scheme: scheme, host: host, port: uri.port, path: uri.path})
+
+      _unusable ->
+        "(unparseable url)"
+    end
+  end
+
+  defp endpoint(_other), do: nil
 
   # Which servers WOULD serve this directory, and whether their command is
   # installed. Nothing is started to find out.

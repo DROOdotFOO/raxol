@@ -100,6 +100,34 @@ defmodule Raxol.MCP.ProtocolTest do
     test "decode returns error for invalid JSON" do
       assert {:error, _} = Protocol.decode("not json")
     end
+
+    # Every one of these raised `BadMapError` out of `normalize/1`, inside
+    # whichever process read the line -- for the client that is
+    # `handle_continue(:connect)` and `handle_manager_info/2`, so a hostile or
+    # merely batching origin took the client down its `start_link` link.
+    test "classifies a decode that is not a JSON object rather than raising" do
+      assert Protocol.decode(~s([{"jsonrpc":"2.0","id":1,"result":{}}])) ==
+               {:error, {:unsupported_message, :batch}}
+
+      assert Protocol.decode("123") == {:error, {:unsupported_message, :number}}
+      assert Protocol.decode(~s("hello")) == {:error, {:unsupported_message, :string}}
+      assert Protocol.decode("true") == {:error, {:unsupported_message, :boolean}}
+      assert Protocol.decode("null") == {:error, {:unsupported_message, :null}}
+    end
+
+    # `{"id":N,"result":null}` is a well-formed JSON-RPC success. Popping on
+    # truthiness erased the key, so the message matched no response clause in
+    # the client: no reply, no log, and the caller blocked for its full
+    # `call_timeout`.
+    test "keeps a key whose value is null, and only reports keys that were sent" do
+      assert {:ok, decoded} = Protocol.decode(~s({"jsonrpc":"2.0","id":7,"result":null}))
+      assert Map.fetch(decoded, :result) == {:ok, nil}
+      assert Protocol.response?(decoded)
+
+      assert {:ok, bare} = Protocol.decode(~s({"jsonrpc":"2.0","id":7}))
+      refute Map.has_key?(bare, :result)
+      refute Protocol.response?(bare)
+    end
   end
 
   describe "encode!/1" do

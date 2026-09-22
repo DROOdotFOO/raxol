@@ -242,8 +242,52 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
         %{name: "intel", url: "https://repo-chose/mcp", source: :workspace}
       ]
 
-      assert {[kept], [{"intel", :duplicate_server_name}]} = McpLoader.admit(servers)
+      assert {[kept], [{"intel", {:duplicate_server_name, "intel"}}]} =
+               McpLoader.admit(servers)
+
       assert kept.source == :user
+    end
+
+    test "two names that mint the SAME tool namespace are one server, not two" do
+      # `-` is legal in a server name and illegal in a tool name, so both of
+      # these become `mcp__intel_api__<tool>`. Admitting both put two
+      # identically named functions in one tool array -- providers reject the
+      # whole request, so every tool call in the session fails -- and let the
+      # workspace entry shadow the operator's by spelling its name differently.
+      assert Raxol.MCP.Client.tool_name(:"intel-api", "lookup") ==
+               Raxol.MCP.Client.tool_name(:intel_api, "lookup")
+
+      servers = [
+        %{name: "intel_api", url: "https://operator/mcp", source: :user},
+        %{name: "intel-api", url: "https://repo-chose/mcp", source: :workspace}
+      ]
+
+      assert {[kept], [{"intel-api", {:duplicate_server_name, "intel_api"}}]} =
+               McpLoader.admit(servers)
+
+      assert kept.source == :user
+    end
+
+    test "minting new atoms is bounded across loads, not just within one" do
+      # The 16-server cap bounds one load; atoms are never collected and each
+      # session reads a fresh `.mcp.json`, so what matters is the count across
+      # every load this node ever does. Own counter and own budget here, so
+      # the assertion does not depend on -- or spend -- the node's.
+      counter = :atomics.new(1, [])
+      budget = [atom_counter: counter, atom_budget: 1]
+      fresh = "mcp_gap_r_#{System.unique_integer([:positive])}"
+
+      assert {[_first], []} = McpLoader.admit([%{name: fresh, command: "true"}], budget)
+
+      later = "mcp_gap_r_#{System.unique_integer([:positive])}"
+
+      assert {[], [{^later, :atom_budget_exhausted}]} =
+               McpLoader.admit([%{name: later, command: "true"}], budget)
+
+      # A name already interned stays free: reloading the same file forever
+      # costs nothing, which is what makes the budget bound an ATTACK rather
+      # than an ordinary long-running host.
+      assert {[_again], []} = McpLoader.admit([%{name: fresh, command: "true"}], budget)
     end
   end
 end

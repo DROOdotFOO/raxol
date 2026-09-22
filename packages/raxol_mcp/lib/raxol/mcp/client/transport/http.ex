@@ -187,8 +187,31 @@ if Code.ensure_loaded?(Mint.HTTP) do
     @impl Raxol.MCP.Client.Transport
     def send(%__MODULE__{} = handle, id, request) do
       with :ok <- meter(handle, request) do
-        issue(handle, id, request)
+        post(handle, id, wire(handle, id, request))
       end
+    end
+
+    @doc """
+    Answer a request the SERVER sent us.
+
+    A POST carrying only a JSON-RPC response is specified to be answered `202`
+    with no body, so it is issued exactly like a notification: a monitored
+    task, tracked under a `nil` id, with nothing for the client to correlate.
+    It is deliberately NOT metered -- a response is not a tool call -- and
+    deliberately not admitted through the client's in-flight window, because a
+    response the server is already blocked on must not queue behind the
+    requests that are blocked on the server.
+    """
+    @impl Raxol.MCP.Client.Transport
+    def respond(%__MODULE__{} = handle, method, response) do
+      wire = %{
+        method: "POST",
+        path: path(handle.vetted.uri),
+        headers: headers(handle, %{method: method, params: %{}}),
+        body: Jason.encode_to_iodata!(response)
+      }
+
+      post(handle, nil, wire)
     end
 
     @impl Raxol.MCP.Client.Transport
@@ -545,8 +568,11 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     # -- issuing a request -------------------------------------------------------
 
-    defp issue(handle, id, request) do
-      wire = wire(handle, id, request)
+    # The wire request is built by the CALLER, because the two callers build
+    # different bodies: `send/3` encodes a JSON-RPC request or notification,
+    # `respond/3` a JSON-RPC response. Everything from here down -- the
+    # monitored task, the breaker, the outcome -- is the same for both.
+    defp post(handle, id, wire) do
       owner = self()
       session = handle.session_id
       era = handle.era
@@ -624,15 +650,21 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     defp messages(response) do
       case content_type(response.headers) do
-        "text/event-stream" ->
-          {payloads, _remainder} = SSE.payloads(response.body)
-          payloads
+        # The body is COMPLETE -- the exchange reads to the end before
+        # answering -- so an unterminated tail is the last frame, not a partial
+        # one waiting for bytes that will never come. Keeping only the
+        # terminated frames discarded the whole response from a server that
+        # omits the final blank line: no reply, no log, and the caller blocked
+        # for its full `call_timeout`.
+        "text/event-stream" -> SSE.complete_payloads(response.body)
+        _json -> json_message(response.body)
+      end
+    end
 
-        _json ->
-          case String.trim(response.body) do
-            "" -> []
-            body -> [body]
-          end
+    defp json_message(body) do
+      case String.trim(body) do
+        "" -> []
+        trimmed -> [trimmed]
       end
     end
 

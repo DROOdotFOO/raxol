@@ -67,3 +67,15 @@ packages/raxol_symphony/lib/raxol/symphony/prompt_builder/memo.ex
 # raises ArgumentError in whoever still holds the reference. Accepting
 # [name: nil] would hand each caller its own cache, which is the defect.
 packages/raxol_mcp/lib/raxol/mcp/client/tables.ex
+
+# `Raxol.Web3.Supervisor` and `Raxol.Web3.Tables` are the same shape as the
+# MCP pair above and were invisible for a plainer reason: the guard's roots
+# did not include `packages/raxol_web3/lib` at all, so the package was never
+# scanned. `Tables` owns the token-bucket, breaker, origin and cache tables
+# for the whole node (ADR-0038 decision 5): a table belongs to the process
+# that created it, so a per-caller owner spends a free-tier rate budget once
+# per process, never trips a breaker on anyone else's failures, and leaves
+# `ArgumentError` behind when it dies. That is the defect [name: nil] would
+# reintroduce. `Supervisor` is its canonical supervisor.
+packages/raxol_web3/lib/raxol/web3/supervisor.ex
+packages/raxol_web3/lib/raxol/web3/tables.ex

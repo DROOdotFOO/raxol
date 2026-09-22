@@ -150,4 +150,30 @@ defmodule Raxol.MCP.Client.SSETest do
       assert {["one"], ""} = SSE.payloads("data: one\r\n\r" <> "\n")
     end
   end
+
+  # A one-shot HTTP response body is every byte there will ever be, so its
+  # unterminated tail is the last frame rather than a partial one. Dropping it
+  # discarded the WHOLE response from a server that omits the trailing blank
+  # line, with no reply and no log, stalling the caller for its full
+  # `call_timeout`.
+  describe "a complete body" do
+    test "yields a lone frame that was never terminated" do
+      assert SSE.complete_payloads(~s(data: {"id":1})) == [~s({"id":1})]
+    end
+
+    test "yields the terminated frames and the unterminated tail, in order" do
+      assert SSE.complete_payloads("data: one\n\ndata: two") == ["one", "two"]
+    end
+
+    test "agrees with payloads/1 when the body is properly terminated" do
+      body = "data: one\n\ndata: two\n\n"
+      assert {payloads, ""} = SSE.payloads(body)
+      assert SSE.complete_payloads(body) == payloads
+    end
+
+    test "a trailing keepalive comment is still not a payload" do
+      assert SSE.complete_payloads("data: one\n\n: keepalive") == ["one"]
+      assert SSE.complete_payloads("") == []
+    end
+  end
 end

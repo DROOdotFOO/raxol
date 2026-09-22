@@ -2585,6 +2585,118 @@ defmodule Raxol.Agent.Code.AppTest do
       refute model.notice =~ "no MCP servers configured"
     end
 
+    test "/mcp names a remote endpoint without its userinfo or query" do
+      # A url is the commonest place an MCP credential lives, and this notice
+      # is output an operator reads and pastes.
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{
+                "remote" => %{
+                  "url" => "https://user:s3cret@mcp.example:8443/mcp?api_key=sk-live-42"
+                }
+              }
+            })
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      {model, []} = submit(model, "/mcp")
+
+      assert model.notice =~ "remote  →  https://mcp.example:8443/mcp"
+      refute model.notice =~ "s3cret"
+      refute model.notice =~ "sk-live-42"
+    end
+
+    test "a newline in a server name cannot forge a second /mcp row" do
+      # Only ADMITTED names are charset-checked, and the terminal boundary
+      # passes `\n` through by design, so the name went to the screen as
+      # written: one entry rendered two rows, the second reading exactly like
+      # a connected server.
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"fs\n● in-the-operators-config" => %{"command" => "npx"}}
+            })
+        })
+
+      name = "fs\n● in-the-operators-config"
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      # Refused by the loader under the name as WRITTEN, so the row's mark has
+      # to resolve against the same rewritten name the row prints.
+      result = %{
+        tools: [],
+        connected: [],
+        failed: [{name, :invalid_server_name}],
+        janitor: nil
+      }
+
+      {model, []} = App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+      {model, []} = submit(model, "/mcp")
+
+      assert model.notice =~ "✗ fs"
+      assert model.notice =~ "in-the-operators-config"
+      assert model.notice =~ "invalid_server_name"
+      refute model.notice =~ "\n"
+    end
+
+    test "a refused server's mark agrees with the reason printed beside it" do
+      # Admission mints its refusals with the STRING name out of the file
+      # while `connected` carries the spec's atom, so comparing the two by
+      # identity marked a refused server `○` -- "never attempted" -- on the
+      # same row as its own failure reason.
+      dir =
+        config_cwd(%{
+          ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"dupe" => %{"command" => "npx"}}})
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      result = %{
+        tools: [],
+        connected: [],
+        failed: [{"dupe", {:duplicate_server_name, "dupe"}}],
+        janitor: nil
+      }
+
+      {model, []} = App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+      {model, []} = submit(model, "/mcp")
+
+      assert model.notice =~ "✗ dupe"
+      assert model.notice =~ "duplicate_server_name"
+      refute model.notice =~ "○ dupe"
+    end
+
+    test "the status line bounds the failed list a large .mcp.json produces" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx"}}})
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      # Admission reports every entry over the cap through `failed`, so a file
+      # with 10k valid servers puts ~9,984 names in here -- in the status
+      # line, which is rebuilt every frame.
+      failed = for n <- 1..40, do: {"srv#{n}", :server_limit_exceeded}
+      result = %{tools: [], connected: [], failed: failed, janitor: nil}
+
+      {model, []} = App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      assert model.status_line =~ "srv16"
+      refute model.status_line =~ "srv17"
+      assert model.status_line =~ "… and 24 more"
+    end
+
     test "the tool authorizer gates a sensitive Dynamic MCP tool" do
       auth = App.tool_authorizer(self())
 

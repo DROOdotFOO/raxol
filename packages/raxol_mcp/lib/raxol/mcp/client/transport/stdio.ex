@@ -21,22 +21,57 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
   `Raxol.MCP.Client.start_link/1` answers `{:error, {:spawn_failed, reason}}`
   for a command that is not on the path instead of taking the caller down with
   an `:enoent` from deep inside `Port.open/2`.
+
+  ## Closing the port is not stopping the server
+
+  `Port.close/1` closes the child's stdio and signals nothing. A server that
+  reads stdin sees EOF and usually exits; one that does not -- and the `npx`
+  and `uvx` wrappers that shell out to a long-lived server are exactly that --
+  keeps running with no owner, forever, once per session. On a long-lived SSH
+  host that is unbounded accumulation.
+
+  So `connect/1` captures the child's signal target while the port is open
+  (`Port.info/2` is the only thing that knows it, and a closed port has
+  forgotten it), and `close/1` closes the port, sends SIGTERM, waits a short
+  grace for the child to go, then SIGKILLs what is left. The grace is 400 ms
+  on purpose: `close/1` runs inside the client's `terminate/2`, and a
+  supervisor's default worker shutdown budget is 5 s.
   """
 
   @behaviour Raxol.MCP.Client.Transport
 
+  require Logger
+
+  alias Raxol.Core.ProcessGroup
   alias Raxol.MCP.Protocol
 
   @enforce_keys [:command]
-  defstruct [:port, :command, buffer: ""]
+  defstruct [:port, :command, target: :none, buffer: ""]
 
   @type t :: %__MODULE__{
           port: port() | nil,
           command: String.t(),
+          target: ProcessGroup.target(),
           buffer: binary()
         }
 
   @line_bytes 1_048_576
+
+  # `{:line, @line_bytes}` bounds one port CHUNK, not the line: a server that
+  # never emits a newline delivers an unbounded run of `:noeol` chunks and
+  # every one of them was appended to `:buffer`, so 100 MB of output became
+  # 100 MB of the client's heap. The accumulated line gets the ceiling the HTTP
+  # leg already gives a response body (`Raxol.MCP.BoundedExchange`'s 2 MiB
+  # `:max_bytes` default), and passing it fails the SESSION rather than the
+  # line: a peer that cannot frame its output is not one whose next line can be
+  # trusted to start where this one stopped.
+  @max_line_bytes 2_097_152
+
+  # Long enough for a node or python server to run its SIGTERM handler and
+  # flush, short enough that `terminate/2` finishes well inside a supervisor's
+  # 5 s worker shutdown. `ProcessGroup.await_gone/3` polls, so a child that
+  # goes immediately costs one poll, not the whole window.
+  @reap_grace_ms 400
 
   @impl Raxol.MCP.Client.Transport
   def connect(config) do
@@ -49,7 +84,7 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
     # is arbitrary local code from a file a clone carried.
     with :ok <- Raxol.MCP.Client.Transport.permit(config, command) do
       port = Port.open({:spawn_executable, find_executable(command)}, port_opts(args, env))
-      {:ok, %__MODULE__{port: port, command: command}}
+      {:ok, %__MODULE__{port: port, command: command, target: capture(port)}}
     end
   catch
     # `Port.open/2` signals a missing or unexecutable command as an ERROR with
@@ -100,23 +135,43 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
   @impl Raxol.MCP.Client.Transport
   def cancel(%__MODULE__{} = handle, _id), do: handle
 
-  defp write(%__MODULE__{port: port} = handle, id, request) do
-    case encode(id, request) do
-      {:ok, data} ->
-        Port.command(port, data)
-        {:ok, handle}
+  # A JSON-RPC response the CLIENT owes the server. The method is the modern
+  # HTTP era's routing header and means nothing on a pipe, where one stream
+  # carries everything in both directions.
+  @impl Raxol.MCP.Client.Transport
+  def respond(%__MODULE__{port: port} = handle, _method, response) when is_port(port) do
+    command(handle, Protocol.encode(response))
+  end
 
-      {:error, reason} ->
-        {:error, {:encode_failed, reason}}
-    end
+  def respond(%__MODULE__{}, _method, _response), do: {:error, :not_connected}
+
+  defp write(%__MODULE__{} = handle, id, request) do
+    command(handle, encode(id, request))
+  end
+
+  defp command(%__MODULE__{port: port} = handle, {:ok, data}) do
+    Port.command(port, data)
+    {:ok, handle}
   rescue
     ArgumentError -> {:error, :not_connected}
   catch
     :error, reason -> {:error, {:port_failed, reason}}
   end
 
+  defp command(%__MODULE__{}, {:error, reason}), do: {:error, {:encode_failed, reason}}
+
+  # The close and the reap, in that order: EOF first gives a well-behaved
+  # server the chance to exit on its own terms, and the grace below is then
+  # usually one poll rather than a wait. What survives both is killed, because
+  # a client that has stopped reading a pipe has already stopped being the
+  # thing keeping that subprocess honest.
   @impl Raxol.MCP.Client.Transport
-  def close(%__MODULE__{port: port}) when is_port(port) do
+  def close(%__MODULE__{port: port} = handle) do
+    if is_port(port), do: close_port(port)
+    reap(handle.target, handle.command)
+  end
+
+  defp close_port(port) do
     Port.close(port)
     :ok
   rescue
@@ -125,15 +180,62 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
     :error, _reason -> :ok
   end
 
-  def close(%__MODULE__{}), do: :ok
+  defp reap(:none, _command), do: :ok
+
+  defp reap(target, command) do
+    shell = [shell: ProcessGroup.shell()]
+
+    case ProcessGroup.signal(target, "-TERM", shell) do
+      # Already gone: the EOF the close delivered was enough.
+      :gone -> :ok
+      :ok -> insist(target, command, shell)
+      {:error, reason} -> warn_unreaped(command, reason)
+    end
+
+    :ok
+  end
+
+  defp insist(target, command, shell) do
+    case ProcessGroup.await_gone(target, @reap_grace_ms, shell) do
+      :ok -> :ok
+      :timeout -> kill(target, command, shell)
+      {:error, reason} -> warn_unreaped(command, reason)
+    end
+  end
+
+  defp kill(target, command, shell) do
+    Logger.warning(
+      "[MCP.Client.Stdio] #{command} ignored SIGTERM after #{@reap_grace_ms} ms; killing"
+    )
+
+    case ProcessGroup.signal(target, "-KILL", shell) do
+      {:error, reason} -> warn_unreaped(command, reason)
+      _gone_or_delivered -> :ok
+    end
+  end
+
+  # The server is still out there and nothing here can stop it: no shell to
+  # signal through, or a kernel that refused. `close/1` answers `:ok` either
+  # way -- the transport contract has no arm for "the server outlived the
+  # session" -- so this is the only place the operator watching a host
+  # accumulate MCP servers gets the reason.
+  defp warn_unreaped(command, reason) do
+    Logger.warning("[MCP.Client.Stdio] could not stop #{command}: #{inspect(reason)}")
+  end
 
   @impl Raxol.MCP.Client.Transport
   def decode_info(%__MODULE__{port: port} = handle, {port, {:data, {:eol, chunk}}}) do
-    {:messages, [handle.buffer <> chunk], %{handle | buffer: ""}}
+    case accumulate(handle, chunk) do
+      {:ok, line} -> {:messages, [line], %{handle | buffer: ""}}
+      :too_long -> overflowed(handle)
+    end
   end
 
   def decode_info(%__MODULE__{port: port} = handle, {port, {:data, {:noeol, chunk}}}) do
-    {:messages, [], %{handle | buffer: handle.buffer <> chunk}}
+    case accumulate(handle, chunk) do
+      {:ok, buffer} -> {:messages, [], %{handle | buffer: buffer}}
+      :too_long -> overflowed(handle)
+    end
   end
 
   def decode_info(%__MODULE__{port: port} = handle, {port, {:exit_status, code}}) do
@@ -147,6 +249,36 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
   def decode_info(%__MODULE__{}, _message), do: :ignore
 
   # -- Private -----------------------------------------------------------------
+
+  # Read while the port is OPEN: `Port.info/2` is the only thing that knows the
+  # child's pid, and a closed port has forgotten it -- and a process group that
+  # outlived its leader is exactly the case worth reaping. `resolve/1` costs
+  # one `kill -0` here, once per session, against the fork of a whole server.
+  defp capture(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 1 -> ProcessGroup.resolve(os_pid)
+      _no_child -> :none
+    end
+  end
+
+  defp accumulate(%__MODULE__{buffer: buffer}, chunk) do
+    if byte_size(buffer) + byte_size(chunk) > @max_line_bytes,
+      do: :too_long,
+      else: {:ok, buffer <> chunk}
+  end
+
+  # The port is torn down HERE because `{:closed, _, _}` routes to the client's
+  # reconnect, which drops the handle without closing it: the subprocess would
+  # go on filling a pipe nobody reads.
+  defp overflowed(%__MODULE__{} = handle) do
+    Logger.warning(
+      "[MCP.Client.Stdio] #{handle.command} sent more than #{@max_line_bytes} bytes " <>
+        "with no newline; closing the session"
+    )
+
+    close(handle)
+    {:closed, {:line_too_long, @max_line_bytes}, %{handle | port: nil, target: :none, buffer: ""}}
+  end
 
   defp encode(nil, %{method: method, params: params}) do
     Protocol.encode(Protocol.notification(method, params))

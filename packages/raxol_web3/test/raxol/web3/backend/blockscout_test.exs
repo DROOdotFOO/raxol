@@ -469,6 +469,48 @@ defmodule Raxol.Web3.Backend.BlockscoutTest do
       assert is_binary(block.hash)
       assert {:evm, _miner} = block.miner
     end
+
+    test "an integer field that does not parse WHOLE fails the read instead of truncating" do
+      # `Integer.parse/1` answers `{1, ".5e18"}`, `{0, "x1f"}` and
+      # `{12, "abc"}` for these, so taking the number and dropping the rest
+      # turned each into a small plausible integer nothing downstream could
+      # tell from a real one. A height of 0 is worse than no height.
+      for value <- ["1.5e18", "1e18", "0x1f", "12abc", true] do
+        handle = handle(%{"/api/v2/blocks/1" => Jason.encode!(%{"height" => value})})
+
+        assert Backend.call(handle, :get_block, [1]) == {:error, {:decode_failed, :height}},
+               "#{inspect(value)} was read as a height"
+      end
+    end
+
+    test "a token's decimals must parse whole, because every amount is read through it" do
+      # `amount / 10 ** decimals`: "18abc" taken as 18 is luck, and taken as
+      # 1 -- which is what the truncating parse did with "1.8e1" -- is a
+      # 10^17 error in the number a user reads as money.
+      body =
+        Jason.encode!(%{
+          "items" => [%{"value" => "1000", "token" => %{"decimals" => "18abc"}}]
+        })
+
+      handle = handle(%{"/api/v2/addresses/#{elem(@vitalik, 1)}/tokens" => body})
+
+      assert {:error, {:decode_failed, :decimals}} =
+               Backend.call(handle, :token_balances, [@vitalik, []])
+    end
+
+    test "a REST height that does not parse is a failed read, not a nil height" do
+      # `"23e6"` truncated to 23: a height off by seven orders of magnitude,
+      # handed to a caller as the chain's head.
+      handle = handle(%{"/api/v2/blocks" => ~s({"items":[{"height":"23e6"}]})})
+
+      assert {:error, {:decode_failed, :height}} = Backend.call(handle, :block_height)
+    end
+
+    test "a stats counter that does not parse names itself in the failure" do
+      handle = handle(%{"/api/v2/stats" => ~s({"total_blocks":"1.5e18"})})
+
+      assert {:error, {:decode_failed, :total_blocks}} = Backend.call(handle, :chain_info)
+    end
   end
 
   describe "resolve_name/2" do

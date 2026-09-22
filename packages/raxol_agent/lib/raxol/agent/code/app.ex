@@ -448,9 +448,10 @@ defmodule Raxol.Agent.Code.App do
   # which a tenant has no claim on.
   defp load_mcp(_cwd, true), do: {[], [], "mcp servers disabled (jailed session)"}
 
-  # User-level servers FIRST: `McpLoader.admit/1` keeps the first server of
-  # each name, so a workspace `.mcp.json` cannot shadow one of the operator's
-  # own by reusing its name.
+  # User-level servers FIRST: `McpLoader.admit/2` keeps the first server of
+  # each name, compared as the tool namespace spells it, so a workspace
+  # `.mcp.json` cannot shadow one of the operator's own by reusing its name
+  # or a punctuation variant that normalizes onto it.
   #
   # Entries the bridge cannot run (an `http`/`sse` entry naming no url, a
   # broken entry) ride along as `mcp_skipped`, so `/mcp` lists them with a
@@ -761,11 +762,22 @@ defmodule Raxol.Agent.Code.App do
     "mcp: #{length(tools)} tools from #{length(connected)} servers"
   end
 
+  # Same bound the `/mcp` notice puts on its skipped list, for the same
+  # reason and then some: `failed` is not just servers that tried and failed,
+  # it carries every admission refusal -- a `.mcp.json` with 10k valid
+  # entries puts the ~9,984 over the cap in here -- and this string is the
+  # status line, re-rendered every frame.
   defp mcp_tools_line(%{tools: tools, failed: failed}) do
-    names =
-      Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
+    {shown, rest} = Enum.split(failed, Raxol.Agent.Code.McpLoader.max_servers())
+    names = Enum.map_join(shown, ", ", fn {name, _reason} -> to_string(name) end)
 
-    "mcp: #{length(tools)} tools · failed: #{names}"
+    more =
+      case rest do
+        [] -> ""
+        more -> " … and #{length(more)} more"
+      end
+
+    "mcp: #{length(tools)} tools · failed: #{names}#{more}"
   end
 
   defp skipped_suffix([]), do: ""

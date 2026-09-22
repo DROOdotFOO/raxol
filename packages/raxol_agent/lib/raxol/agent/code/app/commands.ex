@@ -318,14 +318,52 @@ defmodule Raxol.Agent.Code.App.Commands do
   end
 
   defp mcp_text(%{mcp_servers: servers} = model) do
+    # Index the status ONCE per render. `failed` carries every refusal
+    # admission makes, including the whole over-cap tail of a large
+    # `.mcp.json`, and the per-row `Enum.find` over it (with a `to_string/1`
+    # allocation per comparison) ran once per server per FRAME: a 16-row
+    # notice against 10k refusals was 160k comparisons every time the surface
+    # redrew. Building the two lookups up front makes it one pass, total.
+    status = index_status(model.mcp_status)
+
     rows =
       Enum.map(servers, fn s ->
-        "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  #{target_text(s)}" <>
-          failure_text(model.mcp_status, s.name)
+        name = row_name(s.name)
+
+        "#{server_mark(status, name)} #{name}  →  #{target_text(s)}" <>
+          failure_text(status, name)
       end)
 
     Enum.join(rows ++ skipped_rows(model), "\n")
   end
+
+  # Both sides are keyed by the name AS RENDERED, so a row and its mark agree
+  # even when the name was rewritten on the way to the screen.
+  defp index_status(%{connected: connected, failed: failed}) do
+    %{
+      connected: MapSet.new(connected, &row_name/1),
+      failed: Map.new(failed, fn {name, reason} -> {row_name(name), reason} end)
+    }
+  end
+
+  defp index_status(other), do: other
+
+  # `connected` names are the spec's atoms and `failed` names are whatever
+  # refused them -- admission mints its rejections with the STRING name out of
+  # the file -- so the two lists are keyed on their text or they never match.
+  # They did not: a refused server rendered `○` ("never attempted") next to
+  # its own `(failed: ...)` reason.
+  defp row_key(name) when is_binary(name), do: name
+  defp row_key(name) when is_atom(name), do: Atom.to_string(name)
+  defp row_key(other), do: inspect(other)
+
+  # A name is workspace content and only ADMITTED names are charset-checked,
+  # so a skipped or refused one arrives as written. `Raxol.Core.Boundary.
+  # TermText` passes `\n` through by design, so `"fs\n● evil"` rendered a
+  # second row that reads exactly like a connected server. Newlines become
+  # spaces rather than being deleted, so the forged text stays on the row it
+  # was written on instead of being glued onto the real name.
+  defp row_name(name), do: String.replace(row_key(name), ~r/[\r\n]+/, " ")
 
   # What the entry declares, which is what the operator has to fix when it
   # does not start: a command line, a URL, or neither. Reading `:command`
@@ -334,8 +372,23 @@ defmodule Raxol.Agent.Code.App.Commands do
     String.trim("#{command} #{Enum.join(Map.get(server, :args, []), " ")}")
   end
 
-  defp target_text(%{url: url}) when is_binary(url), do: url
+  defp target_text(%{url: url}) when is_binary(url), do: redacted_url(url)
   defp target_text(_server), do: "(no command or url)"
+
+  # This notice is meant to be read and pasted, and a URL is the commonest
+  # place an MCP credential lives: `https://user:token@host/mcp` and
+  # `?api_key=sk-...` are both ordinary MCP configuration. Scheme, host, port
+  # and path are what identifies the server to its operator; userinfo and
+  # query are dropped rather than masked, so there is nothing to un-mask.
+  defp redacted_url(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host} = uri} when is_binary(scheme) and is_binary(host) ->
+        URI.to_string(%URI{scheme: scheme, host: host, port: uri.port, path: uri.path})
+
+      _unusable ->
+        "(unparseable url)"
+    end
+  end
 
   # `✗` is a server that started and failed, so it carries its reason here
   # rather than being a mark with no explanation next to a `⊘` row that has
@@ -343,9 +396,9 @@ defmodule Raxol.Agent.Code.App.Commands do
   # never allowlisted, a handshake refusal -- comes back through the same
   # `failed` list; one the loader never tried at all rides in `mcp_skipped`.
   defp failure_text(%{failed: failed}, name) do
-    case Enum.find(failed, fn {n, _reason} -> to_string(n) == name end) do
-      nil -> ""
-      {_n, reason} -> "  (failed: #{inspect(reason, limit: 3)})"
+    case Map.fetch(failed, name) do
+      {:ok, reason} -> "  (failed: #{inspect(reason, limit: 3)})"
+      :error -> ""
     end
   end
 
@@ -362,7 +415,7 @@ defmodule Raxol.Agent.Code.App.Commands do
 
     rows =
       Enum.map(shown, fn {name, reason} ->
-        "⊘ #{name}  →  skipped: #{skip_text(reason)}"
+        "⊘ #{row_name(name)}  →  skipped: #{skip_text(reason)}"
       end)
 
     case rest do
@@ -381,15 +434,11 @@ defmodule Raxol.Agent.Code.App.Commands do
   defp server_mark(nil, _name), do: "○"
 
   defp server_mark(%{connected: connected, failed: failed}, name) do
-    atom = String.to_existing_atom(name)
-
     cond do
-      atom in connected -> "●"
-      Enum.any?(failed, fn {n, _reason} -> n == atom end) -> "✗"
+      MapSet.member?(connected, name) -> "●"
+      Map.has_key?(failed, name) -> "✗"
       true -> "○"
     end
-  rescue
-    ArgumentError -> "○"
   end
 
   defp hooks_text(%{hooks: nil}), do: "no hooks configured (.raxol/hooks.json)"

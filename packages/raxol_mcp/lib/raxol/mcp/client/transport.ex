@@ -69,6 +69,20 @@ defmodule Raxol.MCP.Client.Transport do
   what a notification's completion is: a request that finished with nothing
   to deliver, whose in-flight slot must still be released. `:ignore`
   preserves the catch-all clause that was at `client.ex:246`.
+
+  ## Why `respond/3` exists
+
+  Every other callback carries work the CLIENT started. `respond/3` carries the
+  one message the server starts: a JSON-RPC request (`id` + `method`), which
+  the spec obliges the receiver to answer. The client answered none of them --
+  `handle_message/2` dropped anything with a `method` -- so a server that sent
+  `elicitation/create` waited on a response that was never coming while the
+  session looked healthy from both ends.
+
+  `method` is passed alongside the response because the modern era routes every
+  POST on `Mcp-Method`, and the routing key for a response is the method it
+  answers. A stdio transport ignores it, exactly as it ignores the id in
+  `send/3`.
   """
 
   @typedoc "Opaque per-connection transport state, threaded back through every call."
@@ -99,6 +113,8 @@ defmodule Raxol.MCP.Client.Transport do
               {:ok, handle()} | {:error, term()}
   @callback cancel(handle(), pos_integer() | {:notify, pos_integer()}) :: handle()
   @callback close(handle()) :: :ok
+  @callback respond(handle(), method :: String.t(), response :: map()) ::
+              {:ok, handle()} | {:error, term()}
   @callback decode_info(handle(), message :: term()) ::
               {:messages, [binary()], handle()}
               | {:failed, pos_integer(), term(), handle()}
@@ -153,9 +169,9 @@ defmodule Raxol.MCP.Client.Transport do
   `{:error, :no_http_client}`, which `Raxol.Agent.McpBundle.load/2` already
   handles as a per-server fail-open skip.
 
-  The refused spec is echoed back with its header VALUES replaced, because a
-  spec carries resolved credentials and an error term is one of the four places
-  ADR-0033 section 7 names as where they leak.
+  The refused spec is echoed back through `redact/1`, because a spec carries
+  resolved credentials and an error term is one of the four places ADR-0033
+  section 7 names as where they leak.
   """
   @spec select(map() | keyword()) :: {:ok, module(), map()} | {:error, term()}
   def select(spec) do
@@ -187,21 +203,61 @@ defmodule Raxol.MCP.Client.Transport do
   end
 
   @doc """
-  A spec with every header value replaced by `"[redacted]"`.
+  A spec with every credential-bearing value replaced by `"[redacted]"`.
 
   Public because the client reports refused specs too, and one redaction is
   better than two.
+
+  Four keys, not one. `:headers` was the whole of it, and a STDIO spec carries
+  none -- so the fall-through clause handed back `:env`, which is where
+  `.mcp.json` puts `GITHUB_TOKEN`, and `:args`, which is where a CLI server
+  takes `--token=`. `:url` was never redacted on either leg, so `?api_key=`
+  and `user:pass@host` rode out with it.
+
+  Names survive, values do not: an operator reading `{:invalid_spec, _}` needs
+  to see WHICH variable and how many arguments, and neither is the secret. The
+  URL keeps scheme, host and path for the same reason -- that is the target,
+  and the userinfo and query are the credential.
   """
   @spec redact(map()) :: map()
-  def redact(%{headers: headers} = config) when is_list(headers) do
-    %{config | headers: Enum.map(headers, fn {name, _value} -> {name, "[redacted]"} end)}
-  end
-
-  def redact(%{headers: headers} = config) when is_map(headers) do
-    %{config | headers: Map.new(headers, fn {name, _value} -> {name, "[redacted]"} end)}
+  def redact(config) when is_map(config) do
+    config
+    |> redact_pairs(:headers)
+    |> redact_pairs(:env)
+    |> redact_args()
+    |> redact_url()
   end
 
   def redact(config), do: config
+
+  defp redact_pairs(%{} = config, key) do
+    case Map.get(config, key) do
+      pairs when is_list(pairs) ->
+        Map.put(config, key, Enum.map(pairs, fn {name, _value} -> {name, "[redacted]"} end))
+
+      pairs when is_map(pairs) ->
+        Map.put(config, key, Map.new(pairs, fn {name, _value} -> {name, "[redacted]"} end))
+
+      _absent ->
+        config
+    end
+  end
+
+  # Every element, because a secret rides in the argument itself
+  # (`--token=ghp_...`) as often as in the one after it. The arity survives.
+  defp redact_args(%{args: args} = config) when is_list(args) do
+    %{config | args: Enum.map(args, fn _argument -> "[redacted]" end)}
+  end
+
+  defp redact_args(config), do: config
+
+  # `URI.parse/1` never fails, so a malformed URL redacts to whatever it parsed
+  # to rather than being echoed whole.
+  defp redact_url(%{url: url} = config) when is_binary(url) do
+    %{config | url: url |> URI.parse() |> struct(userinfo: nil, query: nil) |> URI.to_string()}
+  end
+
+  defp redact_url(config), do: config
 
   # A spec is a map or a keyword list, and both arrive: `.mcp.json` parses to a
   # map and every in-tree caller writes a keyword list.

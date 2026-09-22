@@ -116,6 +116,20 @@ defmodule Raxol.Agent.Actions.FetchTest do
                )
     end
 
+    test "refuses a port nothing serves HTTP on, so the tool is not a port prober" do
+      # The reject set judges the ADDRESS, so a public host passes every rule
+      # here and the connect result then reports whether the port is open. The
+      # port is whatever the model put in the URL.
+      for port <- [22, 3306, 6379] do
+        assert {:error, :invalid_url} =
+                 Fetch.call(
+                   %{url: "http://93.184.216.34:#{port}/"},
+                   %{http_transport: refusing_transport()}
+                 ),
+               "port #{port} was not refused"
+      end
+    end
+
     test "refuses a non-http scheme" do
       assert {:error, :invalid_url} =
                Fetch.call(
@@ -403,6 +417,193 @@ defmodule Raxol.Agent.Actions.FetchTest do
 
     test "collect/3 with no deadline still reads to the end" do
       assert {"abc", false} = Fetch.collect(["a", "b", "c"], 100)
+    end
+  end
+
+  # These are the only tests here that open a socket, and they have to: the
+  # claim under test is about which ADDRESS the default transport connects to,
+  # which no injected transport can prove. `pinned.test` is reserved by RFC
+  # 6761 and resolves nowhere, so a request that dialled the NAME could not
+  # reach these listeners at all — reaching them is the evidence.
+  describe "the pinned dial" do
+    @name "pinned.test"
+
+    setup do
+      {:ok, _started} = Application.ensure_all_started(:req)
+      :ok
+    end
+
+    test "the guard hands the transport the addresses it vetted" do
+      test = self()
+
+      transport = fn url, opts ->
+        send(test, {:called, url, opts})
+
+        {:ok,
+         %{
+           status: 200,
+           headers: %{"content-type" => ["text/plain"]},
+           chunks: ["ok"],
+           cancel: fn -> :ok end
+         }}
+      end
+
+      assert {:ok, _result} =
+               Fetch.call(%{url: "http://93.184.216.34/x"}, %{http_transport: transport})
+
+      assert_received {:called, "http://93.184.216.34/x", opts}
+      assert %{addresses: [{93, 184, 216, 34}], hostname: "93.184.216.34"} = opts[:pin]
+    end
+
+    test "requests the vetted address while the Host header stays the name" do
+      port = http_listener()
+
+      assert {:ok, response} = fetch_pinned(port, [{127, 0, 0, 1}])
+      assert response.status == 200
+      Fetch.cancel(response)
+
+      assert_receive {:request, request}, 5_000
+      head = String.downcase(request)
+
+      assert head =~ "get /x http/1.1"
+      assert head =~ "host: #{@name}:#{port}"
+      refute head =~ "127.0.0.1"
+    end
+
+    test "falls over to the next vetted address rather than giving up on the first" do
+      # Nothing listens on the v6 loopback at this port, so the first address
+      # refuses and the second has to be tried. Dialling one address and
+      # stopping is not what `:gen_tcp` did while it was the one resolving the
+      # name, and losing that failover is the cost pinning is accused of.
+      port = http_listener()
+
+      assert {:ok, response} = fetch_pinned(port, [{0, 0, 0, 0, 0, 0, 0, 1}, {127, 0, 0, 1}])
+      assert response.status == 200
+      Fetch.cancel(response)
+
+      assert_receive {:request, _request}, 5_000
+    end
+
+    test "sends the name as SNI and still verifies the certificate against it" do
+      # The listener presents a certificate from a CA no trust store has. A
+      # dial that had bought pinning by weakening verification — `verify:
+      # :verify_none`, or a `customize_hostname_check` that accepts an address
+      # — answers `{:ok, _}` here instead of a TLS alert. The captured SNI is
+      # the other half: the handshake asked for `pinned.test`, not for
+      # 127.0.0.1, so the certificate was matched against the NAME.
+      port = tls_listener()
+
+      captured =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:dial_failed, [{{127, 0, 0, 1}, reason}]}} =
+                   Fetch.req_transport("https://#{@name}:#{port}/x",
+                     timeout_ms: 5_000,
+                     max_bytes: 1_024,
+                     pin: pin(port, [{127, 0, 0, 1}], "https")
+                   )
+
+          assert %{reason: {:tls_alert, {alert, _detail}}} = reason
+          assert alert in [:unknown_ca, :bad_certificate, :handshake_failure]
+        end)
+
+      assert_receive {:sni, sni}, 5_000
+      assert to_string(sni) == @name
+      assert is_binary(captured)
+    end
+
+    defp pin(port, addresses, scheme) do
+      %{
+        uri: URI.parse("#{scheme}://#{@name}:#{port}/x"),
+        addresses: addresses,
+        hostname: @name
+      }
+    end
+
+    defp fetch_pinned(port, addresses) do
+      Fetch.req_transport("http://#{@name}:#{port}/x",
+        timeout_ms: 5_000,
+        max_bytes: 1_024,
+        pin: pin(port, addresses, "http")
+      )
+    end
+
+    defp http_listener do
+      {:ok, listener} =
+        :gen_tcp.listen(0, [
+          :binary,
+          packet: :raw,
+          active: false,
+          reuseaddr: true,
+          ip: {127, 0, 0, 1}
+        ])
+
+      {:ok, port} = :inet.port(listener)
+      test = self()
+
+      spawn(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+        send(test, {:request, read_head(socket, "")})
+
+        :gen_tcp.send(
+          socket,
+          "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\n\r\nok"
+        )
+
+        :gen_tcp.close(socket)
+        :gen_tcp.close(listener)
+      end)
+
+      port
+    end
+
+    defp read_head(socket, acc) do
+      case :gen_tcp.recv(socket, 0, 5_000) do
+        {:ok, data} ->
+          acc = acc <> data
+          if String.contains?(acc, "\r\n\r\n"), do: acc, else: read_head(socket, acc)
+
+        {:error, _closed} ->
+          acc
+      end
+    end
+
+    defp tls_listener do
+      test = self()
+      chain = [digest: :sha256, key: {:namedCurve, :secp256r1}]
+
+      config =
+        :public_key.pkix_test_data(%{
+          server_chain: %{root: chain, intermediates: [], peer: chain},
+          client_chain: %{root: chain, intermediates: [], peer: chain}
+        })
+
+      {:ok, listener} =
+        :ssl.listen(
+          0,
+          config[:server_config] ++
+            [
+              :binary,
+              active: false,
+              reuseaddr: true,
+              ip: {127, 0, 0, 1},
+              sni_fun: fn name ->
+                send(test, {:sni, name})
+                []
+              end
+            ]
+        )
+
+      {:ok, {_address, port}} = :ssl.sockname(listener)
+
+      spawn(fn ->
+        with {:ok, socket} <- :ssl.transport_accept(listener, 5_000) do
+          :ssl.handshake(socket, 5_000)
+        end
+
+        :ssl.close(listener)
+      end)
+
+      port
     end
   end
 end

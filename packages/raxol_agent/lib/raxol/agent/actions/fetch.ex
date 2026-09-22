@@ -46,17 +46,21 @@ defmodule Raxol.Agent.Actions.Fetch do
   same event, so `check_hop/2` renames the second one; that distinction is this
   tool's audit vocabulary and stays here rather than moving down.
 
-  Residual limit, stated rather than papered over: the guard resolves the
-  name and the transport resolves it again, so a record that changes
-  between the two (DNS rebinding) is not covered. Closing it means
-  connecting to the already-checked address and carrying the hostname only
-  in SNI/Host, a transport rewrite this tool does not perform.
+  The checked address is the address dialled. `Outbound.vet/2` returns the
+  addresses it resolved, and `req_transport/2` requests the IP LITERAL while
+  the hostname carries identity: `Host` and `server_name_indication` are the
+  name, and `verify: :verify_peer` with Mint's `customize_hostname_check` still
+  matches the certificate against the NAME, never against the address. Nothing
+  on the request path consults a resolver a second time, so a record that
+  changes between the check and the connect (DNS rebinding) changes nothing —
+  which matters most here, because this is the one outbound caller whose URL
+  the MODEL supplies.
 
-  That paragraph survives the lift deliberately. `Outbound.vet/2` returns the
-  addresses it checked, which is what makes pinning possible, but this tool
-  still hands a URL carrying the hostname to `Req` (see `req_transport/2`), so
-  it still resolves twice. What the lift bought is one reject set instead of
-  two, not a rule this tool did not have.
+  `Raxol.Web3.Dial` is the same rule written against Mint directly; this tool
+  reaches it through `Req` because the streaming cap in `collect/3` is built on
+  `Req.Response.Async`. The vetted list is dialled in order for the failover
+  `:gen_tcp` performs when it is handed a name and which pinning would
+  otherwise lose.
 
   ## Bounds
 
@@ -88,6 +92,13 @@ defmodule Raxol.Agent.Actions.Fetch do
   where `chunks` yields body binaries. `Req` supplies one directly:
   `into: :self` returns a `Req.Response.Async` that is an `Enumerable`
   cancelling itself on halt.
+
+  `opts[:pin]` is the `Outbound.vet/2` result for `url`, and it is what makes
+  the dial pinned. The default transport honours it; a transport injected
+  through the context is trusted to be a test double or a provider client
+  (`Raxol.Agent.Actions.WebSearch` passes no pin), so it is handed the URL it
+  was asked for and the addresses alongside rather than a rewritten URL it
+  cannot check.
 
   ## Gating
 
@@ -171,15 +182,18 @@ defmodule Raxol.Agent.Actions.Fetch do
   defp cap(_bytes), do: @default_max_bytes
 
   # One guarded hop. The guard reruns here rather than once at entry, because
-  # the address that matters is the one about to be connected to.
+  # the address that matters is the one about to be connected to — and the
+  # vetted addresses travel with the request for the same reason: binding them
+  # and then handing the transport a NAME is the rebinding window this check
+  # exists to close.
   defp hop(_requested, _url, _cap, _deadline, 0, _transport),
     do: {:error, :too_many_redirects}
 
   defp hop(requested, url, cap, deadline, hops, transport) do
     with {:ok, budget} <- remaining(deadline),
-         {:ok, _vetted} <- check_hop(url, requested),
+         {:ok, vetted} <- check_hop(url, requested),
          {:ok, response} <-
-           call_transport(transport, url, timeout_ms: budget, max_bytes: cap) do
+           call_transport(transport, url, timeout_ms: budget, max_bytes: cap, pin: vetted) do
       dispatch(response, requested, url, cap, deadline, hops, transport)
     end
   end
@@ -546,9 +560,84 @@ defmodule Raxol.Agent.Actions.Fetch do
     end
   end
 
+  # The connect budget for ONE address. The chain has 15s in total and a vetted
+  # list carries up to eight answers, so without a per-address bound the first
+  # black-holed address spends the budget the other seven and the read were
+  # meant to share.
+  @connect_timeout_ms 5_000
+
   defp req_request(url, opts) do
     timeout = Keyword.fetch!(opts, :timeout_ms)
 
+    case Keyword.get(opts, :pin) do
+      %{addresses: [_first | _rest] = addresses, uri: uri, hostname: hostname} ->
+        dial(addresses, uri, hostname, opts, System.monotonic_time(:millisecond) + timeout, [])
+
+      _unpinned ->
+        # `Raxol.Agent.Actions.WebSearch` reaches its configured provider
+        # through this same function and vets nothing, so there is no checked
+        # address to dial and the name is resolved by `Req` as before.
+        run(url, [timeout: timeout], headers(opts), timeout, opts)
+    end
+  end
+
+  # Each vetted address in turn: a failure moves to the next rather than ending
+  # the fetch, which is the failover `:gen_tcp` performed while it was the one
+  # resolving the name. `{:dial_failed, _}` then names every address attempted
+  # rather than only the last one to fail.
+  defp dial([], _uri, _hostname, _opts, _deadline, failures),
+    do: {:error, {:dial_failed, Enum.reverse(failures)}}
+
+  defp dial([address | rest], uri, hostname, opts, deadline, failures) do
+    case remaining(deadline) do
+      {:error, :fetch_timeout} ->
+        {:error, {:dial_failed, Enum.reverse(failures)}}
+
+      {:ok, budget} ->
+        # The request carries the ADDRESS and the identity stays the NAME.
+        # Mint derives SNI, the `customize_hostname_check` match function and
+        # the connection's own host from `:hostname`
+        # (`deps/mint/lib/mint/core/transport/ssl.ex:450-470,561-573`), so
+        # `verify: :verify_peer` still matches the certificate against the name
+        # while the socket goes to the address that was vetted. Nothing here
+        # sets `:verify`, `:server_name_indication` or `:customize_hostname_check`
+        # by hand: each would replace a value Mint already derived correctly.
+        #
+        # `Host` is set here rather than left to Mint because `Req` writes one
+        # itself when the URL host is an IPv6 literal
+        # (`deps/req/lib/req/finch.ex:162-173`), and that one is the address.
+        connect = [timeout: min(budget, @connect_timeout_ms), hostname: hostname]
+        headers = [{"host", host_header(uri, hostname)} | headers(opts)]
+
+        case run(pinned_url(uri, address), connect, headers, budget, opts) do
+          {:ok, response} ->
+            {:ok, response}
+
+          {:error, reason} ->
+            dial(rest, uri, hostname, opts, deadline, [{address, reason} | failures])
+        end
+    end
+  end
+
+  # The vetted address as a literal, keeping the scheme, port, path and query
+  # the caller asked for. `URI.to_string/1` brackets an IPv6 host, which is also
+  # what `Req` reads to connect over v6 at all, so a v6 answer needs nothing
+  # further here.
+  defp pinned_url(%URI{} = uri, address) do
+    URI.to_string(%{uri | host: address |> :inet.ntoa() |> List.to_string()})
+  end
+
+  # The `Host` a name-dialled request would have carried: the name, with the
+  # port when it is not the scheme's default.
+  defp host_header(%URI{scheme: scheme, port: port}, hostname) do
+    host = if String.contains?(hostname, ":"), do: "[" <> hostname <> "]", else: hostname
+
+    if port == URI.default_port(scheme),
+      do: host,
+      else: host <> ":" <> Integer.to_string(port)
+  end
+
+  defp run(url, connect_options, headers, timeout, opts) do
     request =
       Req.new(
         url: url,
@@ -559,8 +648,8 @@ defmodule Raxol.Agent.Actions.Fetch do
         redirect: false,
         retry: false,
         receive_timeout: timeout,
-        connect_options: [timeout: timeout],
-        headers: headers(opts)
+        connect_options: connect_options,
+        headers: headers
       )
 
     case Req.request(request, into: :self) do

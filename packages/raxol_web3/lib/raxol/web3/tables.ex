@@ -21,16 +21,19 @@ defmodule Raxol.Web3.Tables do
   than a message to this process on every outbound request.
 
   This process holds no logic of its own. It creates tables in `init/1` and
-  answers nothing, which is what makes the restart window theoretical rather
-  than a live concern: there is no code path in it that can fail after boot. A
-  restart re-creates the tables and overwrites the `:persistent_term` entries,
-  and a caller that read a reference in between sees `ArgumentError` from ETS.
-  Callers therefore read through `buckets/0` and `breakers/0` per request
-  rather than caching a reference.
+  answers one question -- `cursor_key/0` -- which is what makes the restart
+  window theoretical rather than a live concern: there is no code path in it
+  that can fail after boot. A restart re-creates the tables and overwrites the
+  `:persistent_term` entries, and a caller that read a reference in between
+  sees `ArgumentError` from ETS. Callers therefore read through `buckets/0`
+  and `breakers/0` per request rather than caching a reference.
 
   The cursor MAC key lives here too. It is not a table, but it has the same
   lifetime question and the same answer: minted once at boot, so every cursor
-  this node emits verifies against every cursor it is handed back.
+  this node emits verifies against every cursor it is handed back. It is the
+  one thing here that is a credential, so it is NOT published through
+  `:persistent_term` with the rest -- `init/1` says why, and why that costs a
+  message per MAC.
 
   `Raxol.Web3.Cache`'s table is owned here for the same reason as the other
   two, and one more: a cache created per caller is a cache that never hits.
@@ -45,7 +48,6 @@ defmodule Raxol.Web3.Tables do
   @breakers {__MODULE__, :breakers}
   @origins {__MODULE__, :origins}
   @cache {__MODULE__, :cache}
-  @cursor_key {__MODULE__, :cursor_key}
 
   @cursor_key_bytes 32
 
@@ -95,9 +97,13 @@ defmodule Raxol.Web3.Tables do
   key is a boot error rather than a silent random-key fallback. ADR-0038 records
   the cost either way, since a rotation invalidates outstanding cursors and a
   paging caller restarts its walk.
+
+  Unlike the tables above, this is asked of the owner rather than read from
+  `:persistent_term`, and that costs a message per MAC. See `init/1` for why
+  the message is the cheaper side of the trade.
   """
   @spec cursor_key() :: binary()
-  def cursor_key, do: :persistent_term.get(@cursor_key)
+  def cursor_key, do: GenServer.call(__MODULE__, :cursor_key)
 
   @impl GenServer
   def init(_opts) do
@@ -123,9 +129,33 @@ defmodule Raxol.Web3.Tables do
       ])
     )
 
-    :persistent_term.put(@cursor_key, cursor_key)
+    # The MAC key is the one value here that is a SECRET, so it gets the one
+    # storage the others do not want. It was a persistent term beside the
+    # table ids, and `:persistent_term.get/0` -- no arguments -- hands back
+    # every term on the node, so any code in the VM, a diagnostic dump or an
+    # idle remsh reached the key without ever knowing what it was called. A
+    # crash dump has the same shape: its `=persistent_terms` section lists
+    # every entry.
+    #
+    # A `:private` table is readable by its owner alone -- `:ets.tab2list/1`
+    # from anywhere else is an ArgumentError, whether or not the caller has
+    # the tid -- and an `=ets` crash-dump section carries table metadata, not
+    # contents, while a key held in this process's STATE would land in its
+    # `=proc_heap`. So the only way to the key is `cursor_key/0`, one named
+    # function a reviewer can grep for. The cost is a GenServer call per
+    # cursor signed or verified, against an HTTP round-trip on either side of
+    # it; the lock-free `:persistent_term` read the tables keep is the right
+    # trade for an id that is not a credential and the wrong one for this.
+    secrets = :ets.new(:raxol_web3_secrets, [:set, :private])
+    :ets.insert(secrets, {:cursor_key, cursor_key})
 
-    {:ok, %{}}
+    {:ok, %{secrets: secrets}}
+  end
+
+  @impl GenServer
+  def handle_call(:cursor_key, _from, %{secrets: secrets} = state) do
+    [{:cursor_key, key}] = :ets.lookup(secrets, :cursor_key)
+    {:reply, key, state}
   end
 
   defp configured_cursor_key do
