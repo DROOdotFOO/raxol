@@ -33,31 +33,61 @@ defmodule Raxol.MCP.Registry do
         }
       ]
       Registry.register_resources(registry, resources)
+
+  ## Which errors open a circuit
+
+  Every callback runs behind a `Raxol.MCP.CircuitBreaker` keyed on the tool,
+  resource or prompt. A raise or an exit always counts as a failure; a
+  returned `{:error, reason}` counts unless the registration declares a
+  `:fault?` classifier:
+
+      %{
+        name: "web3_get_transaction",
+        description: "...",
+        inputSchema: %{type: "object"},
+        callback: &Tools.get_transaction/1,
+        fault?: &Tools.fault?/1
+      }
+
+  `:fault?` is a 1-arity function called with the `reason` the callback
+  returned. `false` means the error is an answer about the question -- a
+  not-found, a malformed cursor -- and records nothing. Anything else is an
+  availability fault and records a failure. The registry stays generic: it
+  knows no taxonomy, only who to ask.
+
+  A callback that raises or exits answers `{:error, {:callback_raised,
+  module}}` or `{:error, {:callback_exited, atom}}`. The exception message is
+  logged, never returned, because the return value reaches a model.
   """
 
   use Raxol.Core.Behaviours.BaseManager
 
+  require Logger
+
   alias Raxol.MCP.CircuitBreaker
 
   @type tool_def :: %{
-          name: String.t(),
-          description: String.t(),
-          inputSchema: map(),
-          callback: (map() -> {:ok, term()} | {:error, term()})
+          required(:name) => String.t(),
+          required(:description) => String.t(),
+          required(:inputSchema) => map(),
+          required(:callback) => (map() -> {:ok, term()} | {:error, term()}),
+          optional(:fault?) => (term() -> boolean())
         }
 
   @type resource_def :: %{
-          uri: String.t(),
-          name: String.t(),
-          description: String.t(),
-          callback: (-> {:ok, term()} | {:error, term()})
+          required(:uri) => String.t(),
+          required(:name) => String.t(),
+          required(:description) => String.t(),
+          required(:callback) => (-> {:ok, term()} | {:error, term()}),
+          optional(:fault?) => (term() -> boolean())
         }
 
   @type prompt_def :: %{
-          name: String.t(),
-          description: String.t(),
-          arguments: [map()],
-          callback: (map() -> {:ok, [map()]} | {:error, term()})
+          required(:name) => String.t(),
+          required(:description) => String.t(),
+          required(:arguments) => [map()],
+          required(:callback) => (map() -> {:ok, [map()]} | {:error, term()}),
+          optional(:fault?) => (term() -> boolean())
         }
 
   # -- Client API ---------------------------------------------------------------
@@ -139,7 +169,7 @@ defmodule Raxol.MCP.Registry do
     table = get_table(registry)
 
     :ets.select(table, [
-      {{:"$1", {:tool, :"$2", :"$3", :_}}, [], [:"$3"]}
+      {{:"$1", {:tool, :"$2", :"$3", :_, :_}}, [], [:"$3"]}
     ])
   end
 
@@ -152,8 +182,8 @@ defmodule Raxol.MCP.Registry do
     breaker_key = tool_key(name)
 
     case :ets.lookup(table, breaker_key) do
-      [{_key, {:tool, ^name, _def, callback}}] ->
-        invoke_with_breaker(breaker_table, breaker_key, fn ->
+      [{_key, {:tool, ^name, _def, callback, classifier}}] ->
+        invoke_with_breaker(breaker_table, breaker_key, classifier, fn ->
           callback.(arguments)
         end)
 
@@ -180,7 +210,7 @@ defmodule Raxol.MCP.Registry do
     table = get_table(registry)
 
     :ets.select(table, [
-      {{:"$1", {:resource, :"$2", :"$3", :_}}, [], [:"$3"]}
+      {{:"$1", {:resource, :"$2", :"$3", :_, :_}}, [], [:"$3"]}
     ])
   end
 
@@ -193,8 +223,8 @@ defmodule Raxol.MCP.Registry do
     breaker_key = resource_key(uri)
 
     case :ets.lookup(table, breaker_key) do
-      [{_key, {:resource, ^uri, _def, callback}}] ->
-        invoke_with_breaker(breaker_table, breaker_key, fn -> callback.() end)
+      [{_key, {:resource, ^uri, _def, callback, classifier}}] ->
+        invoke_with_breaker(breaker_table, breaker_key, classifier, fn -> callback.() end)
 
       [] ->
         {:error, :resource_not_found}
@@ -221,7 +251,7 @@ defmodule Raxol.MCP.Registry do
     table = get_table(registry)
 
     :ets.select(table, [
-      {{:"$1", {:prompt, :"$2", :"$3", :_}}, [], [:"$3"]}
+      {{:"$1", {:prompt, :"$2", :"$3", :_, :_}}, [], [:"$3"]}
     ])
   end
 
@@ -234,8 +264,8 @@ defmodule Raxol.MCP.Registry do
     breaker_key = prompt_key(name)
 
     case :ets.lookup(table, breaker_key) do
-      [{_key, {:prompt, ^name, _def, callback}}] ->
-        invoke_with_breaker(breaker_table, breaker_key, fn ->
+      [{_key, {:prompt, ^name, _def, callback, classifier}}] ->
+        invoke_with_breaker(breaker_table, breaker_key, classifier, fn ->
           callback.(arguments)
         end)
 
@@ -280,7 +310,7 @@ defmodule Raxol.MCP.Registry do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:register_tools, tools}, _from, state) do
     for tool <- tools do
-      entry = {:tool, tool.name, tool_definition(tool), tool.callback}
+      entry = {:tool, tool.name, tool_definition(tool), tool.callback, fault_classifier(tool)}
       :ets.insert(state.table, {tool_key(tool.name), entry})
     end
 
@@ -312,7 +342,8 @@ defmodule Raxol.MCP.Registry do
   def handle_manager_call({:register_resources, resources}, _from, state) do
     for resource <- resources do
       entry =
-        {:resource, resource.uri, resource_definition(resource), resource.callback}
+        {:resource, resource.uri, resource_definition(resource), resource.callback,
+         fault_classifier(resource)}
 
       :ets.insert(state.table, {resource_key(resource.uri), entry})
     end
@@ -332,7 +363,10 @@ defmodule Raxol.MCP.Registry do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:register_prompts, prompts}, _from, state) do
     for prompt <- prompts do
-      entry = {:prompt, prompt.name, prompt_definition(prompt), prompt.callback}
+      entry =
+        {:prompt, prompt.name, prompt_definition(prompt), prompt.callback,
+         fault_classifier(prompt)}
+
       :ets.insert(state.table, {prompt_key(prompt.name), entry})
     end
 
@@ -373,33 +407,92 @@ defmodule Raxol.MCP.Registry do
 
   # -- Circuit breaker integration ----------------------------------------------
 
-  defp invoke_with_breaker(breaker_table, key, callback_fn) do
+  # A breaker guards AVAILABILITY, so only an availability fault counts. A
+  # callback that raises or exits is one. A callback that returns
+  # `{:error, reason}` may be either: `:not_found` is an answer to the question
+  # that was asked, and counting five of those as five faults quarantines a
+  # tool that is working perfectly. Only the tool knows which of its own
+  # reasons are which, so it may register a `:fault?` classifier; with none,
+  # every error counts, which is what this did before.
+  defp invoke_with_breaker(breaker_table, key, classifier, callback_fn) do
     case CircuitBreaker.check(breaker_table, key) do
       :open ->
         {:error, :circuit_open}
 
       _closed_or_half_open ->
-        try do
-          case callback_fn.() do
-            {:ok, _} = ok ->
-              CircuitBreaker.record_success(breaker_table, key)
-              ok
-
-            {:error, _} = err ->
-              CircuitBreaker.record_failure(breaker_table, key)
-              err
-
-            other ->
-              CircuitBreaker.record_success(breaker_table, key)
-              {:ok, other}
-          end
-        rescue
-          e ->
-            CircuitBreaker.record_failure(breaker_table, key)
-            {:error, Exception.message(e)}
-        end
+        invoke(breaker_table, key, classifier, callback_fn)
     end
   end
+
+  # `catch` is not decoration. `Raxol.MCP.Server` runs tool callbacks INLINE in
+  # its own process with an `:infinity` call timeout (`server.ex:219-223`), and
+  # a callback that reaches a dead or slow peer -- `GenServer.call` on a
+  # `:noproc`, a call timeout -- exits rather than raises. With `rescue` alone
+  # that exit propagated out of the ETS read and took the whole MCP server
+  # down, dropping every connected session for one broken tool.
+  #
+  # The returned term names the exception STRUCT or the exit CLASS and nothing
+  # else. `{:error, Exception.message(e)}` put upstream bytes in the return
+  # value, and the return value is rendered into the `tools/call` response a
+  # model reads: an `ArgumentError`, a `Jason.EncodeError` or a
+  # `Protocol.UndefinedError` message embeds an `inspect` of the offending
+  # value, so a broken or hostile upstream got text into a context through a
+  # tool whose own error taxonomy carries none. The full message and its
+  # stacktrace are logged here instead, where an operator wants them.
+  defp invoke(breaker_table, key, classifier, callback_fn) do
+    case callback_fn.() do
+      {:ok, _} = ok ->
+        CircuitBreaker.record_success(breaker_table, key)
+        ok
+
+      {:error, reason} = err ->
+        if fault?(classifier, reason) do
+          CircuitBreaker.record_failure(breaker_table, key)
+        end
+
+        err
+
+      other ->
+        CircuitBreaker.record_success(breaker_table, key)
+        {:ok, other}
+    end
+  rescue
+    error ->
+      CircuitBreaker.record_failure(breaker_table, key)
+      log_callback_failure(key, "raised", Exception.format(:error, error, __STACKTRACE__))
+      {:error, {:callback_raised, error.__struct__}}
+  catch
+    :exit, reason ->
+      CircuitBreaker.record_failure(breaker_table, key)
+      log_callback_failure(key, "exited", Exception.format_exit(reason))
+      {:error, {:callback_exited, exit_class(reason)}}
+
+    :throw, value ->
+      CircuitBreaker.record_failure(breaker_table, key)
+      log_callback_failure(key, "threw", inspect(value))
+      {:error, :callback_threw}
+  end
+
+  # Anything but an explicit `false` counts, so a classifier that falls through
+  # protects the breaker instead of silently disabling it.
+  defp fault?(nil, _reason), do: true
+  defp fault?(classifier, reason), do: classifier.(reason) != false
+
+  # The SHAPE of the exit, never its payload: `{:timeout, {GenServer, :call,
+  # [pid, request, 5000]}}` carries the request, and this term is model-visible.
+  defp exit_class(reason) when is_atom(reason), do: reason
+  defp exit_class({reason, _detail}) when is_atom(reason), do: reason
+  defp exit_class(_other), do: :unknown
+
+  defp log_callback_failure(key, verb, detail) do
+    Logger.error("[MCP.Registry] #{inspect(key)} callback #{verb}: #{detail}")
+  end
+
+  # A value that is not a 1-arity function is no classifier. `ToolDef.validate/1`
+  # refuses one loudly at the `register_all/2` seam; a direct `register_tools/2`
+  # falls back to the protective default rather than crashing a registration.
+  defp fault_classifier(%{fault?: classifier}) when is_function(classifier, 1), do: classifier
+  defp fault_classifier(_definition), do: nil
 
   # -- Table resolution --------------------------------------------------------
 

@@ -49,12 +49,13 @@ defmodule Raxol.Core.Outbound do
 
   ## Injecting a resolver
 
-  `:resolver` replaces `:inet.getaddrs/2` with any
-  `(charlist, :inet | :inet6 -> {:ok, [address]} | {:error, term})`. That is
-  the seam a resolver which changes its answer between calls is tested through,
-  which is the test rule 3 exists for and which cannot be written against the
-  real resolver. An IP literal never reaches the resolver at all, injected or
-  not, so skipping DNS skips no part of the check.
+  `:resolver` replaces `:inet.getaddrs/3` with any
+  `(charlist, :inet | :inet6, timeout -> {:ok, [address]} | {:error, term})`,
+  or the 2-arity form for a resolver that answers from a literal and needs no
+  budget. That is the seam a resolver which changes its answer between calls
+  is tested through, which is the test rule 3 exists for and which cannot be
+  written against the real resolver. An IP literal never reaches the resolver
+  at all, injected or not, so skipping DNS skips no part of the check.
   """
 
   @type address :: :inet.ip_address()
@@ -65,7 +66,10 @@ defmodule Raxol.Core.Outbound do
           hostname: String.t()
         }
 
-  @type resolver :: (charlist(), :inet | :inet6 -> {:ok, [address()]} | {:error, term()})
+  @type resolver ::
+          (charlist(), :inet | :inet6 -> {:ok, [address()]} | {:error, term()})
+          | (charlist(), :inet | :inet6, timeout() ->
+               {:ok, [address()]} | {:error, term()})
 
   @type reason ::
           :invalid_url
@@ -73,6 +77,13 @@ defmodule Raxol.Core.Outbound do
           | {:dns_failed, String.t()}
 
   @default_schemes [:https]
+
+  # `:inet.getaddrs/2` is `getaddrs(Host, Family, infinity)` (kernel
+  # `inet.erl`), so the only bound on a lookup is the native resolver's own
+  # `res_option(timeout) * 4`, about eight seconds per family. A caller that
+  # owns an end-to-end deadline cannot express it through that, so resolution
+  # takes a budget of its own and the default is a bound rather than a hope.
+  @default_resolve_timeout_ms 5_000
 
   @doc """
   Vet a URL: `{:ok, vetted}` or `{:error, reason}`.
@@ -84,7 +95,10 @@ defmodule Raxol.Core.Outbound do
   Options:
 
     * `:schemes` - allowed schemes as atoms, default `[:https]`
-    * `:resolver` - a `t:resolver/0`, default `&:inet.getaddrs/2`
+    * `:resolver` - a `t:resolver/0`, default `&:inet.getaddrs/3`
+    * `:timeout_ms` - the total budget for resolution, default `5000`. Both
+      families are looked up under it: the second gets whatever the first left,
+      so the whole of `vet/2` returns within it plus the URL parse.
 
   """
   @spec vet(String.t(), keyword()) :: {:ok, vetted()} | {:error, reason()}
@@ -97,7 +111,7 @@ defmodule Raxol.Core.Outbound do
       {:ok, %URI{scheme: scheme, host: host} = uri}
       when is_binary(host) and host != "" ->
         if scheme in schemes,
-          do: vet_host(uri, unbracket(host), resolver(opts)),
+          do: vet_host(uri, unbracket(host), resolver(opts), timeout_ms(opts)),
           else: {:error, :invalid_url}
 
       _other ->
@@ -107,8 +121,8 @@ defmodule Raxol.Core.Outbound do
 
   def vet(_url, _opts), do: {:error, :invalid_url}
 
-  defp vet_host(%URI{host: host} = uri, hostname, resolver) do
-    case resolve(hostname, resolver) do
+  defp vet_host(%URI{host: host} = uri, hostname, resolver, timeout_ms) do
+    case resolve(hostname, resolver, timeout_ms: timeout_ms) do
       {:ok, addresses} ->
         if Enum.any?(addresses, &blocked?/1),
           do: {:error, {:blocked_address, host}},
@@ -126,9 +140,13 @@ defmodule Raxol.Core.Outbound do
   families, because a host with only an AAAA record must not pass by an empty A
   lookup. No address is judged here, so a caller reaching for this instead of
   `vet/2` is opting out of the policy.
+
+  `:timeout_ms` is the budget for the whole call, default `5000`. It is a
+  deadline rather than a per-family timeout: the AAAA lookup is given whatever
+  the A lookup left, so two slow families cost one budget and not two.
   """
-  @spec resolve(String.t(), resolver()) :: {:ok, [address()]} | :error
-  def resolve(host, resolver \\ &:inet.getaddrs/2) when is_binary(host) do
+  @spec resolve(String.t(), resolver(), keyword()) :: {:ok, [address()]} | :error
+  def resolve(host, resolver \\ &:inet.getaddrs/3, opts \\ []) when is_binary(host) do
     charlist = host |> unbracket() |> String.to_charlist()
 
     case :inet.parse_address(charlist) do
@@ -136,7 +154,15 @@ defmodule Raxol.Core.Outbound do
         {:ok, [address]}
 
       {:error, _reason} ->
-        case getaddrs(resolver, charlist, :inet) ++ getaddrs(resolver, charlist, :inet6) do
+        deadline = now_ms() + timeout_ms(opts)
+
+        # Sequenced rather than written as one `++` expression, because the
+        # second lookup's budget is what the first one left and that is only
+        # true if the two are evaluated in this order.
+        v4 = getaddrs(resolver, charlist, :inet, remaining(deadline))
+        v6 = getaddrs(resolver, charlist, :inet6, remaining(deadline))
+
+        case v4 ++ v6 do
           [] -> :error
           addresses -> {:ok, addresses}
         end
@@ -145,17 +171,38 @@ defmodule Raxol.Core.Outbound do
 
   defp resolver(opts) do
     case Keyword.get(opts, :resolver) do
-      fun when is_function(fun, 2) -> fun
-      _absent -> &:inet.getaddrs/2
+      fun when is_function(fun, 2) or is_function(fun, 3) -> fun
+      _absent -> &:inet.getaddrs/3
     end
   end
 
-  defp getaddrs(resolver, charlist, family) do
-    case resolver.(charlist, family) do
+  defp timeout_ms(opts) do
+    case Keyword.get(opts, :timeout_ms, @default_resolve_timeout_ms) do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _absent_or_nonsense -> @default_resolve_timeout_ms
+    end
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
+  defp remaining(deadline), do: max(deadline - now_ms(), 0)
+
+  defp getaddrs(resolver, charlist, family, timeout) do
+    case call_resolver(resolver, charlist, family, timeout) do
       {:ok, addresses} -> addresses
       {:error, _reason} -> []
     end
   end
+
+  # A 3-arity resolver is handed the remaining budget, which is how the real
+  # one is bounded. The 2-arity form is the original seam and bounds itself:
+  # every injected resolver in this repository answers from a literal, so
+  # there is nothing there to bound.
+  defp call_resolver(resolver, charlist, family, timeout) when is_function(resolver, 3),
+    do: resolver.(charlist, family, timeout)
+
+  defp call_resolver(resolver, charlist, family, _timeout) when is_function(resolver, 2),
+    do: resolver.(charlist, family)
 
   defp unbracket(host) do
     host
@@ -208,12 +255,18 @@ defmodule Raxol.Core.Outbound do
   def blocked?({0x2002, hi, lo, _d, _e, _f, _g, _h}), do: blocked?(v4_from(hi, lo))
 
   def blocked?({a, b, _c, _d, _e, _f, _g, _h}) do
-    # fc00::/7 unique-local, fe80::/10 link-local, ff00::/8 multicast,
-    # 2001:0::/32 Teredo (a v4 tunnel whose server and client addresses are
-    # obfuscated rather than plainly embedded, so it is refused outright
-    # instead of decomposed).
+    # fc00::/7 unique-local, fe80::/10 link-local, fec0::/10 site-local,
+    # ff00::/8 multicast, 2001:0::/32 Teredo (a v4 tunnel whose server and
+    # client addresses are obfuscated rather than plainly embedded, so it is
+    # refused outright instead of decomposed).
+    #
+    # fec0::/10 is deprecated (RFC 3879) and no resolver this repository
+    # reaches should answer with one, which is why it is here: defence in
+    # depth against a resolver that does, not a range anything is known to
+    # return.
     Bitwise.band(a, 0xFE00) == 0xFC00 or
       Bitwise.band(a, 0xFFC0) == 0xFE80 or
+      Bitwise.band(a, 0xFFC0) == 0xFEC0 or
       Bitwise.band(a, 0xFF00) == 0xFF00 or
       (a == 0x2001 and b == 0)
   end

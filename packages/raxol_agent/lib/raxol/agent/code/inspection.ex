@@ -99,8 +99,8 @@ defmodule Raxol.Agent.Code.Inspection do
     end
   end
 
-  # Skipped entries (a `url` server, a broken entry) are part of the
-  # snapshot: the file names them, so the inspection must too.
+  # Skipped entries (an `http`/`sse` entry naming no url, a broken entry) are
+  # part of the snapshot: the file names them, so the inspection must too.
   defp mcp_section(cwd) do
     case McpConfig.load_all(cwd) do
       :none ->
@@ -323,6 +323,12 @@ defmodule Raxol.Agent.Code.Inspection do
 
   defp skill_root_text(%{dir: dir, skills: n}),
     do: "#{dir} (#{n} #{plural(n, "skill")})"
+
+  # No home directory and no override: `Store.default_dir/0` refuses to guess
+  # a world-writable one, and an operator reading /inspect should see why
+  # rather than an empty path.
+  defp render_sessions(%{dir: nil}),
+    do: "sessions: none (no home directory; set $RAXOL_CODE_SESSIONS)"
 
   defp render_sessions(%{dir: dir, count: 0}), do: "sessions: #{dir} (none saved)"
 

@@ -6,6 +6,7 @@ defmodule Raxol.Agent.McpHeadersTest do
   import ExUnit.CaptureLog
 
   alias Raxol.Agent.McpHeaders
+  alias Raxol.Agent.OperatorFile
 
   @secret "op-resolved-s3cr3t"
 
@@ -201,6 +202,82 @@ defmodule Raxol.Agent.McpHeadersTest do
         end)
 
       refute captured =~ "upstream-detail-text"
+    end
+  end
+
+  # The allowlist is the only thing standing between a cloned `.mcp.json` and
+  # this operator's secrets, so where it comes from is part of the control.
+  describe "an allowlist that is not demonstrably the operator's" do
+    test "does not exist at all when the process has no home directory", %{dir: dir} do
+      # What the old fallback would have read: `System.tmp_dir!/0` honours
+      # TMPDIR, so this IS the `/tmp/.raxol/mcp_headers.json` any local user
+      # could have created first.
+      planted = Path.join([dir, ".raxol", "mcp_headers.json"])
+      File.mkdir_p!(Path.dirname(planted))
+      allow(planted, %{"Authorization" => ["${env:INTEL_TOKEN}"]})
+      System.put_env("INTEL_TOKEN", "env-resolved-s3cr3t")
+
+      previous_home = System.get_env("HOME")
+      previous_tmp = System.get_env("TMPDIR")
+      System.delete_env("RAXOL_MCP_HEADER_ALLOWLIST")
+      System.put_env("TMPDIR", dir)
+      System.delete_env("HOME")
+
+      on_exit(fn ->
+        restore("HOME", previous_home)
+        restore("TMPDIR", previous_tmp)
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:workspace_header_reference, "Authorization"}} =
+                   McpHeaders.resolve([{"Authorization", "${env:INTEL_TOKEN}"}],
+                     source: :workspace,
+                     server: :intel
+                   )
+        end)
+
+      assert McpHeaders.allowlist_path() == nil
+      assert log =~ "no home directory"
+    end
+
+    test "is refused when another account may write it", %{allowlist: allowlist} do
+      allow(allowlist, %{"Authorization" => ["${env:INTEL_TOKEN}"]})
+      File.chmod!(allowlist, 0o664)
+      System.put_env("INTEL_TOKEN", "env-resolved-s3cr3t")
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:workspace_header_reference, "Authorization"}} =
+                   McpHeaders.resolve([{"Authorization", "${env:INTEL_TOKEN}"}],
+                     source: :workspace,
+                     server: :intel
+                   )
+        end)
+
+      assert log =~ "mode 0664"
+      assert log =~ allowlist
+    end
+
+    # A test cannot chown, so the foreign owner is a file the system owns.
+    # Running as root makes every file ours, and the premise unstageable.
+    if OperatorFile.uid() not in [0, :unknown] do
+      test "is refused, legibly, when another account owns it" do
+        System.put_env("RAXOL_MCP_HEADER_ALLOWLIST", "/etc/hosts")
+        System.put_env("INTEL_TOKEN", "env-resolved-s3cr3t")
+
+        log =
+          capture_log(fn ->
+            assert {:error, {:workspace_header_reference, "Authorization"}} =
+                     McpHeaders.resolve([{"Authorization", "${env:INTEL_TOKEN}"}],
+                       source: :workspace,
+                       server: :intel
+                     )
+          end)
+
+        assert log =~ "owned by uid 0"
+        assert log =~ "/etc/hosts"
+      end
     end
   end
 end

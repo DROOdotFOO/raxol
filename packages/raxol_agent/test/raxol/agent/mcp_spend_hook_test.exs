@@ -131,9 +131,15 @@ defmodule Raxol.Agent.McpSpendHookTest do
       assert args == %{"q" => "x"}
 
       assert [{:reserve, ref}, {:call, ref}, {:settle, ref}] = cost_records(3)
-      # The handle the transport enforces against is the one that was
-      # reserved: a nil or mismatched handle is an unmetered call.
-      assert Keyword.fetch!(opts, :reservation) == ref
+      # The handle the transport enforces against is MINTED, and it is not
+      # the ledger's `cost_ref`: that one is derived from the model's
+      # tool-use id, so a model could name it and the transport could not
+      # tell it from a live reservation. This one is spendable once.
+      handle = Keyword.fetch!(opts, :reservation)
+      refute handle == ref
+      reservations = Raxol.MCP.Client.Tables.ensure_started().reservations
+      assert Raxol.MCP.Client.Reservation.consume(reservations, handle) == :ok
+      assert Raxol.MCP.Client.Reservation.consume(reservations, handle) == :error
     end
 
     test "a refused reservation issues no request", %{tools: tools} do

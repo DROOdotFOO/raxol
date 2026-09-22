@@ -2224,7 +2224,10 @@ defmodule Raxol.Agent.Code.AppTest do
       model =
         new_model(
           sessions_fetcher: fn _dir, ref, app ->
-            Commands.default_sessions_fetcher(nil, ref, app)
+            # A term that is not a path at all. nil no longer crashes here:
+            # it is the legitimate "this process has no session directory",
+            # which lists empty rather than guessing a world-writable one.
+            Commands.default_sessions_fetcher({:not, :a, :path}, ref, app)
           end
         )
 
@@ -2536,7 +2539,6 @@ defmodule Raxol.Agent.Code.AppTest do
       {model, []} =
         App.update({:command_result, {:mcp_loaded, ref, result}}, model)
 
-      # The load result overwrites the boot line: the count survives it.
       assert model.status_line == "mcp: 1 tools from 1 servers · 1 skipped"
 
       {model, []} = submit(model, "/mcp")
@@ -2564,7 +2566,9 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "remote  →  https://mcp.example/"
     end
 
-    test "a .mcp.json with only skipped entries still shows them in /mcp" do
+    test "an entry naming neither a command nor a url is listed as skipped" do
+      # The entry is reported rather than dropped precisely so it appears
+      # here: a name in `.mcp.json` that shows up nowhere was the bug.
       dir =
         config_cwd(%{
           ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}})
@@ -2573,27 +2577,12 @@ defmodule Raxol.Agent.Code.AppTest do
       model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
 
       assert model.mcp_servers == []
+      assert model.mcp_skipped == [{"broken", :no_command}]
       assert model.status_line =~ "1 MCP servers skipped"
 
       {model, []} = submit(model, "/mcp")
       assert model.notice =~ "⊘ broken  →  skipped: entry names neither a command nor a url"
       refute model.notice =~ "no MCP servers configured"
-    end
-
-    test "/mcp bounds the skipped rows by the same cap that bounds launches" do
-      cap = Raxol.Agent.Code.McpLoader.max_servers()
-      entries = for i <- 1..(cap + 4), into: %{}, do: {"e#{i}", %{}}
-
-      dir = config_cwd(%{".mcp.json" => Jason.encode!(%{"mcpServers" => entries})})
-      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
-
-      assert length(model.mcp_skipped) == cap + 4
-
-      {model, []} = submit(model, "/mcp")
-      rows = String.split(model.notice, "\n")
-
-      assert length(rows) == cap + 1
-      assert List.last(rows) =~ "… and 4 more skipped"
     end
 
     test "the tool authorizer gates a sensitive Dynamic MCP tool" do

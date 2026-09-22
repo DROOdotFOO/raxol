@@ -111,7 +111,7 @@ defmodule Raxol.Web3.Backend.SolanaTest do
   defp catalog, do: %{"portal_list_networks" => fixture("sqd_list_networks.sse")}
 
   defp handle(source, responses, opts) do
-    http_opts = [{:exchange, serving(responses)} | unmetered()]
+    http_opts = [{:exchange, serving(responses)} | unmetered()] ++ Keyword.take(opts, [:headers])
 
     {:ok, handle} =
       Solana.new(
@@ -183,7 +183,10 @@ defmodule Raxol.Web3.Backend.SolanaTest do
     end
 
     test "an unknown source is refused at construction" do
-      assert {:error, {:unknown_source, :helius}} = Solana.new(@mainnet, source: :helius)
+      # `:unsupported_source`, the name `Raxol.Web3.Backend.Tron` already
+      # used for the same fact. Two spellings of one reason is how a caller
+      # ends up matching on one of them.
+      assert {:error, {:unsupported_source, :helius}} = Solana.new(@mainnet, source: :helius)
     end
   end
 
@@ -294,6 +297,18 @@ defmodule Raxol.Web3.Backend.SolanaTest do
       handle = sqd(%{"portal_get_network_info" => sse_error(payload)})
 
       assert {:error, {:upstream_refused, :unknown}} = Backend.call(handle, :chain_info)
+    end
+
+    test "a refusal in a plain result is read, not handed back as a body" do
+      # This endpoint can announce a refusal with isError, and it can announce
+      # one as a plain result whose payload IS the error object.
+      # `Raxol.Web3.Backend.Tron` reads both arms off the same endpoint, and
+      # reading one arm here meant a keyless read came back as a successful
+      # body: the operator was told the archive returned garbage rather than
+      # that this deployment holds no credential.
+      handle = sqd(%{"portal_get_network_info" => sse(%{"error" => %{"code" => "unauthorized"}})})
+
+      assert {:error, {:upstream_refused, :auth}} = Backend.call(handle, :chain_info)
     end
   end
 
@@ -425,6 +440,22 @@ defmodule Raxol.Web3.Backend.SolanaTest do
                Backend.call(handle, :get_transaction, ["0xdeadbeef" <> String.duplicate("0", 60)])
 
       assert [] == requested_tools()
+    end
+
+    test "an operator's own header survives the RPC POST, beside the content type" do
+      # `:http_opts` is documented as forwarded unchanged, and this path
+      # replaced the header list rather than merging into it, so a deployment
+      # pointing this handle at its own gated node lost the credential it
+      # carries in a header. `Raxol.Web3.Backend.CantonTest` asserts the same
+      # property on the other backend that composes a header.
+      operator = {"x-node-authorization", "operator-value"}
+      handle = rpc(%{"getTransaction" => fixture("rpc_transaction.json")}, headers: [operator])
+
+      assert {:ok, _transaction} = Backend.call(handle, :get_transaction, [@signature])
+
+      assert [request] = drain()
+      assert operator in request.headers
+      assert {"content-type", "application/json"} in request.headers
     end
   end
 
@@ -751,6 +782,74 @@ defmodule Raxol.Web3.Backend.SolanaTest do
 
       assert Enum.count(requested_tools(), &(&1 == "portal_list_networks")) == 1
     end
+
+    # The three below share one origin between two handles on purpose: the
+    # cache is keyed by `{origin_id, fragment}` and outlives a handle, so the
+    # second handle reads the first handle's table. That is the only way to
+    # ask "was the first answer stored" without reaching into the table.
+    test "a tool error is not cached, so one bad catalog read does not answer for the hour" do
+      # `resolve/1` runs before every SQD read and `:catalog` holds its answer
+      # for an hour. The refusal arrives as HTTP 200 with `isError: true`, so
+      # a cache that decided by status stored it, and one transient tool error
+      # then answered every SQD read on this chain for the rest of that hour
+      # while the portal was already serving again.
+      url = "https://cache-catalog.sqd.test/mcp"
+      broken = %{"portal_list_networks" => sse_error(%{"error" => %{"code" => "internal_error"}})}
+
+      assert {:error, {:upstream_refused, :unknown}} =
+               Backend.call(sqd(broken, cache: true, url: url), :chain_info)
+
+      recovered =
+        sqd(%{"portal_get_network_info" => fixture("sqd_network_info.sse")},
+          cache: true,
+          url: url
+        )
+
+      assert {:ok, _info} = Backend.call(recovered, :chain_info)
+    end
+
+    test "a slot the node does not have yet is not cached, so the next read sees it land" do
+      # -32004 for a slot at the head is a fact about this moment, and the
+      # `:block` class is a minute. Recorded 2026-09-14.
+      url = "https://cache-unavailable.solana.test/"
+      slot = 999_999_999
+
+      assert {:error, {:upstream_refused, :not_found}} =
+               Backend.call(
+                 rpc(%{"getBlock" => fixture("rpc_block_unavailable.json")},
+                   cache: true,
+                   url: url
+                 ),
+                 :get_block,
+                 [slot]
+               )
+
+      landed = rpc(%{"getBlock" => fixture("rpc_block.json")}, cache: true, url: url)
+
+      assert {:ok, %{height: ^slot}} = Backend.call(landed, :get_block, [slot])
+    end
+
+    test "a skipped slot is cached, because it is permanent rather than a refusal" do
+      # -32009 is the one error code this chain answers that is a fact about
+      # the chain: slot 446,800,612 was skipped and always will have been. It
+      # is a success here, so it is worth a minute in the table, and not
+      # caching it would cost a request per read of every gap in the ledger.
+      url = "https://cache-skipped.solana.test/"
+      slot = 446_800_612
+
+      assert {:ok, %{hash: nil}} =
+               Backend.call(
+                 rpc(%{"getBlock" => fixture("rpc_block_skipped.json")}, cache: true, url: url),
+                 :get_block,
+                 [slot]
+               )
+
+      _ignored = drain()
+      produced = rpc(%{"getBlock" => fixture("rpc_block.json")}, cache: true, url: url)
+
+      assert {:ok, %{hash: nil}} = Backend.call(produced, :get_block, [slot])
+      assert [] == requested_tools()
+    end
   end
 
   describe "no upstream prose escapes" do
@@ -825,6 +924,26 @@ defmodule Raxol.Web3.Backend.SolanaTest do
 
       tools = requested_tools()
       assert "portal_list_networks" in tools
+      assert "getEpochInfo" in tools
+    end
+
+    test "a credential the archive wants and this deployment lacks walks on" do
+      # `unauthorized` is a fact about the SOURCE, not about the question: the
+      # node holds no credential and answers anyway. Reading it as
+      # `{:upstream_refused, :unknown}` made it final, so a keyless archive
+      # read died with a healthy node sitting behind it, while the identical
+      # read on `Raxol.Web3.Backend.Tron` failed over.
+      router =
+        router_pair(
+          %{"portal_get_network_info" => sse_error(%{"error" => %{"code" => "unauthorized"}})},
+          %{"getEpochInfo" => fixture("rpc_epoch_info.json")}
+        )
+
+      assert {:ok, info} = Router.call(router, @mainnet, :chain_info)
+      assert info.total_blocks == 424_994_262
+
+      tools = requested_tools()
+      assert "portal_get_network_info" in tools
       assert "getEpochInfo" in tools
     end
 

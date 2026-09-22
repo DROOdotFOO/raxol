@@ -162,8 +162,8 @@ defmodule Raxol.Agent.Code.App do
       cwd: cwd,
       jail: jail?,
       hooks: hooks,
-      mcp_servers: mcp_servers,
       mcp_skipped: mcp_skipped,
+      mcp_servers: mcp_servers,
       lsp_pool: lsp_pool,
       project_context: project_context
     })
@@ -752,9 +752,6 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  # The boot status line promised a skipped count (`mcp_note/2`); this fold
-  # overwrites that line, so the count rides along or it survives exactly
-  # one frame in any session that has a stdio server to load.
   defp mcp_loaded_line(result, skipped),
     do: mcp_tools_line(result) <> skipped_suffix(skipped)
 

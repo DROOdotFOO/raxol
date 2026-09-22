@@ -7,6 +7,7 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
   alias Raxol.Web3.Backend.JSONRPC
   alias Raxol.Web3.Backend.Stub
   alias Raxol.Web3.Cursor
+  alias Raxol.Web3.MCP.Tools
   alias Raxol.Web3.Origin
   alias Raxol.Web3.Router
   alias Raxol.Web3.Tables
@@ -29,6 +30,7 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
   @hash "0x0b88f6bbaae329a1de198da8b14a3db03a9d1d5bb29345b116bb12fe64496839"
   @head 0x3BD25D0
   @robinhood "https://rpc.mainnet.chain.robinhood.com"
+  @chain "eip155:4663"
 
   # Both limiters are given room, as in `Raxol.Web3.Backend.BlockscoutTest`:
   # every test here shares one origin per URL, so the bucket and the breaker
@@ -49,7 +51,10 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
 
   # Answers a JSON-RPC POST by method. A value may be a result, a one-argument
   # function of the params (for the methods whose answer depends on what was
-  # asked), or `{:error, code}` for a node that refuses.
+  # asked, or on how many times it has been asked), or `{:error, code}` for a
+  # node that refuses. A function may return either shape, because a node's
+  # answer to one question changes: a block at the head is -32004 until it is
+  # not.
   defp serving(rpc) do
     fn _vetted, request, _opts ->
       %{"method" => method, "params" => params, "id" => id} = Jason.decode!(request.body)
@@ -57,9 +62,8 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
 
       answer =
         case Map.fetch(rpc, method) do
-          {:ok, fun} when is_function(fun, 1) -> %{"result" => fun.(params)}
-          {:ok, {:error, code}} -> %{"error" => %{"code" => code}}
-          {:ok, result} -> %{"result" => result}
+          {:ok, fun} when is_function(fun, 1) -> envelope(fun.(params))
+          {:ok, answer} -> envelope(answer)
           :error -> %{"error" => %{"code" => -32_601}}
         end
 
@@ -68,6 +72,9 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
       {:ok, %{status: 200, headers: [], body: Jason.encode!(body)}}
     end
   end
+
+  defp envelope({:error, code}), do: %{"error" => %{"code" => code}}
+  defp envelope(result), do: %{"result" => result}
 
   defp handle(rpc, opts \\ []) do
     http_opts = [{:exchange, serving(rpc)} | unmetered()]
@@ -411,6 +418,70 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
     end
   end
 
+  describe "web3_get_block over this backend" do
+    # Through the served surface rather than the callback, because the bug was
+    # at that boundary: the tool's schema types `number` as an integer and a
+    # model sends a string, and this backend reads any non-hash binary as a
+    # block TAG.
+    defp tool_call(router, name, arguments) do
+      Tools.tool_defs(router)
+      |> Enum.find(&(&1.name == name))
+      |> Map.fetch!(:callback)
+      |> then(& &1.(arguments))
+    end
+
+    defp block_router do
+      Router.new([
+        handle(%{"eth_getBlockByNumber" => fn ["0x3bd25d0", false] -> result("block") end})
+      ])
+    end
+
+    test "a block number sent as a string resolves the block an integer resolves" do
+      router = block_router()
+
+      assert {:ok, from_integer} =
+               tool_call(router, "web3_get_block", %{"chain" => @chain, "number" => @head})
+
+      assert {:ok, from_string} =
+               tool_call(router, "web3_get_block", %{
+                 "chain" => @chain,
+                 "number" => Integer.to_string(@head)
+               })
+
+      assert from_integer == from_string
+
+      # The proof is in what the node was asked. `"62923728"` used to go out
+      # as a block tag, the node answered -32602, and `Raxol.Web3.RPC`'s
+      # classifier turned that into `{:upstream_refused, :not_found}`: a
+      # final "no such block" for a block this node has.
+      assert drain() == [
+               {"eth_getBlockByNumber", ["0x3bd25d0", false]},
+               {"eth_getBlockByNumber", ["0x3bd25d0", false]}
+             ]
+    end
+
+    test "a reference that is neither a number nor a tag is an argument error" do
+      router = block_router()
+
+      assert {:error, %{code: "invalid_argument", detail: "number"}} =
+               tool_call(router, "web3_get_block", %{"chain" => @chain, "number" => "next week"})
+
+      # And it is refused here rather than spent on the node, which would
+      # answer the same wrong `not_found` it answered for a real block.
+      assert drain() == []
+    end
+
+    test "a tag still reaches the node as a tag" do
+      router =
+        Router.new([
+          handle(%{"eth_getBlockByNumber" => fn ["latest", false] -> result("block") end})
+        ])
+
+      assert {:ok, _block} =
+               tool_call(router, "web3_get_block", %{"chain" => @chain, "number" => "latest"})
+    end
+  end
+
   describe "get_logs/3" do
     # head 10, lookback 4, window 2: page one is blocks 7..8 and page two 9..10.
     defp paging_handle(opts \\ []) do
@@ -559,6 +630,67 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
     end
   end
 
+  describe "the headers an RPC post carries" do
+    # A seam of its own, because `serving/1` reports the decoded body and this
+    # is the one question asked about the request's headers.
+    defp recording_seam(result) do
+      fn _vetted, request, _opts ->
+        send(self(), {:headers, request.headers})
+
+        body = %{
+          "jsonrpc" => "2.0",
+          "id" => Jason.decode!(request.body)["id"],
+          "result" => result
+        }
+
+        {:ok, %{status: 200, headers: [], body: Jason.encode!(body)}}
+      end
+    end
+
+    defp authed(headers) do
+      {:ok, handle} =
+        JSONRPC.new("eip155:4663",
+          url: "https://authed-node.test/",
+          http_opts:
+            [{:exchange, recording_seam(result("chain_id"))}, {:headers, headers}] ++ unmetered(),
+          cache: false
+        )
+
+      handle
+    end
+
+    test "an operator-supplied header survives the JSON content type" do
+      # `:http_opts` is documented as forwarded unchanged, and
+      # `Raxol.Web3.RPC` replaced the list rather than merging it: a node
+      # behind RBAC or an API key is reached only by the header the operator
+      # configured, so every read through this backend answered 401 while the
+      # configuration looked right.
+      handle = authed([{"authorization", "Bearer operator-token"}])
+
+      assert {:ok, "0x1237"} =
+               Backend.call(handle, :raw_request, [%{method: "eth_chainId", params: []}])
+
+      assert_receive {:headers, headers}
+      assert {"authorization", "Bearer operator-token"} in headers
+      assert {"content-type", "application/json"} in headers
+    end
+
+    test "the backend's content type wins a collision, and there is one of it" do
+      # A duplicate `content-type` is refused outright by some servers, and a
+      # JSON-RPC body is JSON whatever the operator wrote in its place.
+      handle = authed([{"content-type", "text/plain"}, {"x-api-key", "k"}])
+
+      assert {:ok, "0x1237"} =
+               Backend.call(handle, :raw_request, [%{method: "eth_chainId", params: []}])
+
+      assert_receive {:headers, headers}
+      assert {"x-api-key", "k"} in headers
+
+      assert Enum.filter(headers, fn {name, _value} -> name == "content-type" end) ==
+               [{"content-type", "application/json"}]
+    end
+  end
+
   describe "the response cache" do
     # Own URLs, because the cache is per node and keyed by origin.
     test "a repeated account read is served from the cache" do
@@ -587,6 +719,53 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
       assert {:ok, _second} = Backend.call(handle, :block_height)
 
       assert Enum.count(methods(), &(&1 == "eth_blockNumber")) == 2
+    end
+
+    test "a refusal delivered inside a 200 is not cached, so the next read reaches the node" do
+      # A node announces every refusal it has with HTTP 200 and an `error`
+      # object, so a cache that decided by status stored refusals. -32005 is
+      # the one that reads worst: a rate limit is a fact about a moment, and
+      # the `:block` class is a minute, so one throttled read answered every
+      # later read of that block as throttled long after the budget refilled.
+      answers = :counters.new(1, [])
+
+      handle =
+        handle(
+          %{
+            "eth_getBlockByNumber" => fn _params ->
+              :counters.add(answers, 1, 1)
+
+              case :counters.get(answers, 1) do
+                1 -> {:error, -32_005}
+                _landed -> result("block")
+              end
+            end
+          },
+          cache: true,
+          url: "https://cache-refusal.test/"
+        )
+
+      assert {:error, {:upstream_refused, :rate_limit}} =
+               Backend.call(handle, :get_block, [@head])
+
+      assert {:ok, %{height: @head}} = Backend.call(handle, :get_block, [@head])
+
+      # Two requests: the second was not answered from the table.
+      assert methods() == ["eth_getBlockByNumber", "eth_getBlockByNumber"]
+    end
+
+    test "a result is still cached, so refusing to cache refusals costs nothing else" do
+      handle =
+        handle(
+          %{"eth_getBlockByNumber" => fn ["0x3bd25d0", false] -> result("block") end},
+          cache: true,
+          url: "https://cache-block.test/"
+        )
+
+      assert {:ok, first} = Backend.call(handle, :get_block, [@head])
+      assert {:ok, ^first} = Backend.call(handle, :get_block, [@head])
+
+      assert methods() == ["eth_getBlockByNumber"]
     end
   end
 

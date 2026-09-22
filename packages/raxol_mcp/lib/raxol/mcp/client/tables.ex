@@ -38,14 +38,38 @@ defmodule Raxol.MCP.Client.Tables do
   use GenServer
 
   alias Raxol.MCP.CircuitBreaker
+  alias Raxol.MCP.Client.Reservation
 
   @eras {__MODULE__, :eras}
   @breakers {__MODULE__, :breakers}
+  @reservations {__MODULE__, :reservations}
 
-  @doc "Start the table owner. One per node, named."
+  @type t :: %{eras: :ets.table(), breakers: :ets.table(), reservations: :ets.table()}
+
+  @doc """
+  Start the table owner. One per node, named.
+
+  A name clash is not a failure here. `ensure_started/0` starts this process
+  unlinked and outside any tree, so a client that ran before the subsystem
+  booted may already own the tables; the supervised child adopts that owner
+  rather than refusing to start the whole MCP subtree over the name. The
+  tables are the point, and they are the same ones.
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    case GenServer.start_link(__MODULE__, opts, name: __MODULE__) do
+      {:error, {:already_started, pid}} -> adopt(pid, opts)
+      other -> other
+    end
+  end
+
+  defp adopt(pid, opts) do
+    Process.link(pid)
+    {:ok, pid}
+  rescue
+    # It exited between the name clash and the link, so nobody owns the
+    # tables now: start our own.
+    ArgumentError -> GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc """
@@ -61,19 +85,39 @@ defmodule Raxol.MCP.Client.Tables do
   @spec breakers() :: :ets.table()
   def breakers, do: :persistent_term.get(@breakers)
 
-  @doc """
-  Both tables, starting the owner if nothing has yet.
+  @doc "The minted single-use spend handles (`Raxol.MCP.Client.Reservation`)."
+  @spec reservations() :: :ets.table()
+  def reservations, do: :persistent_term.get(@reservations)
 
-  Idempotent, and safe from a transient caller: the owner is started unlinked.
+  @doc """
+  Every table, starting the owner if nothing has yet.
+
+  Idempotent, and safe from a transient caller: the owner is started
+  unlinked.
+
+  The answer comes from the owner rather than from `:persistent_term` when
+  this call did not start it. `GenServer.start/3` registers the name before
+  `init/1` runs, so two clients connecting concurrently both get past the
+  clash while only one has written the terms, and the loser used to read a
+  term that did not exist yet -- an `ArgumentError` from
+  `handle_continue`, in the exact embedded configuration (`raxol_agent`
+  alone, no `Raxol.MCP.Supervisor`) this function exists for. A call is
+  queued behind `init/1`, so it cannot observe the gap.
   """
-  @spec ensure_started() :: %{eras: :ets.table(), breakers: :ets.table()}
+  @spec ensure_started() :: t()
   def ensure_started do
     case GenServer.start(__MODULE__, [], name: __MODULE__) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
+      {:ok, _pid} -> tables()
+      {:error, {:already_started, pid}} -> await(pid)
     end
+  end
 
-    %{eras: eras(), breakers: breakers()}
+  defp await(pid) do
+    GenServer.call(pid, :tables)
+  catch
+    # The owner exited while we waited on it. One retry, which either starts
+    # a fresh owner or waits on whoever else won the race.
+    :exit, _gone -> ensure_started()
   end
 
   @impl GenServer
@@ -89,7 +133,13 @@ defmodule Raxol.MCP.Client.Tables do
     )
 
     :persistent_term.put(@breakers, CircuitBreaker.new(:raxol_mcp_client_breakers))
+    :persistent_term.put(@reservations, Reservation.new(:raxol_mcp_client_reservations))
 
     {:ok, %{}}
   end
+
+  @impl GenServer
+  def handle_call(:tables, _from, state), do: {:reply, tables(), state}
+
+  defp tables, do: %{eras: eras(), breakers: breakers(), reservations: reservations()}
 end

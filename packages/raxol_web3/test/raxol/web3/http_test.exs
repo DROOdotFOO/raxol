@@ -228,6 +228,104 @@ defmodule Raxol.Web3.HTTPTest do
     end
   end
 
+  describe "the end-to-end budget" do
+    # The stage below reports the bounds it was handed, which is the only way
+    # to observe a clamp without a socket that hangs.
+    defp bounds_seam do
+      fn _vetted, _request, opts ->
+        send(self(), {:bounds, opts})
+        {:ok, %{status: 200, headers: [], body: "{}"}}
+      end
+    end
+
+    test "clamps the connect timeout, the dial budget and the read deadline" do
+      # A caller's own ceilings are ceilings, not guarantees. Unclamped, a
+      # 5 s connect per vetted address plus a 20 s read deadline outlived a
+      # 1 s budget several times over, and this runs inline in the MCP
+      # server's own process.
+      assert {:ok, _response} =
+               HTTP.get(
+                 "https://budget.example/x",
+                 opts(
+                   exchange: bounds_seam(),
+                   budget_ms: 1_000,
+                   connect_timeout_ms: 5_000,
+                   deadline_ms: 20_000
+                 )
+               )
+
+      assert_receive {:bounds, bounds}
+      assert bounds[:connect_timeout_ms] <= 1_000
+      assert bounds[:deadline_ms] <= 1_000
+      assert bounds[:dial_budget_ms] <= 1_000
+    end
+
+    test "a bound smaller than the budget is left alone" do
+      # The clamp is a minimum, not an assignment: a backend that wants a
+      # tighter read deadline than the budget keeps it.
+      assert {:ok, _response} =
+               HTTP.get(
+                 "https://budget-small.example/x",
+                 opts(exchange: bounds_seam(), budget_ms: 30_000, deadline_ms: 50)
+               )
+
+      assert_receive {:bounds, bounds}
+      assert bounds[:deadline_ms] == 50
+    end
+
+    test "the default budget bounds a call that asks for nothing" do
+      assert {:ok, _response} =
+               HTTP.get("https://budget-default.example/x", opts(exchange: bounds_seam()))
+
+      assert_receive {:bounds, bounds}
+      assert bounds[:dial_budget_ms] <= 30_000
+      assert bounds[:deadline_ms] <= 20_000
+    end
+  end
+
+  describe "the taxonomy is closed on every path, not only the dial's" do
+    test "a mid-read transport struct is collapsed to an atom" do
+      # `Raxol.MCP.BoundedExchange` reports a failure during the body as
+      # `{:transport, %Mint.TransportError{}}`. Passed through, `@type
+      # reason`'s `{:transport, atom()}` was false for every mid-read
+      # failure, `Raxol.Web3.Serialize.error/1` rendered it as `%{code:
+      # "error", detail: nil}`, and `Raxol.Web3.Router.log_failover/3`
+      # `inspect`ed the struct into a log line.
+      host = "midread.example"
+
+      assert {:error, {:transport, :closed}} =
+               HTTP.get(
+                 "https://#{host}/x",
+                 opts(
+                   exchange: seam({:error, {:transport, %Mint.TransportError{reason: :closed}}})
+                 )
+               )
+
+      assert failures(host) == 1
+    end
+
+    test "an error term carrying upstream text never leaves the module" do
+      # Mint's `{:invalid_request_target, target}` is reachable through a
+      # `%`-malformed path that `URI.new/1` accepts, and the target is the
+      # path AND the query string, where one of this package's upstreams
+      # carries its API key.
+      leaky = %Mint.HTTPError{
+        module: Mint.HTTP1,
+        reason: {:invalid_request_target, "/api?apikey=SECRET"}
+      }
+
+      assert {:error, reason} =
+               HTTP.get(
+                 "https://leaky.example/x",
+                 opts(exchange: seam({:error, {:transport, leaky}}))
+               )
+
+      refute inspect(reason) =~ "SECRET"
+      assert {:transport, collapsed} = reason
+      assert is_atom(collapsed)
+    end
+  end
+
   describe "the request it builds" do
     test "identifies as raxol_web3 and refuses to be told otherwise" do
       assert {:ok, _} =

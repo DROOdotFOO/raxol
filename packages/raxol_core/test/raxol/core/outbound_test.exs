@@ -62,7 +62,12 @@ defmodule Raxol.Core.OutboundTest do
             "https://[::1]/",
             "https://[::]/",
             "https://[fd00::1]/",
-            "https://[fe80::1]/"
+            "https://[fe80::1]/",
+            # Deprecated by RFC 3879, so nothing is expected to answer with
+            # one. Refused anyway: a range that is not in the table is a range
+            # a resolver can hand back.
+            "https://[fec0::1]/",
+            "https://[feff:ffff::1]/"
           ] do
         assert {:error, {:blocked_address, _host}} = Outbound.vet(url),
                "#{url} was not refused"
@@ -209,6 +214,39 @@ defmodule Raxol.Core.OutboundTest do
 
       assert {:ok, [{93, 184, 216, 34}]} = Outbound.resolve("93.184.216.34", exploding)
       assert {:ok, [{0, 0, 0, 0, 0, 0, 0, 1}]} = Outbound.resolve("[::1]", exploding)
+    end
+  end
+
+  describe "the resolution budget" do
+    test "a three-arity resolver is handed the budget, and the second family what is left" do
+      # `:inet.getaddrs/2` is `getaddrs(Host, Family, infinity)`, so before
+      # this the only bound on a lookup was the native resolver's own
+      # `res_option(timeout) * 4` and a caller with an end-to-end deadline had
+      # no way to state it. The budget is a deadline across BOTH families, not
+      # a timeout handed to each, or a host that hangs on A and AAAA costs it
+      # twice.
+      test = self()
+
+      recording = fn _charlist, family, timeout ->
+        send(test, {:budget, family, timeout})
+        {:ok, []}
+      end
+
+      assert {:error, {:dns_failed, "slow.example"}} =
+               Outbound.vet("https://slow.example/", resolver: recording, timeout_ms: 250)
+
+      assert_received {:budget, :inet, v4_timeout}
+      assert_received {:budget, :inet6, v6_timeout}
+
+      assert v4_timeout > 0 and v4_timeout <= 250
+      assert v6_timeout <= v4_timeout
+    end
+
+    test "the two-arity seam still works, because an injected resolver answers from a literal" do
+      answers = %{inet: [{93, 184, 216, 34}], inet6: []}
+
+      assert {:ok, %{addresses: [{93, 184, 216, 34}]}} =
+               Outbound.vet("https://two-arity.example/", resolver: resolver(answers))
     end
   end
 end

@@ -25,18 +25,12 @@ defmodule Raxol.MCP.ClientTest do
     :exit, _reason -> :ok
   end
 
-  defp await_ready(client, tries \\ 250) do
-    case Client.status(client) do
-      %{status: :ready} = status ->
-        status
-
-      %{status: _not_yet} when tries > 0 ->
-        Process.sleep(20)
-        await_ready(client, tries - 1)
-
-      %{status: status} ->
-        flunk("client never became ready, stuck in #{inspect(status)}")
-    end
+  # The client answers readiness itself. A `Process.sleep` poll loop here was
+  # a race dressed up as a helper: it could only ever observe a state the
+  # client had already left, and on a loaded runner it observed none at all.
+  defp await_ready(client, timeout \\ 5_000) do
+    assert {:ok, status} = Client.await_ready(client, timeout)
+    status
   end
 
   describe "a stdio session" do
@@ -85,13 +79,24 @@ defmodule Raxol.MCP.ClientTest do
       assert {:ok, _result} = Client.call_tool(client, "echo", %{})
     end
 
-    test "a server that exits fails the in-flight request and closes the session" do
-      client = start_peer([])
+    test "a server that exits fails the in-flight request, closes, and reconnects" do
+      client = start_peer(reconnect_ms: 50)
       await_ready(client)
 
       assert {:error, {:server_exited, 3}} = Client.call_tool(client, "boom", %{})
+
+      # The caller is told WHY from here on, rather than which state the
+      # client is passing through.
       assert %{status: :closed, pending: 0} = Client.status(client)
-      assert {:error, {:not_ready, :closed}} = Client.call_tool(client, "echo", %{})
+
+      assert {:error, {:connect_failed, {:server_exited, 3}}} =
+               Client.call_tool(client, "echo", %{})
+
+      # And it comes back. A subprocess that died mid-session used to leave a
+      # live process no supervisor restarts: `close_session/2` marked the
+      # client `:closed` and scheduled nothing.
+      assert %{status: :ready} = await_ready(client)
+      assert {:ok, _result} = Client.call_tool(client, "echo", %{})
     end
 
     test "a request the server never answers expires instead of leaking" do

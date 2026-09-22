@@ -62,6 +62,13 @@ defmodule Raxol.Agent.McpHeaders do
   pre-approved. A missing or malformed file is an empty allowlist, so the
   default is that no workspace reference resolves.
 
+  `Raxol.Agent.OperatorFile` resolves and vets the path, so the same two
+  rules apply here as to every other control in this package: a process with
+  no home directory has NO allowlist (never a `/tmp/.raxol` fallback, which
+  any local user could create first and thereby grant themselves the
+  references), and a file that is not owned by this account, or is group- or
+  other-writable, is refused and logged rather than obeyed.
+
   ## Resolved values do not leak
 
   A resolved value is returned to the caller and goes nowhere else: not a log
@@ -74,9 +81,11 @@ defmodule Raxol.Agent.McpHeaders do
   require Logger
 
   alias Raxol.Agent.Backend.Credentials
+  alias Raxol.Agent.OperatorFile
 
   @allowlist_env "RAXOL_MCP_HEADER_ALLOWLIST"
   @allowlist_filename "mcp_headers.json"
+  @label "mcp header allowlist"
 
   # `${env:NAME}` / `${op://PATH}` anywhere in a value. A bare `op://PATH` as
   # the whole value is also a reference: it is the form `providers.json` and
@@ -105,7 +114,7 @@ defmodule Raxol.Agent.McpHeaders do
   @spec resolve([header()], keyword()) :: {:ok, [header()]} | {:error, reason()}
   def resolve(headers, opts \\ []) when is_list(headers) do
     source = Keyword.get(opts, :source, :workspace)
-    allowed = if source == :user, do: :all, else: allowlist()
+    allowed = allowed(source, headers)
 
     headers
     |> Enum.reduce_while({[], []}, fn header, {resolved, literals} ->
@@ -116,6 +125,18 @@ defmodule Raxol.Agent.McpHeaders do
       end
     end)
     |> finish(Keyword.get(opts, :server))
+  end
+
+  # The allowlist file is read only when a reference is actually present. A
+  # server configured entirely with literals asks for no permission, and
+  # reading the control anyway would log a refusal ("no home directory", "the
+  # file is group-writable") about a grant nothing needed.
+  defp allowed(:user, _headers), do: :all
+
+  defp allowed(_workspace, headers) do
+    if Enum.any?(headers, fn {_name, value} -> references(value) != [] end),
+      do: allowlist(),
+      else: %{}
   end
 
   defp finish({:error, _} = err, _server), do: err
@@ -211,26 +232,27 @@ defmodule Raxol.Agent.McpHeaders do
   defp reference("env:" <> name, token), do: {:env, name, token}
   defp reference("op://" <> path, token), do: {:op, path, token}
 
-  @doc "The allowlist path (`$RAXOL_MCP_HEADER_ALLOWLIST` or `~/.raxol/mcp_headers.json`)."
-  @spec allowlist_path() :: String.t()
-  def allowlist_path do
-    case System.get_env(@allowlist_env) do
-      p when is_binary(p) and p != "" -> p
-      _ -> Path.join([System.user_home() || System.tmp_dir!(), ".raxol", @allowlist_filename])
-    end
-  end
+  @doc """
+  The allowlist path (`$RAXOL_MCP_HEADER_ALLOWLIST` or
+  `~/.raxol/mcp_headers.json`), or nil when there is neither an override nor
+  a home directory to put it in.
+  """
+  @spec allowlist_path() :: String.t() | nil
+  def allowlist_path, do: OperatorFile.path(@allowlist_env, @allowlist_filename)
 
   @doc """
   The operator's header allowlist, as `%{downcased_header_name => MapSet of
   {kind, argument}}`.
 
-  A missing, unreadable or malformed file is `%{}`: no workspace reference
-  resolves. Failing closed on a broken allowlist is the only safe direction,
-  since the file exists to withhold permission.
+  A missing, unreadable, untrusted or malformed file is `%{}`: no workspace
+  reference resolves. Failing closed on a broken allowlist is the only safe
+  direction, since the file exists to withhold permission. "Untrusted" is
+  `Raxol.Agent.OperatorFile`'s judgement: no home and no override, a foreign
+  owner, or a group/other-writable mode.
   """
   @spec allowlist() :: %{optional(String.t()) => MapSet.t()}
   def allowlist do
-    with {:ok, raw} <- File.read(allowlist_path()),
+    with {:ok, raw} <- OperatorFile.read(@allowlist_env, @allowlist_filename, @label),
          {:ok, decoded} when is_map(decoded) <- Jason.decode(raw) do
       Map.new(decoded, fn {name, refs} -> {String.downcase(name), allowed_refs(refs)} end)
     else

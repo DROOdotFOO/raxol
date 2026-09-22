@@ -70,6 +70,15 @@ defmodule Raxol.Web3.Backend do
   methods: an unbounded passthrough to a JSON-RPC backend reaches
   `eth_sendRawTransaction`. A backend with nothing to pass through declines the
   callback, which is stronger than policing it.
+
+  ## One error taxonomy, written down once
+
+  `t:error/0` is the closed set, and its typedoc says which half of
+  `Raxol.Web3.Router.failover?/1`'s split each reason is on. A backend that
+  coins a reason outside it gets the wrong half by default, because an
+  unrecognised term is treated as an answer about the question and is final.
+  Reach for the list before naming a new one: two of the five backends had
+  invented a second spelling of a reason another already had.
   """
 
   alias Raxol.Web3.Cursor
@@ -223,7 +232,8 @@ defmodule Raxol.Web3.Backend do
   @type page(item) :: %{items: [item], next: Cursor.t() | nil}
 
   @typedoc """
-  The backend layer's errors.
+  The backend layer's errors: the closed set, and which half of the split each
+  reason is on.
 
   A superset of `Raxol.Web3.HTTP`'s taxonomy: that module never inspects a
   status or a body, so `{:http, status}` (a status nobody can use),
@@ -232,16 +242,57 @@ defmodule Raxol.Web3.Backend do
   that is not what its content type claimed) are decided here. None of them
   carries upstream text.
 
-  `{:unsupported_chain, _}` is deliberately distinct from
-  `{:unsupported, callback}`, and the difference is what the router does with
-  each. `{:unsupported, callback}` means this source does not answer this
-  question, and a walk down the candidate list is right. `{:unsupported_chain,
-  _}` means this source does not serve this chain at all, which a sibling may,
-  so it is a source error and fails over. It exists as a read error rather than
-  only as a construction error because one upstream's network set has to be
-  resolved at runtime: its README, documentation and changelog disagree about
-  coverage, so a handle can declare a chain in `supported_chain_ids/1` and
-  learn otherwise on the first read, or after a cached catalog goes stale.
+  The split that matters is `Raxol.Web3.Router.failover?/1`'s, and a backend
+  that invents a reason outside this list gets the wrong half of it by
+  default: an unrecognised term is treated as an answer about the QUESTION and
+  is final. The list is here rather than in each backend so that the fifth one
+  copies it instead of coining a synonym, which is how
+  `{:unsupported_source, _}` and `{:unknown_source, _}` came to be the same
+  fact under two names.
+
+  About the SOURCE, so the router tries the next candidate:
+
+    * `{:breaker_open, origin}`, `{:transport, reason}`, `{:timeout, stage}`,
+      `{:dns_failed, origin}`, `{:rate_limited, ms}`, `{:too_large, limit}`,
+      `{:decode_failed, tag}` - from `Raxol.Web3.HTTP` and the decoders.
+    * `{:http, status}` for 403, 408, 429 and any 5xx.
+    * `{:upstream_refused, :auth}` and `{:upstream_refused, :rate_limit}` -
+      a credential this deployment does not hold, and a budget this origin
+      has spent. Both are facts about the source, and a keyless sibling or a
+      separate budget answers where this one will not.
+    * `{:unsupported_chain, ref}` - this source does not serve this chain. It
+      is a read error and not only a construction error because one upstream's
+      network set is resolved at runtime: its README, documentation and
+      changelog disagree about coverage, so a handle can declare a chain in
+      `supported_chain_ids/1` and learn otherwise on the first read, or after
+      a cached catalog goes stale.
+    * `{:source_unavailable, detail}` - this source went away under us. An
+      endpoint it serves unconditionally answered 404, so there is no
+      credential to supply and no resource that could have been missing. It is
+      separate from `:auth` because they call for different operator actions,
+      and `Raxol.Web3.Backend.Aztec` is why: a withdrawn URL prefix was
+      reported as `:auth` purely to buy the failover.
+    * `{:blocked, :address}` - the target resolved into the reject set.
+
+  About the QUESTION, so the router stops and answers:
+
+    * `{:upstream_refused, :not_found}` - a definitive answer about a missing
+      thing, which a sibling would repeat.
+    * `{:upstream_refused, :unknown}` - a refusal we could not classify, which
+      is not evidence that another source would do better.
+    * `{:unsupported, callback}` - this handle does not answer this callback.
+      Distinct from `{:unsupported_chain, _}`: the router has already filtered
+      by capability, so reaching this means nothing on the chain answers it.
+    * `{:invalid_cursor, reason}` - a cursor is pinned to the backend that
+      minted it, so replaying it elsewhere would serve page one as page two.
+    * `{:unsupported_account_ref, detail}` - the reference is not one this
+      chain has.
+    * `{:missing_argument, name}` and `{:invalid_argument, name}` - from
+      `Raxol.Web3.MCP.Tools`, before any backend is reached.
+    * `{:blocked, other}` - a URL we will not dial.
+
+  Construction, from a backend's `new/2` and never from a read:
+  `{:unsupported_source, source}`, `{:invalid_base_url, part}`.
   """
   @type error ::
           Raxol.Web3.HTTP.reason()
@@ -250,8 +301,11 @@ defmodule Raxol.Web3.Backend do
           | {:decode_failed, atom()}
           | {:unsupported, atom()}
           | {:unsupported_chain, atom() | String.t()}
+          | {:source_unavailable, atom()}
           | {:invalid_cursor, Cursor.reason()}
           | {:unsupported_account_ref, atom()}
+          | {:missing_argument, String.t()}
+          | {:invalid_argument, String.t()}
 
   @type list_opts :: [cursor: Cursor.t() | nil]
 
@@ -414,6 +468,93 @@ defmodule Raxol.Web3.Backend do
   @doc "The two callbacks every backend implements, as `{name, arity}`."
   @spec required() :: keyword(non_neg_integer())
   def required, do: @required
+
+  # -- composing the request ---------------------------------------------------
+
+  @doc """
+  Add one header to a `Raxol.Web3.HTTP` option list, keeping the operator's.
+
+  Every backend documents `:http_opts` as forwarded unchanged, and
+  `Keyword.put(opts, :headers, [mine])` does not forward it: it discards the
+  list. That is not theoretical. An RBAC-gated Splice Scan instance answered
+  403 on the two party-scoped reads and 200 on everything else, because the
+  GET reads left the operator's headers alone and the POST reads replaced
+  them, and the same shape sits on every path that has a content type or a
+  credential to add.
+
+  The backend's own header wins on a name collision, and there is exactly one
+  of it afterwards: two `content-type` headers is a request some servers
+  refuse outright. Comparison is on the name as written, because every name
+  this package composes is lower-case and so is every name it replaces.
+  """
+  @spec put_header(keyword(), {String.t(), String.t()}) :: keyword()
+  def put_header(opts, {name, _value} = header) do
+    Keyword.update(opts, :headers, [header], fn headers ->
+      [header | Enum.reject(headers, fn {supplied, _value} -> supplied == name end)]
+    end)
+  end
+
+  # -- reading an upstream row -------------------------------------------------
+
+  @doc """
+  A monetary figure as a non-negative integer, or a decode failure naming it.
+
+  `balance`, `value`, `fee` and `amount` are `non_neg_integer()` in the shapes
+  above, so a figure that is not one is a body that is not what it claimed
+  rather than a number to round down. `Integer.parse/1` on its own answers 1
+  for `"1.5"` and 1 for `"1e18"` and -5 for `"-5"`, which on a payments
+  surface is an error of eighteen orders of magnitude reported as a balance.
+  The whole binary has to be a non-negative integer or the read fails.
+
+  `nil` passes through, because an absent figure is a fact the shapes carry.
+  The tag names the FIELD and never the value, so nothing upstream travels in
+  the error, and `{:decode_failed, _}` is the half of the split the router
+  fails over on: a sibling source may hold a well-formed copy of the same row.
+  """
+  @spec money(term(), atom()) ::
+          {:ok, non_neg_integer() | nil} | {:error, {:decode_failed, atom()}}
+  def money(nil, _field), do: {:ok, nil}
+  def money(value, _field) when is_integer(value) and value >= 0, do: {:ok, value}
+
+  def money(value, field) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number >= 0 -> {:ok, number}
+      _invalid -> {:error, {:decode_failed, field}}
+    end
+  end
+
+  def money(_value, field), do: {:error, {:decode_failed, field}}
+
+  @doc """
+  Normalize every row of a page, stopping at the first row that will not read.
+
+  `rows` is whatever the upstream put where a list belongs, so a non-list is
+  itself a decode failure rather than something to iterate: `Enum.map/2` over
+  a map or a string raises, and a raise inside a normalizer is the failure
+  mode this exists to remove. A row the mapper refuses fails the page for the
+  same reason, because a page quietly missing the row nobody could read is a
+  wrong answer rather than a partial one.
+
+  `tag` is a closed atom naming the row kind, never the row.
+  """
+  @spec map_rows(term(), (term() -> {:ok, item} | {:error, error()}), atom()) ::
+          {:ok, [item]} | {:error, error()}
+        when item: var
+  def map_rows(rows, mapper, _tag) when is_list(rows) and is_function(mapper, 1) do
+    rows
+    |> Enum.reduce_while({:ok, []}, fn row, {:ok, acc} ->
+      case mapper.(row) do
+        {:ok, mapped} -> {:cont, {:ok, [mapped | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, mapped} -> {:ok, Enum.reverse(mapped)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def map_rows(_rows, _mapper, tag), do: {:error, {:decode_failed, tag}}
 
   defp required?(callback), do: Keyword.has_key?(@required, callback)
 

@@ -646,12 +646,18 @@ defmodule Raxol.Web3.Backend.AztecTest do
       {:ok, %{status: 403, headers: [], body: "<html>challenge</html>"}}
     end
 
-    test "a withdrawn prefix 404s an endpoint that has no resource to miss, and that is auth" do
+    test "a withdrawn prefix 404s an endpoint that has no resource to miss" do
       {primary, _fallback, _key} = pair(withdrawn())
 
       # `/l2/tips` takes no parameter, so a 404 on it cannot mean the resource
       # is absent. Every endpoint under a withdrawn prefix answers this way.
-      assert {:error, {:upstream_refused, :auth}} = Backend.call(primary, :block_height)
+      #
+      # This pinned `{:upstream_refused, :auth}`, which was chosen for its
+      # place in the router's failover set rather than for being true: `:auth`
+      # is "this deployment does not hold the credential" everywhere else in
+      # the package, and a withdrawn URL prefix is not a credential anyone can
+      # hand us. The failover is unchanged; the reason now says what happened.
+      assert {:error, {:source_unavailable, :endpoint}} = Backend.call(primary, :block_height)
     end
 
     test "the router fails over to the configured chicmoz instance" do
@@ -685,7 +691,7 @@ defmodule Raxol.Web3.Backend.AztecTest do
       # never move a revoked prefix off the front of the candidate list.
       {primary, _fallback, key} = pair(withdrawn())
 
-      assert {:error, {:upstream_refused, :auth}} = Backend.call(primary, :block_height)
+      assert {:error, {:source_unavailable, :endpoint}} = Backend.call(primary, :block_height)
 
       assert CircuitBreaker.status(Tables.breakers(), key).failures == 0
     end

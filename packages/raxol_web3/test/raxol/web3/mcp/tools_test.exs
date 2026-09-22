@@ -90,6 +90,88 @@ defmodule Raxol.Web3.MCP.ToolsTest do
       assert length(Tools.names()) == length(Tools.callbacks())
       assert length(Tools.names()) == 13
     end
+
+    test "an answer about the question does not open the tool's breaker" do
+      # `Raxol.MCP.Registry` opens a per-tool breaker after five `{:error, _}`
+      # results, and five is one probe short of a working day's worth of empty
+      # wallets. An unfunded account is `{:upstream_refused, :not_found}`,
+      # which is the answer the caller asked for, and quarantining
+      # `web3_account_info` for it took the tool out on every chain at once.
+      registry = registry()
+      router = router(answers: %{account_info: {:error, {:upstream_refused, :not_found}}})
+
+      assert :ok = Tools.register(registry, router)
+
+      for _probe <- 1..6 do
+        assert {:error, %{code: "upstream_refused", detail: :not_found}} =
+                 Registry.call_tool(registry, "web3_account_info", %{
+                   "chain" => @chain,
+                   "account" => @address
+                 })
+      end
+
+      assert Registry.circuit_status(registry, {:tool, "web3_account_info"}).state == :closed
+    end
+
+    test "a fault of the source does open it, so the classification is a split and not a mute" do
+      registry = registry()
+      router = router(answers: %{account_info: {:error, {:timeout, :deadline}}})
+
+      assert :ok = Tools.register(registry, router)
+
+      for _attempt <- 1..5 do
+        assert {:error, %{code: "timeout"}} =
+                 Registry.call_tool(registry, "web3_account_info", %{
+                   "chain" => @chain,
+                   "account" => @address
+                 })
+      end
+
+      assert {:error, :circuit_open} =
+               Registry.call_tool(registry, "web3_account_info", %{
+                 "chain" => @chain,
+                 "account" => @address
+               })
+    end
+
+    test "a 404 an upstream never classified is an answer, not a fault" do
+      # A backend that cannot classify a status hands it through as
+      # `{:http, status}`, and Blockscout answers an unknown hash with a
+      # plain 404: five lookups of hashes that do not exist, from one client,
+      # took `web3_get_transaction` out for every client of the server.
+      registry = registry()
+      router = router(answers: %{get_transaction: {:error, {:http, 404}}})
+      arguments = %{"chain" => @chain, "hash" => "0xdeadbeef"}
+
+      assert :ok = Tools.register(registry, router)
+
+      for _probe <- 1..6 do
+        assert {:error, %{code: "http", detail: 404}} =
+                 Registry.call_tool(registry, "web3_get_transaction", arguments)
+      end
+
+      assert Registry.circuit_status(registry, {:tool, "web3_get_transaction"}).state == :closed
+    end
+
+    test "a 5xx from the same upstream still is a fault" do
+      # The other side of the split, so that classifying `{:http, _}` as an
+      # answer wholesale fails here. The line is
+      # `Raxol.Web3.HTTP.unhealthy_status?/1`, the one the origin breaker and
+      # the router's failover already use.
+      registry = registry()
+      router = router(answers: %{get_transaction: {:error, {:http, 503}}})
+      arguments = %{"chain" => @chain, "hash" => "0xdeadbeef"}
+
+      assert :ok = Tools.register(registry, router)
+
+      for _attempt <- 1..5 do
+        assert {:error, %{code: "http", detail: 503}} =
+                 Registry.call_tool(registry, "web3_get_transaction", arguments)
+      end
+
+      assert {:error, :circuit_open} =
+               Registry.call_tool(registry, "web3_get_transaction", arguments)
+    end
   end
 
   describe "arguments" do
@@ -170,6 +252,60 @@ defmodule Raxol.Web3.MCP.ToolsTest do
                  "chain" => @chain,
                  "account" => @address,
                  "cursor" => "somecursor"
+               })
+    end
+
+    test "an argument of the wrong type is a closed error rather than a raise" do
+      # Neither `Raxol.MCP.Server` nor `Raxol.MCP.Registry` enforces
+      # `inputSchema`, so an argument's type is whatever the peer sent.
+      # Unchecked, `{"account": 123}` reached `Serialize.account_ref/1`,
+      # which is guarded `when is_binary(value)`: the `FunctionClauseError`
+      # was rendered into the result a model reads AND counted against the
+      # tool's breaker, so five wrong-typed calls disabled the tool for every
+      # client.
+      router = router()
+
+      wrong = [
+        {"web3_account_info", %{"chain" => @chain, "account" => 123}, "account"},
+        {"web3_contract_metadata", %{"chain" => @chain, "account" => %{}}, "account"},
+        {"web3_get_transaction", %{"chain" => @chain, "hash" => 42}, "hash"},
+        {"web3_resolve_name", %{"chain" => @chain, "name" => ["vitalik.eth"]}, "name"},
+        {"web3_read_contract", %{"chain" => @chain, "to" => "0xabc", "data" => %{}}, "data"},
+        {"web3_read_contract",
+         %{"chain" => @chain, "to" => "0xabc", "data" => "0x70a08231", "block" => 3.5}, "block"},
+        {"web3_list_transactions", %{"chain" => @chain, "account" => @address, "cursor" => 7},
+         "cursor"},
+        {"web3_chain_info", %{"chain" => 1}, "chain"},
+        {"web3_get_block", %{"chain" => @chain, "number" => 1.5}, "number"},
+        {"web3_get_block", %{"chain" => @chain, "number" => %{"n" => 1}}, "number"}
+      ]
+
+      for {name, arguments, detail} <- wrong do
+        assert {:error, %{code: "invalid_argument", detail: ^detail}} =
+                 call(router, name, arguments),
+               "#{name} did not refuse #{inspect(arguments)}"
+      end
+    end
+
+    test "a wrong-typed argument is not evidence against the tool" do
+      # The other half: a closed refusal that still counted as a fault would
+      # let a model disable a working tool by sending the wrong JSON type
+      # five times.
+      registry = registry()
+      assert :ok = Tools.register(registry, router())
+
+      for _attempt <- 1..6 do
+        assert {:error, %{code: "invalid_argument", detail: "account"}} =
+                 Registry.call_tool(registry, "web3_account_info", %{
+                   "chain" => @chain,
+                   "account" => 123
+                 })
+      end
+
+      assert {:ok, _account} =
+               Registry.call_tool(registry, "web3_account_info", %{
+                 "chain" => @chain,
+                 "account" => @address
                })
     end
   end

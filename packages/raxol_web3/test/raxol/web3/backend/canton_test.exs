@@ -78,7 +78,9 @@ defmodule Raxol.Web3.Backend.CantonTest do
   defp page_for(pages, request), do: Map.fetch!(pages, Jason.decode!(request.body)["after"])
 
   defp handle(routes, opts \\ []) do
-    http_opts = [{:exchange, serving(routes)} | unmetered(Keyword.get(opts, :metered, false))]
+    http_opts =
+      [{:exchange, serving(routes)} | unmetered(Keyword.get(opts, :metered, false))] ++
+        Keyword.take(opts, [:headers])
 
     {:ok, handle} =
       Canton.new(
@@ -349,6 +351,27 @@ defmodule Raxol.Web3.Backend.CantonTest do
       assert %{"owner_party_ids" => [party]} = Jason.decode!(summary.body)
       assert party == elem(@party, 1)
       assert party =~ "::"
+    end
+
+    test "an operator's own header survives the POST reads, beside the content type" do
+      # `:http_opts` is documented as forwarded unchanged, and the POST path
+      # replaced the header list rather than merging into it. The GET reads
+      # kept the operator's headers and these two dropped them, so an
+      # RBAC-gated Scan instance answered 403 on the party-scoped reads alone
+      # while every other read on the same host worked.
+      operator = {"x-scan-authorization", "operator-value"}
+      handle = handle(scan_routes(), headers: [operator])
+
+      assert {:ok, _account} = Backend.call(handle, :account_info, [@party])
+
+      requests = drain()
+      summary = Enum.find(requests, &(&1.path == "/v0/holdings/summary"))
+      dso = Enum.find(requests, &(&1.path == "/v0/dso"))
+
+      assert operator in summary.headers
+      assert {"content-type", "application/json"} in summary.headers
+      # The GET reads never lost it, which is what made the gap invisible.
+      assert operator in dso.headers
     end
 
     test "the snapshot is resolved from the derived migration id, not a hardcoded one" do
@@ -693,6 +716,19 @@ defmodule Raxol.Web3.Backend.CantonTest do
       # this the three refutations above would pass by never being exercised.
       assert [called] = drain()
       assert {_name, "Bearer " <> @key} = List.keyfind(called.headers, "authorization", 0)
+    end
+
+    test "a configured handle does not render its key when it is inspected" do
+      # `Router.candidates/3` is operator-facing and hands back handles, and a
+      # crash below formats the struct whole, so the struct declares what may
+      # be shown rather than relying on nobody printing it.
+      handle = handle(scan_routes(), ccscan_key: @key)
+
+      refute inspect(handle, limit: :infinity) =~ @key
+
+      # Without this the refutation above would pass on a handle that never
+      # held the key in the first place.
+      assert state(handle).ccscan_key == @key
     end
 
     test "it is not in the cache key, because a passthrough is not cached" do

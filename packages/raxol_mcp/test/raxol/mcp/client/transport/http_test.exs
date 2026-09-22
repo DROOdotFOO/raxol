@@ -10,6 +10,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
   alias Raxol.MCP.Client.ReferenceServer
   alias Raxol.MCP.Client.ReferenceServer.Legacy
   alias Raxol.MCP.Client.ReferenceServer.Modern
+  alias Raxol.MCP.Client.Reservation
   alias Raxol.MCP.Client.Transport
 
   # ADR-0037 validation items 3, 4, 6, 7 and the transport half of 9. The two
@@ -40,9 +41,14 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
   defp tables do
     %{
       eras: :ets.new(:eras, [:set, :public]),
-      breakers: CircuitBreaker.new(:breakers)
+      breakers: CircuitBreaker.new(:breakers),
+      reservations: Reservation.new(:reservations)
     }
   end
+
+  # What the spend hook hands the transport for a priced call: a handle it
+  # minted and the transport spends exactly once.
+  defp reservation(tables), do: Reservation.mint(tables.reservations)
 
   defp resolver(addresses \\ [@public]) do
     fn
@@ -95,12 +101,17 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
   defp initialize, do: %{method: "initialize", params: %{}}
   defp list_tools, do: %{method: "tools/list", params: %{}}
 
-  defp await_ready(client, tries \\ 100) do
-    case Client.status(client) do
-      %{status: :ready} = status -> status
-      %{status: _other} when tries > 0 -> Process.sleep(10) && await_ready(client, tries - 1)
-      %{status: other} -> flunk("client never became ready, stuck in #{inspect(other)}")
-    end
+  # Readiness is an event the client answers, not a state to poll for: a
+  # sleep loop can only observe a state the client has already left, and on a
+  # loaded runner it observes none.
+  #
+  # The handshake is not over at `:ready` though: `notifications/initialized`
+  # is a POST, it holds an in-flight slot, and a test that proceeds while it
+  # is still running races it -- for the session it is about to expire, for
+  # the in-flight cap it occupies, and for the ETS tables its task reads.
+  defp await_ready(client, timeout \\ 5_000) do
+    assert {:ok, _ready} = Client.await_ready(client, timeout)
+    await_status(client, %{pending: 0})
   end
 
   defp await_status(client, expected, tries \\ 100) do
@@ -214,6 +225,33 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       assert methods(observations()) == ["tools/list"]
     end
 
+    test "a caller that names only one table still gets the one it named" do
+      # A spec may own one table and not the other two -- `Raxol.Web3` supplies
+      # the breaker its router reads and shares the rest -- and the whole map
+      # used to be dropped unless all three keys were present. The verdict and
+      # the breaker then went to the process-wide tables, where the caller's
+      # pre-seeding was unread and its health checks saw nothing.
+      eras = :ets.new(:eras, [:set, :public])
+      breakers = CircuitBreaker.new(:breakers)
+
+      start_client!(spec(legacy(), %{eras: eras})) |> await_ready()
+      assert Era.verdict(eras, @key) == {:ok, :legacy}
+
+      start_client!(spec(legacy(), %{breakers: breakers})) |> await_ready()
+
+      # `check/3` answers `:closed` for a key it has never seen, so the row
+      # itself is the evidence that this table is the one being written.
+      assert [{{:origin, @origin}, :closed, _failures, _opened_at}] = :ets.tab2list(breakers)
+    end
+
+    test "a table key that is not one of the three is refused, not substituted" do
+      # The singular is the plausible typo, and answering it with the
+      # process-wide table is the failure this whole pair of tests is about.
+      config = legacy() |> spec(%{breaker: CircuitBreaker.new(:breakers)}) |> Map.new()
+
+      assert_raise ArgumentError, ~r/:breaker/, fn -> Transport.Http.connect(config) end
+    end
+
     test "a verdict past its TTL is re-probed, and one inside it is not" do
       tables = tables()
       seam = legacy()
@@ -228,7 +266,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       refute Enum.any?(methods(observations()), &(&1 == "server/discover"))
     end
 
-    test "a rejected session re-probes the era once and fails the request" do
+    test "a rejected session re-probes once, re-handshakes, and works again" do
       tables = tables()
       state = ReferenceServer.state(:legacy, [])
       client = start_client!(spec(ReferenceServer.seam(Legacy, state), tables))
@@ -244,12 +282,40 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       # The re-probe runs in a monitored task, so its observation is awaited
       # rather than drained: draining would race the task.
       assert_receive {:reference_server, %{method: "server/discover"}}, 1_000
-      _first_reprobe = observations()
 
-      # Exactly once: the client now holds no session and no round trip has
-      # succeeded since, so the next 404 is a 404 and not another re-probe.
-      assert {:error, {:http, 404}} = Client.call_tool(client, "echo", %{})
-      refute Enum.any?(methods(observations()), &(&1 == "server/discover"))
+      # The rejection also re-handshakes, and that half was missing: the
+      # transport can forget a dead session id but only the client can mint a
+      # new one. Without it every later request went out with no
+      # `mcp-session-id`, the origin answered 404 to all of them, and
+      # `{:http, 404}` is neither a failover reason nor a breaker failure --
+      # the client was wedged for the lifetime of the node.
+      assert {:ok, _result} = Client.call_tool(client, "echo", %{})
+      assert "initialize" in methods(observations())
+    end
+
+    test "a client whose first connect failed serves a later request" do
+      # The connect ran once. On failure the client sat in `:closed` forever,
+      # and a live process is one its supervisor will not restart, so a DNS
+      # blip or an inherited open breaker at boot removed that upstream until
+      # the VM was restarted.
+      tables = tables()
+      inner = modern()
+      refusals = :counters.new(1, [])
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "server/discover" and :counters.get(refusals, 1) == 0 do
+          :counters.add(refusals, 1, 1)
+          {:error, {:transport, :econnrefused}}
+        else
+          inner.(vetted, request, opts)
+        end
+      end
+
+      client = start_client!(spec(seam, tables, reconnect_ms: 10))
+
+      await_ready(client)
+      assert :counters.get(refusals, 1) == 1
+      assert {:ok, [%{name: "echo"}]} = Client.list_tools(client)
     end
 
     test "a successful round trip restores the ability to re-probe" do
@@ -573,8 +639,8 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       # origin the upstream chose.
       test = self()
 
-      redirecting = fn _vetted, request, _opts ->
-        Kernel.send(test, {:issued, request})
+      redirecting = fn vetted, request, _opts ->
+        Kernel.send(test, {:issued, vetted.uri.host, request})
 
         {:ok,
          %{
@@ -595,8 +661,20 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
       assert {:error, {:connect_failed, {:redirect_refused, 302}}} = Client.list_tools(client)
 
-      assert_receive {:issued, _probe}
-      refute_receive {:issued, _second}, 50
+      # The invariant is the target, not the count: a failed connect now
+      # retries on a backoff, so "exactly one request" is a wall-clock
+      # window and this is not.
+      assert_receive {:issued, host, _probe}
+      assert host == "mcp.example.test"
+      assert Enum.all?(issued(), &(&1 == "mcp.example.test"))
+    end
+
+    defp issued(hosts \\ []) do
+      receive do
+        {:issued, host, _request} -> issued([host | hosts])
+      after
+        0 -> hosts
+      end
     end
 
     test "no header value reaches an error term or a log line" do
@@ -645,30 +723,22 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
   describe "metering at the transport" do
     test "a priced tool with no reservation issues no request" do
       handle = handle!(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 1})
-      # Drained before the refutation: the probe's observation is already in the
-      # mailbox and would satisfy a lazy `refute_receive`.
+      # Drained first: the probe's observation is already in the mailbox.
       assert methods(observations()) == ["server/discover"]
 
       request = %{method: "tools/call", params: %{name: "paid", arguments: %{}}}
       assert {:error, :unmetered_call} = Transport.Http.send(handle, 7, request)
-      refute_receive {:reference_server, _observation}, 50
+
+      # `send/3` is synchronous up to spawning the task, so a refusal means
+      # no task exists and the drained mailbox is exact. A `refute_receive`
+      # window would be a false pass on a loaded runner either way.
+      assert observations() == []
     end
 
-    test "a non-integer price is not treated as either free or reservable" do
-      handle = handle!(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 0.01})
-      _probe = observations()
-
-      request = %{
-        method: "tools/call",
-        params: %{name: "paid", arguments: %{}},
-        reservation: "cost-ref-invalid-price"
-      }
-
-      assert {:error, {:unknown_price, "paid"}} = Transport.Http.send(handle, 7, request)
-      refute_receive {:reference_server, _observation}, 50
-    end
-
-    test "the same call with a reservation handle is issued" do
+    test "an invented reservation handle is refused like an absent one" do
+      # The gate was `Map.get(request, :reservation)` truthiness, so this
+      # string -- which is what a caller of the public `call_tool/4` can
+      # invent -- bought a priced call. A handle now has to have been minted.
       handle = handle!(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 1})
       _probe = observations()
 
@@ -678,6 +748,21 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
         reservation: "cost-ref-1"
       }
 
+      assert {:error, :unmetered_call} = Transport.Http.send(handle, 7, request)
+      assert observations() == []
+    end
+
+    test "a minted handle is spent once and refused the second time" do
+      tables = tables()
+      handle = handle!(modern(tools: [tool("paid")]), tables, prices: %{"paid" => 1})
+      _probe = observations()
+
+      request = %{
+        method: "tools/call",
+        params: %{name: "paid", arguments: %{}},
+        reservation: reservation(tables)
+      }
+
       assert {:ok, _handle} = Transport.Http.send(handle, 7, request)
       assert_receive {:reference_server, %{method: "tools/call"}}, 1_000
 
@@ -685,6 +770,25 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       # for it also means the request's task has finished with this test's
       # tables before the test process takes them down with it.
       assert_receive {:mcp_http, _ref, 7, {:ok, [_payload], _session}}, 1_000
+
+      # One reservation, one call: replaying the handle buys nothing.
+      assert {:error, :unmetered_call} = Transport.Http.send(handle, 8, request)
+      assert observations() == []
+    end
+
+    test "a non-integer price is not treated as either free or reservable" do
+      tables = tables()
+      handle = handle!(modern(tools: [tool("paid")]), tables, prices: %{"paid" => 0.01})
+      _probe = observations()
+
+      request = %{
+        method: "tools/call",
+        params: %{name: "paid", arguments: %{}},
+        reservation: reservation(tables)
+      }
+
+      assert {:error, {:unknown_price, "paid"}} = Transport.Http.send(handle, 7, request)
+      assert observations() == []
     end
 
     test "an unknown price on a metered origin is denied, naming the tool and the origin" do
@@ -700,7 +804,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
       assert log =~ "mystery"
       assert log =~ @origin
-      refute_receive {:reference_server, _observation}, 50
+      assert observations() == []
     end
 
     test "a zero price is invalid while an unmetered origin goes through" do
@@ -727,16 +831,20 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       # The native-harness shape: `hook.ex:21-31` records that a backend driving
       # its own tool loop bypasses the spend-gate seam entirely, so the
       # transport is the only enforcement site left.
+      tables = tables()
+
       client =
-        start_client!(spec(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 1}))
+        start_client!(spec(modern(tools: [tool("paid")]), tables, prices: %{"paid" => 1}))
 
       assert {:ok, _tools} = Client.list_tools(client)
       _seen = observations()
 
       assert {:error, :unmetered_call} = Client.call_tool(client, "paid", %{})
-      refute_receive {:reference_server, _observation}, 50
+      assert observations() == []
 
-      assert {:ok, _result} = Client.call_tool(client, "paid", %{}, reservation: "cost-ref-2")
+      assert {:ok, _result} =
+               Client.call_tool(client, "paid", %{}, reservation: reservation(tables))
+
       assert_receive {:reference_server, %{method: "tools/call"}}, 1_000
     end
   end

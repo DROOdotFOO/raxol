@@ -320,26 +320,28 @@ defmodule Raxol.Agent.Code.App.Commands do
   defp mcp_text(%{mcp_servers: servers} = model) do
     rows =
       Enum.map(servers, fn s ->
-        "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
-          server_target(s) <>
+        "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  #{target_text(s)}" <>
           failure_text(model.mcp_status, s.name)
       end)
 
     Enum.join(rows ++ skipped_rows(model), "\n")
   end
 
-  # Two transports, two targets: a stdio server is the command line it runs,
-  # a remote server is the endpoint it dials. Reading `:command` from either
-  # shape raised on the remote one, which carries no such key.
-  defp server_target(%{command: command} = server),
-    do: "#{command} #{Enum.join(Map.get(server, :args, []), " ")}"
+  # What the entry declares, which is what the operator has to fix when it
+  # does not start: a command line, a URL, or neither. Reading `:command`
+  # unconditionally raised on a remote server, which carries no such key.
+  defp target_text(%{command: command} = server) when is_binary(command) do
+    String.trim("#{command} #{Enum.join(Map.get(server, :args, []), " ")}")
+  end
 
-  defp server_target(%{url: url}), do: url
-  defp server_target(_server), do: "(no transport)"
+  defp target_text(%{url: url}) when is_binary(url), do: url
+  defp target_text(_server), do: "(no command or url)"
 
-  # The other half of the refusal vocabulary: `✗` is a server that started
-  # and failed, so it carries its reason here rather than being a mark with
-  # no explanation next to a `⊘` row that has one.
+  # `✗` is a server that started and failed, so it carries its reason here
+  # rather than being a mark with no explanation next to a `⊘` row that has
+  # one. An entry the bridge refused after starting -- a host the operator
+  # never allowlisted, a handshake refusal -- comes back through the same
+  # `failed` list; one the loader never tried at all rides in `mcp_skipped`.
   defp failure_text(%{failed: failed}, name) do
     case Enum.find(failed, fn {n, _reason} -> to_string(n) == name end) do
       nil -> ""
@@ -375,7 +377,6 @@ defmodule Raxol.Agent.Code.App.Commands do
   defp skip_text(:no_command), do: "entry names neither a command nor a url"
   defp skip_text(:command_not_string), do: "command is not a string"
   defp skip_text(:not_an_object), do: "entry is not an object"
-
   defp server_mark(:loading, _name), do: "…"
   defp server_mark(nil, _name), do: "○"
 

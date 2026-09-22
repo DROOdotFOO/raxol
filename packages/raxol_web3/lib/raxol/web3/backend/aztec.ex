@@ -36,8 +36,11 @@ defmodule Raxol.Web3.Backend.Aztec do
     * A 404 on a **parameterless** endpoint (`/l2/info`, `/l2/tips`,
       `/l2/stats/*`) cannot mean "that resource is absent", because there is no
       parameter for it to be absent for. Every endpoint under a withdrawn
-      prefix answers 404, so a 404 here is a withdrawn credential:
-      `{:upstream_refused, :auth}`.
+      prefix answers 404, so a 404 here is this source having gone away under
+      us: `{:source_unavailable, :endpoint}`, which fails over. Not
+      `{:upstream_refused, :auth}`, which is what it was: that reason means
+      "this deployment does not hold the credential" everywhere else, and a
+      withdrawn URL prefix is not a credential anyone can hand us.
     * A 404 on an **addressed** endpoint (a block, a transaction hash, a
       contract instance) is an answer: `{:upstream_refused, :not_found}`, which
       must not fail over, because the fallback would answer the same.
@@ -180,6 +183,11 @@ defmodule Raxol.Web3.Backend.Aztec do
   alias Raxol.Web3.Origin
   alias Raxol.Web3.TTL
 
+  # `:http_opts` is an operator's own keyword list and may carry an
+  # authorization header, so it is not something `inspect/1` may render: a
+  # handle reaches an operator through `Raxol.Web3.Router.candidates/3`, and a
+  # crash anywhere below formats the struct whole into a log line.
+  @derive {Inspect, except: [:http_opts]}
   @enforce_keys [:chain_ref, :base_url, :network, :source, :base_digest]
   defstruct [
     :chain_ref,
@@ -365,7 +373,7 @@ defmodule Raxol.Web3.Backend.Aztec do
   def get_block(%__MODULE__{} = state, number) do
     with {:ok, body} <- object(get(state, "/l2/blocks/#{segment(number)}", :block, :addressed)),
          {:ok, height} <- block_number(body) do
-      variables = get_in(body, ["header", "globalVariables"]) || %{}
+      variables = body |> dig(["header", "globalVariables"]) |> as_map()
 
       {:ok,
        %{
@@ -544,10 +552,17 @@ defmodule Raxol.Web3.Backend.Aztec do
   # them has a resource that can be absent, so a 404 on one is the prefix
   # being gone rather than the resource. `:addressed` is the other four, which
   # name a block, a transaction hash twice, or a contract instance, and a 404
-  # there is an answer. Since ADR-0039's amendment the router fails over on
-  # `{:upstream_refused, :auth}` and never on `:not_found`, so this split is a
-  # routing decision rather than a taste one.
-  defp decode({:ok, %{status: 404}}, :fixed), do: {:error, {:upstream_refused, :auth}}
+  # there is an answer.
+  #
+  # `{:source_unavailable, _}` rather than `{:upstream_refused, :auth}`, which
+  # is what this was. Both fail over, which is the routing outcome this split
+  # exists for, but `:auth` means "this deployment does not hold the
+  # credential" everywhere else in the package (`Raxol.Web3.Backend.Canton`
+  # says exactly which key an operator must create), and a withdrawn URL
+  # prefix is not a credential we can be handed. Naming it `:auth` to buy a
+  # failover made the one classification an operator reads during a
+  # revocation say the wrong thing about what to do next.
+  defp decode({:ok, %{status: 404}}, :fixed), do: {:error, {:source_unavailable, :endpoint}}
   defp decode({:ok, %{status: 404}}, :addressed), do: {:error, {:upstream_refused, :not_found}}
   defp decode({:ok, %{status: status}}, _resource), do: {:error, {:http, status}}
   defp decode({:error, _reason} = error, _resource), do: error
@@ -629,14 +644,15 @@ defmodule Raxol.Web3.Backend.Aztec do
     do: number
 
   defp rung(ladder, name) do
-    case get_in(ladder, [name, "block", "number"]) do
+    case dig(ladder, [name, "block", "number"]) do
       number when is_integer(number) -> number
       _absent -> nil
     end
   end
 
   defp mined(body) do
-    with {:ok, status} <- revert_status(body["revertCode"]) do
+    with {:ok, status} <- revert_status(body["revertCode"]),
+         {:ok, fee} <- Backend.money(body["transactionFee"], :fee) do
       {:ok,
        %{
          hash: body["txHash"],
@@ -646,7 +662,7 @@ defmodule Raxol.Web3.Backend.Aztec do
          from: nil,
          to: nil,
          value: nil,
-         fee: int(body["transactionFee"]),
+         fee: fee,
          # A private function call is not observable, and the public call
          # requests a transaction made are a separate resource rather than a
          # name on this record.
@@ -695,7 +711,7 @@ defmodule Raxol.Web3.Backend.Aztec do
   end
 
   defp effect_count(body) do
-    case get_in(body, ["body", "txEffects"]) do
+    case dig(body, ["body", "txEffects"]) do
       effects when is_list(effects) -> length(effects)
       _absent -> nil
     end
@@ -722,6 +738,16 @@ defmodule Raxol.Web3.Backend.Aztec do
   end
 
   defp int(_other), do: nil
+
+  # `get_in/2` raises on the way through anything that is not a map, and every
+  # value on the way through belongs to the upstream.
+  defp dig(value, path), do: Enum.reduce(path, value, fn key, inner -> field(inner, key) end)
+
+  defp field(map, key) when is_map(map), do: Map.get(map, key)
+  defp field(_other, _key), do: nil
+
+  defp as_map(value) when is_map(value), do: value
+  defp as_map(_other), do: %{}
 
   # Milliseconds since the epoch, which is what every timestamp on this
   # surface is: a block's `globalVariables.timestamp` and a transaction's

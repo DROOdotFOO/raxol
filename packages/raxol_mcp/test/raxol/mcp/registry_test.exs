@@ -30,6 +30,20 @@ defmodule Raxol.MCP.RegistryTest do
     }
   end
 
+  # A tool that answers `reason` and tells the registry which of its own
+  # reasons are availability faults.
+  defp classified_tool(reason) do
+    %{sample_tool() | callback: fn _args -> {:error, reason} end}
+    |> Map.put(:fault?, fn answer -> answer != :not_found end)
+  end
+
+  # A process that never answers, so a `GenServer.call` on it times out.
+  defp deaf_peer do
+    peer = spawn(fn -> receive do: (:never -> :ok) end)
+    on_exit(fn -> Process.exit(peer, :kill) end)
+    peer
+  end
+
   describe "tool registration" do
     test "register and list tools", %{registry: r} do
       assert Registry.list_tools(r) == []
@@ -91,11 +105,54 @@ defmodule Raxol.MCP.RegistryTest do
       assert {:error, :tool_not_found} = Registry.call_tool(r, "nope", %{})
     end
 
-    test "catches callback exceptions", %{registry: r} do
-      tool = %{sample_tool() | callback: fn _args -> raise "boom" end}
+    test "a raise answers the exception module, never its message", %{registry: r} do
+      # `{:error, Exception.message(e)}` put upstream bytes into the value
+      # `Raxol.MCP.Server` renders into a `tools/call` response: an
+      # `ArgumentError`, a `Jason.EncodeError` and a `Protocol.UndefinedError`
+      # all embed an `inspect` of whatever they choked on.
+      tool = %{
+        sample_tool()
+        | callback: fn _args -> raise ArgumentError, "upstream said sk-live-4242" end
+      }
+
+      :ok = Registry.register_tools(r, [tool])
+      result = Registry.call_tool(r, "test_tool", %{})
+
+      assert result == {:error, {:callback_raised, ArgumentError}}
+      refute inspect(result) =~ "sk-live-4242"
+    end
+
+    test "an exit from a dead peer is an error, not the caller's death", %{registry: r} do
+      # Reaching this assertion at all is the test: callbacks run inline in
+      # whoever called, `try/rescue` does not catch an exit, and a tool that
+      # `GenServer.call`s a dead peer therefore killed `Raxol.MCP.Server` and
+      # every session on it.
+      tool = %{
+        sample_tool()
+        | callback: fn _args -> GenServer.call(:raxol_mcp_no_such_peer, :ping) end
+      }
+
       :ok = Registry.register_tools(r, [tool])
 
-      assert {:error, "boom"} = Registry.call_tool(r, "test_tool", %{})
+      assert {:error, {:callback_exited, :noproc}} = Registry.call_tool(r, "test_tool", %{})
+    end
+
+    test "a call-timeout exit carries no part of the request", %{registry: r} do
+      # That exit reason is `{:timeout, {GenServer, :call, [pid, request,
+      # timeout]}}`, so returning it verbatim would hand a model the request
+      # the tool timed out on.
+      peer = deaf_peer()
+
+      tool = %{
+        sample_tool()
+        | callback: fn _args -> GenServer.call(peer, {:fetch, "sk-live-4242"}, 0) end
+      }
+
+      :ok = Registry.register_tools(r, [tool])
+      result = Registry.call_tool(r, "test_tool", %{})
+
+      assert result == {:error, {:callback_exited, :timeout}}
+      refute inspect(result) =~ "sk-live-4242"
     end
 
     test "passes error tuples through", %{registry: r} do
@@ -158,12 +215,84 @@ defmodule Raxol.MCP.RegistryTest do
                Registry.read_resource(r, "raxol://nope")
     end
 
-    test "catches callback exceptions", %{registry: r} do
-      resource = %{sample_resource() | callback: fn -> raise "kaboom" end}
+    test "a raise answers the exception module, never its message", %{registry: r} do
+      resource = %{
+        sample_resource()
+        | callback: fn -> raise RuntimeError, "kaboom sk-live-4242" end
+      }
+
+      :ok = Registry.register_resources(r, [resource])
+      result = Registry.read_resource(r, "raxol://test/resource")
+
+      assert result == {:error, {:callback_raised, RuntimeError}}
+      refute inspect(result) =~ "sk-live-4242"
+    end
+  end
+
+  describe "what counts as a circuit-breaker fault" do
+    test "an error the tool calls an answer never opens the circuit", %{registry: r} do
+      :ok = Registry.register_tools(r, [classified_tool(:not_found)])
+
+      for _ <- 1..10 do
+        assert {:error, :not_found} = Registry.call_tool(r, "test_tool", %{})
+      end
+
+      assert %{state: :closed, failures: 0} = Registry.circuit_status(r, {:tool, "test_tool"})
+    end
+
+    test "an error the tool calls a fault opens it at the threshold", %{registry: r} do
+      :ok = Registry.register_tools(r, [classified_tool(:upstream_down)])
+
+      for _ <- 1..5 do
+        assert {:error, :upstream_down} = Registry.call_tool(r, "test_tool", %{})
+      end
+
+      assert {:error, :circuit_open} = Registry.call_tool(r, "test_tool", %{})
+    end
+
+    test "a tool that declares no classifier counts every error", %{registry: r} do
+      tool = %{sample_tool() | callback: fn _args -> {:error, :not_found} end}
+      :ok = Registry.register_tools(r, [tool])
+
+      for _ <- 1..5 do
+        assert {:error, :not_found} = Registry.call_tool(r, "test_tool", %{})
+      end
+
+      assert {:error, :circuit_open} = Registry.call_tool(r, "test_tool", %{})
+    end
+
+    test "an exit counts however the classifier answers", %{registry: r} do
+      # A classifier speaks about the tool's own error terms. A callback that
+      # died did not answer anything, and that is an availability fault.
+      tool =
+        %{
+          sample_tool()
+          | callback: fn _args -> GenServer.call(:raxol_mcp_no_such_peer, :ping) end
+        }
+        |> Map.put(:fault?, fn _answer -> false end)
+
+      :ok = Registry.register_tools(r, [tool])
+
+      for _ <- 1..5 do
+        assert {:error, {:callback_exited, :noproc}} = Registry.call_tool(r, "test_tool", %{})
+      end
+
+      assert {:error, :circuit_open} = Registry.call_tool(r, "test_tool", %{})
+    end
+
+    test "a resource classifier is honoured too", %{registry: r} do
+      resource =
+        %{sample_resource() | callback: fn -> {:error, :not_found} end}
+        |> Map.put(:fault?, fn answer -> answer != :not_found end)
+
       :ok = Registry.register_resources(r, [resource])
 
-      assert {:error, "kaboom"} =
-               Registry.read_resource(r, "raxol://test/resource")
+      for _ <- 1..10 do
+        assert {:error, :not_found} = Registry.read_resource(r, "raxol://test/resource")
+      end
+
+      assert %{state: :closed} =
+               Registry.circuit_status(r, {:resource, "raxol://test/resource"})
     end
   end
 

@@ -34,16 +34,21 @@ defmodule Raxol.Agent.Code.Store do
           events: [map()]
         }
 
-  @doc "The default sessions directory (`$RAXOL_CODE_SESSIONS` or `~/.raxol/code_sessions`)."
-  @spec default_dir() :: String.t()
-  def default_dir do
-    case System.get_env("RAXOL_CODE_SESSIONS") do
-      dir when is_binary(dir) and dir != "" -> dir
-      _ -> Path.join(home_base(), ".raxol/code_sessions")
-    end
-  end
+  @doc """
+  The default sessions directory (`$RAXOL_CODE_SESSIONS` or
+  `~/.raxol/code_sessions`), or nil when there is neither an override nor a
+  home directory.
 
-  defp home_base, do: System.user_home() || System.tmp_dir!()
+  nil rather than a `/tmp/.raxol` fallback: a saved session is the whole
+  conversation plus the cwd it ran in, and `--continue` loads the most
+  recently updated one straight back into the model's context. Under a temp
+  directory that is both a disclosure (any local account reads the
+  transcript) and an injection (any local account plants the session
+  `--continue` picks). No home means no default session store, and the
+  functions below refuse a nil directory rather than guess one.
+  """
+  @spec default_dir() :: String.t() | nil
+  def default_dir, do: Raxol.Agent.OperatorFile.path("RAXOL_CODE_SESSIONS", "code_sessions")
 
   @doc """
   Persist a session's messages + metadata. Returns `:ok` or `{:error, reason}`.
@@ -74,8 +79,14 @@ defmodule Raxol.Agent.Code.Store do
   reads as "starting fresh" — silently discarding the conversation, which
   lives ONLY here (the journal holds transcript events, not the messages).
   """
-  @spec save(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
-  def save(dir, session_key, attrs, opts \\ []) do
+  @spec save(String.t() | nil, String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def save(dir, session_key, attrs, opts \\ [])
+
+  # No session directory (see `default_dir/0`): refuse rather than mint one
+  # somewhere every local account can read it.
+  def save(nil, _session_key, _attrs, _opts), do: {:error, :no_session_dir}
+
+  def save(dir, session_key, attrs, opts) do
     with :ok <- File.mkdir_p(dir),
          :ok <- check_expected(dir, session_key, opts),
          {:ok, json} <- encode(session_key, attrs) do
@@ -142,7 +153,9 @@ defmodule Raxol.Agent.Code.Store do
   end
 
   @doc "Load a session by id. Returns `{:ok, session}` or `{:error, :not_found}`."
-  @spec load(String.t(), String.t()) :: {:ok, session()} | {:error, :not_found}
+  @spec load(String.t() | nil, String.t()) :: {:ok, session()} | {:error, :not_found}
+  def load(nil, _session_key), do: {:error, :not_found}
+
   def load(dir, session_key) do
     with {:ok, binary} <- File.read(path(dir, session_key)),
          {:ok, json} when is_map(json) <- Jason.decode(binary) do
@@ -172,7 +185,7 @@ defmodule Raxol.Agent.Code.Store do
   end
 
   @doc "The most recently updated session id, or `nil` if none exist."
-  @spec latest(String.t()) :: String.t() | nil
+  @spec latest(String.t() | nil) :: String.t() | nil
   def latest(dir) do
     case list(dir) do
       [%{id: id} | _] -> id
@@ -184,7 +197,7 @@ defmodule Raxol.Agent.Code.Store do
   Saved sessions, most-recently-updated first:
   `%{id, updated_at, message_count, cwd, title}`.
   """
-  @spec list(String.t()) :: [
+  @spec list(String.t() | nil) :: [
           %{
             id: String.t(),
             updated_at: integer(),
@@ -193,6 +206,8 @@ defmodule Raxol.Agent.Code.Store do
             title: String.t()
           }
         ]
+  def list(nil), do: []
+
   def list(dir) do
     case File.ls(dir) do
       {:ok, files} ->

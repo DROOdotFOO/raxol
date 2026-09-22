@@ -77,6 +77,11 @@ defmodule Raxol.Web3.Backend.Blockscout do
   alias Raxol.Web3.RPC
   alias Raxol.Web3.TTL
 
+  # `:http_opts` is an operator's own keyword list and may carry an
+  # authorization header, so it is not something `inspect/1` may render: a
+  # handle reaches an operator through `Raxol.Web3.Router.candidates/3`, and a
+  # crash anywhere below formats the struct whole into a log line.
+  @derive {Inspect, except: [:http_opts]}
   @enforce_keys [:chain_ref, :host]
   defstruct [:chain_ref, :host, :rpc_url, http_opts: [], cache?: true]
 
@@ -135,7 +140,8 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @spec new(Backend.chain_ref(), keyword()) :: {:ok, Backend.t()} | {:error, term()}
   def new(chain_ref, opts \\ []) do
     with {:ok, chain_id} <- chain_id(chain_ref),
-         {:ok, {host, _status}} <- Map.fetch(@hosts, chain_id) |> ok_or(:unsupported_chain) do
+         {:ok, {host, _status}} <-
+           Map.fetch(@hosts, chain_id) |> ok_or({:unsupported_chain, chain_ref}) do
       state = %__MODULE__{
         chain_ref: chain_ref,
         host: host,
@@ -206,18 +212,19 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @impl Backend
   def get_transaction(%__MODULE__{} = state, hash) when is_binary(hash) do
     with {:ok, body} <- get(state, "/api/v2/transactions/#{segment(hash)}", %{}, :transaction) do
-      {:ok, transaction(body)}
+      transaction(body)
     end
   end
 
   @impl Backend
   def account_info(%__MODULE__{} = state, account_ref) do
     with {:ok, address} <- evm_address(account_ref),
-         {:ok, body} <- get(state, "/api/v2/addresses/#{segment(address)}", %{}, :account) do
+         {:ok, body} <- get(state, "/api/v2/addresses/#{segment(address)}", %{}, :account),
+         {:ok, balance} <- Backend.money(body["coin_balance"], :balance) do
       {:ok,
        %{
          ref: {:evm, body["hash"] || address},
-         balance: int(body["coin_balance"]),
+         balance: balance,
          contract?: body["is_contract"] == true,
          verified?: body["is_verified"] == true,
          name: body["name"],
@@ -316,12 +323,10 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
   @impl Backend
   def resolve_name(%__MODULE__{} = state, name) when is_binary(name) do
-    with {:ok, body} <- get(state, "/api/v2/search", %{"q" => name}, :account) do
-      body
-      |> Map.get("items", [])
-      |> Enum.find_value(:error, &match_name(&1, name))
-      |> case do
-        :error -> {:error, {:upstream_refused, :not_found}}
+    with {:ok, body} <- get(state, "/api/v2/search", %{"q" => name}, :account),
+         {:ok, rows} <- page_rows(body["items"]) do
+      case Enum.find_value(rows, &match_name(&1, name)) do
+        nil -> {:error, {:upstream_refused, :not_found}}
         ref -> {:ok, ref}
       end
     end
@@ -390,14 +395,33 @@ defmodule Raxol.Web3.Backend.Blockscout do
   # one serving the other's contents.
   defp page(state, path, endpoint, opts, mapper) do
     with {:ok, query} <- cursor_query(state, endpoint, Keyword.get(opts, :cursor)),
-         {:ok, body} <- get(state, path, query, :list) do
+         {:ok, body} <- get(state, path, query, :list),
+         {:ok, rows} <- page_rows(body["items"]),
+         {:ok, items} <- Backend.map_rows(rows, mapper, endpoint) do
       {:ok,
        %{
-         items: body |> Map.get("items", []) |> Enum.map(mapper),
-         next: Cursor.encode(body["next_page_params"], origin_id(state), endpoint)
+         items: items,
+         next: next_cursor(state, body["next_page_params"], endpoint)
        }}
     end
   end
+
+  # An absent list is an empty page, and a list-shaped key holding something
+  # else is a body that is not what it claimed rather than a page with no
+  # rows: an empty page would report an account as holding nothing.
+  defp page_rows(nil), do: {:ok, []}
+  defp page_rows(rows) when is_list(rows), do: {:ok, rows}
+  defp page_rows(_other), do: {:error, {:decode_failed, :page}}
+
+  # `Raxol.Web3.Cursor.encode/3` takes a map or `nil`, and `next_page_params`
+  # is whatever the upstream put under that key: anything else is the last
+  # page rather than a `FunctionClauseError` on the way out of a successful
+  # read.
+  defp next_cursor(state, params, endpoint) when is_map(params) do
+    Cursor.encode(params, origin_id(state), endpoint)
+  end
+
+  defp next_cursor(_state, _absent, _endpoint), do: nil
 
   defp cursor_query(_state, _endpoint, nil), do: {:ok, %{}}
 
@@ -412,7 +436,18 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
   # -- normalization -----------------------------------------------------------
 
-  defp transaction(item) do
+  defp transaction(item) when is_map(item) do
+    fee = item |> field("fee") |> object()
+
+    with {:ok, value} <- Backend.money(item["value"], :value),
+         {:ok, paid} <- Backend.money(fee["value"], :fee) do
+      {:ok, normalized_transaction(item, value, paid)}
+    end
+  end
+
+  defp transaction(_item), do: {:error, {:decode_failed, :transaction}}
+
+  defp normalized_transaction(item, value, paid) do
     %{
       hash: item["hash"],
       status: status(item["status"]),
@@ -420,57 +455,66 @@ defmodule Raxol.Web3.Backend.Blockscout do
       timestamp: timestamp(item["timestamp"]),
       from: address_ref(item["from"]),
       to: address_ref(item["to"]),
-      value: int(item["value"]),
-      fee: item |> Map.get("fee", %{}) |> then(&int(&1["value"])),
+      value: value,
+      fee: paid,
       method: item["method"]
     }
   end
 
-  defp token_balance(item) do
-    %{
-      token: token(item["token"]),
-      amount: int(item["value"]),
-      token_id: item["token_id"]
-    }
+  defp token_balance(item) when is_map(item) do
+    with {:ok, amount} <- Backend.money(item["value"], :amount) do
+      {:ok, %{token: token(item["token"]), amount: amount, token_id: item["token_id"]}}
+    end
   end
 
-  defp token_transfer(item) do
-    total = Map.get(item, "total", %{})
+  defp token_balance(_item), do: {:error, {:decode_failed, :token_balance_row}}
 
-    %{
-      token: token(item["token"]),
-      amount: int(total["value"]),
-      from: address_ref(item["from"]),
-      to: address_ref(item["to"]),
-      block: int(item["block_number"]),
-      timestamp: timestamp(item["timestamp"]),
-      transaction: item["transaction_hash"]
-    }
+  defp token_transfer(item) when is_map(item) do
+    total = item |> field("total") |> object()
+
+    with {:ok, amount} <- Backend.money(total["value"], :amount) do
+      {:ok,
+       %{
+         token: token(item["token"]),
+         amount: amount,
+         from: address_ref(item["from"]),
+         to: address_ref(item["to"]),
+         block: int(item["block_number"]),
+         timestamp: timestamp(item["timestamp"]),
+         transaction: item["transaction_hash"]
+       }}
+    end
   end
 
-  defp log(item) do
-    %{
-      address: get_in(item, ["address", "hash"]),
-      topics: item |> Map.get("topics", []) |> Enum.reject(&is_nil/1),
-      data: item["data"],
-      block: int(item["block_number"]),
-      transaction: item["transaction_hash"],
-      index: int(item["index"])
-    }
+  defp token_transfer(_item), do: {:error, {:decode_failed, :token_transfer_row}}
+
+  defp log(item) when is_map(item) do
+    {:ok,
+     %{
+       address: item |> field("address") |> field("hash"),
+       topics: item |> field("topics") |> rows_of() |> Enum.reject(&is_nil/1),
+       data: item["data"],
+       block: int(item["block_number"]),
+       transaction: item["transaction_hash"],
+       index: int(item["index"])
+     }}
   end
 
-  defp nft(item) do
-    %{
-      token: token(item["token"]),
-      token_id: item["id"],
-      name: get_in(item, ["metadata", "name"]),
-      image_url: item["image_url"]
-    }
+  defp log(_item), do: {:error, {:decode_failed, :log_row}}
+
+  defp nft(item) when is_map(item) do
+    {:ok,
+     %{
+       token: token(item["token"]),
+       token_id: item["id"],
+       name: item |> field("metadata") |> field("name"),
+       image_url: item["image_url"]
+     }}
   end
 
-  defp token(nil), do: %{address: nil, symbol: nil, name: nil, decimals: nil, type: nil}
+  defp nft(_item), do: {:error, {:decode_failed, :nft_row}}
 
-  defp token(token) do
+  defp token(token) when is_map(token) do
     %{
       address: token["address_hash"] || token["address"],
       symbol: token["symbol"],
@@ -479,6 +523,8 @@ defmodule Raxol.Web3.Backend.Blockscout do
       type: token["type"]
     }
   end
+
+  defp token(_absent), do: %{address: nil, symbol: nil, name: nil, decimals: nil, type: nil}
 
   defp match_name(%{"ens_info" => %{"name" => name}, "address_hash" => hash}, name)
        when is_binary(hash),
@@ -492,6 +538,15 @@ defmodule Raxol.Web3.Backend.Blockscout do
   defp status("ok"), do: :success
   defp status("error"), do: :reverted
   defp status(_pending), do: :pending
+
+  defp field(map, key) when is_map(map), do: Map.get(map, key)
+  defp field(_other, _key), do: nil
+
+  defp object(value) when is_map(value), do: value
+  defp object(_other), do: %{}
+
+  defp rows_of(value) when is_list(value), do: value
+  defp rows_of(_other), do: []
 
   # Advisory, so a failure here is `nil` rather than a failed read: the lag is
   # extra information about a height, not the height.
@@ -547,11 +602,13 @@ defmodule Raxol.Web3.Backend.Blockscout do
   defp evm_address({tag, _value}), do: {:error, {:unsupported_account_ref, tag}}
   defp evm_address(_other), do: {:error, {:unsupported_account_ref, :unknown}}
 
-  # `0x` plus twenty bytes of hex, either case. A charlist walk rather than a
+  # `0x` plus twenty bytes of hex, either case. A byte walk rather than a
   # regex: the check runs on every read and a compiled pattern buys nothing at
-  # 42 characters.
+  # 42 characters. Bytes rather than codepoints because `to_charlist/1` RAISES
+  # on a binary that is not valid UTF-8, and this one is a tool argument; a
+  # byte outside `@hex_digits` is refused either way.
   defp evm_address?("0x" <> hex) when byte_size(hex) == 40 do
-    hex |> to_charlist() |> Enum.all?(&(&1 in @hex_digits))
+    hex |> :binary.bin_to_list() |> Enum.all?(&(&1 in @hex_digits))
   end
 
   defp evm_address?(_other), do: false

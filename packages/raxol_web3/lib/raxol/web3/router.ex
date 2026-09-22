@@ -56,6 +56,10 @@ defmodule Raxol.Web3.Router do
       on a read rather than in a constructor because one upstream's network set
       is resolved at runtime (its own documentation disagrees with itself about
       coverage), so a handle can declare a chain and then learn otherwise.
+    * `{:source_unavailable, _}`, which means the source went away under us:
+      an endpoint it is supposed to serve unconditionally is not there. It is
+      distinct from `:auth` because no credential fixes it, and distinct from
+      a status because the upstream answered a perfectly healthy 404.
 
   Failing over is wrong when the error describes the QUESTION, because asking
   the same question of another source gets the same answer and hides the first:
@@ -80,6 +84,7 @@ defmodule Raxol.Web3.Router do
 
   alias Raxol.MCP.CircuitBreaker
   alias Raxol.Web3.Backend
+  alias Raxol.Web3.HTTP
   alias Raxol.Web3.Tables
 
   @enforce_keys [:chains]
@@ -207,7 +212,8 @@ defmodule Raxol.Web3.Router do
     :rate_limited,
     :too_large,
     :decode_failed,
-    :unsupported_chain
+    :unsupported_chain,
+    :source_unavailable
   ]
 
   defp failover?({kind, _detail}) when kind in @source_errors, do: true
@@ -215,7 +221,10 @@ defmodule Raxol.Web3.Router do
   # the question, and a refusal we could not classify is not evidence that
   # another source would do better.
   defp failover?({:upstream_refused, class}), do: class in [:auth, :rate_limit]
-  defp failover?({:http, status}), do: status in [403, 408, 429] or status >= 500
+  # The status policy is `Raxol.Web3.HTTP`'s, not a second copy of it: the
+  # statuses that record a breaker failure there are the statuses worth
+  # failing over from here, and two lists drift.
+  defp failover?({:http, status}), do: HTTP.unhealthy_status?(status)
   defp failover?({:blocked, :address}), do: true
   defp failover?(_question), do: false
 

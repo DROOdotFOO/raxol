@@ -61,6 +61,20 @@ defmodule Raxol.MCP.ToolDefTest do
       assert :missing_input_schema in errors
     end
 
+    test "carries an optional :fault? classifier onto the definition" do
+      classifier = fn reason -> reason != :not_found end
+
+      assert {:ok, %{fault?: ^classifier}} =
+               ToolDef.new("t", valid_opts(fault?: classifier))
+    end
+
+    test "rejects a :fault? that cannot be called with one reason" do
+      # Silently ignoring it would leave the tool registered with the default
+      # rule, so its routine not-founds would keep opening the circuit.
+      assert {:error, errors} = ToolDef.new("t", valid_opts(fault?: fn -> true end))
+      assert :invalid_fault_classifier in errors
+    end
+
     test "rejects schema without type=object" do
       opts = valid_opts(input_schema: %{type: "array"})
       assert {:error, errors} = ToolDef.new("t", opts)

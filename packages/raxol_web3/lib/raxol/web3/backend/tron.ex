@@ -117,6 +117,7 @@ defmodule Raxol.Web3.Backend.Tron do
   alias Raxol.MCP.Client
   alias Raxol.MCP.Client.Era
   alias Raxol.Web3.Backend
+  alias Raxol.Web3.Backend.SQD
   alias Raxol.Web3.Cache
   alias Raxol.Web3.Cursor
   alias Raxol.Web3.MCPCall
@@ -125,6 +126,11 @@ defmodule Raxol.Web3.Backend.Tron do
   alias Raxol.Web3.Tron.Address
   alias Raxol.Web3.TTL
 
+  # `:http_opts` is an operator's own keyword list and may carry an
+  # authorization header, so it is not something `inspect/1` may render: a
+  # handle reaches an operator through `Raxol.Web3.Router.candidates/3`, and a
+  # crash anywhere below formats the struct whole into a log line.
+  @derive {Inspect, except: [:http_opts]}
   @enforce_keys [:source, :chain_ref]
   defstruct [:source, :chain_ref, :client, http_opts: [], cache?: true]
 
@@ -294,13 +300,14 @@ defmodule Raxol.Web3.Backend.Tron do
     %{id: {Client, name}, start: {Client, :start_link, [spec]}}
   end
 
-  # The era verdict belongs to the client, because it is the client's cached
-  # decision about a protocol revision and means nothing here. The breaker is
-  # this package's, so the health the transport records on the request path is
-  # the health `Raxol.Web3.Router` orders candidates by; two tables would give
-  # the router a second opinion it could not see the first of.
+  # The era verdict and the spend reservations belong to the client, so only
+  # the breaker is named here and the transport fills the other two from the
+  # process-wide set. The breaker is this package's, so the health the
+  # transport records on the request path is the health `Raxol.Web3.Router`
+  # orders candidates by; two tables would give the router a second opinion it
+  # could not see the first of.
   defp default_tables do
-    %{eras: Raxol.MCP.Client.Tables.ensure_started().eras, breakers: Tables.breakers()}
+    %{breakers: Tables.breakers()}
   end
 
   @doc "The name `client_spec/2` labels a source's client with by default."
@@ -404,7 +411,7 @@ defmodule Raxol.Web3.Backend.Tron do
       {:ok,
        %{
          height: height,
-         finalized_height: int(get_in(body, ["finalized_head", "number"])),
+         finalized_height: int(dig(body, ["finalized_head", "number"])),
          unit: :block,
          indexer: sqd_indexer(body)
        }}
@@ -443,16 +450,14 @@ defmodule Raxol.Web3.Backend.Tron do
 
   @impl Backend
   def get_transaction(%__MODULE__{source: :trongrid} = state, hash) when is_binary(hash) do
-    with {:ok, body} <- call(state, "getTransactionById", %{"value" => hash}, :transaction),
-         {:ok, transaction} <- trongrid_transaction(body) do
-      {:ok, transaction}
+    with {:ok, body} <- call(state, "getTransactionById", %{"value" => hash}, :transaction) do
+      trongrid_transaction(body)
     end
   end
 
   def get_transaction(%__MODULE__{source: :tronscan} = state, hash) when is_binary(hash) do
-    with {:ok, body} <- call(state, "getTransactionDetail", %{"hash" => hash}, :transaction),
-         {:ok, transaction} <- tronscan_transaction(body) do
-      {:ok, transaction}
+    with {:ok, body} <- call(state, "getTransactionDetail", %{"hash" => hash}, :transaction) do
+      tronscan_transaction(body)
     end
   end
 
@@ -461,7 +466,7 @@ defmodule Raxol.Web3.Backend.Tron do
     with {:ok, address} <- account(account_ref),
          {:ok, body} <- call(state, "getAccountInfo", %{"address" => address}, :account),
          {:ok, record} <- first_row(body, :account),
-         {:ok, balance} <- money(record["balance"], :balance) do
+         {:ok, balance} <- Backend.money(record["balance"], :balance) do
       {:ok,
        %{
          ref: {:tron, canonical!(record["address"], address)},
@@ -480,7 +485,7 @@ defmodule Raxol.Web3.Backend.Tron do
   def account_info(%__MODULE__{source: :tronscan} = state, account_ref) do
     with {:ok, address} <- account(account_ref),
          {:ok, body} <- call(state, "getAccountDetail", %{"address" => address}, :account),
-         {:ok, balance} <- money(body["balance"], :balance) do
+         {:ok, balance} <- Backend.money(body["balance"], :balance) do
       {:ok,
        %{
          ref: {:tron, canonical!(body["address"], address)},
@@ -542,10 +547,13 @@ defmodule Raxol.Web3.Backend.Tron do
   # This read mints no cursor, so it accepts none. Answering page one again for
   # a cursor nobody minted is the silent rewind the opaque-cursor rule exists
   # to prevent, and it is indistinguishable from a walk that ended.
+  # `:wrong_scope` is the reason `Raxol.Web3.Cursor` already has for it and the
+  # one `Raxol.Web3.Backend.Solana` mints for the same case; the endpoint atom
+  # this used to carry named no cursor endpoint at all.
   defp no_cursor(opts) do
     case Keyword.get(opts, :cursor) do
       nil -> :ok
-      _held -> {:error, {:invalid_cursor, {:unknown_endpoint, :tron_account_info}}}
+      _held -> {:error, {:invalid_cursor, :wrong_scope}}
     end
   end
 
@@ -632,8 +640,8 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp dispatch(%__MODULE__{source: :sqd} = state, tool, arguments, extra) do
     case MCPCall.call(url(state), tool, arguments, http_opts(state, extra)) do
-      {:ok, payload} -> payload_result(payload)
-      {:tool_error, _payload} -> {:error, {:upstream_refused, :unknown}}
+      {:ok, payload} -> sqd_result(state, payload)
+      {:tool_error, payload} -> {:error, sqd_refusal(state, payload)}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -643,11 +651,29 @@ defmodule Raxol.Web3.Backend.Tron do
   end
 
   defp dispatch(%__MODULE__{client: client}, tool, arguments, _extra) do
-    case Client.call_tool(client, tool, arguments) do
+    case call_tool(client, tool, arguments) do
       {:ok, %{content: content, is_error: false}} -> content_payload(content)
       {:ok, %{is_error: true}} -> {:error, {:upstream_refused, :unknown}}
       {:error, reason} -> {:error, client_error(reason)}
     end
+  end
+
+  # `Raxol.MCP.Client.call_tool/3` is a `GenServer.call`, and a `case` does not
+  # catch an exit. A client that died between the handle being built and the
+  # read exits the CALLER with `{:noproc, _}`. A slow exchange exits it with
+  # `{:timeout, _}`: both timers are 30s, but the caller's starts when the
+  # call is issued and the client's own `call_timeout` only when the request
+  # is dispatched, so on a `:serialized` or `:pooled` source anything spent
+  # queueing is time the caller's timer has and the client's has not.
+  # Either way the process that dies is the READER -- a router candidate, or
+  # whatever served the MCP tool call -- so the failover that exists for
+  # exactly this case never runs. Both map onto reasons
+  # `Raxol.Web3.Router.failover?/1` moves on.
+  defp call_tool(client, tool, arguments) do
+    Client.call_tool(client, tool, arguments)
+  catch
+    :exit, {:timeout, _call} -> {:error, {:timeout, :deadline}}
+    :exit, _down -> {:error, {:transport, :client_down}}
   end
 
   defp http_opts(state, extra) do
@@ -668,27 +694,39 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp content_payload(_other), do: {:error, {:decode_failed, :mcp_content}}
 
-  # The one recognised refusal shape inside a successful tool result: a payload
-  # whose `error` is a string and which carries nothing else to read. Measured
-  # 2026-09-14, that is how TronScan announces its pagination ceiling, and the
-  # announcement is prose in a language this repository's own lint would refuse,
-  # so the class is `:unknown` rather than a reading of the words.
+  # The one recognised refusal shape inside a successful tool result from the
+  # two stateful sources: a payload whose `error` is a string and which
+  # carries nothing else to read. Measured 2026-09-14, that is how TronScan
+  # announces its pagination ceiling, and the announcement is prose in a
+  # language this repository's own lint would refuse, so the class is
+  # `:unknown` rather than a reading of the words.
   defp payload_result(%{"error" => reason} = payload) when is_binary(reason) do
     if map_size(payload) == 1, do: {:error, {:upstream_refused, :unknown}}, else: {:ok, payload}
   end
 
-  # SQD announces a refusal as a nested object with a machine-readable code, and
-  # those two we do classify, because the code is a value rather than prose.
-  defp payload_result(%{"error" => %{"code" => code}}) when is_binary(code) do
-    {:error, {:upstream_refused, sqd_class(code)}}
-  end
-
   defp payload_result(payload), do: {:ok, payload}
 
-  defp sqd_class("unauthorized"), do: :auth
-  defp sqd_class("rate_limited"), do: :rate_limit
-  defp sqd_class("unknown_network"), do: :not_found
-  defp sqd_class(_other), do: :unknown
+  # SQD announces a refusal as a nested object with a machine-readable code,
+  # and it puts that object in both places a tool result can carry one: an
+  # `isError: true` result, and a plain result whose payload is the object.
+  # The code is read in both arms because it is the same refusal in both,
+  # and reading one arm only was the bug: both RECORDED refusals from this
+  # source carry `isError: true`, so every one of them collapsed to
+  # `{:upstream_refused, :unknown}` and became final.
+  #
+  # The reading itself is `Raxol.Web3.Backend.SQD`'s rather than this
+  # module's, because `Raxol.Web3.Backend.Solana` reads the same endpoint and
+  # the two copies of this had already disagreed twice: once about
+  # `unknown_network` and once about which arm carries the object. One
+  # endpoint, one reading.
+  defp sqd_result(state, payload) do
+    case SQD.refusal(payload, network_name(state)) do
+      nil -> payload_result(payload)
+      reason -> {:error, reason}
+    end
+  end
+
+  defp sqd_refusal(state, payload), do: SQD.announced(payload, network_name(state))
 
   # Every reason `Raxol.MCP.Client` produces, mapped onto the closed taxonomy in
   # `Raxol.Web3.Backend`. Nothing upstream travels: a JSON-RPC error contributes
@@ -726,9 +764,9 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp url(%__MODULE__{source: source}), do: Map.fetch!(@sources, source).url
 
-  defp network(%__MODULE__{source: source}) do
-    %{"network" => Map.fetch!(@sources, source).network}
-  end
+  defp network(%__MODULE__{} = state), do: %{"network" => network_name(state)}
+
+  defp network_name(%__MODULE__{source: source}), do: Map.fetch!(@sources, source).network
 
   # Chain identity, confirmed rather than asserted. The upstream names the
   # network and the VM family it indexed, and a handle that asked for Tron and
@@ -747,7 +785,7 @@ defmodule Raxol.Web3.Backend.Tron do
          arguments = Map.merge(base, Map.put(params, "limit", @page_limit)),
          {:ok, body} <- call(state, tool, arguments, :list),
          {:ok, rows} <- rows(body, :page),
-         {:ok, items} <- map_items(rows, mapper) do
+         {:ok, items} <- Backend.map_rows(rows, mapper, endpoint) do
       {:ok,
        %{
          items: items,
@@ -767,7 +805,7 @@ defmodule Raxol.Web3.Backend.Tron do
          arguments = Map.merge(base, %{"start" => start, "limit" => @page_limit}),
          {:ok, body} <- call(state, tool, arguments, :list),
          {:ok, rows} <- rows(body, :page),
-         {:ok, items} <- map_items(rows, mapper) do
+         {:ok, items} <- Backend.map_rows(rows, mapper, endpoint) do
       {:ok,
        %{
          items: items,
@@ -781,7 +819,7 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp next_fingerprint(body) do
     with %{"meta" => %{"fingerprint" => fingerprint} = meta} <- body,
-         true <- is_binary(get_in(meta, ["links", "next"])) do
+         true <- is_binary(dig(meta, ["links", "next"])) do
       %{"fingerprint" => fingerprint}
     else
       _last_page -> nil
@@ -816,10 +854,11 @@ defmodule Raxol.Web3.Backend.Tron do
 
   # -- normalization -----------------------------------------------------------
 
-  defp trongrid_transaction(body) do
+  defp trongrid_transaction(body) when is_map(body) do
     contract = contract_call(body)
+    raw = body |> field("raw_data") |> object()
 
-    with {:ok, value} <- money(contract["amount"] || contract["call_value"], :value) do
+    with {:ok, value} <- Backend.money(contract["amount"] || contract["call_value"], :value) do
       {:ok,
        %{
          hash: body["txID"],
@@ -828,39 +867,48 @@ defmodule Raxol.Web3.Backend.Tron do
          # and it currently refuses its own output. TronScan is the source that
          # answers those fields.
          block: nil,
-         timestamp: epoch_ms(get_in(body, ["raw_data", "timestamp"])),
+         timestamp: epoch_ms(raw["timestamp"]),
          from: ref(contract["owner_address"]),
          to: ref(counterparty(contract)),
          value: value,
          fee: nil,
-         method: get_in(body, ["raw_data", "contract"]) |> contract_type()
+         method: contract_type(raw["contract"])
        }}
     end
   end
 
-  defp trongrid_list_transaction(item) do
+  defp trongrid_transaction(_body), do: {:error, {:decode_failed, :transaction}}
+
+  defp trongrid_list_transaction(item) when is_map(item) do
     contract = contract_call(item)
-    raw_fee = item |> Map.get("ret", []) |> List.first(%{}) |> Map.get("fee")
 
-    with {:ok, value} <- money(contract["amount"] || contract["call_value"], :value),
-         {:ok, fee} <- money(raw_fee, :fee) do
-      {:ok,
-       %{
-         hash: item["txID"],
-         status: contract_status(item),
-         block: int(item["blockNumber"]),
-         timestamp: epoch_ms(item["block_timestamp"]),
-         from: ref(contract["owner_address"]),
-         to: ref(counterparty(contract)),
-         value: value,
-         fee: fee,
-         method: item |> Map.get("raw_data", %{}) |> Map.get("contract") |> contract_type()
-       }}
+    with {:ok, value} <- Backend.money(contract["amount"] || contract["call_value"], :value),
+         {:ok, fee} <- Backend.money(ret_fee(item), :fee) do
+      {:ok, trongrid_transaction_row(item, contract, value, fee)}
     end
   end
 
-  defp tronscan_transaction(body) do
-    with {:ok, fee} <- money(get_in(body, ["cost", "fee"]), :fee) do
+  defp trongrid_list_transaction(_item), do: {:error, {:decode_failed, :transaction_row}}
+
+  # A listed transaction answers its own block and its own fee, which is why
+  # this row is wider than the one `trongrid_transaction/1` can build out of
+  # `getTransactionById` alone.
+  defp trongrid_transaction_row(item, contract, value, fee) do
+    %{
+      hash: item["txID"],
+      status: contract_status(item),
+      block: int(item["blockNumber"]),
+      timestamp: epoch_ms(item["block_timestamp"]),
+      from: ref(contract["owner_address"]),
+      to: ref(counterparty(contract)),
+      value: value,
+      fee: fee,
+      method: item |> field("raw_data") |> field("contract") |> contract_type()
+    }
+  end
+
+  defp tronscan_transaction(body) when is_map(body) do
+    with {:ok, fee} <- Backend.money(body |> field("cost") |> field("fee"), :fee) do
       {:ok,
        %{
          hash: body["hash"],
@@ -871,56 +919,101 @@ defmodule Raxol.Web3.Backend.Tron do
          to: ref(body["toAddress"]),
          value: nil,
          fee: fee,
-         method: presence(body["contractType"] && to_string(body["contractType"]))
+         method: method_name(body["contractType"])
        }}
     end
   end
 
+  defp tronscan_transaction(_body), do: {:error, {:decode_failed, :transaction}}
+
   defp trongrid_block(body) do
-    raw = get_in(body, ["block_header", "raw_data"]) || %{}
+    raw = body |> field("block_header") |> field("raw_data") |> object()
 
     %{
       height: int(raw["number"]),
       hash: body["blockID"],
       timestamp: epoch_ms(raw["timestamp"]),
-      transactions_count: body |> Map.get("transactions", []) |> length_or_nil(),
+      transactions_count: body |> field("transactions") |> length_or_nil(),
       miner: ref(raw["witness_address"])
     }
   end
 
   # Both standards out of one account record. TRC-20 arrives as a list of
   # single-key maps from contract address to an amount string; TRC-10 as a list
-  # of `key`/`value` pairs whose key is the numeric asset id.
+  # of `key`/`value` pairs whose key is the numeric asset id. Neither list is
+  # guaranteed by anything but the upstream's habit, so a row that is not the
+  # shape claimed fails the read rather than raising inside the walk: the
+  # router fails over on `{:decode_failed, _}`, and a `FunctionClauseError`
+  # here would abort the read and carry the row into its own message.
+  #
+  # An ABSENT list is empty rather than a failure, because an account holding
+  # one standard and not the other omits the key it has nothing for.
   defp trongrid_token_balances(record) do
-    trc10 =
-      record
-      |> Map.get("assetV2", [])
-      |> Enum.map(fn %{"key" => id, "value" => amount} -> {:trc10, id, amount} end)
-
-    trc20 =
-      record
-      |> Map.get("trc20", [])
-      |> Enum.flat_map(fn entry ->
-        Enum.map(entry, fn {contract, amount} -> {:trc20, contract, amount} end)
-      end)
-
-    map_items(trc20 ++ trc10, fn
-      {:trc10, id, amount} ->
-        with {:ok, parsed} <- money(amount, :amount) do
-          {:ok, %{token: token(nil, "TRC-10"), amount: parsed, token_id: to_string(id)}}
-        end
-
-      {:trc20, contract, amount} ->
-        with {:ok, parsed} <- money(amount, :amount) do
-          {:ok, %{token: token(canonical(contract), "TRC-20"), amount: parsed, token_id: nil}}
-        end
-    end)
+    with {:ok, trc20} <- trc20_pairs(field(record, "trc20")),
+         {:ok, trc10} <- trc10_pairs(field(record, "assetV2")) do
+      Backend.map_rows(trc20 ++ trc10, &token_balance_row/1, :token_balance_row)
+    end
   end
 
-  defp tronscan_token_balance(item) do
+  defp trc20_pairs(nil), do: {:ok, []}
+
+  defp trc20_pairs(entries) when is_list(entries) do
+    entries
+    |> Enum.reduce_while({:ok, []}, fn
+      entry, {:ok, acc} when is_map(entry) ->
+        {:cont, {:ok, Enum.reduce(entry, acc, &[{:trc20, elem(&1, 0), elem(&1, 1)} | &2])}}
+
+      _row, {:ok, _acc} ->
+        {:halt, {:error, {:decode_failed, :token_balance_row}}}
+    end)
+    |> reversed()
+  end
+
+  defp trc20_pairs(_other), do: {:error, {:decode_failed, :token_balances}}
+
+  defp trc10_pairs(nil), do: {:ok, []}
+
+  defp trc10_pairs(entries) when is_list(entries) do
+    entries
+    |> Enum.reduce_while({:ok, []}, fn
+      %{"key" => id, "value" => amount}, {:ok, acc} ->
+        {:cont, {:ok, [{:trc10, id, amount} | acc]}}
+
+      _row, {:ok, _acc} ->
+        {:halt, {:error, {:decode_failed, :token_balance_row}}}
+    end)
+    |> reversed()
+  end
+
+  defp trc10_pairs(_other), do: {:error, {:decode_failed, :token_balances}}
+
+  defp reversed({:ok, pairs}), do: {:ok, Enum.reverse(pairs)}
+  defp reversed({:error, _reason} = error), do: error
+
+  defp token_balance_row({:trc10, id, amount}) do
+    with {:ok, parsed} <- Backend.money(amount, :amount) do
+      {:ok, %{token: token(nil, "TRC-10"), amount: parsed, token_id: asset_id(id)}}
+    end
+  end
+
+  defp token_balance_row({:trc20, contract, amount}) do
+    with {:ok, parsed} <- Backend.money(amount, :amount) do
+      {:ok, %{token: token(canonical(contract), "TRC-20"), amount: parsed, token_id: nil}}
+    end
+  end
+
+  # A TRC-10 id is the key of a `key`/`value` pair, so it is whatever the
+  # upstream put there. A binary or an integer is an asset id; anything else is
+  # not one, and rendering it with `to_string/1` would either raise or put
+  # upstream structure in the field a caller keys a token by.
+  defp asset_id(id) when is_binary(id), do: id
+  defp asset_id(id) when is_integer(id), do: Integer.to_string(id)
+  defp asset_id(_other), do: nil
+
+  defp tronscan_token_balance(item) when is_map(item) do
     {address, token_id} = token_identity(item["tokenId"])
 
-    with {:ok, amount} <- money(item["balance"], :amount) do
+    with {:ok, amount} <- Backend.money(item["balance"], :amount) do
       {:ok,
        %{
          token: %{
@@ -936,10 +1029,12 @@ defmodule Raxol.Web3.Backend.Tron do
     end
   end
 
-  defp trongrid_token_transfer(item) do
-    info = Map.get(item, "token_info", %{})
+  defp tronscan_token_balance(_item), do: {:error, {:decode_failed, :token_balance_row}}
 
-    with {:ok, amount} <- money(item["value"], :amount) do
+  defp trongrid_token_transfer(item) when is_map(item) do
+    info = item |> field("token_info") |> object()
+
+    with {:ok, amount} <- Backend.money(item["value"], :amount) do
       {:ok,
        %{
          token: %{
@@ -959,41 +1054,43 @@ defmodule Raxol.Web3.Backend.Tron do
     end
   end
 
-  defp tronscan_token_transfer(item) do
-    info = Map.get(item, "tokenInfo", %{})
-    {address, _token_id} = token_identity(info["tokenId"])
+  defp trongrid_token_transfer(_item), do: {:error, {:decode_failed, :token_transfer_row}}
 
-    with {:ok, amount} <- money(item["amount"], :amount) do
-      {:ok,
-       %{
-         token: %{
-           address: address,
-           symbol: presence(info["tokenAbbr"]),
-           name: presence(info["tokenName"]),
-           decimals: int(info["tokenDecimal"]),
-           type: token_type(info["tokenType"], info["tokenId"])
-         },
-         amount: amount,
-         from: ref(item["transferFromAddress"]),
-         to: ref(item["transferToAddress"]),
-         block: int(item["block"]),
-         timestamp: epoch_ms(item["timestamp"]),
-         transaction: item["transactionHash"]
-       }}
+  defp tronscan_token_transfer(item) when is_map(item) do
+    with {:ok, amount} <- Backend.money(item["amount"], :amount) do
+      {:ok, tronscan_transfer_row(item, amount)}
     end
   end
 
-  defp map_items(items, mapper) do
-    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
-      case mapper.(item) do
-        {:ok, mapped} -> {:cont, {:ok, [mapped | acc]}}
-        {:error, _reason} = error -> {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, mapped} -> {:ok, Enum.reverse(mapped)}
-      {:error, _reason} = error -> error
-    end
+  defp tronscan_token_transfer(_item), do: {:error, {:decode_failed, :token_transfer_row}}
+
+  defp tronscan_transfer_row(item, amount) do
+    %{
+      token: tronscan_transfer_token(item),
+      amount: amount,
+      from: ref(item["transferFromAddress"]),
+      to: ref(item["transferToAddress"]),
+      block: int(item["block"]),
+      timestamp: epoch_ms(item["timestamp"]),
+      transaction: item["transactionHash"]
+    }
+  end
+
+  # A transfer describes the token it moves under `tokenInfo`, with the same
+  # keys a balance row spells at its top level, so the identity split and the
+  # symbol/name/decimals triple are read here rather than beside the fields
+  # that belong to the transfer itself.
+  defp tronscan_transfer_token(item) do
+    info = item |> field("tokenInfo") |> object()
+    {address, _token_id} = token_identity(info["tokenId"])
+
+    %{
+      address: address,
+      symbol: presence(info["tokenAbbr"]),
+      name: presence(info["tokenName"]),
+      decimals: int(info["tokenDecimal"]),
+      type: token_type(info["tokenType"], info["tokenId"])
+    }
   end
 
   # The native asset has neither an address nor an asset id, a TRC-10 has an id
@@ -1020,11 +1117,13 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp contract_call(body) do
     body
-    |> Map.get("raw_data", %{})
-    |> Map.get("contract", [])
-    |> List.first(%{})
-    |> Map.get("parameter", %{})
-    |> Map.get("value", %{})
+    |> field("raw_data")
+    |> field("contract")
+    |> rows_of()
+    |> List.first()
+    |> field("parameter")
+    |> field("value")
+    |> object()
   end
 
   defp contract_type([%{"type" => type} | _rest]) when is_binary(type), do: type
@@ -1038,15 +1137,21 @@ defmodule Raxol.Web3.Backend.Tron do
   end
 
   defp contract_status(body) do
-    body |> Map.get("ret", []) |> List.first(%{}) |> Map.get("contractRet") |> ret_status()
+    body |> field("ret") |> rows_of() |> List.first() |> field("contractRet") |> ret_status()
   end
 
   defp ret_status("SUCCESS"), do: :success
   defp ret_status(nil), do: :pending
   defp ret_status(_reverted), do: :reverted
 
+  # The fee of a listed transaction lives in the same first `ret` entry that
+  # carries the `contractRet` `contract_status/1` reads.
+  defp ret_fee(item) do
+    item |> field("ret") |> rows_of() |> List.first() |> field("fee")
+  end
+
   defp sqd_indexer(body) do
-    indexing = Map.get(body, "indexing", %{})
+    indexing = body |> field("indexing") |> object()
 
     # `:indexed_ratio` is absent rather than computed: this upstream publishes
     # a lag in blocks and in seconds and no ratio at all, and a 1.0 here would
@@ -1062,7 +1167,7 @@ defmodule Raxol.Web3.Backend.Tron do
   # -- reading the upstream shapes ---------------------------------------------
 
   defp block_number(body) do
-    case int(get_in(body, ["block_header", "raw_data", "number"])) do
+    case int(dig(body, ["block_header", "raw_data", "number"])) do
       number when is_integer(number) -> {:ok, number}
       nil -> {:error, {:decode_failed, :block}}
     end
@@ -1075,8 +1180,8 @@ defmodule Raxol.Web3.Backend.Tron do
   defp sample_block(_state, _height), do: {:error, {:decode_failed, :block}}
 
   defp average_block_time_ms(head, earlier) do
-    newer = int(get_in(head, ["block_header", "raw_data", "timestamp"]))
-    older = int(get_in(earlier, ["block_header", "raw_data", "timestamp"]))
+    newer = int(dig(head, ["block_header", "raw_data", "timestamp"]))
+    older = int(dig(earlier, ["block_header", "raw_data", "timestamp"]))
 
     if is_integer(newer) and is_integer(older) and newer > older do
       (newer - older) / @block_time_sample
@@ -1092,8 +1197,8 @@ defmodule Raxol.Web3.Backend.Tron do
   # twice would make that depth zero.
   defp highest_confirmed(rows) do
     rows
-    |> Enum.filter(&(&1["confirmed"] == true))
-    |> Enum.map(&int(&1["number"]))
+    |> Enum.filter(&(field(&1, "confirmed") == true))
+    |> Enum.map(&int(field(&1, "number")))
     |> Enum.reject(&is_nil/1)
     |> Enum.max(fn -> nil end)
   end
@@ -1110,11 +1215,25 @@ defmodule Raxol.Web3.Backend.Tron do
   end
 
   defp dig_int(body, path, tag) do
-    case int(get_in(body, path)) do
+    case int(dig(body, path)) do
       value when is_integer(value) -> {:ok, value}
       nil -> {:error, {:decode_failed, tag}}
     end
   end
+
+  # The upstream's own value at a path, or `nil` where the path does not lead
+  # to one. `get_in/2` raises on the way through anything that is not a map,
+  # and every value on the way through belongs to the upstream.
+  defp dig(value, path), do: Enum.reduce(path, value, fn key, inner -> field(inner, key) end)
+
+  defp field(map, key) when is_map(map), do: Map.get(map, key)
+  defp field(_other, _key), do: nil
+
+  defp object(value) when is_map(value), do: value
+  defp object(_other), do: %{}
+
+  defp rows_of(value) when is_list(value), do: value
+  defp rows_of(_other), do: []
 
   # -- the account reference ---------------------------------------------------
 
@@ -1205,17 +1324,12 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp epoch_ms(_other), do: nil
 
-  defp money(nil, _field), do: {:ok, nil}
-  defp money(value, _field) when is_integer(value) and value >= 0, do: {:ok, value}
-
-  defp money(value, field) when is_binary(value) do
-    case Integer.parse(value) do
-      {number, ""} when number >= 0 -> {:ok, number}
-      _invalid -> {:error, {:decode_failed, field}}
-    end
-  end
-
-  defp money(_value, field), do: {:error, {:decode_failed, field}}
+  # `contractType` is an integer on this upstream, and `to_string/1` on
+  # whatever else an upstream might put there raises rather than naming a
+  # method. A shape this module does not read is no method name at all.
+  defp method_name(value) when is_integer(value), do: Integer.to_string(value)
+  defp method_name(value) when is_binary(value), do: presence(value)
+  defp method_name(_other), do: nil
 
   defp int(nil), do: nil
   defp int(value) when is_integer(value), do: value

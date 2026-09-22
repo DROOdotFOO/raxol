@@ -50,7 +50,7 @@ defmodule Raxol.Web3.RPC do
     eth_chainId
   )
 
-  @json_headers [{"content-type", "application/json"}]
+  @json_header {"content-type", "application/json"}
 
   @doc "The methods this client will speak, as a list."
   @spec read_methods() :: [String.t()]
@@ -241,9 +241,37 @@ defmodule Raxol.Web3.RPC do
       })
 
     url
-    |> HTTP.post(body, Keyword.put(opts, :headers, @json_headers))
+    |> HTTP.post(body, opts |> Backend.put_header(@json_header) |> classified())
     |> handle_response()
   end
+
+  # Header composition is `Raxol.Web3.Backend.put_header/2`: merge, never
+  # replace. `:http_opts` is documented as forwarded unchanged, and
+  # `Keyword.put(:headers, ...)` dropped whatever the operator configured, so
+  # a node reached only by an RBAC or API-key header answered 401 or 403 on
+  # every read through this module (which is every read
+  # `Raxol.Web3.Backend.JSONRPC` performs, plus `Blockscout.read_contract/2`).
+  # Ours wins a name collision and there is exactly one of it afterwards: some
+  # servers refuse a duplicate `content-type` outright.
+
+  # A node announces every refusal it has inside a 200, so the cache stage
+  # cannot tell a result from a refusal by status and has to be told. Without
+  # this, `eth_getBlockByNumber` on a head block answers -32004 once and the
+  # `:block` class serves that refusal for the next minute while the node is
+  # already caught up, and a -32005 rate limit is served as a cached rate
+  # limit after the budget has refilled.
+  defp classified(opts) do
+    case Keyword.get(opts, :cache) do
+      nil -> opts
+      spec -> Keyword.put(opts, :cache, Keyword.put_new(spec, :cacheable, &result?/1))
+    end
+  end
+
+  # The same reading `handle_response/1` makes, and deliberately the same
+  # function's worth of it: a body carries an answer when it carries a
+  # `result`, and everything else is a refusal, a shape we did not expect, or
+  # not JSON at all. None of the three is worth serving from a table later.
+  defp result?(%{body: body}), do: match?({:ok, %{"result" => _value}}, Jason.decode(body))
 
   defp handle_response({:ok, %{status: status, body: body}}) when status in 200..299 do
     case Jason.decode(body) do

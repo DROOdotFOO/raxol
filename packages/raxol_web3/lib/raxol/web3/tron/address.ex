@@ -156,8 +156,14 @@ defmodule Raxol.Web3.Tron.Address do
 
   defp digit(number), do: elem(@digits, rem(number, 58))
 
+  # Bytes rather than codepoints. The alphabet is ASCII, so the two agree on
+  # every address that could decode, and they differ on the ones that cannot:
+  # `String.to_charlist/1` RAISES `UnicodeConversionError` on a binary that is
+  # not valid UTF-8, and the binary here reaches this module from a tool
+  # argument and from an upstream payload. A byte outside the alphabet is not
+  # in `@values`, so a refusal stays a refusal instead of becoming a crash.
   defp base58_decode(string) do
-    chars = String.to_charlist(string)
+    chars = :binary.bin_to_list(string)
 
     case to_integer(chars, 0) do
       {:ok, 0} ->

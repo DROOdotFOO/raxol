@@ -35,6 +35,7 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
   setup do
     dir = Path.join(System.tmp_dir!(), "raxol-remote-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
+    File.chmod!(dir, 0o700)
 
     # A real `op` on PATH whose every invocation leaves a file behind, so "no
     # op process was spawned" is a filesystem fact rather than a flag this
@@ -51,20 +52,41 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
     allowlist = Path.join(dir, "mcp_headers.json")
     previous_allowlist = System.get_env("RAXOL_MCP_HEADER_ALLOWLIST")
     System.put_env("RAXOL_MCP_HEADER_ALLOWLIST", allowlist)
+
+    # Every workspace-sourced remote spec below would otherwise be refused
+    # before it started: a repository cannot pick the host the agent talks
+    # to. The operator allowlisted this one.
+    hosts = Path.join(dir, "mcp_hosts.json")
+    previous_hosts = System.get_env("RAXOL_MCP_HOST_ALLOWLIST")
+    System.put_env("RAXOL_MCP_HOST_ALLOWLIST", hosts)
+    write_control!(hosts, Jason.encode!(["mcp.example.com"]))
+
     System.put_env("INTEL_TOKEN", @env_secret)
 
     on_exit(fn ->
       restore("PATH", previous_path)
       restore("RAXOL_MCP_HEADER_ALLOWLIST", previous_allowlist)
+      restore("RAXOL_MCP_HOST_ALLOWLIST", previous_hosts)
       System.delete_env("INTEL_TOKEN")
       File.rm_rf!(dir)
     end)
 
-    %{op_log: log, allowlist: allowlist}
+    %{dir: dir, op_log: log, allowlist: allowlist, hosts: hosts}
   end
 
   defp restore(name, nil), do: System.delete_env(name)
   defp restore(name, value), do: System.put_env(name, value)
+
+  # A control file is written 0600 rather than at the ambient umask.
+  # `Raxol.Agent.OperatorFile` refuses one another account may write, so a
+  # fixture at 0664 -- umask 002, the Ubuntu default with user private
+  # groups -- would refuse ITSELF, and every positive test here would pass or
+  # fail by the environment it ran in. The directory is 0700 for the same
+  # reason: the parent is half of that rule.
+  defp write_control!(path, contents) do
+    File.write!(path, contents)
+    File.chmod!(path, 0o600)
+  end
 
   defp start_fn do
     parent = self()
@@ -309,7 +331,7 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
   test "an operator allowlist lets one named workspace reference through", %{
     allowlist: allowlist
   } do
-    File.write!(allowlist, Jason.encode!(%{"Authorization" => ["${env:INTEL_TOKEN}"]}))
+    write_control!(allowlist, Jason.encode!(%{"Authorization" => ["${env:INTEL_TOKEN}"]}))
 
     {loaded, _log} = load([spec(headers: [{"Authorization", "${env:INTEL_TOKEN}"}])])
 
@@ -349,6 +371,124 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
       refute inspect(reason) =~ "env-secret-DEADBEEF"
       refute log =~ "sk-live-DEADBEEF"
       refute log =~ "env-secret-DEADBEEF"
+    end
+  end
+
+  # Connecting is itself the damage: the client's first exchange is
+  # `tools/list`, and those descriptions are rendered into the model's
+  # context before anything is invoked. So the host a REPOSITORY named has to
+  # be one the operator approved, outside that repository.
+  describe "a workspace spec's host" do
+    test "is refused before any client starts when no operator allowlist names it", %{
+      hosts: hosts
+    } do
+      write_control!(hosts, Jason.encode!(["other.example.com"]))
+
+      {loaded, log} = load([spec(headers: [{"Authorization", @literal}])])
+
+      assert loaded.servers == []
+      assert loaded.tools == []
+      assert loaded.failed == [{:intel, {:workspace_remote_host, "mcp.example.com"}}]
+      refute_received {:started, _opts}
+
+      # Named, so an operator can add it deliberately rather than guess.
+      assert log =~ "mcp.example.com"
+      assert log =~ hosts
+    end
+
+    test "is refused when the allowlist is one another account may write", %{hosts: hosts} do
+      File.chmod!(hosts, 0o666)
+
+      {loaded, log} = load([spec([])])
+
+      assert loaded.failed == [{:intel, {:workspace_remote_host, "mcp.example.com"}}]
+      refute_received {:started, _opts}
+      assert log =~ "mode 0666"
+    end
+
+    test "is refused when the process has no home and no allowlist override", %{dir: dir} do
+      previous_home = System.get_env("HOME")
+      previous_tmp = System.get_env("TMPDIR")
+      System.delete_env("RAXOL_MCP_HOST_ALLOWLIST")
+      System.put_env("TMPDIR", dir)
+      System.delete_env("HOME")
+
+      on_exit(fn ->
+        restore("HOME", previous_home)
+        restore("TMPDIR", previous_tmp)
+      end)
+
+      # The path the old home fallback would have read, planted by anyone.
+      # Written as a control the rules WOULD accept, so the refusal is
+      # attributable to the absent home rather than to its mode.
+      planted = Path.join([dir, ".raxol", "mcp_hosts.json"])
+      File.mkdir_p!(Path.dirname(planted))
+      File.chmod!(Path.dirname(planted), 0o700)
+      write_control!(planted, Jason.encode!(["mcp.example.com"]))
+
+      {loaded, _log} = load([spec([])])
+
+      assert loaded.failed == [{:intel, {:workspace_remote_host, "mcp.example.com"}}]
+      refute_received {:started, _opts}
+    end
+
+    test "an allowlisted host connects, and a :user spec needs no allowlist at all", %{
+      hosts: hosts
+    } do
+      {loaded, _log} = load([spec([])])
+      assert loaded.failed == []
+      assert_receive {:started, _opts}
+
+      write_control!(hosts, Jason.encode!([]))
+      {user_loaded, _log} = load([spec(source: :user)])
+
+      assert user_loaded.failed == []
+      assert_receive {:started, _opts}
+    end
+  end
+
+  # The host allowlist guarded one transport, not the config file. The same
+  # `.mcp.json` can declare `{"command": "npx", "args": ["-y", "mcp-remote",
+  # "https://evil/mcp"]}` -- the same tool-list-into-context result over
+  # stdio, and arbitrary local code besides.
+  describe "a workspace spec's command" do
+    test "is refused, by name, when no operator allowlist names it" do
+      {loaded, log} =
+        load([%{name: :evil, source: :workspace, command: "npx", args: ["-y", "mcp-remote"]}])
+
+      assert loaded.servers == []
+      assert loaded.tools == []
+      assert loaded.failed == [{:evil, {:workspace_command, "npx"}}]
+      refute_received {:started, _opts}
+      assert log =~ "npx"
+    end
+
+    test "runs once the operator allowlists it, and a :user spec needs no allow", %{
+      hosts: hosts
+    } do
+      write_control!(hosts, Jason.encode!(%{"commands" => ["npx"]}))
+
+      {loaded, _log} = load([%{name: :ok_cmd, source: :workspace, command: "npx"}])
+      assert loaded.failed == []
+      assert_receive {:started, opts}
+      assert Keyword.fetch!(opts, :command) == "npx"
+
+      # The gate travels with the spec, so the transport can ask again.
+      assert Keyword.fetch!(opts, :source) == :workspace
+      assert is_function(Keyword.fetch!(opts, :permit), 1)
+
+      write_control!(hosts, Jason.encode!([]))
+      {user_loaded, _log} = load([%{name: :operator_cmd, source: :user, command: "anything"}])
+      assert user_loaded.failed == []
+      assert_receive {:started, _opts}
+    end
+
+    test "an untagged spec is the operator's own program, not repository content" do
+      # `default_servers/1` and an embedder's list are assembled in code;
+      # every spec parsed out of a repository is tagged by `McpConfig`.
+      {loaded, _log} = load([%{name: :catalog, command: "uvx"}])
+      assert loaded.failed == []
+      assert_receive {:started, _opts}
     end
   end
 end
