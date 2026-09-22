@@ -123,10 +123,11 @@ defmodule Raxol.Web3.MCPCall do
     |> decode()
   end
 
-  # An MCP tool server announces a refusal inside a 200 in two different
-  # shapes -- a JSON-RPC `error` on the envelope and `isError: true` on the
-  # result -- so the cache stage cannot tell an answer from a refusal by
-  # status and has to be told. The measured cost of not telling it: SQD's
+  # An MCP tool server announces a refusal inside a 200 in three different
+  # shapes -- a JSON-RPC `error` on the envelope, `isError: true` on the
+  # result, and an `error` object carrying a `code` in the payload itself --
+  # so the cache stage cannot tell an answer from a refusal by status and has
+  # to be told. The measured cost of not telling it: SQD's
   # `portal_list_networks` is cached under `:catalog` for an hour, so one
   # transient tool error resolved every read on that source to a refusal for
   # the rest of the hour while the source was already answering again.
@@ -138,9 +139,28 @@ defmodule Raxol.Web3.MCPCall do
   end
 
   # `decode/1` itself, rather than a second reading of the same body: the two
-  # would have to agree about both refusal shapes forever, and the only way to
+  # would have to agree about the refusal shapes forever, and the only way to
   # guarantee that is to have one of them.
-  defp answered?(response), do: match?({:ok, _payload}, decode({:ok, response}))
+  #
+  # The third shape is the one `decode/1` cannot own, because it is not a
+  # refusal at the MCP level at all: the server answered, `isError` is absent,
+  # and what came back is a well-formed payload whose CONTENT says no.
+  # `Raxol.Web3.Backend.Tron.sqd_result/2` reads exactly that payload and
+  # turns `unknown_network` into `{:unsupported_chain, _}`, so caching it puts
+  # the same refusal in front of every read of that class for the whole TTL,
+  # which is the bug this predicate exists to remove. Returning the payload to
+  # the caller unchanged and merely declining to STORE it is the conservative
+  # half: a genuine payload that happens to carry an `error` code costs one
+  # re-fetch, where a cached refusal costs an hour of wrong answers.
+  defp answered?(response) do
+    case decode({:ok, response}) do
+      {:ok, payload} -> not payload_refusal?(payload)
+      _refused -> false
+    end
+  end
+
+  defp payload_refusal?(%{"error" => %{"code" => _code}}), do: true
+  defp payload_refusal?(_payload), do: false
 
   defp headers(opts) do
     Enum.reduce(@default_headers, Keyword.get(opts, :headers, []), fn {name, value}, headers ->

@@ -186,6 +186,46 @@ defmodule Raxol.Web3.MCPCallTest do
     end
   end
 
+  describe "what may be stored" do
+    # Own cache keys per test, because an entry is keyed by
+    # {origin_id, fragment} and every test here shares one endpoint.
+    defp twice(body, key) do
+      opts = [{:cache, [key: key, ttl_ms: 60_000]} | answering(200, body)]
+
+      first = MCPCall.call(@endpoint, "portal_list_networks", %{}, opts)
+      second = MCPCall.call(@endpoint, "portal_list_networks", %{}, opts)
+
+      {first, second, Enum.count(drain())}
+    end
+
+    defp drain(acc \\ []) do
+      receive do
+        {:request, request} -> drain([request | acc])
+      after
+        0 -> acc
+      end
+    end
+
+    test "a payload whose own content says no is not stored" do
+      # The third refusal shape: 200, no `isError`, a well-formed payload
+      # carrying a code. `Raxol.Web3.Backend.Tron.sqd_result/2` reads exactly
+      # this and answers `{:unsupported_chain, _}`, so storing it served that
+      # refusal for the whole class TTL, an hour for `:catalog`, while the
+      # source was already answering.
+      payload = %{"error" => %{"code" => "unknown_network"}}
+      body = framed(envelope(text_result(payload)))
+
+      assert {{:ok, ^payload}, {:ok, ^payload}, 2} = twice(body, "refusal-in-payload")
+    end
+
+    test "an answer is stored, so the predicate is a split and not a mute" do
+      payload = %{"networks" => ["tron-mainnet"]}
+      body = framed(envelope(text_result(payload)))
+
+      assert {{:ok, ^payload}, {:ok, ^payload}, 1} = twice(body, "real-answer")
+    end
+  end
+
   describe "envelope and transport failures" do
     test "a JSON-RPC envelope error classifies by code, never by message" do
       for {code, class} <- [
