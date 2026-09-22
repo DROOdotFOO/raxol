@@ -61,3 +61,23 @@ paths = [
   '''priv/static/assets/vendor/.*''',
 ]
 
+[[allowlists]]
+description = """
+Two public on-chain identifiers asserted by value in the web3 backend tests: an
+SPL mint pubkey and a TRC-20 contract address, each recorded from a mainnet
+read on 2026-09-14 and resolvable in any block explorer. `generic-api-key`
+matches them on entropy alone, because base58 is what both a mint address and
+a key look like.
+
+Allowlisted BY VALUE rather than by fingerprint or path, for two reasons. The
+tests assert these exact strings, since the property under test is that a token
+is identified correctly, so they cannot be shortened or faked away. And a
+fingerprint binds to a commit sha, so it goes stale the moment the branch is
+rebased and the gate fails again for a reason that has nothing to do with
+secrets. Any OTHER key-shaped string in those files still fails.
+"""
+targetRules = ["generic-api-key"]
+regexes = [
+  '''NkfbyG7feH9aJhdnSs4d7D7kWCEnxrmNUbM7dbpC6MM''',
+  '''TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq''',
+]

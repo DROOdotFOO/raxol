@@ -99,8 +99,8 @@ defmodule Raxol.Agent.Code.Inspection do
     end
   end
 
-  # Skipped entries (a `url` server, a broken entry) are part of the
-  # snapshot: the file names them, so the inspection must too.
+  # Skipped entries (an `http`/`sse` entry naming no url, a broken entry) are
+  # part of the snapshot: the file names them, so the inspection must too.
   defp mcp_section(cwd) do
     case McpConfig.load_all(cwd) do
       :none ->
@@ -110,7 +110,10 @@ defmodule Raxol.Agent.Code.Inspection do
         %{
           status: :ok,
           servers: Enum.map(servers, &redact_server/1),
-          skipped: Enum.map(skipped, fn {name, reason} -> %{name: name, reason: reason} end)
+          skipped:
+            Enum.map(skipped, fn {name, reason} ->
+              %{name: one_line(name), reason: reason}
+            end)
         }
 
       {:error, reason} ->
@@ -118,15 +121,50 @@ defmodule Raxol.Agent.Code.Inspection do
     end
   end
 
-  # Env NAMES only: `.mcp.json` env values may hold tokens.
+  # NAMES only, never values: `.mcp.json` env values and header values may
+  # hold tokens, and this output is meant to be read and pasted.
+  #
+  # A url was the hole in that: it was copied out verbatim, and a url is the
+  # commonest place an MCP credential lives -- `https://user:token@host/mcp`
+  # and `?api_key=sk-...` are both ordinary MCP configuration. It is now cut
+  # down to what identifies the server, by `endpoint/1`.
+  #
+  # The name is workspace content too, and nothing has checked its charset at
+  # this point (the loader's check applies to servers it ADMITS, which is a
+  # later and narrower set). A `\n` in it forged a whole extra row in the
+  # rendered snapshot, so newlines become spaces here.
   defp redact_server(server) do
     %{
-      name: server.name,
-      command: server.command,
-      args: server.args,
-      env_keys: server |> Map.get(:env, %{}) |> Map.keys() |> Enum.sort()
+      name: one_line(server.name),
+      source: Map.get(server, :source, :workspace),
+      command: Map.get(server, :command),
+      args: Map.get(server, :args, []),
+      env_keys: server |> Map.get(:env, %{}) |> Map.keys() |> Enum.sort(),
+      url: endpoint(Map.get(server, :url)),
+      header_names: server |> Map.get(:headers, []) |> Enum.map(&elem(&1, 0)),
+      metered: Map.get(server, :metered, false)
     }
   end
+
+  defp one_line(name) when is_binary(name), do: String.replace(name, ~r/[\r\n]+/, " ")
+  defp one_line(name), do: name
+
+  # Scheme, host, port and path: enough for an operator to recognize which
+  # server this is, with userinfo and the query string dropped rather than
+  # masked, so there is nothing left to un-mask.
+  defp endpoint(nil), do: nil
+
+  defp endpoint(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host} = uri} when is_binary(scheme) and is_binary(host) ->
+        URI.to_string(%URI{scheme: scheme, host: host, port: uri.port, path: uri.path})
+
+      _unusable ->
+        "(unparseable url)"
+    end
+  end
+
+  defp endpoint(_other), do: nil
 
   # Which servers WOULD serve this directory, and whether their command is
   # installed. Nothing is started to find out.
@@ -278,7 +316,7 @@ defmodule Raxol.Agent.Code.Inspection do
             keys -> "  (env: #{Enum.join(keys, ", ")})"
           end
 
-        "  #{s.name} → #{Enum.join([s.command | s.args], " ")}#{env}"
+        "  #{s.name} → #{server_target(s)}#{env}"
       end)
 
     skipped_rows =
@@ -287,8 +325,17 @@ defmodule Raxol.Agent.Code.Inspection do
     ["mcp servers (.mcp.json):" | rows ++ skipped_rows]
   end
 
-  defp skip_reason_text(:unsupported_transport), do: "http/sse transport, not bridged"
-  defp skip_reason_text(:no_command), do: "no command"
+  # A remote server carries no command, so joining `[s.command | s.args]`
+  # raised on it. Naming what the entry declares is what makes this snapshot
+  # usable for "why did that server not start".
+  defp server_target(%{command: command} = server) when is_binary(command),
+    do: Enum.join([command | server.args], " ")
+
+  defp server_target(%{url: url}) when is_binary(url), do: url
+  defp server_target(_server), do: "(no command or url)"
+
+  defp skip_reason_text(:unsupported_transport), do: "type is http/sse but no url"
+  defp skip_reason_text(:no_command), do: "neither a command nor a url"
   defp skip_reason_text(:command_not_string), do: "command not a string"
   defp skip_reason_text(:not_an_object), do: "not an object"
 
@@ -309,6 +356,12 @@ defmodule Raxol.Agent.Code.Inspection do
 
   defp skill_root_text(%{dir: dir, skills: n}),
     do: "#{dir} (#{n} #{plural(n, "skill")})"
+
+  # No home directory and no override: `Store.default_dir/0` refuses to guess
+  # a world-writable one, and an operator reading /inspect should see why
+  # rather than an empty path.
+  defp render_sessions(%{dir: nil}),
+    do: "sessions: none (no home directory; set $RAXOL_CODE_SESSIONS)"
 
   defp render_sessions(%{dir: dir, count: 0}), do: "sessions: #{dir} (none saved)"
 

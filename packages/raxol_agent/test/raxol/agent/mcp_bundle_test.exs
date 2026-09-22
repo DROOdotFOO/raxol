@@ -2,7 +2,7 @@ defmodule Raxol.Agent.McpBundleTest.FakeServer do
   @moduledoc """
   A real GenServer standing in for an external MCP stdio server at the process
   boundary: it answers the exact `GenServer.call`s `Raxol.MCP.Client` makes
-  (`:list_tools`, `{:call_tool, name, args}`), so the bundle -> Dynamic ->
+  (`:list_tools`, `{:call_tool, name, args, opts}`), so the bundle -> Dynamic ->
   ToolConverter chain is exercised for real without spawning npx/uvx.
   """
   use GenServer
@@ -22,8 +22,8 @@ defmodule Raxol.Agent.McpBundleTest.FakeServer do
   def handle_call(:list_tools, _from, state),
     do: {:reply, {:ok, state.tools}, state}
 
-  def handle_call({:call_tool, name, args}, _from, state) do
-    if state.test_pid, do: send(state.test_pid, {:fake_called, name, args})
+  def handle_call({:call_tool, name, args, opts}, _from, state) do
+    if state.test_pid, do: send(state.test_pid, {:fake_called, name, args, opts})
 
     {:reply, {:ok, %{"content" => [%{"type" => "text", "text" => "ok:#{name}"}]}}, state}
   end
@@ -166,7 +166,7 @@ defmodule Raxol.Agent.McpBundleTest do
 
       # The server receives the ORIGINAL tool name, not the namespaced one, with
       # string-keyed args.
-      assert_receive {:fake_called, "status", %{"path" => "."}}
+      assert_receive {:fake_called, "status", %{"path" => "."}, _opts}
     end
 
     test "bundled tools are sensitive by default and gated; a sensitive:false spec is callable" do
@@ -255,20 +255,32 @@ defmodule Raxol.Agent.McpBundleTest do
       assert [{:slow, {:not_ready, :initializing}}] = loaded.failed
     end
 
-    test "fails open at once on an already-closed server without polling to timeout" do
-      start = fn _opts -> ClosedServer.start_link([]) end
+    test "awaits a closed server within the deadline, then stops the client it gave up on" do
+      # `:closed` is not terminal any more: the client schedules its own
+      # reconnect with backoff and keeps the pid, so failing open at once
+      # left a server reported as skipped whose client went on dialling for
+      # the whole session. It is awaited within the SHARED deadline instead,
+      # and the one that never arrives is stopped rather than orphaned.
+      parent = self()
 
-      # A large timeout must NOT block: `:closed` is terminal, so no retry. If it
-      # were retried, this test would hang until the ExUnit timeout.
+      start = fn _opts ->
+        {:ok, pid} = ClosedServer.start_link([])
+        send(parent, {:client, pid})
+        {:ok, pid}
+      end
+
       loaded =
         McpBundle.load([%{name: :dead, command: "x"}],
           start: start,
-          ready_timeout: 60_000,
-          ready_interval: 50
+          ready_timeout: 30,
+          ready_interval: 5
         )
 
       assert loaded.tools == []
       assert [{:dead, {:not_ready, :closed}}] = loaded.failed
+
+      assert_received {:client, pid}
+      refute Process.alive?(pid)
     end
   end
 end

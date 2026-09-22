@@ -398,10 +398,16 @@ jobs:
         # have shipped unrun. raxol_agent is the package that consumes both, so
         # both join together.
         #
+        # raxol_web3 joins with its first module. It is the guarded outbound
+        # client of ADR-0038, so every test it has is a security property: the
+        # SNI and the Host header a pinned dial presents, and the transport
+        # options it refuses. Landing it ungated would repeat exactly the gap
+        # the packages above were added here to close.
+        #
         # Keep on ONE line: test/raxol/formatter_delegation_test.exs parses this
         # matrix with `^\s*package: \[...\]` to prove every gated package is also
         # delegated by the root .formatter.exs. A block sequence parses as absent.
-        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony]
+        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony, raxol_web3]
 
     steps:
       - uses: actions/checkout@v7

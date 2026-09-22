@@ -9,6 +9,50 @@ Verdicts are the point of this document:
 - **PORT**: licence permits reusing the design; we reimplement in Elixir
 - **AVOID**: dead, licence-hostile, or gated behind a paid key
 
+## Corrections, measured 2026-09-14 while the backends were written
+
+The figures below supersede the 2026-08-31 ones in this document where they disagree. Each was
+taken from a live call, and the drift is the point: these surfaces move, so a figure here is a
+dated observation rather than a constant.
+
+1. **Canton has a keyless path after all, and the claim that it does not was the most
+   consequential error in this survey.** On `api.cantonnodes.com`, keyless:
+   `GET /v0/round-of-latest-data` (200, the round the chain counts in), `GET /v0/dso` (200,
+   72,339 bytes, the DSO party id), `POST /v0/holdings/summary` and `POST /v0/holdings/state`
+   (200 for a real party id), and `GET /v0/updates/{update_id}` (200). So every read the Canton
+   backend declares answers keyless except its ccscan passthrough, and the zero-configuration
+   promise holds on this chain for everything but that one callback. `POST /v0/holdings/summary`
+   requires `owner_party_ids` rather than `party_ids`, and `POST /v0/holdings/state` requires
+   `page_size` with a measured ceiling of 1000. Two path guesses taken from the Splice
+   specification were 404s (`/v0/total-amulet-balance`), so probe rather than port paths.
+   `scan.sv-1.global.canton.network.digitalasset.com/api/scan/v0/*` answers 403 "RBAC: access
+   denied", so that super-validator host is not an open Scan endpoint from this network.
+2. **ccscan is unchanged in shape and worth restating precisely**: 13 tools, no session at all,
+   and plain `application/json` responses rather than SSE. `tools/call` answers HTTP 200 with
+   `result.isError` true and `content[0].text` holding
+   `{"error": "account_required", ...}`, which is a refusal announced inside a success and maps
+   onto `{:upstream_refused, :auth}`.
+3. **SQD Portal serves 31 tools, not 28**, and its `tools/list` result carries neither `ttlMs`
+   nor `cacheScope`, which the 2026-07-28 revision requires on a list result. It has no
+   transaction-by-signature lookup for Solana: the only id-shaped parameters in the whole
+   surface are `sighash` on the EVM and Tron transaction queries, which is a method selector,
+   and `transaction_hash` on the EVM trace tool. Its account tool is a look-back activity
+   summary rather than a balance. Those two findings are what shrank the required callback set
+   to two in ADR-0039.
+4. **TronGrid still serves 149 tools, but the sub-counts drifted**: 25 `solidity*` tools rather
+   than 26, and 27 `eth*` shims rather than 33. Its `initialize` answers `application/json` and
+   issues a `mcp-session-id`; every later call needs that header or returns 400, and
+   `tools/list` comes back as `text/event-stream` at **269,860 bytes**, which is the
+   context-window cost the facade argument rests on.
+5. **Aztecscan's surface is larger than the coverage matrix records.** `l2/tips` answers the
+   whole finality ladder in one response (proposed, checkpointed, proven, finalized, plus
+   staleness), which is how that chain answers `finalized_height` honestly. `l2/txs` is the
+   pending pool rather than a mined list, and the mined record is `l2/tx-effects/{hash}`.
+   `l2/accounts` is a 404: there is no account resource. `l2/contract-instances` and
+   `l2/contract-classes` are unpaginated at 2.4 MB and 2.3 MB, so neither is callable. A
+   withdrawn key prefix answers 404 text/plain rather than 403, which a circuit breaker records
+   as a success, so only an error classification can fail it over.
+
 ## The short version
 
 Three findings reorder the plan.
@@ -199,3 +243,13 @@ undocumented; SQD network coverage, where the README, docs, and changelog disagr
 it at runtime through `portal_list_networks` rather than hardcoding; the licences of the hosted
 Tron MCPs and ccscan, which have no repositories, so terms of service govern and PROXY-only is
 the safe reading; and whether SEP-986 is merged as normative spec text or merely accepted.
+
+Resolved on 2026-09-14, and moved out of that list: SQD network coverage is now read at
+runtime through `portal_list_networks` by `Raxol.Web3.Backend.Solana`, so the documentation's
+disagreement with itself no longer has to be adjudicated. Still unverified, and now visible in
+configuration rather than in prose: every rate limit above. Each backend seeds
+`Raxol.Core.TokenBucket` through `Raxol.Web3.HTTP`'s `:rate_limit` option and labels the figure
+a guess in the attribute that carries it, except Solana's public RPC, which is labelled
+documented-not-measured at 100 requests per 10 seconds. Nothing probes an undocumented limit by
+exceeding it: these are free paths, and finding the ceiling by hitting it is not a measurement
+worth taking.

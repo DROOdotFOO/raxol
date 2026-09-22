@@ -1,0 +1,144 @@
+{
+  "dso_party_id": "DSO::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc",
+  "sv_party_id": "SV::party",
+  "voting_threshold": 9,
+  "initial_round": "0",
+  "latest_mining_round": {
+    "contract": {
+      "template_id": "fb10433a48c24f30076a7aee03a3e314b7ab02fe9a22e2069e3af92d2b6ac88a:Splice.Round:OpenMiningRound",
+      "contract_id": "0088182e48d86469d80c045c51239f91e824990a75f1d205709586b78c5c53ed1bca1212205e6b20bae74366357c870a7e25214f7fef88044f9fbe1ff157b8b96ccc290780",
+      "payload": {
+        "dso": "DSO::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc",
+        "tickDuration": {
+          "microseconds": "600000000"
+        },
+        "round": {
+          "number": "113141"
+        },
+        "amuletPrice": "0.095581"
+      }
+    }
+  },
+  "sv_node_states": [
+    {
+      "contract": {
+        "payload": {
+          "sv": "Digital-Asset-1::12203a616cd41a519d1950ffd4df0ced808cce3bea558d684296c007bb8e12d7f649",
+          "state": {
+            "synchronizerNodes": [
+              [
+                "global-domain::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc",
+                {
+                  "physicalSynchronizers": [
+                    [
+                      "5",
+                      {
+                        "sequencer": {
+                          "url": "https://sequencer-5.sv-1.global.canton.network.digitalasset.com"
+                        }
+                      }
+                    ]
+                  ],
+                  "sequencerIdentity": {
+                    "sequencerId": "SEQ::Digital-Asset-1::122017a38ab4867e14a446125751b7dbe88c3a4a738c703b1ce9e5778b3f10c76fea",
+                    "availableAfter": "2026-06-10T08:45:15.108477Z"
+                  },
+                  "legacySequencerConfig": null,
+                  "scan": {
+                    "publicUrl": "https://scan.sv-1.global.canton.network.digitalasset.com"
+                  },
+                  "mediator": {
+                    "mediatorId": "MED::Digital-Asset-1::1220e56bc5c9c72a5fb5ec9a05e0985dbf4d707f9990358e1622e410447f053877ac"
+                  },
+                  "cometBft": {
+                    "nodes": [
+                      [
+                        "853b6e19714a218b4ab1ac2b4b0d79c430d4b859",
+                        {
+                          "validatorPubKey": "jrhvlnjtI1/B27rGj05khiLs91TOOk1CfAMxmF2BBJE=",
+                          "votingPower": "1"
+                        }
+                      ]
+                    ],
+                    "governanceKeys": [
+                      {
+                        "pubKey": "3xEvZUECWRbynRWeLs7d/OTU7TnMF1Vzwnd4DA9KzVs="
+                      }
+                    ],
+                    "sequencingKeys": []
+                  },
+                  "sequencer": {
+                    "migrationId": "4",
+                    "sequencerId": "SEQ::Digital-Asset-1::122017a38ab4867e14a446125751b7dbe88c3a4a738c703b1ce9e5778b3f10c76fea",
+                    "url": "https://sequencer-5.sv-1.global.canton.network.digitalasset.com",
+                    "availableAfter": "2025-12-22T08:41:52.451150Z"
+                  }
+                }
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "contract": {
+        "payload": {
+          "sv": "MPC-Holding-Inc::12204783725aa3adcd787311531134baed8b9b28ccf76b100c62b8d4995842aabd6b",
+          "state": {
+            "synchronizerNodes": [
+              [
+                "global-domain::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc",
+                {
+                  "physicalSynchronizers": [
+                    [
+                      "5",
+                      {
+                        "sequencer": {
+                          "url": "https://sequencer-5.sv-1.global.canton.network.mpch.io"
+                        }
+                      }
+                    ]
+                  ],
+                  "sequencerIdentity": {
+                    "sequencerId": "SEQ::MPC-Holding-Inc::1220b49317f66c64ce7216ff3c68642d2ee338a070659b97b2572d02b098be801ddb",
+                    "availableAfter": "2026-06-13T04:25:21.795377Z"
+                  },
+                  "legacySequencerConfig": null,
+                  "scan": {
+                    "publicUrl": "https://scan.sv-1.global.canton.network.mpch.io"
+                  },
+                  "mediator": {
+                    "mediatorId": "MED::MPC-Holding-Inc::122086bb983c1f8768e9dff172ff7e2d08c00841eb9cdb9e3ff797f2fa118609d8e6"
+                  },
+                  "cometBft": {
+                    "nodes": [
+                      [
+                        "ba7242cb6b936cb54ee8cb735c4298909600cfa3",
+                        {
+                          "validatorPubKey": "npMe1mqSMtbVCzM333Ny0urOYdswbpjo65NttE3tiNI=",
+                          "votingPower": "1"
+                        }
+                      ]
+                    ],
+                    "governanceKeys": [
+                      {
+                        "pubKey": "59H83xTJSmHfJrxQdq9mblVwQZ5Xvcp+LSODx0Pf1bg="
+                      }
+                    ],
+                    "sequencingKeys": []
+                  },
+                  "sequencer": {
+                    "migrationId": "4",
+                    "sequencerId": "SEQ::MPC-Holding-Inc::1220b49317f66c64ce7216ff3c68642d2ee338a070659b97b2572d02b098be801ddb",
+                    "url": "https://sequencer-5.sv-1.global.canton.network.mpch.io",
+                    "availableAfter": "2025-12-29T14:33:15.274963Z"
+                  }
+                }
+              ]
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

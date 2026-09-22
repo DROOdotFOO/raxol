@@ -1,0 +1,44 @@
+{
+  "tips": {
+    "proposed": {
+      "number": 83597,
+      "hash": "0x20dc8b86617cbd2a04f4fd16729a60a816d5ac398b3e47775f00c8ff50c729e0"
+    },
+    "checkpointed": {
+      "block": {
+        "number": 83597,
+        "hash": "0x20dc8b86617cbd2a04f4fd16729a60a816d5ac398b3e47775f00c8ff50c729e0"
+      },
+      "checkpoint": {
+        "number": 71054,
+        "hash": "0x0099b4a616f879f6aaa8a802cd2d830ae3b9042a7697c9638126adcbf4fea6f5"
+      }
+    },
+    "proven": {
+      "block": {
+        "number": 83589,
+        "hash": "0x0bc151e61eaab7b4fa9b6973d212ab313a909a6ed82e8690314fe01a12df2953"
+      },
+      "checkpoint": {
+        "number": 71046,
+        "hash": "0x009aa1176623ea69d26bb36c59017f0fa25753af5578cc0b58b880f2f99a1178"
+      }
+    },
+    "finalized": {
+      "block": {
+        "number": 83561,
+        "hash": "0x04918e4ebb704aa94202d0ac2fd4f9ea036a20698b93c573b1af1152d0a21649"
+      },
+      "checkpoint": {
+        "number": 71018,
+        "hash": "0x0065f79b322821641267c51278bb20e79a68c70971c272635af6bdc145431c72"
+      }
+    }
+  },
+  "observedAt": 1789381757309,
+  "stale": false,
+  "stalenessMs": 24815,
+  "staleAfterMs": 60000,
+  "degraded": false,
+  "source": {}
+}

@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "absoluteSlot": 446951753,
+    "blockHeight": 424994262,
+    "epoch": 1034,
+    "slotIndex": 263753,
+    "slotsInEpoch": 432000,
+    "transactionCount": 548325347180
+  },
+  "id": 1
+}

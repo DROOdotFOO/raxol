@@ -91,6 +91,7 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.Agent.Authorization.Verdict
   alias Raxol.Agent.Code.App.Commands
   alias Raxol.Agent.Code.App.Wizard
+  alias Raxol.Agent.Code.McpConfig
   alias Raxol.Agent.Code.ProjectContext
   alias Raxol.Agent.Contract
   alias Raxol.Agent.Journal.FileStore
@@ -161,8 +162,8 @@ defmodule Raxol.Agent.Code.App do
       cwd: cwd,
       jail: jail?,
       hooks: hooks,
-      mcp_servers: mcp_servers,
       mcp_skipped: mcp_skipped,
+      mcp_servers: mcp_servers,
       lsp_pool: lsp_pool,
       project_context: project_context
     })
@@ -442,17 +443,44 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # A jailed session gets neither file: the workspace one names a command to
+  # execute, and the user-level one holds the HOST operator's credentials,
+  # which a tenant has no claim on.
   defp load_mcp(_cwd, true), do: {[], [], "mcp servers disabled (jailed session)"}
 
-  # Entries the bridge cannot run (a `url` server, a broken entry) ride
-  # along as `mcp_skipped`, so `/mcp` lists them with a reason instead of
-  # leaving a server named in the file silently absent.
+  # User-level servers FIRST: `McpLoader.admit/2` keeps the first server of
+  # each name, compared as the tool namespace spells it, so a workspace
+  # `.mcp.json` cannot shadow one of the operator's own by reusing its name
+  # or a punctuation variant that normalizes onto it.
+  #
+  # Entries the bridge cannot run (an `http`/`sse` entry naming no url, a
+  # broken entry) ride along as `mcp_skipped`, so `/mcp` lists them with a
+  # reason instead of leaving a server named in the file silently absent.
   defp load_mcp(cwd, _jail?) do
-    case Raxol.Agent.Code.McpConfig.load_all(cwd) do
-      {:ok, [], []} -> {[], [], nil}
-      {:ok, servers, skipped} -> {servers, skipped, mcp_note(servers, skipped)}
+    {user, user_skipped, user_note} = mcp_source(&McpConfig.load_user/0, "user")
+
+    {workspace, workspace_skipped, workspace_note} =
+      mcp_source(fn -> McpConfig.load_all(cwd) end, "workspace")
+
+    servers = user ++ workspace
+    skipped = user_skipped ++ workspace_skipped
+
+    note =
+      [user_note, workspace_note]
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> if servers == [] and skipped == [], do: nil, else: mcp_note(servers, skipped)
+        errors -> Enum.join(errors, "; ")
+      end
+
+    {servers, skipped, note}
+  end
+
+  defp mcp_source(load, label) do
+    case load.() do
+      {:ok, servers, skipped} -> {servers, skipped, nil}
       :none -> {[], [], nil}
-      {:error, reason} -> {[], [], "mcp config error: #{inspect(reason)}"}
+      {:error, reason} -> {[], [], "#{label} mcp config error: #{inspect(reason)}"}
     end
   end
 
@@ -706,15 +734,25 @@ defmodule Raxol.Agent.Code.App do
   def default_mcp_loader(servers, ref, app) do
     # The janitor monitors `app` (the dispatcher/session process), so the
     # started clients are torn down whenever this session ends.
-    spawn(fn ->
-      result = Raxol.Agent.Code.McpLoader.load(servers, owner: app)
-      send(app, {:command_result, {:mcp_loaded, ref, result}})
-    end)
+    case Task.Supervisor.start_child(Raxol.Agent.TaskSupervisor, fn ->
+           result =
+             Raxol.Agent.Code.McpLoader.load(servers,
+               owner: app,
+               supervisor: Raxol.Agent.TaskSupervisor
+             )
+
+           send(app, {:command_result, {:mcp_loaded, ref, result}})
+         end) do
+      {:ok, pid} ->
+        pid
+
+      {:error, reason} ->
+        result = %{tools: [], connected: [], failed: [{:loader, reason}], janitor: nil}
+        send(app, {:command_result, {:mcp_loaded, ref, result}})
+        {:error, reason}
+    end
   end
 
-  # The boot status line promised a skipped count (`mcp_note/2`); this fold
-  # overwrites that line, so the count rides along or it survives exactly
-  # one frame in any session that has a stdio server to load.
   defp mcp_loaded_line(result, skipped),
     do: mcp_tools_line(result) <> skipped_suffix(skipped)
 
@@ -724,11 +762,22 @@ defmodule Raxol.Agent.Code.App do
     "mcp: #{length(tools)} tools from #{length(connected)} servers"
   end
 
+  # Same bound the `/mcp` notice puts on its skipped list, for the same
+  # reason and then some: `failed` is not just servers that tried and failed,
+  # it carries every admission refusal -- a `.mcp.json` with 10k valid
+  # entries puts the ~9,984 over the cap in here -- and this string is the
+  # status line, re-rendered every frame.
   defp mcp_tools_line(%{tools: tools, failed: failed}) do
-    names =
-      Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
+    {shown, rest} = Enum.split(failed, Raxol.Agent.Code.McpLoader.max_servers())
+    names = Enum.map_join(shown, ", ", fn {name, _reason} -> to_string(name) end)
 
-    "mcp: #{length(tools)} tools · failed: #{names}"
+    more =
+      case rest do
+        [] -> ""
+        more -> " … and #{length(more)} more"
+      end
+
+    "mcp: #{length(tools)} tools · failed: #{names}#{more}"
   end
 
   defp skipped_suffix([]), do: ""
@@ -1022,7 +1071,23 @@ defmodule Raxol.Agent.Code.App do
     }
     |> maybe_add_skills()
     |> maybe_add_hooks(model)
+    |> add_spend_hook()
     |> maybe_add_lsp(model)
+  end
+
+  # Last in the chain, so an earlier hook's capability veto happens before any
+  # money is reserved. Registered unconditionally: it is the deny-by-default
+  # gate for a per-call-priced MCP tool, and a session with no priced tools
+  # never reaches past its fast path. No `:spend_gate` is wired here, so a
+  # priced tool is denied until an operator wires a real budget seam -- a
+  # default budget would be a fake one.
+  defp add_spend_hook(context) do
+    hooks =
+      context
+      |> Map.get(:tool_call_hooks, [])
+      |> List.insert_at(-1, Raxol.Agent.McpSpendHook)
+
+    Map.put(context, :tool_call_hooks, hooks)
   end
 
   defp maybe_add_lsp(context, %{lsp_pool: pool}) when is_pid(pool),

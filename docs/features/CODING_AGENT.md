@@ -528,7 +528,10 @@ Two optional per-project files, both read from `<cwd>/`:
   `"*"`) plus `stop` commands. A pre-hook that exits non-zero vetoes the tool (30-second
   timeout, `RAXOL_TOOL_NAME` in the environment); post-hooks are advisory; stop commands
   run at turn end.
-- `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format.
+- `.mcp.json` uses the standard `{"mcpServers": {name: {...}}}` format, in both of its
+  forms: `{command, args, env}` starts a local subprocess, and
+  `{url, headers, metered, prices, concurrency}` connects to a hosted HTTP server. An entry
+  carrying both `command` and `url`, or neither, is refused by name rather than dropped.
   Configured servers are started (supervised, off the boot path) and their tools join the
   live toolset as `mcp__<server>__<tool>`, sensitive by default: each call is
   approval-gated like any mutating tool, and plan mode denies them outright since an
@@ -543,12 +546,52 @@ Two optional per-project files, both read from `<cwd>/`:
   refusals show up in `/mcp` alongside connection failures, and the `⊘` rows are
   capped at the same 16 with an `… and N more skipped` line.
 
-Both files name a command to execute, so both are read only when the session owns its
+### Remote servers, credentials and provenance
+
+A remote entry's `headers` values may be literals, or references: `${env:VAR}`,
+`${op://item/field}`, or a bare `op://...` path, resolved at connect time through the same
+`op read` path the provider credential store uses. A literal is accepted and warned about
+once per server, because refusing it would only push operators to a worse workaround.
+
+Whether a reference resolves depends on which file it came from, and this asymmetry is
+deliberate:
+
+- `~/.raxol/mcp.json` (override with `$RAXOL_MCP_CONFIG`) is the operator's own file, read
+  in the same format. Its references resolve.
+- `<cwd>/.mcp.json` is repository content, a file a clone can carry. Its references do NOT
+  resolve: the server is skipped with a named reason. Otherwise a cloned repository would
+  be an instruction to read a named environment variable, or a named 1Password item, and
+  POST it to a host the repository chose. The outbound target rules do not help, because
+  the destination is a legitimate public address.
+- `~/.raxol/mcp_headers.json` (override with `$RAXOL_MCP_HEADER_ALLOWLIST`) is the operator
+  opt-out, held outside every workspace: `{"Authorization": ["${env:INTEL_TOKEN}"]}` lets a
+  workspace entry resolve exactly that reference for exactly that header. A missing or
+  malformed file permits nothing.
+
+Servers are merged user-level first, so a workspace entry cannot shadow one of the
+operator's own by reusing its name; the duplicate is refused.
+
+A resolved header value goes to the server and nowhere else: not a log line, not an error
+term, not `/mcp` or `/inspect`, which show header names only.
+
+### Per-call priced tools
+
+A remote server that bills per call declares `"metered": true` and, per tool,
+`"prices": {"lookup": 150}` in the unit the run budget counts. A priced tool is
+`sensitive: true` whatever the spec says, and every call reserves against the session's
+spend gate before the request is built: a refused reservation issues no request. A tool on
+a metered origin whose price is unknown is denied by default, naming the tool and the
+origin, and a priced tool is denied while no budget seam is configured. The transport
+refuses a priced call that arrives without a reservation handle, which is what covers a
+native harness driving its own tool loop past the hook chain.
+
+Both workspace files name something to run, so both are read only when the session owns its
 workspace. A jailed session (multi-tenant SSH, see below) loads NEITHER: its workspace is
 writable by a tenant whose own `write_file` can author these files, and running them would
 be arbitrary execution as the server uid: around the cwd jail, the `:jail` shell gate,
-and the approval chain alike. `/mcp` and the status line say so rather than reporting an
-empty config.
+and the approval chain alike. A jailed session also loads no `~/.raxol/mcp.json`, whose
+servers hold the host operator's credentials rather than the tenant's. `/mcp` and the
+status line say so rather than reporting an empty config.
 
 ## Editors over ACP
 

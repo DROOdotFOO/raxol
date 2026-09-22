@@ -23,29 +23,44 @@ defmodule Raxol.Agent.Actions.Fetch do
 
   ## SSRF policy
 
-  `check_url/1` runs before every request AND again on every redirect hop.
-  It requires an `http`/`https` scheme, resolves the host (A and AAAA), and
-  refuses the whole request when ANY resolved address is loopback,
-  link-local, private, carrier-grade NAT, unspecified, multicast or
-  reserved — including every form that smuggles a v4 address through a v6
-  literal: IPv4-mapped, IPv4-compatible, IPv4-translated, NAT64 (both the
-  /96 and the RFC 8215 local-use prefix) and 6to4, which carries the address
-  in a different pair of groups than the rest. Teredo is refused outright
-  rather than decomposed, since it obfuscates the addresses it tunnels.
-  Refusing on ANY resolved
-  address (rather than the first) is deliberate: a host with one public and
-  one loopback record must not be reachable by luck of resolver ordering.
+  The policy is `Raxol.Core.Outbound`, and it lives there rather than here
+  because this tool is no longer its only caller: it sits in `raxol_core`,
+  below every package, so a second reject set never has to be written. This
+  module supplies the one deliberate difference in how it is called, and owns
+  the two rules the policy cannot express for it.
+
+  `Outbound.vet/2` runs before every request AND again on every redirect hop.
+  It requires an `http`/`https` scheme here (`:schemes` defaults to `[:https]`
+  for callers that have no reason to allow cleartext; this tool's documented
+  contract does), resolves the host (A and AAAA), and refuses the whole request
+  when ANY resolved address is loopback, link-local, private, carrier-grade
+  NAT, unspecified, multicast or reserved, including every form that smuggles a
+  v4 address through a v6 literal. `Raxol.Core.Outbound.blocked?/1` is the
+  clause table, and its moduledoc states what each clause covers.
 
   Re-checking per hop is the substance of the policy, not a detail: a
   public host that answers `302 Location: http://169.254.169.254/` is the
   standard cloud-metadata escape. That is why the chain is followed here,
   one guarded hop at a time, and never by the transport (`redirect: false`).
+  A blocked ORIGIN and a blocked REDIRECT TARGET are the same check but not the
+  same event, so `check_hop/2` renames the second one; that distinction is this
+  tool's audit vocabulary and stays here rather than moving down.
 
-  Residual limit, stated rather than papered over: the guard resolves the
-  name and the transport resolves it again, so a record that changes
-  between the two (DNS rebinding) is not covered. Closing it means
-  connecting to the already-checked address and carrying the hostname only
-  in SNI/Host, a transport rewrite this tool does not perform.
+  The checked address is the address dialled. `Outbound.vet/2` returns the
+  addresses it resolved, and `req_transport/2` requests the IP LITERAL while
+  the hostname carries identity: `Host` and `server_name_indication` are the
+  name, and `verify: :verify_peer` with Mint's `customize_hostname_check` still
+  matches the certificate against the NAME, never against the address. Nothing
+  on the request path consults a resolver a second time, so a record that
+  changes between the check and the connect (DNS rebinding) changes nothing —
+  which matters most here, because this is the one outbound caller whose URL
+  the MODEL supplies.
+
+  `Raxol.Web3.Dial` is the same rule written against Mint directly; this tool
+  reaches it through `Req` because the streaming cap in `collect/3` is built on
+  `Req.Response.Async`. The vetted list is dialled in order for the failover
+  `:gen_tcp` performs when it is handed a name and which pinning would
+  otherwise lose.
 
   ## Bounds
 
@@ -77,6 +92,13 @@ defmodule Raxol.Agent.Actions.Fetch do
   where `chunks` yields body binaries. `Req` supplies one directly:
   `into: :self` returns a `Req.Response.Async` that is an `Enumerable`
   cancelling itself on halt.
+
+  `opts[:pin]` is the `Outbound.vet/2` result for `url`, and it is what makes
+  the dial pinned. The default transport honours it; a transport injected
+  through the context is trusted to be a test double or a provider client
+  (`Raxol.Agent.Actions.WebSearch` passes no pin), so it is handed the URL it
+  was asked for and the addresses alongside rather than a rewritten URL it
+  cannot check.
 
   ## Gating
 
@@ -129,6 +151,8 @@ defmodule Raxol.Agent.Actions.Fetch do
       ]
     ]
 
+  alias Raxol.Core.Outbound
+
   @default_max_bytes 524_288
   @max_max_bytes 2_097_152
   @total_timeout_ms 15_000
@@ -158,15 +182,18 @@ defmodule Raxol.Agent.Actions.Fetch do
   defp cap(_bytes), do: @default_max_bytes
 
   # One guarded hop. The guard reruns here rather than once at entry, because
-  # the address that matters is the one about to be connected to.
+  # the address that matters is the one about to be connected to — and the
+  # vetted addresses travel with the request for the same reason: binding them
+  # and then handing the transport a NAME is the rebinding window this check
+  # exists to close.
   defp hop(_requested, _url, _cap, _deadline, 0, _transport),
     do: {:error, :too_many_redirects}
 
   defp hop(requested, url, cap, deadline, hops, transport) do
     with {:ok, budget} <- remaining(deadline),
-         {:ok, _uri} <- check_hop(url, requested),
+         {:ok, vetted} <- check_hop(url, requested),
          {:ok, response} <-
-           call_transport(transport, url, timeout_ms: budget, max_bytes: cap) do
+           call_transport(transport, url, timeout_ms: budget, max_bytes: cap, pin: vetted) do
       dispatch(response, requested, url, cap, deadline, hops, transport)
     end
   end
@@ -219,141 +246,25 @@ defmodule Raxol.Agent.Actions.Fetch do
 
   # -- SSRF guard --------------------------------------------------------------
 
-  @doc """
-  Check a URL against the outbound policy: `{:ok, uri}` or `{:error, reason}`.
-
-  Public because it is the whole security posture of this tool and is tested
-  directly, and because the redirect follower calls it per hop.
-  """
-  @spec check_url(String.t()) :: {:ok, URI.t()} | {:error, term()}
-  def check_url(url) when is_binary(url) do
-    case URI.new(url) do
-      {:ok, %URI{scheme: scheme, host: host} = uri}
-      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
-        check_host(uri)
-
-      _other ->
-        {:error, :invalid_url}
-    end
-  end
-
-  def check_url(_url), do: {:error, :invalid_url}
+  # The scheme set is the one intentional difference between this caller and
+  # `Raxol.Core.Outbound`'s default: this tool's description and input schema
+  # both promise `http://`, so it passes both schemes rather than inheriting
+  # the https-only default a new caller gets.
+  @schemes [:http, :https]
 
   # A blocked ORIGIN and a blocked REDIRECT TARGET are the same check but not
   # the same event: the second means a host the model legitimately asked for
   # tried to walk it somewhere private, which is worth naming distinctly both
-  # to the model and in an audit trail.
+  # to the model and in an audit trail. That rename is the reason this wrapper
+  # stays here while the check itself moved down.
   defp check_hop(url, requested) do
-    case check_url(url) do
+    case Outbound.vet(url, schemes: @schemes) do
       {:error, {:blocked_address, host}} when url != requested ->
         {:error, {:blocked_redirect, host}}
 
       result ->
         result
     end
-  end
-
-  defp check_host(%URI{host: host} = uri) do
-    case resolve(host) do
-      {:ok, addresses} ->
-        if Enum.any?(addresses, &blocked?/1),
-          do: {:error, {:blocked_address, host}},
-          else: {:ok, uri}
-
-      :error ->
-        {:error, {:dns_failed, host}}
-    end
-  end
-
-  # An IP literal never reaches the resolver; a name is resolved over BOTH
-  # families, because a host with only an AAAA record must not pass by an
-  # empty A lookup.
-  defp resolve(host) do
-    charlist =
-      host
-      |> String.trim_leading("[")
-      |> String.trim_trailing("]")
-      |> String.to_charlist()
-
-    case :inet.parse_address(charlist) do
-      {:ok, address} ->
-        {:ok, [address]}
-
-      {:error, _reason} ->
-        case getaddrs(charlist, :inet) ++ getaddrs(charlist, :inet6) do
-          [] -> :error
-          addresses -> {:ok, addresses}
-        end
-    end
-  end
-
-  defp getaddrs(charlist, family) do
-    case :inet.getaddrs(charlist, family) do
-      {:ok, addresses} -> addresses
-      {:error, _reason} -> []
-    end
-  end
-
-  @doc """
-  Whether an `:inet` address tuple is outside the public internet.
-
-  Public for the same reason as `check_url/1`: this predicate is the policy.
-  """
-  @spec blocked?(:inet.ip_address() | term()) :: boolean()
-  def blocked?({0, _b, _c, _d}), do: true
-  def blocked?({10, _b, _c, _d}), do: true
-  def blocked?({127, _b, _c, _d}), do: true
-  def blocked?({169, 254, _c, _d}), do: true
-  def blocked?({172, b, _c, _d}) when b in 16..31, do: true
-  def blocked?({192, 168, _c, _d}), do: true
-  def blocked?({100, b, _c, _d}) when b in 64..127, do: true
-  # Multicast (224/4) through reserved and broadcast (240/4).
-  def blocked?({a, _b, _c, _d}) when a >= 224, do: true
-  def blocked?({_a, _b, _c, _d}), do: false
-
-  def blocked?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
-  def blocked?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
-
-  # Every way a v4 address hides inside a v6 one. Each is decomposed and judged
-  # as the v4 address it carries, so `http://[::ffff:169.254.169.254]/` cannot
-  # walk past the v4 clauses above.
-  #
-  # ::ffff:a.b.c.d (IPv4-mapped) and ::a.b.c.d (IPv4-compatible).
-  def blocked?({0, 0, 0, 0, 0, 0xFFFF, hi, lo}), do: blocked?(v4_from(hi, lo))
-  def blocked?({0, 0, 0, 0, 0, 0, hi, lo}), do: blocked?(v4_from(hi, lo))
-
-  # ::ffff:0:a.b.c.d (IPv4-translated, RFC 2765). A different prefix from
-  # IPv4-mapped and it was missing, so `[::ffff:0:169.254.169.254]` resolved
-  # to the generic clause below and was allowed.
-  def blocked?({0, 0, 0, 0, 0xFFFF, 0, hi, lo}), do: blocked?(v4_from(hi, lo))
-
-  # 64:ff9b::/96 (NAT64, RFC 6052) and 64:ff9b:1::/48 (local-use, RFC 8215).
-  # The local-use form carries a nonzero third group, which the /96 pattern
-  # pinned to 0, so it too fell through.
-  def blocked?({0x64, 0xFF9B, 0, 0, 0, 0, hi, lo}), do: blocked?(v4_from(hi, lo))
-  def blocked?({0x64, 0xFF9B, _u, _v, _w, _x, hi, lo}), do: blocked?(v4_from(hi, lo))
-
-  # 2002::/16 (6to4, RFC 3056) embeds the v4 address in the SECOND and THIRD
-  # groups, so `2002:a9fe:a9fe::` is a route to 169.254.169.254 and
-  # `2002:7f00:1::` one to 127.0.0.1. Neither matched anything above.
-  def blocked?({0x2002, hi, lo, _d, _e, _f, _g, _h}), do: blocked?(v4_from(hi, lo))
-
-  def blocked?({a, b, _c, _d, _e, _f, _g, _h}) do
-    # fc00::/7 unique-local, fe80::/10 link-local, ff00::/8 multicast,
-    # 2001:0::/32 Teredo (a v4 tunnel whose server and client addresses are
-    # obfuscated rather than plainly embedded, so it is refused outright
-    # instead of decomposed).
-    Bitwise.band(a, 0xFE00) == 0xFC00 or
-      Bitwise.band(a, 0xFFC0) == 0xFE80 or
-      Bitwise.band(a, 0xFF00) == 0xFF00 or
-      (a == 0x2001 and b == 0)
-  end
-
-  # Anything that is not an address tuple is not something to connect to.
-  def blocked?(_other), do: true
-
-  defp v4_from(hi, lo) do
-    {Bitwise.bsr(hi, 8), Bitwise.band(hi, 0xFF), Bitwise.bsr(lo, 8), Bitwise.band(lo, 0xFF)}
   end
 
   # -- capped collection -------------------------------------------------------
@@ -649,9 +560,84 @@ defmodule Raxol.Agent.Actions.Fetch do
     end
   end
 
+  # The connect budget for ONE address. The chain has 15s in total and a vetted
+  # list carries up to eight answers, so without a per-address bound the first
+  # black-holed address spends the budget the other seven and the read were
+  # meant to share.
+  @connect_timeout_ms 5_000
+
   defp req_request(url, opts) do
     timeout = Keyword.fetch!(opts, :timeout_ms)
 
+    case Keyword.get(opts, :pin) do
+      %{addresses: [_first | _rest] = addresses, uri: uri, hostname: hostname} ->
+        dial(addresses, uri, hostname, opts, System.monotonic_time(:millisecond) + timeout, [])
+
+      _unpinned ->
+        # `Raxol.Agent.Actions.WebSearch` reaches its configured provider
+        # through this same function and vets nothing, so there is no checked
+        # address to dial and the name is resolved by `Req` as before.
+        run(url, [timeout: timeout], headers(opts), timeout, opts)
+    end
+  end
+
+  # Each vetted address in turn: a failure moves to the next rather than ending
+  # the fetch, which is the failover `:gen_tcp` performed while it was the one
+  # resolving the name. `{:dial_failed, _}` then names every address attempted
+  # rather than only the last one to fail.
+  defp dial([], _uri, _hostname, _opts, _deadline, failures),
+    do: {:error, {:dial_failed, Enum.reverse(failures)}}
+
+  defp dial([address | rest], uri, hostname, opts, deadline, failures) do
+    case remaining(deadline) do
+      {:error, :fetch_timeout} ->
+        {:error, {:dial_failed, Enum.reverse(failures)}}
+
+      {:ok, budget} ->
+        # The request carries the ADDRESS and the identity stays the NAME.
+        # Mint derives SNI, the `customize_hostname_check` match function and
+        # the connection's own host from `:hostname`
+        # (`deps/mint/lib/mint/core/transport/ssl.ex:450-470,561-573`), so
+        # `verify: :verify_peer` still matches the certificate against the name
+        # while the socket goes to the address that was vetted. Nothing here
+        # sets `:verify`, `:server_name_indication` or `:customize_hostname_check`
+        # by hand: each would replace a value Mint already derived correctly.
+        #
+        # `Host` is set here rather than left to Mint because `Req` writes one
+        # itself when the URL host is an IPv6 literal
+        # (`deps/req/lib/req/finch.ex:162-173`), and that one is the address.
+        connect = [timeout: min(budget, @connect_timeout_ms), hostname: hostname]
+        headers = [{"host", host_header(uri, hostname)} | headers(opts)]
+
+        case run(pinned_url(uri, address), connect, headers, budget, opts) do
+          {:ok, response} ->
+            {:ok, response}
+
+          {:error, reason} ->
+            dial(rest, uri, hostname, opts, deadline, [{address, reason} | failures])
+        end
+    end
+  end
+
+  # The vetted address as a literal, keeping the scheme, port, path and query
+  # the caller asked for. `URI.to_string/1` brackets an IPv6 host, which is also
+  # what `Req` reads to connect over v6 at all, so a v6 answer needs nothing
+  # further here.
+  defp pinned_url(%URI{} = uri, address) do
+    URI.to_string(%{uri | host: address |> :inet.ntoa() |> List.to_string()})
+  end
+
+  # The `Host` a name-dialled request would have carried: the name, with the
+  # port when it is not the scheme's default.
+  defp host_header(%URI{scheme: scheme, port: port}, hostname) do
+    host = if String.contains?(hostname, ":"), do: "[" <> hostname <> "]", else: hostname
+
+    if port == URI.default_port(scheme),
+      do: host,
+      else: host <> ":" <> Integer.to_string(port)
+  end
+
+  defp run(url, connect_options, headers, timeout, opts) do
     request =
       Req.new(
         url: url,
@@ -662,8 +648,8 @@ defmodule Raxol.Agent.Actions.Fetch do
         redirect: false,
         retry: false,
         receive_timeout: timeout,
-        connect_options: [timeout: timeout],
-        headers: headers(opts)
+        connect_options: connect_options,
+        headers: headers
       )
 
     case Req.request(request, into: :self) do

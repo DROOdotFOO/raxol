@@ -135,6 +135,46 @@ defmodule Raxol.MCP.ServerTest do
 
       assert [%{type: "text", text: "hello world"}] = resp.result.content
     end
+
+    test "a tool that exits does not take the server down with it", %{server: s, registry: r} do
+      # Callbacks run INLINE in this server with an `:infinity` call timeout,
+      # and an exit is not caught by `rescue`. A tool whose peer had died
+      # therefore killed the server, dropping every connected session, and the
+      # caller died with it on the `GenServer.call`.
+      tools = [
+        %{
+          name: "dead_peer",
+          description: "Calls a peer that is not there",
+          inputSchema: %{type: "object"},
+          callback: fn _args -> GenServer.call(:raxol_mcp_no_such_peer, :ping) end
+        },
+        %{
+          name: "echo",
+          description: "Echo",
+          inputSchema: %{type: "object"},
+          callback: fn _args -> {:ok, "still here"} end
+        }
+      ]
+
+      Registry.register_tools(r, tools)
+
+      exiting = %{
+        id: 30,
+        method: "tools/call",
+        params: %{"name" => "dead_peer", "arguments" => %{}}
+      }
+
+      {:reply, resp} = Server.handle_message(s, exiting)
+
+      assert resp.result.isError == true
+      assert [%{type: "text", text: text}] = resp.result.content
+      assert text =~ "callback_exited"
+
+      after_it = %{id: 31, method: "tools/call", params: %{"name" => "echo", "arguments" => %{}}}
+
+      assert {:reply, %{result: %{content: [%{text: "still here"}]}}} =
+               Server.handle_message(s, after_it)
+    end
   end
 
   describe "resources/list" do

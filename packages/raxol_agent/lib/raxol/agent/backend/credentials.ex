@@ -25,8 +25,11 @@ defmodule Raxol.Agent.Backend.Credentials do
   `String.to_atom/1` on file input).
   """
 
+  alias Raxol.Agent.OperatorFile
+
   @env_path "RAXOL_PROVIDERS"
   @filename "providers.json"
+  @label "provider credential store"
 
   @type ref_entry :: %{
           optional(:op_ref) => String.t(),
@@ -34,16 +37,12 @@ defmodule Raxol.Agent.Backend.Credentials do
           optional(:base_url) => String.t()
         }
 
-  @doc "The reference-store path (`$RAXOL_PROVIDERS` or `~/.raxol/providers.json`)."
-  @spec path() :: String.t()
-  def path do
-    case System.get_env(@env_path) do
-      p when is_binary(p) and p != "" -> p
-      _ -> Path.join(home_base(), Path.join(".raxol", @filename))
-    end
-  end
-
-  defp home_base, do: System.user_home() || System.tmp_dir!()
+  @doc """
+  The reference-store path (`$RAXOL_PROVIDERS` or `~/.raxol/providers.json`),
+  or nil when there is neither an override nor a home directory.
+  """
+  @spec path() :: String.t() | nil
+  def path, do: OperatorFile.path(@env_path, @filename)
 
   @doc """
   Load the reference map keyed by provider-harness string.
@@ -51,14 +50,59 @@ defmodule Raxol.Agent.Backend.Credentials do
   A missing or unreadable file is an empty map, not an error: the resolver
   simply falls through to env vars. A malformed file logs nothing and yields
   `%{}` so a corrupt store never crashes agent boot.
+
+  An entry here names the 1Password item a provider key is read from, so the
+  file is a control: `Raxol.Agent.OperatorFile` refuses (and logs) one this
+  account does not own or that others may write, and there is no store at all
+  without a home directory or an explicit `$RAXOL_PROVIDERS` -- never a guess
+  at `/tmp/.raxol`, where any local account could name the vault item this
+  agent reads. All three cases fall through to env vars, and the last is
+  silent: a container configured entirely by environment never had a store
+  to lose.
+
+  Reading is where that fall-through belongs. `put/2` and `delete/1` refuse
+  instead, because a refusal they folded into `%{}` would be written back.
   """
   @spec load() :: %{optional(String.t()) => ref_entry()}
   def load do
-    with {:ok, raw} <- File.read(path()),
-         {:ok, decoded} when is_map(decoded) <- Jason.decode(raw) do
-      Enum.reduce(decoded, %{}, &put_sanitized/2)
-    else
-      _ -> %{}
+    case load_store() do
+      {:ok, store} -> store
+      {:error, _refused} -> %{}
+    end
+  end
+
+  # The store in three states, because the WRITERS have to tell them apart.
+  # `{:ok, map}` covers a present store and an absent one alike: an absent
+  # control grants nothing, and writing the first entry into it is the point.
+  # `{:error, reason}` is a store `OperatorFile` refused.
+  #
+  # Refused is not empty. A `providers.json` created by hand at 0664 (umask
+  # 002, the Ubuntu default with user private groups) is refused on READ and
+  # is still writable by its owner, so folding that refusal into `%{}` -- as
+  # `load/0` must, for the resolver -- and then writing the result back
+  # replaced every other provider reference in the file with the one being
+  # stored, and chmodded it 600 on the way out. The read hardening became
+  # data loss.
+  @spec load_store() :: {:ok, %{optional(String.t()) => ref_entry()}} | {:error, term()}
+  defp load_store do
+    case path() do
+      nil -> {:error, :no_home}
+      file -> read_store(file)
+    end
+  end
+
+  defp read_store(file) do
+    case OperatorFile.read_path(file, @label) do
+      {:ok, raw} -> {:ok, decode_store(raw)}
+      :none -> {:ok, %{}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp decode_store(raw) do
+    case Jason.decode(raw) do
+      {:ok, decoded} when is_map(decoded) -> Enum.reduce(decoded, %{}, &put_sanitized/2)
+      _malformed -> %{}
     end
   end
 
@@ -105,6 +149,11 @@ defmodule Raxol.Agent.Backend.Credentials do
   `attrs` accepts `:op_ref`, `:model`, and `:base_url`; a raw key is refused
   here on purpose (this store never holds secrets). The file is written with
   owner-only (`0600`) permissions.
+
+  `{:error, reason}` when the store already on disk cannot be READ -- a mode
+  or an owner `Raxol.Agent.OperatorFile` refuses -- and nothing is written in
+  that case. The alternative is destroying the references that file holds,
+  since a store refused for its mode is still writable by its owner.
   """
   @spec put(atom() | String.t(), keyword() | map()) :: :ok | {:error, term()}
   def put(harness, attrs) do
@@ -113,27 +162,44 @@ defmodule Raxol.Agent.Backend.Credentials do
     if map_size(entry) == 0 do
       {:error, :empty_entry}
     else
-      updated = Map.put(load(), to_string(harness), entry)
-      write(updated)
+      with {:ok, store} <- load_store() do
+        store |> Map.put(to_string(harness), entry) |> write()
+      end
     end
   end
 
-  @doc "Remove a provider's stored reference entry."
+  @doc """
+  Remove a provider's stored reference entry.
+
+  Refuses on the same terms as `put/2`: a store that could not be read is not
+  rewritten, so `{:error, reason}` here leaves that entry, and every other
+  one, on disk.
+  """
   @spec delete(atom() | String.t()) :: :ok | {:error, term()}
   def delete(harness) do
-    load() |> Map.delete(to_string(harness)) |> write()
+    with {:ok, store} <- load_store() do
+      store |> Map.delete(to_string(harness)) |> write()
+    end
   end
 
+  # No home and no `$RAXOL_PROVIDERS` is a refusal, not a temp-path write: a
+  # store at `/tmp/.raxol/providers.json` would be readable (and replaceable)
+  # by every local account, and what it holds is where this operator's keys
+  # live.
   defp write(map) do
-    file = path()
+    case path() do
+      nil ->
+        {:error, :no_home}
 
-    with :ok <- File.mkdir_p(Path.dirname(file)),
-         encoded = Jason.encode!(map, pretty: true),
-         :ok <- File.write(file, encoded) do
-      # Owner read/write only: the file holds references, but they still name
-      # a person's vault items and should not be world-readable.
-      _ = File.chmod(file, 0o600)
-      :ok
+      file ->
+        with :ok <- File.mkdir_p(Path.dirname(file)),
+             encoded = Jason.encode!(map, pretty: true),
+             :ok <- File.write(file, encoded) do
+          # Owner read/write only: the file holds references, but they still
+          # name a person's vault items and should not be world-readable.
+          _ = File.chmod(file, 0o600)
+          :ok
+        end
     end
   end
 

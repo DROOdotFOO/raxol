@@ -1,0 +1,28 @@
+{
+  "l2NetworkId": "MAINNET",
+  "l1ChainId": 1,
+  "rollupVersion": "4248422647",
+  "l1ContractAddresses": {
+    "rollupAddress": "0x91ff8bbd8ebb07893010d50a48a1609e5ebd8e34",
+    "registryAddress": "0x35b22e09ee0390539439e24f06da43d83f90e298",
+    "inboxAddress": "0x7d4ef0676c2032bbcc09227501d34d86641ab8ca",
+    "outboxAddress": "0x5b062ab5fd3a66bc7e73b04ced38587673b6a2d7",
+    "feeJuiceAddress": "0xa27ec0006e59f245217ff08cd52a7e8b169e62d2",
+    "feeJuicePortalAddress": "0xaf73dd51d1eb8a079bb097f39c832cdd00ac691c",
+    "coinIssuerAddress": "0x02fadf157d551aa6d761b2a2237d03af68e41ca6",
+    "rewardDistributorAddress": "0x555baac4757a89f1ce0c84fa35afe9dd7aa8e1d3",
+    "governanceProposerAddress": "0x06ef1dcf87e419c48b94a331b252819fadbd63ef",
+    "governanceAddress": "0x1102471eb3378fee427121c9efcea452e4b6b75e",
+    "stakingAssetAddress": "0xa27ec0006e59f245217ff08cd52a7e8b169e62d2"
+  },
+  "protocolContractAddresses": {
+    "classRegistry": "0x0000000000000000000000000000000000000000000000000000000000000001",
+    "feeJuice": "0x0000000000000000000000000000000000000000000000000000000000000003",
+    "instanceRegistry": "0x0000000000000000000000000000000000000000000000000000000000000002",
+    "multiCallEntrypoint": "0x05dc8c4896e9171487c4d2566f6c7b1cab035334fbce5d745911806fe9f92cc8"
+  },
+  "stakingAssetSymbol": "AZTEC",
+  "stakingAssetDecimals": 18,
+  "feeJuiceSymbol": "AZTEC",
+  "feeJuiceDecimals": 18
+}

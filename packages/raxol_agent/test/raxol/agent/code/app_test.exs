@@ -2224,7 +2224,10 @@ defmodule Raxol.Agent.Code.AppTest do
       model =
         new_model(
           sessions_fetcher: fn _dir, ref, app ->
-            Commands.default_sessions_fetcher(nil, ref, app)
+            # A term that is not a path at all. nil no longer crashes here:
+            # it is the legitimate "this process has no session directory",
+            # which lists empty rather than guessing a world-writable one.
+            Commands.default_sessions_fetcher({:not, :a, :path}, ref, app)
           end
         )
 
@@ -2497,13 +2500,13 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "✗ ghost"
     end
 
-    test "a url mcp server is reported as skipped, not silently absent" do
+    test "a typed entry naming no url is reported as skipped, not silently absent" do
       dir =
         config_cwd(%{
           ".mcp.json" =>
             Jason.encode!(%{
               "mcpServers" => %{
-                "remote" => %{"type" => "http", "url" => "https://mcp.example/"},
+                "typed" => %{"type" => "sse"},
                 "fs" => %{"command" => "npx", "args" => []}
               }
             })
@@ -2519,10 +2522,10 @@ defmodule Raxol.Agent.Code.AppTest do
           end
         )
 
-      assert model.mcp_skipped == [{"remote", :unsupported_transport}]
+      assert model.mcp_skipped == [{"typed", :unsupported_transport}]
       assert model.status_line =~ "1 MCP servers · 1 skipped"
 
-      # Only the stdio server reaches the bridge.
+      # Only the entry that names a transport reaches the bridge.
       {model, []} = App.update(key("x"), model)
       assert_received {:mcp_spawned, [%{name: "fs"}], ref, _app}
 
@@ -2536,17 +2539,36 @@ defmodule Raxol.Agent.Code.AppTest do
       {model, []} =
         App.update({:command_result, {:mcp_loaded, ref, result}}, model)
 
-      # The load result overwrites the boot line: the count survives it.
       assert model.status_line == "mcp: 1 tools from 1 servers · 1 skipped"
 
       {model, []} = submit(model, "/mcp")
       assert model.notice =~ "● fs  →  npx"
 
       assert model.notice =~
-               "⊘ remote  →  skipped: http/sse transport is not bridged"
+               "⊘ typed  →  skipped: type is http/sse but the entry names no url"
     end
 
-    test "a .mcp.json with only skipped entries still shows them in /mcp" do
+    test "a url mcp server is bridged and /mcp names its endpoint" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"remote" => %{"url" => "https://mcp.example/"}}
+            })
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      assert model.mcp_skipped == []
+      assert [%{name: "remote", url: "https://mcp.example/"}] = model.mcp_servers
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "remote  →  https://mcp.example/"
+    end
+
+    test "an entry naming neither a command nor a url is listed as skipped" do
+      # The entry is reported rather than dropped precisely so it appears
+      # here: a name in `.mcp.json` that shows up nowhere was the bug.
       dir =
         config_cwd(%{
           ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}})
@@ -2555,27 +2577,124 @@ defmodule Raxol.Agent.Code.AppTest do
       model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
 
       assert model.mcp_servers == []
+      assert model.mcp_skipped == [{"broken", :no_command}]
       assert model.status_line =~ "1 MCP servers skipped"
 
       {model, []} = submit(model, "/mcp")
-      assert model.notice =~ "⊘ broken  →  skipped: entry has no command"
+      assert model.notice =~ "⊘ broken  →  skipped: entry names neither a command nor a url"
       refute model.notice =~ "no MCP servers configured"
     end
 
-    test "/mcp bounds the skipped rows by the same cap that bounds launches" do
-      cap = Raxol.Agent.Code.McpLoader.max_servers()
-      entries = for i <- 1..(cap + 4), into: %{}, do: {"e#{i}", %{}}
+    test "/mcp names a remote endpoint without its userinfo or query" do
+      # A url is the commonest place an MCP credential lives, and this notice
+      # is output an operator reads and pastes.
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{
+                "remote" => %{
+                  "url" => "https://user:s3cret@mcp.example:8443/mcp?api_key=sk-live-42"
+                }
+              }
+            })
+        })
 
-      dir = config_cwd(%{".mcp.json" => Jason.encode!(%{"mcpServers" => entries})})
       model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
 
-      assert length(model.mcp_skipped) == cap + 4
-
       {model, []} = submit(model, "/mcp")
-      rows = String.split(model.notice, "\n")
 
-      assert length(rows) == cap + 1
-      assert List.last(rows) =~ "… and 4 more skipped"
+      assert model.notice =~ "remote  →  https://mcp.example:8443/mcp"
+      refute model.notice =~ "s3cret"
+      refute model.notice =~ "sk-live-42"
+    end
+
+    test "a newline in a server name cannot forge a second /mcp row" do
+      # Only ADMITTED names are charset-checked, and the terminal boundary
+      # passes `\n` through by design, so the name went to the screen as
+      # written: one entry rendered two rows, the second reading exactly like
+      # a connected server.
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"fs\n● in-the-operators-config" => %{"command" => "npx"}}
+            })
+        })
+
+      name = "fs\n● in-the-operators-config"
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      # Refused by the loader under the name as WRITTEN, so the row's mark has
+      # to resolve against the same rewritten name the row prints.
+      result = %{
+        tools: [],
+        connected: [],
+        failed: [{name, :invalid_server_name}],
+        janitor: nil
+      }
+
+      {model, []} = App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+      {model, []} = submit(model, "/mcp")
+
+      assert model.notice =~ "✗ fs"
+      assert model.notice =~ "in-the-operators-config"
+      assert model.notice =~ "invalid_server_name"
+      refute model.notice =~ "\n"
+    end
+
+    test "a refused server's mark agrees with the reason printed beside it" do
+      # Admission mints its refusals with the STRING name out of the file
+      # while `connected` carries the spec's atom, so comparing the two by
+      # identity marked a refused server `○` -- "never attempted" -- on the
+      # same row as its own failure reason.
+      dir =
+        config_cwd(%{
+          ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"dupe" => %{"command" => "npx"}}})
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      result = %{
+        tools: [],
+        connected: [],
+        failed: [{"dupe", {:duplicate_server_name, "dupe"}}],
+        janitor: nil
+      }
+
+      {model, []} = App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+      {model, []} = submit(model, "/mcp")
+
+      assert model.notice =~ "✗ dupe"
+      assert model.notice =~ "duplicate_server_name"
+      refute model.notice =~ "○ dupe"
+    end
+
+    test "the status line bounds the failed list a large .mcp.json produces" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx"}}})
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      # Admission reports every entry over the cap through `failed`, so a file
+      # with 10k valid servers puts ~9,984 names in here -- in the status
+      # line, which is rebuilt every frame.
+      failed = for n <- 1..40, do: {"srv#{n}", :server_limit_exceeded}
+      result = %{tools: [], connected: [], failed: failed, janitor: nil}
+
+      {model, []} = App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      assert model.status_line =~ "srv16"
+      refute model.status_line =~ "srv17"
+      assert model.status_line =~ "… and 24 more"
     end
 
     test "the tool authorizer gates a sensitive Dynamic MCP tool" do
@@ -2671,7 +2790,10 @@ defmodule Raxol.Agent.Code.AppTest do
       assert_receive {:opts, opts}
       context = Keyword.fetch!(opts, :context)
       assert Map.has_key?(context, :subagent)
-      assert context.tool_call_hooks == [Raxol.Agent.Code.Hooks]
+      # The spend gate is registered unconditionally and runs LAST, so an
+      # earlier hook's capability veto happens before any money is reserved.
+      assert context.tool_call_hooks ==
+               [Raxol.Agent.Code.Hooks, Raxol.Agent.McpSpendHook]
 
       names =
         Enum.map(Keyword.fetch!(opts, :actions), & &1.__action_meta__().name)
@@ -2691,7 +2813,12 @@ defmodule Raxol.Agent.Code.AppTest do
 
       model =
         App.init(%{
-          options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]
+          options: [
+            runner: stub_runner(),
+            sessions_dir: tmp_dir(),
+            cwd: dir,
+            mcp_loader: fn _servers, _ref, _app -> :ok end
+          ]
         })
 
       {model, []} = submit(model, "/hooks")

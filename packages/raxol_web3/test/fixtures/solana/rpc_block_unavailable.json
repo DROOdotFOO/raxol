@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32004,
+    "message": "Block not available for slot 999999999"
+  },
+  "id": 1
+}

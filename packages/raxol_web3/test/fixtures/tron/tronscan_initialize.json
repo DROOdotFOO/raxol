@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"completions":{},"logging":{},"prompts":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false},"tools":{"listChanged":false}},"serverInfo":{"name":"tronscan-mcp-server","version":"1.0.0"},"instructions":"TronScan MCP Server - Provide a TRON blockchain data query tool"}}

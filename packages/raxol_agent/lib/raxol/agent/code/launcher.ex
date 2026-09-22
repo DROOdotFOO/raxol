@@ -127,8 +127,21 @@ defmodule Raxol.Agent.Code.Launcher do
   defp usage_error!(message), do: throw({:raxol_code_usage, message})
 
   defp print_sessions do
-    dir = Store.default_dir()
+    case Store.default_dir() do
+      nil ->
+        IO.puts(
+          "no session directory: this process has no home directory; " <>
+            "set $RAXOL_CODE_SESSIONS to one you own"
+        )
 
+        0
+
+      dir ->
+        print_sessions(dir)
+    end
+  end
+
+  defp print_sessions(dir) do
     case Store.list(dir) do
       [] ->
         IO.puts("no saved sessions in #{dir}")

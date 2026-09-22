@@ -1,0 +1,33 @@
+{
+  "txHash": "0x0b80d11d7315a41d662199175a6dfa14a0ffa92fc01b8bd1abb0d34ae5633803",
+  "feePayer": "0x1a6d21ce5fd80137df0e99632a4ca17e58a42dc8f6c08191a96ca8ae907a1bc0",
+  "birthTimestamp": 1788027417612,
+  "initiator": "0x0b6e99c4da6082a55590191da91abde2b7d5a5c0694b3fc2b12cd928c336fbb1",
+  "expirationTimestamp": 1788027448,
+  "gasLimitDa": 6109,
+  "gasLimitL2": 1334835,
+  "teardownGasLimitDa": 3054,
+  "teardownGasLimitL2": 166854,
+  "maxFeePerDaGas": "0",
+  "maxFeePerL2Gas": "2461042310691",
+  "maxPriorityFeePerDaGas": "0",
+  "maxPriorityFeePerL2Gas": "0",
+  "gasUsedDa": 5056,
+  "gasUsedL2": 1096050,
+  "feePaymentMethod": "fee_juice",
+  "noteHashCount": 6,
+  "nullifierCount": 13,
+  "l2ToL1MsgCount": 0,
+  "privateLogCount": 8,
+  "publicCallRequests": [
+    {
+      "msgSender": "0x0b6e99c4da6082a55590191da91abde2b7d5a5c0694b3fc2b12cd928c336fbb1",
+      "contractAddress": "0x0b6e99c4da6082a55590191da91abde2b7d5a5c0694b3fc2b12cd928c336fbb1",
+      "isStaticCall": false,
+      "calldataHash": "0x12a48eccf7de75dd6222917a407f348e0950c1c495adb57179d8c536137e578e",
+      "callType": "revertible",
+      "functionSelector": "0x730b06a5",
+      "timestamp": 1788027401662
+    }
+  ]
+}
