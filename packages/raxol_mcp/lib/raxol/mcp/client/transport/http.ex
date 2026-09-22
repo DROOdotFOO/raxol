@@ -353,7 +353,9 @@ if Code.ensure_loaded?(Mint.HTTP) do
         {:ok, vetted} -> {:ok, vetted}
         {:error, :invalid_url} -> {:error, {:blocked, :invalid_url}}
         {:error, {:blocked_address, _host}} -> {:error, {:blocked, :address}}
-        {:error, {:dns_failed, _host}} -> {:error, :dns_failed}
+        # The payload is `{host, reason}`; this transport collapses both to a
+        # bare atom because its taxonomy names no host and no DNS detail.
+        {:error, {:dns_failed, _host_and_reason}} -> {:error, :dns_failed}
       end
     end
 
