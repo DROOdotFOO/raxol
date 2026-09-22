@@ -14,6 +14,26 @@ defmodule Raxol.Sensor.Feed do
   @default_buffer_size 1000
   @default_max_errors 10
   @backoff_ms 5_000
+  @max_backoff_ms 300_000
+  @jitter 0.2
+
+  # Reasons meaning "the endpoint is not answering", as opposed to "the
+  # endpoint answered with something unusable". Matched bare and unwrapped
+  # from any struct carrying a :reason -- Mint and Req transport errors
+  # included -- without taking a dependency on either package.
+  @unreachable [
+    :timeout,
+    :etimedout,
+    :connect_timeout,
+    :econnrefused,
+    :econnreset,
+    :closed,
+    :ehostunreach,
+    :enetunreach,
+    :ehostdown,
+    :nxdomain,
+    :eai_noname
+  ]
 
   @type status :: :connecting | :running | :error | :stopped
 
@@ -30,7 +50,10 @@ defmodule Raxol.Sensor.Feed do
           error_count: non_neg_integer(),
           max_errors: pos_integer(),
           poll_ref: reference() | nil,
-          backoff_ref: reference() | nil
+          backoff_ref: reference() | nil,
+          budget_ms: timeout(),
+          backoff_ms: pos_integer(),
+          max_backoff_ms: pos_integer()
         }
 
   defstruct sensor_id: nil,
@@ -45,7 +68,10 @@ defmodule Raxol.Sensor.Feed do
             error_count: 0,
             max_errors: @default_max_errors,
             poll_ref: nil,
-            backoff_ref: nil
+            backoff_ref: nil,
+            budget_ms: :infinity,
+            backoff_ms: @backoff_ms,
+            max_backoff_ms: @max_backoff_ms
 
   # -- Public API --
 
@@ -75,6 +101,21 @@ defmodule Raxol.Sensor.Feed do
     GenServer.cast(server, :reconnect)
   end
 
+  @spec backoff_delay(non_neg_integer(), keyword()) :: pos_integer()
+  def backoff_delay(attempt, opts \\ [])
+      when is_integer(attempt) and attempt >= 0 do
+    base = Keyword.get(opts, :backoff_ms, @backoff_ms)
+    ceiling = Keyword.get(opts, :max_backoff_ms, @max_backoff_ms)
+
+    # Cap the exponent before the multiply: 2 ** attempt on a long-dead
+    # endpoint would otherwise build a bignum to immediately throw away.
+    target = min(base * Integer.pow(2, min(attempt, 32)), ceiling)
+    jittered = target + target * @jitter * (:rand.uniform() * 2 - 1)
+
+    # Clamp after jittering too, or the ceiling leaks by the jitter width.
+    jittered |> round() |> max(1) |> min(ceiling)
+  end
+
   # -- Callbacks --
 
   @impl true
@@ -95,7 +136,10 @@ defmodule Raxol.Sensor.Feed do
       buffer: CircularBuffer.new(buffer_size),
       max_errors: max_errors,
       sample_rate_ms: sample_rate,
-      connect_opts: connect_opts
+      connect_opts: connect_opts,
+      budget_ms: Keyword.get(opts, :budget_ms, :infinity),
+      backoff_ms: Keyword.get(opts, :backoff_ms, @backoff_ms),
+      max_backoff_ms: Keyword.get(opts, :max_backoff_ms, @max_backoff_ms)
     }
 
     {:ok, state, {:continue, :connect}}
@@ -103,7 +147,9 @@ defmodule Raxol.Sensor.Feed do
 
   @impl true
   def handle_continue(:connect, %__MODULE__{} = state) do
-    case state.module.connect([sensor_id: state.sensor_id] ++ state.connect_opts) do
+    connect_opts = [sensor_id: state.sensor_id] ++ state.connect_opts
+
+    case with_budget(state, fn -> state.module.connect(connect_opts) end) do
       {:ok, sensor_state} ->
         state = %__MODULE__{
           state
@@ -142,7 +188,7 @@ defmodule Raxol.Sensor.Feed do
 
   @impl true
   def handle_info(:poll, %__MODULE__{status: :running} = state) do
-    case state.module.read(state.sensor_state) do
+    case with_budget(state, fn -> state.module.read(state.sensor_state) end) do
       {:ok, reading, new_sensor_state} ->
         buffer = CircularBuffer.insert(state.buffer, reading)
         notify_fusion(state.fusion_pid, reading)
@@ -158,12 +204,17 @@ defmodule Raxol.Sensor.Feed do
 
       {:error, reason} ->
         error_count = state.error_count + 1
+        class = classify(reason)
 
         Logger.warning(
-          "Sensor #{state.sensor_id} read error (#{error_count}/#{state.max_errors}): #{inspect(reason)}"
+          "Sensor #{state.sensor_id} read error " <>
+            "(#{class}, #{error_count}/#{state.max_errors}): " <>
+            inspect(reason)
         )
 
-        if error_count >= state.max_errors do
+        # An unreachable endpoint does not get the error ladder: every
+        # remaining rung costs a full connect timeout to learn nothing new.
+        if class == :unreachable or error_count >= state.max_errors do
           disconnect_sensor(state.module, state.sensor_state)
 
           state = %__MODULE__{
@@ -214,6 +265,23 @@ defmodule Raxol.Sensor.Feed do
 
   # -- Private --
 
+  defp with_budget(%__MODULE__{budget_ms: :infinity}, fun), do: fun.()
+
+  defp with_budget(%__MODULE__{budget_ms: budget}, fun) do
+    task = Task.async(fun)
+
+    case Task.yield(task, budget) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, reason} -> {:error, reason}
+      nil -> {:error, :timeout}
+    end
+  end
+
+  defp classify(reason) when reason in @unreachable, do: :unreachable
+  defp classify({:timeout, _}), do: :unreachable
+  defp classify(%{reason: reason}), do: classify(reason)
+  defp classify(_reason), do: :transient
+
   defp notify_fusion(nil, _reading), do: :ok
   defp notify_fusion(pid, reading), do: send(pid, {:sensor_reading, reading})
 
@@ -230,7 +298,14 @@ defmodule Raxol.Sensor.Feed do
 
   defp schedule_backoff(%__MODULE__{} = state) do
     _ = cancel_timer(state.backoff_ref)
-    ref = Process.send_after(self(), :backoff_reconnect, @backoff_ms)
+
+    delay =
+      backoff_delay(0,
+        backoff_ms: state.backoff_ms,
+        max_backoff_ms: state.max_backoff_ms
+      )
+
+    ref = Process.send_after(self(), :backoff_reconnect, delay)
     %__MODULE__{state | backoff_ref: ref}
   end
 
