@@ -4,7 +4,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
   This is a simplified version that delegates to the available handler modules.
   """
 
-  alias Raxol.Core.Runtime.Log
+  require Logger
+
   alias Raxol.Terminal.Commands.CSIHandler.{Cursor, CursorMovementHandler}
   alias Raxol.Terminal.Commands.CursorUtils
   alias Raxol.Terminal.Commands.WindowHandler
@@ -257,7 +258,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
 
     if gset do
       # Debug log for testing
-      Log.debug("handle_scs params_buffer: #{inspect(params_buffer)}")
+      Logger.debug("handle_scs params_buffer: #{inspect(params_buffer)}")
 
       char_code = parse_charset_char_code(params_buffer)
 
@@ -482,7 +483,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
         ?0
 
       "1" ->
-        Log.debug("Matched '1' string, returning ?A (#{?A})")
+        Logger.debug("Matched '1' string, returning ?A (#{?A})")
         # Test compatibility - "1" maps to UK ASCII (character 'A')
         ?A
 

@@ -2,7 +2,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
   @moduledoc """
   Handles the parsing logic for Sixel graphics data streams within a DCS sequence.
   """
-  alias Raxol.Core.Runtime.Log
+  require Logger
+
   alias Raxol.Terminal.ANSI.SixelPalette
   alias Raxol.Terminal.ANSI.Utils.SixelPatternMap
 
@@ -40,9 +41,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
   @spec parse(binary(), ParserState.t()) ::
           {:ok, ParserState.t()} | {:error, atom()}
   def parse(data, state) when is_binary(data) do
-    Log.debug(
-      "SixelParser: Incoming palette color 1 is #{inspect(Map.get(state.palette, 1, :not_found))}"
-    )
+    palette_size = map_size(state.palette)
+    Logger.debug("SixelParser: palette has #{palette_size} colors")
 
     case data do
       <<>> ->
@@ -98,9 +98,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, %{state | raster_attrs: new_attrs})
 
       {:error, reason, _} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Error parsing Raster Attributes: #{inspect(reason)}. Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Error parsing Raster Attributes: #{inspect(reason)}. Skipping."
         )
 
         parse(rest, state)
@@ -135,9 +134,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         handle_color_selection(params, remaining_data, state)
 
       {:error, reason, _} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Error parsing Color Definition: #{inspect(reason)}. Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Error parsing Color Definition: #{inspect(reason)}. Skipping."
         )
 
         parse(rest, state)
@@ -163,19 +161,15 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
             })
 
           {:error, reason} ->
-            Raxol.Core.Runtime.Log.warning_with_context(
-              "Sixel Parser: Invalid color definition ##{pc}: #{inspect(reason)}. Skipping.",
-              %{}
+            Logger.warning(
+              "Sixel Parser: Invalid color definition ##{inspect(pc)}: #{inspect(reason)}. Skipping."
             )
 
             parse(remaining_data, state)
         end
 
       false ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Invalid color index ##{pc}. Skipping.",
-          %{}
-        )
+        Logger.warning("Sixel Parser: Invalid color index ##{inspect(pc)}. Skipping.")
 
         parse(remaining_data, state)
     end
@@ -192,9 +186,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, %{state | color_index: 0})
 
       _ ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Unexpected params for Color Definition: #{inspect(params)}. Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Unexpected params for Color Definition: #{inspect(params)}. Skipping."
         )
 
         parse(remaining_data, state)
@@ -207,9 +200,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, %{state | repeat_count: pn})
 
       {:ok, [pn], remaining_data} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Invalid repeat count found (!#{pn}). Skipping repeat command.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Invalid repeat count found (!#{inspect(pn)}). Skipping repeat command."
         )
 
         parse(remaining_data, state)
@@ -218,9 +210,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, state)
 
       {:error, reason, _} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Sixel Parser: Error parsing Repeat Command: #{inspect(reason)}. Skipping.",
-          %{}
+        Logger.warning(
+          "Sixel Parser: Error parsing Repeat Command: #{inspect(reason)}. Skipping."
         )
 
         parse(rest, state)
@@ -250,16 +241,10 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
   end
 
   defp handle_data_character(char_byte, remaining_data, state) do
-    Log.debug(
-      "SixelParser: [handle_data_character] BEFORE pixel gen, palette color 1 is #{inspect(Map.get(state.palette, 1, :not_found))}"
-    )
-
-    Log.debug("SixelParser: Processing character byte: #{char_byte} ('#{<<char_byte>>}')")
+    Logger.debug("SixelParser: processing data character")
 
     case SixelPatternMap.get_pattern(char_byte) do
       pattern_int when is_integer(pattern_int) ->
-        Log.debug("SixelParser: Got pattern #{pattern_int} for character #{char_byte}")
-
         {final_buffer, final_x, final_max_x} =
           generate_repeated_pixels(
             pattern_int,
@@ -271,13 +256,7 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
             state.max_x
           )
 
-        Log.debug("SixelParser: Generated pixels, buffer size: #{map_size(final_buffer)}")
-
-        Log.debug("SixelParser: Final buffer: #{inspect(final_buffer)}")
-
-        Log.debug(
-          "SixelParser: [handle_data_character] AFTER pixel gen, palette color 1 is #{inspect(Map.get(state.palette, 1, :not_found))}"
-        )
+        Logger.debug("SixelParser: Generated pixels, buffer size: #{map_size(final_buffer)}")
 
         parse(remaining_data, %{
           state
@@ -289,7 +268,7 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         })
 
       nil ->
-        Log.debug("SixelParser: No pattern found for character #{char_byte}")
+        Logger.debug("SixelParser: ignored unknown data character")
 
         case remaining_data do
           <<"\e\\", _::binary>> ->

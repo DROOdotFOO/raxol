@@ -135,8 +135,7 @@ config :raxol, :terminal,
   scrollback_lines: 1000,
   enable_ansi: true,
   enable_mouse: true,
-  debug_mode: false,
-  log_level: :info
+  debug_mode: false
 
 # Configure web interface settings for development
 config :raxol, :web,

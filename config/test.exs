@@ -26,7 +26,6 @@ config :raxol, :terminal,
   enable_ansi: true,
   enable_mouse: false,
   debug_mode: false,
-  log_level: :warn,
   # --- REVERT TO MOCK NIF FOR TESTING --- #
   use_termbox: false,
   mock_termbox: true

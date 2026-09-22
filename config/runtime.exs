@@ -71,6 +71,41 @@ if config_env() == :prod do
     config :raxol_earn, accounting_enabled: accounting_enabled
   end
 
+  # TERMINAL_LOG_LEVEL sets the Logger level for the WHOLE node, not just the
+  # terminal: everything the release logs is filtered by it. "warn" is kept as
+  # an alias for :warning because Logger still accepts it and operators had it
+  # set before this key reached Logger.
+  logger_levels = %{
+    "all" => :all,
+    "debug" => :debug,
+    "info" => :info,
+    "notice" => :notice,
+    "warning" => :warning,
+    "warn" => :warning,
+    "error" => :error,
+    "critical" => :critical,
+    "alert" => :alert,
+    "emergency" => :emergency,
+    "none" => :none
+  }
+
+  terminal_log_level_name = System.get_env("TERMINAL_LOG_LEVEL") || "info"
+
+  terminal_log_level =
+    case Map.fetch(logger_levels, terminal_log_level_name) do
+      {:ok, level} ->
+        level
+
+      :error ->
+        valid_levels =
+          logger_levels |> Map.keys() |> Enum.sort() |> Enum.join(", ")
+
+        raise ArgumentError,
+              "invalid TERMINAL_LOG_LEVEL #{inspect(terminal_log_level_name)}; expected one of: #{valid_levels}"
+    end
+
+  config :logger, level: terminal_log_level
+
   # Configure terminal settings from environment
   config :raxol, :terminal,
     default_width: String.to_integer(System.get_env("TERMINAL_WIDTH") || "80"),
@@ -81,7 +116,6 @@ if config_env() == :prod do
     enable_ansi: System.get_env("TERMINAL_ANSI", "true") == "true",
     enable_mouse: System.get_env("TERMINAL_MOUSE", "true") == "true",
     debug_mode: System.get_env("TERMINAL_DEBUG", "false") == "true",
-    log_level: String.to_atom(System.get_env("TERMINAL_LOG_LEVEL") || "info"),
     virtual_scroll_size:
       String.to_integer(
         System.get_env("TERMINAL_VIRTUAL_SCROLL_SIZE") || "1000"

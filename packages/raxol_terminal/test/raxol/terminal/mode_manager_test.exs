@@ -136,4 +136,82 @@ defmodule Raxol.Terminal.ModeManagerTest do
       end
     end
   end
+
+  describe "debug logging on the write path" do
+    # `Logger.debug/1` is a macro: when the level is disabled for the calling
+    # module it never evaluates its argument. `Raxol.Core.Runtime.Log.debug/1`
+    # is a plain function, so its argument is built first and the level is
+    # checked afterwards - which is what this path must never go back to.
+    # Interpolation runs through `Kernel.inspect/1` and
+    # `String.Chars.to_string/1`, so one traced call attributed to ModeManager
+    # is proof a message was built, whatever that message says.
+    #
+    # Note `Logger.put_process_level/2` does NOT gate the macro
+    # (`:logger.allow/2` ignores it); the module level does.
+    setup do
+      Logger.put_module_level(ModeManager, :error)
+
+      on_exit(fn ->
+        Logger.delete_module_level(ModeManager)
+        :erlang.trace_pattern({Kernel, :inspect, :_}, false, [:local])
+        :erlang.trace_pattern({String.Chars, :to_string, :_}, false, [:local])
+      end)
+    end
+
+    test "set_mode/3 renders no debug message while its level is disabled" do
+      emulator = Emulator.new(80, 24)
+
+      {result, rendered} =
+        trace_rendering(fn -> ModeManager.set_mode(emulator, [:decckm]) end)
+
+      assert {:ok, %Emulator{} = updated} = result
+      assert updated.mode_manager.cursor_keys_mode == :application
+
+      assert rendered == [],
+             "ModeManager rendered #{length(rendered)} message fragment(s) at a disabled level: #{inspect(rendered)}"
+    end
+
+    # Runs `fun` in a traced process and returns its result together with the
+    # message-rendering calls ModeManager itself made.
+    defp trace_rendering(fun) do
+      task = Task.async(fn -> receive(do: (:go -> fun.())) end)
+
+      # The match spec attaches the calling MFA to each trace message so
+      # rendering done by other modules (whose debug level is untouched) can
+      # be filtered out.
+      match_spec = [{:_, [], [{:message, {:caller}}]}]
+
+      :erlang.trace(task.pid, true, [:call, {:tracer, self()}])
+      :erlang.trace_pattern({Kernel, :inspect, :_}, match_spec, [:local])
+      :erlang.trace_pattern({String.Chars, :to_string, :_}, match_spec, [:local])
+
+      send(task.pid, :go)
+      result = Task.await(task)
+
+      # Trace messages are not ordered against the task's reply, so draining
+      # straight after `Task.await/2` can see a prefix of them - or none, which
+      # would pass an empty list. `trace_delivered/1` is the fence: its reply
+      # arrives only after every trace message the tracee has already
+      # generated has reached this process.
+      ref = :erlang.trace_delivered(task.pid)
+
+      receive do
+        {:trace_delivered, _tracee, ^ref} -> :ok
+      end
+
+      {result, drain_traced_calls([])}
+    end
+
+    defp drain_traced_calls(acc) do
+      receive do
+        {:trace, _pid, :call, {_m, _f, args}, {ModeManager, fun, arity}} ->
+          drain_traced_calls([{ModeManager, fun, arity, args} | acc])
+
+        {:trace, _pid, :call, _mfa, _caller} ->
+          drain_traced_calls(acc)
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+  end
 end

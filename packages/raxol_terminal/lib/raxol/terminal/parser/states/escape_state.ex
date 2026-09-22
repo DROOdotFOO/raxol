@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.Parser.States.EscapeState do
   Handles the :escape state of the terminal parser.
   """
 
+  require Logger
+
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State
   @behaviour Raxol.Terminal.Parser.StateBehaviour
@@ -68,8 +70,8 @@ defmodule Raxol.Terminal.Parser.States.EscapeState do
   end
 
   defp dispatch_escape_input(<<"P", rest::binary>>, emulator, parser_state) do
-    Raxol.Core.Runtime.Log.debug(
-      "EscapeState: Found DCS final byte 'P', transitioning to dcs_entry with rest=#{inspect(rest)}"
+    Logger.debug(
+      "EscapeState: Found DCS introducer, transitioning to dcs_entry; payload redacted"
     )
 
     # Found DCS final byte 'P', transitioning to dcs_entry

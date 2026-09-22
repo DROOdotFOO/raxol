@@ -6,7 +6,8 @@ defmodule Raxol.Terminal.ModeManager do
   handling both simple flag toggles and modes with side effects on the
   emulator state (like screen buffer switching or resizing).
   """
-  alias Raxol.Core.Runtime.Log
+  require Logger
+
   alias Raxol.Terminal.ModeManager.SavedState
 
   alias Raxol.Terminal.Modes.Handlers.{
@@ -67,35 +68,23 @@ defmodule Raxol.Terminal.ModeManager do
   Returns potentially updated Emulator state if side effects occurred.
   """
   def set_mode(emulator, modes, category \\ nil) when is_list(modes) do
-    Log.debug(
+    Logger.debug(
       "ModeManager.set_mode/2 called with modes=#{inspect(modes)}, category=#{inspect(category)}"
     )
 
-    Log.debug(
-      "ModeManager.set_mode/2: initial emulator mode_manager=#{inspect(emulator.mode_manager)}"
-    )
+    Enum.reduce_while(modes, {:ok, emulator}, fn mode, {:ok, emu} ->
+      case do_set_mode(mode, emu, category) do
+        {:ok, new_emu} ->
+          {:cont, {:ok, new_emu}}
 
-    result =
-      Enum.reduce_while(modes, {:ok, emulator}, fn mode, {:ok, emu} ->
-        case do_set_mode(mode, emu, category) do
-          {:ok, new_emu} ->
-            Log.debug(
-              "ModeManager.set_mode/2: mode #{inspect(mode)} set successfully, new_emu.mode_manager=#{inspect(new_emu.mode_manager)}"
-            )
+        {:error, reason} ->
+          Logger.debug(
+            "ModeManager.set_mode/2: mode #{inspect(mode)} failed with reason=#{inspect(reason)}"
+          )
 
-            {:cont, {:ok, new_emu}}
-
-          {:error, reason} ->
-            Log.debug(
-              "ModeManager.set_mode/2: mode #{inspect(mode)} failed with reason=#{inspect(reason)}"
-            )
-
-            {:halt, {:error, reason}}
-        end
-      end)
-
-    Log.debug("ModeManager.set_mode/2: final result=#{inspect(result)}")
-    result
+          {:halt, {:error, reason}}
+      end
+    end)
   end
 
   @doc """
@@ -181,7 +170,7 @@ defmodule Raxol.Terminal.ModeManager do
   end
 
   defp find_mode_definition(mode_name, category) do
-    Log.debug(
+    Logger.debug(
       "ModeManager.find_mode_definition/2 called with mode_name=#{inspect(mode_name)}, category=#{inspect(category)}"
     )
 
@@ -235,33 +224,21 @@ defmodule Raxol.Terminal.ModeManager do
   end
 
   defp apply_mode_effects(mode_def, emulator, value) do
-    Log.debug(
-      "ModeManager.apply_mode_effects called with mode_def=#{inspect(mode_def)}, value=#{inspect(value)}"
-    )
-
     case mode_def.category do
       :dec_private ->
-        Log.debug("ModeManager.apply_mode_effects: routing to DECPrivateHandler")
-
         DECPrivateHandler.handle_mode_change(mode_def.name, value, emulator)
 
       :screen_buffer ->
-        Log.debug("ModeManager.apply_mode_effects: routing to DECPrivateHandler (screen_buffer)")
-
         DECPrivateHandler.handle_mode_change(mode_def.name, value, emulator)
 
       :mouse ->
-        Log.debug("ModeManager.apply_mode_effects: routing to DECPrivateHandler (mouse)")
-
         DECPrivateHandler.handle_mode_change(mode_def.name, value, emulator)
 
       :standard ->
-        Log.debug("ModeManager.apply_mode_effects: routing to StandardHandler")
-
         StandardHandler.handle_mode_change(mode_def.name, value, emulator)
 
       _ ->
-        Log.debug(
+        Logger.debug(
           "ModeManager.apply_mode_effects: unknown category #{inspect(mode_def.category)}"
         )
 
