@@ -6,6 +6,8 @@ defmodule Raxol.Terminal.ControlCodes do
   Relies on Emulator state and ScreenBuffer for actions.
   """
 
+  require Logger
+
   alias Raxol.Terminal.ANSI.CharacterSets
   alias Raxol.Terminal.Cursor.Movement
   alias Raxol.Terminal.Emulator
@@ -40,7 +42,7 @@ defmodule Raxol.Terminal.ControlCodes do
 
   defp c0_handler_for(@nul),
     do: fn emulator ->
-      Raxol.Core.Runtime.Log.debug("NUL received, ignoring")
+      Logger.debug("NUL received, ignoring")
       emulator
     end
 
@@ -58,20 +60,20 @@ defmodule Raxol.Terminal.ControlCodes do
 
   defp c0_handler_for(@esc),
     do: fn emulator ->
-      Raxol.Core.Runtime.Log.debug("ESC received unexpectedly in C0 handler, ignoring")
+      Logger.debug("ESC received unexpectedly in C0 handler, ignoring")
 
       emulator
     end
 
   defp c0_handler_for(@del),
     do: fn emulator ->
-      Raxol.Core.Runtime.Log.debug("DEL received, ignoring")
+      Logger.debug("DEL received, ignoring")
       emulator
     end
 
   defp c0_handler_for(_),
     do: fn emulator ->
-      Raxol.Core.Runtime.Log.debug("Unhandled C0 control code")
+      Logger.debug("Unhandled C0 control code")
       emulator
     end
 
@@ -206,7 +208,9 @@ defmodule Raxol.Terminal.ControlCodes do
   end
 
   defp log_cursor_position(cursor) do
-    Raxol.Core.Runtime.Log.debug(
+    # The lookup stays inside the macro argument: when the cursor is a pid it
+    # is a synchronous GenServer.call and nothing but this trace needs it.
+    Logger.debug(
       "[move_cursor_down] Final: cursor=#{inspect(Raxol.Terminal.Cursor.Manager.get_position(cursor))}"
     )
   end
@@ -219,7 +223,7 @@ defmodule Raxol.Terminal.ControlCodes do
 
   @doc "Handle Carriage Return (CR)"
   def handle_cr(%Emulator{} = emulator) do
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[handle_cr] Input: cursor=#{inspect(Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor))}, last_exceeded=#{emulator.last_col_exceeded}"
     )
 
@@ -228,7 +232,7 @@ defmodule Raxol.Terminal.ControlCodes do
       handle_pending_wrap(emulator.last_col_exceeded, emulator)
 
     # 2. Perform CR logic on potentially updated state
-    Raxol.Core.Runtime.Log.debug("[handle_cr] Moving cursor to column 0")
+    Logger.debug("[handle_cr] Moving cursor to column 0")
     # Keep the current row (position tuples are {row, col} and move_to is
     # (cursor, row, col) -- this previously destructured the COLUMN as the
     # row and passed the arguments swapped, so every CR teleported the
@@ -244,7 +248,7 @@ defmodule Raxol.Terminal.ControlCodes do
         0
       )
 
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[handle_cr] Final cursor: #{inspect(Raxol.Terminal.Cursor.Manager.get_position(final_cursor))}"
     )
 
@@ -273,7 +277,7 @@ defmodule Raxol.Terminal.ControlCodes do
   def handle_can(emulator) do
     # CAN: Cancel. Parser should handle this within sequences.
     # If it reaches here, it was outside a sequence.
-    Raxol.Core.Runtime.Log.debug("CAN received outside escape sequence, ignoring")
+    Logger.debug("CAN received outside escape sequence, ignoring")
 
     emulator
   end
@@ -291,7 +295,7 @@ defmodule Raxol.Terminal.ControlCodes do
   @spec handle_ris(Emulator.t()) :: Emulator.t()
   # ESC c - Reset to Initial State
   def handle_ris(emulator) do
-    Raxol.Core.Runtime.Log.info("RIS (Reset to Initial State) received")
+    Logger.info("RIS (Reset to Initial State) received")
     # Re-initialize most state components, keeping buffer dimensions
     active_buffer = Emulator.get_screen_buffer(emulator)
     width = ScreenBuffer.get_width(active_buffer)
@@ -446,19 +450,18 @@ defmodule Raxol.Terminal.ControlCodes do
   """
   @spec handle_escape(Emulator.t(), integer()) :: Emulator.t()
   def handle_escape(emulator, byte) do
-    Raxol.Core.Runtime.Log.debug("ControlCodes.handle_escape called with byte=#{inspect(byte)}")
+    Logger.debug("ControlCodes.handle_escape called with byte=#{inspect(byte)}")
 
     case Map.get(@escape_handlers, byte) do
       nil ->
-        Raxol.Core.Runtime.Log.debug("Unhandled escape sequence byte: #{inspect(byte)}")
+        Logger.debug("Unhandled escape sequence byte: #{inspect(byte)}")
 
         emulator
 
       handler ->
-        Raxol.Core.Runtime.Log.debug("Found handler for byte #{inspect(byte)}, calling handler")
+        Logger.debug("Found handler for byte #{inspect(byte)}, calling handler")
 
         result = handler.(emulator)
-        Raxol.Core.Runtime.Log.debug("Handler returned: #{inspect(result)}")
         result
     end
   end
@@ -593,7 +596,7 @@ defmodule Raxol.Terminal.ControlCodes do
   end
 
   defp handle_pending_wrap(true, emulator) do
-    Raxol.Core.Runtime.Log.debug("[handle_cr] Pending wrap detected")
+    Logger.debug("[handle_cr] Pending wrap detected")
     # Perform the deferred wrap: move cursor to col 0, next line. Position
     # tuples are {row, col} and move_to is (cursor, row, col) -- this
     # previously destructured the COLUMN as the row and passed the
@@ -610,7 +613,7 @@ defmodule Raxol.Terminal.ControlCodes do
         0
       )
 
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[handle_cr] Cursor after wrap: #{inspect(Raxol.Terminal.Cursor.Manager.get_position(wrapped_cursor))}"
     )
 
@@ -622,7 +625,7 @@ defmodule Raxol.Terminal.ControlCodes do
           last_col_exceeded: false
       })
 
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[handle_cr] State after pending wrap + scroll: cursor=#{inspect(Raxol.Terminal.Cursor.Manager.get_position(maybe_scrolled_emulator.cursor))}, last_exceeded=#{maybe_scrolled_emulator.last_col_exceeded}"
     )
 
@@ -630,7 +633,7 @@ defmodule Raxol.Terminal.ControlCodes do
   end
 
   defp handle_pending_wrap(_has_wrap, emulator) do
-    Raxol.Core.Runtime.Log.debug("[handle_cr] No pending wrap")
+    Logger.debug("[handle_cr] No pending wrap")
     emulator
   end
 

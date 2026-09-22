@@ -1,5 +1,6 @@
 defmodule Raxol.Terminal.ANSI.SixelGraphics do
-  alias Raxol.Core.Runtime.Log
+  require Logger
+
   import Bitwise
 
   @behaviour Raxol.Terminal.ANSI.Behaviours.SixelGraphics
@@ -395,7 +396,7 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
   @spec process_sequence(t(), binary()) :: {t(), :ok | {:error, term()}}
   @impl true
   def process_sequence(state, data) when is_binary(data) do
-    Log.debug("SixelGraphics: process_sequence called with data: #{inspect(data)}")
+    Logger.debug("SixelGraphics: processing #{byte_size(data)} bytes")
 
     # Ensure palette is initialized
     state_with_palette =
@@ -408,13 +409,11 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
         state
       end
 
-    Log.debug("SixelGraphics: Initial palette has #{map_size(state_with_palette.palette)} colors")
-
-    Log.debug(
-      "SixelGraphics: Color index 1 is #{inspect(Map.get(state_with_palette.palette, 1, :not_found))}"
+    Logger.debug(
+      "SixelGraphics: Initial palette has #{map_size(state_with_palette.palette)} colors"
     )
 
-    Log.debug("SixelGraphics: Calling SixelParser.parse with data: #{inspect(data)}")
+    Logger.debug("SixelGraphics: calling parser")
 
     case Raxol.Terminal.ANSI.SixelParser.parse(
            data,
@@ -431,12 +430,8 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
            }
          ) do
       {:ok, parser_state} ->
-        Log.debug(
-          "SixelGraphics: Parser returned palette with #{map_size(parser_state.palette)} colors"
-        )
-
-        Log.debug(
-          "SixelGraphics: Parser color index 1 is #{inspect(Map.get(parser_state.palette, 1, :not_found))}"
+        Logger.debug(
+          "SixelGraphics: parser returned palette with #{map_size(parser_state.palette)} colors"
         )
 
         # Preserve the original palette if the parser didn't modify it
@@ -445,11 +440,7 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
             do: state_with_palette.palette,
             else: parser_state.palette
 
-        Log.debug("SixelGraphics: Final palette has #{map_size(final_palette)} colors")
-
-        Log.debug(
-          "SixelGraphics: Final color index 1 is #{inspect(Map.get(final_palette, 1, :not_found))}"
-        )
+        Logger.debug("SixelGraphics: Final palette has #{map_size(final_palette)} colors")
 
         updated_state = %{
           state_with_palette
@@ -463,7 +454,7 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
         {updated_state, :ok}
 
       {:error, reason} ->
-        Log.debug("SixelGraphics: Parser returned error: #{inspect(reason)}")
+        Logger.debug("SixelGraphics: Parser returned error: #{inspect(reason)}")
 
         # Return unchanged state and error
         {state_with_palette, {:error, reason}}

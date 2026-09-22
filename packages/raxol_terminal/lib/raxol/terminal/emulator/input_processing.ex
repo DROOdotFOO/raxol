@@ -1,7 +1,8 @@
 defmodule Raxol.Terminal.Emulator.InputProcessing do
   @moduledoc false
 
-  alias Raxol.Core.Runtime.Log
+  require Logger
+
   alias Raxol.Terminal.Emulator.ModeOperations
 
   def process_input(emulator, input) do
@@ -20,43 +21,43 @@ defmodule Raxol.Terminal.Emulator.InputProcessing do
   end
 
   def handle_esc_equals(emulator) do
-    Log.debug("Emulator.handle_esc_equals called - setting decckm mode")
+    Logger.debug("Emulator.handle_esc_equals called - setting decckm mode")
 
-    Log.debug("Initial cursor_keys_mode: #{inspect(emulator.mode_manager.cursor_keys_mode)}")
+    initial_cursor_keys_mode = emulator.mode_manager.cursor_keys_mode
+    Logger.debug("Initial cursor_keys_mode: #{inspect(initial_cursor_keys_mode)}")
 
     case ModeOperations.set_mode(emulator, :decckm) do
       {:ok, new_emulator} ->
-        Log.debug("ModeOperations.set_mode succeeded")
+        Logger.debug("ModeOperations.set_mode succeeded")
 
-        Log.debug(
-          "Final cursor_keys_mode: #{inspect(new_emulator.mode_manager.cursor_keys_mode)}"
-        )
+        final_cursor_keys_mode = new_emulator.mode_manager.cursor_keys_mode
+        Logger.debug("Final cursor_keys_mode: #{inspect(final_cursor_keys_mode)}")
 
         new_emulator
 
       {:error, reason} ->
-        Log.debug("ModeOperations.set_mode failed: #{inspect(reason)}")
+        Logger.debug("ModeOperations.set_mode failed: #{inspect(reason)}")
         emulator
     end
   end
 
   def handle_esc_greater(emulator) do
-    Log.debug("Emulator.handle_esc_greater called - resetting decckm mode")
+    Logger.debug("Emulator.handle_esc_greater called - resetting decckm mode")
 
-    Log.debug("Initial cursor_keys_mode: #{inspect(emulator.mode_manager.cursor_keys_mode)}")
+    initial_cursor_keys_mode = emulator.mode_manager.cursor_keys_mode
+    Logger.debug("Initial cursor_keys_mode: #{inspect(initial_cursor_keys_mode)}")
 
     case ModeOperations.reset_mode(emulator, :decckm) do
       {:ok, new_emulator} ->
-        Log.debug("ModeOperations.reset_mode succeeded")
+        Logger.debug("ModeOperations.reset_mode succeeded")
 
-        Log.debug(
-          "Final cursor_keys_mode: #{inspect(new_emulator.mode_manager.cursor_keys_mode)}"
-        )
+        final_cursor_keys_mode = new_emulator.mode_manager.cursor_keys_mode
+        Logger.debug("Final cursor_keys_mode: #{inspect(final_cursor_keys_mode)}")
 
         new_emulator
 
       {:error, reason} ->
-        Log.debug("ModeOperations.reset_mode failed: #{inspect(reason)}")
+        Logger.debug("ModeOperations.reset_mode failed: #{inspect(reason)}")
         emulator
     end
   end

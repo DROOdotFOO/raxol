@@ -4,6 +4,8 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
   Combines all OSC handler functionality including window, clipboard, color, and selection operations.
   """
 
+  require Logger
+
   alias Raxol.Terminal.{Clipboard, Colors}
 
   # Alias for backward compatibility
@@ -32,7 +34,7 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
         handle_standalone_ops(emulator, cmd, data)
 
       :unsupported ->
-        Raxol.Core.Runtime.Log.warning("Unsupported OSC command: #{command}")
+        Logger.warning("Unsupported OSC command: #{inspect(command)}")
         {:error, :unsupported_command, emulator}
     end
   end
