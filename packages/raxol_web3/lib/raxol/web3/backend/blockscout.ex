@@ -181,9 +181,9 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @impl Backend
   def chain_info(%__MODULE__{} = state) do
     with {:ok, body} <- get(state, "/api/v2/stats", %{}, :chain_stats),
-         {:ok, blocks} <- int(body["total_blocks"], :total_blocks),
-         {:ok, transactions} <- int(body["total_transactions"], :total_transactions),
-         {:ok, addresses} <- int(body["total_addresses"], :total_addresses) do
+         {:ok, blocks} <- Backend.int(body["total_blocks"], :total_blocks),
+         {:ok, transactions} <- Backend.int(body["total_transactions"], :total_transactions),
+         {:ok, addresses} <- Backend.int(body["total_addresses"], :total_addresses) do
       {:ok,
        %{
          chain_ref: state.chain_ref,
@@ -269,8 +269,8 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @impl Backend
   def get_block(%__MODULE__{} = state, number) do
     with {:ok, body} <- get(state, "/api/v2/blocks/#{segment(number)}", %{}, :block),
-         {:ok, height} <- int(body["height"], :height),
-         {:ok, count} <- int(body["transactions_count"], :transactions_count) do
+         {:ok, height} <- Backend.int(body["height"], :height),
+         {:ok, count} <- Backend.int(body["transactions_count"], :transactions_count) do
       {:ok,
        %{
          height: height,
@@ -446,7 +446,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
     with {:ok, value} <- Backend.money(item["value"], :value),
          {:ok, paid} <- Backend.money(fee["value"], :fee),
-         {:ok, block} <- int(item["block_number"], :block_number) do
+         {:ok, block} <- Backend.int(item["block_number"], :block_number) do
       {:ok, normalized_transaction(item, value, paid, block)}
     end
   end
@@ -481,7 +481,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
     with {:ok, amount} <- Backend.money(total["value"], :amount),
          {:ok, token} <- token(item["token"]),
-         {:ok, block} <- int(item["block_number"], :block_number) do
+         {:ok, block} <- Backend.int(item["block_number"], :block_number) do
       {:ok,
        %{
          token: token,
@@ -498,8 +498,8 @@ defmodule Raxol.Web3.Backend.Blockscout do
   defp token_transfer(_item), do: {:error, {:decode_failed, :token_transfer_row}}
 
   defp log(item) when is_map(item) do
-    with {:ok, block} <- int(item["block_number"], :block_number),
-         {:ok, index} <- int(item["index"], :index) do
+    with {:ok, block} <- Backend.int(item["block_number"], :block_number),
+         {:ok, index} <- Backend.int(item["index"], :index) do
       {:ok,
        %{
          address: item |> field("address") |> field("hash"),
@@ -533,7 +533,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
   # read as 18 would have been luck and read as 1 is a 10^17 error in what a
   # user is shown. It fails the row like any other unreadable field.
   defp token(token) when is_map(token) do
-    with {:ok, decimals} <- int(token["decimals"], :decimals) do
+    with {:ok, decimals} <- Backend.int(token["decimals"], :decimals) do
       {:ok,
        %{
          address: token["address_hash"] || token["address"],
@@ -586,7 +586,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
   end
 
   defp latest_height(%{"items" => [%{"height" => height} | _rest]}),
-    do: int(height, :height)
+    do: Backend.int(height, :height)
 
   defp latest_height(_body), do: {:error, {:decode_failed, :blocks}}
 
@@ -636,27 +636,6 @@ defmodule Raxol.Web3.Backend.Blockscout do
   end
 
   defp evm_address?(_other), do: false
-
-  # A partial parse is a WRONG number, not a missing one, and this one fed
-  # block heights, log indexes and a token's DECIMALS -- the exponent every
-  # amount beside it is read through. `Integer.parse/1` answers `{1, ".5e18"}`
-  # for "1.5e18", `{1, "e18"}` for "1e18", `{0, "x1f"}` for "0x1f" and
-  # `{12, "abc"}` for "12abc", so taking `{number, _rest}` turned each of
-  # those into a small plausible integer a caller reads as data. The whole
-  # value parses or the read fails, which is what every other backend in this
-  # package already required and what `Backend.money/2` requires of the
-  # amounts themselves. `nil` stays `nil`: absent is not malformed.
-  defp int(nil, _field), do: {:ok, nil}
-  defp int(value, _field) when is_integer(value), do: {:ok, value}
-
-  defp int(value, field) when is_binary(value) do
-    case Integer.parse(value) do
-      {number, ""} -> {:ok, number}
-      _unparseable -> {:error, {:decode_failed, field}}
-    end
-  end
-
-  defp int(_other, field), do: {:error, {:decode_failed, field}}
 
   defp float(value) when is_number(value), do: value * 1.0
 

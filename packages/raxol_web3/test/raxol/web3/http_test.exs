@@ -80,7 +80,7 @@ defmodule Raxol.Web3.HTTPTest do
                )
     end
 
-    test "a host that does not resolve is an unhealthy origin, named by id" do
+    test "a host that does not resolve names the origin by id" do
       host = "nxdomain.example"
 
       assert {:error, {:dns_failed, id}} =
@@ -92,9 +92,51 @@ defmodule Raxol.Web3.HTTPTest do
       assert id == origin_id(host)
       assert {:ok, "https://#{host}:443"} == Origin.resolve(id)
 
-      # A dead name trips the breaker, so the router fails over instead of every
-      # call paying for the same failed lookup.
-      assert failures(host) == 1
+      # Nothing is recorded against the origin. The breaker gate sits inside
+      # `guarded/4`, which a failed vet never reaches, so a record here cannot
+      # spare the next caller the lookup -- the next caller's vet runs first
+      # either way. Failover is the router's, off `{:dns_failed, _}`.
+      assert failures(host) == 0
+    end
+
+    test "a resolver that did not answer does not spend the origin's breaker" do
+      host = "servfail.example"
+      unanswered = fn _charlist, _family -> {:error, :timeout} end
+
+      # Same answer to this caller, and the router still fails over on it.
+      assert {:error, {:dns_failed, id}} =
+               HTTP.get("https://#{host}/x",
+                 resolver: unanswered,
+                 exchange: refusing_seam()
+               )
+
+      assert id == origin_id(host)
+      assert failures(host) == 0
+      assert breaker_state(host) == :closed
+    end
+
+    test "an origin whose name recovers is usable at once, not quarantined for having been down" do
+      # The only moment a DNS-recorded failure was ever READABLE: resolution
+      # has to succeed for the pipeline to reach the breaker at all, so the
+      # record's single observable effect was to refuse the origin in the
+      # window it had just become reachable again.
+      host = "recovers.example"
+      trip = [breaker: [failure_threshold: 1, recovery_ms: 60_000]]
+
+      recovering = fn charlist, family ->
+        case Process.put(:resolved?, true) do
+          nil -> {:error, :nxdomain}
+          true -> resolver().(charlist, family)
+        end
+      end
+
+      assert {:error, {:dns_failed, _id}} =
+               HTTP.get("https://#{host}/x", [resolver: recovering, exchange: ok()] ++ trip)
+
+      assert {:ok, _response} =
+               HTTP.get("https://#{host}/x", [resolver: recovering, exchange: ok()] ++ trip)
+
+      assert_receive {:exchange, _request}
     end
   end
 

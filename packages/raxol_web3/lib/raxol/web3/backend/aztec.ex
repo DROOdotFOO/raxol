@@ -323,11 +323,13 @@ defmodule Raxol.Web3.Backend.Aztec do
     with {:ok, info} <- object(get(state, "/l2/info", :chain_stats, :fixed)),
          :ok <- same_network(state, info),
          {:ok, block_time} <- get(state, "/l2/stats/average-block-time", :chain_stats, :fixed),
-         {:ok, transactions} <- get(state, "/l2/stats/total-tx-effects", :chain_stats, :fixed) do
+         {:ok, transactions} <- get(state, "/l2/stats/total-tx-effects", :chain_stats, :fixed),
+         {:ok, average_block_time_ms} <- Backend.int(block_time, :average_block_time_ms),
+         {:ok, total_transactions} <- Backend.int(transactions, :total_transactions) do
       {:ok,
        %{
          chain_ref: state.chain_ref,
-         average_block_time_ms: int(block_time),
+         average_block_time_ms: average_block_time_ms,
          # No counter of blocks exists on this surface, and `l2/tips` reports a
          # height. Reading a height as a count is the mistake ADR-0038
          # records, so this stays nil rather than borrowing that number.
@@ -335,7 +337,7 @@ defmodule Raxol.Web3.Backend.Aztec do
          # One tx effect per mined transaction, which is the count a caller
          # means. `l2/stats/total-txs` is a 404; the plural that exists is
          # `total-tx-effects`.
-         total_transactions: int(transactions),
+         total_transactions: total_transactions,
          # No account resource exists, so no count of accounts does either.
          # `total-contract-instances` (205 on 2026-09-14) counts deployments
          # rather than addresses.
@@ -449,7 +451,7 @@ defmodule Raxol.Web3.Backend.Aztec do
          proven: rung(ladder, "proven"),
          finalized: rung(ladder, "finalized"),
          stale?: body["stale"] == true,
-         staleness_ms: int(body["stalenessMs"]),
+         staleness_ms: staleness_ms(body),
          degraded?: body["degraded"] == true
        }}
     end
@@ -467,13 +469,14 @@ defmodule Raxol.Web3.Backend.Aztec do
   """
   @spec rollup(t()) :: {:ok, rollup()} | {:error, Backend.error()}
   def rollup(%__MODULE__{} = state) do
-    with {:ok, info} <- object(get(state, "/l2/info", :chain_stats, :fixed)) do
+    with {:ok, info} <- object(get(state, "/l2/info", :chain_stats, :fixed)),
+         {:ok, l1_chain_id} <- Backend.int(info["l1ChainId"], :l1_chain_id) do
       contracts = Map.get(info, "l1ContractAddresses", %{})
 
       {:ok,
        %{
          network: info["l2NetworkId"],
-         l1_chain_id: int(info["l1ChainId"]),
+         l1_chain_id: l1_chain_id,
          rollup_version: info["rollupVersion"],
          l1_rollup: evm_ref(contracts["rollupAddress"]),
          l1_registry: evm_ref(contracts["registryAddress"])
@@ -631,9 +634,9 @@ defmodule Raxol.Web3.Backend.Aztec do
   defp indexer(body) do
     reported = %{finished?: body["stale"] != true}
 
-    case int(body["stalenessMs"]) do
-      ms when is_integer(ms) and ms >= 0 -> Map.put(reported, :lag_seconds, div(ms, 1000))
-      _unpublished -> reported
+    case staleness_ms(body) do
+      nil -> reported
+      ms -> Map.put(reported, :lag_seconds, div(ms, 1000))
     end
   end
 
@@ -652,12 +655,13 @@ defmodule Raxol.Web3.Backend.Aztec do
 
   defp mined(body) do
     with {:ok, status} <- revert_status(body["revertCode"]),
-         {:ok, fee} <- Backend.money(body["transactionFee"], :fee) do
+         {:ok, fee} <- Backend.money(body["transactionFee"], :fee),
+         {:ok, block} <- Backend.int(body["blockHeight"], :block_height) do
       {:ok,
        %{
          hash: body["txHash"],
          status: status,
-         block: int(body["blockHeight"]),
+         block: block,
          timestamp: timestamp(body["timestamp"]),
          from: nil,
          to: nil,
@@ -694,19 +698,21 @@ defmodule Raxol.Web3.Backend.Aztec do
   # status is unknown, because the contract has no such status. It is a body
   # that is not what it claimed, and the other source may parse it.
   defp revert_status(%{"code" => code}) do
-    case int(code) do
-      0 -> {:ok, :success}
-      other when is_integer(other) -> {:ok, :reverted}
-      nil -> {:error, {:decode_failed, :revert_code}}
+    case Backend.int(code, :revert_code) do
+      {:ok, 0} -> {:ok, :success}
+      {:ok, other} when is_integer(other) -> {:ok, :reverted}
+      {:ok, nil} -> {:error, {:decode_failed, :revert_code}}
+      {:error, _reason} = error -> error
     end
   end
 
   defp revert_status(_absent), do: {:error, {:decode_failed, :revert_code}}
 
   defp block_number(body) do
-    case int(body["height"]) do
-      height when is_integer(height) -> {:ok, height}
-      nil -> {:error, {:decode_failed, :block}}
+    case Backend.int(body["height"], :block) do
+      {:ok, height} when is_integer(height) -> {:ok, height}
+      {:ok, nil} -> {:error, {:decode_failed, :block}}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -727,17 +733,26 @@ defmodule Raxol.Web3.Backend.Aztec do
   defp ok_or({:ok, _value} = ok, _reason), do: ok
   defp ok_or(:error, reason), do: {:error, reason}
 
-  defp int(nil), do: nil
-  defp int(value) when is_integer(value), do: value
-
-  defp int(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {number, _rest} -> number
-      :error -> nil
+  # The age of the tips observation, in milliseconds, or `nil`.
+  #
+  # Unreadable is reported the same as absent, which is the one place in this
+  # module a malformed value does NOT fail the read. This is a diagnostic:
+  # `block_height/1`'s contract is a height, and `indexer` hangs off it to say
+  # how fresh the source's view is. Failing the whole read over it threw away
+  # a height that parsed, on a REQUIRED callback, because an optional field
+  # beside it did not -- and `Raxol.Web3.Router` fails over on
+  # `{:decode_failed, _}`, so an upstream shipping one bad `stalenessMs` cost
+  # the chain its height on every source at once.
+  #
+  # Nothing is truncated to buy that: an unreadable age becomes no age, which
+  # is what a negative one already became. The rule the rest of this module
+  # keeps -- a wrong number is worse than no number -- is what says so.
+  defp staleness_ms(body) do
+    case Backend.int(body["stalenessMs"], :staleness_ms) do
+      {:ok, ms} when is_integer(ms) and ms >= 0 -> ms
+      _absent_or_unreadable -> nil
     end
   end
-
-  defp int(_other), do: nil
 
   # `get_in/2` raises on the way through anything that is not a map, and every
   # value on the way through belongs to the upstream.
