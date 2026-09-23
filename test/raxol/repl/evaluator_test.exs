@@ -107,6 +107,22 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert reason =~ "result limit"
     end
 
+    test "truncates an oversized error message to the result limit" do
+      eval = Evaluator.new()
+      limit = 1_000
+
+      assert {:error, reason, ^eval} =
+               Evaluator.eval(eval, ~s|raise String.duplicate("é", 50_000)|,
+                 max_result_bytes: limit
+               )
+
+      note = "\n[error truncated at #{limit} bytes]"
+      assert String.ends_with?(reason, note)
+      assert byte_size(reason) <= limit + byte_size(note)
+      assert reason =~ "RuntimeError"
+      assert String.valid?(reason)
+    end
+
     test "preserves evaluator on error" do
       eval = Evaluator.new()
       {:ok, _result, eval} = Evaluator.eval(eval, "x = 10")
