@@ -190,45 +190,10 @@ defmodule Raxol.Sensor.Feed do
   def handle_info(:poll, %__MODULE__{status: :running} = state) do
     case with_budget(state, fn -> state.module.read(state.sensor_state) end) do
       {:ok, reading, new_sensor_state} ->
-        buffer = CircularBuffer.insert(state.buffer, reading)
-        notify_fusion(state.fusion_pid, reading)
-
-        state = %__MODULE__{
-          state
-          | sensor_state: new_sensor_state,
-            buffer: buffer,
-            error_count: 0
-        }
-
-        {:noreply, schedule_poll(state)}
+        record_reading(state, reading, new_sensor_state)
 
       {:error, reason} ->
-        error_count = state.error_count + 1
-        class = classify(reason)
-
-        Logger.warning(
-          "Sensor #{state.sensor_id} read error " <>
-            "(#{class}, #{error_count}/#{state.max_errors}): " <>
-            inspect(reason)
-        )
-
-        # An unreachable endpoint does not get the error ladder: every
-        # remaining rung costs a full connect timeout to learn nothing new.
-        if class == :unreachable or error_count >= state.max_errors do
-          disconnect_sensor(state.module, state.sensor_state)
-
-          state = %__MODULE__{
-            state
-            | error_count: error_count,
-              status: :error,
-              sensor_state: nil
-          }
-
-          {:noreply, schedule_backoff(state)}
-        else
-          state = %__MODULE__{state | error_count: error_count}
-          {:noreply, schedule_poll(state)}
-        end
+        handle_read_error(state, reason)
     end
   end
 
@@ -264,6 +229,48 @@ defmodule Raxol.Sensor.Feed do
   end
 
   # -- Private --
+
+  defp record_reading(%__MODULE__{} = state, reading, new_sensor_state) do
+    buffer = CircularBuffer.insert(state.buffer, reading)
+    notify_fusion(state.fusion_pid, reading)
+
+    state = %__MODULE__{
+      state
+      | sensor_state: new_sensor_state,
+        buffer: buffer,
+        error_count: 0
+    }
+
+    {:noreply, schedule_poll(state)}
+  end
+
+  defp handle_read_error(%__MODULE__{} = state, reason) do
+    error_count = state.error_count + 1
+    class = classify(reason)
+
+    Logger.warning(
+      "Sensor #{state.sensor_id} read error " <>
+        "(#{class}, #{error_count}/#{state.max_errors}): " <>
+        inspect(reason)
+    )
+
+    # An unreachable endpoint does not get the error ladder: every
+    # remaining rung costs a full connect timeout to learn nothing new.
+    if class == :unreachable or error_count >= state.max_errors do
+      disconnect_sensor(state.module, state.sensor_state)
+
+      state = %__MODULE__{
+        state
+        | error_count: error_count,
+          status: :error,
+          sensor_state: nil
+      }
+
+      {:noreply, schedule_backoff(state)}
+    else
+      {:noreply, schedule_poll(%__MODULE__{state | error_count: error_count})}
+    end
+  end
 
   defp with_budget(%__MODULE__{budget_ms: :infinity}, fun), do: fun.()
 
