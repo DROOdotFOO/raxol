@@ -53,7 +53,8 @@ defmodule Raxol.Sensor.Feed do
           backoff_ref: reference() | nil,
           budget_ms: timeout(),
           backoff_ms: pos_integer(),
-          max_backoff_ms: pos_integer()
+          max_backoff_ms: pos_integer(),
+          backoff_attempt: non_neg_integer()
         }
 
   defstruct sensor_id: nil,
@@ -71,7 +72,8 @@ defmodule Raxol.Sensor.Feed do
             backoff_ref: nil,
             budget_ms: :infinity,
             backoff_ms: @backoff_ms,
-            max_backoff_ms: @max_backoff_ms
+            max_backoff_ms: @max_backoff_ms,
+            backoff_attempt: 0
 
   # -- Public API --
 
@@ -218,11 +220,15 @@ defmodule Raxol.Sensor.Feed do
     state = cancel_timers(state)
     disconnect_sensor(state.module, state.sensor_state)
 
+    # An operator asking for a reconnect is asserting the endpoint is back;
+    # honour it by starting the schedule over instead of making them wait
+    # out a ceiling-length delay earned by the previous outage.
     state = %__MODULE__{
       state
       | sensor_state: nil,
         status: :connecting,
-        error_count: 0
+        error_count: 0,
+        backoff_attempt: 0
     }
 
     {:noreply, state, {:continue, :connect}}
@@ -234,11 +240,15 @@ defmodule Raxol.Sensor.Feed do
     buffer = CircularBuffer.insert(state.buffer, reading)
     notify_fusion(state.fusion_pid, reading)
 
+    # A reading is the only proof the endpoint is actually serving, so it
+    # is the only thing that rewinds the retry schedule. A bare connect
+    # succeeding proves the socket opens, not that reads work.
     state = %__MODULE__{
       state
       | sensor_state: new_sensor_state,
         buffer: buffer,
-        error_count: 0
+        error_count: 0,
+        backoff_attempt: 0
     }
 
     {:noreply, schedule_poll(state)}
@@ -307,13 +317,18 @@ defmodule Raxol.Sensor.Feed do
     _ = cancel_timer(state.backoff_ref)
 
     delay =
-      backoff_delay(0,
+      backoff_delay(state.backoff_attempt,
         backoff_ms: state.backoff_ms,
         max_backoff_ms: state.max_backoff_ms
       )
 
     ref = Process.send_after(self(), :backoff_reconnect, delay)
-    %__MODULE__{state | backoff_ref: ref}
+
+    %__MODULE__{
+      state
+      | backoff_ref: ref,
+        backoff_attempt: state.backoff_attempt + 1
+    }
   end
 
   defp cancel_timers(%__MODULE__{} = state) do

@@ -275,6 +275,26 @@ defmodule Raxol.Sensor.FeedTest do
       # ...and wait the configured 50ms base, not the 5s default.
       assert_receive :read_attempted, 500
     end
+
+    test "the retry interval grows across consecutive failures" do
+      {:ok, _pid} =
+        Feed.start_link(
+          sensor_id: :backoff_growth_test,
+          module: UnreachableSensor,
+          sample_rate_ms: 5,
+          backoff_ms: 100,
+          connect_opts: [test_pid: self(), reason: :econnrefused]
+        )
+
+      assert_receive :read_attempted, 1_000
+      assert_receive :read_attempted, 1_000
+
+      # The second backoff is drawn from a doubled base. 100ms +20% tops
+      # out at 120ms, so on a growing schedule nothing can arrive inside
+      # 130ms; on a flat one the third read lands here.
+      refute_receive :read_attempted, 130
+      assert_receive :read_attempted, 1_000
+    end
   end
 
   defp wait_for_status(pid, expected, attempts \\ 100)
