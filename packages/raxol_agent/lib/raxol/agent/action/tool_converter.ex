@@ -424,10 +424,23 @@ defmodule Raxol.Agent.Action.ToolConverter do
         "or link-local address, so nothing was read. Do not try to reach it " <>
         "another way."
 
-  def public_error(name, {:dns_failed, host}) when is_binary(host),
+  # `Raxol.Core.Outbound.vet/2` reports `{:dns_failed, {host, reason}}`, and the
+  # reason decides the remedy: `:nxdomain` is the resolver answering that the
+  # name has no address, which the model fixes by correcting the hostname, while
+  # `{:lookup_failed, _}` is our own lookup not answering, which says nothing
+  # about the hostname and is worth retrying. One sentence for both would send
+  # the model editing a URL that was right.
+  def public_error(name, {:dns_failed, {host, :nxdomain}}) when is_binary(host),
     do:
       "[Tool error for #{name}]: #{host} does not resolve. Check the " <>
         "hostname, or search for the page instead of guessing its URL."
+
+  def public_error(name, {:dns_failed, {host, {:lookup_failed, _reason}}})
+      when is_binary(host),
+      do:
+        "[Tool error for #{name}]: the DNS lookup for #{host} failed to " <>
+          "answer, so nothing was read. The hostname may well be correct — " <>
+          "retry it, or move on."
 
   def public_error(name, :invalid_url),
     do:

@@ -225,6 +225,37 @@ defmodule Raxol.Agent.Action.ToolConverterTest do
     end
   end
 
+  describe "public_error/2 for a DNS failure" do
+    # The term is taken from the producer rather than hand-written: the
+    # regression was a consumer guarding on a payload shape that
+    # `Raxol.Core.Outbound` had widened underneath it, which a literal in the
+    # test would have reproduced instead of caught.
+    test "names the host the model mistyped" do
+      {:error, reason} =
+        Raxol.Core.Outbound.vet("https://nowhere.example/",
+          resolver: fn _host, _family -> {:error, :nxdomain} end
+        )
+
+      message = ToolConverter.public_error("fetch", reason)
+
+      assert message =~ "nowhere.example"
+      assert message =~ "does not resolve"
+    end
+
+    test "a resolver that did not answer does not send the model editing its URL" do
+      {:error, reason} =
+        Raxol.Core.Outbound.vet("https://flaky.example/",
+          resolver: fn _host, _family -> {:error, :timeout} end
+        )
+
+      message = ToolConverter.public_error("fetch", reason)
+
+      assert message =~ "flaky.example"
+      assert message =~ "retry"
+      refute message =~ "Check the hostname"
+    end
+  end
+
   describe "format_tool_result/2" do
     test "formats result as tool role message" do
       result = ToolConverter.format_tool_result("call_123", %{content: "hello"})
