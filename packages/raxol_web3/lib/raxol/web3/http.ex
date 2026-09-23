@@ -327,42 +327,47 @@ defmodule Raxol.Web3.HTTP do
   defp vet_error(:invalid_url, _url, _opts), do: {:blocked, :invalid_url}
   defp vet_error({:blocked_address, _host}, _url, _opts), do: {:blocked, :address}
 
-  # `:nxdomain` is the resolver ANSWERING that the name has no address in
-  # either family, which makes the origin unusable rather than momentarily
-  # unreachable: it trips the breaker so the router fails over and every other
-  # caller stops paying for the same lookup.
+  # No DNS failure records against the origin's health, for either reason, and
+  # the reason is not what decides that -- the pipeline order is.
   #
-  # `{:lookup_failed, _}` is our own resolver not answering. It is evidence
-  # about us, not about the origin, and a breaker slot spent on it quarantines
-  # a healthy upstream for every caller for 30 seconds over a SERVFAIL we
-  # caused. This call still fails and the router still fails over — failover
-  # reads `{:dns_failed, _}` — but the origin's health record is untouched.
-  # The reason itself is dropped from the returned term because the taxonomy in
-  # `Raxol.Web3.Backend` names an origin and nothing else, so it is logged
-  # rather than swallowed.
-  defp vet_error({:dns_failed, {_host, reason}}, url, opts) do
+  # `check_breaker/2` is called from `guarded/4`, which this function's caller
+  # never reaches: the vet is stage 1 and a failed vet returns here instead.
+  # So a recorded failure cannot spare the NEXT caller anything, because that
+  # caller's vet runs first and pays the same resolution budget whatever the
+  # breaker says. The record only becomes readable once resolution starts
+  # working again, which is the one moment the origin is known to be reachable
+  # -- so the old clause's single observable effect was to quarantine an
+  # origin for `recovery_ms` at the instant it recovered. The comment it
+  # carried ("every call paying for the same lookup") described a gate that
+  # does not sit on this path.
+  #
+  # A name that does not resolve is still a failure and still fails over:
+  # `Raxol.Web3.Router` fails over on `{:dns_failed, _}` without consulting
+  # any breaker. That is the whole of the routing benefit the record was
+  # credited with. Bounding the cost of a broken resolver is a real problem
+  # and a separate one; it needs a gate BEFORE the vet, which this is not.
+  #
+  # One clause, matching any `t:Raxol.Core.Outbound.dns_reason/0` including one
+  # added later. This module's taxonomy is closed, and a `FunctionClauseError`
+  # on an unrecognised reason is not closed -- that is the failure this
+  # package just spent a PR removing from `ToolConverter.public_error/2`.
+  defp vet_error({:dns_failed, {_host, reason}}, url, _opts) do
     case URI.new(url) do
       {:ok, %URI{host: host} = uri} when is_binary(host) and host != "" ->
         origin_id = Origin.id(uri)
-        record_dns_failure(reason, origin_id, opts)
+
+        # Logged rather than swallowed: the returned taxonomy names an origin
+        # and nothing else, so this is the only place the reason survives.
+        Logger.debug(fn ->
+          "raxol_web3: DNS for origin #{origin_id} failed (#{inspect(reason)}); " <>
+            "not recorded against the origin's health"
+        end)
+
         {:dns_failed, origin_id}
 
       _unparseable ->
         {:blocked, :invalid_url}
     end
-  end
-
-  defp record_dns_failure(:nxdomain, origin_id, opts) do
-    CircuitBreaker.record_failure(Tables.breakers(), {:origin, origin_id}, breaker_opts(opts))
-  end
-
-  defp record_dns_failure({:lookup_failed, reason}, origin_id, _opts) do
-    Logger.debug(fn ->
-      "raxol_web3: DNS lookup for origin #{origin_id} did not answer " <>
-        "(#{inspect(reason)}); not recorded against the origin's health"
-    end)
-
-    :ok
   end
 
   # -- stage 2: the token bucket -----------------------------------------------

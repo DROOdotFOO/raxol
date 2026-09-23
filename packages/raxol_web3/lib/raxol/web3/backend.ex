@@ -526,6 +526,35 @@ defmodule Raxol.Web3.Backend do
   def money(_value, field), do: {:error, {:decode_failed, field}}
 
   @doc """
+  A whole-number field as an integer, or a decode failure naming it.
+
+  `money/2`'s rule without the sign: block heights, log indexes, chain ids and
+  token DECIMALS are counted, not weighed, and a negative one is a real value
+  on none of them but `Integer.parse/1` reads one happily.
+
+  A PARTIAL parse is the failure this closes. `Integer.parse/1` answers
+  `{1, ".5e18"}` for `"1.5e18"`, `{1, "e18"}` for `"1e18"`, `{0, "x1f"}` for
+  `"0x1f"` and `{12, "abc"}` for `"12abc"`, so a caller taking `{number, _rest}`
+  is handed a small plausible integer that nothing downstream can tell from a
+  real one. The whole binary parses or the read fails.
+
+  `nil` passes through: an absent field is a fact the shapes carry, and absent
+  is not malformed.
+  """
+  @spec int(term(), atom()) :: {:ok, integer() | nil} | {:error, {:decode_failed, atom()}}
+  def int(nil, _field), do: {:ok, nil}
+  def int(value, _field) when is_integer(value), do: {:ok, value}
+
+  def int(value, field) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} -> {:ok, number}
+      _unparseable -> {:error, {:decode_failed, field}}
+    end
+  end
+
+  def int(_value, field), do: {:error, {:decode_failed, field}}
+
+  @doc """
   Normalize every row of a page, stopping at the first row that will not read.
 
   `rows` is whatever the upstream put where a list belongs, so a non-list is

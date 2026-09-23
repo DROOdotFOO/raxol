@@ -326,6 +326,24 @@ defmodule Raxol.Web3.Backend.AztecTest do
       refute Map.has_key?(indexer, :lag_blocks)
     end
 
+    test "an unreadable staleness costs the lag, never the height" do
+      # `stalenessMs` is diagnostic and `block_height/1` is a required
+      # callback, so an upstream shipping one bad optional field must not take
+      # the height down with it -- `{:decode_failed, _}` fails the router over,
+      # and every source publishes the same field.
+      for probe <- [~s("1.5e18"), ~s("12abc"), "true", "null"] do
+        body = ~s({"tips":{"proposed":{"number":7}},"stalenessMs":#{probe}})
+
+        assert {:ok, height} = Backend.call(handle(%{"/l2/tips" => body}), :block_height),
+               "#{probe} failed the read"
+
+        assert height.height == 7
+
+        # No age, rather than a truncated one. Same answer a negative age gets.
+        refute Map.has_key?(height.indexer, :lag_seconds)
+      end
+    end
+
     test "a ladder whose finalized rung is above the head is refused, not repaired" do
       # The one invariant the height shape exists to express. A consumer
       # computing confirmation depth from an inverted pair reads a negative
@@ -521,6 +539,23 @@ defmodule Raxol.Web3.Backend.AztecTest do
                  :get_transaction,
                  [@mined]
                )
+    end
+
+    test "a revert code that only partly parses is refused, never read as success" do
+      # The one field where a truncating parse changes an ANSWER rather than a
+      # statistic: `{0, "x1f"}` for "0x1f" reads a reverted transaction as
+      # successful, and a caller settling on that has no way to tell.
+      for probe <- ["0x1f", "1.5e18", "1e18", "12abc", true] do
+        body = patched("tx_effects.json", %{"revertCode" => %{"code" => probe}})
+
+        assert {:error, {:decode_failed, :revert_code}} =
+                 Backend.call(
+                   handle(%{"/l2/tx-effects/#{@mined}" => body}),
+                   :get_transaction,
+                   [@mined]
+                 ),
+               "#{inspect(probe)} was accepted"
+      end
     end
 
     test "a hash cannot reshape the path it is interpolated into" do
