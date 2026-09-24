@@ -292,17 +292,17 @@ defmodule Raxol.SSH.ServerTest do
   describe "connection tracking" do
     @tag :integration
     test "tracks connections and enforces max" do
-      port = 22_000 + :rand.uniform(1000)
-
       dir =
         Path.join(System.tmp_dir!(), "raxol_ssh_conn_#{:rand.uniform(100_000)}")
 
       on_exit(fn -> File.rm_rf!(dir) end)
 
+      # These tests never dial the daemon. Port 0 lets the OS pick; a random
+      # port in 22_000..23_000 collided with other listeners (:eaddrinuse).
       start_supervised!(
         {Server,
          app_module: Raxol.Playground.App,
-         port: port,
+         port: 0,
          host_keys_dir: dir,
          allow_anonymous: true,
          max_connections: 2,
@@ -336,8 +336,6 @@ defmodule Raxol.SSH.ServerTest do
 
     @tag :integration
     test "unregister does not go below zero" do
-      port = 22_000 + :rand.uniform(1000)
-
       dir =
         Path.join(System.tmp_dir!(), "raxol_ssh_zero_#{:rand.uniform(100_000)}")
 
@@ -346,7 +344,7 @@ defmodule Raxol.SSH.ServerTest do
       start_supervised!(
         {Server,
          app_module: Raxol.Playground.App,
-         port: port,
+         port: 0,
          host_keys_dir: dir,
          allow_anonymous: true,
          max_connections: 10,
