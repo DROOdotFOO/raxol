@@ -270,6 +270,66 @@ defmodule Raxol.Agent.SessionStreamerTest do
       sessions = SessionStreamer.list_sessions(streamer)
       refute :agent_1 in sessions
     end
+
+    # Each subscribe used to add a monitor that nothing removed until the
+    # subscriber died, so a long-lived consumer cycling per-run sessions grew
+    # the streamer's monitor list without bound.
+    test "subscribe/unsubscribe cycles leave the monitor count bounded", %{
+      streamer: streamer
+    } do
+      baseline = monitor_count(streamer)
+
+      for i <- 1..1_000 do
+        :ok = SessionStreamer.subscribe(:cycled, streamer)
+        :ok = SessionStreamer.subscribe(:cycled, streamer)
+        :ok = SessionStreamer.subscribe({:run, i}, streamer)
+        :ok = SessionStreamer.unsubscribe(:cycled, streamer)
+        :ok = SessionStreamer.release({:run, i}, streamer)
+      end
+
+      assert monitor_count(streamer) == baseline
+    end
+
+    test "one monitor per subscriber, held until its last session goes", %{
+      streamer: streamer
+    } do
+      baseline = monitor_count(streamer)
+
+      SessionStreamer.subscribe(:first, streamer)
+      SessionStreamer.subscribe(:first, streamer)
+      SessionStreamer.subscribe(:second, streamer)
+      assert monitor_count(streamer) == baseline + 1
+
+      SessionStreamer.unsubscribe(:first, streamer)
+      assert monitor_count(streamer) == baseline + 1
+
+      SessionStreamer.unsubscribe(:second, streamer)
+      assert monitor_count(streamer) == baseline
+    end
+
+    test "a subscriber that left one session is still reaped from another", %{
+      streamer: streamer
+    } do
+      baseline = monitor_count(streamer)
+      test_pid = self()
+
+      subscriber =
+        spawn(fn ->
+          SessionStreamer.subscribe(:left, streamer)
+          SessionStreamer.subscribe(:kept, streamer)
+          SessionStreamer.unsubscribe(:left, streamer)
+          send(test_pid, :subscribed)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :subscribed
+      assert :kept in SessionStreamer.list_sessions(streamer)
+
+      kill_and_await(subscriber)
+
+      refute :kept in SessionStreamer.list_sessions(streamer)
+      assert monitor_count(streamer) == baseline
+    end
   end
 
   describe "cross-surface consistency" do
@@ -348,5 +408,10 @@ defmodule Raxol.Agent.SessionStreamerTest do
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^pid, _}
     :ok
+  end
+
+  defp monitor_count(pid) do
+    {:monitors, monitors} = Process.info(pid, :monitors)
+    length(monitors)
   end
 end

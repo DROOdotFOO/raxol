@@ -58,10 +58,11 @@ defmodule Raxol.Agent.SessionStreamer do
 
   @type session_id :: term()
 
-  defstruct subscriptions: %{}, history: %{}, max_history: 100
+  defstruct subscriptions: %{}, monitors: %{}, history: %{}, max_history: 100
 
   @type t :: %__MODULE__{
           subscriptions: %{session_id() => MapSet.t(pid())},
+          monitors: %{pid() => {reference(), MapSet.t(session_id())}},
           history: %{session_id() => :queue.queue()},
           max_history: pos_integer()
         }
@@ -129,14 +130,14 @@ defmodule Raxol.Agent.SessionStreamer do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:subscribe, session_id, pid}, _from, state) do
-    Process.monitor(pid)
-
     subs =
       Map.update(state.subscriptions, session_id, MapSet.new([pid]), fn set ->
         MapSet.put(set, pid)
       end)
 
-    {:reply, :ok, %{state | subscriptions: subs}}
+    state = %{state | subscriptions: subs, monitors: track(state.monitors, pid, session_id)}
+
+    {:reply, :ok, state}
   end
 
   def handle_manager_call({:unsubscribe, session_id, pid}, _from, state) do
@@ -177,13 +178,19 @@ defmodule Raxol.Agent.SessionStreamer do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    state.subscriptions
-    |> Enum.filter(fn {_session_id, set} -> MapSet.member?(set, pid) end)
-    |> Enum.reduce(state, fn {session_id, _set}, acc ->
-      drop_subscriber(acc, session_id, pid)
-    end)
-    |> then(&{:noreply, &1})
+  def handle_manager_info({:DOWN, ref, :process, pid, _reason}, state) do
+    case Map.pop(state.monitors, pid) do
+      {{^ref, sessions}, monitors} ->
+        state =
+          Enum.reduce(sessions, %{state | monitors: monitors}, fn session_id, acc ->
+            remove_subscription(acc, session_id, pid)
+          end)
+
+        {:noreply, state}
+
+      _untracked ->
+        {:noreply, state}
+    end
   end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
@@ -194,6 +201,11 @@ defmodule Raxol.Agent.SessionStreamer do
   # kept one turn's prompts, assistant text and tool results resident on a
   # node-global singleton past /clear, disconnect and session end.
   defp drop_subscriber(state, session_id, pid) do
+    state = remove_subscription(state, session_id, pid)
+    %{state | monitors: untrack(state.monitors, pid, session_id)}
+  end
+
+  defp remove_subscription(state, session_id, pid) do
     remaining =
       state.subscriptions
       |> Map.get(session_id, MapSet.new())
@@ -210,6 +222,37 @@ defmodule Raxol.Agent.SessionStreamer do
         state
         | subscriptions: Map.put(state.subscriptions, session_id, remaining)
       }
+    end
+  end
+
+  # One monitor per subscriber pid however many sessions (or duplicate
+  # subscribes) it holds, released with its last session. Monitoring on every
+  # subscribe grew the streamer's monitor list for as long as a long-lived
+  # consumer kept cycling per-run sessions.
+  defp track(monitors, pid, session_id) do
+    case Map.fetch(monitors, pid) do
+      {:ok, {ref, sessions}} ->
+        Map.put(monitors, pid, {ref, MapSet.put(sessions, session_id)})
+
+      :error ->
+        Map.put(monitors, pid, {Process.monitor(pid), MapSet.new([session_id])})
+    end
+  end
+
+  defp untrack(monitors, pid, session_id) do
+    case Map.fetch(monitors, pid) do
+      {:ok, {ref, sessions}} ->
+        sessions = MapSet.delete(sessions, session_id)
+
+        if MapSet.size(sessions) == 0 do
+          Process.demonitor(ref, [:flush])
+          Map.delete(monitors, pid)
+        else
+          Map.put(monitors, pid, {ref, sessions})
+        end
+
+      :error ->
+        monitors
     end
   end
 

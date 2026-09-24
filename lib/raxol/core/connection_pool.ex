@@ -71,15 +71,39 @@ defmodule Raxol.Core.ConnectionPool do
 
   @doc """
   Executes a function with a connection from the pool.
+
+  The function runs in the calling process, never inside the pool, so a slow
+  or hung callback holds only its own connection. The connection is checked
+  back in when the function returns or raises; if the caller dies instead,
+  the pool reclaims it through its monitor on the caller.
   """
-  @spec transaction(pool_name(), (connection() -> result), timeout()) :: result
+  @spec transaction(pool_name(), (connection() -> result), timeout()) ::
+          result | {:error, term()}
         when result: term()
-  def transaction(pool_name, fun, timeout \\ Raxol.Core.Defaults.timeout_ms()) do
-    GenServer.call(pool_name, {:checkout, fun, timeout}, timeout + 100)
+  def transaction(pool_name, fun, timeout \\ Raxol.Core.Defaults.timeout_ms())
+      when is_function(fun, 1) do
+    case checkout(pool_name, timeout) do
+      {:ok, conn} ->
+        try do
+          fun.(conn)
+        rescue
+          error ->
+            Log.error("Error in pool transaction: #{inspect(error)}")
+            {:error, error}
+        after
+          checkin(pool_name, conn)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
   Checks out a connection from the pool.
+
+  The connection belongs to the calling process until `checkin/2`; if that
+  process exits first, the pool takes the connection back.
   """
   @spec checkout(pool_name(), timeout()) ::
           {:ok, connection()} | {:error, term()}
@@ -141,32 +165,8 @@ defmodule Raxol.Core.ConnectionPool do
   end
 
   @impl true
-  def handle_manager_call({:checkout, fun, timeout}, _from, state)
-      when is_function(fun) do
-    case do_checkout(state, timeout) do
-      {:ok, conn, new_state} ->
-        # Execute function with connection
-        result =
-          try do
-            fun.(conn)
-          rescue
-            error ->
-              Log.error("Error in pool transaction: #{inspect(error)}")
-              {:error, error}
-          after
-            do_checkin(new_state, conn)
-          end
-
-        {:reply, result, new_state}
-
-      {:error, reason, new_state} ->
-        {:reply, {:error, reason}, new_state}
-    end
-  end
-
-  @impl true
-  def handle_manager_call({:checkout, timeout}, _from, state) do
-    case do_checkout(state, timeout) do
+  def handle_manager_call({:checkout, timeout}, {owner, _tag}, state) do
+    case do_checkout(state, owner, timeout) do
       {:ok, conn, new_state} ->
         {:reply, {:ok, conn}, new_state}
 
@@ -207,6 +207,20 @@ defmodule Raxol.Core.ConnectionPool do
     {:noreply, state}
   end
 
+  # A checked-out connection's owner exited without checking it in.
+  def handle_manager_info({:DOWN, ref, :process, _owner, _reason}, state) do
+    owned =
+      Enum.find_value(state.connections.busy, fn
+        {conn, {_owner, ^ref, _checked_out_at}} -> conn
+        _other -> nil
+      end)
+
+    case owned do
+      nil -> {:noreply, state}
+      conn -> {:noreply, do_checkin(state, conn)}
+    end
+  end
+
   # Private Functions
 
   defp initialize_pool(state) do
@@ -228,9 +242,9 @@ defmodule Raxol.Core.ConnectionPool do
     put_in(state.connections.available, connections)
   end
 
-  @spec do_checkout(map(), timeout()) ::
+  @spec do_checkout(map(), pid(), timeout()) ::
           {:ok, connection(), map()} | {:error, term(), map()}
-  defp do_checkout(state, timeout) do
+  defp do_checkout(state, owner, timeout) do
     %{connections: conns, metrics: metrics} = state
 
     case conns.available do
@@ -239,7 +253,7 @@ defmodule Raxol.Core.ConnectionPool do
         new_conns = %{
           conns
           | available: rest,
-            busy: Map.put(conns.busy, conn, :os.timestamp())
+            busy: Map.put(conns.busy, conn, claim(owner))
         }
 
         new_metrics = Map.update(metrics, :checkouts, 1, &(&1 + 1))
@@ -249,7 +263,7 @@ defmodule Raxol.Core.ConnectionPool do
       [] ->
         # No available connections, try overflow
         if length(conns.overflow) < state.max_overflow do
-          create_overflow_connection(state)
+          create_overflow_connection(state, owner)
         else
           # Add to waiting queue
           add_to_waiting_queue(state, timeout)
@@ -260,50 +274,66 @@ defmodule Raxol.Core.ConnectionPool do
   defp do_checkin(state, conn) do
     %{connections: conns, metrics: metrics} = state
 
-    if Map.has_key?(conns.busy, conn) do
-      new_busy = Map.delete(conns.busy, conn)
-      new_metrics = Map.update(metrics, :checkins, 1, &(&1 + 1))
+    case Map.pop(conns.busy, conn) do
+      {nil, _busy} ->
+        state
 
-      # Check if anyone is waiting
-      case :queue.out(state.waiting) do
-        {{:value, waiting_from}, new_queue} ->
-          # Give connection to waiting process
-          GenServer.reply(waiting_from, {:ok, conn})
+      {{_owner, ref, _checked_out_at}, new_busy} ->
+        Process.demonitor(ref, [:flush])
 
-          %{
-            state
-            | connections: %{
-                conns
-                | busy: Map.put(new_busy, conn, :os.timestamp())
-              },
-              waiting: new_queue,
-              metrics: new_metrics
-          }
-
-        {:empty, _} ->
-          # Return to available pool
-          %{
-            state
-            | connections: %{
-                conns
-                | available: [conn | conns.available],
-                  busy: new_busy
-              },
-              metrics: new_metrics
-          }
-      end
-    else
-      state
+        hand_back(
+          state,
+          conn,
+          new_busy,
+          Map.update(metrics, :checkins, 1, &(&1 + 1))
+        )
     end
   end
 
-  defp create_overflow_connection(state) do
+  defp hand_back(state, conn, new_busy, new_metrics) do
+    %{connections: conns} = state
+
+    # Check if anyone is waiting
+    case :queue.out(state.waiting) do
+      {{:value, {waiter, _tag} = waiting_from}, new_queue} ->
+        # Give connection to waiting process
+        GenServer.reply(waiting_from, {:ok, conn})
+
+        %{
+          state
+          | connections: %{
+              conns
+              | busy: Map.put(new_busy, conn, claim(waiter))
+            },
+            waiting: new_queue,
+            metrics: new_metrics
+        }
+
+      {:empty, _} ->
+        # Return to available pool
+        %{
+          state
+          | connections: %{
+              conns
+              | available: [conn | conns.available],
+                busy: new_busy
+            },
+            metrics: new_metrics
+        }
+    end
+  end
+
+  # A busy connection records who holds it and the monitor that reclaims it
+  # if the holder exits before checking it in.
+  defp claim(owner), do: {owner, Process.monitor(owner), :os.timestamp()}
+
+  defp create_overflow_connection(state, owner) do
     case state.connect_fn.() do
       {:ok, conn} ->
         new_conns = %{
           state.connections
           | overflow: [conn | state.connections.overflow],
-            busy: Map.put(state.connections.busy, conn, :os.timestamp())
+            busy: Map.put(state.connections.busy, conn, claim(owner))
         }
 
         {:ok, conn, %{state | connections: new_conns}}
