@@ -22,8 +22,14 @@ defmodule Raxol.Gateway.Adapter.Discord.GatewaySocket.MintTransport do
            {:ok, conn, ref} <- Mint.WebSocket.upgrade(scheme, conn, path, []) do
         {:ok, %{conn: conn, ws: nil, ref: ref, status: nil, headers: []}}
       else
-        {:error, reason} -> {:error, reason}
-        {:error, _conn, reason} -> {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+
+        # The TCP connection is already open and the socket retries on
+        # error, so dropping it here leaked one socket per reconnect.
+        {:error, conn, reason} ->
+          Mint.HTTP.close(conn)
+          {:error, reason}
       end
     else
       {:error, :mint_web_socket_not_loaded}
