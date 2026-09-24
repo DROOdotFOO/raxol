@@ -25,7 +25,12 @@ defmodule Raxol.System.Updater.Core do
     with {:ok, manifest} <- Manifest.load(opts),
          {:ok, current} <- current_version(manifest, opts) do
       if Keyword.get(opts, :force) == true or check_due?(),
-        do: compare_latest(manifest, current),
+        do:
+          compare_release(
+            manifest,
+            Keyword.get(opts, :version) || :latest,
+            current
+          ),
         else: {:no_update, current}
     end
   end
@@ -301,8 +306,8 @@ defmodule Raxol.System.Updater.Core do
     end
   end
 
-  defp compare_latest(manifest, current) do
-    with {:ok, release} <- Network.fetch_release(manifest, :latest) do
+  defp compare_release(manifest, version, current) do
+    with {:ok, release} <- Network.fetch_release(manifest, version) do
       Validation.compare_versions(current, release.version)
     end
   end
