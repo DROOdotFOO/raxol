@@ -1,186 +1,321 @@
 defmodule Raxol.System.Updater.Network do
   @moduledoc """
-  Network operations for the Raxol System Updater including HTTP requests, GitHub API, file downloads, and archive operations.
+  The updater's I/O: release lookup, `SHA256SUMS`, downloads, checksum
+  verification, and replacing the running executable.
+
+  Every URL comes from `Raxol.System.Updater.Manifest`. HTTPS requests verify
+  the server certificate and hostname against the OS trust store. A
+  downloaded file is only ever used after `verify_file/3` has matched it to
+  its `SHA256SUMS` entry.
   """
 
-  alias Raxol.Core.Runtime.Log
-  @github_repo "username/raxol"
+  alias Raxol.System.Updater.Manifest
 
-  def fetch_latest_version do
-    url = "https://api.github.com/repos/#{@github_repo}/releases/latest"
+  @timeout 30_000
 
-    case :httpc.request(
-           :get,
-           {String.to_charlist(url),
-            [
-              {~c"User-Agent", ~c"Raxol-Updater"}
-            ]},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, body}} ->
-        body_str = List.to_string(body)
+  @type release :: %{
+          version: String.t(),
+          tag: String.t(),
+          assets: %{String.t() => non_neg_integer()}
+        }
 
-        case Jason.decode(body_str) do
-          {:ok, release_data} ->
-            version = release_data["tag_name"]
-            url = release_data["html_url"]
-            {:ok, %{version: version, url: url}}
-
-          _ ->
-            {:error, :invalid_response}
-        end
-
-      {:ok, {{_, status, _}, _, _}} ->
-        {:error, "GitHub API returned status #{status}"}
-
-      {:error, reason} ->
-        {:error, "Failed to connect to GitHub: #{inspect(reason)}"}
+  @doc """
+  The newest published (non-draft, non-prerelease) release on the channel,
+  or the release for an explicit version.
+  """
+  @spec fetch_release(Manifest.t(), :latest | String.t()) ::
+          {:ok, release()} | {:error, term()}
+  def fetch_release(manifest, :latest) do
+    with {:ok, releases} <- get_json(Manifest.releases_url(manifest)) do
+      releases
+      |> List.wrap()
+      |> Enum.filter(&published?/1)
+      |> Enum.flat_map(&List.wrap(normalize_release(manifest, &1)))
+      |> Enum.max_by(&Version.parse!(&1.version), Version, fn -> nil end)
+      |> case do
+        nil -> {:error, {:no_release_found, manifest.tag_prefix}}
+        release -> {:ok, release}
+      end
     end
   end
 
-  def fetch_github_releases do
-    url = "https://api.github.com/repos/#{@github_repo}/releases"
-
-    case :httpc.request(
-           :get,
-           {String.to_charlist(url), [{~c"User-Agent", ~c"Raxol-Updater"}]},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, body}} ->
-        case Jason.decode(body) do
-          {:ok, releases} -> {:ok, releases}
-          _ -> {:error, :invalid_response}
-        end
-
-      {:ok, {{_, status, _}, _, _}} ->
-        {:error, "GitHub API returned status #{status}"}
-
-      {:error, reason} ->
-        {:error, "Failed to connect to GitHub: #{inspect(reason)}"}
+  def fetch_release(manifest, version) do
+    with {:ok, tag} <- Manifest.tag(manifest, version),
+         {:ok, release} <- get_json(Manifest.release_url(manifest, tag)) do
+      case normalize_release(manifest, release) do
+        %{tag: ^tag} = normalized -> {:ok, normalized}
+        _other -> {:error, {:release_tag_mismatch, tag}}
+      end
     end
   end
 
-  def download_file(url, destination) do
-    case :httpc.request(:get, {String.to_charlist(url), []}, [], [
-           {:stream, String.to_charlist(destination)}
-         ]) do
+  @spec fetch_checksums(Manifest.t(), release()) ::
+          {:ok, %{String.t() => String.t()}} | {:error, term()}
+  def fetch_checksums(manifest, release) do
+    url = Manifest.asset_url(manifest, release.tag, manifest.checksums_asset)
+
+    with {:ok, body} <- get_text(url), do: parse_checksums(body)
+  end
+
+  @doc """
+  Parses `sha256sum` output strictly: every non-blank line must be
+  `<64 hex> <name>` (an optional `*` binary marker), and a name may appear
+  once. One malformed or duplicated line rejects the whole file.
+  """
+  @spec parse_checksums(String.t()) ::
+          {:ok, %{String.t() => String.t()}} | {:error, term()}
+  def parse_checksums(body) when is_binary(body) do
+    body
+    |> String.split(["\r\n", "\n"])
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.reduce_while({:ok, %{}}, &add_checksum_line/2)
+    |> require_entries()
+  end
+
+  defp add_checksum_line(line, {:ok, acc}) do
+    case Regex.run(~r/\A([0-9A-Fa-f]{64})\s+\*?(\S+)\z/, line) do
+      nil ->
+        {:halt, {:error, {:invalid_checksum_line, line}}}
+
+      [_, _sha, name] when is_map_key(acc, name) ->
+        {:halt, {:error, {:duplicate_checksum, name}}}
+
+      [_, sha, name] ->
+        {:cont, {:ok, Map.put(acc, name, String.downcase(sha))}}
+    end
+  end
+
+  defp require_entries({:ok, sums}) when map_size(sums) == 0,
+    do: {:error, :empty_checksums}
+
+  defp require_entries(result), do: result
+
+  @spec checksum_for(%{String.t() => String.t()}, String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def checksum_for(sums, name) do
+    case Map.fetch(sums, name) do
+      {:ok, sha} -> {:ok, sha}
+      :error -> {:error, {:missing_checksum, name}}
+    end
+  end
+
+  @spec download(String.t(), Path.t()) :: :ok | {:error, term()}
+  def download(url, destination) do
+    ensure_started()
+    _ = File.rm(destination)
+
+    case :httpc.request(:get, {to_charlist(url), headers()}, http_options(url),
+           stream: to_charlist(destination)
+         ) do
       {:ok, :saved_to_file} ->
         :ok
 
+      {:ok, {{_, status, _}, _headers, _body}} ->
+        _ = File.rm(destination)
+        {:error, {:http_status, status, url}}
+
       {:error, reason} ->
-        throw({:error, "Failed to download update: #{inspect(reason)}"})
+        _ = File.rm(destination)
+        {:error, {:download_failed, url, reason}}
     end
   end
 
-  def extract_archive(archive_path, destination, "tar.gz") do
-    case System.cmd("tar", ["xzf", archive_path, "-C", destination]) do
-      {_, 0} -> :ok
-      {error, _} -> throw({:error, "Failed to extract update: #{error}"})
-    end
+  @doc "Streams `path` through SHA-256 and compares with `expected` (hex)."
+  @spec verify_file(Path.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def verify_file(path, expected, name) do
+    if sha256_file(path) == String.downcase(expected),
+      do: :ok,
+      else: {:error, {:checksum_mismatch, name}}
+  rescue
+    e in File.Error -> {:error, {:unreadable, name, e.reason}}
   end
 
-  def extract_archive(archive_path, destination, "zip") do
-    case System.cmd("unzip", [archive_path, "-d", destination]) do
-      {_, 0} -> :ok
-      {error, _} -> throw({:error, "Failed to extract update: #{error}"})
-    end
+  @spec sha256_file(Path.t()) :: String.t()
+  def sha256_file(path) do
+    path
+    |> File.stream!(65_536, [:raw, :binary])
+    |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
+    |> :crypto.hash_final()
+    |> Base.encode16(case: :lower)
   end
 
-  def find_executable(dir, platform) do
-    executable_name =
-      case platform do
-        "windows" -> "raxol.exe"
-        _ -> "raxol"
+  @doc """
+  Installs `new_exe` over `current_exe`.
+
+  With a `backup_dir`, the current executable is first copied to
+  `<backup_dir>/previous_version`, which is what rollback restores. The new
+  file is staged next to the executable and renamed over it: a rename is
+  atomic, and it never writes into the running binary's inode (Linux refuses
+  that with `ETXTBSY`). On Windows the running executable cannot be
+  replaced, so a detached batch file moves it into place after exit.
+  """
+  @spec install_executable(
+          Path.t(),
+          Path.t(),
+          Path.t() | nil,
+          Manifest.platform()
+        ) ::
+          :ok | {:error, term()}
+  def install_executable(current_exe, new_exe, backup_dir, platform) do
+    staged = staged_path(current_exe)
+
+    result =
+      with :ok <- backup(current_exe, backup_dir),
+           :ok <- copy(new_exe, staged),
+           :ok <- chmod(staged) do
+        swap(staged, current_exe, Manifest.windows_platform?(platform))
       end
 
-    executable_path = Path.join(dir, executable_name)
+    if result != :ok, do: File.rm(staged)
+    result
+  end
 
-    case File.exists?(executable_path) do
-      true ->
-        executable_path
+  defp backup(_current_exe, nil), do: :ok
 
-      false ->
-        # Search recursively in subdirectories
-        case find_file_recursive(dir, executable_name) do
-          nil ->
-            throw({:error, "Could not find new executable in update package"})
-
-          path ->
-            path
-        end
+  defp backup(current_exe, backup_dir) do
+    with :ok <- File.mkdir_p(backup_dir),
+         {:ok, _bytes} <-
+           File.copy(current_exe, Path.join(backup_dir, "previous_version")) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:backup_failed, reason}}
     end
   end
 
-  def do_replace_executable(current_exe, new_exe, platform) do
-    # Make the new executable executable
-    File.chmod!(new_exe, 0o755)
-
-    case platform do
-      "windows" ->
-        # On Windows, use a batch file since we can't replace a running exe
-        # Create a batch file that will replace the exe after we exit
-        updater_bat = System.tmp_dir!() |> Path.join("raxol_updater.bat")
-
-        # Ensure paths are properly escaped for the batch file
-        safe_new_exe = Path.expand(new_exe)
-        safe_current_exe = Path.expand(current_exe)
-
-        batch_contents = """
-        @echo off
-        timeout /t 2 /nobreak > nul
-        copy /y "#{safe_new_exe}" "#{safe_current_exe}"
-        del "#{updater_bat}"
-        """
-
-        File.write!(updater_bat, batch_contents)
-
-        # Execute the batch file and exit
-        # Using start /b runs the command in the background without a new window
-        _ = System.cmd("cmd", ["/c", "start", "/b", updater_bat])
-        # Give the batch file a moment to start before exiting
-        Process.sleep(500)
-        # Exit the current Elixir application
-        System.stop(0)
-
-      _ ->
-        # On Unix systems, we can replace the current executable directly
-        # The new process will start with the updated executable
-        case File.cp(new_exe, current_exe) do
-          :ok ->
-            Log.info(
-              "Executable replaced successfully. Please restart the application."
-            )
-
-            # On Unix, System.stop is not required here: the restart
-            # strategy is the caller's, and this returns :ok so the caller
-            # can decide between restarting and exiting.
-            :ok
-
-          {:error, reason} ->
-            throw({:error, "Failed to replace executable: #{inspect(reason)}"})
-        end
+  defp copy(source, dest) do
+    case File.copy(source, dest) do
+      {:ok, _bytes} -> :ok
+      {:error, reason} -> {:error, {:stage_failed, reason}}
     end
   end
 
-  # --- Private Functions ---
-
-  defp check_file(path, filename) do
-    case {Path.basename(path) == filename, File.dir?(path)} do
-      {true, _} -> path
-      {false, true} -> find_file_recursive(path, filename)
-      {false, false} -> nil
+  defp chmod(path) do
+    case File.chmod(path, 0o755) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:chmod_failed, reason}}
     end
   end
 
-  defp find_file_recursive(dir, filename) do
-    case File.ls(dir) do
-      {:ok, files} ->
-        Enum.find_value(files, &check_file(Path.join(dir, &1), filename))
+  defp swap(staged, current_exe, false = _windows?) do
+    case File.rename(staged, current_exe) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:replace_failed, reason}}
+    end
+  end
 
-      _ ->
+  defp swap(staged, current_exe, true = _windows?) do
+    bat =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol-updater-#{System.unique_integer([:positive])}.bat"
+      )
+
+    body = """
+    @echo off
+    timeout /t 2 /nobreak > nul
+    move /y "#{Path.expand(staged)}" "#{Path.expand(current_exe)}" > nul
+    del "%~f0"
+    """
+
+    with :ok <- File.write(bat, body),
+         {_output, 0} <- System.cmd("cmd", ["/c", "start", "/b", bat]) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:replace_failed, reason}}
+      {output, status} -> {:error, {:replace_failed, {:cmd, status, output}}}
+    end
+  end
+
+  defp staged_path(current_exe) do
+    dir = Path.dirname(current_exe)
+    base = Path.basename(current_exe)
+    Path.join(dir, ".#{base}.#{System.unique_integer([:positive])}.update")
+  end
+
+  defp published?(%{"draft" => true}), do: false
+  defp published?(%{"prerelease" => true}), do: false
+  defp published?(%{"tag_name" => tag}) when is_binary(tag), do: true
+  defp published?(_release), do: false
+
+  # Only the tag and the asset names/sizes are taken from the API response;
+  # download URLs are rebuilt from the manifest.
+  defp normalize_release(manifest, %{"tag_name" => tag} = release) do
+    case Manifest.version_from_tag(manifest, tag) do
+      {:ok, version} ->
+        %{version: version, tag: tag, assets: asset_sizes(release)}
+
+      :error ->
         nil
     end
+  end
+
+  defp normalize_release(_manifest, _release), do: nil
+
+  defp asset_sizes(%{"assets" => assets}) when is_list(assets) do
+    for %{"name" => name} = asset <- assets, is_binary(name), into: %{} do
+      {name, Map.get(asset, "size", 0)}
+    end
+  end
+
+  defp asset_sizes(_release), do: %{}
+
+  defp get_json(url) do
+    with {:ok, body} <- get_text(url) do
+      case Jason.decode(body) do
+        {:ok, decoded} -> {:ok, decoded}
+        {:error, _reason} -> {:error, {:invalid_json, url}}
+      end
+    end
+  end
+
+  defp get_text(url) do
+    ensure_started()
+
+    case :httpc.request(:get, {to_charlist(url), headers()}, http_options(url),
+           body_format: :binary
+         ) do
+      {:ok, {{_, status, _}, _headers, body}} when status in 200..299 ->
+        {:ok, body}
+
+      {:ok, {{_, status, _}, _headers, _body}} ->
+        {:error, {:http_status, status, url}}
+
+      {:error, reason} ->
+        {:error, {:request_failed, url, reason}}
+    end
+  end
+
+  defp headers do
+    [
+      {~c"accept", ~c"application/vnd.github+json"},
+      {~c"user-agent", ~c"raxol-updater"}
+    ]
+  end
+
+  defp http_options(url) do
+    base = [timeout: @timeout, connect_timeout: @timeout, autoredirect: true]
+
+    case URI.parse(url) do
+      %URI{scheme: "https"} -> [{:ssl, ssl_options()} | base]
+      _loopback_http -> base
+    end
+  end
+
+  defp ssl_options do
+    [
+      verify: :verify_peer,
+      cacerts: :public_key.cacerts_get(),
+      depth: 4,
+      customize_hostname_check: [
+        match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+      ]
+    ]
+  end
+
+  defp ensure_started do
+    {:ok, _} = Application.ensure_all_started(:inets)
+    {:ok, _} = Application.ensure_all_started(:ssl)
+    :ok
   end
 end

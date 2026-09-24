@@ -225,10 +225,6 @@ if Code.ensure_loaded?(Mox) do
   # )
 
   # System and UI mocks
-  Mox.defmock(Raxol.System.DeltaUpdaterSystemAdapterMock,
-    for: Raxol.System.DeltaUpdaterSystemAdapterBehaviour
-  )
-
   Mox.defmock(SystemInteractionMock,
     for: Raxol.System.Interaction
   )

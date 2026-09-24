@@ -123,14 +123,14 @@ defmodule Raxol.CLI.Commands.UpdateCmd do
     case Updater.check_for_updates(opts) do
       {:update_available, version} ->
         Log.info("Update available: v#{version}")
-        Log.info("Current version: v#{Application.spec(:raxol, :vsn)}")
+        Log.info("Current version: v#{Updater.get_current_version()}")
         Log.info("\nRun 'raxol update' to install the update")
 
       {:no_update, version} ->
         Log.info("Raxol is up to date (v#{version})")
 
       {:error, reason} ->
-        Log.error("Error checking for updates: #{reason}")
+        Log.error("Error checking for updates: #{format_reason(reason)}")
     end
   end
 
@@ -148,7 +148,7 @@ defmodule Raxol.CLI.Commands.UpdateCmd do
         Log.info("Raxol is already up to date (v#{version})")
 
       {:error, reason} ->
-        Log.error("Error checking for updates: #{reason}")
+        Log.error("Error checking for updates: #{format_reason(reason)}")
     end
   end
 
@@ -165,9 +165,9 @@ defmodule Raxol.CLI.Commands.UpdateCmd do
         Log.info("Already running version v#{current_version}")
 
       {:error, reason} ->
-        Log.error("Update failed: #{reason}")
+        Log.error("Update failed: #{format_reason(reason)}")
         Log.info("\nYou can try downloading the latest version manually from:")
-        Log.info("https://github.com/username/raxol/releases/latest")
+        Log.info(releases_page())
     end
   end
 
@@ -190,12 +190,25 @@ defmodule Raxol.CLI.Commands.UpdateCmd do
         Log.info("\nTo update using delta updates, run: raxol update")
 
       {:error, reason} ->
-        Log.error("Delta update not available: #{reason}")
+        Log.error("Delta update not available: #{format_reason(reason)}")
         Log.info("Full update will be used when updating to this version.")
     end
   end
 
   defp format_bytes(bytes), do: Raxol.Utils.Format.format_bytes_iec(bytes)
+
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
+
+  defp releases_page do
+    case Raxol.System.Updater.Manifest.load() do
+      {:ok, manifest} ->
+        Raxol.System.Updater.Manifest.releases_page_url(manifest)
+
+      {:error, reason} ->
+        "(no update channel configured: #{inspect(reason)})"
+    end
+  end
 
   defp success_msg(text) do
     "\e[32m#{text}\e[0m"
@@ -227,7 +240,7 @@ defmodule Raxol.CLI.Commands.UpdateCmd do
         Log.info("No delta update information available.")
 
       {:error, reason} ->
-        Log.error("Error checking for updates: #{reason}")
+        Log.error("Error checking for updates: #{format_reason(reason)}")
     end
   end
 

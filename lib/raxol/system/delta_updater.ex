@@ -1,237 +1,170 @@
 defmodule Raxol.System.DeltaUpdater do
   @moduledoc """
-  Handles delta updates for the Raxol terminal emulator.
+  Binary-delta self-updates: fetch a small bsdiff patch instead of the full
+  binary, and prove the result before it replaces anything.
+
+  A delta asset is named `<delta_prefix>-<from>-<to>-<platform>.bin` (see
+  `Raxol.System.Updater.Manifest.delta_asset/4`) and must be listed in the
+  release's `SHA256SUMS`. The delta's own checksum is verified before the
+  patch tool runs, and the patched output must hash to the *full* asset's
+  published checksum before it is installed. The patched binary is never
+  executed to check it. Deltas apply only to raw-binary channels (`format:
+  :binary`), where the full asset's checksum is the executable's checksum.
+
+  Options (all optional; each defaults to the running installation):
+
+    * `:manifest` - see `Raxol.System.Updater.Manifest.load/1`
+    * `:current_version`, `:current_executable`, `:platform`
+    * `:backup_dir` - where the replaced executable is kept for rollback
+    * `:work_dir` - scratch directory for the download and patch output
+    * `:apply_patch` - `(old, delta, new -> :ok | {:error, term})`, default
+      `bspatch old new delta`
   """
 
-  # Called via adapter now
-  alias Raxol.System.DeltaUpdaterSystemAdapterImpl
+  alias Raxol.System.Updater.{Core, Manifest, Network}
 
-  defp system_adapter do
-    Application.get_env(:raxol, :system_adapter, DeltaUpdaterSystemAdapterImpl)
-  end
+  @type delta_info :: %{
+          delta_size: non_neg_integer(),
+          full_size: non_neg_integer(),
+          savings_percent: integer(),
+          delta_url: String.t(),
+          full_url: String.t()
+        }
 
-  def check_delta_availability(target_version) do
-    with {:ok, releases} <- get_releases(),
-         {:ok, assets} <- extract_assets(releases, target_version),
-         {:ok, full_asset} <- find_full_asset(assets, target_version),
-         {:ok, delta_asset} <- find_delta_asset(assets, target_version) do
-      compare_asset_sizes(full_asset, delta_asset)
-    else
-      error -> error
+  @doc """
+  Whether a delta from the installed version to `target_version` is
+  published and is less than half the size of the full binary.
+  """
+  @spec check_delta_availability(String.t(), keyword()) ::
+          {:ok, delta_info()} | {:error, term()}
+  def check_delta_availability(target_version, opts \\ []) do
+    with {:ok, ctx} <- Core.resolve(target_version, opts),
+         :ok <- binary_channel(ctx.manifest),
+         {:ok, current} <- Core.current_version(ctx.manifest, opts),
+         {:ok, names} <- asset_names(ctx, current),
+         {:ok, sizes} <- asset_sizes(ctx.release, names) do
+      delta_info(ctx, names, sizes)
     end
   end
 
-  defp compare_asset_sizes(full_asset, delta_asset) do
-    full_size = full_asset["size"]
-    delta_size = delta_asset["size"]
+  @doc """
+  Updates the running executable to `target_version` by delta. Returns
+  `{:error, :delta_not_found}` when the release carries no delta from the
+  installed version, so a caller can fall back to a full update.
+  """
+  @spec apply_delta_update(String.t(), keyword()) :: :ok | {:error, term()}
+  def apply_delta_update(target_version, opts \\ []) do
+    with {:ok, ctx} <- Core.resolve(target_version, opts),
+         {:ok, plan} <- Core.plan(ctx, opts) do
+      plan =
+        Map.put(plan, :apply_patch, Keyword.get(opts, :apply_patch, &bspatch/3))
 
-    evaluate_delta_size(
-      delta_size < full_size * 0.5,
-      delta_size,
-      full_size,
-      delta_asset,
-      full_asset
-    )
+      Core.with_work_dir(opts, &apply_delta(Map.put(plan, :work_dir, &1)))
+    end
   end
 
-  def apply_delta_update(delta_url, target_version) do
-    random_suffix = :rand.uniform(1_000_000)
-
-    with {:ok, base_tmp_dir} <- system_adapter().system_tmp_dir(),
-         tmp_dir_path =
-           Path.join(base_tmp_dir, "raxol_update_#{random_suffix}"),
-         :ok <- system_adapter().file_mkdir_p(tmp_dir_path) do
-      Raxol.Core.ErrorHandling.ensure_cleanup(
-        fn -> perform_update(tmp_dir_path, delta_url, target_version) end,
-        fn -> system_adapter().file_rm_rf(tmp_dir_path) end
+  @doc false
+  # The delta step of a full self-update, given an already-resolved release
+  # and its checksums (so `Raxol.System.Updater.Core` does not refetch them).
+  @spec apply_delta(map()) :: :ok | {:error, term()}
+  def apply_delta(plan) do
+    with :ok <- binary_channel(plan.manifest),
+         {:ok, names} <- asset_names(plan, plan.from_version),
+         {:ok, _size} <- asset_size(plan.release, names.delta, :delta_not_found),
+         {:ok, shas} <- checksums(plan.checksums, names),
+         {:ok, patched} <- fetch_and_patch(plan, names, shas) do
+      Network.install_executable(
+        plan.current_exe,
+        patched,
+        plan.backup_dir,
+        plan.platform
       )
-    else
-      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp perform_update(tmp_dir_path, delta_url, target_version) do
-    with {:ok, current_exe} <- get_current_executable(),
-         delta_file = Path.join(tmp_dir_path, "update.delta"),
-         :ok <- download_delta(delta_url, delta_file),
-         new_exe = Path.join(tmp_dir_path, "raxol.new"),
-         :ok <- apply_binary_delta(current_exe, delta_file, new_exe),
-         :ok <- verify_patched_executable(new_exe, target_version),
-         :ok <- replace_executable(current_exe, new_exe) do
-      {:ok, :update_applied}
+  # Downloads the delta, verifies it, patches, and verifies the output
+  # against the full binary's checksum. Nothing is executed.
+  defp fetch_and_patch(plan, names, shas) do
+    delta_path = Path.join(plan.work_dir, names.delta)
+    patched = Path.join(plan.work_dir, names.full)
+    url = Manifest.asset_url(plan.manifest, plan.release.tag, names.delta)
+
+    with :ok <- Network.download(url, delta_path),
+         :ok <- Network.verify_file(delta_path, shas.delta, names.delta),
+         :ok <- plan.apply_patch.(plan.current_exe, delta_path, patched),
+         :ok <- Network.verify_file(patched, shas.full, names.full) do
+      {:ok, patched}
     end
   end
 
-  # Private functions
-
-  defp extract_assets(releases, target_version) when is_list(releases) do
-    # Find the release with the target version
-    case Enum.find(releases, &(&1["tag_name"] == "v#{target_version}")) do
-      nil -> {:error, :release_not_found}
-      release -> extract_assets(release, target_version)
-    end
-  end
-
-  defp extract_assets(%{"assets" => assets}, _target_version)
-       when is_list(assets),
-       do: {:ok, assets}
-
-  defp extract_assets(_, _), do: {:error, "No assets found in release data"}
-
-  defp find_delta_asset(assets, target_version) do
-    # Match assets like raxol-delta-*-<from>-<to>-*.bin
-    regex = ~r/raxol-delta-[^-]+-#{Regex.escape(target_version)}-[^.]+\.bin/
-
-    case Enum.find(assets, &(&1["name"] =~ regex)) do
-      nil -> {:error, :delta_not_found}
-      asset -> {:ok, asset}
-    end
-  end
-
-  defp find_full_asset(assets, target_version) do
-    case Enum.find(assets, &(&1["name"] =~ ~r/raxol-#{target_version}/)) do
-      nil -> {:error, :full_package_not_found}
-      asset -> {:ok, asset}
-    end
-  end
-
-  defp download_delta(url, destination) do
-    case system_adapter().httpc_request(
-           :get,
-           {String.to_charlist(url), []},
-           [],
-           [{:stream, String.to_charlist(destination)}]
-         ) do
-      {:ok, :saved_to_file} ->
-        :ok
-
-      {:error, reason} ->
-        # Return error tuple instead of throwing
-        {:error, {:download_failed, reason}}
-    end
-  end
-
-  defp get_current_executable do
-    # Use adapter for system calls
-    exe_path_env = system_adapter().system_get_env("BURRITO_EXECUTABLE_PATH")
-    argv = system_adapter().system_argv()
-
-    exe = exe_path_env || List.first(argv)
-
-    handle_executable_path(is_nil(exe), exe)
-  end
-
-  defp apply_binary_delta(original_file, delta_file, output_file) do
-    # We use bsdiff/bspatch for binary deltas
-    # This assumes bspatch is available on the system
-    case system_adapter().system_cmd(
-           "bspatch",
-           [original_file, output_file, delta_file],
-           []
-         ) do
-      {_output, 0} ->
-        :ok
-
-      {error_output, _exit_status} ->
-        # Return error tuple
-        {:error, {:apply_delta_failed, error_output}}
-    end
-  end
-
-  defp verify_patched_executable(exe_path, expected_version) do
-    case system_adapter().file_chmod(exe_path, 0o755) do
-      :ok -> check_version(exe_path, expected_version)
-      {:error, reason} -> {:error, {:chmod_failed, reason}}
-      error -> error
-    end
-  end
-
-  defp check_version(exe_path, expected_version) do
-    case system_adapter().system_cmd(exe_path, ["--version"],
-           stderr_to_stdout: true
-         ) do
-      {output, 0} ->
-        validate_version_output(String.contains?(output, expected_version))
-
-      {error_output, _exit_status} ->
-        {:error, {:verify_failed_to_run, error_output}}
-    end
-  end
-
-  defp replace_executable(current_exe, new_exe) do
-    # Determine platform using adapter
-    platform =
-      case system_adapter().os_type() do
-        {:win32, _} -> "windows"
-        # Default to unix for other :os.type() results
-        _ -> "unix"
-      end
-
-    # Call the shared helper function via adapter
-    system_adapter().updater_do_replace_executable(
-      current_exe,
-      new_exe,
-      platform
-    )
-  end
-
-  defp get_releases do
-    url = "https://api.github.com/repos/raxol/raxol/releases"
-
-    case system_adapter().http_get(url) do
-      {:ok, body} ->
-        decode_releases_json(body)
-
-      {:error, {:http_error, status_code, _body}} ->
-        {:error, {:fetch_releases_failed_status, status_code}}
-
-      {:error, reason} ->
-        {:error, {:fetch_releases_failed, reason}}
-    end
-  end
-
-  defp decode_releases_json(body) do
-    case Raxol.Core.ErrorHandling.safe_call(fn -> Jason.decode!(body) end) do
-      {:ok, releases} -> {:ok, releases}
-      {:error, _} -> {:error, :json_decode_error}
-    end
-  end
-
-  # Helper functions to eliminate if statements
-
-  defp evaluate_delta_size(
-         false,
-         _delta_size,
-         _full_size,
-         _delta_asset,
-         _full_asset
+  defp asset_names(
+         %{manifest: manifest, platform: platform, release: release},
+         from
        ) do
-    {:error, :delta_too_large}
+    with {:ok, full} <- Manifest.asset(manifest, platform) do
+      {:ok,
+       %{
+         full: full,
+         delta: Manifest.delta_asset(manifest, from, release.version, platform)
+       }}
+    end
   end
 
-  defp evaluate_delta_size(true, delta_size, full_size, delta_asset, full_asset) do
-    savings_percent = round((1 - delta_size / full_size) * 100)
+  defp checksums(sums, names) do
+    with {:ok, delta} <- Network.checksum_for(sums, names.delta),
+         {:ok, full} <- Network.checksum_for(sums, names.full) do
+      {:ok, %{delta: delta, full: full}}
+    end
+  end
 
+  defp asset_sizes(release, names) do
+    with {:ok, full} <- asset_size(release, names.full, :full_package_not_found),
+         {:ok, delta} <- asset_size(release, names.delta, :delta_not_found) do
+      {:ok, %{full: full, delta: delta}}
+    end
+  end
+
+  defp delta_info(ctx, names, %{full: full, delta: delta})
+       when delta < full * 0.5 do
     {:ok,
      %{
-       delta_size: delta_size,
-       full_size: full_size,
-       savings_percent: savings_percent,
-       delta_url: delta_asset["browser_download_url"],
-       full_url: full_asset["browser_download_url"]
+       delta_size: delta,
+       full_size: full,
+       savings_percent: round((1 - delta / full) * 100),
+       delta_url:
+         Manifest.asset_url(ctx.manifest, ctx.release.tag, names.delta),
+       full_url: Manifest.asset_url(ctx.manifest, ctx.release.tag, names.full)
      }}
   end
 
-  defp handle_executable_path(true, _exe) do
-    {:error, :cannot_determine_executable_path}
+  defp delta_info(_ctx, _names, _sizes), do: {:error, :delta_too_large}
+
+  defp binary_channel(%Manifest{format: :binary}), do: :ok
+
+  defp binary_channel(%Manifest{format: format}),
+    do: {:error, {:delta_unsupported, format}}
+
+  defp asset_size(%{assets: assets}, name, missing) do
+    case Map.fetch(assets, name) do
+      {:ok, size} when is_integer(size) -> {:ok, size}
+      {:ok, _size} -> {:ok, 0}
+      :error -> {:error, missing}
+    end
   end
 
-  defp handle_executable_path(false, exe) do
-    {:ok, exe}
+  @doc false
+  # `bspatch OLD NEW PATCH`, the default `:apply_patch`.
+  @spec bspatch(Path.t(), Path.t(), Path.t()) :: :ok | {:error, term()}
+  def bspatch(old, delta, new) do
+    case System.find_executable("bspatch") do
+      nil ->
+        {:error, :bspatch_not_found}
+
+      bspatch ->
+        case System.cmd(bspatch, [old, new, delta], stderr_to_stdout: true) do
+          {_output, 0} -> :ok
+          {output, status} -> {:error, {:apply_delta_failed, status, output}}
+        end
+    end
   end
-
-  defp validate_version_output(true), do: :ok
-
-  defp validate_version_output(false),
-    do: {:error, :version_verification_failed}
 end

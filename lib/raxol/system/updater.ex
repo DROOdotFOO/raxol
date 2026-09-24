@@ -2,16 +2,32 @@ defmodule Raxol.System.Updater do
   use Raxol.Core.Behaviours.BaseManager
 
   @moduledoc """
-  Provides version management and self-update functionality for Raxol.
+  Version checks and verified self-update for a Burrito-packaged binary.
 
-  This module handles:
-  - Checking for updates from GitHub releases
-  - Comparing versions to determine if updates are available
-  - Self-updating the application when running as a compiled binary
-  - Managing update settings and configurations
+  Where updates come from is a `Raxol.System.Updater.Manifest`: by default the
+  `raxol` CLI release channel (`raxol-cli-v*` releases on `DROOdotFOO/raxol`),
+  or whatever an application sets in `config :raxol, :updater_manifest`.
+  Every download is checked against the release's `SHA256SUMS` before it is
+  extracted, patched, or installed, and the replaced executable is kept so
+  `rollback_update/1` can restore it.
+
+  ## Options
+
+  Every function takes a keyword list; each option defaults to the running
+  installation:
+
+    * `:manifest` - a `Manifest` struct or overrides of the configured one
+    * `:force` - check even when the automatic-check interval has not passed
+    * `:use_delta` - try a binary delta before the full binary (default `true`)
+    * `:current_version` - the installed version (default: the manifest's `:app`)
+    * `:current_executable` - the binary to replace (default: the Burrito binary)
+    * `:platform` - the manifest platform key (default: the host's)
+    * `:backup_dir`, `:download_dir` - default to the update settings' paths
+    * `:work_dir` - scratch directory (default: a fresh temp dir, removed after)
+    * `:apply_patch` - the delta patch function (default: `bspatch`)
   """
 
-  alias Raxol.System.Updater.{Core, Network, State, Validation}
+  alias Raxol.System.Updater.{Core, State}
 
   # --- Client API ---
 
@@ -29,28 +45,31 @@ defmodule Raxol.System.Updater do
     State.default_update_settings()
   end
 
-  def download_update(version) do
-    Core.download_update(version)
+  @doc "Downloads and verifies a release asset; see `install_update/3`."
+  def download_update(version, opts \\ []) do
+    Core.download_update(version, opts)
   end
 
-  def install_update(context, version) do
-    Core.install_update(context, version)
+  @doc "Re-verifies and installs an asset fetched by `download_update/2`."
+  def install_update(context, version, opts \\ []) do
+    Core.install_update(context, version, opts)
   end
 
   def handle_no_update(_context, {:no_update, _current_version}) do
     :ok
   end
 
-  def rollback_update do
-    Core.rollback_update()
+  @doc "Restores the executable the last install replaced."
+  def rollback_update(opts \\ []) do
+    Core.rollback_update(opts)
   end
 
-  def get_current_version do
-    Core.get_current_version()
+  def get_current_version(opts \\ []) do
+    Core.get_current_version(opts)
   end
 
-  def get_available_versions do
-    Core.get_available_versions()
+  def get_available_versions(opts \\ []) do
+    Core.get_available_versions(opts)
   end
 
   def get_update_history do
@@ -132,95 +151,36 @@ defmodule Raxol.System.Updater do
   # --- Public Helper Functions ---
 
   @doc """
-  Checks if a newer version of Raxol is available.
+  Checks whether a newer release than the installed version is published.
 
-  Returns a tuple with the check result and the latest version if available:
-  - `{:no_update, current_version}` - No update available
-  - `{:update_available, latest_version}` - Update available
-  - `{:error, reason}` - Error occurred during check
+  Without `force: true` this only goes to the network when automatic checks
+  are enabled and the check interval has passed, and records the check time.
 
-  ## Parameters
-
-  - `force`: When set to `true`, bypasses the update check interval. Defaults to `false`.
-
-  ## Examples
-
-      iex> Raxol.System.Updater.check_for_updates()
-      {:no_update, "0.1.0"}
-
-      iex> Raxol.System.Updater.check_for_updates(force: true)
-      {:update_available, "0.2.0"}
+  Returns `{:update_available, version}`, `{:no_update, current_version}`,
+  or `{:error, reason}`.
   """
   def check_for_updates(opts \\ []) do
-    force = Keyword.get(opts, :force, false)
-
-    with {:ok, settings} <- get_update_settings(),
-         true <- force || Validation.should_check_for_update?(settings),
-         {:ok, latest_version} <- Network.fetch_latest_version() do
-      _ = Validation.update_last_check(settings)
-      {:ok, latest_version} |> Validation.compare_versions()
-    else
-      {:error, reason} -> {:error, reason}
-      false -> {:no_update, Mix.Project.config()[:version]}
-    end
+    Core.check(opts)
   end
 
   @doc """
-  Performs a self-update of the application if running as a compiled binary.
+  Updates the running binary to `version` (default: the newest release),
+  when that release is newer than the installed one.
 
-  Returns:
-  - `:ok` - Update successfully completed
-  - `{:error, reason}` - Error occurred during update
-  - `{:no_update, current_version}` - No update needed
-
-  ## Parameters
-
-  - `version`: The version to update to. If not provided, updates to the latest version.
-  - `opts`: Options for the update process:
-    - `:use_delta`: Whether to try using delta updates (default: true)
-
-  ## Examples
-
-      iex> Raxol.System.Updater.self_update()
-      :ok
-
-      iex> Raxol.System.Updater.self_update("0.2.0")
-      {:error, "Not running as a compiled binary"}
+  Returns `:ok`, `{:no_update, current_version}`, or `{:error, reason}`.
+  Nothing is installed unless its checksum matches the release's
+  `SHA256SUMS`.
   """
   def self_update(version \\ nil, opts \\ []) do
     Core.self_update(version, opts)
   end
 
-  @doc """
-  Displays update information to the user, if an update is available.
-
-  This function checks for updates (respecting the check interval) and
-  outputs a message to the user if an update is available.
-
-  ## Examples
-
-      iex> Raxol.System.Updater.notify_if_update_available()
-      :ok
-  """
-  def notify_if_update_available do
-    Core.notify_if_update_available()
+  @doc "Prints a notice when `check_for_updates/1` finds a newer release."
+  def notify_if_update_available(opts \\ []) do
+    Core.notify_if_update_available(opts)
   end
 
-  @doc """
-  Enables or disables automatic update checks.
-
-  ## Parameters
-
-  - `enabled`: Whether to enable or disable automatic update checks
-
-  ## Examples
-
-      iex> Raxol.System.Updater.set_auto_check(true)
-      :ok
-
-      iex> Raxol.System.Updater.set_auto_check(false)
-      :ok
-  """
+  @doc "Enables or disables automatic update checks."
   def set_auto_check(enabled) when is_boolean(enabled) do
     State.set_auto_check(enabled)
   end
