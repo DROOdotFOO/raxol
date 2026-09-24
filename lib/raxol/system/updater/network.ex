@@ -134,7 +134,7 @@ defmodule Raxol.System.Updater.Network do
   @spec sha256_file(Path.t()) :: String.t()
   def sha256_file(path) do
     path
-    |> File.stream!(65_536, [:raw, :binary])
+    |> File.stream!(65_536)
     |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
     |> :crypto.hash_final()
     |> Base.encode16(case: :lower)
@@ -160,15 +160,16 @@ defmodule Raxol.System.Updater.Network do
   def install_executable(current_exe, new_exe, backup_dir, platform) do
     staged = staged_path(current_exe)
 
-    result =
-      with :ok <- backup(current_exe, backup_dir),
-           :ok <- copy(new_exe, staged),
-           :ok <- chmod(staged) do
-        swap(staged, current_exe, Manifest.windows_platform?(platform))
-      end
-
-    if result != :ok, do: File.rm(staged)
-    result
+    with :ok <- backup(current_exe, backup_dir),
+         :ok <- copy(new_exe, staged),
+         :ok <- chmod(staged),
+         :ok <- swap(staged, current_exe, Manifest.windows_platform?(platform)) do
+      :ok
+    else
+      error ->
+        _ = File.rm(staged)
+        error
+    end
   end
 
   defp backup(_current_exe, nil), do: :ok

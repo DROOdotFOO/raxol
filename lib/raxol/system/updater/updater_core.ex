@@ -14,9 +14,6 @@ defmodule Raxol.System.Updater.Core do
   """
   use Raxol.Core.Behaviours.BaseManager
 
-  # Burrito is a dependency of the packaged binaries, not of this library.
-  @compile {:no_warn_undefined, Burrito.Util.Args}
-
   alias Raxol.Core.Runtime.Log
   alias Raxol.System.DeltaUpdater
   alias Raxol.System.Updater.{Archive, Manifest, Network, State, Validation}
@@ -480,13 +477,12 @@ defmodule Raxol.System.Updater.Core do
     end)
   end
 
+  # Burrito's launcher exports the wrapped binary's path as
+  # `__BURRITO_BIN_PATH`; `Burrito.Util.Args.get_bin_path/0` reads the same
+  # variable. Reading it here keeps Burrito out of this library's deps.
   defp burrito_executable do
-    with true <- Code.ensure_loaded?(Burrito.Util.Args),
-         true <- function_exported?(Burrito.Util.Args, :get_bin_path, 0),
-         path when is_binary(path) and path != "" <-
-           Burrito.Util.Args.get_bin_path() do
-      {:ok, path}
-    else
+    case System.get_env("__BURRITO_BIN_PATH") do
+      path when is_binary(path) and path != "" -> {:ok, path}
       _ -> {:error, :not_running_as_binary}
     end
   end
