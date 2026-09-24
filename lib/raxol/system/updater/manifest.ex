@@ -35,7 +35,6 @@ defmodule Raxol.System.Updater.Manifest do
           app: atom(),
           assets: %{platform() => String.t()},
           checksums_asset: String.t(),
-          delta_prefix: String.t(),
           format: format(),
           api_base: String.t(),
           download_base: String.t()
@@ -51,7 +50,6 @@ defmodule Raxol.System.Updater.Manifest do
               "win32-x64" => "raxol_cli_windows.exe"
             },
             checksums_asset: "SHA256SUMS",
-            delta_prefix: "raxol-delta",
             format: :binary,
             api_base: "https://api.github.com",
             download_base: "https://github.com"
@@ -105,7 +103,6 @@ defmodule Raxol.System.Updater.Manifest do
       app: is_atom(m.app),
       assets: valid_assets?(m.assets),
       checksums_asset: safe_name?(m.checksums_asset),
-      delta_prefix: safe_name?(m.delta_prefix),
       format: valid_format?(m.format),
       api_base: allowed_base?(m.api_base),
       download_base: allowed_base?(m.download_base)
@@ -186,11 +183,6 @@ defmodule Raxol.System.Updater.Manifest do
       :error -> {:error, {:unsupported_platform, platform}}
     end
   end
-
-  @doc "Delta assets are named `<delta_prefix>-<from>-<to>-<platform>.bin`."
-  @spec delta_asset(t(), String.t(), String.t(), platform()) :: String.t()
-  def delta_asset(%__MODULE__{delta_prefix: prefix}, from, to, platform),
-    do: "#{prefix}-#{from}-#{to}-#{platform}.bin"
 
   @doc "The installed version of the manifest's application."
   @spec installed_version(t()) :: {:ok, String.t()} | {:error, term()}

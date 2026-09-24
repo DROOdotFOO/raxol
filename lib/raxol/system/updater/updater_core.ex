@@ -6,16 +6,13 @@ defmodule Raxol.System.Updater.Core do
   fetch its `SHA256SUMS`, download, verify the download's checksum, and
   only then extract (archive channels) and install. Nothing downloaded is
   extracted, executed, or copied over the running binary before it
-  verifies. A delta update is tried first when enabled and falls back to
-  the full binary.
+  verifies.
 
   Functions take the options documented on `Raxol.System.Updater`; each
   defaults to the running installation.
   """
   use Raxol.Core.Behaviours.BaseManager
 
-  alias Raxol.Core.Runtime.Log
-  alias Raxol.System.DeltaUpdater
   alias Raxol.System.Updater.{Archive, Manifest, Network, State, Validation}
 
   # --- Client API ---
@@ -149,18 +146,16 @@ defmodule Raxol.System.Updater.Core do
     end
   end
 
-  # --- Shared lookups (also used by Raxol.System.DeltaUpdater) ---
+  # --- Shared lookups ---
 
-  @doc false
-  def platform(opts) do
+  defp platform(opts) do
     case Keyword.fetch(opts, :platform) do
       {:ok, platform} -> {:ok, platform}
       :error -> Manifest.host_platform()
     end
   end
 
-  @doc false
-  def current_version(manifest, opts) do
+  defp current_version(manifest, opts) do
     case Keyword.fetch(opts, :current_version) do
       {:ok, version} -> Manifest.normalize_version(version)
       :error -> Manifest.installed_version(manifest)
@@ -180,8 +175,7 @@ defmodule Raxol.System.Updater.Core do
     end
   end
 
-  @doc false
-  def with_work_dir(opts, fun) do
+  defp with_work_dir(opts, fun) do
     case Keyword.fetch(opts, :work_dir) do
       {:ok, dir} ->
         with :ok <- File.mkdir_p(dir), do: fun.(dir)
@@ -219,7 +213,7 @@ defmodule Raxol.System.Updater.Core do
 
   @impl true
   def handle_manager_call({:install_update, version}, _from, state) do
-    case self_update(version, use_delta: true) do
+    case self_update(version) do
       :ok ->
         {:reply, :ok,
          %{state | status: :installed, current_version: version, error: nil}}
@@ -313,11 +307,8 @@ defmodule Raxol.System.Updater.Core do
     end
   end
 
-  @doc false
   # The manifest, platform, and release every update path starts from.
-  @spec resolve(:latest | String.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def resolve(version, opts) do
+  defp resolve(version, opts) do
     with {:ok, manifest} <- Manifest.load(opts),
          {:ok, platform} <- platform(opts),
          {:ok, release} <- Network.fetch_release(manifest, version) do
@@ -325,27 +316,19 @@ defmodule Raxol.System.Updater.Core do
     end
   end
 
-  @doc false
-  # Everything an install needs beyond `resolve/2`: the running version and
-  # executable, the release's checksums, and where the old binary is kept.
-  @spec plan(map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def plan(ctx, opts) do
-    with {:ok, current} <- current_version(ctx.manifest, opts),
-         {:ok, current_exe} <- current_executable(opts),
-         {:ok, sums} <- Network.fetch_checksums(ctx.manifest, ctx.release) do
-      {:ok,
-       Map.merge(ctx, %{
-         checksums: sums,
-         from_version: current,
-         current_exe: current_exe,
-         backup_dir: backup_dir(opts)
-       })}
-    end
-  end
-
+  # Everything an install needs beyond `resolve/2`: the running executable,
+  # the release's checksums, and where the old binary is kept.
   defp install(ctx, opts) do
-    with {:ok, plan} <- plan(ctx, opts) do
-      with_work_dir(opts, &install_release(Map.put(plan, :work_dir, &1), opts))
+    with {:ok, current_exe} <- current_executable(opts),
+         {:ok, sums} <- Network.fetch_checksums(ctx.manifest, ctx.release) do
+      plan =
+        Map.merge(ctx, %{
+          checksums: sums,
+          current_exe: current_exe,
+          backup_dir: backup_dir(opts)
+        })
+
+      with_work_dir(opts, &full_install(Map.put(plan, :work_dir, &1)))
     end
   end
 
@@ -358,35 +341,6 @@ defmodule Raxol.System.Updater.Core do
            do: {:ok, path}
     end
   end
-
-  defp install_release(plan, opts) do
-    if Keyword.get(opts, :use_delta, true),
-      do: plan |> Map.put(:apply_patch, apply_patch(opts)) |> delta_or_full(),
-      else: full_install(plan)
-  end
-
-  defp delta_or_full(plan) do
-    case DeltaUpdater.apply_delta(plan) do
-      :ok ->
-        :ok
-
-      {:error, :delta_not_found} ->
-        full_install(plan)
-
-      {:error, {:delta_unsupported, _format}} ->
-        full_install(plan)
-
-      {:error, reason} ->
-        Log.warning(
-          "Delta update failed (#{inspect(reason)}); falling back to a full update"
-        )
-
-        full_install(plan)
-    end
-  end
-
-  defp apply_patch(opts),
-    do: Keyword.get(opts, :apply_patch, &DeltaUpdater.bspatch/3)
 
   defp full_install(plan) do
     with {:ok, asset} <- asset_sha(plan, plan.checksums),
@@ -464,8 +418,7 @@ defmodule Raxol.System.Updater.Core do
 
   defp context_executable(_context, opts), do: current_executable(opts)
 
-  @doc false
-  def backup_dir(opts) do
+  defp backup_dir(opts) do
     Keyword.get_lazy(opts, :backup_dir, fn ->
       State.get_update_settings().backup_path
     end)

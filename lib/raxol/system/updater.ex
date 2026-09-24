@@ -18,13 +18,11 @@ defmodule Raxol.System.Updater do
 
     * `:manifest` - a `Manifest` struct or overrides of the configured one
     * `:force` - check even when the automatic-check interval has not passed
-    * `:use_delta` - try a binary delta before the full binary (default `true`)
     * `:current_version` - the installed version (default: the manifest's `:app`)
     * `:current_executable` - the binary to replace (default: the Burrito binary)
     * `:platform` - the manifest platform key (default: the host's)
     * `:backup_dir`, `:download_dir` - default to the update settings' paths
     * `:work_dir` - scratch directory (default: a fresh temp dir, removed after)
-    * `:apply_patch` - the delta patch function (default: `bspatch`)
   """
 
   alias Raxol.System.Updater.{Core, State}
