@@ -25,7 +25,8 @@ defmodule Raxol.REPL.Evaluator do
     * `:timeout` -- how long the single evaluation process may run
     * `:max_heap_bytes` -- that process's heap, via `:max_heap_size` with
       `kill: true`
-    * `:max_result_bytes` -- the value plus bindings plus output it may hand back
+    * `:max_result_bytes` -- the value plus bindings plus output it may hand
+      back (refused when over), and the error message (truncated when over)
     * `Raxol.REPL.CaptureIO`'s limit -- bytes of captured output retained, and
       the wait on an `io_lib` expansion run on the evaluation's behalf
 
@@ -175,7 +176,30 @@ defmodule Raxol.REPL.Evaluator do
     end
   end
 
+  # The error path is bounded by truncation rather than refusal: a truncated
+  # value would be a wrong answer, but a truncated `Exception.format/3` string
+  # is still the error, and its useful part (kind, message head) is at the
+  # front. Without this clause `raise String.duplicate("x", 20_000_000)` hands
+  # back a payload 76x the cap -- a refc binary, so `:max_heap_size` misses it.
+  defp bound_result({:error, message}, max_result_bytes)
+       when is_binary(message) and byte_size(message) > max_result_bytes do
+    {:error,
+     utf8_prefix(message, max_result_bytes) <>
+       "\n[error truncated at #{max_result_bytes} bytes]"}
+  end
+
   defp bound_result(result, _max_result_bytes), do: result
+
+  # Cutting at a byte offset can split a codepoint; drop the partial tail so
+  # the caller renders valid UTF-8.
+  defp utf8_prefix(binary, max_bytes) do
+    prefix = binary_part(binary, 0, max_bytes)
+
+    case :unicode.characters_to_binary(prefix) do
+      {:incomplete, valid, _rest} -> valid
+      _ -> prefix
+    end
+  end
 
   defp handle_eval_response(evaluator, code, %{} = st) do
     %{pid: pid, ref: ref, tag: tag} = st

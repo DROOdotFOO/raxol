@@ -60,6 +60,20 @@ updates:
       package-toolchain:
         patterns:
           - "*"
+        exclude-patterns:
+          - "finch"
+          - "joken"
+          - "mint"
+          - "pigeon"
+    ignore:
+      # Nx 1.0 requires Complex 1.0, but the sensor and speech stacks remain
+      # on the Nx 0.x API. Do not regenerate an unsatisfiable grouped bump.
+      - dependency-name: "nx"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "complex"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "chore"
       include: "scope"
