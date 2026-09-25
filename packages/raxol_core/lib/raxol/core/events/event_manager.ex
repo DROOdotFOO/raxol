@@ -24,6 +24,14 @@ defmodule Raxol.Core.Events.EventManager do
   # Client API
 
   @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
+
+  @doc """
   Initializes the event manager state.
   """
   @spec init() :: :ok

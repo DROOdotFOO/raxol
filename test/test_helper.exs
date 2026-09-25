@@ -267,25 +267,6 @@ case Registry.start_link(keys: :duplicate, name: :raxol_event_subscriptions) do
   {:error, {:already_started, _pid}} -> :ok
 end
 
-# Start the EventManager for tests
-IO.puts("[TestHelper] Starting EventManager...")
-
-case Raxol.Core.Events.EventManager.start_link(
-       name: Raxol.Core.Events.EventManager
-     ) do
-  {:ok, _pid} ->
-    IO.puts("[TestHelper] EventManager started successfully")
-
-  {:error, {:already_started, _pid}} ->
-    IO.puts("[TestHelper] EventManager already running")
-
-  {:error, reason} ->
-    IO.puts(
-      :stderr,
-      "[TestHelper] Failed to start EventManager: #{inspect(reason)}"
-    )
-end
-
 # Skip endpoint startup - Phoenix web interface removed
 # if Process.whereis(RaxolWeb.Endpoint) do
 #   IO.puts("[TestHelper] Endpoint already running")
