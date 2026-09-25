@@ -1,185 +1,197 @@
 defmodule Raxol.System.Updater.Core do
   @moduledoc """
-  Core update logic and GenServer callbacks for the Raxol System Updater.
+  Update flow and GenServer callbacks for `Raxol.System.Updater`.
+
+  Every install follows one order: resolve the release from the manifest,
+  fetch its `SHA256SUMS`, download, verify the download's checksum, and
+  only then extract (archive channels) and install. Nothing downloaded is
+  extracted, executed, or copied over the running binary before it
+  verifies.
+
+  Functions take the options documented on `Raxol.System.Updater`; each
+  defaults to the running installation.
   """
   use Raxol.Core.Behaviours.BaseManager
 
-  alias Raxol.Core.Runtime.Log
-  alias Raxol.System.Updater.{Network, State, Validation}
-
-  @github_repo "username/raxol"
-  @version Mix.Project.config()[:version]
+  alias Raxol.System.Updater.{Archive, Manifest, Network, State, Validation}
 
   # --- Client API ---
 
-  def check_for_updates do
-    settings = State.get_update_settings()
-    handle_update_check(settings.auto_update, settings)
-  end
-
-  defp handle_update_check(false, _settings),
-    do: {:error, :auto_update_disabled}
-
-  defp handle_update_check(true, _settings) do
-    with {:ok, %{version: latest_version}} <- Network.fetch_latest_version(),
-         current_version = get_current_version(),
-         true <- latest_version != current_version do
-      {:ok, latest_version}
-    else
-      {:error, reason} -> {:error, reason}
-      false -> {:no_update, get_current_version()}
+  @spec check(keyword()) ::
+          {:update_available, String.t()}
+          | {:no_update, String.t()}
+          | {:error, term()}
+  def check(opts \\ []) do
+    with {:ok, manifest} <- Manifest.load(opts),
+         {:ok, current} <- current_version(manifest, opts) do
+      if Keyword.get(opts, :force) == true or check_due?(),
+        do: compare_latest(manifest, current),
+        else: {:no_update, current}
     end
   end
 
-  def download_update(version) do
-    settings = State.get_update_settings()
-    platform = Validation.get_platform()
-
-    ext =
-      case platform == "windows" do
-        true -> "zip"
-        false -> "tar.gz"
-      end
-
-    url =
-      "https://github.com/#{@github_repo}/releases/download/v#{version}/raxol-#{version}-#{platform}.#{ext}"
-
-    :ok =
-      Network.download_file(
-        url,
-        Path.join(settings.download_path, "update.#{ext}")
-      )
-
-    {:ok, version}
-  end
-
-  def install_update(context, version) do
-    settings = State.get_update_settings()
-    platform = Validation.get_platform()
-
-    ext =
-      case platform == "windows" do
-        true -> "zip"
-        false -> "tar.gz"
-      end
-
-    update_path = Path.join(settings.download_path, "update.#{ext}")
-
-    with :ok <-
-           Network.extract_archive(update_path, settings.download_path, ext),
-         {:ok, new_exe} <-
-           Network.find_executable(settings.download_path, platform),
-         :ok <- apply_update(context.current_exe, new_exe, platform) do
-      {:ok, version}
-    else
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  def rollback_update do
-    settings = State.get_update_settings()
-    backup_path = Path.join(settings.backup_path, "previous_version")
-    handle_rollback(File.exists?(backup_path), backup_path)
-  end
-
-  defp handle_rollback(false, _backup_path), do: {:error, :no_backup_found}
-
-  defp handle_rollback(true, backup_path) do
-    _platform = Validation.get_platform()
-
-    current_exe =
-      System.get_env("BURRITO_EXECUTABLE_PATH") ||
-        System.argv() |> List.first()
-
-    case File.cp(backup_path, current_exe) do
-      :ok -> {:ok, get_current_version()}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  def get_current_version do
-    Application.spec(:raxol)[:vsn]
-  end
-
-  def get_available_versions do
-    case Network.fetch_github_releases() do
-      {:ok, releases} -> {:ok, releases}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  def update(opts \\ []) do
-    opts =
-      case is_map(opts) do
-        true -> Enum.into(opts, [])
-        false -> opts
-      end
-
-    force = Keyword.get(opts, :force, false)
-    use_delta = Keyword.get(opts, :use_delta, true)
-    version = Keyword.get(opts, :version)
-
-    Raxol.Core.ErrorHandling.safe_call(fn ->
-      with {:ok, target_version} <- get_target_version(version, force) do
-        apply_target_update(target_version, use_delta)
-      end
-    end)
-    |> case do
-      {:ok, result} -> result
-      {:error, {:throw, {:no_update, v}}} -> {:no_update, v}
-      {:error, {:throw, {:error, reason}}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
+  @spec self_update(String.t() | nil, keyword()) ::
+          :ok | {:no_update, String.t()} | {:error, term()}
   def self_update(version \\ nil, opts \\ []) do
-    use_delta = Keyword.get(opts, :use_delta, true)
-
-    Raxol.Core.ErrorHandling.safe_call(fn ->
-      handle_self_update(is_binary(version), version, use_delta)
-    end)
-    |> case do
-      {:ok, result} -> result
-      {:error, {:throw, {:error, reason}}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
+    with {:ok, ctx} <- resolve(version || :latest, opts),
+         {:ok, current} <- current_version(ctx.manifest, opts) do
+      if Validation.newer?(ctx.release.version, current),
+        do: install(ctx, opts),
+        else: {:no_update, current}
     end
   end
 
-  def notify_if_update_available do
-    case check_for_updates() do
-      {:ok, _version} ->
-        # Use bright green on black for the update notification
-        fg = {0, 255, 0}
-        bg = {0, 0, 0}
+  @doc """
+  Downloads and verifies the release asset for `version` into the download
+  directory, where `install_update/3` picks it up.
+  """
+  @spec download_update(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def download_update(version, opts \\ []) do
+    with {:ok, ctx} <- resolve(version, opts),
+         {:ok, asset} <- asset_checksum(ctx),
+         {:ok, _path} <- download_verified(ctx, asset, download_dir(opts)) do
+      {:ok, ctx.release.version}
+    end
+  end
 
+  @doc """
+  Installs a release previously fetched by `download_update/2`. The stored
+  file is re-verified against the release's `SHA256SUMS` first, so a file
+  swapped in the download directory in between is refused.
+  """
+  @spec install_update(map(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def install_update(context, version, opts \\ []) do
+    with {:ok, ctx} <- resolve(version, opts),
+         {:ok, path} <- stored_download(ctx, opts),
+         {:ok, current_exe} <- context_executable(context, opts),
+         :ok <-
+           with_work_dir(
+             opts,
+             &stage_and_install(ctx, path, current_exe, &1, opts)
+           ) do
+      {:ok, ctx.release.version}
+    end
+  end
+
+  @doc "Restores the executable saved by the last install."
+  @spec rollback_update(keyword()) :: :ok | {:error, term()}
+  def rollback_update(opts \\ []) do
+    backup = Path.join(backup_dir(opts), "previous_version")
+
+    with {:ok, platform} <- platform(opts),
+         {:ok, current_exe} <- current_executable(opts),
+         true <- File.regular?(backup) || {:error, :no_backup_found} do
+      Network.install_executable(current_exe, backup, nil, platform)
+    end
+  end
+
+  @spec get_current_version(keyword()) :: String.t() | nil
+  def get_current_version(opts \\ []) do
+    with {:ok, manifest} <- Manifest.load(opts),
+         {:ok, version} <- current_version(manifest, opts) do
+      version
+    else
+      _ -> nil
+    end
+  end
+
+  @spec get_available_versions(keyword()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def get_available_versions(opts \\ []) do
+    with {:ok, manifest} <- Manifest.load(opts),
+         {:ok, latest} <- Network.fetch_release(manifest, :latest) do
+      {:ok, [latest.version]}
+    end
+  end
+
+  @spec update(keyword() | map()) ::
+          :ok | {:no_update, String.t()} | {:error, term()}
+  def update(opts \\ []) do
+    opts = if is_map(opts), do: Enum.into(opts, []), else: opts
+
+    case Keyword.get(opts, :version) do
+      nil ->
+        case check(opts) do
+          {:update_available, version} -> self_update(version, opts)
+          other -> other
+        end
+
+      version ->
+        self_update(version, opts)
+    end
+  end
+
+  def notify_if_update_available(opts \\ []) do
+    case check(opts) do
+      {:update_available, version} ->
         fg_hex =
-          Raxol.Style.Colors.Color.from_rgb(
-            elem(fg, 0),
-            elem(fg, 1),
-            elem(fg, 2)
-          )
+          Raxol.Style.Colors.Color.from_rgb(0, 255, 0)
           |> Raxol.Style.Colors.Color.to_hex()
 
         bg_hex =
-          Raxol.Style.Colors.Color.from_rgb(
-            elem(bg, 0),
-            elem(bg, 1),
-            elem(bg, 2)
-          )
+          Raxol.Style.Colors.Color.from_rgb(0, 0, 0)
           |> Raxol.Style.Colors.Color.to_hex()
 
-        Raxol.UI.Terminal.println("Update Available!",
+        Raxol.UI.Terminal.println("Update Available! (#{version})",
           color: fg_hex,
           background: bg_hex
         )
 
         :ok
 
-      {:no_update, _} ->
+      _no_update_or_error ->
         :ok
+    end
+  end
 
-      {:error, _} ->
-        :ok
+  # --- Shared lookups ---
+
+  defp platform(opts) do
+    case Keyword.fetch(opts, :platform) do
+      {:ok, platform} -> {:ok, platform}
+      :error -> Manifest.host_platform()
+    end
+  end
+
+  defp current_version(manifest, opts) do
+    case Keyword.fetch(opts, :current_version) do
+      {:ok, version} -> Manifest.normalize_version(version)
+      :error -> Manifest.installed_version(manifest)
+    end
+  end
+
+  @doc """
+  The executable to replace: `opts[:current_executable]`, else the Burrito
+  binary this node was launched from. Nothing else qualifies -- a plain
+  `mix`/`iex` node has no executable of its own to replace.
+  """
+  @spec current_executable(keyword()) :: {:ok, Path.t()} | {:error, term()}
+  def current_executable(opts) do
+    case Keyword.get(opts, :current_executable) do
+      path when is_binary(path) and path != "" -> {:ok, path}
+      _ -> burrito_executable()
+    end
+  end
+
+  defp with_work_dir(opts, fun) do
+    case Keyword.fetch(opts, :work_dir) do
+      {:ok, dir} ->
+        with :ok <- File.mkdir_p(dir), do: fun.(dir)
+
+      :error ->
+        dir =
+          Path.join(
+            System.tmp_dir!(),
+            "raxol_update_#{System.unique_integer([:positive])}"
+          )
+
+        try do
+          with :ok <- File.mkdir_p(dir), do: fun.(dir)
+        after
+          File.rm_rf(dir)
+        end
     end
   end
 
@@ -190,7 +202,7 @@ defmodule Raxol.System.Updater.Core do
     state = %{
       settings: State.default_update_settings(),
       status: :idle,
-      current_version: current_version(),
+      current_version: get_current_version(),
       available_updates: [],
       last_check: nil,
       error: nil
@@ -201,9 +213,16 @@ defmodule Raxol.System.Updater.Core do
 
   @impl true
   def handle_manager_call({:install_update, version}, _from, state) do
-    case perform_install_update(version, state) do
-      {:ok, new_state} -> {:reply, :ok, new_state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    case self_update(version) do
+      :ok ->
+        {:reply, :ok,
+         %{state | status: :installed, current_version: version, error: nil}}
+
+      {:no_update, _current} ->
+        {:reply, :ok, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, %{state | status: :error, error: reason}}
     end
   end
 
@@ -214,17 +233,16 @@ defmodule Raxol.System.Updater.Core do
 
   @impl true
   def handle_manager_call({:set_update_settings, settings}, _from, state) do
-    state = %{state | settings: settings}
-    {:reply, :ok, state}
+    {:reply, :ok, %{state | settings: settings}}
   end
 
   @impl true
   def handle_manager_call(:check_for_updates, _from, state) do
-    case check_updates(state) do
+    case available_updates() do
       {:ok, updates} ->
         state = %{
           state
-          | status: :updates_available,
+          | status: if(updates == [], do: :idle, else: :updates_available),
             available_updates: updates,
             last_check: DateTime.utc_now(),
             error: nil
@@ -233,8 +251,7 @@ defmodule Raxol.System.Updater.Core do
         {:reply, {:ok, updates}, state}
 
       {:error, reason} ->
-        state = %{state | status: :error, error: reason}
-        {:reply, {:error, reason}, state}
+        {:reply, {:error, reason}, %{state | status: :error, error: reason}}
     end
   end
 
@@ -252,198 +269,174 @@ defmodule Raxol.System.Updater.Core do
 
   # --- Private Functions ---
 
-  defp current_version do
-    Application.spec(:raxol)[:vsn]
-  end
+  defp available_updates do
+    with {:ok, manifest} <- Manifest.load() do
+      case check(force: true) do
+        {:update_available, version} ->
+          {:ok, tag} = Manifest.tag(manifest, version)
 
-  defp check_updates(state) do
-    case Network.fetch_latest_version() do
-      {:ok, %{version: latest_version}} ->
-        versions_different = latest_version != state.current_version
-        build_update_response(versions_different, latest_version)
+          {:ok,
+           [%{version: version, url: Manifest.release_page_url(manifest, tag)}]}
 
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
+        {:no_update, _current} ->
+          {:ok, []}
 
-  defp build_update_response(false, _latest_version), do: {:ok, []}
-
-  defp build_update_response(true, latest_version) do
-    {:ok,
-     [
-       %{
-         version: latest_version,
-         url:
-           "https://github.com/#{@github_repo}/releases/tag/v#{latest_version}"
-       }
-     ]}
-  end
-
-  defp perform_install_update(version, state) do
-    case self_update(version, use_delta: true) do
-      :ok ->
-        new_state = %{
-          state
-          | status: :installed,
-            current_version: version,
-            error: nil
-        }
-
-        {:ok, new_state}
-
-      {:error, reason} ->
-        _new_state = %{state | status: :error, error: reason}
-        {:error, reason}
-
-      {:no_update, _current_version} ->
-        {:ok, state}
-    end
-  end
-
-  defp do_version_update(version, use_delta) do
-    select_update_method(use_delta, version)
-  end
-
-  defp select_update_method(true, version), do: try_delta_update(version)
-  defp select_update_method(false, version), do: do_self_update(version)
-
-  defp get_update_version(version) do
-    handle_version_fetch(is_nil(version), version)
-  end
-
-  defp handle_version_fetch(false, version), do: {:ok, version}
-
-  defp handle_version_fetch(true, _version) do
-    case Network.fetch_latest_version() do
-      {:ok, latest} -> {:ok, latest}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp handle_self_update(false, _version, _use_delta) do
-    {:error, "Not running as a compiled binary"}
-  end
-
-  defp handle_self_update(true, version, use_delta) do
-    with {:ok, target_version} <- get_update_version(version) do
-      case @version == target_version do
-        false -> do_version_update(target_version, use_delta)
-        true -> {:no_update, @version}
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
 
-  defp do_self_update(version) do
-    platform = Validation.get_platform()
-    ext = platform_extension(platform)
-    url = release_url(version, platform, ext)
+  # Only the interval-gated (automatic) check reads and records the last
+  # check time; a forced check neither consults nor resets it.
+  defp check_due? do
+    settings = State.get_update_settings()
+    now = :os.system_time(:second)
 
-    tmp_dir = System.tmp_dir!() |> Path.join("raxol_update_#{version}")
-    _ = File.rm_rf(tmp_dir)
-    :ok = File.mkdir_p(tmp_dir)
-
-    Raxol.Core.ErrorHandling.ensure_cleanup(
-      fn -> perform_self_update(tmp_dir, url, ext, platform) end,
-      fn -> File.rm_rf(tmp_dir) end
-    )
-    |> unwrap_cleanup_result()
-  end
-
-  defp platform_extension("windows"), do: "zip"
-  defp platform_extension(_), do: "tar.gz"
-
-  defp release_url(version, platform, ext) do
-    "https://github.com/#{@github_repo}/releases/download/v#{version}/raxol-#{version}-#{platform}.#{ext}"
-  end
-
-  defp perform_self_update(tmp_dir, url, ext, platform) do
-    archive_path = Path.join(tmp_dir, "update.#{ext}")
-    :ok = Network.download_file(url, archive_path)
-    :ok = Network.extract_archive(archive_path, tmp_dir, ext)
-
-    current_exe =
-      System.get_env("BURRITO_EXECUTABLE_PATH") ||
-        System.argv() |> List.first()
-
-    new_exe = Network.find_executable(tmp_dir, platform)
-    apply_update(current_exe, new_exe, platform)
-    :ok
-  end
-
-  defp unwrap_cleanup_result({:ok, result}), do: result
-
-  defp unwrap_cleanup_result({:error, {:throw, {:error, reason}}}),
-    do: {:error, reason}
-
-  defp unwrap_cleanup_result({:error, reason}), do: {:error, reason}
-
-  defp apply_update(current_exe, new_exe, platform) do
-    Network.do_replace_executable(current_exe, new_exe, platform)
-    # Consider if any further action is needed here after calling the helper,
-    # especially for the non-Windows case where we didn't System.stop() inside.
-    # If the application should exit after update on Unix, add System.stop(0) here.
-    # For now, returning :ok based on the helper's success.
-    :ok
-  end
-
-  defp do_delta_update(version, delta_info) do
-    Log.info(
-      "Delta update available (#{delta_info.savings_percent}% smaller download)"
-    )
-
-    case Raxol.System.DeltaUpdater.apply_delta_update(
-           version,
-           delta_info.delta_url
-         ) do
-      {:ok, _} ->
-        :ok
-
-      {:error, reason} ->
-        Log.error("Delta update failed: #{inspect(reason)}")
-        Log.warning("Falling back to full update...")
-        do_self_update(version)
-    end
-  end
-
-  defp try_delta_update(version) do
-    case Raxol.System.DeltaUpdater.check_delta_availability(version) do
-      {:ok, delta_info} -> do_delta_update(version, delta_info)
-      {:error, _reason} -> do_self_update(version)
-    end
-  end
-
-  defp get_target_version(version, force) do
-    case version do
-      nil ->
-        case check_for_updates_with_force(force) do
-          {:update_available, v} -> {:ok, v}
-          {:no_update, v} -> {:no_update, v}
-          {:error, reason} -> {:error, reason}
-        end
-
-      v ->
-        {:ok, v}
-    end
-  end
-
-  defp check_for_updates_with_force(force) do
-    with {:ok, settings} <- State.get_update_settings(),
-         true <- force || Validation.should_check_for_update?(settings),
-         {:ok, latest_version} <- Network.fetch_latest_version() do
-      _ = Validation.update_last_check(settings)
-      {:ok, latest_version} |> Validation.compare_versions()
+    if Validation.should_check_for_update?(settings, now) do
+      _ = State.set_update_settings(Validation.update_last_check(settings, now))
+      true
     else
-      {:error, reason} -> {:error, reason}
-      false -> {:no_update, Mix.Project.config()[:version]}
+      false
     end
   end
 
-  defp apply_target_update(version, use_delta) do
-    case self_update(version, use_delta: use_delta) do
-      :ok -> :ok
-      {:no_update, v} -> {:no_update, v}
-      {:error, reason} -> {:error, reason}
+  defp compare_latest(manifest, current) do
+    with {:ok, release} <- Network.fetch_release(manifest, :latest) do
+      Validation.compare_versions(current, release.version)
+    end
+  end
+
+  # The manifest, platform, and release every update path starts from.
+  defp resolve(version, opts) do
+    with {:ok, manifest} <- Manifest.load(opts),
+         {:ok, platform} <- platform(opts),
+         {:ok, release} <- Network.fetch_release(manifest, version) do
+      {:ok, %{manifest: manifest, platform: platform, release: release}}
+    end
+  end
+
+  # Everything an install needs beyond `resolve/2`: the running executable,
+  # the release's checksums, and where the old binary is kept.
+  defp install(ctx, opts) do
+    with {:ok, current_exe} <- current_executable(opts),
+         {:ok, sums} <- Network.fetch_checksums(ctx.manifest, ctx.release) do
+      plan =
+        Map.merge(ctx, %{
+          checksums: sums,
+          current_exe: current_exe,
+          backup_dir: backup_dir(opts)
+        })
+
+      with_work_dir(opts, &full_install(Map.put(plan, :work_dir, &1)))
+    end
+  end
+
+  # The file `download_update/2` stored, re-verified against the release.
+  defp stored_download(ctx, opts) do
+    with {:ok, asset} <- asset_checksum(ctx) do
+      path = Path.join(download_dir(opts), asset.name)
+
+      with :ok <- Network.verify_file(path, asset.sha, asset.name),
+           do: {:ok, path}
+    end
+  end
+
+  defp full_install(plan) do
+    with {:ok, asset} <- asset_sha(plan, plan.checksums),
+         {:ok, path} <- download_verified(plan, asset, plan.work_dir),
+         {:ok, new_exe} <- stage(plan.manifest, path, plan.work_dir) do
+      Network.install_executable(
+        plan.current_exe,
+        new_exe,
+        plan.backup_dir,
+        plan.platform
+      )
+    end
+  end
+
+  defp stage_and_install(ctx, verified, current_exe, work_dir, opts) do
+    with {:ok, new_exe} <- stage(ctx.manifest, verified, work_dir) do
+      Network.install_executable(
+        current_exe,
+        new_exe,
+        backup_dir(opts),
+        ctx.platform
+      )
+    end
+  end
+
+  defp asset_checksum(ctx) do
+    with {:ok, sums} <- Network.fetch_checksums(ctx.manifest, ctx.release) do
+      asset_sha(ctx, sums)
+    end
+  end
+
+  # The platform's asset name and its SHA256SUMS entry. Resolved before any
+  # download starts, so a release without a checksum is never fetched.
+  defp asset_sha(ctx, sums) do
+    with {:ok, name} <- Manifest.asset(ctx.manifest, ctx.platform),
+         {:ok, sha} <- Network.checksum_for(sums, name) do
+      {:ok, %{name: name, sha: sha}}
+    end
+  end
+
+  defp download_verified(ctx, asset, dir) do
+    path = Path.join(dir, asset.name)
+    url = Manifest.asset_url(ctx.manifest, ctx.release.tag, asset.name)
+
+    with :ok <- File.mkdir_p(dir),
+         :ok <- Network.download(url, path),
+         :ok <- verify_or_discard(path, asset.sha, asset.name) do
+      {:ok, path}
+    end
+  end
+
+  # A verified asset becomes the executable to install: as-is for a raw
+  # binary channel, or extracted (entry paths vetted) for an archive one.
+  defp stage(%Manifest{format: :binary}, verified, _work_dir),
+    do: {:ok, verified}
+
+  defp stage(%Manifest{format: {kind, exe}}, verified, work_dir) do
+    extract_dir = Path.join(work_dir, "extracted")
+
+    with :ok <- Archive.extract(verified, extract_dir, kind) do
+      Archive.find_executable(extract_dir, exe)
+    end
+  end
+
+  defp verify_or_discard(path, sha, name) do
+    with {:error, _reason} = error <- Network.verify_file(path, sha, name) do
+      _ = File.rm(path)
+      error
+    end
+  end
+
+  defp context_executable(%{current_exe: path}, _opts)
+       when is_binary(path) and path != "",
+       do: {:ok, path}
+
+  defp context_executable(_context, opts), do: current_executable(opts)
+
+  defp backup_dir(opts) do
+    Keyword.get_lazy(opts, :backup_dir, fn ->
+      State.get_update_settings().backup_path
+    end)
+  end
+
+  defp download_dir(opts) do
+    Keyword.get_lazy(opts, :download_dir, fn ->
+      State.get_update_settings().download_path
+    end)
+  end
+
+  # Burrito's launcher exports the wrapped binary's path as
+  # `__BURRITO_BIN_PATH`; `Burrito.Util.Args.get_bin_path/0` reads the same
+  # variable. Reading it here keeps Burrito out of this library's deps.
+  defp burrito_executable do
+    case System.get_env("__BURRITO_BIN_PATH") do
+      path when is_binary(path) and path != "" -> {:ok, path}
+      _ -> {:error, :not_running_as_binary}
     end
   end
 end

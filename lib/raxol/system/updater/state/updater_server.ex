@@ -333,7 +333,6 @@ defmodule Raxol.System.Updater.State.UpdaterServer do
       retry_delay: 5,
       # seconds
       timeout: 300,
-      verify_checksums: true,
       require_confirmation: true
     }
   end

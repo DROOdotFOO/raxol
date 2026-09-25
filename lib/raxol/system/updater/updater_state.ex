@@ -181,7 +181,6 @@ defmodule Raxol.System.Updater.State do
           :retry_count => non_neg_integer(),
           :retry_delay => pos_integer(),
           :timeout => pos_integer(),
-          :verify_checksums => boolean(),
           :require_confirmation => boolean()
         }
   def default_update_settings do
@@ -199,7 +198,6 @@ defmodule Raxol.System.Updater.State do
       retry_delay: 5,
       # seconds
       timeout: 300,
-      verify_checksums: true,
       require_confirmation: true
     }
   end

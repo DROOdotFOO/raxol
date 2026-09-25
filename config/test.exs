@@ -86,8 +86,6 @@ config :raxol, :mocks, %{
     :"Raxol.Core.Runtime.Rendering.EngineMock",
 
   # System and UI mocks
-  :"Raxol.System.DeltaUpdaterSystemAdapter" =>
-    :"Raxol.System.DeltaUpdaterSystemAdapterMock",
   :"Raxol.Terminal.Config.EnvironmentAdapter" =>
     :"Raxol.Terminal.Config.EnvironmentAdapterMock",
   :"Raxol.Terminal.ClipboardBehaviour" => :"Raxol.Terminal.ClipboardMock"
@@ -103,10 +101,6 @@ config :raxol, :debug_mode, true
 
 # Configure mock implementations for behaviours
 config :raxol, :keyboard_shortcuts_impl, Raxol.Mocks.KeyboardShortcutsMock
-
-config :raxol,
-       :delta_updater_system_adapter_impl,
-       Raxol.Mocks.DeltaUpdaterSystemAdapterMock
 
 config :raxol, :environment_adapter_impl, Raxol.Mocks.EnvironmentAdapterMock
 
