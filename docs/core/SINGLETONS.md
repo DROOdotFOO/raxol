@@ -44,7 +44,6 @@ allowlist below.
 | Module | Path |
 |--------|------|
 | `Raxol.Core.Runtime.Supervisor` | `lib/raxol/core/runtime/runtime_supervisor.ex` |
-| `Raxol.Core.ServerRegistry` | `lib/raxol/core/server_registry.ex` |
 | `Raxol.DynamicSupervisor` | `lib/raxol/dynamic_supervisor.ex` |
 | `Raxol.Terminal.Supervisor` | `packages/raxol_terminal/lib/raxol/terminal/terminal_supervisor.ex` |
 | `Raxol.Core.Runtime.Plugins.PluginSupervisor` | `packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_supervisor.ex` |

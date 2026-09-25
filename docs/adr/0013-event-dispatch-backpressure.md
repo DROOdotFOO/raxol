@@ -25,7 +25,7 @@ A naive "cast becomes call everywhere" change makes every keystroke synchronous 
 The repo already uses `Process.info(pid, :message_queue_len)` in two places:
 
 - `lib/raxol/memory/optimizer.ex:78-82`: triggers memory triage when a process has `message_queue_len > 1000`.
-- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279`: probes `self()` for diagnostics.
+- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279`: probes `self()` for diagnostics (module removed since, #1094).
 
 We are not inventing a new probe. We are wrapping an existing one in a policy.
 
@@ -167,6 +167,6 @@ The cost is one new module (~80 LOC including docs and specs), one property test
 ## References
 
 - `lib/raxol/memory/optimizer.ex:78-82`: prior art for queue-depth probing.
-- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279`: prior art for `Process.info(:message_queue_len)`.
+- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279`: prior art for `Process.info(:message_queue_len)` (module removed since, #1094).
 - `lib/raxol/core/runtime/rendering/engine.ex:277`: existing telemetry shape `[:raxol, :runtime, :*]`.
 - CLAUDE.md, "OTP / Process Communication" section: "When in doubt, use `call` over `cast`, to ensure back-pressure".

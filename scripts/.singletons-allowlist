@@ -9,7 +9,6 @@
 
 # Supervisors -- canonical, harmless
 lib/raxol/core/runtime/runtime_supervisor.ex
-lib/raxol/core/server_registry.ex
 lib/raxol/dynamic_supervisor.ex
 packages/raxol_terminal/lib/raxol/terminal/terminal_supervisor.ex
 packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_supervisor.ex

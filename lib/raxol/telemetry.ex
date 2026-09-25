@@ -53,10 +53,10 @@ defmodule Raxol.Telemetry do
   `[:raxol, :runtime, :backpressure]` appears in
   `Raxol.UI.Rendering.RenderBatcher`'s moduledoc but is emitted by
   `Raxol.Core.Runtime.Backpressure` in `packages/raxol_core`, so it is that
-  package's event to classify. `Raxol.Performance.AdaptiveOptimizer`,
-  `AutomatedMonitor` and `DevHints` name a dozen more `[:raxol, ...]` events
-  in `:telemetry.attach_many/4` SUBSCRIPTION lists (terminal parse/render,
-  cache hit/miss); those are emitted by `raxol_terminal` and friends.
+  package's event to classify. `Raxol.Performance.AdaptiveOptimizer` and
+  `DevHints` name a dozen more `[:raxol, ...]` events in their
+  `:telemetry.attach/4` / `attach_many/4` SUBSCRIPTION lists (terminal
+  parse/render, cache hit/miss). A subscription is not an emit site, and
   `Raxol.Core.Telemetry.Invariants.scan_lib!/1` only reports first-argument
   literals of `:telemetry.execute`/`span`, so neither kind is mistaken for
   ours.
@@ -81,16 +81,6 @@ defmodule Raxol.Telemetry do
       # alarms.
       [:raxol, :minimal, :startup] => :operational,
       [:raxol, :minimal, :input] => :operational,
-
-      # OPERATIONAL x3. `RecoverySupervisor` doing its job: opening a
-      # circuit after repeated child failures, announcing a degraded
-      # fallback, and recording how long a restart took. The trigger is a
-      # crashing child (often app-supplied) plus the health thresholds in
-      # `check_system_health/1`, i.e. load. A supervisor that never recovers
-      # anything is the only way these stay silent.
-      [:raxol, :error_recovery, :circuit_break] => :operational,
-      [:raxol, :error_recovery, :degradation] => :operational,
-      [:raxol, :error_recovery, :restart] => :operational,
 
       # OPERATIONAL. Emitted on every successful dispatcher sync in the
       # render loop -- the happy path itself.

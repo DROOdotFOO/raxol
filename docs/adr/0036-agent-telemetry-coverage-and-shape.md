@@ -266,7 +266,7 @@ two runs; ranges are across the runs.
 One span costs about as much as the pricing call it would sit next to, roughly 0.5 us, or
 0.03% of a 2 ms frame. A provider call is hundreds of milliseconds; a tool call is
 milliseconds. Overhead is not a constraint on any boundary proposed below; the constraint is
-what a **handler** does, since it runs in the emitting process. `automated_monitor.ex:319`
+what a **handler** does, since it runs in the emitting process. `automated_monitor.ex:319` (since removed, #1094)
 already writes ETS on the hot path and `telemetry_logger.ex:47` logs synchronously; neither
 subscribes to agent events, but they are the pattern a consumer of these must not copy on the
 turn path.
