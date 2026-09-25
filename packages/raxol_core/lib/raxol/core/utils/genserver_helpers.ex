@@ -116,19 +116,37 @@ defmodule Raxol.Core.Utils.GenServerHelpers do
   @doc """
   Ensures a named process is running. Starts it via `start_fun` if not found.
 
-  The `start_fun` is a zero-arity function that should return `{:ok, pid}`.
+  `start_fun` is a zero-arity function that starts the process UNLINKED
+  (`GenServer.start/3`, `Agent.start/2`) and registers it under `name`. It
+  must return `{:ok, pid}` or `{:error, {:already_started, pid}}`.
+
+  The process is started unlinked because the first caller is often a
+  rendering process, a session process or an ExUnit test process. With
+  `start_link`, that caller's exit took the singleton, and all of its state,
+  with it, and a crash in the singleton killed whichever process happened to
+  call first.
+
+  Two callers can both find no process and both run `start_fun`. The loser
+  gets `{:error, {:already_started, pid}}`, which counts as started.
 
   ## Examples
 
-      ensure_started(MyServer, fn -> MyServer.start_link(name: MyServer) end)
+      ensure_started(MyServer, fn ->
+        GenServer.start(MyServer, [], name: MyServer)
+      end)
   """
-  @spec ensure_started(atom(), (-> {:ok, pid()} | {:error, term()})) :: :ok
+  @spec ensure_started(
+          atom(),
+          (-> {:ok, pid()} | {:error, {:already_started, pid()}})
+        ) :: :ok
   def ensure_started(name, start_fun)
       when is_atom(name) and is_function(start_fun, 0) do
     case Process.whereis(name) do
       nil ->
-        {:ok, _pid} = start_fun.()
-        :ok
+        case start_fun.() do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+        end
 
       _pid ->
         :ok

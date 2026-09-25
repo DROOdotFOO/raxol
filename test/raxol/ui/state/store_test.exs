@@ -6,9 +6,11 @@ defmodule Raxol.UI.State.StoreTest do
   alias Raxol.UI.State.Store
 
   # A server left running by an earlier test would hide an unnamed start.
+  # The public API starts the server unlinked, so it outlives each test
+  # unless stopped here.
   setup do
-    if pid = Process.whereis(Server), do: GenServer.stop(pid)
-    :ok
+    stop_server()
+    on_exit(&stop_server/0)
   end
 
   describe "server naming" do
@@ -26,6 +28,27 @@ defmodule Raxol.UI.State.StoreTest do
       assert Store.get_state([:count]) == 7
       assert Process.whereis(Server) == pid
     end
+
+    test "the server outlives the process that first called the API" do
+      parent = self()
+
+      starter =
+        spawn(fn ->
+          :ok = Store.update_state([:count], 3)
+          send(parent, {:started, Process.whereis(Server)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:started, pid}, 500
+      assert is_pid(pid)
+      ref = Process.monitor(pid)
+
+      Process.exit(starter, :kill)
+
+      refute_receive {:DOWN, ^ref, :process, ^pid, _}, 100
+      assert Process.whereis(Server) == pid
+      assert Store.get_state([:count]) == 3
+    end
   end
 
   describe "component cleanup" do
@@ -42,6 +65,20 @@ defmodule Raxol.UI.State.StoreTest do
       assert_receive {:DOWN, ^ref, :process, ^component, :normal}
 
       assert Server.get_hook_state(:counter, :use_state_0) == nil
+    end
+  end
+
+  defp stop_server do
+    case Process.whereis(Server) do
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
     end
   end
 end

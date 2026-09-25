@@ -11,7 +11,7 @@ defmodule Raxol.Protocols do
   defp ensure_started do
     Raxol.Core.Utils.GenServerHelpers.ensure_started(
       @agent_name,
-      fn -> Agent.start_link(fn -> %{} end, name: @agent_name) end
+      fn -> Agent.start(fn -> %{} end, name: @agent_name) end
     )
   end
 

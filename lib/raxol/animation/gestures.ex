@@ -22,7 +22,7 @@ defmodule Raxol.Animation.Gestures do
   defp ensure_server_started do
     Raxol.Core.Utils.GenServerHelpers.ensure_started(
       Server,
-      fn -> Server.start_link() end
+      fn -> GenServer.start(Server, [], name: Server) end
     )
   end
 

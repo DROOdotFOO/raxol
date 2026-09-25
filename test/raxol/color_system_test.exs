@@ -47,7 +47,10 @@ defmodule Raxol.ColorSystemTest do
          [name: accessibility_server_name, user_preferences_pid: local_user_prefs_name]}
       )
 
-    # Initialize ColorSystem
+    # ColorSystem.init/0 starts the ColorSystemServer unlinked, so it outlives
+    # each test. Stop it on both sides so theme and contrast state don't leak.
+    stop_color_system_server()
+    on_exit(&stop_color_system_server/0)
     ColorSystem.init()
 
     # Register the standard theme for testing
@@ -362,5 +365,19 @@ defmodule Raxol.ColorSystemTest do
   defp calculate_contrast_ratio(color1, color2) do
     # Use the proper Utilities.contrast_ratio function
     Raxol.Style.Colors.Utilities.contrast_ratio(color1, color2)
+  end
+
+  defp stop_color_system_server do
+    case Process.whereis(Raxol.Style.Colors.System.ColorSystemServer) do
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
+    end
   end
 end
