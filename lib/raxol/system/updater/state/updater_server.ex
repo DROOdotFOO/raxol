@@ -331,8 +331,8 @@ defmodule Raxol.System.Updater.State.UpdaterServer do
       check_interval: 24 * 60 * 60,
       update_channel: :stable,
       notify_on_update: true,
-      download_path: System.get_env("HOME") <> "/.raxol/downloads",
-      backup_path: System.get_env("HOME") <> "/.raxol/backups",
+      download_path: Path.expand("~/.raxol/downloads"),
+      backup_path: Path.expand("~/.raxol/backups"),
       max_backups: 5,
       retry_count: 3,
       # seconds

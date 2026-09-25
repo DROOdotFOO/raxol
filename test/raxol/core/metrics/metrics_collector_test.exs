@@ -145,6 +145,24 @@ defmodule Raxol.Core.Metrics.MetricsCollectorTest do
     end
   end
 
+  describe "records within one clock tick" do
+    # Entries were keyed by the microsecond monotonic time alone, so two
+    # records landing on the same tick overwrote each other. Windows' coarse
+    # clock made that the norm; a tight loop hits it on any platform.
+    test "every record is kept" do
+      for value <- 1..500,
+          do: MetricsCollector.record_performance(:tick_test, value)
+
+      values =
+        :tick_test
+        |> MetricsCollector.get_metric(:performance, limit: 1_000)
+        |> Enum.map(& &1.value)
+        |> Enum.sort()
+
+      assert values == Enum.to_list(1..500)
+    end
+  end
+
   describe "system metrics collection" do
     @tag :skip_on_ci
     test "collects system metrics automatically" do

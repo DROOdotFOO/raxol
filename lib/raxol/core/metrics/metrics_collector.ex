@@ -61,8 +61,10 @@ defmodule Raxol.Core.Metrics.MetricsCollector do
     tags = Keyword.get(opts, :tags, [])
     timestamp = System.monotonic_time(:microsecond)
 
-    # Key format: {type, name, timestamp} for ordered access
-    key = {type, name, timestamp}
+    # Key format: {type, name, {timestamp, unique}}. The unique integer keeps
+    # two records on the same clock tick from overwriting each other; tuple
+    # order still sorts by time.
+    key = {type, name, {timestamp, :erlang.unique_integer([:monotonic])}}
 
     entry = %{
       value: value,
