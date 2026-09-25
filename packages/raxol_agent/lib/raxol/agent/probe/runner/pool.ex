@@ -35,13 +35,20 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   reconciles a run that opened but never reached a journaled terminal), NOT from
   this process.
 
-  **Documented follow-ups (production wiring, deliberately NOT done here):**
+  **Documented follow-up (production wiring, deliberately NOT done here):**
     * Supervise the pool (a `start_link` under a supervisor) so a coordinator
       crash restarts it eagerly and orphaned Tasks are cleaned up, rather than the
       current lazy-restart-on-next-submit.
-    * GC terminated runs — `state.runs` is currently append-only (see
-      `put_run/3`), so a long-lived singleton grows unbounded; a TTL/cap is needed
-      once `status/1`/`kill/1` no longer need to answer for old run_ids.
+
+  ## Finished-run retention
+
+  `status/1` and `kill/1` answer for a finished run only while the pool still
+  retains it. The pool keeps at most `:max_terminal_runs` finished runs (default
+  1000); when one more run finishes, the run that finished longest ago is
+  dropped, and `status/1`/`kill/1` then return `{:error, :not_found}` for it. A
+  run that is still running or parked is never dropped. The journal keeps every
+  terminal, so a dropped run's outcome remains readable there. Set the cap with
+  `start/1` before the first `submit/3`.
 
   ## Stub vs. production values
 
@@ -109,6 +116,21 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   @doc false
   def finalize(run_id, result), do: GenServer.call(__MODULE__, {:finalize, run_id, result})
 
+  @default_max_terminal_runs 1_000
+
+  @doc """
+  Start the pool singleton unlinked (see the process model above).
+
+  Options:
+    * `:max_terminal_runs` — how many finished runs `status/1`/`kill/1` can still
+      answer for (non-negative integer, default #{@default_max_terminal_runs}).
+
+  `submit/3`, `kill/1` and `status/1` start the pool with the defaults when it
+  is not running, so call this first to use other options.
+  """
+  @spec start(keyword()) :: GenServer.on_start()
+  def start(opts \\ []), do: GenServer.start(__MODULE__, opts, name: __MODULE__)
+
   # Lazy, idempotent start — the pool is an UNSUPERVISED singleton in-BEAM
   # coordinator. `GenServer.start` (not `start_link`, not under a supervisor): it
   # is unlinked, so a caller crash never takes the pool down and the pool's own
@@ -119,7 +141,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   def ensure_started do
     case Process.whereis(__MODULE__) do
       nil ->
-        case GenServer.start(__MODULE__, %{}, name: __MODULE__) do
+        case start() do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
         end
@@ -140,7 +162,23 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   @pressure_shed_ms 40
 
   @impl true
-  def init(_), do: {:ok, %{runs: %{}, parked: %{}}}
+  def init(opts) do
+    case Keyword.get(opts, :max_terminal_runs, @default_max_terminal_runs) do
+      max when is_integer(max) and max >= 0 ->
+        {:ok,
+         %{
+           runs: %{},
+           parked: %{},
+           # Finished run_ids, oldest first, for the :max_terminal_runs bound.
+           finished: :queue.new(),
+           finished_count: 0,
+           max_terminal_runs: max
+         }}
+
+      other ->
+        {:stop, {:invalid_option, {:max_terminal_runs, other}}}
+    end
+  end
 
   @impl true
   def handle_call({:submit, _session_id, probe, opts}, _from, state) do
@@ -193,9 +231,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         state =
           state
           |> put_run(run_id, %{run | status: :killed, killed: true})
-          |> Map.update(:parked, %{}, fn sets ->
-            Map.update(sets, key, MapSet.new(), &MapSet.delete(&1, run_id))
-          end)
+          |> unpark(key, run_id)
 
         {:reply, :ok, state}
 
@@ -463,9 +499,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
 
         state
         |> put_run(run_id, %{run | status: status})
-        |> Map.update(:parked, %{}, fn sets ->
-          Map.update(sets, key, MapSet.new(), &MapSet.delete(&1, run_id))
-        end)
+        |> unpark(key, run_id)
 
       _ ->
         state
@@ -927,5 +961,43 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
 
   defp pool_key(budget), do: budget
 
-  defp put_run(state, run_id, run), do: %{state | runs: Map.put(state.runs, run_id, run)}
+  # Every run write goes through here. A run's first write with a terminal status
+  # queues it for retention; past :max_terminal_runs the run that finished first
+  # is dropped. Only terminal runs are ever queued, so a live run is never dropped.
+  defp put_run(state, run_id, run) do
+    finished? = match?(%{status: s} when s in @terminal, Map.get(state.runs, run_id))
+    state = %{state | runs: Map.put(state.runs, run_id, run)}
+
+    if run.status in @terminal and not finished?,
+      do: retain_finished(state, run_id),
+      else: state
+  end
+
+  defp retain_finished(%{finished_count: count, max_terminal_runs: max} = state, run_id)
+       when count < max do
+    %{state | finished: :queue.in(run_id, state.finished), finished_count: count + 1}
+  end
+
+  defp retain_finished(state, run_id) do
+    {{:value, oldest}, finished} = :queue.out(:queue.in(run_id, state.finished))
+    %{state | finished: finished, runs: Map.delete(state.runs, oldest)}
+  end
+
+  # Drop a run from its pool's parked set, and the set itself once it is empty.
+  defp unpark(state, key, run_id) do
+    case Map.fetch(state.parked, key) do
+      {:ok, held} ->
+        held = MapSet.delete(held, run_id)
+
+        parked =
+          if MapSet.size(held) == 0,
+            do: Map.delete(state.parked, key),
+            else: Map.put(state.parked, key, held)
+
+        %{state | parked: parked}
+
+      :error ->
+        state
+    end
+  end
 end
