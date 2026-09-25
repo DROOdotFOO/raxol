@@ -421,6 +421,141 @@ defmodule Raxol.MCP.ElicitationTest do
     end
   end
 
+  # `initialize` records a connection's capabilities, and only a subscriber's
+  # `:DOWN` removes them. A connection nobody subscribes under -- a forged or
+  # stale SSE session id, say -- never gets one, so the map is capped.
+  describe "capabilities cap" do
+    setup %{registry: registry} do
+      ask = fn _tool, _args, _ctx -> {:ask, "Approve moving money?"} end
+
+      server =
+        start_supervised!(
+          {Server,
+           name: :"cap_#{System.unique_integer([:positive])}",
+           registry: registry,
+           authorizer: ask,
+           elicitation_timeout_ms: 30_000,
+           max_client_capabilities: 3},
+          id: :capped_server
+        )
+
+      events =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:raxol, :mcp, :server, :client_capabilities_evicted]
+        ])
+
+      on_exit(fn -> :telemetry.detach(events) end)
+
+      {:ok, server: server, events: events}
+    end
+
+    test "holds at the cap and reports each eviction", %{server: server, events: events} do
+      for n <- 1..10, do: :ok = initialize(server, %{elicitation: %{}}, "orphan-#{n}")
+
+      assert map_size(:sys.get_state(server).client_capabilities) == 3
+
+      # Other servers in concurrently running modules emit the same event, so
+      # every match is pinned to this one.
+      for _ <- 1..7 do
+        assert_received {[:raxol, :mcp, :server, :client_capabilities_evicted], ^events,
+                         %{count: 1, size: 3},
+                         %{server: ^server, max_client_capabilities: 3, live_subscriber: false}}
+      end
+
+      refute_received {[:raxol, :mcp, :server, :client_capabilities_evicted], ^events, _,
+                       %{server: ^server}}
+    end
+
+    test "evicts the oldest unsubscribed entry before an older live one", %{server: server} do
+      :ok = subscribe(server, self(), "live")
+      :ok = initialize(server, %{elicitation: %{}}, "live")
+      :ok = initialize(server, %{elicitation: %{}}, "orphan-1")
+      :ok = initialize(server, %{elicitation: %{}}, "orphan-2")
+
+      # Over the cap by one. "live" is the oldest entry, but it has a stream.
+      :ok = initialize(server, %{elicitation: %{}}, "orphan-3")
+
+      # orphan-1 went: subscribing under it now finds nothing it declared.
+      :ok = subscribe(server, self(), "orphan-1")
+
+      assert {:reply, response} = spend_as(server, "orphan-1")
+      assert %{"error" => "authorization_required"} = decoded_payload(response)
+
+      # orphan-2 was the next oldest and is still there.
+      :ok = subscribe(server, self(), "orphan-2")
+      assert {:reply, nil} = spend_as(server, "orphan-2")
+      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+    end
+
+    test "a live connection can still elicit after sustained pressure", %{
+      server: server,
+      events: events
+    } do
+      :ok = subscribe(server, self(), "live")
+      :ok = initialize(server, %{elicitation: %{}}, "live")
+
+      for n <- 1..200, do: :ok = initialize(server, %{elicitation: %{}}, "orphan-#{n}")
+
+      assert map_size(:sys.get_state(server).client_capabilities) == 3
+
+      refute_received {[:raxol, :mcp, :server, :client_capabilities_evicted], ^events, _,
+                       %{server: ^server, live_subscriber: true}}
+
+      assert {:reply, nil} = spend_as(server, "live")
+      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+    end
+
+    test "when every entry is live, the oldest goes and the cap still holds", %{
+      server: server,
+      events: events
+    } do
+      for id <- ["a", "b", "c", "d"] do
+        :ok = subscribe(server, self(), id)
+        :ok = initialize(server, %{elicitation: %{}}, id)
+      end
+
+      assert map_size(:sys.get_state(server).client_capabilities) == 3
+
+      assert_received {[:raxol, :mcp, :server, :client_capabilities_evicted], ^events,
+                       %{count: 1, size: 3}, %{server: ^server, live_subscriber: true}}
+
+      # "a" lost only its capabilities: it can be served, not asked.
+      assert {:reply, response} = spend_as(server, "a")
+      assert %{"error" => "authorization_required"} = decoded_payload(response)
+      assert {:reply, nil} = spend_as(server, "d")
+      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+    end
+
+    test "the cap must be a positive integer", %{registry: registry} do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               Server.start_link(name: nil, registry: registry, max_client_capabilities: 0)
+
+      assert message =~ ":max_client_capabilities"
+    end
+
+    defp subscribe(server, pid, conn_id) do
+      Server.subscribe(server, pid, conn_id)
+      # `subscribe/3` is a cast; make sure it landed before anything reads it.
+      _ = Server.authorization_configured?(server)
+      :ok
+    end
+
+    defp spend_as(server, conn_id) do
+      Server.handle_message(
+        server,
+        %{
+          jsonrpc: "2.0",
+          id: 21,
+          method: "tools/call",
+          params: %{"name" => "spend", "arguments" => %{"amount" => 5}}
+        },
+        conn_id
+      )
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
 
   defp initialize(server, capabilities, conn_id) do
