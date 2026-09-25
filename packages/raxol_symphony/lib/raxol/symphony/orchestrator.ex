@@ -53,6 +53,7 @@ defmodule Raxol.Symphony.Orchestrator do
   alias Raxol.Symphony.Orchestrator.Retry
   alias Raxol.Symphony.Orchestrator.State
   alias Raxol.Symphony.Runner
+  alias Raxol.Symphony.Runners.RaxolAgent
   alias Raxol.Symphony.Runners.RaxolAgentSession
   alias Raxol.Symphony.Tracker
   alias Raxol.Symphony.Workflow.GraphAdapter
@@ -227,7 +228,7 @@ defmodule Raxol.Symphony.Orchestrator do
         new_state =
           state
           |> remove_running(issue_id, :stopped_by_user)
-          |> reclaim_prompt_cache(issue_id)
+          |> reclaim_issue_caches(issue_id)
           |> notify_listeners(:worker_stopped)
 
         {:reply, :ok, new_state}
@@ -245,7 +246,7 @@ defmodule Raxol.Symphony.Orchestrator do
           |> release_host(Map.get(paused_entry, :host))
           |> Map.put(:paused, Map.delete(state.paused, issue_id))
           |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
-          |> reclaim_prompt_cache(issue_id)
+          |> reclaim_issue_caches(issue_id)
           |> notify_listeners(:worker_stopped)
 
         {:reply, :ok, new_state}
@@ -1044,7 +1045,6 @@ defmodule Raxol.Symphony.Orchestrator do
        ) do
     state
     |> release_host(Map.get(prepared, :host))
-    |> Map.put(:completed, MapSet.put(state.completed, issue.id))
     |> schedule_continuation_retry(issue, 1)
   end
 
@@ -1189,7 +1189,6 @@ defmodule Raxol.Symphony.Orchestrator do
 
         state
         |> schedule_continuation_retry(entry.issue, 1)
-        |> Map.put(:completed, MapSet.put(state.completed, issue_id))
         |> notify_listeners(:worker_exit_normal)
 
       :stopped_by_user ->
@@ -1200,7 +1199,7 @@ defmodule Raxol.Symphony.Orchestrator do
         # Terminal: user stop, no re-dispatch -- reclaim any cache row.
         state
         |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
-        |> reclaim_prompt_cache(issue_id)
+        |> reclaim_issue_caches(issue_id)
         |> notify_listeners(:worker_stopped)
 
       other ->
@@ -1690,23 +1689,25 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   # An issue is leaving the run set for good (terminal, gone, or no longer
-  # active): drop the claim AND flush any prompt-cache row it left behind. The
+  # active): drop the claim AND flush any cache rows it left behind. The
   # session runner's `prompt_cache` writes a row on every fresh dispatch; a
   # one-shot issue (or an odd-length continuation chain) leaves one unread row
-  # that only this terminal flush reclaims.
+  # that only this terminal flush reclaims. The agent runner's `tracker_cache`
+  # row is never read again once the issue is terminal, so it goes too.
   defp release_issue(%State{} = state, issue_id) do
     state
-    |> reclaim_prompt_cache(issue_id)
+    |> reclaim_issue_caches(issue_id)
     |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
   end
 
-  # Flush the prompt-cache row an issue may have left behind. Pipeable; a no-op
-  # unless the session runner's `prompt_cache` is configured. Call this ONLY at
-  # genuinely-terminal release sites (the same `issue.id` is NOT about to be
-  # re-dispatched) -- flushing on a continuation/retry path would just force a
-  # needless re-render on the next dispatch.
-  defp reclaim_prompt_cache(%State{} = state, issue_id) do
+  # Flush the prompt-cache and tracker-cache rows an issue may have left
+  # behind. Pipeable; each is a no-op unless its runner cache is configured.
+  # Call this ONLY at genuinely-terminal release sites (the same `issue.id` is
+  # NOT about to be re-dispatched) -- flushing on a continuation/retry path
+  # would just force a needless re-render or tracker query on the next dispatch.
+  defp reclaim_issue_caches(%State{} = state, issue_id) do
     RaxolAgentSession.flush_prompt_cache(state.config, issue_id)
+    RaxolAgent.flush_tracker_cache(state.config, issue_id)
     state
   end
 
@@ -1832,7 +1833,7 @@ defmodule Raxol.Symphony.Orchestrator do
     # Terminal drop: the parked run is discarded, not resumed, so flush its
     # prompt-cache row. Without this the cache row is never re-read and the
     # lazy TTL never reclaims it, leaking one row per abandoned paused run.
-    |> reclaim_prompt_cache(issue_id)
+    |> reclaim_issue_caches(issue_id)
     |> notify_listeners(:paused_gc)
   end
 
@@ -1974,7 +1975,7 @@ defmodule Raxol.Symphony.Orchestrator do
 
     state
     |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
-    |> reclaim_prompt_cache(issue_id)
+    |> reclaim_issue_caches(issue_id)
   end
 
   # -- Run events -------------------------------------------------------------

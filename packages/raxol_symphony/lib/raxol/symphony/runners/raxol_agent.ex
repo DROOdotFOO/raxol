@@ -115,7 +115,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   `{:tracker, issue.id}`; default TTL is 30s, overridden by
   `agent.tracker_cache_ttl_ms`. The cache is opt-in: leaving
   `tracker_cache` unset preserves the existing per-turn-boundary
-  query behavior.
+  query behavior. The orchestrator deletes an issue's row through
+  `flush_tracker_cache/2` when the issue leaves the run set for good.
 
   Trade-off: with caching enabled, a tracker state change during the
   TTL window is not seen until the TTL expires. Use a short TTL for
@@ -638,7 +639,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   end
 
   def __workflow_still_active__(%{tracker_cache: cache, issue: issue, config: config} = state) do
-    key = {:tracker, issue.id}
+    key = tracker_cache_key(issue.id)
 
     case Raxol.Agent.Cache.get(cache, key) do
       {:ok, cached} ->
@@ -651,6 +652,22 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         result
     end
   end
+
+  @doc """
+  Removes any tracker-cache row for `issue_id`.
+
+  A no-op when no `tracker_cache` is configured. The orchestrator calls
+  this when an issue leaves the run set for good. `Cache.Ets` expires a
+  row only on a same-key `get`, and a terminal issue is never checked
+  again, so without this flush every finished issue would leave its row
+  behind.
+  """
+  @spec flush_tracker_cache(Config.t(), term()) :: :ok
+  def flush_tracker_cache(%Config{} = config, issue_id) do
+    Raxol.Agent.Cache.delete(agent_tracker_cache(config), tracker_cache_key(issue_id))
+  end
+
+  defp tracker_cache_key(issue_id), do: {:tracker, issue_id}
 
   defp do_run(%Issue{} = issue, %Config{} = config, opts) do
     parent = Keyword.fetch!(opts, :parent)

@@ -68,7 +68,7 @@ defmodule Raxol.Symphony.OrchestratorTest do
   # through the Noop runner (via `runner_module:`), which never writes the
   # cache -- so the row is seeded directly, standing in for what a real
   # `RaxolAgentSession` dispatch would have left behind.
-  defp cache_config(adapter) do
+  defp cache_config(adapter, cache_key \\ :prompt_cache) do
     Config.from_workflow(%{
       config: %{
         tracker: %{
@@ -79,7 +79,7 @@ defmodule Raxol.Symphony.OrchestratorTest do
         polling: %{interval_ms: 60_000},
         agent: %{max_concurrent_agents: 3, max_retry_backoff_ms: 60_000},
         codex: %{stall_timeout_ms: 0},
-        runner: %{kind: "noop", agent: %{prompt_cache: adapter}}
+        runner: %{kind: "noop", agent: %{cache_key => adapter}}
       },
       prompt_template: ""
     })
@@ -666,6 +666,32 @@ defmodule Raxol.Symphony.OrchestratorTest do
       wait_until(fn -> Orchestrator.snapshot(pid).counts.retrying == 1 end)
 
       assert cache_size(adapter) == 1
+    end
+  end
+
+  # The `RaxolAgent` runner's opt-in `tracker_cache` keeps one
+  # `{:tracker, issue.id}` row per issue. `Cache.Ets` expires only on a same-key
+  # `get`, and a terminal issue is never checked again, so without the terminal
+  # flush every finished issue left one row for the life of the BEAM.
+  describe "tracker-cache flush on terminal exits" do
+    test "reconcile-kill of a now-terminal issue reclaims its tracker-cache row" do
+      adapter = ets_cache_adapter()
+      config = cache_config(adapter, :tracker_cache)
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+      Noop.Director.set("MT-1", :stall)
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+      assert Orchestrator.snapshot(pid).counts.running == 1
+
+      :ok = Raxol.Agent.Cache.put(adapter, {:tracker, "a"}, true, 60_000)
+      assert cache_size(adapter) == 1
+
+      Memory.transition("a", "Done")
+      :ok = Orchestrator.tick_now(pid)
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.running == 0 end)
+
+      assert cache_size(adapter) == 0
     end
   end
 

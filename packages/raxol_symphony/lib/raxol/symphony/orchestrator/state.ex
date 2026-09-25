@@ -2,7 +2,9 @@ defmodule Raxol.Symphony.Orchestrator.State do
   @moduledoc """
   Orchestrator runtime state.
 
-  Implements SPEC s4.1.8.
+  Implements SPEC s4.1.8, except the SPEC's `completed` set of issue ids.
+  The SPEC marks it bookkeeping only; nothing here read it, and it grew by
+  one id per finished run for the orchestrator's lifetime.
   """
 
   alias Raxol.Symphony.{Config, Issue}
@@ -109,7 +111,6 @@ defmodule Raxol.Symphony.Orchestrator.State do
     claimed: MapSet.new(),
     retry_attempts: %{},
     paused: %{},
-    completed: MapSet.new(),
     codex_totals: %{
       input_tokens: 0,
       output_tokens: 0,
@@ -137,7 +138,6 @@ defmodule Raxol.Symphony.Orchestrator.State do
           paused_saver: {module(), map()} | nil,
           host_pool: Raxol.Symphony.Worker.HostPool.t() | nil,
           paused_max_age_ms: non_neg_integer() | nil,
-          completed: MapSet.t(binary()),
           codex_totals: codex_totals(),
           codex_rate_limits: term() | nil,
           listeners: MapSet.t(pid())
