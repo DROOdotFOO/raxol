@@ -1,7 +1,8 @@
 defmodule Raxol.System.Updater.Network do
   @moduledoc """
-  The updater's I/O: release lookup, `SHA256SUMS`, downloads, checksum
-  verification, and replacing the running executable.
+  The updater's I/O: release lookup, `SHA256SUMS`, the Sigstore
+  attestation, downloads, checksum verification, and replacing the running
+  executable.
 
   Every URL comes from `Raxol.System.Updater.Manifest`. HTTPS requests verify
   the server certificate and hostname against the OS trust store. A
@@ -55,6 +56,15 @@ defmodule Raxol.System.Updater.Network do
     url = Manifest.asset_url(manifest, release.tag, manifest.checksums_asset)
 
     with {:ok, body} <- get_text(url), do: parse_checksums(body)
+  end
+
+  @doc "The release's Sigstore bundle (`manifest.attestation_asset`), unparsed."
+  @spec fetch_attestation(Manifest.t(), release()) ::
+          {:ok, binary()} | {:error, term()}
+  def fetch_attestation(manifest, release) do
+    get_text(
+      Manifest.asset_url(manifest, release.tag, manifest.attestation_asset)
+    )
   end
 
   @doc """

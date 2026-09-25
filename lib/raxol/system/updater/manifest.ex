@@ -8,10 +8,18 @@ defmodule Raxol.System.Updater.Manifest do
   or another tag.
 
   The default manifest is the `raxol` CLI release channel: `raxol-cli-v*`
-  tags on `DROOdotFOO/raxol`, one raw binary per platform plus `SHA256SUMS`,
-  as `.github/workflows/release-raxol-cli.yml` and
+  tags on `DROOdotFOO/raxol`, one raw binary per platform plus `SHA256SUMS`
+  and the Sigstore bundle `raxol-cli-attestation.sigstore.json`, as
+  `.github/workflows/release-raxol-cli.yml` and
   `scripts/build_cli_release_manifest.mjs` publish them. The installed
   version is read from the `:raxol_cli` application.
+
+  The manifest also says who must have built a release. With
+  `provenance: :required` (the default) an asset is installed only when
+  the release's `attestation_asset` proves, via
+  `Raxol.System.Updater.Provenance`, that `signer_workflow` in `repo` built
+  it for the release's tag. `provenance: :off` turns that off, for a
+  channel that publishes no attestation.
 
   An application that ships its own binary configures its own channel:
 
@@ -20,7 +28,9 @@ defmodule Raxol.System.Updater.Manifest do
         tag_prefix: "v",
         app: :widget,
         assets: %{"linux-x64" => "widget-linux-x64.tar.gz"},
-        format: {:tar_gz, "widget"}
+        format: {:tar_gz, "widget"},
+        attestation_asset: "widget.sigstore.json",
+        signer_workflow: ".github/workflows/release.yml"
 
   Base URLs must be `https`. Plain `http` is accepted only for loopback
   hosts, which is what the updater's own tests serve releases from.
@@ -36,6 +46,9 @@ defmodule Raxol.System.Updater.Manifest do
           assets: %{platform() => String.t()},
           checksums_asset: String.t(),
           format: format(),
+          provenance: :required | :off,
+          attestation_asset: String.t(),
+          signer_workflow: String.t(),
           api_base: String.t(),
           download_base: String.t()
         }
@@ -51,6 +64,9 @@ defmodule Raxol.System.Updater.Manifest do
             },
             checksums_asset: "SHA256SUMS",
             format: :binary,
+            provenance: :required,
+            attestation_asset: "raxol-cli-attestation.sigstore.json",
+            signer_workflow: ".github/workflows/release-raxol-cli.yml",
             api_base: "https://api.github.com",
             download_base: "https://github.com"
 
@@ -59,6 +75,7 @@ defmodule Raxol.System.Updater.Manifest do
   @repo_re ~r/\A[A-Za-z0-9](?:[A-Za-z0-9._-]*)\/[A-Za-z0-9._-]+\z/
   @name_re ~r/\A[A-Za-z0-9._-]+\z/
   @prefix_re ~r/\A[A-Za-z0-9._-]*\z/
+  @workflow_re ~r/\A\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml\z/
 
   @doc """
   The manifest for this call: `opts[:manifest]` (a struct or overrides),
@@ -104,6 +121,9 @@ defmodule Raxol.System.Updater.Manifest do
       assets: valid_assets?(m.assets),
       checksums_asset: safe_name?(m.checksums_asset),
       format: valid_format?(m.format),
+      provenance: m.provenance in [:required, :off],
+      attestation_asset: safe_name?(m.attestation_asset),
+      signer_workflow: match_string?(@workflow_re, m.signer_workflow),
       api_base: allowed_base?(m.api_base),
       download_base: allowed_base?(m.download_base)
     ]

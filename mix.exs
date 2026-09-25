@@ -453,6 +453,7 @@ defmodule Raxol.MixProject do
       files: ~w(
           lib
           priv/themes
+          priv/sigstore/trusted_root.json
           docs/getting-started
           docs/core
           docs/cookbook

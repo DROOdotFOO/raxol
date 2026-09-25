@@ -4,8 +4,9 @@ defmodule Raxol.CLI.Update do
 
   This module owns the CLI experience (flags, messages, exit codes, the
   once-a-day interactive prompt). Finding the release, checking it against
-  `SHA256SUMS`, and replacing the binary are `Raxol.System.Updater`'s, on its
-  default channel: the `raxol-cli-v*` releases this binary is built from.
+  `SHA256SUMS` and its Sigstore provenance, and replacing the binary are
+  `Raxol.System.Updater`'s, on its default channel: the `raxol-cli-v*`
+  releases this binary is built from.
   """
 
   alias Raxol.System.Updater
@@ -116,26 +117,36 @@ defmodule Raxol.CLI.Update do
 
   defp install(target, updater) do
     with {:ok, platform} <- platform(updater),
+         {:ok, manifest} <- Manifest.load(updater),
          {:ok, _current_exe} <- Updater.current_executable(updater) do
       IO.puts("Downloading raxol-#{platform}…")
-      target |> Updater.self_update(updater) |> report_install(target)
+      target |> Updater.self_update(updater) |> report_install(target, manifest)
     else
       {:error, reason} -> fail(reason)
     end
   end
 
-  defp report_install(:ok, target) do
-    IO.puts("✔ Updated to #{target} (verified against SHA256SUMS)")
+  defp report_install(:ok, target, manifest) do
+    IO.puts("✔ Updated to #{target} (#{verified_by(manifest)})")
     IO.puts("Restart raxol to use the new version")
     0
   end
 
-  defp report_install({:no_update, _current}, _target) do
+  defp report_install({:no_update, _current}, _target, _manifest) do
     IO.puts("Raxol is up to date")
     0
   end
 
-  defp report_install({:error, reason}, _target), do: fail(reason)
+  defp report_install({:error, reason}, _target, _manifest), do: fail(reason)
+
+  # `self_update/2` fails closed, so `:ok` under `provenance: :required`
+  # means the release's attestation verified.
+  defp verified_by(%Manifest{provenance: :required} = manifest),
+    do:
+      "verified against SHA256SUMS and its Sigstore provenance: " <>
+        "built by #{manifest.repo}/#{manifest.signer_workflow}"
+
+  defp verified_by(%Manifest{provenance: :off}), do: "verified against SHA256SUMS"
 
   defp fail(reason) do
     IO.puts(:stderr, "raxol update: #{format_reason(reason)}")
@@ -258,10 +269,31 @@ defmodule Raxol.CLI.Update do
   defp format_reason({:unsupported_platform, platform}), do: "unsupported platform #{platform}"
   defp format_reason({:invalid_version, version}), do: "invalid version #{inspect(version)}"
 
+  defp format_reason({:provenance_failed, reason}),
+    do: "refusing to install: #{provenance_problem(reason)}; nothing was changed"
+
   defp format_reason({:http_status, 404, _url}), do: "no such release"
   defp format_reason({:http_status, status, url}), do: "HTTP #{status} from #{url}"
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
+
+  defp provenance_problem({:attestation_unavailable, {:http_status, 404, _url}}),
+    do: "the release has no Sigstore provenance attestation"
+
+  defp provenance_problem({:attestation_unavailable, reason}),
+    do: "could not fetch the release's provenance attestation (#{format_reason(reason)})"
+
+  defp provenance_problem({:subject_digest_mismatch, name}),
+    do: "the release's provenance attestation does not cover this #{name}"
+
+  defp provenance_problem({:subject_not_found, name}),
+    do: "the release's provenance attestation does not name #{name}"
+
+  defp provenance_problem({:identity_mismatch, claim, actual}),
+    do: "the release was not built by the expected workflow (#{claim}: #{inspect(actual)})"
+
+  defp provenance_problem(reason),
+    do: "its Sigstore provenance did not verify (#{inspect(reason)})"
 
   defp print_help do
     IO.puts("""
@@ -273,7 +305,9 @@ defmodule Raxol.CLI.Update do
       -h, --help         Show this help
 
     Downloads the matching Burrito binary from the latest raxol-cli GitHub
-    release, verifies it against SHA256SUMS, and replaces the running binary.
+    release, verifies it against SHA256SUMS and the release's Sigstore
+    provenance (built by this repository's release workflow for that tag),
+    and replaces the running binary.
     The replaced binary is kept in ~/.raxol/backups/previous_version.
     """)
   end

@@ -45,9 +45,13 @@ every provider it can see, and the config it resolved.
 
 `raxol` checks for a newer `raxol-cli-v*` GitHub Release once per day when
 started interactively and prompts before installing. `raxol update` runs the
-same path on demand: it downloads the matching platform binary, verifies
-`SHA256SUMS`, and replaces the installed binary in place. Restart `raxol` after
-it reports success. Set `RAXOL_NO_UPDATE_CHECK=1` to disable the entry prompt.
+same path on demand: it downloads the matching platform binary, verifies it
+against `SHA256SUMS` and the release's Sigstore provenance (signed by this
+repository's release workflow for that tag, checked by `raxol` itself with no
+`gh` needed), and replaces the installed binary in place. A release whose
+provenance is missing or does not verify is not installed. Restart `raxol`
+after it reports success. Set `RAXOL_NO_UPDATE_CHECK=1` to disable the entry
+prompt.
 
 ## How this package is put together
 

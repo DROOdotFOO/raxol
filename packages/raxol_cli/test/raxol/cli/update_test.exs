@@ -2,6 +2,10 @@ defmodule Raxol.CLI.UpdateTest do
   @moduledoc """
   `raxol update` end to end against a real HTTP release channel on loopback
   (`Raxol.Test.UpdaterReleaseServer`), installing into a scratch file.
+
+  Synthetic binaries carry no Sigstore attestation, so most tests turn
+  provenance off; the provenance tests keep the default (required) and
+  serve the real `raxol-cli-v0.2.10` attestation.
   """
   use ExUnit.Case, async: true
 
@@ -15,6 +19,11 @@ defmodule Raxol.CLI.UpdateTest do
   @asset "raxol_cli_macos"
   @old "old raxol binary\n"
   @binary "new raxol binary\n"
+  @attestation "raxol-cli-attestation.sigstore.json"
+  @bundle Path.expand(
+            "../../../../../test/fixtures/sigstore/0.2.10/#{@attestation}",
+            __DIR__
+          )
 
   setup do
     dir = Path.join(System.tmp_dir!(), "raxol-update-test-#{System.unique_integer([:positive])}")
@@ -35,7 +44,7 @@ defmodule Raxol.CLI.UpdateTest do
   defp runtime(base, ctx, overrides \\ []) do
     Keyword.merge(
       [
-        manifest: [api_base: base, download_base: base],
+        manifest: [api_base: base, download_base: base, provenance: :off],
         platform: @platform,
         current_version: "0.2.6+abc",
         current_executable: ctx.exe,
@@ -76,6 +85,47 @@ defmodule Raxol.CLI.UpdateTest do
 
     assert stderr =~ "checksum mismatch for #{@asset}"
     assert File.read!(ctx.exe) == @old
+  end
+
+  # The default channel (provenance required) serving the real 0.2.10
+  # attestation, or none, beside a binary it does not cover.
+  defp serve_attested(assets) do
+    Server.start(Server.release_routes(@repo, "raxol-cli-v0.2.10", assets))
+  end
+
+  defp attested(base, ctx) do
+    runtime(base, ctx,
+      manifest: [api_base: base, download_base: base],
+      current_version: "0.2.8"
+    )
+  end
+
+  describe "with provenance required" do
+    test "a binary the release's attestation does not cover is refused", ctx do
+      base = serve_attested(%{@asset => @binary, @attestation => File.read!(@bundle)})
+
+      stderr =
+        capture_io(:stderr, fn ->
+          _stdout = capture_io(fn -> assert Update.run([], attested(base, ctx)) == 1 end)
+        end)
+
+      assert stderr =~
+               "refusing to install: the release's provenance attestation does not cover this #{@asset}"
+
+      assert File.read!(ctx.exe) == @old
+    end
+
+    test "a release without an attestation is refused", ctx do
+      base = serve_attested(%{@asset => @binary})
+
+      stderr =
+        capture_io(:stderr, fn ->
+          _stdout = capture_io(fn -> assert Update.run([], attested(base, ctx)) == 1 end)
+        end)
+
+      assert stderr =~ "refusing to install: the release has no Sigstore provenance attestation"
+      assert File.read!(ctx.exe) == @old
+    end
   end
 
   test "a specific version installs that release", ctx do

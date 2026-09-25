@@ -3,17 +3,29 @@ defmodule Raxol.System.Updater.Core do
   Update flow and GenServer callbacks for `Raxol.System.Updater`.
 
   Every install follows one order: resolve the release from the manifest,
-  fetch its `SHA256SUMS`, download, verify the download's checksum, and
-  only then extract (archive channels) and install. Nothing downloaded is
-  extracted, executed, or copied over the running binary before it
-  verifies.
+  fetch its `SHA256SUMS` and (unless the manifest turns provenance off) its
+  Sigstore attestation, download, verify the download's checksum, verify
+  the attestation covers the download (`Raxol.System.Updater.Provenance`),
+  and only then extract (archive channels) and install. Nothing downloaded
+  is extracted, executed, or copied over the running binary before it
+  verifies, and a release whose attestation is missing or does not verify
+  is never installed.
 
   Functions take the options documented on `Raxol.System.Updater`; each
   defaults to the running installation.
   """
   use Raxol.Core.Behaviours.BaseManager
 
-  alias Raxol.System.Updater.{Archive, Manifest, Network, State, Validation}
+  alias Raxol.System.Updater.{
+    Archive,
+    Manifest,
+    Network,
+    Provenance,
+    State,
+    Validation
+  }
+
+  alias Raxol.System.Updater.Provenance.Policy
 
   # --- Client API ---
 
@@ -55,15 +67,17 @@ defmodule Raxol.System.Updater.Core do
   def download_update(version, opts \\ []) do
     with {:ok, ctx} <- resolve(version, opts),
          {:ok, asset} <- asset_checksum(ctx),
-         {:ok, _path} <- download_verified(ctx, asset, download_dir(opts)) do
+         {:ok, attestation} <- fetch_attestation(ctx),
+         {:ok, _path} <-
+           download_verified(ctx, asset, attestation, download_dir(opts)) do
       {:ok, ctx.release.version}
     end
   end
 
   @doc """
   Installs a release previously fetched by `download_update/2`. The stored
-  file is re-verified against the release's `SHA256SUMS` first, so a file
-  swapped in the download directory in between is refused.
+  file is re-verified against the release's `SHA256SUMS` and attestation
+  first, so a file swapped in the download directory in between is refused.
   """
   @spec install_update(map(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -339,17 +353,21 @@ defmodule Raxol.System.Updater.Core do
 
   # The file `download_update/2` stored, re-verified against the release.
   defp stored_download(ctx, opts) do
-    with {:ok, asset} <- asset_checksum(ctx) do
-      path = Path.join(download_dir(opts), asset.name)
-
-      with :ok <- Network.verify_file(path, asset.sha, asset.name),
-           do: {:ok, path}
+    with {:ok, asset} <- asset_checksum(ctx),
+         {:ok, attestation} <- fetch_attestation(ctx),
+         path = Path.join(download_dir(opts), asset.name),
+         :ok <- Network.verify_file(path, asset.sha, asset.name),
+         :ok <-
+           discard_on_error(path, verify_provenance(ctx, asset, attestation)) do
+      {:ok, path}
     end
   end
 
   defp full_install(plan) do
     with {:ok, asset} <- asset_sha(plan, plan.checksums),
-         {:ok, path} <- download_verified(plan, asset, plan.work_dir),
+         {:ok, attestation} <- fetch_attestation(plan),
+         {:ok, path} <-
+           download_verified(plan, asset, attestation, plan.work_dir),
          {:ok, new_exe} <- stage(plan.manifest, path, plan.work_dir) do
       Network.install_executable(
         plan.current_exe,
@@ -386,14 +404,50 @@ defmodule Raxol.System.Updater.Core do
     end
   end
 
-  defp download_verified(ctx, asset, dir) do
+  defp download_verified(ctx, asset, attestation, dir) do
     path = Path.join(dir, asset.name)
     url = Manifest.asset_url(ctx.manifest, ctx.release.tag, asset.name)
 
     with :ok <- File.mkdir_p(dir),
          :ok <- Network.download(url, path),
-         :ok <- verify_or_discard(path, asset.sha, asset.name) do
+         :ok <-
+           discard_on_error(
+             path,
+             Network.verify_file(path, asset.sha, asset.name)
+           ),
+         :ok <-
+           discard_on_error(path, verify_provenance(ctx, asset, attestation)) do
       {:ok, path}
+    end
+  end
+
+  # The release's Sigstore bundle, fetched before the asset so that a
+  # release without one is never downloaded. Missing is a refusal, not a
+  # fallback to checksums alone.
+  defp fetch_attestation(%{manifest: %Manifest{provenance: :off}}),
+    do: {:ok, :off}
+
+  defp fetch_attestation(ctx) do
+    case Network.fetch_attestation(ctx.manifest, ctx.release) do
+      {:ok, bundle} ->
+        {:ok, bundle}
+
+      {:error, reason} ->
+        {:error, {:provenance_failed, {:attestation_unavailable, reason}}}
+    end
+  end
+
+  # The checksum-verified asset must be an attested subject of a bundle the
+  # manifest's signer workflow produced for this release's tag.
+  defp verify_provenance(_ctx, _asset, :off), do: :ok
+
+  defp verify_provenance(ctx, asset, bundle) do
+    %Manifest{repo: repo, signer_workflow: workflow} = ctx.manifest
+    policy = Policy.for_release(repo, workflow, ctx.release.tag)
+
+    case Provenance.verify(bundle, {asset.name, {"sha256", asset.sha}}, policy) do
+      {:ok, _verified} -> :ok
+      {:error, reason} -> {:error, {:provenance_failed, reason}}
     end
   end
 
@@ -410,12 +464,12 @@ defmodule Raxol.System.Updater.Core do
     end
   end
 
-  defp verify_or_discard(path, sha, name) do
-    with {:error, _reason} = error <- Network.verify_file(path, sha, name) do
-      _ = File.rm(path)
-      error
-    end
+  defp discard_on_error(path, {:error, _reason} = error) do
+    _ = File.rm(path)
+    error
   end
+
+  defp discard_on_error(_path, result), do: result
 
   defp context_executable(%{current_exe: path}, _opts)
        when is_binary(path) and path != "",

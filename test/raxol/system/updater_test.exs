@@ -3,6 +3,10 @@ defmodule Raxol.System.UpdaterTest do
   The self-updater against a real HTTP release channel on loopback: real
   downloads, real SHA256SUMS, real files standing in for the running
   executable. What is asserted is what would end up on disk.
+
+  Synthetic binaries have no Sigstore attestation, so those channels turn
+  provenance off; the "provenance" tests keep the default channel's
+  `provenance: :required` and serve the real `raxol-cli-v0.2.10` bundle.
   """
   use ExUnit.Case, async: true
 
@@ -16,6 +20,11 @@ defmodule Raxol.System.UpdaterTest do
   @platform "linux-x64"
   @asset "raxol_cli_linux"
   @old "old binary"
+  @attestation "raxol-cli-attestation.sigstore.json"
+  @bundle Path.expand(
+            "../../fixtures/sigstore/0.2.10/raxol-cli-attestation.sigstore.json",
+            __DIR__
+          )
 
   setup do
     dir =
@@ -42,7 +51,11 @@ defmodule Raxol.System.UpdaterTest do
 
     Keyword.merge(
       [
-        manifest: [api_base: base, download_base: base] ++ manifest,
+        manifest:
+          Keyword.merge(
+            [api_base: base, download_base: base, provenance: :off],
+            manifest
+          ),
         platform: @platform,
         current_version: "1.0.0",
         current_executable: ctx.exe,
@@ -51,6 +64,13 @@ defmodule Raxol.System.UpdaterTest do
       ],
       extra
     )
+  end
+
+  # The default channel's own provenance policy, on the loopback server.
+  defp attested_opts(base, ctx, extra) do
+    base
+    |> opts(ctx, extra)
+    |> Keyword.update!(:manifest, &Keyword.delete(&1, :provenance))
   end
 
   defp download_path(tag, name),
@@ -95,6 +115,19 @@ defmodule Raxol.System.UpdaterTest do
                Manifest.new(url: "https://x")
 
       assert {:ok, _loopback} = Manifest.new(api_base: "http://127.0.0.1:4000")
+    end
+
+    test "a provenance policy that is not a workflow of the channel's repo is refused" do
+      assert {:error, {:invalid_manifest, :provenance, :optional}} =
+               Manifest.new(provenance: :optional)
+
+      assert {:error, {:invalid_manifest, :signer_workflow, _}} =
+               Manifest.new(
+                 signer_workflow: "someone/else/.github/workflows/x.yml"
+               )
+
+      assert {:error, {:invalid_manifest, :attestation_asset, _}} =
+               Manifest.new(attestation_asset: "../bundle.json")
     end
   end
 
@@ -334,6 +367,79 @@ defmodule Raxol.System.UpdaterTest do
 
       assert {:error, {:unsafe_archive_entry, "raxol", :symlink}} =
                Archive.extract(tar, Path.join(ctx.dir, "tout"), :tar_gz)
+    end
+  end
+
+  @attested_tag "raxol-cli-v0.2.10"
+
+  # The real raxol-cli-v0.2.10 attestation serves beside binaries it does not
+  # cover: every Sigstore check passes except the subject digest.
+  defp serve_attested(assets) do
+    Server.start(Server.release_routes(@repo, @attested_tag, assets))
+  end
+
+  describe "provenance" do
+    test "a binary the release's attestation does not cover is refused and nothing is replaced",
+         ctx do
+      base =
+        serve_attested(%{
+          @asset => "new binary",
+          @attestation => File.read!(@bundle)
+        })
+
+      assert {:error, {:provenance_failed, {:subject_digest_mismatch, @asset}}} =
+               Updater.self_update(
+                 "0.2.10",
+                 attested_opts(base, ctx, current_version: "0.2.8")
+               )
+
+      assert File.read!(ctx.exe) == @old
+      refute File.exists?(ctx.backup)
+      refute File.exists?(Path.join([ctx.dir, "work", @asset]))
+    end
+
+    test "a release without an attestation is refused before its binary is downloaded",
+         ctx do
+      base = serve_attested(%{@asset => "new binary"})
+
+      assert {:error,
+              {:provenance_failed,
+               {:attestation_unavailable, {:http_status, 404, _url}}}} =
+               Updater.self_update(
+                 "0.2.10",
+                 attested_opts(base, ctx, current_version: "0.2.8")
+               )
+
+      asset_path = download_path(@attested_tag, @asset)
+      refute_received {:release_request, ^asset_path}
+      assert File.read!(ctx.exe) == @old
+    end
+
+    test "download_update/2 and install_update/3 refuse what the attestation does not cover",
+         ctx do
+      base =
+        serve_attested(%{
+          @asset => "new binary",
+          @attestation => File.read!(@bundle)
+        })
+
+      download_dir = Path.join(ctx.dir, "downloads")
+      opts = attested_opts(base, ctx, download_dir: download_dir)
+      stored = Path.join(download_dir, @asset)
+
+      assert {:error, {:provenance_failed, {:subject_digest_mismatch, @asset}}} =
+               Updater.download_update("0.2.10", opts)
+
+      refute File.exists?(stored)
+
+      # A file that matches SHA256SUMS, dropped where a download would be.
+      File.write!(stored, "new binary")
+
+      assert {:error, {:provenance_failed, {:subject_digest_mismatch, @asset}}} =
+               Updater.install_update(%{}, "0.2.10", opts)
+
+      assert File.read!(ctx.exe) == @old
+      refute File.exists?(stored)
     end
   end
 end
