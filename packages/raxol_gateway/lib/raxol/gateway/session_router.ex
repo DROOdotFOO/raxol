@@ -131,6 +131,12 @@ defmodule Raxol.Gateway.SessionRouter do
   Hand a conversation off to another platform: start a session on `to_route`
   reusing the source session's `conversation_id` (and `:log`), so a configured
   log resumes the same history. Returns the destination session pid.
+
+  The destination is started like any other session, so it passes the same
+  authorization, `:max_sessions` and per-key cooldown gates; a refusal is
+  `{:error, :unauthorized | :max_sessions | :rate_limited}` and leaves the source
+  session as it was. A live destination session keeps its own conversation; a
+  tracked one that is already dead is replaced, as in `route/3`.
   """
   @spec handoff(GenServer.server(), String.t(), Route.t()) :: {:ok, pid()} | {:error, term()}
   def handoff(server, from_key, %Route{} = to_route) do
@@ -162,7 +168,7 @@ defmodule Raxol.Gateway.SessionRouter do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:route, route, event}, _from, state) do
-    case ensure_session(route, state) do
+    case ensure_session(route, nil, state) do
       {:ok, pid, new_state} ->
         Session.dispatch(pid, event)
         {:reply, :ok, new_state}
@@ -173,7 +179,7 @@ defmodule Raxol.Gateway.SessionRouter do
   end
 
   def handle_manager_call({:start_session, route}, _from, state) do
-    case ensure_session(route, state) do
+    case ensure_session(route, nil, state) do
       {:ok, pid, new_state} -> {:reply, {:ok, pid}, new_state}
       {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
@@ -212,7 +218,9 @@ defmodule Raxol.Gateway.SessionRouter do
   # Authorization is checked on EVERY event, not only on the start that creates
   # the session. A revoked user whose session is still within its idle timeout
   # would otherwise keep being served from the grant they no longer hold.
-  defp ensure_session(route, state) do
+  # `conversation_id` (set by a handoff) applies only to a session started here;
+  # a live one keeps its own.
+  defp ensure_session(route, conversation_id, state) do
     key = Route.key(route)
 
     cond do
@@ -221,10 +229,10 @@ defmodule Raxol.Gateway.SessionRouter do
         {:error, :unauthorized, state}
 
       pid = Map.get(state.sessions, key) ->
-        reuse_session(key, pid, route, state)
+        reuse_session(key, pid, route, conversation_id, state)
 
       true ->
-        start_guarded(key, route, state)
+        start_guarded(key, route, conversation_id, state)
     end
   end
 
@@ -233,11 +241,11 @@ defmodule Raxol.Gateway.SessionRouter do
   # the death here, as the :DOWN handler would, then start a session exactly as
   # if that :DOWN had been read first -- same max_sessions and cooldown -- so the
   # answer does not depend on which message the router happened to read first.
-  defp reuse_session(key, pid, route, state) do
+  defp reuse_session(key, pid, route, conversation_id, state) do
     if Process.alive?(pid) do
       {:ok, pid, state}
     else
-      start_guarded(key, route, drop_dead(key, pid, state))
+      start_guarded(key, route, conversation_id, drop_dead(key, pid, state))
     end
   end
 
@@ -282,7 +290,7 @@ defmodule Raxol.Gateway.SessionRouter do
 
   # Errors carry the state: a restart refused after drop_dead/3 must still
   # persist the drop, since the :DOWN that would otherwise do it is flushed.
-  defp start_guarded(key, route, state) do
+  defp start_guarded(key, route, conversation_id, state) do
     cond do
       map_size(state.sessions) >= state.max_sessions ->
         emit(:rejected, %{key: key, reason: :max_sessions})
@@ -293,7 +301,7 @@ defmodule Raxol.Gateway.SessionRouter do
         {:error, :rate_limited, state}
 
       true ->
-        case do_start(key, route, nil, state) do
+        case do_start(key, route, conversation_id, state) do
           {:ok, pid, new_state} -> {:ok, pid, new_state}
           {:error, reason} -> {:error, reason, state}
         end
@@ -354,30 +362,13 @@ defmodule Raxol.Gateway.SessionRouter do
   # conversation_id so a configured log resumes the same history. A live
   # destination session keeps its own conversation_id (no mid-life rebind).
   # A handoff creates a session on a route the source conversation named, so it
-  # is a session start like any other and the destination is authorized on its
-  # own terms. Otherwise "follow me to Discord" would be a way to open a chat
-  # the gate would have refused directly.
+  # is a session start like any other: authorization, max_sessions and the
+  # cooldown judge the destination on its own terms. Otherwise "follow me to
+  # Discord" would be a way to open a chat the gates would have refused directly.
   defp rebind(conversation_id, to_route, state) do
-    to_key = Route.key(to_route)
-
-    if authorized?(to_route, state) do
-      rebind_authorized(conversation_id, to_route, to_key, state)
-    else
-      emit(:rejected, %{key: to_key, reason: :unauthorized})
-      {:reply, {:error, :unauthorized}, state}
-    end
-  end
-
-  defp rebind_authorized(conversation_id, to_route, to_key, state) do
-    case Map.get(state.sessions, to_key) do
-      nil ->
-        case do_start(to_key, to_route, conversation_id, state) do
-          {:ok, pid, new_state} -> {:reply, {:ok, pid}, new_state}
-          {:error, reason} -> {:reply, {:error, reason}, state}
-        end
-
-      pid ->
-        {:reply, {:ok, pid}, state}
+    case ensure_session(to_route, conversation_id, state) do
+      {:ok, pid, new_state} -> {:reply, {:ok, pid}, new_state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
