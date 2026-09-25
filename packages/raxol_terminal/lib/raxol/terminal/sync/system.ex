@@ -29,6 +29,15 @@ defmodule Raxol.Terminal.Sync.System do
         }
 
   # Client API
+
+  @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
+
   def sync(sync_id, key, value, opts \\ []) do
     Log.debug(
       "[System] sync called: sync_id=#{sync_id}, key=#{key}, value=#{inspect(value)}, opts=#{inspect(opts)}"

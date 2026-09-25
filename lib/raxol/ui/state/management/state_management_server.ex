@@ -21,6 +21,14 @@ defmodule Raxol.UI.State.Management.StateManagementServer do
   # Client API
 
   @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
+
+  @doc """
   Returns a child specification for this server.
   """
   def child_spec(opts) do
@@ -241,8 +249,7 @@ defmodule Raxol.UI.State.Management.StateManagementServer do
     Log.debug("get_state path_list: #{inspect(path_list)}")
     log_store_debug(state.store_data)
 
-    value = get_in(state.store_data, path_list)
-    {:reply, value, state}
+    {:reply, value_at(state.store_data, path_list), state}
   end
 
   @impl true
@@ -418,17 +425,8 @@ defmodule Raxol.UI.State.Management.StateManagementServer do
   # Handle process termination
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    # Clean up all state associated with the dead process
-    state = %{
-      state
-      | component_ids: Map.delete(state.component_ids, pid),
-        render_contexts: Map.delete(state.render_contexts, pid),
-        component_processes: Map.delete(state.component_processes, pid),
-        monitors: Map.delete(state.monitors, pid),
-        debounce_timers: clean_timers_for_pid(state.debounce_timers, pid)
-    }
-
-    # Also clean up hook states for this component if it had an ID
+    # Clean up hook states for this component if it had an ID. This has to
+    # read `component_ids` before the cleanup below deletes the pid from it.
     state =
       case Map.get(state.component_ids, pid) do
         nil ->
@@ -442,6 +440,16 @@ defmodule Raxol.UI.State.Management.StateManagementServer do
 
           %{state | hook_states: hook_states}
       end
+
+    # Clean up all other state associated with the dead process
+    state = %{
+      state
+      | component_ids: Map.delete(state.component_ids, pid),
+        render_contexts: Map.delete(state.render_contexts, pid),
+        component_processes: Map.delete(state.component_processes, pid),
+        monitors: Map.delete(state.monitors, pid),
+        debounce_timers: clean_timers_for_pid(state.debounce_timers, pid)
+    }
 
     {:noreply, state}
   end
@@ -546,6 +554,10 @@ defmodule Raxol.UI.State.Management.StateManagementServer do
     |> Enum.reject(fn {{p, _}, _} -> p == pid end)
     |> Enum.into(%{})
   end
+
+  # `get_in/2` rejects an empty path, which means the whole store here.
+  defp value_at(data, []), do: data
+  defp value_at(data, path), do: get_in(data, path)
 
   defp normalize_path(path) when is_list(path),
     do: Enum.map(path, &normalize_key/1)

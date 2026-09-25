@@ -243,4 +243,14 @@ defmodule Raxol.Terminal.Sync.SystemTest do
       assert Map.get(sync_data, "key3").value == "value3"
     end
   end
+
+  # `Raxol.Application` starts it as `{Raxol.Terminal.Sync.System, []}`.
+  describe "server naming" do
+    test "a server started without a name serves the API" do
+      start_supervised!({System, []})
+
+      assert :ok == System.sync("naming", "key", "value")
+      assert {:ok, "value"} == System.get("naming", "key")
+    end
+  end
 end

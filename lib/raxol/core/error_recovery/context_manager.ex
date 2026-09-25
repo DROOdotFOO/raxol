@@ -57,6 +57,14 @@ defmodule Raxol.Core.ErrorRecovery.ContextManager do
   # Public API
 
   @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
+
+  @doc """
   Store context data for a process or component.
   """
   def store_context(key, data, opts \\ []) do

@@ -57,7 +57,13 @@ defmodule Raxol.Performance.Profiler do
 
   # Client API
 
-  # BaseManager provides start_link/1 and start_link/2 automatically
+  @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
 
   @doc """
   Profiles a code block and records metrics.

@@ -19,7 +19,13 @@ defmodule Raxol.System.Updater.State.UpdaterServer do
 
   # Client API
 
-  # start_link is provided by BaseManager
+  @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
 
   @doc """
   Returns a child specification for this server.
