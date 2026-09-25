@@ -64,18 +64,21 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
   end
 
   @doc """
-  Cleans up terminal state during shutdown: kills stdin reader, closes tty port,
-  restores terminal modes and original stty settings.
+  Cleans up terminal state during shutdown: releases the prim_tty reader,
+  closes tty port, restores terminal modes and original stty settings.
   """
   @dialyzer {:nowarn_function, cleanup_terminal: 1}
   def cleanup_terminal(state) do
-    # Kill the stdin reader process
+    # Stop intercepting input. The reader is OTP's (`:user_drv_reader`); the
+    # Driver only traced its sends. Never exit it: user_drv treats any
+    # non-normal reader exit as a crash and stops, taking every group leader,
+    # and so :standard_io, down before the restore below can be written.
     case get_in(state, [
            Access.key(:io_terminal_state),
            Access.key(:input_reader)
          ]) do
       pid when is_pid(pid) ->
-        Process.exit(pid, :shutdown)
+        untrace_reader(pid)
 
       _ ->
         :ok
@@ -117,6 +120,16 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
     end
 
     :ok
+  end
+
+  defp untrace_reader(reader) do
+    _ = :erlang.trace(reader, false, [:send])
+    :ok
+  catch
+    :error, :badarg ->
+      Log.debug(
+        "[TerminalDriver] Input reader #{inspect(reader)} already exited; nothing to untrace"
+      )
   end
 
   @dialyzer {:nowarn_function, call_termbox_init: 0}
