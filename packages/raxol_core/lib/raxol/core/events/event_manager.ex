@@ -207,6 +207,8 @@ defmodule Raxol.Core.Events.EventManager do
     state = %{
       handlers: handlers_table,
       subscriptions: subscriptions_table,
+      # pid -> monitor ref, one per handler or subscriber pid
+      monitors: %{},
       config: opts
     }
 
@@ -227,7 +229,7 @@ defmodule Raxol.Core.Events.EventManager do
     priority = 50
     handler_entry = {event_type, target, handler, priority}
     :ets.insert(state.handlers, handler_entry)
-    {:reply, :ok, state}
+    {:reply, :ok, maybe_monitor(state, target)}
   end
 
   @impl true
@@ -263,10 +265,7 @@ defmodule Raxol.Core.Events.EventManager do
       :ets.insert(state.subscriptions, entry)
     end)
 
-    # Monitor the subscriber to clean up on death
-    Process.monitor(subscriber_pid)
-
-    {:reply, {:ok, ref}, state}
+    {:reply, {:ok, ref}, maybe_monitor(state, subscriber_pid)}
   end
 
   @impl true
@@ -329,7 +328,7 @@ defmodule Raxol.Core.Events.EventManager do
   def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
     # Clean up dead process handlers and subscriptions
     cleanup_dead_process(state, pid)
-    {:noreply, state}
+    {:noreply, %{state | monitors: Map.delete(state.monitors, pid)}}
   end
 
   @impl true
@@ -408,6 +407,17 @@ defmodule Raxol.Core.Events.EventManager do
       Map.get(event_data, key) == expected_value
     end)
   end
+
+  # A pid handler or subscriber is removed on :DOWN, so monitor it once.
+  defp maybe_monitor(state, pid) when is_pid(pid) do
+    if Map.has_key?(state.monitors, pid) do
+      state
+    else
+      %{state | monitors: Map.put(state.monitors, pid, Process.monitor(pid))}
+    end
+  end
+
+  defp maybe_monitor(state, _target), do: state
 
   defp cleanup_dead_process(state, dead_pid) do
     # Remove handlers for dead process

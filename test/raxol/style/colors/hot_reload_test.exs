@@ -46,7 +46,9 @@ defmodule Raxol.Style.Colors.HotReloadTest do
 
     # Stop any existing HotReload process to avoid conflicts
     case Process.whereis(HotReload) do
-      nil -> :ok
+      nil ->
+        :ok
+
       pid when is_pid(pid) ->
         if Process.alive?(pid) do
           try do
@@ -191,18 +193,53 @@ defmodule Raxol.Style.Colors.HotReloadTest do
 
   describe "subscriber management" do
     test "handles multiple subscribers", %{tmp_dir: tmp_dir} do
-      # Create another subscriber
-      HotReload.subscribe()
+      test = self()
+
+      spawn_link(fn ->
+        :ok = HotReload.subscribe()
+        send(test, :subscribed)
+        send(test, {:other_received, receive_theme_with_name("Test Theme")})
+      end)
+
+      assert_receive :subscribed
 
       # Create theme file
       theme_path = Path.join(tmp_dir, "test_theme.json")
       File.write!(theme_path, Jason.encode!(@test_theme))
 
       # Both subscribers should receive the test theme (ignore Default)
-      theme1 = receive_theme_with_name("Test Theme")
-      theme2 = receive_theme_with_name("Test Theme")
-      assert theme1.name == "Test Theme"
-      assert theme2.name == "Test Theme"
+      assert receive_theme_with_name("Test Theme").name == "Test Theme"
+      assert_receive {:other_received, %{name: "Test Theme"}}, 5000
+    end
+
+    test "notifies a process that subscribed twice once", %{tmp_dir: tmp_dir} do
+      :ok = HotReload.subscribe()
+
+      theme_path = Path.join(tmp_dir, "test_theme.json")
+      File.write!(theme_path, Jason.encode!(@test_theme))
+
+      assert receive_theme_with_name("Test Theme").name == "Test Theme"
+      refute_receive {:theme_reloaded, %{name: "Test Theme"}}, 300
+    end
+
+    test "drops a subscriber that exits" do
+      test = self()
+
+      subscriber =
+        spawn(fn ->
+          :ok = HotReload.subscribe()
+          send(test, :subscribed)
+          receive do: (:stop -> :ok)
+        end)
+
+      assert_receive :subscribed
+      assert subscriber in :sys.get_state(HotReload).subscribers
+
+      ref = Process.monitor(subscriber)
+      Process.exit(subscriber, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^subscriber, :killed}
+
+      refute subscriber in :sys.get_state(HotReload).subscribers
     end
 
     test "handles subscriber unsubscribe", %{tmp_dir: tmp_dir} do

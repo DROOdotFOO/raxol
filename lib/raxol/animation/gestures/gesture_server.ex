@@ -65,6 +65,13 @@ defmodule Raxol.Animation.Gestures.GestureServer do
   end
 
   @doc """
+  Starts the server, registered as `#{inspect(__MODULE__)}` unless `:name` is given.
+  """
+  def start_link(opts \\ []) do
+    super(Keyword.put_new(opts, :name, __MODULE__))
+  end
+
+  @doc """
   Initializes gesture state for the calling process.
   """
   def init_gestures(pid \\ nil) do
@@ -211,8 +218,6 @@ defmodule Raxol.Animation.Gestures.GestureServer do
 
   @impl true
   def handle_call({:register_handler, pid, gesture_type, handler}, _from, state) do
-    state = ensure_monitored(pid, state)
-
     updated_state =
       update_process_state(state, pid, fn gesture_state ->
         handlers =
@@ -231,8 +236,6 @@ defmodule Raxol.Animation.Gestures.GestureServer do
 
   @impl true
   def handle_call({:touch_down, pid, position, time}, _from, state) do
-    state = ensure_monitored(pid, state)
-
     updated_state =
       update_process_state(state, pid, fn gesture_state ->
         %{
@@ -399,7 +402,10 @@ defmodule Raxol.Animation.Gestures.GestureServer do
     Map.get(state.process_states, pid, State.new())
   end
 
+  # Every write goes through here, so every pid with an entry is monitored
+  # and its entry is dropped on :DOWN.
   defp update_process_state(state, pid, fun) do
+    state = ensure_monitored(pid, state)
     gesture_state = get_process_state(state, pid)
     updated_gesture_state = fun.(gesture_state)
     process_states = Map.put(state.process_states, pid, updated_gesture_state)

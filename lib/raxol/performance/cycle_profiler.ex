@@ -189,8 +189,20 @@ defmodule Raxol.Performance.CycleProfiler do
 
   @impl true
   def handle_cast({:subscribe, pid}, %State{} = state) do
-    {:noreply, %{state | subscribers: [pid | state.subscribers]}}
+    if pid in state.subscribers do
+      {:noreply, state}
+    else
+      _ = Process.monitor(pid)
+      {:noreply, %{state | subscribers: [pid | state.subscribers]}}
+    end
   end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, %State{} = state) do
+    {:noreply, %{state | subscribers: List.delete(state.subscribers, pid)}}
+  end
+
+  def handle_info(_msg, %State{} = state), do: {:noreply, state}
 
   @impl true
   def handle_call(:stats, _from, %State{} = state) do
