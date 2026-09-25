@@ -99,7 +99,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
       options: Map.merge(@default_options, Map.new(opts))
     }
 
-    schedule_check()
+    schedule_check(state.options.check_interval)
     {:ok, state}
   end
 
@@ -167,7 +167,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:check_alerts, _timer_id}, state) do
     new_state = check_all_alerts(state)
-    schedule_check()
+    schedule_check(state.options.check_interval)
     {:noreply, new_state}
   end
 
@@ -412,13 +412,13 @@ defmodule Raxol.Core.Metrics.AlertManager do
     )
   end
 
-  defp schedule_check do
+  defp schedule_check(interval_seconds) do
     timer_id = System.unique_integer([:positive])
 
     Process.send_after(
       self(),
       {:check_alerts, timer_id},
-      @default_options.check_interval * 1000
+      interval_seconds * 1000
     )
   end
 

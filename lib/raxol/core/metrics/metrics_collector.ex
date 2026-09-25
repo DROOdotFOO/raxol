@@ -169,10 +169,14 @@ defmodule Raxol.Core.Metrics.MetricsCollector do
     end
   end
 
-  # Normalize tags to a consistent map format for comparison
-  defp normalize_tags(tags) when is_map(tags), do: tags
+  @doc """
+  Normalizes recorded tags to a map: keyword lists become maps and plain tag
+  lists such as `[:api]` become `%{api: true}`.
+  """
+  @spec normalize_tags(term()) :: map()
+  def normalize_tags(tags) when is_map(tags), do: tags
 
-  defp normalize_tags(tags) when is_list(tags) do
+  def normalize_tags(tags) when is_list(tags) do
     # Handle both keyword lists [{:key, value}] and plain atom lists [:tag1, :tag2]
     cond do
       tags == [] ->
@@ -187,7 +191,7 @@ defmodule Raxol.Core.Metrics.MetricsCollector do
     end
   end
 
-  defp normalize_tags(_), do: %{}
+  def normalize_tags(_), do: %{}
 
   @doc """
   Gets all metrics grouped by type.

@@ -42,7 +42,7 @@ defmodule Raxol.Test.MetricsHelper do
       start_or_reuse(
         Raxol.Core.Metrics.AlertManager,
         Keyword.get(opts, :alert_manager_opts,
-          check_interval: :timer.seconds(1),
+          check_interval: 1,
           max_rules: 10,
           default_cooldown: :timer.seconds(5)
         )
