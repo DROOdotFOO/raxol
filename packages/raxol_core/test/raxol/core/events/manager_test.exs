@@ -90,6 +90,18 @@ defmodule Raxol.Core.Events.EventManagerTest do
                {__MODULE__, :dummy_handler, 50}
              ]
     end
+
+    test "drops a pid handler when the pid exits" do
+      handler = spawn(fn -> receive do: (:stop -> :ok) end)
+      :ok = EventManager.register_handler(:test_event, handler, :handle_event)
+      assert EventManager.get_handlers() == %{test_event: [{handler, :handle_event, 50}]}
+
+      ref = Process.monitor(handler)
+      Process.exit(handler, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^handler, :killed}
+
+      assert EventManager.get_handlers() == %{}
+    end
   end
 
   describe "unregister_handler/3" do

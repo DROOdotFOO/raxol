@@ -5,14 +5,28 @@ defmodule Raxol.Performance.CycleProfilerTest do
 
   setup do
     name = :"profiler_test_#{System.unique_integer([:positive])}"
-    {:ok, pid} = CycleProfiler.start_link(name: name, max_entries: 100, slow_threshold_us: 1000)
+
+    {:ok, pid} =
+      CycleProfiler.start_link(
+        name: name,
+        max_entries: 100,
+        slow_threshold_us: 1000
+      )
+
     %{pid: pid}
   end
 
   describe "record_update/2" do
     test "records update timings", %{pid: pid} do
-      CycleProfiler.record_update(pid, %{update_us: 500, message_summary: ":tick"})
-      CycleProfiler.record_update(pid, %{update_us: 700, message_summary: ":key"})
+      CycleProfiler.record_update(pid, %{
+        update_us: 500,
+        message_summary: ":tick"
+      })
+
+      CycleProfiler.record_update(pid, %{
+        update_us: 700,
+        message_summary: ":key"
+      })
 
       # Give casts time to process
       :timer.sleep(10)
@@ -92,7 +106,11 @@ defmodule Raxol.Performance.CycleProfilerTest do
       CycleProfiler.record_render(pid, %{total_us: 100, view_us: 50})
       :timer.sleep(10)
 
-      path = Path.join(System.tmp_dir!(), "profiler_test_#{System.unique_integer([:positive])}.bin")
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "profiler_test_#{System.unique_integer([:positive])}.bin"
+        )
 
       assert :ok = CycleProfiler.export(pid, path)
       assert File.exists?(path)
@@ -123,6 +141,37 @@ defmodule Raxol.Performance.CycleProfilerTest do
       CycleProfiler.record_render(pid, %{total_us: 500})
 
       refute_receive {:slow_cycle, _}, 50
+    end
+
+    test "notifies a process that subscribed twice once", %{pid: pid} do
+      CycleProfiler.subscribe(pid)
+      CycleProfiler.subscribe(pid)
+      CycleProfiler.record_render(pid, %{total_us: 2000})
+
+      assert_receive {:slow_cycle, _}
+      refute_receive {:slow_cycle, _}, 50
+    end
+
+    test "drops a subscriber that exits", %{pid: pid} do
+      test = self()
+
+      subscriber =
+        spawn(fn ->
+          CycleProfiler.subscribe(pid)
+          # A call from the same process runs after the subscribe cast.
+          _ = CycleProfiler.counts(pid)
+          send(test, :subscribed)
+          receive do: (:stop -> :ok)
+        end)
+
+      assert_receive :subscribed
+      assert subscriber in :sys.get_state(pid).subscribers
+
+      ref = Process.monitor(subscriber)
+      Process.exit(subscriber, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^subscriber, :killed}
+
+      refute subscriber in :sys.get_state(pid).subscribers
     end
   end
 end

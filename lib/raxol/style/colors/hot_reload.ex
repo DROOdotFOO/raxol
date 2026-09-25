@@ -18,7 +18,8 @@ defmodule Raxol.Style.Colors.HotReload do
   defstruct [
     :watched_paths,
     :last_modified,
-    :subscribers
+    :subscribers,
+    monitors: %{}
   ]
 
   # Client API
@@ -88,13 +89,31 @@ defmodule Raxol.Style.Colors.HotReload do
 
   @impl true
   def handle_manager_call(:subscribe, {from_pid, _ref}, state) do
-    {:reply, :ok, %{state | subscribers: [from_pid | state.subscribers]}}
+    if Map.has_key?(state.monitors, from_pid) do
+      {:reply, :ok, state}
+    else
+      ref = Process.monitor(from_pid)
+
+      {:reply, :ok,
+       %{
+         state
+         | subscribers: [from_pid | state.subscribers],
+           monitors: Map.put(state.monitors, from_pid, ref)
+       }}
+    end
   end
 
   @impl true
   def handle_manager_call(:unsubscribe, {from_pid, _ref}, state) do
+    {ref, monitors} = Map.pop(state.monitors, from_pid)
+    if ref, do: Process.demonitor(ref, [:flush])
+
     {:reply, :ok,
-     %{state | subscribers: List.delete(state.subscribers, from_pid)}}
+     %{
+       state
+       | subscribers: List.delete(state.subscribers, from_pid),
+         monitors: monitors
+     }}
   end
 
   @impl true
@@ -114,6 +133,16 @@ defmodule Raxol.Style.Colors.HotReload do
   def handle_manager_info({:theme_reloaded, _theme}, state) do
     # Ignore theme_reloaded messages sent to self
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    {:noreply,
+     %{
+       state
+       | subscribers: List.delete(state.subscribers, pid),
+         monitors: Map.delete(state.monitors, pid)
+     }}
   end
 
   # Private Functions
