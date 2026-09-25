@@ -14,7 +14,6 @@ defmodule Raxol.UI.Theming.Colors do
   """
 
   alias Raxol.Style.Colors.{Color, Formats, Utilities}
-  # alias Raxol.UI.Theming.PaletteRegistry # Removed unused alias
 
   # Format: "#RRGGBB" or "#RRGGBBAA"
   @type color_hex :: String.t()
@@ -459,7 +458,8 @@ defmodule Raxol.UI.Theming.Colors do
   @doc """
   Converts a color or theme map to use a specific palette (e.g., 256 colors).
   Finds the closest color in the palette for each color in the theme.
-  *Currently only supports named palettes like :xterm256*
+  Supported palettes: `:xterm256`, `:xterm`, `:basic`, `:linux`, `:mac` and
+  `:windows`. Any other palette name falls back to `:xterm256`.
   """
   def convert_to_palette(value, palette_name \\ :xterm256)
 
@@ -538,82 +538,6 @@ defmodule Raxol.UI.Theming.Colors do
     {15, {242, 242, 242}}
   ]
 
-  # Custom palette registry
-  # @custom_palettes %{}  # Removed unused module attribute
-
-  @doc """
-  Registers a custom color palette for use with convert_to_palette/2.
-
-  ## Examples
-
-      iex> register_custom_palette(:my_palette, [{0, {0, 0, 0}}, {1, {255, 255, 255}}])
-      :ok
-  """
-  def register_custom_palette(name, colors)
-      when is_atom(name) and is_list(colors) do
-    # Validate color format
-    case validate_palette_colors(colors) do
-      :ok ->
-        Raxol.UI.Theming.PaletteRegistry.register(name, colors)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Unregisters a custom color palette.
-
-  ## Examples
-
-      iex> unregister_custom_palette(:my_palette)
-      :ok
-  """
-  def unregister_custom_palette(name) when is_atom(name) do
-    Raxol.UI.Theming.PaletteRegistry.unregister(name)
-  end
-
-  @doc """
-  Lists all registered custom palettes.
-
-  ## Examples
-
-      iex> list_custom_palettes()
-      [:my_palette, :another_palette]
-  """
-  def list_custom_palettes do
-    Raxol.UI.Theming.PaletteRegistry.list()
-  end
-
-  @doc """
-  Gets a custom palette by name.
-
-  ## Examples
-
-      iex> get_custom_palette(:my_palette)
-      [{0, {0, 0, 0}}, {1, {255, 255, 255}}]
-  """
-  def get_custom_palette(name) when is_atom(name) do
-    Raxol.UI.Theming.PaletteRegistry.get(name)
-  end
-
-  defp validate_palette_colors(colors) do
-    handle_palette_validation(Enum.all?(colors, &valid_palette_color?/1))
-  end
-
-  defp handle_palette_validation(true), do: :ok
-  defp handle_palette_validation(false), do: {:error, :invalid_color_format}
-
-  defp valid_palette_color?({index, {r, g, b}})
-       when is_integer(index) and
-              r in 0..255//1 and
-              g in 0..255//1 and
-              b in 0..255//1 do
-    true
-  end
-
-  defp valid_palette_color?(_), do: false
-
   defp find_closest_palette_color(rgb, palette_name) do
     palette_name
     |> resolve_palette()
@@ -626,13 +550,6 @@ defmodule Raxol.UI.Theming.Colors do
   defp resolve_palette(:mac), do: @mac_colors
   defp resolve_palette(:windows), do: @windows_colors
   defp resolve_palette(:xterm), do: @xterm_colors
-
-  defp resolve_palette(custom) when is_atom(custom) do
-    case Raxol.UI.Theming.PaletteRegistry.get(custom) do
-      {:ok, colors} -> colors
-      {:error, _} -> @ansi_256_colors
-    end
-  end
 
   defp resolve_palette(_), do: @ansi_256_colors
 

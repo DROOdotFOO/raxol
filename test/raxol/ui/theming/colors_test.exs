@@ -154,4 +154,20 @@ defmodule Raxol.UI.Theming.ColorsTest do
       assert Colors.blend(:red, :blue, 0.5) == "#800080"
     end
   end
+
+  describe "convert_to_palette/2" do
+    test "an unknown palette name falls back to the xterm 256-colour palette" do
+      xterm = Colors.convert_to_palette({255, 0, 0}, :xterm256)
+
+      assert is_integer(xterm)
+      assert Colors.convert_to_palette({255, 0, 0}, :no_such_palette) == xterm
+    end
+
+    test "an unknown palette name falls back for every colour in a theme map" do
+      theme = %{fg: {255, 0, 0}, bg: {0, 0, 128}, name: "keep"}
+
+      assert Colors.convert_to_palette(theme, :no_such_palette) ==
+               Colors.convert_to_palette(theme, :xterm256)
+    end
+  end
 end

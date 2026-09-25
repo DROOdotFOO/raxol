@@ -158,27 +158,6 @@ defmodule Raxol.UI.State.Management.StateManagementServer do
     GenServer.call(__MODULE__, {:cancel_debounced, self(), key})
   end
 
-  @doc """
-  Sets context for a component.
-  """
-  def set_context(component_id, context) do
-    GenServer.call(__MODULE__, {:set_context, component_id, context})
-  end
-
-  @doc """
-  Gets context for a component.
-  """
-  def get_context(component_id, default \\ nil) do
-    GenServer.call(__MODULE__, {:get_context, component_id, default})
-  end
-
-  @doc """
-  Sets a slot for a component.
-  """
-  def set_slot(component_id, slot_data) do
-    GenServer.call(__MODULE__, {:set_slot, component_id, slot_data})
-  end
-
   # Missing function stubs to fix compilation warnings
   def clear_component_context(_component_id), do: :ok
   def get_cache(_key), do: :cache_miss

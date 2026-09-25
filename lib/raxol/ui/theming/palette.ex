@@ -556,7 +556,7 @@ defmodule Raxol.UI.Theming.Palette do
     }
   end
 
-  # lib/raxol/ui/universal.ex:66-91 -- matches Tailwind CSS v3 defaults
+  # Matches Tailwind CSS v3 defaults
   def semantic_defaults(:web_tailwind) do
     %{
       primary: "#2563eb",

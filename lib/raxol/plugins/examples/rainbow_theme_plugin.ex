@@ -13,6 +13,9 @@ defmodule Raxol.Plugins.Examples.RainbowThemePlugin do
 
   @behaviour Raxol.Plugins.Plugin
 
+  alias Raxol.Style.Colors.Color
+  alias Raxol.UI.Theming.Theme
+
   # Plugin manifest
   def manifest do
     %{
@@ -395,17 +398,13 @@ defmodule Raxol.Plugins.Examples.RainbowThemePlugin do
   end
 
   defp apply_color_theme({r, g, b}) do
-    # Create a theme with the current rainbow color
-    theme = %{
-      background: :default,
-      foreground: {r, g, b},
-      cursor: {r, g, b},
-      # With alpha
-      selection: {r, g, b, 64}
-    }
+    # Tint the current theme's text and accent colours with the rainbow colour
+    # and make it the current theme, which renderers read via Theme.current/0.
+    color = Color.from_rgb(r, g, b)
+    theme = Theme.current()
+    colors = Map.merge(theme.colors || %{}, %{foreground: color, accent: color})
 
-    # Apply through the theme system
-    :ok = Raxol.Themes.apply_theme(theme)
+    :ok = Theme.apply_theme(%{theme | colors: colors})
   end
 end
 
