@@ -2,28 +2,31 @@ defmodule Raxol.Core.ConnectionPool do
   @moduledoc """
   Generic connection pooling implementation for external services.
 
-  Provides connection pooling, health checking, and automatic retry capabilities
-  for any external service connections (HTTP, SSH, Database, etc).
+  Provides connection pooling and health checking for any external service
+  connections (HTTP, SSH, Database, etc).
 
   ## Features
   - Configurable pool size limits
+  - Transient overflow connections: up to `max_overflow` extra connections
+    are opened when the pool is empty and disconnected on checkin
   - Connection health checking
-  - Automatic reconnection on failure
-  - Connection timeout management
   - Metrics and monitoring
+
+  The pool never queues callers. When every pooled and overflow connection is
+  checked out, `checkout/2` and `transaction/3` return `{:error, :timeout}`
+  immediately (counted in `metrics.timeouts`); retrying is up to the caller.
 
   ## Usage
 
-      # Define a pool for an HTTP service
-      defmodule MyApp.APIPool do
-        use Raxol.Core.ConnectionPool,
-  alias Raxol.Core.Runtime.Log
+      {:ok, _pid} =
+        ConnectionPool.start_link(
           name: :api_pool,
           pool_size: 10,
-          max_overflow: 5
-      end
+          max_overflow: 5,
+          connect_fn: &MyApp.API.connect/0,
+          disconnect_fn: &MyApp.API.disconnect/1
+        )
 
-      # Use the pool
       ConnectionPool.transaction(:api_pool, fn conn ->
         # Use connection
       end)
@@ -47,7 +50,6 @@ defmodule Raxol.Core.ConnectionPool do
     :idle_timeout,
     :health_check_interval,
     :connections,
-    :waiting,
     :metrics,
     :connect_fn,
     :disconnect_fn,
@@ -104,11 +106,15 @@ defmodule Raxol.Core.ConnectionPool do
 
   The connection belongs to the calling process until `checkin/2`; if that
   process exits first, the pool takes the connection back.
+
+  Does not wait for a connection: when the pool and its overflow are
+  exhausted this returns `{:error, :timeout}` at once. `timeout` only bounds
+  the call to the pool process.
   """
   @spec checkout(pool_name(), timeout()) ::
           {:ok, connection()} | {:error, term()}
   def checkout(pool_name, timeout \\ Raxol.Core.Defaults.timeout_ms()) do
-    GenServer.call(pool_name, {:checkout, timeout}, timeout + 100)
+    GenServer.call(pool_name, :checkout, timeout)
   end
 
   @doc """
@@ -141,7 +147,6 @@ defmodule Raxol.Core.ConnectionPool do
       idle_timeout: Keyword.get(opts, :idle_timeout),
       health_check_interval: Keyword.get(opts, :health_check_interval),
       connections: %{available: [], busy: %{}, overflow: []},
-      waiting: :queue.new(),
       metrics: %{
         checkouts: 0,
         checkins: 0,
@@ -165,8 +170,8 @@ defmodule Raxol.Core.ConnectionPool do
   end
 
   @impl true
-  def handle_manager_call({:checkout, timeout}, {owner, _tag}, state) do
-    case do_checkout(state, owner, timeout) do
+  def handle_manager_call(:checkout, {owner, _tag}, state) do
+    case do_checkout(state, owner) do
       {:ok, conn, new_state} ->
         {:reply, {:ok, conn}, new_state}
 
@@ -182,7 +187,6 @@ defmodule Raxol.Core.ConnectionPool do
       available: length(state.connections.available),
       busy: map_size(state.connections.busy),
       overflow: length(state.connections.overflow),
-      waiting: :queue.len(state.waiting),
       metrics: state.metrics
     }
 
@@ -242,9 +246,9 @@ defmodule Raxol.Core.ConnectionPool do
     put_in(state.connections.available, connections)
   end
 
-  @spec do_checkout(map(), pid(), timeout()) ::
+  @spec do_checkout(map(), pid()) ::
           {:ok, connection(), map()} | {:error, term(), map()}
-  defp do_checkout(state, owner, timeout) do
+  defp do_checkout(state, owner) do
     %{connections: conns, metrics: metrics} = state
 
     case conns.available do
@@ -265,8 +269,7 @@ defmodule Raxol.Core.ConnectionPool do
         if length(conns.overflow) < state.max_overflow do
           create_overflow_connection(state, owner)
         else
-          # Add to waiting queue
-          add_to_waiting_queue(state, timeout)
+          refuse_exhausted(state)
         end
     end
   end
@@ -290,37 +293,20 @@ defmodule Raxol.Core.ConnectionPool do
     end
   end
 
+  # Overflow connections are transient: they close on checkin, freeing their
+  # overflow slot, rather than growing the pool past `pool_size`.
   defp hand_back(state, conn, new_busy, new_metrics) do
     %{connections: conns} = state
 
-    # Check if anyone is waiting
-    case :queue.out(state.waiting) do
-      {{:value, {waiter, _tag} = waiting_from}, new_queue} ->
-        # Give connection to waiting process
-        GenServer.reply(waiting_from, {:ok, conn})
+    new_conns =
+      if conn in conns.overflow do
+        state.disconnect_fn.(conn)
+        %{conns | overflow: List.delete(conns.overflow, conn), busy: new_busy}
+      else
+        %{conns | available: [conn | conns.available], busy: new_busy}
+      end
 
-        %{
-          state
-          | connections: %{
-              conns
-              | busy: Map.put(new_busy, conn, claim(waiter))
-            },
-            waiting: new_queue,
-            metrics: new_metrics
-        }
-
-      {:empty, _} ->
-        # Return to available pool
-        %{
-          state
-          | connections: %{
-              conns
-              | available: [conn | conns.available],
-                busy: new_busy
-            },
-            metrics: new_metrics
-        }
-    end
+    %{state | connections: new_conns, metrics: new_metrics}
   end
 
   # A busy connection records who holds it and the monitor that reclaims it
@@ -344,8 +330,8 @@ defmodule Raxol.Core.ConnectionPool do
     end
   end
 
-  defp add_to_waiting_queue(state, _timeout) do
-    # This would need proper implementation with timeout handling
+  # The pool does not queue callers; an exhausted pool refuses immediately.
+  defp refuse_exhausted(state) do
     new_metrics = Map.update(state.metrics, :timeouts, 1, &(&1 + 1))
     {:error, :timeout, %{state | metrics: new_metrics}}
   end
