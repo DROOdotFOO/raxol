@@ -149,13 +149,13 @@ defmodule :termbox2_nif do
 
   @doc """
   Set the terminal title.
-  Returns {:ok, "set"} on success, {:error, reason} on failure.
+  Returns `{:ok, ~c"set"}` on success, `{:error, reason}` on failure.
   """
   def tb_set_title(_title), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Set the terminal window position.
-  Returns {:ok, "set"} on success, {:error, reason} on failure.
+  Returns `{:ok, ~c"set"}` on success, `{:error, reason}` on failure.
   """
   def tb_set_position(_x, _y), do: :erlang.nif_error(:nif_not_loaded)
 end
