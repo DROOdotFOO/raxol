@@ -153,7 +153,18 @@ defmodule Raxol.Symphony.Runner do
   """
   @callback pause_reasons() :: [atom()]
 
-  @optional_callbacks pause_reasons: 0
+  @doc """
+  Release whatever this runner kept alive for a parked run's resume.
+
+  Optional. The orchestrator calls it with the entry's resume token when it
+  DISCARDS a parked run instead of resuming it: `stop_run/2` on a parked run,
+  and the paused-run TTL GC. A runner that parks nothing beyond the token
+  itself needs no implementation. Must be idempotent and must not raise; a
+  token whose resources are already gone is `:ok`.
+  """
+  @callback release(resume_token :: term()) :: :ok
+
+  @optional_callbacks pause_reasons: 0, release: 1
 
   @doc """
   Every runner kind `resolve/2` handles, in declaration order.
