@@ -4,7 +4,7 @@ defmodule Raxol.Core.ErrorRecovery.ContextManagerTest do
 
   alias Raxol.Core.ErrorRecovery.ContextManager
 
-  # `RecoverySupervisor.init/1` starts it with `start_link([])`.
+  # A bare child spec starts it with `start_link([])`, passing no name.
   test "a context manager started without a name serves the API" do
     start_supervised!({ContextManager, []})
 
