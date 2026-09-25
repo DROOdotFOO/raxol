@@ -103,6 +103,7 @@
   - Root: `Raxol.Core.Renderer.RendererManager` and `Raxol.Core.Runtime.Events.Handler`, two `EventManager` consumers that no library code started or called.
   - `raxol_core`: `Raxol.Core.Events.Manager` (a delegating alias of `EventManager`), `Raxol.Core.Events.Subscription` (keyboard, mouse, window, timer and custom subscription wrappers over `EventManager.subscribe/2`) and `Raxol.Core.Events.EventManager.EventManagerServer`, which nothing started. Use `Raxol.Core.Events.EventManager` directly.
   - `raxol_core`: the plugin load path that only called itself: `LifecycleManager.load_plugin/8` and `unload_plugin/6`, `Discovery.load_plugin/8` and `unload_plugin/6`, `LifecycleHelper.load_plugin/8`, `load_plugin/3` and `unload_plugin/6`, and the helpers only they reached: `Raxol.Core.Runtime.Plugins.PluginUnloader`, `PluginErrorHandler.handle_load_error/2`, `PluginValidator.validate_plugin/4`, and `Plugins.StateManager.initialize_plugin_state/2` and `update_plugin_state_legacy/3` (with their `Raxol.Core.Behaviours.StateManager` callbacks). Plugins load through `PluginManager`; `LifecycleManager.reload_plugin/2` stays.
+  - Root: `Raxol.Core.ErrorTemplates`, whose one caller was the removed `ErrorReporter`, and `Raxol.Core.ErrorRecovery.ContextManager`, which only its own test used.
 
 ## [2.7.0] - 2026-09-09
 
