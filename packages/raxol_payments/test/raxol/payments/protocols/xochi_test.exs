@@ -853,7 +853,7 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       # allowlist normalizes case, so a pull to the same address as the worker
       # serves it (lowercased) passes, while any other recipient is rejected
       # before signing -- the forged-`to` abort the gate relies on.
-      canonical = "0x97D447561fDe10E959E782a29411D8F89586d80b"
+      canonical = "0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"
       attacker = "0x000000000000000000000000000000000000dEaD"
 
       Application.put_env(:raxol_payments, :pull_solver_allowlist, [canonical])
@@ -1528,8 +1528,8 @@ defmodule Raxol.Payments.Protocols.XochiTest do
     end
 
     test "a populated allowlist is never fail-open, pin required or not" do
-      refute Xochi.origin_pull_fail_open?(["0x97D447561fDe10E959E782a29411D8F89586d80b"], false)
-      refute Xochi.origin_pull_fail_open?(["0x97D447561fDe10E959E782a29411D8F89586d80b"], true)
+      refute Xochi.origin_pull_fail_open?(["0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"], false)
+      refute Xochi.origin_pull_fail_open?(["0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"], true)
     end
   end
 
@@ -1547,7 +1547,7 @@ defmodule Raxol.Payments.Protocols.XochiTest do
     test "returns :ok when the allowlist is populated" do
       assert :ok =
                Xochi.assert_origin_pull_pinned!(
-                 ["0x97D447561fDe10E959E782a29411D8F89586d80b"],
+                 ["0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"],
                  false
                )
     end

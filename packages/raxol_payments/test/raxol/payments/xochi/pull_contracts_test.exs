@@ -4,7 +4,9 @@ defmodule Raxol.Payments.Xochi.PullContractsTest do
   alias Raxol.Payments.EIP712
   alias Raxol.Payments.Xochi.PullContracts
 
-  @solver "0x97D447561fDe10E959E782a29411D8F89586d80b"
+  @solver "0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"
+  # Deployed the proxies, then swept 2026-08-19; its key is public.
+  @swept_deployer "0x97D447561fDe10E959E782a29411D8F89586d80b"
   @base_erc3009 "0xaA8FDA73906293A0A3Cd8e057Db97670944A46F8"
   @permit2 "0xE9B020941015e428876f60C1979B3fc2A38a2f53"
 
@@ -34,6 +36,7 @@ defmodule Raxol.Payments.Xochi.PullContractsTest do
     assert @solver in recipients
     assert @base_erc3009 in recipients
     assert @permit2 in recipients
+    refute @swept_deployer in recipients
     # 1 solver + 5 per-chain ERC-3009 proxies + 1 permit2 proxy.
     assert length(recipients) == 7
   end

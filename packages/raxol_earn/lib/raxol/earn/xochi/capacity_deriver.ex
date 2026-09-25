@@ -15,7 +15,7 @@ defmodule Raxol.Earn.Xochi.CapacityDeriver do
   4663 has none -- set `DERIVE_RPC_4663`).
   """
 
-  @canonical_solver "0x97D447561fDe10E959E782a29411D8F89586d80b"
+  @canonical_solver "0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"
   @balance_of_selector "0x70a08231"
 
   @default_rpc %{
