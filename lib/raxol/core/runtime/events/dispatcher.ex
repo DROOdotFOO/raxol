@@ -554,6 +554,14 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     dispatch_raw_message(msg, state)
   end
 
+  # EventManager delivers matches for a `Subscription.events/1` subscription
+  # in this shape; the app's update/2 receives the message unchanged.
+  @impl true
+  def handle_manager_info({:event, event_type, _event_data} = msg, state)
+      when is_atom(event_type) do
+    dispatch_raw_message(msg, state)
+  end
+
   @impl true
   def handle_manager_info(msg, state) do
     Raxol.Core.Runtime.Log.warning_with_context(
