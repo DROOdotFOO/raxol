@@ -104,6 +104,47 @@ defmodule Raxol.Agent.Conversation.LogTest do
       assert_receive {:conversation_item, ^conv, ^item}
       assert Process.alive?(log)
     end
+
+    test "unsubscribing leaves no entry behind for the conversation", %{log: log, conv: conv} do
+      convs = for n <- 1..3, do: "#{conv}-#{n}"
+
+      for c <- convs, do: {:ok, _} = Log.subscribe(log, c)
+      for c <- convs, do: :ok = Log.unsubscribe(log, c)
+      # Unsubscribing from a conversation never subscribed to adds nothing.
+      :ok = Log.unsubscribe(log, "#{conv}-never")
+
+      assert %{subscribers: subscribers, monitors: monitors} = :sys.get_state(log)
+      assert subscribers == %{}
+      assert monitors == %{}
+    end
+
+    test "a dead subscriber's conversations are forgotten once nobody else listens",
+         %{log: log, conv: conv} do
+      parent = self()
+      shared = "#{conv}-shared"
+      only_doomed = "#{conv}-doomed"
+
+      doomed =
+        spawn(fn ->
+          {:ok, _} = Log.subscribe(log, shared)
+          {:ok, _} = Log.subscribe(log, only_doomed)
+          send(parent, :subscribed)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :subscribed
+      {:ok, _} = Log.subscribe(log, shared)
+
+      ref = Process.monitor(doomed)
+      Process.exit(doomed, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^doomed, _}
+
+      assert %{subscribers: subscribers} = :sys.get_state(log)
+      assert subscribers == %{shared => MapSet.new([self()])}
+
+      {:ok, [item]} = Log.append(log, shared, %{type: :message})
+      assert_receive {:conversation_item, ^shared, ^item}
+    end
   end
 
   describe "queries" do
