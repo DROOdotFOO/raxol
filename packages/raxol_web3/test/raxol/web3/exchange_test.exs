@@ -120,7 +120,10 @@ defmodule Raxol.Web3.ExchangeTest do
           exchange(endpoint, max_bytes: 65_536, chunk_timeout_ms: 5_000)
         end)
 
-      assert_receive {:headers_sent, server}
+      # The server sends this only after the client has connected and sent its
+      # request, which ExUnit's default 100ms does not always cover on a loaded
+      # CI runner. 5_000 is the hang bound the file's other waits use.
+      assert_receive {:headers_sent, server}, 5_000
       assert {:error, {:too_large, 65_536}} = Task.await(request, 6_000)
       send(server, :send_body)
     end
