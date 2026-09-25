@@ -4,20 +4,6 @@ defmodule Raxol.Terminal.SessionTest do
   alias Raxol.Terminal.ScreenBuffer
   alias Raxol.Terminal.Session
 
-  setup_all do
-    # Start GlobalRegistry if not running - needed for session registration
-    case Process.whereis(Raxol.Core.GlobalRegistry) do
-      nil ->
-        {:ok, _} =
-          start_supervised({Raxol.Core.GlobalRegistry, [name: Raxol.Core.GlobalRegistry]})
-
-      _pid ->
-        :ok
-    end
-
-    :ok
-  end
-
   setup do
     # Clean up any existing session files
     File.rm_rf!(".tmp/sessions")

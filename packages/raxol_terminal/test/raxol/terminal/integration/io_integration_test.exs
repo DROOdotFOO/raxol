@@ -5,10 +5,6 @@ defmodule Raxol.Terminal.Integration.IOIntegrationTest do
   alias Raxol.Terminal.Integration.Main
 
   setup do
-    # Start the UnifiedIO process
-    {:ok, _unified_io_pid} =
-      Raxol.Terminal.IO.IOServer.start_link(name: Raxol.Terminal.IO.IOServer)
-
     # Start the Manager process
     {:ok, _unified_window_pid} =
       Raxol.Terminal.Window.Manager.start_link()
@@ -19,13 +15,9 @@ defmodule Raxol.Terminal.Integration.IOIntegrationTest do
   end
 
   describe "input/output integration" do
-    test "handles keyboard input and produces output", %{pid: pid} do
-      # Send keyboard input
+    test "handles keyboard input and written output", %{pid: pid} do
       assert :ok = Main.handle_input(pid, {:key, ?a})
-
-      # Verify output
-      assert {:ok, output} = Main.write(pid, "test output")
-      assert is_binary(output)
+      assert :ok = Main.write(pid, "test output")
     end
 
     test "handles special keys", %{pid: pid} do
@@ -76,7 +68,7 @@ defmodule Raxol.Terminal.Integration.IOIntegrationTest do
 
     test "handles clear screen", %{pid: pid} do
       # Write some content
-      assert {:ok, _} = Main.write(pid, "test content")
+      assert :ok = Main.write(pid, "test content")
 
       # Clear screen
       assert :ok = Main.clear(pid)
@@ -124,7 +116,7 @@ defmodule Raxol.Terminal.Integration.IOIntegrationTest do
     test "handles large output data", %{pid: pid} do
       # Generate large output
       large_output = String.duplicate("test ", 1000)
-      assert {:ok, _} = Main.write(pid, large_output)
+      assert :ok = Main.write(pid, large_output)
 
       # Verify system handles it
       state = Main.get_state(pid)
