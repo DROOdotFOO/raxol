@@ -250,6 +250,43 @@ defmodule Raxol.HeadlessTest do
 
       refute :monitor_test in Headless.list()
     end
+
+    # The ToolSynchronizer is linked to Headless, not to the lifecycle, so
+    # nothing but Headless's own `:DOWN` handling can stop it when the app dies
+    # on its own. Left running, it keeps its telemetry handler and the session's
+    # MCP resources registered for a session `list/0` no longer reports.
+    test "stops the session's tool synchronizer when the lifecycle dies" do
+      registry =
+        Process.whereis(Raxol.MCP.Registry) ||
+          start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      {:ok, id} = Headless.start(TestApp, id: :sync_down_test)
+
+      %{lifecycle_pid: lifecycle_pid, synchronizer_pid: sync_pid} =
+        :sys.get_state(Headless).sessions[id]
+
+      assert is_pid(sync_pid)
+      context_uri = "raxol://session/#{id}/context"
+      assert context_uri in resource_uris(registry)
+
+      sync_ref = Process.monitor(sync_pid)
+      lifecycle_ref = Process.monitor(lifecycle_pid)
+      Process.exit(lifecycle_pid, :kill)
+      assert_receive {:DOWN, ^lifecycle_ref, :process, _, :killed}
+
+      assert_receive {:DOWN, ^sync_ref, :process, _, _}, 2_000
+      refute id in Headless.list()
+      refute context_uri in resource_uris(registry)
+
+      refute Enum.any?(
+               :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
+               &String.starts_with?(&1.id, "tool_sync_#{id}_")
+             )
+    end
+  end
+
+  defp resource_uris(registry) do
+    registry |> Raxol.MCP.Registry.list_resources() |> Enum.map(& &1.uri)
   end
 
   describe "file loading" do

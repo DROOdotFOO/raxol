@@ -351,14 +351,23 @@ defmodule Raxol.Headless do
     {:reply, Map.keys(state.sessions), state}
   end
 
+  # A lifecycle that exits on its own gets the same teardown as `stop/1`, minus
+  # stopping the already-dead lifecycle: the synchronizer is linked to Headless,
+  # not to the app, so nothing else would detach its telemetry handler or drop
+  # the session's MCP tools and resources. `stop/1` deletes the session before
+  # this `:DOWN` arrives, so the two paths never stop a synchronizer twice.
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    new_sessions =
-      state.sessions
-      |> Enum.reject(fn {_id, session} -> session.lifecycle_pid == pid end)
-      |> Map.new()
+    {down, alive} =
+      Enum.split_with(state.sessions, fn {_id, session} ->
+        session.lifecycle_pid == pid
+      end)
 
-    {:noreply, %{state | sessions: new_sessions}}
+    Enum.each(down, fn {_id, session} ->
+      stop_synchronizer(session.synchronizer_pid)
+    end)
+
+    {:noreply, %{state | sessions: Map.new(alive)}}
   end
 
   @impl true
