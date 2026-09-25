@@ -203,4 +203,15 @@ defmodule Raxol.Terminal.Cache.SystemTest do
       assert {:ok, "test_value"} == System.get("test_key", namespace: :general)
     end
   end
+
+  # `Raxol.Terminal.Supervisor` starts the cache with options and no `:name`.
+  describe "server naming" do
+    test "a cache started without a name serves the API" do
+      GenServer.stop(Raxol.Terminal.Cache.System)
+      start_supervised!({System, [max_size: 1024]})
+
+      assert :ok == System.put("k", "v", namespace: :general)
+      assert {:ok, "v"} == System.get("k", namespace: :general)
+    end
+  end
 end

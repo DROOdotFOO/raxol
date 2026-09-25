@@ -45,10 +45,10 @@ defmodule Raxol.Core.Accessibility.PreferenceManager do
     )
   end
 
-  @doc "Notifies ColorSystem.Server when high_contrast preference changes."
+  @doc "Notifies the running ColorSystemServer when high_contrast changes."
   def maybe_notify_color_system(:high_contrast, value) do
     if Code.ensure_loaded?(Raxol.Style.Colors.System) and
-         Process.whereis(Raxol.Style.Colors.System.Server) do
+         Process.whereis(Raxol.Style.Colors.System.ColorSystemServer) do
       Raxol.Style.Colors.System.handle_high_contrast({:accessibility_high_contrast, value})
     end
   end

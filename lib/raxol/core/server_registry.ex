@@ -33,7 +33,8 @@ defmodule Raxol.Core.ServerRegistry do
     {Raxol.UI.Theming.ThemeManager, name: :theme_manager},
     {Raxol.Core.Accessibility.AccessibilityServer, name: :accessibility_server},
     {Raxol.Core.I18n.I18nServer, name: :i18n_server},
-    {Raxol.UI.State.Management.StateManagementServer, name: :ui_state_server},
+    {Raxol.UI.State.Management.StateManagementServer,
+     name: Raxol.UI.State.Management.StateManagementServer},
 
     # Terminal System Servers
     {Raxol.Terminal.Buffer.BufferServer, name: :buffer_server},

@@ -34,7 +34,13 @@ defmodule Raxol.Terminal.Cache.System do
           eviction_count: non_neg_integer()
         }
 
-  # BaseManager provides start_link
+  @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
 
   @doc """
   Gets a value from the cache.

@@ -14,6 +14,7 @@ defmodule Raxol.Core.ColorSystem do
   """
 
   alias Raxol.Style.Colors.{Color, Utilities}
+  alias Raxol.Style.Colors.System.ColorSystemServer
   alias Raxol.UI.Theming.Colors
   alias Raxol.UI.Theming.Theme
 
@@ -295,13 +296,13 @@ defmodule Raxol.Core.ColorSystem do
       %{}
     )
 
-    Raxol.Style.Colors.System.ColorSystemServer.set_current_theme(:default)
+    set_current_theme(:default)
     :ok
   end
 
   defp do_init(_theme, theme_id) do
     # Store current theme in process dictionary for compatibility
-    Raxol.Style.Colors.System.ColorSystemServer.set_current_theme(theme_id)
+    set_current_theme(theme_id)
     :ok
   end
 
@@ -319,9 +320,7 @@ defmodule Raxol.Core.ColorSystem do
       {:ok, %{name: "default", colors: %{...}}}
   """
   def get_current_theme do
-    theme_id =
-      Raxol.Style.Colors.System.ColorSystemServer.get_current_theme_name() ||
-        :default
+    theme_id = current_theme_name() || :default
 
     theme = Theme.get(theme_id)
     format_theme_result(theme)
@@ -359,11 +358,28 @@ defmodule Raxol.Core.ColorSystem do
   defp do_set_theme(nil, _theme_id), do: {:error, :theme_not_found}
 
   defp do_set_theme(_theme, theme_id) do
-    Raxol.Style.Colors.System.ColorSystemServer.set_current_theme(theme_id)
+    set_current_theme(theme_id)
     :ok
   end
 
   # Private functions
+
+  defp set_current_theme(theme_id) do
+    ensure_server_started()
+    ColorSystemServer.set_current_theme(theme_id)
+  end
+
+  defp current_theme_name do
+    ensure_server_started()
+    ColorSystemServer.get_current_theme_name()
+  end
+
+  defp ensure_server_started do
+    Raxol.Core.Utils.GenServerHelpers.ensure_started(
+      ColorSystemServer,
+      &ColorSystemServer.start_link/0
+    )
+  end
 
   @spec adjust_color_for_contrast(any(), any(), any(), non_neg_integer()) ::
           any()

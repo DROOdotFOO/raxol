@@ -16,7 +16,13 @@ defmodule Raxol.Security.UserContext.ContextServer do
   alias Raxol.Core.Runtime.Log
   # Client API
 
-  # BaseManager provides start_link
+  @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
 
   @doc """
   Returns a child specification for this server.
@@ -248,10 +254,10 @@ defmodule Raxol.Security.UserContext.ContextServer do
   end
 
   @impl true
-  def handle_manager_info({:DOWN, ref, :process, pid, _reason}, state) do
-    # Clean up context for dead process
+  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    # Clean up context for dead process; monitors are keyed by pid
     contexts = Map.delete(state.contexts, pid)
-    monitors = Map.delete(state.monitors, ref)
+    monitors = Map.delete(state.monitors, pid)
 
     {:noreply, %{state | contexts: contexts, monitors: monitors}}
   end

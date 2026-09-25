@@ -13,6 +13,14 @@ defmodule Raxol.Benchmark.SuiteRegistry do
   # Client API
 
   @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: the public API calls it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
+
+  @doc """
   Register a benchmark suite module.
   """
   def register_suite(module) when is_atom(module) do
