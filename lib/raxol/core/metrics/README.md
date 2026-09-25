@@ -27,7 +27,8 @@ History is capped at `Raxol.Core.Defaults.history_limit/0`.
 
 `Raxol.Core.Metrics.Aggregator` applies time-windowed aggregation rules with
 grouping. Defaults: an hourly window, `[:mean, :max, :min]`, a 7-day retention
-period, and a 60-second update interval.
+period, and a 60-second update interval (the `update_interval:` start option,
+in seconds). Each update recomputes every rule from the collector.
 
 ```elixir
 Aggregator.add_rule(%{
@@ -86,7 +87,9 @@ run its own instance instead of the VM-wide singleton.
 
 ## Starting them
 
-The Aggregator, Visualizer, and AlertManager use
+`Raxol.Core.Metrics.init/1` (called by `Raxol.Core.start_application/2`)
+starts only the collector. The Aggregator, Visualizer, and AlertManager are
+opt-in: start the ones you use. They use
 `Raxol.Core.Behaviours.BaseManager`, which supplies `start_link/1`:
 
 ```elixir

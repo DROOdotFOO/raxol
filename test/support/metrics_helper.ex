@@ -24,7 +24,7 @@ defmodule Raxol.Test.MetricsHelper do
       start_or_reuse(
         Raxol.Core.Metrics.Aggregator,
         Keyword.get(opts, :aggregator_opts,
-          update_interval: :timer.seconds(1),
+          update_interval: 1,
           max_rules: 10
         )
       )

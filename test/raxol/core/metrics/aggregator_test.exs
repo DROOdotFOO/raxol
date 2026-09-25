@@ -4,50 +4,27 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
   error handling, and statistical calculations.
   """
   use ExUnit.Case, async: false
-  alias Raxol.Core.Metrics.Aggregator
+  alias Raxol.Core.Metrics.{Aggregator, MetricsCollector}
 
-  setup do
-    {:ok, _pid} = Aggregator.start_link(name: Aggregator)
+  setup context do
+    if Process.whereis(MetricsCollector) == nil do
+      start_supervised!({MetricsCollector, auto_collect_system_metrics: false})
+    end
 
-    # Setup meck for MetricsCollector once for all tests
-    setup_meck()
+    MetricsCollector.clear_metrics()
 
-    on_exit(fn ->
-      pid = Process.whereis(Aggregator)
-
-      if pid && Process.alive?(pid) do
-        try do
-          GenServer.stop(Aggregator)
-        catch
-          :exit, _ -> :ok
-        end
+    opts =
+      case context[:update_interval] do
+        nil -> [name: Aggregator]
+        seconds -> [name: Aggregator, update_interval: seconds]
       end
 
-      cleanup_meck()
-    end)
-
-    :ok
+    %{aggregator: start_supervised!({Aggregator, opts})}
   end
 
-  defp setup_meck do
-    :meck.new(Raxol.Core.Metrics.MetricsCollector, [:passthrough])
-  catch
-    :error, {:already_started, _} -> :ok
-  end
-
-  defp cleanup_meck do
-    :meck.unload(Raxol.Core.Metrics.MetricsCollector)
-  catch
-    :error, {:not_mocked, _} -> :ok
-  end
-
-  defp create_test_metrics(values, tags \\ %{service: "test"}) do
-    Enum.map(values, fn value ->
-      %{
-        timestamp: DateTime.utc_now() |> DateTime.to_unix(:millisecond),
-        value: value,
-        tags: tags
-      }
+  defp record_metrics(metric_name, values, tags \\ %{service: "test"}) do
+    Enum.each(values, fn value ->
+      MetricsCollector.record_metric(metric_name, :custom, value, tags: tags)
     end)
   end
 
@@ -98,12 +75,7 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
     end
 
     test "aggregates metrics by mean", %{rule_id: rule_id} do
-      metrics = create_test_metrics([10, 20, 30])
-
-      :meck.expect(Raxol.Core.Metrics.MetricsCollector, :get_metrics, fn _name,
-                                                                         _tags ->
-        metrics
-      end)
+      record_metrics("test_metric", [10, 20, 30])
 
       assert {:ok, aggregated} = Aggregator.update_aggregation(rule_id)
       assert length(aggregated) == 1
@@ -121,12 +93,7 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
 
       {:ok, median_rule_id} = Aggregator.add_rule(rule)
 
-      metrics = create_test_metrics([10, 20, 30])
-
-      :meck.expect(Raxol.Core.Metrics.MetricsCollector, :get_metrics, fn _name,
-                                                                         _tags ->
-        metrics
-      end)
+      record_metrics("test_metric", [10, 20, 30])
 
       assert {:ok, aggregated} = Aggregator.update_aggregation(median_rule_id)
       assert length(aggregated) == 1
@@ -138,34 +105,20 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
         type: :mean,
         window: :hour,
         metric_name: "test_metric",
-        tags: %{service: "test"},
         group_by: ["service", "region"]
       }
 
       {:ok, group_rule_id} = Aggregator.add_rule(rule)
 
-      metrics = [
-        %{
-          timestamp: DateTime.utc_now() |> DateTime.to_unix(:millisecond),
-          value: 10,
-          tags: %{"service" => "test", "region" => "us"}
-        },
-        %{
-          timestamp: DateTime.utc_now() |> DateTime.to_unix(:millisecond),
-          value: 20,
-          tags: %{"service" => "test", "region" => "eu"}
-        },
-        %{
-          timestamp: DateTime.utc_now() |> DateTime.to_unix(:millisecond),
-          value: 30,
-          tags: %{"service" => "test", "region" => "us"}
-        }
-      ]
+      record_metrics("test_metric", [10, 30], %{
+        "service" => "test",
+        "region" => "us"
+      })
 
-      :meck.expect(Raxol.Core.Metrics.MetricsCollector, :get_metrics, fn _name,
-                                                                         _tags ->
-        metrics
-      end)
+      record_metrics("test_metric", [20], %{
+        "service" => "test",
+        "region" => "eu"
+      })
 
       assert {:ok, aggregated} = Aggregator.update_aggregation(group_rule_id)
       assert length(aggregated) == 2
@@ -175,6 +128,42 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
 
       assert us_metrics.value == 20.0
       assert eu_metrics.value == 20.0
+    end
+
+    test "a rule with no recorded metrics aggregates to nothing", %{
+      rule_id: rule_id
+    } do
+      assert {:ok, []} = Aggregator.update_aggregation(rule_id)
+      assert {:ok, []} = Aggregator.get_aggregated_metrics(rule_id)
+    end
+  end
+
+  describe "periodic update" do
+    @tag update_interval: 1
+    test "refreshes every rule on the configured interval", %{
+      aggregator: aggregator
+    } do
+      {:ok, rule_id} =
+        Aggregator.add_rule(%{metric_name: "periodic_metric", type: :max})
+
+      {:ok, empty_rule_id} =
+        Aggregator.add_rule(%{metric_name: "periodic_metric_unrecorded"})
+
+      record_metrics("periodic_metric", [3, 7])
+
+      # The trace reports each message as it reaches the aggregator's mailbox,
+      # so the call below queues behind the timer message.
+      :erlang.trace(aggregator, true, [:receive])
+
+      assert_receive {:trace, ^aggregator, :receive, message}
+                     when not is_tuple(message) or
+                            elem(message, 0) != :"$gen_call",
+                     3_000
+
+      :erlang.trace(aggregator, false, [:receive])
+
+      assert {:ok, [%{value: 7}]} = Aggregator.get_aggregated_metrics(rule_id)
+      assert {:ok, []} = Aggregator.get_aggregated_metrics(empty_rule_id)
     end
   end
 
@@ -197,12 +186,7 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
 
       {:ok, rule_id} = Aggregator.add_rule(rule)
 
-      metrics = create_test_metrics([10, 20, 30, 40])
-
-      :meck.expect(Raxol.Core.Metrics.MetricsCollector, :get_metrics, fn _name,
-                                                                         _tags ->
-        metrics
-      end)
+      record_metrics("test_metric", [10, 20, 30, 40])
 
       assert {:ok, aggregated} = Aggregator.update_aggregation(rule_id)
       assert length(aggregated) == 1
@@ -219,12 +203,7 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
 
       {:ok, rule_id} = Aggregator.add_rule(rule)
 
-      metrics = create_test_metrics([10, 20, 30, 40, 50])
-
-      :meck.expect(Raxol.Core.Metrics.MetricsCollector, :get_metrics, fn _name,
-                                                                         _tags ->
-        metrics
-      end)
+      record_metrics("test_metric", [10, 20, 30, 40, 50])
 
       assert {:ok, aggregated} = Aggregator.update_aggregation(rule_id)
       assert length(aggregated) == 1

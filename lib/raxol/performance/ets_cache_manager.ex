@@ -32,6 +32,15 @@ defmodule Raxol.Performance.ETSCacheManager do
 
   # Client API
 
+  @doc """
+  Starts the server, registered under its module name unless `:name` is
+  given: `clear_all/0`, `clear_cache/1`, `stats/0` and the opt-in caching in
+  `Raxol.UI.ThemeResolver` and `Raxol.UI.StyleProcessor` reach it by that name.
+  """
+  def start_link(opts \\ []) do
+    opts |> Keyword.put_new(:name, __MODULE__) |> super()
+  end
+
   @doc "Cache a parsed CSI sequence."
   def cache_csi(sequence, result) do
     CacheHelper.put_lru(@csi_parser_cache, sequence, result, @max_csi_entries)
@@ -190,7 +199,12 @@ defmodule Raxol.Performance.ETSCacheManager do
     GenServer.call(__MODULE__, :clear_all)
   end
 
-  @doc "Clear a specific cache."
+  @doc """
+  Clear a specific cache: `:csi_parser`, `:cell`, `:style`, `:buffer`,
+  `:layout` or `:font_metrics`. Any other name returns
+  `{:error, :unknown_cache}`.
+  """
+  @spec clear_cache(atom()) :: :ok | {:error, :unknown_cache}
   def clear_cache(cache_name) do
     GenServer.call(__MODULE__, {:clear_cache, cache_name})
   end
@@ -280,9 +294,14 @@ defmodule Raxol.Performance.ETSCacheManager do
   end
 
   def handle_manager_call({:clear_cache, cache_name}, _from, state) do
-    table = get_table_name(cache_name)
-    _ = :ets.delete_all_objects(table)
-    {:reply, :ok, state}
+    case get_table_name(cache_name) do
+      {:ok, table} ->
+        _ = :ets.delete_all_objects(table)
+        {:reply, :ok, state}
+
+      :error ->
+        {:reply, {:error, :unknown_cache}, state}
+    end
   end
 
   def handle_manager_call(:stats, _from, state) do
@@ -308,11 +327,11 @@ defmodule Raxol.Performance.ETSCacheManager do
     }
   end
 
-  defp get_table_name(:csi_parser), do: @csi_parser_cache
-  defp get_table_name(:cell), do: @cell_cache
-  defp get_table_name(:style), do: @style_cache
-  defp get_table_name(:buffer), do: @buffer_cache
-  defp get_table_name(:layout), do: @layout_cache
-  defp get_table_name(:font_metrics), do: @font_metrics_cache
-  defp get_table_name(name), do: name
+  defp get_table_name(:csi_parser), do: {:ok, @csi_parser_cache}
+  defp get_table_name(:cell), do: {:ok, @cell_cache}
+  defp get_table_name(:style), do: {:ok, @style_cache}
+  defp get_table_name(:buffer), do: {:ok, @buffer_cache}
+  defp get_table_name(:layout), do: {:ok, @layout_cache}
+  defp get_table_name(:font_metrics), do: {:ok, @font_metrics_cache}
+  defp get_table_name(_name), do: :error
 end
