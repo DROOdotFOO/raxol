@@ -226,9 +226,11 @@ these need Elixir at run time:
 
 ```bash
 curl -fsSL https://raxol.io/install | bash   # scripts/install.sh, checksum-verified
-brew install droodotfoo/tap/raxol            # scripts/gen_homebrew_formula.sh emits the formula
 npm install -g @raxol/cli                  # wrapper + one per-platform binary
 ```
+
+No Homebrew tap is published yet (`DROOdotFOO/homebrew-tap` does not exist);
+`scripts/gen_homebrew_formula.sh` emits the formula for when one is.
 
 npm ships as a small `@raxol/cli` launcher plus per-platform packages
 (`@raxol/cli-<platform>-<arch>`) declared as `optionalDependencies` with

@@ -78,7 +78,7 @@ tool that spawns agent CLIs.
 Install the CLI, then point the host at `raxol acp`:
 
 ```bash
-curl -fsSL https://raxol.io/install | bash   # or: brew install droodotfoo/tap/raxol
+curl -fsSL https://raxol.io/install | bash
 raxol doctor                                 # confirms "acp surface: available"
 ```
 
@@ -138,7 +138,7 @@ to the wire before a frame, which a strict NDJSON client would reject.
 a path dependency of `raxol_agent`, so a Hex install of `raxol_agent` is
 compiled without `Raxol.Agent.ClientProtocol.StdioAgent` and has no ACP surface
 at all; adding the dependency downstream does not retroactively enable it. The
-packaged CLI (npm, Homebrew, the install script) is built from source and does
+packaged CLI (npm or the install script) is built from source and does
 have it. `raxol doctor` reports which you have.
 
 **Native-CLI backends bypass all of the above.** With `--backend claude_native`
