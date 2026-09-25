@@ -6,11 +6,15 @@ defmodule Raxol.Earn.Seller.QueueTest do
   alias Raxol.Earn.ProviderAdapter
   alias Raxol.Earn.Seller.Queue
   alias Raxol.Earn.TestSupport.{EchoOffering, SellerHelper}
+  alias Raxol.Earn.Xochi.UsdcPublicOffering
 
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
   @chain 8453
   @core "0x238E541BfefD82238730D00a2208E5497F1832E0"
+  # Well-formed Xochi offering request; with no Xochi config its accept-time
+  # resolve fails closed with {:error, :no_xochi_config}.
+  @xochi_request %{"signed_intent" => %{"intent_id" => "intent-1"}}
 
   setup do
     terminate_sessions()
@@ -349,6 +353,109 @@ defmodule Raxol.Earn.Seller.QueueTest do
                      500
 
       assert JobSession.Registry.whereis({@chain, job_b}) == :undefined
+    end
+  end
+
+  describe "failed offers release their session" do
+    setup do
+      attach_telemetry([:dispatched, :dropped])
+      {:ok, _spec} = EchoOffering.register()
+      {:ok, _spec} = UsdcPublicOffering.register()
+
+      prev = Application.get_env(:raxol_earn, :seller_max_active_jobs)
+      Application.put_env(:raxol_earn, :seller_max_active_jobs, 1)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:raxol_earn, :seller_max_active_jobs, prev),
+          else: Application.delete_env(:raxol_earn, :seller_max_active_jobs)
+      end)
+
+      :ok
+    end
+
+    test "a failed on-chain setBudget frees the slot; an accepted job still holds it", %{
+      adapter: adapter
+    } do
+      failed = job_id()
+      ProviderAdapter.Mock.set_send_calls_error(adapter, :rpc_down)
+
+      offer(failed)
+
+      assert_receive {:telemetry, [:raxol, :earn, :seller, :queue, :dropped],
+                      %{job_id: ^failed, reason: {:handler_error, :rpc_down}}},
+                     500
+
+      assert status(failed) == :gone
+
+      # The untracked job's later expiry has no session left to mirror into.
+      Queue.dispatch(%{type: :job_expired, job_id: failed, reason: "timeout"})
+
+      assert_receive {:telemetry, [:raxol, :earn, :seller, :queue, :dropped],
+                      %{type: :job_expired, job_id: ^failed, reason: :job_not_running}},
+                     500
+
+      # The cap is 1: the failed offer must not have kept the only slot.
+      ProviderAdapter.Mock.set_send_calls_error(adapter, nil)
+      accepted = job_id()
+      offer(accepted)
+
+      assert_receive {:telemetry, [:raxol, :earn, :seller, :queue, :dispatched],
+                      %{type: :job_offered, job_id: ^accepted}},
+                     500
+
+      # A normally accepted job still counts against the cap.
+      next = job_id()
+      offer(next)
+
+      assert_receive {:telemetry, [:raxol, :earn, :seller, :queue, :dropped],
+                      %{type: :job_offered, job_id: ^next, reason: :at_capacity}},
+                     500
+    end
+
+    test "a failed accept-time resolve frees the slot" do
+      failed = job_id()
+
+      # No Xochi config is set, so the offering's resolve_accept fails closed.
+      offer(failed, %{offering: "xochi_usdc_public", request: @xochi_request})
+
+      assert_receive {:telemetry, [:raxol, :earn, :seller, :queue, :dropped],
+                      %{job_id: ^failed, reason: {:handler_error, :no_xochi_config}}},
+                     500
+
+      assert status(failed) == :gone
+
+      accepted = job_id()
+      offer(accepted)
+
+      assert_receive {:telemetry, [:raxol, :earn, :seller, :queue, :dispatched],
+                      %{type: :job_offered, job_id: ^accepted}},
+                     500
+    end
+
+    test "a failed offer leaves a session it did not start running" do
+      # A session Resync rehydrated mid-flight belongs to that job's live
+      # lifecycle; a failed re-offer must not tear it down.
+      # Room for the pre-started session plus the re-offer's capacity check.
+      Application.put_env(:raxol_earn, :seller_max_active_jobs, 2)
+      jid = job_id()
+
+      {:ok, pid} =
+        JobSession.Supervisor.start_session(
+          chain_id: @chain,
+          job_id: jid,
+          role: :provider,
+          initial_status: :funded
+        )
+
+      offer(jid, %{offering: "xochi_usdc_public", request: @xochi_request})
+
+      assert_receive {:telemetry, [:raxol, :earn, :seller, :queue, :dropped],
+                      %{job_id: ^jid, reason: {:handler_error, :no_xochi_config}}},
+                     500
+
+      assert JobSession.Registry.whereis({@chain, jid}) == pid
+      assert status(jid) == :funded
     end
   end
 end
