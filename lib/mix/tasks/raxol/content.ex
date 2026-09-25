@@ -96,7 +96,7 @@ defmodule Mix.Raxol.Content do
     #   reduced_motion: false
 
     # Theme configuration
-    # config :raxol, :theme, Raxol.UI.Theming.Theme.dark_theme()
+    # config :raxol, :current_theme, Raxol.UI.Theming.Theme.dark_theme()
     #{String.trim_trailing(ssh_config)}
     #{String.trim_trailing(liveview_config)}
     """
