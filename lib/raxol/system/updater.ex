@@ -7,9 +7,11 @@ defmodule Raxol.System.Updater do
   Where updates come from is a `Raxol.System.Updater.Manifest`: by default the
   `raxol` CLI release channel (`raxol-cli-v*` releases on `DROOdotFOO/raxol`),
   or whatever an application sets in `config :raxol, :updater_manifest`.
-  Every download is checked against the release's `SHA256SUMS` before it is
-  extracted, patched, or installed, and the replaced executable is kept so
-  `rollback_update/1` can restore it.
+  Every download is checked against the release's `SHA256SUMS` and, unless
+  the manifest sets `provenance: :off`, against the release's Sigstore
+  attestation (`Raxol.System.Updater.Provenance`: signed by the manifest's
+  workflow for that tag) before it is extracted or installed. The replaced
+  executable is kept so `rollback_update/1` can restore it.
 
   ## Options
 
@@ -177,7 +179,8 @@ defmodule Raxol.System.Updater do
 
   Returns `:ok`, `{:no_update, current_version}`, or `{:error, reason}`.
   Nothing is installed unless its checksum matches the release's
-  `SHA256SUMS`.
+  `SHA256SUMS` and, with provenance required, the release's attestation
+  covers it; a provenance failure is `{:error, {:provenance_failed, reason}}`.
   """
   def self_update(version \\ nil, opts \\ []) do
     Core.self_update(version, opts)
