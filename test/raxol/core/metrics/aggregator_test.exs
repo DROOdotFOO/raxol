@@ -130,6 +130,26 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
       assert eu_metrics.value == 20.0
     end
 
+    # `Raxol.Core.Metrics.record/3` passes its tags through as a keyword list.
+    test "groups metrics recorded with keyword-list tags" do
+      {:ok, rule_id} =
+        Aggregator.add_rule(%{
+          type: :sum,
+          metric_name: "keyword_tagged_metric",
+          group_by: ["component"]
+        })
+
+      record_metrics("keyword_tagged_metric", [1, 2], component: "table")
+      record_metrics("keyword_tagged_metric", [5], component: "list")
+
+      assert {:ok, aggregated} = Aggregator.update_aggregation(rule_id)
+
+      assert aggregated |> Map.new(&{&1.group, &1.value}) == %{
+               "table" => 3,
+               "list" => 5
+             }
+    end
+
     test "a rule with no recorded metrics aggregates to nothing", %{
       rule_id: rule_id
     } do

@@ -302,6 +302,34 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
     end
   end
 
+  describe "scheduled checks" do
+    test "a check fires on the configured check_interval (seconds)" do
+      name = :alert_manager_interval_test
+      pid = start_supervised!({AlertManager, name: name, check_interval: 1})
+
+      {:ok, rule_id} =
+        AlertManager.add_rule(
+          %{metric_name: "interval_metric", condition: :above, threshold: 50},
+          name
+        )
+
+      Raxol.Core.Metrics.MetricsCollector.record_metric(
+        "interval_metric",
+        :custom,
+        60
+      )
+
+      # The trace reports each message as it reaches the manager's mailbox,
+      # so the call below queues behind the timer message.
+      :erlang.trace(pid, true, [:receive])
+      assert_receive {:trace, ^pid, :receive, {:check_alerts, _}}, 3_000
+      :erlang.trace(pid, false, [:receive])
+
+      assert {:ok, %{active: true, current_value: 60}} =
+               AlertManager.get_alert_state(rule_id, name)
+    end
+  end
+
   describe "error handling" do
     test "returns error for non-existent rule", %{test_name: test_name} do
       assert {:error, :rule_not_found} =

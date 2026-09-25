@@ -64,7 +64,8 @@ Visualizer.get_chart(chart_id)
 
 `Raxol.Core.Metrics.AlertManager` evaluates threshold rules on a check interval
 and holds each rule down for a cooldown after it fires. Defaults: 60-second
-check interval, 300-second cooldown, `:warning` severity.
+check interval (the `check_interval:` start option, in seconds), 300-second
+cooldown, `:warning` severity.
 
 ```elixir
 AlertManager.add_rule(%{
@@ -82,8 +83,10 @@ AlertManager.get_alert_state(rule_id)
 AlertManager.get_alert_history(rule_id)
 ```
 
-Every function takes an optional process as its last argument, so a test can
-run its own instance instead of the VM-wide singleton.
+Each AlertManager function takes an optional process as its last argument, so
+a test can run its own instance instead of the VM-wide singleton. The Aggregator
+and Visualizer functions take none (only their `stop/1` does): they address the
+process registered under the module name.
 
 ## Starting them
 
