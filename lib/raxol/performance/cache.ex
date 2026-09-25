@@ -144,9 +144,10 @@ defmodule Raxol.Performance.Cache do
     do: ETSCacheManager.cache_font_metrics(key, value)
 
   @doc """
-  Clears the specified cache.
+  Clears the specified cache. A name outside `t:cache_name/0` returns
+  `{:error, :unknown_cache}`.
   """
-  @spec clear(cache_name()) :: :ok
+  @spec clear(atom()) :: :ok | {:error, :unknown_cache}
   def clear(cache_name) do
     ETSCacheManager.clear_cache(cache_name)
   end

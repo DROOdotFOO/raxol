@@ -30,7 +30,6 @@ defmodule Raxol.Test.IsolationHelper do
     reset_if_alive(Raxol.Performance.ETSCacheManager, fn ->
       Raxol.Performance.ETSCacheManager.clear_cache(:style)
       Raxol.Performance.ETSCacheManager.clear_cache(:layout)
-      Raxol.Performance.ETSCacheManager.clear_cache(:theme_cache)
     end)
 
     :ok

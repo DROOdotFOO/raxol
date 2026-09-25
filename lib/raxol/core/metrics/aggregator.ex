@@ -148,7 +148,7 @@ defmodule Raxol.Core.Metrics.Aggregator do
       options: Map.merge(@default_options, Map.new(opts))
     }
 
-    schedule_update()
+    schedule_update(state.options.update_interval)
     {:ok, state}
   end
 
@@ -182,7 +182,9 @@ defmodule Raxol.Core.Metrics.Aggregator do
         {:reply, {:error, :rule_not_found}, state}
 
       rule ->
-        metrics = MetricsCollector.get_metrics(rule.metric_name, rule.tags)
+        {:ok, metrics} =
+          MetricsCollector.get_metrics(rule.metric_name, rule.tags)
+
         aggregated = aggregate_metrics(metrics, rule)
 
         new_state = %{
@@ -214,7 +216,7 @@ defmodule Raxol.Core.Metrics.Aggregator do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info(:update_aggregations, state) do
     new_state = update_all_aggregations(state)
-    schedule_update()
+    schedule_update(state.options.update_interval)
     {:noreply, new_state}
   end
 
@@ -253,6 +255,9 @@ defmodule Raxol.Core.Metrics.Aggregator do
     end)
   end
 
+  # A rule with no recorded metrics has nothing to aggregate.
+  defp group_metrics([], _group_by), do: []
+
   defp group_metrics(metrics, []) do
     [{"all", metrics}]
   end
@@ -269,7 +274,9 @@ defmodule Raxol.Core.Metrics.Aggregator do
 
   defp update_all_aggregations(state) do
     Enum.reduce(state.rules, state, fn {rule_id, rule}, acc_state ->
-      metrics = MetricsCollector.get_metrics(rule.metric_name, rule.tags)
+      {:ok, metrics} =
+        MetricsCollector.get_metrics(rule.metric_name, rule.tags)
+
       aggregated = aggregate_metrics(metrics, rule)
 
       %{
@@ -279,13 +286,7 @@ defmodule Raxol.Core.Metrics.Aggregator do
     end)
   end
 
-  defp schedule_update do
-    timer_id = System.unique_integer([:positive])
-
-    Process.send_after(
-      self(),
-      {:aggregate, timer_id},
-      @default_options.update_interval * 1000
-    )
+  defp schedule_update(interval_seconds) do
+    Process.send_after(self(), :update_aggregations, interval_seconds * 1000)
   end
 end

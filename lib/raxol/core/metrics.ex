@@ -7,25 +7,19 @@ defmodule Raxol.Core.Metrics do
   are swallowed where appropriate.
   """
 
+  @doc """
+  Starts the metrics collector.
+
+  `Raxol.Core.Metrics.Aggregator` and `Raxol.Core.Metrics.AlertManager` are
+  opt-in servers that the caller starts itself; see the metrics README.
+  """
   @spec init(keyword()) :: :ok | {:error, term()}
   def init(options \\ []) do
-    with {:ok, _pid} <-
-           safe_call(
-             fn -> Raxol.Core.Metrics.MetricsCollector.start_link(options) end,
-             5000
-           ),
-         :ok <-
-           safe_call(
-             fn -> Raxol.Core.Metrics.Aggregator.init(options) end,
-             3000
-           ),
-         :ok <-
-           safe_call(
-             fn -> Raxol.Core.Metrics.AlertManager.init(options) end,
-             3000
-           ) do
-      :ok
-    else
+    case safe_call(
+           fn -> Raxol.Core.Metrics.MetricsCollector.start_link(options) end,
+           5000
+         ) do
+      {:ok, _pid} -> :ok
       {:error, reason} -> {:error, {:metrics_init_failed, reason}}
     end
   end
@@ -75,7 +69,7 @@ defmodule Raxol.Core.Metrics do
              fn -> Raxol.Core.Metrics.MetricsCollector.clear_metrics() end,
              2000
            ),
-         :ok <- safe_call(fn -> Raxol.Core.Metrics.Aggregator.clear() end, 2000) do
+         :ok <- safe_call(&clear_aggregator/0, 2000) do
       :ok
     else
       {:error, reason} -> {:error, {:metrics_clear_failed, reason}}
@@ -83,6 +77,14 @@ defmodule Raxol.Core.Metrics do
   end
 
   # -- Private --
+
+  # The aggregator is opt-in: with none running there are no rules to clear.
+  defp clear_aggregator do
+    case Process.whereis(Raxol.Core.Metrics.Aggregator) do
+      nil -> :ok
+      _pid -> Raxol.Core.Metrics.Aggregator.clear()
+    end
+  end
 
   # Runs fun in a Task with timeout, normalizes the result to {:ok, result} | {:error, reason}.
   defp safe_call(fun, timeout_ms) do

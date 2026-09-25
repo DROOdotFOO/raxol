@@ -10,8 +10,13 @@ alias Raxol.Terminal.Escape.Parsers.{CSIParser, CSIParserCached}
 alias Raxol.Terminal.{Cell, CellCached}
 alias Raxol.Performance.{ETSCacheManager, PredictiveOptimizer}
 
-# Ensure cache manager is started
-{:ok, _} = ETSCacheManager.start_link()
+# Ensure cache manager is started (the application starts it with
+# :performance_monitoring on)
+case ETSCacheManager.start_link() do
+  {:ok, _} -> :ok
+  {:error, {:already_started, _}} -> :ok
+end
+
 {:ok, _} = PredictiveOptimizer.start_link()
 
 # Warm up caches
