@@ -3616,7 +3616,7 @@ tool that spawns agent CLIs.
 Install the CLI, then point the host at `raxol acp`:
 
 ```bash
-curl -fsSL https://raxol.io/install | bash   # or: brew install droodotfoo/tap/raxol
+curl -fsSL https://raxol.io/install | bash
 raxol doctor                                 # confirms "acp surface: available"
 ```
 
