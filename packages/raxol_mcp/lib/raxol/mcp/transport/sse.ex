@@ -210,11 +210,15 @@ if Code.ensure_loaded?(Plug.Router) do
     # unidentified caller to answer on another's behalf.
     #
     # A fresh id per request looked safer and was worse. `initialize` records
-    # capabilities under whatever key it is given, and that map is only ever
-    # evicted on a subscriber's `:DOWN` -- which a never-subscribed key does not
-    # have. One unauthenticated POST per permanent entry, with a caller-supplied
-    # map as its value, is unbounded memory growth with no way to reclaim it.
-    # One shared key is bounded by construction.
+    # capabilities under whatever key it is given, and only a subscriber's
+    # `:DOWN` removes one -- which a never-subscribed key does not have. The
+    # server's `:max_client_capabilities` cap bounds the memory, but every
+    # unidentified POST would still take a slot and push out another client's
+    # entry. One shared key takes one slot.
+    #
+    # A client-supplied `mcp-session-id` is trusted as-is, so a client that
+    # invents ids can still fill the cap; it evicts unsubscribed entries before
+    # any live stream's.
     @anonymous_conn :anonymous
 
     defp conn_id(conn) do

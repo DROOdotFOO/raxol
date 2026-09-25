@@ -59,6 +59,17 @@ defmodule Raxol.MCP.Server do
   The server REFUSES TO BOOT when one is already registered, and denies at
   `tools/call` for one registered afterwards -- the boot check alone would be
   bypassable by registering late.
+
+  ## Client capabilities
+
+  What each connection advertised at `initialize` is kept until that
+  connection's subscriber exits. A connection that never subscribes has no
+  exit to wait for, so the map is also capped by `:max_client_capabilities`
+  (default 1024). Past the cap the oldest entry without a live subscriber is
+  evicted first, and a live one only when every entry has a subscriber. Each
+  eviction emits `[:raxol, :mcp, :server, :client_capabilities_evicted]`.
+  An evicted connection keeps working; it just cannot be asked, so an ASK
+  becomes the deny, until it sends `initialize` again.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -79,6 +90,11 @@ defmodule Raxol.MCP.Server do
   # machine-readable deny it would have received without elicitation.
   @default_elicitation_timeout_ms 60_000
 
+  # `initialize` is unauthenticated and a transport may take the connection id
+  # from the client (`Transport.SSE` trusts `mcp-session-id`), so a client that
+  # never subscribes can mint entries the `:DOWN` path will never reach.
+  @default_max_client_capabilities 1024
+
   # The implicit single connection. stdio has exactly one peer and the OS
   # process boundary IS the principal, so it never names a connection and every
   # message it carries belongs to this one. A multi-client transport must mint
@@ -97,7 +113,8 @@ defmodule Raxol.MCP.Server do
     resource_subscriptions: %{},
     client_capabilities: %{},
     pending_elicitations: %{},
-    elicitation_timeout_ms: @default_elicitation_timeout_ms
+    elicitation_timeout_ms: @default_elicitation_timeout_ms,
+    max_client_capabilities: @default_max_client_capabilities
   ]
 
   @typedoc """
@@ -147,9 +164,10 @@ defmodule Raxol.MCP.Server do
             | :emergency,
           subscribers: %{conn_id() => pid()},
           resource_subscriptions: %{String.t() => boolean()},
-          client_capabilities: %{conn_id() => map()},
+          client_capabilities: %{conn_id() => {integer(), map()}},
           pending_elicitations: %{String.t() => pending_elicitation()},
-          elicitation_timeout_ms: pos_integer()
+          elicitation_timeout_ms: pos_integer(),
+          max_client_capabilities: pos_integer()
         }
 
   @typedoc """
@@ -331,6 +349,10 @@ defmodule Raxol.MCP.Server do
            opts,
            :elicitation_timeout_ms,
            @default_elicitation_timeout_ms
+         ),
+       max_client_capabilities:
+         max_client_capabilities!(
+           Keyword.get(opts, :max_client_capabilities, @default_max_client_capabilities)
          )
      }}
   end
@@ -465,21 +487,18 @@ defmodule Raxol.MCP.Server do
     # asking. Held globally, one client advertising it would turn prompting on
     # for every other client on the server.
     #
-    # This map is keyed by connection and evicted on that connection's `:DOWN`,
-    # so every key must be one a subscriber can eventually own. A transport that
-    # mints a fresh key per REQUEST for callers it cannot identify would grow it
-    # without bound and without authentication; see `Transport.SSE`, which
-    # collapses those onto one shared key for that reason.
+    # This map is keyed by connection and evicted on that connection's `:DOWN`.
+    # A key nobody subscribes under never gets one, which is why the map is also
+    # capped; see `put_client_capabilities/3`. A transport that mints a fresh
+    # key per REQUEST for callers it cannot identify would still churn that cap
+    # and push out other clients' entries; see `Transport.SSE`, which collapses
+    # those onto one shared key for that reason.
     client_capabilities =
       msg
       |> Map.get(:params, %{})
       |> fetch_field("capabilities", %{})
 
-    state = %{
-      state
-      | initialized: true,
-        client_capabilities: Map.put(state.client_capabilities, conn_id, client_capabilities)
-    }
+    state = put_client_capabilities(%{state | initialized: true}, conn_id, client_capabilities)
 
     {Protocol.response(id, result), state}
   end
@@ -1105,6 +1124,14 @@ defmodule Raxol.MCP.Server do
             "got: #{inspect(other)}"
   end
 
+  defp max_client_capabilities!(max) when is_integer(max) and max > 0, do: max
+
+  defp max_client_capabilities!(other) do
+    raise ArgumentError,
+          "Raxol.MCP.Server :max_client_capabilities must be a positive integer, " <>
+            "got: #{inspect(other)}"
+  end
+
   # Registering a tool that declares itself destructive/sensitive while no
   # authorizer is configured is a REFUSAL, not a warning: the whole point of the
   # annotation is that this tool must not run unattended, and booting anyway
@@ -1200,9 +1227,59 @@ defmodule Raxol.MCP.Server do
 
   defp elicitation_capable?(state, conn_id) do
     Map.has_key?(state.subscribers, conn_id) and
-      state.client_capabilities
-      |> Map.get(conn_id, %{})
-      |> fetch_field("elicitation", nil) != nil
+      case Map.fetch(state.client_capabilities, conn_id) do
+        {:ok, {_seq, caps}} -> fetch_field(caps, "elicitation", nil) != nil
+        :error -> false
+      end
+  end
+
+  # Record what `conn_id` advertised, stamped so the cap can tell old from new.
+  # A re-`initialize` restamps the entry: the connection just showed it is
+  # still there.
+  #
+  # Only one entry is added per call, so at most one needs to go. Entries
+  # without a live subscriber go first: nothing will ever remove them
+  # otherwise, and none of them can elicit anyway. That includes the entry
+  # just written -- an unsubscribed newcomer does not push out a live client.
+  # Only when every entry has a subscriber does the oldest live one go, which
+  # costs it nothing but the ability to be asked until it re-initializes.
+  defp put_client_capabilities(state, conn_id, caps) do
+    entry = {System.unique_integer([:monotonic]), caps}
+    all = Map.put(state.client_capabilities, conn_id, entry)
+
+    if map_size(all) > state.max_client_capabilities do
+      {victim, live?} = eviction_victim(all, state.subscribers)
+      remaining = Map.delete(all, victim)
+
+      :telemetry.execute(
+        [:raxol, :mcp, :server, :client_capabilities_evicted],
+        %{count: 1, size: map_size(remaining)},
+        %{
+          server: self(),
+          max_client_capabilities: state.max_client_capabilities,
+          live_subscriber: live?
+        }
+      )
+
+      %{state | client_capabilities: remaining}
+    else
+      %{state | client_capabilities: all}
+    end
+  end
+
+  defp eviction_victim(entries, subscribers) do
+    {unsubscribed, live} =
+      Enum.split_with(entries, fn {conn_id, _} -> not Map.has_key?(subscribers, conn_id) end)
+
+    case unsubscribed do
+      [] -> {oldest(live), true}
+      _ -> {oldest(unsubscribed), false}
+    end
+  end
+
+  defp oldest(entries) do
+    {conn_id, _} = Enum.min_by(entries, fn {_conn_id, {seq, _caps}} -> seq end)
+    conn_id
   end
 
   # Park the call and ask. Returning `nil` is what makes this safe on a

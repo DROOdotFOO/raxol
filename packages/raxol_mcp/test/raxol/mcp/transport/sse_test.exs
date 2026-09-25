@@ -295,5 +295,26 @@ defmodule Raxol.MCP.Transport.SSETest do
 
       assert map_size(:sys.get_state(s).client_capabilities) == 1
     end
+
+    test "POSTs under fresh session ids that never subscribe are capped", %{registry: registry} do
+      # `conn_id/1` trusts any `mcp-session-id` a client sends, and only a
+      # subscriber's `:DOWN` ever removed a capabilities entry. A client that
+      # sends `initialize` under a new id each time and never opens the stream
+      # left one permanent entry per POST.
+      server_name = :"capped_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Server.start_link(name: server_name, registry: registry, max_client_capabilities: 8)
+
+      capabilities = %{elicitation: %{}, padding: String.duplicate("x", 512)}
+
+      for n <- 1..50 do
+        post_as(server_name, Protocol.request(n, "initialize", %{capabilities: capabilities}), [
+          {"mcp-session-id", "forged-#{n}"}
+        ])
+      end
+
+      assert map_size(:sys.get_state(server_name).client_capabilities) == 8
+    end
   end
 end
