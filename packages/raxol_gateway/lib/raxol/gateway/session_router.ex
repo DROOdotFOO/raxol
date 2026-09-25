@@ -54,7 +54,8 @@ defmodule Raxol.Gateway.SessionRouter do
       was killed. Emitted by `Raxol.Gateway.Session`; metadata adds `:handler`
       and `:timeout`.
     * `:down` -- a session died for any reason other than `:normal` or
-      `:shutdown`. Metadata adds `:reason`.
+      `:shutdown`. Metadata adds `:reason`, which is `:noproc` when the router
+      found the session dead before its `:DOWN` arrived and so never saw why.
     * `:stopped` -- `stop_session/2` was called. Metadata adds `reason: :explicit`.
     * `:rejected` -- no session was started. Metadata adds `:reason`, one of
       `:max_sessions`, `:rate_limited` or `:unauthorized`.
@@ -89,6 +90,14 @@ defmodule Raxol.Gateway.SessionRouter do
   `[:raxol_gateway, :session, :ready]`, `:down` and `:init_timeout` are what
   report that. An `{:error, _}` here is only ever a refusal to route --
   `:unauthorized`, `:max_sessions` or `:rate_limited`.
+
+  A tracked session that is already dead when the event arrives (its `:DOWN`
+  still queued behind this call) is dropped and replaced by a fresh session,
+  under the same authorization, `:max_sessions` and per-key cooldown as any other
+  start. Within the cooldown that is `{:error, :rate_limited}`, never an `:ok` for
+  an event cast into a dead process. The event is cast, not called, so a session
+  that dies after the liveness check and before reading its mailbox still loses
+  it after `:ok`; `:down` telemetry reports that death.
   """
   @spec route(GenServer.server(), Route.t(), term()) :: :ok | {:error, term()}
   def route(server, %Route{} = route, event) do
@@ -158,15 +167,15 @@ defmodule Raxol.Gateway.SessionRouter do
         Session.dispatch(pid, event)
         {:reply, :ok, new_state}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
     end
   end
 
   def handle_manager_call({:start_session, route}, _from, state) do
     case ensure_session(route, state) do
       {:ok, pid, new_state} -> {:reply, {:ok, pid}, new_state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -209,14 +218,44 @@ defmodule Raxol.Gateway.SessionRouter do
     cond do
       not authorized?(route, state) ->
         emit(:rejected, %{key: key, reason: :unauthorized})
-        {:error, :unauthorized}
+        {:error, :unauthorized, state}
 
       pid = Map.get(state.sessions, key) ->
-        {:ok, pid, state}
+        reuse_session(key, pid, route, state)
 
       true ->
         start_guarded(key, route, state)
     end
+  end
+
+  # A session can be dead while still tracked: its :DOWN is queued behind the
+  # call being handled. Casting to it would lose the event after an :ok. Settle
+  # the death here, as the :DOWN handler would, then start a session exactly as
+  # if that :DOWN had been read first -- same max_sessions and cooldown -- so the
+  # answer does not depend on which message the router happened to read first.
+  defp reuse_session(key, pid, route, state) do
+    if Process.alive?(pid) do
+      {:ok, pid, state}
+    else
+      start_guarded(key, route, drop_dead(key, pid, state))
+    end
+  end
+
+  # Take the queued :DOWN for its real reason, then demonitor with :flush so one
+  # not yet delivered never arrives. That can only happen if the session is still
+  # exiting, which leaves the reason unknown; :noproc says as much.
+  defp drop_dead(key, pid, state) do
+    ref = Map.fetch!(state.monitors, key)
+
+    reason =
+      receive do
+        {:DOWN, ^ref, :process, ^pid, reason} -> reason
+      after
+        0 -> :noproc
+      end
+
+    Process.demonitor(ref, [:flush])
+    drop_pid(pid, reason, state)
   end
 
   defp authorized?(_route, %{authorize: nil}), do: true
@@ -241,18 +280,23 @@ defmodule Raxol.Gateway.SessionRouter do
       false
   end
 
+  # Errors carry the state: a restart refused after drop_dead/3 must still
+  # persist the drop, since the :DOWN that would otherwise do it is flushed.
   defp start_guarded(key, route, state) do
     cond do
       map_size(state.sessions) >= state.max_sessions ->
         emit(:rejected, %{key: key, reason: :max_sessions})
-        {:error, :max_sessions}
+        {:error, :max_sessions, state}
 
       rate_limited?(key, state) ->
         emit(:rejected, %{key: key, reason: :rate_limited})
-        {:error, :rate_limited}
+        {:error, :rate_limited, state}
 
       true ->
-        do_start(key, route, nil, state)
+        case do_start(key, route, nil, state) do
+          {:ok, pid, new_state} -> {:ok, pid, new_state}
+          {:error, reason} -> {:error, reason, state}
+        end
     end
   end
 
