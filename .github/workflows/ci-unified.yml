@@ -17,14 +17,14 @@ on:
   # diff, so the child merged unverified and only met CI after its parent
   # landed and it was retargeted. `push` stays limited to the long-lived
   # branches; the concurrency group below cancels superseded runs.
+  #
+  # No `paths-ignore` either, unlike `push`. `CI Status` is the only required
+  # check on master, and a workflow that a path filter never starts reports
+  # nothing, so a pull request touching only docs waited on it forever: #1077
+  # sat BLOCKED with every other check green. The same filter now lives in
+  # the `changes` job, which skips the expensive jobs, and `CI Status` passes
+  # on a docs-only diff.
   pull_request:
-    paths-ignore:
-      - 'web/**'
-      - 'docs/**'
-      - 'assets/**'
-      - '**.md'
-      - '.github/**'
-      - '!.github/workflows/**'
   workflow_call:
     inputs:
       skip_heavy_checks:
@@ -54,6 +54,80 @@ env:
 
 jobs:
   # ========================================
+  # Change Detection
+  # ========================================
+  # Cheap on purpose: no toolchain, just git. Everything else hangs off `setup`,
+  # which only runs when `code` is true, so a docs-only pull request skips the
+  # whole pipeline and `CI Status` still reports.
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.check-changes.outputs.code }}
+      should-run-heavy: ${{ steps.check-changes.outputs.should-run-heavy }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # Need full history for change detection
+
+      - name: Detect changed files
+        id: check-changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SKIP_HEAVY: ${{ inputs.skip_heavy_checks }}
+          # SHAs from the event, not `origin/<base_ref>`. That ref names a
+          # branch, and a branch deleted while its pull request was retargeted
+          # made `git diff` exit 128 and the run fail before any check started.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            # push keeps its own paths-ignore; dispatch and workflow_call
+            # always mean "run it".
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            if [ "$SKIP_HEAVY" == "true" ]; then
+              echo "should-run-heavy=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "should-run-heavy=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          # The payload's base commit is the merge ref's first parent, so a
+          # full-depth checkout already has it; fetch it only if not.
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags origin "$BASE_SHA"
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          printf 'Changed files:\n%s\n' "$CHANGED_FILES"
+
+          # Mirrors the `push` paths-ignore: a change is docs-only when every
+          # file is under web/, docs/ or assets/, is Markdown, or is under
+          # .github/ but outside .github/workflows/. An empty diff runs
+          # everything rather than nothing.
+          CODE=false
+          if [ -z "$CHANGED_FILES" ]; then
+            CODE=true
+          fi
+          while IFS= read -r file; do
+            case "$file" in
+              '') ;;
+              .github/workflows/*) CODE=true ;;
+              web/*|docs/*|assets/*|*.md|.github/*) ;;
+              *) CODE=true ;;
+            esac
+          done <<< "$CHANGED_FILES"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+          if [ "$SKIP_HEAVY" == "true" ]; then
+            echo "should-run-heavy=false" >> "$GITHUB_OUTPUT"
+          elif echo "$CHANGED_FILES" | grep -qE "(mix\.exs|mix\.lock|lib/.*\.ex$)"; then
+            echo "should-run-heavy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-run-heavy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ========================================
   # Setup and Cache Preparation
   # ========================================
   # The toolchain pin lives in `mise.toml` and is read exactly once, here. The
@@ -62,36 +136,18 @@ jobs:
   # resolved version rather than a literal someone has to remember to bump.
   setup:
     name: Setup & Cache
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     outputs:
       elixir-version: ${{ steps.beam.outputs.elixir-version }}
       otp-version: ${{ steps.beam.outputs.otp-version }}
       cache-key: ${{ steps.cache-key.outputs.key }}
       deps-cache-hit: ${{ steps.deps-cache.outputs.cache-hit }}
-      should-run-heavy: ${{ steps.check-changes.outputs.should-run-heavy }}
-    
+      should-run-heavy: ${{ needs.changes.outputs.should-run-heavy }}
+
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # Need full history for change detection
-      
-      - name: Detect changed files
-        id: check-changes
-        run: |
-          # Check if we should run heavy checks
-          if [ "${{ inputs.skip_heavy_checks }}" == "true" ]; then
-            echo "should-run-heavy=false" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" == "push" ]; then
-            echo "should-run-heavy=true" >> $GITHUB_OUTPUT
-          else
-            # For PRs, check if critical files changed
-            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-            if echo "$CHANGED_FILES" | grep -qE "(mix\.exs|mix\.lock|lib/.*\.ex$)"; then
-              echo "should-run-heavy=true" >> $GITHUB_OUTPUT
-            else
-              echo "should-run-heavy=false" >> $GITHUB_OUTPUT
-            fi
-          fi
       
       # Ahead of the cache-key step, because the key is stamped with the
       # versions this step reports having installed.
@@ -1158,8 +1214,12 @@ jobs:
     # Listing a job here without reading its `result` is the trap this comment
     # exists to prevent -- `credo` was once declared and never read, so it
     # looked gated and was not. Any job added to `needs` gets a case below.
+    #
+    # `changes` is listed so a docs-only pull request, where every other job
+    # is skipped, can pass here rather than read "skipped" as failed.
     needs:
       [
+        changes,
         format,
         release-check,
         compile,
@@ -1175,7 +1235,30 @@ jobs:
 
     steps:
       - name: Check status
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "❌ Change detection failed"
+            exit 1
+          fi
+
+          # Docs-only: `setup` never ran, so every gated job is expected to be
+          # skipped. Anything that did run must still have succeeded; a
+          # failure or cancellation fails this check like it would below.
+          if [ "${{ needs.changes.outputs.code }}" != "true" ]; then
+            BAD=$(echo "$NEEDS" | jq -r 'to_entries[]
+              | select(.value.result != "success" and .value.result != "skipped")
+              | "\(.key): \(.value.result)"')
+            if [ -n "$BAD" ]; then
+              echo "❌ Docs-only change, but jobs did not pass:"
+              echo "$BAD"
+              exit 1
+            fi
+            echo "✅ Docs-only change; code checks skipped."
+            exit 0
+          fi
+
           # Required checks
           if [ "${{ needs.format.result }}" != "success" ]; then
             echo "❌ Format check failed"

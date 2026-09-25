@@ -9,9 +9,10 @@ name: Lockstep Deps
 # will copy, and those drift silently. One sweep found 17 stale snippets.
 #
 # Because it triggers ON Markdown, this workflow is also where the prose and
-# link gate runs. `ci-unified.yml` carries `paths-ignore` for 'docs/**' and
-# '**.md', so its `mix raxol.check_docs` step skips exactly the pull requests
-# that change prose and links. The `prose` job below closes that hole.
+# link gate runs. `ci-unified.yml` skips its code jobs when a pull request
+# touches only 'docs/**', '**.md' and the like, so its `mix raxol.check_docs`
+# step skips exactly the pull requests that change prose and links. The
+# `prose` job below closes that hole.
 
 # `**/mix.lock` is in the triggers even though `check-lockstep-deps.sh` reads
 # only `mix.exs`. Without it this workflow could not fire on a dependency-bump
