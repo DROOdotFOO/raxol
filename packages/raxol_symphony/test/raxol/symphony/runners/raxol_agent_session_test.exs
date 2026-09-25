@@ -8,7 +8,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
   alias Raxol.Symphony.TestSupport.{
     SessionAgentErrors,
     SessionAgentPausesResumes,
+    SessionAgentPausesThenHangs,
     SessionAgentSilent,
+    SessionAgentStartsAndHangs,
     SessionAgentSucceed,
     SessionAgentWorkspaceEcho
   }
@@ -176,6 +178,112 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
                  resume_value: :approved
                )
     end
+  end
+
+  # The session subtree lives under `Raxol.Agent.DynSup`, not under the worker,
+  # so it can outlive a pause. The orchestrator ends a run by killing its worker
+  # (`stop_run`, a stall, reconcile), which no code in the worker survives.
+  describe "session lifetime" do
+    test "a worker killed mid-run takes its session down with it" do
+      cfg = config(%{module: SessionAgentStartsAndHangs, session_timeout_ms: 60_000})
+
+      worker = spawn_run(cfg, attempt: nil)
+      session = await_session_pid()
+      ref = Process.monitor(session)
+
+      Process.exit(worker, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^session, _}, 5_000
+    end
+
+    test "a worker killed mid-resume takes its session down with it" do
+      cfg = config(%{module: SessionAgentPausesThenHangs, session_timeout_ms: 60_000})
+
+      assert {:pause, :awaiting_review, token} =
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 1
+               )
+
+      worker = spawn_run(cfg, attempt: 1, resume_token: token, resume_value: :approved)
+      session = await_session_pid()
+      ref = Process.monitor(session)
+
+      Process.exit(worker, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^session, _}, 5_000
+    end
+
+    test "a paused run's session outlives the worker that parked it" do
+      cfg = config(%{module: SessionAgentPausesResumes})
+      test_pid = self()
+
+      {worker, worker_ref} =
+        spawn_monitor(fn ->
+          result =
+            RaxolAgentSession.run(issue(), cfg,
+              parent: test_pid,
+              workspace_path: @workspace,
+              attempt: 1
+            )
+
+          send(test_pid, {:result, result})
+        end)
+
+      assert_receive {:result, {:pause, :awaiting_review, token}}, 5_000
+      [{pid, _}] = Registry.lookup(Raxol.Agent.Registry, token.session_id)
+      session_ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :normal}, 5_000
+
+      # Anything that stopped the session on the worker's exit would do so
+      # asynchronously, so the proof is its absence over a bounded window.
+      refute_receive {:DOWN, ^session_ref, :process, ^pid, _}, 200
+
+      assert :ok = RaxolAgentSession.release(token)
+      assert_receive {:DOWN, ^session_ref, :process, ^pid, _}, 5_000
+    end
+
+    test "release/1 stops a parked session and is a no-op without one" do
+      cfg = config(%{module: SessionAgentPausesResumes})
+
+      assert {:pause, :awaiting_review, token} =
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 1
+               )
+
+      [{pid, _}] = Registry.lookup(Raxol.Agent.Registry, token.session_id)
+      ref = Process.monitor(pid)
+
+      assert :ok = RaxolAgentSession.release(token)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
+
+      assert :ok = RaxolAgentSession.release(token)
+      assert :ok = RaxolAgentSession.release(%{session_id: "never-started"})
+      assert :ok = RaxolAgentSession.release(:not_a_token)
+    end
+  end
+
+  defp spawn_run(cfg, opts) do
+    test_pid = self()
+
+    spawn(fn ->
+      RaxolAgentSession.run(
+        issue(),
+        cfg,
+        [parent: test_pid, workspace_path: @workspace] ++ opts
+      )
+    end)
+  end
+
+  # The hanging agents report their session id as a `:turn_complete` event,
+  # which the runner forwards to its parent (this test).
+  defp await_session_pid do
+    assert_receive {:run_event, "issue-1", %{event: :turn_complete, session_id: id}}, 5_000
+    [{pid, _}] = Registry.lookup(Raxol.Agent.Registry, id)
+    pid
   end
 
   describe "workspace" do

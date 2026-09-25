@@ -170,3 +170,54 @@ defmodule Raxol.Symphony.TestSupport.SessionAgentWorkspaceEcho do
 
   def view(_model), do: %{type: :text, content: "workspace"}
 end
+
+defmodule Raxol.Symphony.TestSupport.SessionAgentStartsAndHangs do
+  @moduledoc """
+  TEA agent that reports its `session_id` on `:symphony_start` and then never
+  finishes, so a test can kill the worker mid-run and watch the session.
+  """
+
+  def init(_args), do: {%{}, []}
+
+  def update({:agent_message, _, {:symphony_start, payload}}, model) do
+    Raxol.Agent.SessionStreamer.emit(
+      payload.session_id,
+      {:turn_complete, %{session_id: payload.session_id}}
+    )
+
+    {model, []}
+  end
+
+  def update(_msg, model), do: {model, []}
+  def view(_model), do: %{type: :text, content: "hangs"}
+end
+
+defmodule Raxol.Symphony.TestSupport.SessionAgentPausesThenHangs do
+  @moduledoc """
+  TEA agent that pauses on `:symphony_start`, then on `:symphony_resume`
+  reports its `session_id` and never finishes: a resumed run to kill mid-run.
+  """
+
+  def init(_args), do: {%{}, []}
+
+  def update({:agent_message, _, {:symphony_start, payload}}, model) do
+    Raxol.Agent.SessionStreamer.emit(
+      payload.session_id,
+      {:paused, %{reason: :awaiting_review, token: %{}}}
+    )
+
+    {model, []}
+  end
+
+  def update({:agent_message, _, {:symphony_resume, payload}}, model) do
+    Raxol.Agent.SessionStreamer.emit(
+      payload.session_id,
+      {:turn_complete, %{session_id: payload.session_id}}
+    )
+
+    {model, []}
+  end
+
+  def update(_msg, model), do: {model, []}
+  def view(_model), do: %{type: :text, content: "pauses then hangs"}
+end

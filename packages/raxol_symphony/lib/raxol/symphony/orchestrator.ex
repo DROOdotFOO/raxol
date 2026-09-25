@@ -235,6 +235,7 @@ defmodule Raxol.Symphony.Orchestrator do
       Map.has_key?(state.paused, issue_id) ->
         paused_entry = Map.fetch!(state.paused, issue_id)
         forget_paused(state.paused_saver, issue_id)
+        release_parked(state, paused_entry)
 
         # Terminal: a paused run stopped by the user does not resume.
         new_state =
@@ -1815,6 +1816,7 @@ defmodule Raxol.Symphony.Orchestrator do
     )
 
     forget_paused(state.paused_saver, issue_id)
+    release_parked(state, entry)
 
     Workspace.remove(state.config, entry.workspace_path,
       host: Map.get(entry, :host),
@@ -1832,6 +1834,37 @@ defmodule Raxol.Symphony.Orchestrator do
     # lazy TTL never reclaims it, leaking one row per abandoned paused run.
     |> reclaim_prompt_cache(issue_id)
     |> notify_listeners(:paused_gc)
+  end
+
+  # A parked run's runner may hold resources for the resume that the paused
+  # entry does not own -- `RaxolAgentSession` keeps the agent session subtree
+  # alive under `Raxol.Agent.DynSup`. Discarding the entry must hand them back,
+  # or every stopped or expired parked run strands its session for the node's
+  # lifetime. Best-effort: a runner fault is logged, never fatal to the discard.
+  defp release_parked(%State{} = state, entry) do
+    with {:ok, runner_mod} <- runner_module(state),
+         true <- Code.ensure_loaded?(runner_mod),
+         true <- function_exported?(runner_mod, :release, 1) do
+      runner_mod.release(Map.get(entry, :resume_token))
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "symphony.orchestrator.release_failed issue=#{entry.issue.identifier} " <>
+          "error=#{Exception.message(e)}"
+      )
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "symphony.orchestrator.release_failed issue=#{entry.issue.identifier} " <>
+          "exit=#{inspect(reason)}"
+      )
+
+      :ok
   end
 
   defp reconcile_stalls(%State{} = state) do

@@ -94,6 +94,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   `Raxol.Agent.Session.Supervisor`), so it survives the worker exit
   that follows the pause return.
 
+  Because the subtree outlives the worker, the worker cannot be the
+  only thing that stops it: the orchestrator ends runs by killing the
+  worker (`stop_run/2`, a stall, reconcile), and no code in a killed
+  worker runs. While a worker owns a session, a guard process watches
+  it and stops the session if the worker dies; returning a pause
+  disarms the guard. A parked session is stopped by `release/1`, which
+  the orchestrator calls when it discards a parked run instead of
+  resuming it.
+
   On resume the runner sends:
 
       {:symphony_resume, %{resume_value: rv, session_id: id, workspace_path: dir}}
@@ -239,21 +248,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
     with :ok <- ensure_session_streamer(),
          :ok <- subscribe(session_id),
+         guard = arm_guard(session_id),
          {:ok, _pid} <- start_session(session_id, module) do
       seed_agent(session_id, issue, config, attempt, workspace)
 
-      case loop(session_id, issue.id, parent, timeout_ms) do
-        :ok ->
-          finalize(session_id, :ok)
-
-        {:error, _} = err ->
-          finalize(session_id, err)
-
-        {:pause, _, _} = pause ->
-          # Session keeps running under DynSup; runner detaches only.
-          unsubscribe(session_id)
-          pause
-      end
+      session_id
+      |> loop(issue.id, parent, timeout_ms)
+      |> settle(session_id, guard)
     else
       {:error, reason} ->
         unsubscribe(session_id)
@@ -281,30 +282,61 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
       [{_pid, _}] ->
         with :ok <- ensure_session_streamer(),
              :ok <- subscribe(session_id) do
+          guard = arm_guard(session_id)
           send_resume(session_id, resume_value, workspace)
 
-          case loop(session_id, issue.id, parent, timeout_ms) do
-            :ok ->
-              finalize(session_id, :ok)
-
-            {:error, _} = err ->
-              finalize(session_id, err)
-
-            {:pause, _, _} = pause ->
-              unsubscribe(session_id)
-              pause
-          end
+          session_id
+          |> loop(issue.id, parent, timeout_ms)
+          |> settle(session_id, guard)
         else
           {:error, reason} -> {:error, {:session_setup_failed, reason}}
         end
     end
   end
 
-  defp finalize(session_id, result) do
+  # A finished run stops its session, then disarms the guard (the other order
+  # leaves a window where a kill strands the session). A pause disarms first:
+  # the parked session must outlive this worker.
+  defp settle({:pause, _, _} = pause, session_id, guard) do
+    unsubscribe(session_id)
+    disarm_guard(guard)
+    pause
+  end
+
+  defp settle(result, session_id, guard) do
     unsubscribe(session_id)
     stop_session(session_id)
+    disarm_guard(guard)
     result
   end
+
+  @doc """
+  Stops the session a parked run kept alive (see `Raxol.Symphony.Runner`'s
+  `release/1`). Idempotent; `:ok` for a token with no live session.
+  """
+  @impl Runner
+  def release(%{session_id: session_id}) when is_binary(session_id),
+    do: stop_session(session_id)
+
+  def release(_token), do: :ok
+
+  # The guard is deliberately unlinked: a link would take it down with a
+  # killed worker before it could act. It watches the worker, stops the session
+  # if the worker dies while it is armed, and exits either way.
+  defp arm_guard(session_id) do
+    worker = self()
+
+    spawn(fn ->
+      ref = Process.monitor(worker)
+
+      receive do
+        {:disarm, ^worker} -> Process.demonitor(ref, [:flush])
+        {:DOWN, ^ref, :process, ^worker, _reason} -> stop_session(session_id)
+      end
+    end)
+  end
+
+  defp disarm_guard(guard), do: send(guard, {:disarm, self()})
 
   # -- Loop --
 
