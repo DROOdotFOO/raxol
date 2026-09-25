@@ -69,7 +69,8 @@ defmodule Raxol.Gateway.SessionRouterTest do
              handler: {EchoHandler, []},
              sessions_sup: sup,
              deliver: fn route, rendered -> send(test_pid, {:out, route, rendered}) end,
-             max_sessions: Map.get(ctx, :max_sessions, 1000)
+             max_sessions: Map.get(ctx, :max_sessions, 1000),
+             cooldown_ms: Map.get(ctx, :cooldown_ms, 5_000)
            ]
          ]}
     })
@@ -239,6 +240,54 @@ defmodule Raxol.Gateway.SessionRouterTest do
     assert SessionRouter.session_count(r) == 0
   end
 
+  # The router tracks a session by pid and learns of its death from a :DOWN that
+  # queues like any other message. A route/3 call already queued ahead of that
+  # :DOWN found the dead pid still tracked, cast the event into it, and replied
+  # :ok -- the event was gone and the caller was told it had been accepted.
+  describe "routing to a session whose :DOWN is still queued" do
+    @tag cooldown_ms: 0
+    test "starts a fresh session and delivers the event to it", %{router: r} do
+      rt = route(1)
+      key = Route.key(rt)
+      attach_telemetry([:down])
+
+      {:ok, dead} = SessionRouter.start_session(r, rt)
+
+      task =
+        call_behind_session_death(r, dead, fn -> SessionRouter.route(r, rt, {:say, "hi"}) end)
+
+      assert :ok = Task.await(task)
+      assert_receive {:out, ^rt, "echo: hi"}, 1_000
+
+      fresh = SessionRouter.get_session(r, key)
+      assert is_pid(fresh) and fresh != dead
+      assert Process.alive?(fresh)
+      assert SessionRouter.session_count(r) == 1
+
+      # The crash is still reported, once, with its real reason.
+      assert_received {:telemetry, :down, %{key: ^key, reason: :killed}}
+      refute_received {:telemetry, :down, _}
+    end
+
+    # The per-key cooldown exists to stop crash loops, and it applies here as it
+    # would had the :DOWN been read first. Refusing is fine; lying is not.
+    test "refuses within the cooldown instead of reporting the event accepted",
+         %{router: r} do
+      rt = route(1)
+
+      {:ok, dead} = SessionRouter.start_session(r, rt)
+
+      task =
+        call_behind_session_death(r, dead, fn -> SessionRouter.route(r, rt, {:say, "hi"}) end)
+
+      assert {:error, :rate_limited} = Task.await(task)
+
+      # The refused restart still dropped the dead entry.
+      assert SessionRouter.get_session(r, Route.key(rt)) == nil
+      assert SessionRouter.session_count(r) == 0
+    end
+  end
+
   test "a session stops on idle timeout", %{router: r} do
     {:ok, pid} = SessionRouter.start_session(r, route(1))
     ref = Process.monitor(pid)
@@ -285,6 +334,48 @@ defmodule Raxol.Gateway.SessionRouterTest do
     # The router survived the timed-out call and still tracks the session.
     assert SessionRouter.session_count(router) == 1
     send(pid, :release)
+  end
+
+  describe "handoff" do
+    # Same race as route/3: the destination's :DOWN is queued behind the
+    # handoff, which used to hand back the tracked pid as the new home of the
+    # conversation even though it was already dead.
+    @tag cooldown_ms: 0
+    test "does not rebind to a destination session that just died", %{router: r} do
+      from = route(1)
+      to = route(2)
+      {:ok, _source} = SessionRouter.start_session(r, from)
+      {:ok, dead} = SessionRouter.start_session(r, to)
+
+      task =
+        call_behind_session_death(r, dead, fn ->
+          SessionRouter.handoff(r, Route.key(from), to)
+        end)
+
+      assert {:ok, fresh} = Task.await(task)
+      assert fresh != dead
+      assert Process.alive?(fresh)
+      assert SessionRouter.get_session(r, Route.key(to)) == fresh
+
+      # The fresh destination carries the source conversation, as a handoff must.
+      assert Raxol.Gateway.Session.conversation_id(fresh) == Route.key(from)
+    end
+
+    # A handoff starts a session like any other, so it answers to the same
+    # limit; otherwise it was a way past max_sessions one chat at a time.
+    @tag max_sessions: 1
+    test "is refused when the destination would exceed max_sessions", %{router: r} do
+      from = route(1)
+      {:ok, source} = SessionRouter.start_session(r, from)
+
+      assert {:error, :max_sessions} = SessionRouter.handoff(r, Route.key(from), route(2))
+
+      assert SessionRouter.session_count(r) == 1
+      assert SessionRouter.get_session(r, Route.key(route(2))) == nil
+      # The source is untouched by the refusal.
+      assert SessionRouter.get_session(r, Route.key(from)) == source
+      assert Process.alive?(source)
+    end
   end
 
   @tag max_sessions: 1
@@ -437,4 +528,45 @@ defmodule Raxol.Gateway.SessionRouterTest do
   end
 
   defp uid, do: System.unique_integer([:positive])
+
+  # Queue `call` in the router from a task, then kill `session` and let its
+  # :DOWN queue behind that call, so the router reads the call while it still
+  # tracks a dead pid. Returns the task making the call.
+  defp call_behind_session_death(router, session, call) do
+    router_pid = Process.whereis(router)
+    ref = Process.monitor(session)
+
+    :sys.suspend(router_pid)
+    task = Task.async(call)
+    await_queued(router_pid, 1)
+
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^session, :killed}
+    await_queued(router_pid, 2)
+
+    :sys.resume(router_pid)
+    task
+  end
+
+  # A suspended process reads only system messages, so everything else stays in
+  # its mailbox. Spins on the count rather than sleeping.
+  defp await_queued(pid, count) do
+    case Process.info(pid, :message_queue_len) do
+      {:message_queue_len, len} when len >= count -> :ok
+      _ -> await_queued(pid, count)
+    end
+  end
+
+  defp attach_telemetry(events) do
+    handler_id = "router-#{uid()}"
+
+    :telemetry.attach_many(
+      handler_id,
+      Enum.map(events, &[:raxol_gateway, :session, &1]),
+      fn event, _measure, meta, pid -> send(pid, {:telemetry, List.last(event), meta}) end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
 end
