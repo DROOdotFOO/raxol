@@ -129,7 +129,9 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   is not running, so call this first to use other options.
   """
   @spec start(keyword()) :: GenServer.on_start()
-  def start(opts \\ []), do: GenServer.start(__MODULE__, opts, name: __MODULE__)
+  def start(opts \\ []) do
+    GenServer.start(__MODULE__, opts, name: __MODULE__)
+  end
 
   # Lazy, idempotent start — the pool is an UNSUPERVISED singleton in-BEAM
   # coordinator. `GenServer.start` (not `start_link`, not under a supervisor): it
