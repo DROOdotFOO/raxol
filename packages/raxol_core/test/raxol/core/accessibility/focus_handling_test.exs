@@ -21,6 +21,7 @@ defmodule Raxol.Core.Accessibility.FocusHandlingTest do
     Raxol.Test.IsolationHelper.reset_global_state()
 
     Raxol.Core.I18n.init()
+    on_exit(&Raxol.Core.I18n.cleanup/0)
     :ok
   end
 

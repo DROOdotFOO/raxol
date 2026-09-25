@@ -17,12 +17,12 @@ defmodule Raxol.RBAC do
   use Agent
 
   @doc """
-  Start the RBAC agent.
+  Start the RBAC agent, linked, for a supervision tree.
 
-  Usually started automatically by the application supervisor.
+  Without one, the public API starts the agent unlinked on first use.
   """
   def start_link(_opts \\ []) do
-    Agent.start_link(fn -> %{roles: %{}, user_roles: %{}} end, name: __MODULE__)
+    Agent.start_link(&initial_state/0, name: __MODULE__)
   end
 
   @doc """
@@ -151,9 +151,11 @@ defmodule Raxol.RBAC do
   defp ensure_started do
     Raxol.Core.Utils.GenServerHelpers.ensure_started(
       __MODULE__,
-      fn -> start_link() end
+      fn -> Agent.start(&initial_state/0, name: __MODULE__) end
     )
   end
+
+  defp initial_state, do: %{roles: %{}, user_roles: %{}}
 
   defp get_user_id(%{id: id}), do: to_string(id)
   defp get_user_id(%{"id" => id}), do: to_string(id)

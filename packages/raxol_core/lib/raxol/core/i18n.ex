@@ -202,7 +202,7 @@ defmodule Raxol.Core.I18n do
   defp ensure_server_started(config \\ %{}) do
     Raxol.Core.Utils.GenServerHelpers.ensure_started(
       @server,
-      fn -> I18nServer.start_link(name: @server, config: config) end
+      fn -> GenServer.start(I18nServer, config, name: @server) end
     )
   end
 end

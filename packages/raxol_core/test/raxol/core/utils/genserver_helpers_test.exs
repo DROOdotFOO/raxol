@@ -422,6 +422,42 @@ defmodule Raxol.Core.Utils.GenServerHelpersTest do
   end
 
   # ------------------------------------------------------------------
+  # ensure_started/2
+  # ------------------------------------------------------------------
+
+  describe "ensure_started/2" do
+    setup do
+      name = :"genserver_helpers_test_#{System.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        try do
+          Agent.stop(name)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      %{name: name}
+    end
+
+    test "a server started by a concurrent caller counts as started", %{
+      name: name
+    } do
+      start = fn -> Agent.start(fn -> :first end, name: name) end
+
+      # Another caller registers the name after the `whereis` check but
+      # before this caller's own start runs.
+      racing_start = fn ->
+        {:ok, _winner} = start.()
+        start.()
+      end
+
+      assert :ok = GenServerHelpers.ensure_started(name, racing_start)
+      assert Agent.get(name, & &1) == :first
+    end
+  end
+
+  # ------------------------------------------------------------------
   # Integration: round-trip workflows
   # ------------------------------------------------------------------
 

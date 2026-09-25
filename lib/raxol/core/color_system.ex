@@ -377,7 +377,9 @@ defmodule Raxol.Core.ColorSystem do
   defp ensure_server_started do
     Raxol.Core.Utils.GenServerHelpers.ensure_started(
       ColorSystemServer,
-      &ColorSystemServer.start_link/0
+      fn ->
+        GenServer.start(ColorSystemServer, [], name: ColorSystemServer)
+      end
     )
   end
 

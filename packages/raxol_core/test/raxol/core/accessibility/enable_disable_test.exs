@@ -14,6 +14,7 @@ defmodule Raxol.Core.Accessibility.EnableDisableTest do
 
   setup do
     Raxol.Core.I18n.init()
+    on_exit(&Raxol.Core.I18n.cleanup/0)
     :ok
   end
 

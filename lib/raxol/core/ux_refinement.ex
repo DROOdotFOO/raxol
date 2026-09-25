@@ -196,7 +196,7 @@ defmodule Raxol.Core.UXRefinement do
   defp ensure_server_started do
     Raxol.Core.Utils.GenServerHelpers.ensure_started(
       @server,
-      fn -> UxServer.start_link(name: @server) end
+      fn -> GenServer.start(UxServer, [], name: @server) end
     )
   end
 
