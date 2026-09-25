@@ -8,7 +8,7 @@ defmodule Raxol.Test.Integration.ComponentManagement do
   - Managing component state and subscriptions
   """
 
-  alias Raxol.Core.Events.Subscription
+  alias Raxol.Core.Events.EventManager
 
   @doc """
   Sets up a test scenario with multiple components.
@@ -74,7 +74,7 @@ defmodule Raxol.Test.Integration.ComponentManagement do
     new_state = Map.put(new_state, :unmounted, true)
 
     # Clean up subscriptions
-    Enum.each(component.subscriptions, &Subscription.unsubscribe(&1))
+    Enum.each(component.subscriptions, &EventManager.unsubscribe/1)
 
     # Reset mount state
     %{component | state: new_state, subscriptions: []}
