@@ -131,6 +131,11 @@ defmodule Raxol.Application do
       {Raxol.Performance.ETSCacheManager, []},
       {Registry, keys: :duplicate, name: :raxol_event_subscriptions},
       Raxol.Core.Runtime.EmitBus,
+      # Transient: tests stop it with `EventManager.cleanup/0` and start their
+      # own copy, and a permanent child would restart it under them.
+      Supervisor.child_spec(Raxol.Core.Events.EventManager,
+        restart: :transient
+      ),
       {Raxol.DynamicSupervisor, []},
       {Raxol.Core.UserPreferences, [name: Raxol.Core.UserPreferences]}
     ]
@@ -141,6 +146,9 @@ defmodule Raxol.Application do
     [
       # Core error recovery only
       {Raxol.Core.ErrorRecovery, [mode: :minimal]},
+      # The web gallery runs TEA apps in this mode, and their event
+      # subscriptions call EventManager.
+      Raxol.Core.Events.EventManager,
       # Basic telemetry if enabled
       maybe_add_telemetry(:minimal)
     ]
@@ -156,6 +164,7 @@ defmodule Raxol.Application do
       {Raxol.DynamicSupervisor, []},
       {Registry, keys: :duplicate, name: :raxol_event_subscriptions},
       Raxol.Core.Runtime.EmitBus,
+      Raxol.Core.Events.EventManager,
       maybe_add_mcp_supervisor(),
       {Raxol.Headless, []},
       maybe_add_pubsub()
@@ -189,6 +198,7 @@ defmodule Raxol.Application do
       # Essential services that should always run
       {Raxol.Core.ErrorRecovery, [name: Raxol.Core.ErrorRecovery]},
       {Raxol.Core.UserPreferences, [name: Raxol.Core.UserPreferences]},
+      Raxol.Core.Events.EventManager,
       {Raxol.DynamicSupervisor, []},
       {Raxol.Terminal.Supervisor, []},
       maybe_add_agent_supervisor(),

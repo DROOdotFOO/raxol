@@ -56,8 +56,9 @@ defmodule Raxol.Core.AccessibilityTestHelper do
 
     # Note: No on_exit cleanup needed here because:
     # 1. UserPreferences is started via start_supervised! so ExUnit handles cleanup
-    # 2. EventManager is started globally by test_helper.exs and should not be
-    #    stopped by individual tests (doing so causes flaky test failures)
+    # 2. EventManager is started by the application's :test supervision tree
+    #    and should not be stopped by individual tests (doing so causes flaky
+    #    test failures)
 
     {:ok, prefs_name: prefs_name, pref_pid: pid}
   end
