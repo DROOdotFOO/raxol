@@ -18,6 +18,7 @@ defmodule Raxol.System.Updater do
 
     * `:manifest` - a `Manifest` struct or overrides of the configured one
     * `:force` - check even when the automatic-check interval has not passed
+    * `:version` - for `check_for_updates/1`, check that release instead of the newest
     * `:current_version` - the installed version (default: the manifest's `:app`)
     * `:current_executable` - the binary to replace (default: the Burrito binary)
     * `:platform` - the manifest platform key (default: the host's)
@@ -64,6 +65,15 @@ defmodule Raxol.System.Updater do
 
   def get_current_version(opts \\ []) do
     Core.get_current_version(opts)
+  end
+
+  @doc """
+  The executable an update would replace: `:current_executable`, else the
+  Burrito binary this node runs from; `{:error, :not_running_as_binary}` on a
+  plain `mix`/`iex` node.
+  """
+  def current_executable(opts \\ []) do
+    Core.current_executable(opts)
   end
 
   def get_available_versions(opts \\ []) do
