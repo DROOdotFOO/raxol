@@ -668,4 +668,48 @@ defmodule Raxol.Symphony.OrchestratorTest do
       assert cache_size(adapter) == 1
     end
   end
+
+  describe "subscribe/1" do
+    test "a subscriber that exits is dropped from the listeners", %{config: config} do
+      pid = start_orchestrator(config)
+      test_pid = self()
+
+      listener =
+        spawn(fn ->
+          :ok = Orchestrator.subscribe(pid)
+          send(test_pid, :subscribed)
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive :subscribed
+      assert MapSet.member?(:sys.get_state(pid).listeners, listener)
+
+      ref = Process.monitor(listener)
+      send(listener, :stop)
+      assert_receive {:DOWN, ^ref, :process, ^listener, :normal}
+
+      # The orchestrator monitors the same pid, so its own DOWN was enqueued
+      # during that exit -- ahead of this call, which is therefore a barrier.
+      refute MapSet.member?(:sys.get_state(pid).listeners, listener)
+    end
+
+    test "subscribing again does not stack another monitor", %{config: config} do
+      pid = start_orchestrator(config)
+
+      :ok = Orchestrator.subscribe(pid)
+      monitors = monitor_count(pid)
+
+      for _ <- 1..3, do: :ok = Orchestrator.subscribe(pid)
+
+      assert monitor_count(pid) == monitors
+    end
+  end
+
+  defp monitor_count(pid) do
+    {:monitors, monitors} = Process.info(pid, :monitors)
+    length(monitors)
+  end
 end

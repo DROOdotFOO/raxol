@@ -206,9 +206,14 @@ defmodule Raxol.Symphony.Orchestrator do
     {:reply, build_snapshot(state), state}
   end
 
+  # One monitor per listener; its :DOWN removes the listener.
   def handle_manager_call({:subscribe, pid}, _from, %State{} = state) do
-    Process.monitor(pid)
-    {:reply, :ok, %State{state | listeners: MapSet.put(state.listeners, pid)}}
+    if MapSet.member?(state.listeners, pid) do
+      {:reply, :ok, state}
+    else
+      Process.monitor(pid)
+      {:reply, :ok, %State{state | listeners: MapSet.put(state.listeners, pid)}}
+    end
   end
 
   def handle_manager_call({:stop_run, issue_id}, _from, %State{} = state) do
@@ -308,7 +313,7 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   def handle_manager_info(
-        {:DOWN, ref, :process, _pid, reason},
+        {:DOWN, ref, :process, pid, reason},
         %State{} = state
       ) do
     cond do
@@ -319,8 +324,7 @@ defmodule Raxol.Symphony.Orchestrator do
         {:noreply, handle_worker_exit(state, issue_id, reason)}
 
       true ->
-        # Maybe a listener; drop it from listeners.
-        {:noreply, drop_listener_by_ref(state, ref)}
+        {:noreply, %State{state | listeners: MapSet.delete(state.listeners, pid)}}
     end
   end
 
@@ -2103,13 +2107,6 @@ defmodule Raxol.Symphony.Orchestrator do
       send(pid, {:symphony_event, event_name, snapshot})
     end)
 
-    state
-  end
-
-  defp drop_listener_by_ref(%State{} = state, _ref) do
-    # We do not track ref->pid mapping; on listener crash we simply leave the
-    # entry in the set (sends to dead pids are no-ops). This is
-    # acceptable; a future version may switch to Phoenix.PubSub.
     state
   end
 

@@ -54,6 +54,18 @@ defmodule Raxol.Gateway.PairingTest do
       assert {:error, :invalid} = Pairing.confirm(p, "BADCODE2")
       assert {:error, :locked_out} = Pairing.confirm(p, "BADCODE3")
     end
+
+    test "requests do not accumulate state for codes and cooldowns that have lapsed" do
+      p = start_pairing(code_ttl_ms: 0, request_cooldown_ms: 0)
+
+      for i <- 1..20, do: {:ok, _code} = Pairing.request_code(p, "u#{i}")
+      {:ok, code} = Pairing.request_code(p, "last")
+
+      # No public size accessor; the leak is the server's own state.
+      state = :sys.get_state(p)
+      assert Map.keys(state.pending) == [code]
+      assert Map.keys(state.last_request) == ["last"]
+    end
   end
 
   describe "authorize/2 check order" do

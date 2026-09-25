@@ -95,4 +95,37 @@ defmodule Raxol.Core.ConnectionPoolTest do
       assert %{busy: 0, available: 1} = ConnectionPool.stats(pool)
     end
   end
+
+  describe "overflow" do
+    test "an overflow connection is disconnected on checkin, freeing its slot" do
+      test_pid = self()
+
+      pool =
+        start_pool!(
+          pool_size: 1,
+          max_overflow: 1,
+          disconnect_fn: fn conn ->
+            send(test_pid, {:disconnected, conn})
+            :ok
+          end
+        )
+
+      assert {:ok, base} = ConnectionPool.checkout(pool)
+      assert {:ok, overflow} = ConnectionPool.checkout(pool)
+      assert {:error, :timeout} = ConnectionPool.checkout(pool)
+
+      ConnectionPool.checkin(pool, base)
+      ConnectionPool.checkin(pool, overflow)
+
+      # Casts and the stats call come from this process, so the checkins are
+      # handled before stats replies.
+      assert %{available: 1, busy: 0, overflow: 0} = ConnectionPool.stats(pool)
+      assert_received {:disconnected, ^overflow}
+      refute_received {:disconnected, ^base}
+
+      assert {:ok, ^base} = ConnectionPool.checkout(pool)
+      assert {:ok, second_overflow} = ConnectionPool.checkout(pool)
+      refute second_overflow == overflow
+    end
+  end
 end
