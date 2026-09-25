@@ -17,7 +17,6 @@ Not a Node user? The binary does not need one:
 
 ```bash
 curl -fsSL https://raxol.io/install | bash
-brew install droodotfoo/tap/raxol
 ```
 
 To require GitHub Actions provenance as well as the mandatory SHA-256 check,
