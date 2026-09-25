@@ -74,6 +74,16 @@ defmodule Raxol.Symphony.OrchestratorWorkflowModeTest do
     end
   end
 
+  # A run that finishes cleanly exits `:normal` and is scheduled for a
+  # continuation re-check: the listener sees `:worker_exit_normal` with the
+  # issue gone from `running` and queued for retry with no error.
+  defp assert_finished_normally(issue_id, timeout_ms \\ 1_000) do
+    assert_receive {:symphony_event, :worker_exit_normal, snap}, timeout_ms
+    assert snap.counts.running == 0
+    assert [%{issue_id: ^issue_id, error: nil}] = snap.retrying
+    snap
+  end
+
   describe "config.workflow_mode" do
     test "defaults to :default when absent" do
       config = build_config(nil)
@@ -103,12 +113,10 @@ defmodule Raxol.Symphony.OrchestratorWorkflowModeTest do
       Noop.Director.set("GT-1", {:succeed_after, 30})
 
       pid = start_orchestrator(config)
+      :ok = Orchestrator.subscribe(pid)
       :ok = Orchestrator.tick_now(pid)
 
-      wait_until(fn ->
-        Orchestrator.snapshot(pid).counts.running == 0 and
-          MapSet.member?(:sys.get_state(pid).completed, "g1")
-      end)
+      assert_finished_normally("g1")
     end
 
     test "runner failure under :graph mode schedules a retry like :default mode" do
@@ -147,12 +155,11 @@ defmodule Raxol.Symphony.OrchestratorWorkflowModeTest do
 
       assert [%{interrupt_reason: :awaiting_review}] = snap.paused
 
+      :ok = Orchestrator.subscribe(pid)
       :ok = Orchestrator.resume_run(pid, "g3", :approved)
 
-      wait_until(2_000, fn ->
-        Orchestrator.snapshot(pid).counts.paused == 0 and
-          MapSet.member?(:sys.get_state(pid).completed, "g3")
-      end)
+      snap = assert_finished_normally("g3", 2_000)
+      assert snap.counts.paused == 0
     end
 
     test ":default mode still dispatches without invoking the graph runtime" do
@@ -163,12 +170,10 @@ defmodule Raxol.Symphony.OrchestratorWorkflowModeTest do
       Noop.Director.set("DT-1", {:succeed_after, 30})
 
       pid = start_orchestrator(config)
+      :ok = Orchestrator.subscribe(pid)
       :ok = Orchestrator.tick_now(pid)
 
-      wait_until(fn ->
-        Orchestrator.snapshot(pid).counts.running == 0 and
-          MapSet.member?(:sys.get_state(pid).completed, "d1")
-      end)
+      assert_finished_normally("d1")
     end
   end
 end
