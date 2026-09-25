@@ -144,6 +144,8 @@ defmodule Raxol.Gateway.Pairing do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:request_code, user_id}, _from, state) do
+    state = purge_lapsed(state)
+
     if rate_limited?(user_id, state) do
       {:reply, {:error, :rate_limited}, state}
     else
@@ -269,6 +271,20 @@ defmodule Raxol.Gateway.Pairing do
       nil -> false
       ts -> now() - ts < state.config.request_cooldown_ms
     end
+  end
+
+  # Otherwise only `confirm/2` removes a code and nothing removes a cooldown, so
+  # without this sweep every user who asks and never confirms would stay in
+  # both maps for the life of the server. An expired code is kept for one more
+  # TTL so a late confirm still hears `:expired` instead of counting as a failure.
+  defp purge_lapsed(state) do
+    now = now()
+    %{code_ttl_ms: ttl, request_cooldown_ms: cooldown} = state.config
+
+    pending = Map.reject(state.pending, fn {_code, entry} -> now >= entry.expires_at + ttl end)
+    last_request = Map.reject(state.last_request, fn {_user, ts} -> now - ts >= cooldown end)
+
+    %{state | pending: pending, last_request: last_request}
   end
 
   defp drop_code(state, code), do: %{state | pending: Map.delete(state.pending, code)}
