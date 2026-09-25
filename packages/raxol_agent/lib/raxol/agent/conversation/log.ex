@@ -177,7 +177,7 @@ defmodule Raxol.Agent.Conversation.Log do
   end
 
   defp remove_subscriber(state, conversation_id, pid) do
-    set = state.subscribers |> Map.get(conversation_id, MapSet.new()) |> MapSet.delete(pid)
+    subscribers = drop_member(state.subscribers, conversation_id, pid)
 
     monitors =
       case Map.pop(state.monitors, {pid, conversation_id}) do
@@ -189,12 +189,14 @@ defmodule Raxol.Agent.Conversation.Log do
           monitors
       end
 
-    %{state | subscribers: Map.put(state.subscribers, conversation_id, set), monitors: monitors}
+    %{state | subscribers: subscribers, monitors: monitors}
   end
 
   defp drop_pid(state, pid) do
     subscribers =
-      Map.new(state.subscribers, fn {conv, set} -> {conv, MapSet.delete(set, pid)} end)
+      state.subscribers
+      |> Map.keys()
+      |> Enum.reduce(state.subscribers, &drop_member(&2, &1, pid))
 
     monitors =
       state.monitors
@@ -202,5 +204,21 @@ defmodule Raxol.Agent.Conversation.Log do
       |> Map.new()
 
     %{state | subscribers: subscribers, monitors: monitors}
+  end
+
+  # A conversation with no subscribers left has no entry: an empty set kept per
+  # conversation id would grow with every conversation ever subscribed to.
+  defp drop_member(subscribers, conversation_id, pid) do
+    case Map.fetch(subscribers, conversation_id) do
+      :error ->
+        subscribers
+
+      {:ok, set} ->
+        set = MapSet.delete(set, pid)
+
+        if MapSet.size(set) == 0,
+          do: Map.delete(subscribers, conversation_id),
+          else: Map.put(subscribers, conversation_id, set)
+    end
   end
 end
