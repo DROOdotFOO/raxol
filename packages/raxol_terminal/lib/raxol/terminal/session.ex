@@ -156,15 +156,6 @@ defmodule Raxol.Terminal.Session do
     GenServer.call(pid, {:set_auto_save, enabled})
   end
 
-  @spec count_active_sessions() :: non_neg_integer()
-  def count_active_sessions do
-    # Guard against potential nil return or other issues
-    case Raxol.Core.GlobalRegistry.count(:sessions) do
-      count when is_integer(count) and count >= 0 -> count
-      _ -> 0
-    end
-  end
-
   @doc false
   @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts) do
@@ -219,9 +210,6 @@ defmodule Raxol.Terminal.Session do
       theme: theme,
       auto_save: auto_save
     }
-
-    # Register with error handling
-    safe_register_session(id, state)
 
     {:ok, state}
   end
@@ -310,23 +298,6 @@ defmodule Raxol.Terminal.Session do
 
   defp safe_get_screen_buffer(emulator, width, height) do
     emulator.main_screen_buffer || ScreenBuffer.new(width, height)
-  end
-
-  defp safe_register_session(id, state) do
-    Raxol.Core.GlobalRegistry.register(:sessions, id, state)
-    :ok
-  rescue
-    error ->
-      Raxol.Core.Runtime.Log.error(
-        "Failed to register session #{id}: #{Exception.message(error)}"
-      )
-
-      :ok
-  catch
-    :exit, reason ->
-      Raxol.Core.Runtime.Log.error("Failed to register session #{id}: #{inspect(reason)}")
-
-      :ok
   end
 
   defp safe_process_input(state, input) do

@@ -7,7 +7,6 @@ defmodule Raxol.Terminal.Integration.Config do
 
   alias Raxol.Terminal.{
     Config,
-    Rendering.RenderServer,
     ScreenBuffer.Manager
   }
 
@@ -128,14 +127,6 @@ defmodule Raxol.Terminal.Integration.Config do
       scroll_buffer_state,
       config.behavior.scrollback_limit
     )
-  end
-
-  @doc """
-  Updates the renderer configuration.
-  """
-  def update_renderer_config(renderer_state, config) do
-    RenderServer.update_config(config.rendering)
-    renderer_state
   end
 
   @doc """

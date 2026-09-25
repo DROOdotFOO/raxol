@@ -229,9 +229,7 @@ defmodule Raxol.Property.ProcessIsolationTest do
        "Process.unlink(lifecycle_pid)"},
       {"packages/raxol_terminal/lib/raxol/terminal/emulator/constructors.ex",
        "Process.unlink(pid)"},
-      {"lib/raxol/core/runtime/subscription.ex", "Process.unlink(pid)"},
-      {"packages/raxol_terminal/lib/raxol/terminal/io/io_server.ex",
-       "Process.unlink(renderer)"}
+      {"lib/raxol/core/runtime/subscription.ex", "Process.unlink(pid)"}
     ]
 
     for {file, pattern} <- @guarded_files do

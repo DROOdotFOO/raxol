@@ -6,15 +6,6 @@ defmodule Raxol.Terminal.Integration.TabIntegrationTest do
   alias Raxol.Terminal.Window.Manager
 
   setup do
-    # Start the IOServer process if not already running
-    case Process.whereis(Raxol.Terminal.IO.IOServer) do
-      nil ->
-        {:ok, _pid} = Raxol.Terminal.IO.IOServer.start_link(name: Raxol.Terminal.IO.IOServer)
-
-      _pid ->
-        :ok
-    end
-
     {:ok, _pid} = Manager.start_link()
     {:ok, _pid} = TabServer.start_link(name: TabServer)
     :ok

@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Integration do
 
   This module manages the interaction between various terminal components:
   - State management
-  - Input/output processing (via TerminalIO)
   - Buffer management
   - Rendering
   - Configuration
@@ -43,63 +42,19 @@ defmodule Raxol.Terminal.Integration do
   end
 
   @doc """
-  Processes user input and updates the terminal state using TerminalIO.
+  Handles a user input event and returns the rendered state.
   """
-  def handle_input(%State{} = state, input_event) do
-    # Convert tuple format to map format for TerminalIO
-    converted_event = convert_input_event(input_event)
-    Raxol.Terminal.IO.IOServer.process_input(converted_event)
+  def handle_input(%State{} = state, _input_event) do
     State.render(state)
   end
 
-  # Convert tuple input events to map format expected by TerminalIO
-  defp convert_input_event({:key, key}) when is_atom(key) do
-    %{type: :special_key, key: key}
-  end
-
-  defp convert_input_event({:key, key}) when is_integer(key) do
-    %{type: :key, key: <<key>>}
-  end
-
-  defp convert_input_event({:mouse, {x, y, :move}}) do
-    %{type: :mouse, x: x, y: y, button: 0, event_type: :move}
-  end
-
-  defp convert_input_event({:mouse, {x, y, button}}) do
-    %{type: :mouse, x: x, y: y, button: button, event_type: :press}
-  end
-
-  defp convert_input_event({:invalid, _reason}) do
-    %{type: :invalid}
-  end
-
-  defp convert_input_event(event) when is_map(event) do
-    # Already in map format, return as-is
-    event
-  end
-
-  defp convert_input_event(event) do
-    # Fallback for unknown formats
-    %{type: :unknown, data: event}
-  end
-
   @doc """
-  Writes text to the terminal using TerminalIO output processing.
+  Renders the state after a write and returns it.
+
+  `text` is not applied to the screen buffer.
   """
-  def write(%State{} = state, text) do
-    case Raxol.Terminal.IO.IOServer.process_output(text) do
-      {:ok, output} when is_binary(output) ->
-        _ = State.render(state)
-        output
-
-      {:ok, _} ->
-        _ = State.render(state)
-        ""
-
-      _ ->
-        _ = State.render(state)
-        ""
-    end
+  def write(%State{} = state, _text) do
+    State.render(state)
   end
 
   @doc """
@@ -162,7 +117,6 @@ defmodule Raxol.Terminal.Integration do
   Updates the configuration.
   """
   def update_config(%State{} = state, config) do
-    Raxol.Terminal.IO.IOServer.update_config(config)
     State.update(state, config: config)
   end
 
@@ -309,8 +263,8 @@ defmodule Raxol.Terminal.Integration.Main do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:write, text}, _from, state) do
-    output = Raxol.Terminal.Integration.write(state, text)
-    {:reply, {:ok, output}, state}
+    new_state = Raxol.Terminal.Integration.write(state, text)
+    {:reply, :ok, new_state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
