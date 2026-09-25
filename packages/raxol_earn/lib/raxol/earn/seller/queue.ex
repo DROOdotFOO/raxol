@@ -27,7 +27,9 @@ defmodule Raxol.Earn.Seller.Queue do
   A `:job_offered` starts a supervised `JobSession`, so an unbounded stream of
   offers is an unbounded stream of processes. The Queue caps concurrent sessions
   at `:seller_max_active_jobs`: once the cap is reached, further offers drop with
-  reason `:at_capacity`. Events for jobs already in flight are never capped.
+  reason `:at_capacity`. Events for jobs already in flight are never capped. An
+  offer that fails after starting its session (accept-time resolve or on-chain
+  `setBudget` error) stops that session, so a failed offer frees its slot.
 
   ## Events handled (v1 backend shapes -> v2 statuses)
 
@@ -216,7 +218,7 @@ defmodule Raxol.Earn.Seller.Queue do
     request = Map.get(event, :request, %{})
 
     case start_session(job_id, defaults) do
-      {:ok, session} ->
+      {:ok, session, started} ->
         {:ok, spec} = OfferingRegistry.lookup(name)
         provider = build_provider(session, spec, event, defaults, job_id)
 
@@ -245,6 +247,7 @@ defmodule Raxol.Earn.Seller.Queue do
               # reservation does not leak on a write failure.
               {:error, reason} ->
                 Provider.release(provider, resolved_request)
+                stop_started_session(started)
                 drop(:job_offered, job_id, %{offering: name}, {:handler_error, reason}, state)
             end
 
@@ -253,6 +256,7 @@ defmodule Raxol.Earn.Seller.Queue do
             drop(:job_offered, job_id, %{offering: name}, {:rejected, reason}, state)
 
           {:error, reason} ->
+            stop_started_session(started)
             drop(:job_offered, job_id, %{offering: name}, {:handler_error, reason}, state)
         end
 
@@ -290,17 +294,34 @@ defmodule Raxol.Earn.Seller.Queue do
     end
   end
 
+  # `started` is `{:started, pid}` when this offer started the session and
+  # `:existing` when it was already running (Resync rehydration, or a session
+  # that survived a Queue restart).
   defp start_session(job_id, defaults) do
     case JobSession.Supervisor.start_session(
            chain_id: defaults.chain_id,
            job_id: job_id,
            role: :provider
          ) do
-      {:ok, _pid} -> {:ok, {defaults.chain_id, job_id}}
-      {:error, {:already_started, _pid}} -> {:ok, {defaults.chain_id, job_id}}
+      {:ok, pid} -> {:ok, {defaults.chain_id, job_id}, {:started, pid}}
+      {:error, {:already_started, _pid}} -> {:ok, {defaults.chain_id, job_id}, :existing}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # A failed offer is never tracked in `jobs`, so nothing would ever end a
+  # session it started: its later `:job_expired` drops as `:job_not_running`
+  # and it holds a `seller_max_active_jobs` slot forever. Stop it. A session
+  # this offer did not start belongs to a live job (e.g. rehydrated mid-flight
+  # by Resync) and is left running. `:not_found` means it already exited.
+  defp stop_started_session({:started, pid}) do
+    case DynamicSupervisor.terminate_child(JobSession.Supervisor, pid) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+    end
+  end
+
+  defp stop_started_session(:existing), do: :ok
 
   defp build_provider(session, spec, event, defaults, job_id) do
     Provider.new(
