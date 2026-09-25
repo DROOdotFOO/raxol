@@ -52,12 +52,7 @@ defmodule Raxol.UI do
           """
       end
 
-    quote do
-      unquote(framework_code)
-
-      # Universal features available to all frameworks
-      import Raxol.UI.Universal
-    end
+    framework_code
   end
 
   @doc """
