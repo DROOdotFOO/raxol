@@ -20,6 +20,7 @@ defmodule Raxol.UI.Layout.Engine do
     PreparedElement,
     Responsive,
     SplitPane,
+    StyleInheritance,
     Table
   }
 
@@ -451,7 +452,6 @@ defmodule Raxol.UI.Layout.Engine do
     children_space =
       stamp_text_paint_bound(inner_space, style, border, explicit_w)
 
-    box_style = Map.get(box, :style, %{})
     animation_hints = Map.get(box, :animation_hints, [])
 
     box_element = %{
@@ -464,12 +464,12 @@ defmodule Raxol.UI.Layout.Engine do
       y: space.y,
       width: width,
       height: height,
-      style: box_style,
+      style: style,
       animation_hints: animation_hints,
       attrs: %{
         border: border,
         padding: padding,
-        style: box_style
+        style: style
       }
     }
 
@@ -495,6 +495,13 @@ defmodule Raxol.UI.Layout.Engine do
   # layout is an ordinary row of text segments.
   def process_element(%{type: :scrubber} = element, space, acc) do
     process_element(%{element | type: :row}, space, acc)
+  end
+
+  # `container/1` (and components such as SelectList) emit a generic
+  # `:container` that stacks its children with no gap unless one is given,
+  # so it lays out as a gapless column.
+  def process_element(%{type: :container} = element, space, acc) do
+    process_element(container_as_column(element), space, acc)
   end
 
   # Process button elements in new View DSL format (no :attrs key)
@@ -862,6 +869,11 @@ defmodule Raxol.UI.Layout.Engine do
     measure_element(Map.put(element, :type, :row), available_space)
   end
 
+  # Same mirror for `:container`'s :column alias.
+  def measure_element(%{type: :container} = element, available_space) do
+    measure_element(container_as_column(element), available_space)
+  end
+
   # Box with top-level properties (new View DSL format from Box.new/1)
   def measure_element(
         %{type: :box, children: children} = element,
@@ -1060,12 +1072,16 @@ defmodule Raxol.UI.Layout.Engine do
   defp style_to_map(styles) when is_map(styles), do: styles
   defp style_to_map(_), do: %{}
 
-  # Resolve style map from an element, defaulting to empty map.
+  # Resolve an element's style as a map; keyword and atom-list styles are
+  # normalized, anything else is an empty map.
   defp resolve_style(element) do
-    case Map.get(element, :style) do
-      s when is_map(s) -> s
-      _ -> %{}
-    end
+    StyleInheritance.ensure_style_map(Map.get(element, :style))
+  end
+
+  defp container_as_column(element) do
+    element
+    |> Map.put(:type, :column)
+    |> Map.put_new(:gap, 0)
   end
 
   # Per-side padding as {top, right, bottom, left}. Accepts a bare integer
