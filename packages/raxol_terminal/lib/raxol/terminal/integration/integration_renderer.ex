@@ -68,7 +68,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
 
   defp clear_and_present do
     case :termbox2_nif.tb_clear() do
-      0 -> present_buffer()
+      :ok -> present_buffer()
       clear_error_code -> {:error, {:clear_failed, clear_error_code}}
     end
   end
@@ -89,7 +89,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
 
   defp set_cursor_and_present(x, y) do
     case :termbox2_nif.tb_set_cursor(x, y) do
-      0 ->
+      :ok ->
         present_buffer()
 
       set_cursor_error_code ->
@@ -269,7 +269,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
 
   defp apply_config_value(:title, title) do
     case :termbox2_nif.tb_set_title(title) do
-      {:ok, "set"} -> :ok
+      {:ok, ~c"set"} -> :ok
       {:error, reason} -> {:error, reason}
       other -> {:error, {:unexpected_response, other}}
     end
@@ -428,7 +428,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
     {cursor_x, cursor_y} = CursorManager.get_position(state.cursor_manager)
 
     case :termbox2_nif.tb_set_cursor(cursor_x, cursor_y) do
-      0 -> present_buffer()
+      :ok -> present_buffer()
       error_code -> {:error, {:set_cursor_failed, error_code}}
     end
   end
@@ -440,7 +440,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
 
   defp present_buffer_by_mode(false) do
     case :termbox2_nif.tb_present() do
-      0 -> :ok
+      :ok -> :ok
       error_code -> {:error, {:present_failed, error_code}}
     end
   end
@@ -532,7 +532,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
   defp set_title_by_mode(state, title, false) do
     # In real mode, use termbox2 to set the title
     case :termbox2_nif.tb_set_title(title) do
-      {:ok, "set"} ->
+      {:ok, ~c"set"} ->
         %{state | config: Map.put(state.config || %{}, :title, title)}
 
       {:error, reason} ->
