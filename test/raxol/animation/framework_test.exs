@@ -292,14 +292,14 @@ defmodule Raxol.Animation.FrameworkTest do
       :ets.new(:accessibility_test_announcements, [:set, :public, :named_table])
       :ets.insert(:accessibility_test_announcements, {:announcements, []})
 
-      Raxol.Core.Events.Manager.register_handler(
+      Raxol.Core.Events.EventManager.register_handler(
         :screen_reader_announcement,
         Raxol.AccessibilityTestHelpers,
         :handle_announcement_spy
       )
 
       # Dispatch an accessibility event
-      Raxol.Core.Events.Manager.dispatch(
+      Raxol.Core.Events.EventManager.dispatch(
         {:screen_reader_announcement, "test message"}
       )
 
@@ -316,7 +316,7 @@ defmodule Raxol.Animation.FrameworkTest do
       assert "test message" in announcements
 
       # Clean up
-      Raxol.Core.Events.Manager.unregister_handler(
+      Raxol.Core.Events.EventManager.unregister_handler(
         :screen_reader_announcement,
         Raxol.AccessibilityTestHelpers,
         :handle_announcement_spy

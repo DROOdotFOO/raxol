@@ -99,6 +99,11 @@
   - `Raxol.UI.State.Management.StateManagementServer.set_context/2`, `get_context/1,2` and `set_slot/2`, whose only caller was `Raxol.UI.Universal`; the server never handled their messages.
   - `Raxol.UI.Theming.PaletteRegistry` and the `Raxol.UI.Theming.Colors` functions that called it: `register_custom_palette/2`, `unregister_custom_palette/1`, `list_custom_palettes/0` and `get_custom_palette/1`. Nothing started the registry, so every call exited `:noproc`; its persistence only logged.
   - `Raxol.Themes` (`apply_theme/1`, `get_current_theme/0`, `load_theme/1`, `list_themes/0`, `register_theme_callback/1,2`). Nothing started it, and it could not be started under its name (`init_manager/1` matched only `:ok`), so every call exited `:noproc`. Use `Raxol.UI.Theming.Theme.apply_theme/1` and `Theme.current/0`.
+- **Code with no callers (#1107).**
+  - Root: `Raxol.Core.Renderer.RendererManager` and `Raxol.Core.Runtime.Events.Handler`, two `EventManager` consumers that no library code started or called.
+  - `raxol_core`: `Raxol.Core.Events.Manager` (a delegating alias of `EventManager`), `Raxol.Core.Events.Subscription` (keyboard, mouse, window, timer and custom subscription wrappers over `EventManager.subscribe/2`) and `Raxol.Core.Events.EventManager.EventManagerServer`, which nothing started. Use `Raxol.Core.Events.EventManager` directly.
+  - `raxol_core`: the plugin load path that only called itself: `LifecycleManager.load_plugin/8` and `unload_plugin/6`, `Discovery.load_plugin/8` and `unload_plugin/6`, `LifecycleHelper.load_plugin/8`, `load_plugin/3` and `unload_plugin/6`, and the helpers only they reached: `Raxol.Core.Runtime.Plugins.PluginUnloader`, `PluginErrorHandler.handle_load_error/2`, `PluginValidator.validate_plugin/4`, and `Plugins.StateManager.initialize_plugin_state/2` and `update_plugin_state_legacy/3` (with their `Raxol.Core.Behaviours.StateManager` callbacks). Plugins load through `PluginManager`; `LifecycleManager.reload_plugin/2` stays.
+  - Root: `Raxol.Core.ErrorTemplates`, whose one caller was the removed `ErrorReporter`, and `Raxol.Core.ErrorRecovery.ContextManager`, which only its own test used.
 
 ## [2.7.0] - 2026-09-09
 

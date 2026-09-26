@@ -71,12 +71,16 @@ setup do
   registry_name = :"test_registry_#{:erlang.unique_integer([:positive])}"
   start_supervised!({Registry, keys: :duplicate, name: registry_name})
 
-  event_manager_name = :"test_event_manager_#{:erlang.unique_integer([:positive])}"
-  start_supervised!({Raxol.Core.Events.EventManager, name: event_manager_name})
-
-  %{registry: registry_name, event_manager: event_manager_name}
+  %{registry: registry_name}
 end
 ```
+
+`Raxol.Core.Events.EventManager` cannot be isolated this way: apart from
+`notify/3`, its client functions (`register_handler/3`, `subscribe/2`,
+`dispatch/1`, ...) always call the process registered under its module name,
+so an instance started under a unique name is never reached. Start it under
+its default name with `start_supervised!(Raxol.Core.Events.EventManager)` and
+run those tests with `async: false`.
 
 ### 4. Add explicit module loading checks
 

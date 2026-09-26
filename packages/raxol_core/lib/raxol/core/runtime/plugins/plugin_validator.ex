@@ -25,22 +25,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginValidator do
   @supported_api_versions ["1.0", "1.1", "2.0"]
 
   @doc """
-  Performs comprehensive validation of a plugin.
-  """
-  @spec validate_plugin(String.t(), module(), map(), map()) ::
-          validation_result()
-  def validate_plugin(plugin_id, plugin_module, plugins, options \\ %{}) do
-    with :ok <- validate_not_loaded(plugin_id, plugins),
-         :ok <- validate_behaviour(plugin_module),
-         :ok <- validate_metadata(plugin_module),
-         :ok <- validate_security(plugin_module, options),
-         :ok <- validate_compatibility(plugin_module),
-         :ok <- validate_performance(plugin_module) do
-      validate_dependencies(plugin_module, plugins)
-    end
-  end
-
-  @doc """
   Validates that a plugin is not already loaded.
   """
   @spec validate_not_loaded(String.t(), map()) ::
