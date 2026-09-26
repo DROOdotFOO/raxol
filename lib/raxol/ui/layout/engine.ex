@@ -978,6 +978,17 @@ defmodule Raxol.UI.Layout.Engine do
     ViewNodes.measure_shadow(element, available_space)
   end
 
+  # A table measures as `process_element/3` lays it out, with or without
+  # `:attrs`: normalized, so the top-level headers, rows and border count.
+  def measure_element(%{type: :table} = element, available_space) do
+    measured =
+      element
+      |> Table.normalize_table_attrs()
+      |> Table.measure(available_space)
+
+    Map.take(measured, [:width, :height])
+  end
+
   # Handles valid elements (maps with :type and :attrs)
   def measure_element(%{type: type, attrs: attrs} = element, available_space)
       when is_atom(type) do
@@ -1063,16 +1074,6 @@ defmodule Raxol.UI.Layout.Engine do
     measure_element_by_type(container_type, element, %{}, available_space)
   end
 
-  # normalize DSL top-level headers/rows for measure
-  def measure_element(%{type: :table} = element, available_space) do
-    measured =
-      element
-      |> Table.normalize_table_attrs()
-      |> Table.measure(available_space)
-
-    Map.take(measured, [:width, :height])
-  end
-
   # Absolute layer measures as its flow child measures -- overlays are
   # non-flow (positioned independently in process_element/3) and
   # intentionally contribute nothing to intrinsic size.
@@ -1135,9 +1136,6 @@ defmodule Raxol.UI.Layout.Engine do
              :split_pane
            ] ->
         measure_container_element(type, element, available_space)
-
-      :table ->
-        Table.measure(attrs_map, available_space)
 
       _ ->
         handle_unknown_element(type)

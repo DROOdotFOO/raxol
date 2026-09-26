@@ -212,11 +212,13 @@ defmodule Raxol.UI.Renderer do
   end
 
   defp render_visible_element(
-         %{type: :table, x: x, y: y} = table_element,
+         %{type: :table, x: x, y: y, width: width, height: height} =
+           table_element,
          theme,
          parent_style
        ) do
-    _merged_style =
+    # The frame takes its colours the way a box's border does.
+    frame_style =
       StyleProcessor.flatten_merged_style(parent_style, table_element, theme)
 
     # Extract table data from the element or attrs
@@ -227,19 +229,15 @@ defmodule Raxol.UI.Renderer do
     column_widths =
       Map.get(table_element, :column_widths) || Map.get(attrs, :_col_widths, [])
 
-    # Calculate table width if not provided
-    width = ElementRenderer.calculate_table_width(headers, data, column_widths)
-
     # Build attrs with table data and custom styles
     merged_attrs =
-      ElementRenderer.build_table_attrs(
-        table_element,
-        headers,
-        data,
-        column_widths
-      )
+      table_element
+      |> ElementRenderer.build_table_attrs(headers, data, column_widths)
+      |> Map.put(:_frame_style, frame_style)
 
-    cells = ElementRenderer.render_table(x, y, width, 0, merged_attrs, theme)
+    # Drawn into the box the layout measured for it
+    cells =
+      ElementRenderer.render_table(x, y, width, height, merged_attrs, theme)
 
     CellManager.clip_cells_to_bounds(
       cells,

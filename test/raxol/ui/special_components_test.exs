@@ -103,7 +103,8 @@ defmodule Raxol.UI.SpecialComponentsTest do
     header_cell = Helper.get_cell_at(cells, 0, 0)
     Helper.assert_cell_style(header_cell, :red, nil)
 
-    data_cell = Helper.get_cell_at(cells, 0, 2)
+    # No border: the data row sits right under the header.
+    data_cell = Helper.get_cell_at(cells, 0, 1)
     Helper.assert_cell_style(data_cell, :green, nil)
   end
 

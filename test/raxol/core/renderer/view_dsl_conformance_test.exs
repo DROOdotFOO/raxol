@@ -1297,6 +1297,106 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
     end
   end
 
+  describe "a table's border" do
+    @table [headers: ["Name", "Qty"], data: [["apple", "3"], ["kiwi", "12"]]]
+
+    test "defaults to :single: a frame, and a rule under the header" do
+      frame = render_frame(View.table(@table))
+
+      for check <- [
+            line: {0, "┌────────────┐"},
+            line: {1, "│ Name   Qty │"},
+            line: {2, "│────────────│"},
+            line: {3, "│ apple  3   │"},
+            line: {4, "│ kiwi   12  │"},
+            line: {5, "└────────────┘"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "draws the style it names" do
+      frame = render_frame(View.table(@table ++ [border: :double]))
+
+      for check <- [
+            line: {0, "╔════════════╗"},
+            line: {1, "║ Name   Qty ║"},
+            line: {2, "║════════════║"},
+            line: {5, "╚════════════╝"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test ":none draws no frame or rule, and takes no space for them" do
+      frame =
+        render_frame(
+          View.column(
+            children: [
+              View.table(@table ++ [border: :none]),
+              View.text("below")
+            ]
+          )
+        )
+
+      for check <- [
+            line: {0, "Name   Qty"},
+            line: {1, "apple  3"},
+            line: {2, "kiwi   12"},
+            line: {3, "below"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "is measured, so the next sibling starts just past it" do
+      below =
+        render_frame(
+          View.column(children: [View.table(@table), View.text("below")])
+        )
+
+      beside =
+        render_frame(View.row(children: [View.table(@table), View.text("R")]))
+
+      for {frame, check} <- [
+            {below, {:line, {5, "└────────────┘"}}},
+            {below, {:line, {6, "below"}}},
+            {beside, {:line, {0, "┌────────────┐R"}}},
+            {beside, {:line, {5, "└────────────┘"}}}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "keeps a cell's text inside its column" do
+      frame =
+        render_frame(%{
+          type: :table,
+          attrs: %{
+            columns: [
+              %{label: "Long header", width: 6},
+              %{label: "B", width: 4}
+            ],
+            rows: [["abcdefghij", "xy"]]
+          }
+        })
+
+      for check <- [line: {1, "│ Long  B  │"}, line: {3, "│ abcd  xy │"}] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "draws after a sibling in the same box" do
+      frame =
+        render_frame(
+          View.box(children: [View.text("above"), View.table(@table)])
+        )
+
+      for check <- [text: "above", line: {1, "│ Name   Qty │"}] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
   describe "an application's own helpers" do
     test "a local label/2 compiles next to the imported DSL" do
       [{module, _}] =

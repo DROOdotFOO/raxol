@@ -87,18 +87,19 @@ defmodule Raxol.UI.RendererTest do
       assert find_cell(rendered_cells, 6, 2) == {6, 2, "H", :cyan, :default, []}
       assert find_cell(rendered_cells, 7, 2) == {7, 2, "2", :cyan, :default, []}
 
-      # Verify data cells (split: "D1" at (1,4) and (2,4), "D2" at (6,4) and (7,4))
-      assert find_cell(rendered_cells, 1, 4) ==
-               {1, 4, "D", :default, :default, []}
+      # No border: the data row sits right under the header, with no rule
+      # row between them ("D1" at (1,3) and (2,3), "D2" at (6,3) and (7,3))
+      assert find_cell(rendered_cells, 1, 3) ==
+               {1, 3, "D", :default, :default, []}
 
-      assert find_cell(rendered_cells, 2, 4) ==
-               {2, 4, "1", :default, :default, []}
+      assert find_cell(rendered_cells, 2, 3) ==
+               {2, 3, "1", :default, :default, []}
 
-      assert find_cell(rendered_cells, 6, 4) ==
-               {6, 4, "D", :default, :default, []}
+      assert find_cell(rendered_cells, 6, 3) ==
+               {6, 3, "D", :default, :default, []}
 
-      assert find_cell(rendered_cells, 7, 4) ==
-               {7, 4, "2", :default, :default, []}
+      assert find_cell(rendered_cells, 7, 3) ==
+               {7, 3, "2", :default, :default, []}
     end
 
     test "applies theme styles to table header and data rows" do
@@ -131,7 +132,7 @@ defmodule Raxol.UI.RendererTest do
       assert bg == :default
 
       # Assert data row style
-      data_cell = find_cell(rendered_cells, 1, 4)
+      data_cell = find_cell(rendered_cells, 1, 3)
       assert data_cell != nil
       {_, _, "D", fg, bg, _} = data_cell
       assert fg == :default
