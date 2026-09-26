@@ -53,18 +53,20 @@ defmodule Raxol.Test.GeneratedApp do
   """
   @spec render!(module(), String.t()) :: String.t()
   def render!(app, marker) do
-    if is_nil(Process.whereis(Headless)),
-      do: start_supervised!({Headless, [name: Headless]})
+    _ =
+      if is_nil(Process.whereis(Headless)),
+        do: start_supervised!({Headless, [name: Headless]})
 
     id = :"generated_app_#{System.unique_integer([:positive])}"
 
-    assert {:ok, ^id} =
-             Headless.start(app,
-               id: id,
-               width: 80,
-               height: 24,
-               subscriptions: false
-             )
+    _ =
+      assert {:ok, ^id} =
+               Headless.start(app,
+                 id: id,
+                 width: 80,
+                 height: 24,
+                 subscriptions: false
+               )
 
     on_exit(fn -> if Process.whereis(Headless), do: Headless.stop(id) end)
 
@@ -82,7 +84,7 @@ defmodule Raxol.Test.GeneratedApp do
   end
 
   defp screenshot_until(id, marker, attempts, _last) do
-    assert {:ok, text} = Headless.screenshot(id)
+    _ = assert {:ok, text} = Headless.screenshot(id)
 
     if String.contains?(text, marker),
       do: text,
@@ -114,9 +116,9 @@ defmodule Raxol.Test.GeneratedApp do
   end
 
   defp purge(modules) do
-    for module <- modules do
-      :code.purge(module)
-      :code.delete(module)
-    end
+    Enum.each(modules, fn module ->
+      _ = :code.purge(module)
+      _ = :code.delete(module)
+    end)
   end
 end
