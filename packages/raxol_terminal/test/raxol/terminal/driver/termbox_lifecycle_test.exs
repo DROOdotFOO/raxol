@@ -13,8 +13,12 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycleTest do
 
   A plain process stands in for the reader: the test must not touch the test
   VM's own `user_drv`.
+
+  On a TTY, init also turns Logger off for the session; cleanup must hand back
+  the level init found, not a fixed one (#1128). That test sets the node-wide
+  Logger level, so this module is not async.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Raxol.Terminal.Driver
   alias Raxol.Terminal.Driver.TermboxLifecycle
@@ -42,6 +46,21 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycleTest do
       assert_receive {:DOWN, ^ref, :process, ^reader, :normal}
 
       assert TermboxLifecycle.cleanup_terminal(state_with_reader(reader)) == :ok
+    end
+
+    test "restores the Logger level the Driver found at init" do
+      found = Logger.level()
+      on_exit(fn -> Logger.configure(level: found) end)
+
+      # As the Driver's TTY branch does at init: note the level, then turn
+      # logging off for the session. :notice, because cleanup used to set
+      # :debug whatever it found.
+      Logger.configure(level: :notice)
+      state = %{state_with_reader(nil) | logger_level: Logger.level()}
+      Logger.configure(level: :none)
+
+      assert TermboxLifecycle.cleanup_terminal(state) == :ok
+      assert Logger.level() == :notice
     end
   end
 
