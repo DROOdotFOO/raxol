@@ -300,6 +300,46 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
       assert alert_active,
              "Expected alert to become active within 3 seconds"
     end
+
+    test "groups metrics recorded with keyword-list tags", %{
+      test_name: test_name,
+      pid: pid
+    } do
+      {:ok, rule_id} =
+        AlertManager.add_rule(
+          %{
+            metric_name: "keyword_tagged_metric",
+            condition: :above,
+            threshold: 50,
+            group_by: ["component"]
+          },
+          test_name
+        )
+
+      # Keyword tags are the form Metrics.record/3 stores.
+      Raxol.Core.Metrics.MetricsCollector.record_metric(
+        "keyword_tagged_metric",
+        :custom,
+        20,
+        tags: [component: "table"]
+      )
+
+      Raxol.Core.Metrics.MetricsCollector.record_metric(
+        "keyword_tagged_metric",
+        :custom,
+        90,
+        tags: [component: "list"]
+      )
+
+      send(pid, {:check_alerts, 1})
+
+      # The call queues behind the check. The largest group mean is "list"'s
+      # 90.0; one ungrouped mean would be 55.0.
+      assert {:ok, %{active: true, current_value: 90.0}} =
+               AlertManager.get_alert_state(rule_id, test_name)
+
+      assert Process.alive?(pid)
+    end
   end
 
   describe "scheduled checks" do
@@ -327,6 +367,21 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
 
       assert {:ok, %{active: true, current_value: 60}} =
                AlertManager.get_alert_state(rule_id, name)
+    end
+  end
+
+  describe "check_interval option" do
+    test "rejects a value that is not a positive integer number of seconds" do
+      Process.flag(:trap_exit, true)
+
+      for invalid <- [0, -1, 0.5] do
+        assert {:error, {:invalid_option, :check_interval, ^invalid}} =
+                 AlertManager.start_link(check_interval: invalid)
+      end
+    end
+
+    test "accepts a positive integer number of seconds" do
+      assert {:ok, _pid} = start_supervised({AlertManager, check_interval: 1})
     end
   end
 

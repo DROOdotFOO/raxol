@@ -65,7 +65,9 @@ Visualizer.get_chart(chart_id)
 `Raxol.Core.Metrics.AlertManager` evaluates threshold rules on a check interval
 and holds each rule down for a cooldown after it fires. Defaults: 60-second
 check interval (the `check_interval:` start option, in seconds), 300-second
-cooldown, `:warning` severity.
+cooldown, `:warning` severity. `check_interval` must be a positive integer;
+any other value makes `start_link/1` return
+`{:error, {:invalid_option, :check_interval, value}}`.
 
 ```elixir
 AlertManager.add_rule(%{
