@@ -122,6 +122,18 @@ defmodule Raxol.Test.GeneratedApp do
   end
 
   @doc """
+  Applies the generated project's `config/config.exs`, read for the test env,
+  with `overrides` merged into its own application's env, as `mix test` would.
+  Restored when the test exits. For a project with no application to start.
+  """
+  @spec put_config!(Path.t(), keyword()) :: :ok
+  def put_config!(project, overrides \\ []) do
+    {app, _mod} = mix_application(project)
+    put_config(project, app, overrides)
+    :ok
+  end
+
+  @doc """
   Runs `mix format --check-formatted` in the generated project at `project`,
   under the `.formatter.exs` it generated, and fails naming every file the
   formatter would change.

@@ -266,9 +266,16 @@ defmodule Mix.Raxol.Generator do
 
   defp print_template_hint(_bindings), do: :ok
 
-  defp print_ssh_hint(%{ssh: true}) do
+  # A --sup app's application starts the server; without --sup nothing does,
+  # so the command starts it through `<Module>.SSH.start/0`.
+  defp print_ssh_hint(%{ssh: true} = bindings) do
+    command =
+      if bindings.sup,
+        do: "mix run --no-halt",
+        else: ~s|mix run --no-halt -e "#{bindings.module}.SSH.start()"|
+
     Mix.shell().info("")
-    Mix.shell().info([:yellow, "SSH server:", :reset, " mix run --no-halt"])
+    Mix.shell().info([:yellow, "SSH server:", :reset, " ", command])
 
     Mix.shell().info([
       "Then connect: ",

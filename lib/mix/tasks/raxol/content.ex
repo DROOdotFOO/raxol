@@ -10,13 +10,11 @@ defmodule Mix.Raxol.Content do
         app: app,
         module: module,
         sup: sup?,
-        ssh: ssh?,
         liveview: liveview?,
         version: version
       }) do
     extra_deps =
       []
-      |> maybe_add(ssh?, ~s|{:ssh_subsystem_fwup, "~> 0.6", optional: true}|)
       |> maybe_add(liveview?, ~s|{:phoenix_live_view, "~> 1.0"}|)
       |> maybe_add(liveview?, ~s|{:phoenix, "~> 1.7"}|)
 
@@ -63,15 +61,15 @@ defmodule Mix.Raxol.Content do
   Generates config/config.exs content.
 
   A --sup app's `Application` reads the TUI's options from
-  `config :<app>, :raxol` and, with --ssh, the SSH server's from
-  `config :<app>, :ssh`, so those sections are live config for it.
+  `config :<app>, :raxol`. With --ssh, `<Module>.SSH.start/1` and the --sup
+  `Application` read the SSH server's from `config :<app>, :ssh`, so those
+  sections are live config.
   """
   def config_exs(%{app: app, sup: sup?, ssh: ssh?, liveview: liveview?}) do
     sections =
       [base_config(app)]
       |> maybe_add(sup? and not ssh?, tui_config(app))
-      |> maybe_add(sup? and ssh?, ssh_server_config(app))
-      |> maybe_add(ssh? and not sup?, ssh_config_hint(app))
+      |> maybe_add(ssh?, ssh_server_config(app))
       |> maybe_add(liveview?, liveview_config_hint(app))
 
     Enum.join(sections, "\n")
@@ -293,11 +291,14 @@ defmodule Mix.Raxol.Content do
     do_tea_module(template, bindings)
   end
 
-  @doc "Generates SSH server module."
-  def ssh_module(%{module: module}) do
-    app_mod =
-      if String.ends_with?(module, ".App"), do: module, else: "#{module}.App"
+  @doc """
+  Generates SSH server module.
 
+  `start/1` serves with the options under `config :<app>, :ssh`, which
+  `config_exs/1` fills in: `Raxol.SSH.Server` refuses to start without
+  authentication settings.
+  """
+  def ssh_module(%{module: module, app: app} = bindings) do
     """
     defmodule #{module}.SSH do
       @moduledoc \"\"\"
@@ -312,18 +313,18 @@ defmodule Mix.Raxol.Content do
           ssh localhost -p 2222
       \"\"\"
 
+      @doc "Serves the app with the options under `config :#{app}, :ssh`, overridden by `opts`."
       def start(opts \\\\ []) do
-        port = Keyword.get(opts, :port, 2222)
-        Raxol.SSH.Server.serve(#{app_mod}, port: port)
+        options = Keyword.merge(Application.get_env(:#{app}, :ssh, []), opts)
+        Raxol.SSH.Server.serve(#{tea_module_name(bindings)}, options)
       end
     end
     """
   end
 
   @doc "Generates Phoenix LiveView bridge module."
-  def liveview_module(%{module: module}) do
-    app_mod =
-      if String.ends_with?(module, ".App"), do: module, else: "#{module}.App"
+  def liveview_module(%{module: module} = bindings) do
+    app_mod = tea_module_name(bindings)
 
     """
     defmodule #{module}.Live do
@@ -533,8 +534,8 @@ defmodule Mix.Raxol.Content do
 
   defp ssh_server_config(app) do
     """
-    # The SSH server the application starts (see Raxol.SSH.serve/2). Anonymous
-    # access binds loopback only and has to state its limits.
+    # The SSH server's options (see Raxol.SSH.serve/2). Anonymous access binds
+    # loopback only and has to state its limits.
     config :#{app}, :ssh,
       port: 2222,
       allow_anonymous: true,
@@ -543,20 +544,11 @@ defmodule Mix.Raxol.Content do
       idle_timeout: :timer.minutes(5),
       max_session_duration: :timer.hours(1)
 
-    # `mix test` starts the application too. Port 0 takes any free port, so
-    # tests run while the app is serving on 2222.
+    # Port 0 takes any free port, so a server started under `mix test` runs
+    # while the app is serving on 2222.
     if config_env() == :test do
       config :#{app}, :ssh, port: 0
     end
-    """
-  end
-
-  defp ssh_config_hint(app) do
-    """
-    # SSH server configuration
-    # config :#{app}, :ssh,
-    #   port: 2222,
-    #   host_keys_dir: "/tmp/#{app}_ssh_keys"
     """
   end
 
@@ -567,6 +559,10 @@ defmodule Mix.Raxol.Content do
     #   pubsub: #{Macro.camelize(app)}.PubSub
     """
   end
+
+  # The TEA module: `<Module>.App` with --sup, the main module without.
+  defp tea_module_name(%{sup: true, module: module}), do: "#{module}.App"
+  defp tea_module_name(%{module: module}), do: module
 
   # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
   defp maybe_add(list, true, item), do: list ++ [item]

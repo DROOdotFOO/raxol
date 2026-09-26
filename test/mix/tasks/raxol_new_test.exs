@@ -120,6 +120,23 @@ defmodule Mix.Tasks.Raxol.NewTest do
     assert Raxol.SSH.Server.port(server) > 0
   end
 
+  # Without --sup nothing starts the server: the generator's instructions run
+  # `<Module>.SSH.start()`, which has to find its settings in the config.
+  test "--ssh generates an SSH.start/0 that serves the app", %{tmp: tmp} do
+    {project, module} = generate(tmp, ["--template", "counter", "--ssh"])
+    ssh = Module.concat(module, SSH)
+    assert ssh in GeneratedApp.compile!(lib_files(project))
+
+    keys_dir = Path.join(tmp, "ssh_host_keys")
+    GeneratedApp.put_config!(project, ssh: [host_keys_dir: keys_dir])
+
+    assert {:ok, server} = ssh.start()
+    Process.unlink(server)
+    on_exit(fn -> stop(server) end)
+
+    assert Raxol.SSH.Server.port(server) > 0
+  end
+
   # The generated --ci workflow runs `mix format --check-formatted`, so every
   # combination of the flags that shape generated Elixir has to pass it as
   # generated.
@@ -142,6 +159,14 @@ defmodule Mix.Tasks.Raxol.NewTest do
     capture_io(fn -> Mix.Tasks.Raxol.New.run([project | flags]) end)
 
     {project, Module.concat([Macro.camelize(name)])}
+  end
+
+  # The server can exit between the check and the stop.
+  defp stop(server) do
+    if Process.alive?(server), do: GenServer.stop(server)
+  catch
+    :exit, :noproc -> :ok
+    :exit, {:noproc, _call} -> :ok
   end
 
   defp lib_files(project),
