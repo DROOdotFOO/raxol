@@ -28,6 +28,21 @@ defmodule Raxol.CLI.NewTest do
       name = Path.basename(dir)
       assert capture_io(:stderr, fn -> assert New.run([name]) == 1 end) =~ "already exists"
     end
+
+    test "rejects names that would not compile, creating nothing" do
+      base =
+        Path.join(System.tmp_dir!(), "raxol_cli_badname_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+
+      # A trailing newline, a stdlib module, and the dependency itself.
+      for name <- ["trail\n", "enum", "raxol"] do
+        capture_io(:stderr, fn -> assert File.cd!(base, fn -> New.run([name]) end) == 1 end)
+      end
+
+      assert File.ls!(base) == []
+    end
   end
 
   describe "run/1 generation" do

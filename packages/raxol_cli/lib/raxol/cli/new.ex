@@ -6,7 +6,12 @@ defmodule Raxol.CLI.New do
   a minimal runnable TEA app: `mix.exs`, a counter module, and a README.
   """
 
-  @name_re ~r/^[a-z][a-z0-9_]*$/
+  @name_re ~r/\A[a-z][a-z0-9_]*\z/
+
+  # The names `Mix.Raxol.Generator.validate_app_name!/1` reserves. This package
+  # builds against raxol from Hex, where that check is private, so the list is
+  # kept in step by hand.
+  @reserved ~w(raxol elixir mix test lib config)
 
   @doc "Generate a new app under `./<name>`, returning an exit code."
   @spec run([String.t()]) :: non_neg_integer()
@@ -14,6 +19,14 @@ defmodule Raxol.CLI.New do
     cond do
       not Regex.match?(@name_re, name) ->
         err("invalid app name #{inspect(name)} (use snake_case: my_app)")
+
+      name in @reserved ->
+        err("app name #{name} is reserved")
+
+      # `mix new`'s rule: the app's module must not already exist, or the new
+      # project redefines it (`enum` would try to compile `Enum`).
+      Code.ensure_loaded?(Module.concat([Macro.camelize(name)])) ->
+        err("app name #{name} would redefine the existing module #{Macro.camelize(name)}")
 
       File.exists?(name) ->
         err("#{name}/ already exists")
