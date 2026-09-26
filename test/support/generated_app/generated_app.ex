@@ -114,7 +114,7 @@ defmodule Raxol.Test.GeneratedApp do
 
     put_config(project, app, overrides)
 
-    assert {:ok, sup} = callback.start(:normal, args)
+    _ = assert {:ok, sup} = callback.start(:normal, args)
     Process.unlink(sup)
     on_exit(fn -> stop_supervisor(sup) end)
 
@@ -181,7 +181,7 @@ defmodule Raxol.Test.GeneratedApp do
   end
 
   defp screenshot!(id) do
-    assert {:ok, text} = Headless.screenshot(id)
+    _ = assert {:ok, text} = Headless.screenshot(id)
     text
   end
 
@@ -218,6 +218,8 @@ defmodule Raxol.Test.GeneratedApp do
     for {config_app, pairs} <- config,
         {key, value} <- pairs,
         do: put_env(config_app, key, value)
+
+    :ok
   end
 
   # A test that quits the app has already taken the supervisor down, and it
