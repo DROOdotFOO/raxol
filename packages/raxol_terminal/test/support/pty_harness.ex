@@ -1,6 +1,6 @@
 defmodule Raxol.Terminal.PtyHarness do
   @moduledoc """
-  Drives the real `InlineDriver` inside a real pty and reports what it decoded.
+  Drives a real driver inside a real pty and reports what it decoded.
 
   The mechanism shared by every test that cannot be had without a genuine
   terminal: the protocol canary and the `-isig` contract both need an actual
@@ -14,10 +14,11 @@ defmodule Raxol.Terminal.PtyHarness do
 
   ## The app under the pty
 
-  `test/fixtures/input_canary_app.exs`, booted through `mix run` inside the
-  multiplexer. It arms the driver, writes `<out>.ready` with its diagnostics,
-  collects `CANARY_N` key events, writes one token per line to `<out>`, and
-  halts. Everything here is bookkeeping around that file pair.
+  A fixture script booted through `mix run` inside the multiplexer: by default
+  `test/fixtures/input_canary_app.exs` (the `InlineDriver`), or the one named
+  by `run/4`'s `:app` option. It arms the driver, writes `<out>.ready` with its
+  diagnostics, collects `CANARY_N` key events, writes one token per line to
+  `<out>`, and halts. Everything here is bookkeeping around that file pair.
 
   ## Keys
 
@@ -28,12 +29,12 @@ defmodule Raxol.Terminal.PtyHarness do
   ## Retries
 
   A cold pty boot can drop the first keystroke if it lands before the reader
-  has armed its select loop -- a timing flake, not a real failure. `run/3`
+  has armed its select loop -- a timing flake, not a real failure. `run/4`
   retries the whole drive, so a genuine break fails every attempt while a race
   succeeds on a later one.
   """
 
-  @app Path.expand("../fixtures/input_canary_app.exs", __DIR__)
+  @default_app Path.expand("../fixtures/input_canary_app.exs", __DIR__)
   @pkg_dir Path.expand("../..", __DIR__)
   @gap_ms 300
   # Settle after the reader signals ready, before the first keystroke, so its
@@ -82,15 +83,23 @@ defmodule Raxol.Terminal.PtyHarness do
   `expected` is a stopping condition, NOT an assertion -- the caller still has
   to assert on the returned tokens. Passing them in is what lets a flake
   retry while a real failure returns promptly with its evidence intact.
+
+  `opts[:app]` is the fixture script to boot (default: the `InlineDriver`
+  canary app).
   """
-  @spec run(:tmux | :expect, [key()], [String.t()]) :: result()
-  def run(driver, keys, expected, attempts_left \\ @max_attempts, attempt \\ 1) do
-    result = attempt_drive(driver, keys)
+  @spec run(:tmux | :expect, [key()], [String.t()], keyword()) :: result()
+  def run(driver, keys, expected, opts \\ []) do
+    app = Keyword.get(opts, :app, @default_app)
+    run_attempts(driver, app, keys, expected, @max_attempts, 1)
+  end
+
+  defp run_attempts(driver, app, keys, expected, attempts_left, attempt) do
+    result = attempt_drive(driver, app, keys)
 
     cond do
       result.tokens == expected -> Map.put(result, :attempts, attempt)
       attempts_left <= 1 -> Map.put(result, :attempts, attempt)
-      true -> run(driver, keys, expected, attempts_left - 1, attempt + 1)
+      true -> run_attempts(driver, app, keys, expected, attempts_left - 1, attempt + 1)
     end
   end
 
@@ -114,11 +123,11 @@ defmodule Raxol.Terminal.PtyHarness do
     """
   end
 
-  defp attempt_drive(driver, keys) do
+  defp attempt_drive(driver, app, keys) do
     out = Path.join(System.tmp_dir!(), "raxol_input_canary_#{unique()}")
 
     try do
-      stage = drive(driver, out, keys)
+      stage = drive(driver, app, out, keys)
       diag = read_diagnostics(out)
 
       case {stage, File.read(out)} do
@@ -151,12 +160,12 @@ defmodule Raxol.Terminal.PtyHarness do
     end
   end
 
-  defp drive(:tmux, out, keys) do
+  defp drive(:tmux, app, out, keys) do
     session = "raxol-input-canary-#{unique()}"
 
     cmd =
       "cd #{@pkg_dir} && CANARY_OUT=#{out} CANARY_N=#{length(keys)} " <>
-        "MIX_ENV=test mix run --no-compile #{@app}"
+        "MIX_ENV=test mix run --no-compile #{app}"
 
     try do
       {_, 0} =
@@ -181,7 +190,7 @@ defmodule Raxol.Terminal.PtyHarness do
     end
   end
 
-  defp drive(:expect, out, keys) do
+  defp drive(:expect, app, out, keys) do
     # The app `System.halt/0`s right after writing output, so `eof` returns
     # promptly. `--no-compile`: the parent test already compiled, so the nested
     # run must not recompile under lock contention.
@@ -192,7 +201,7 @@ defmodule Raxol.Terminal.PtyHarness do
 
     script = """
     set timeout 120
-    spawn env CANARY_OUT=#{out} CANARY_N=#{length(keys)} MIX_ENV=test mix run --no-compile #{@app}
+    spawn env CANARY_OUT=#{out} CANARY_N=#{length(keys)} MIX_ENV=test mix run --no-compile #{app}
     set t 0
     while {![file exists "#{out}.ready"] && $t < #{@ready_tries}} { after 100; incr t }
     after #{@settle_ms}

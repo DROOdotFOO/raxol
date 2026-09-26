@@ -53,8 +53,12 @@ defmodule Raxol.Terminal.Driver do
 
   defmodule State do
     @moduledoc false
+    # `logger_level`: the Logger level found at init, before the TTY branch
+    # turned logging off; nil when init left Logger alone. Restored by
+    # `TermboxLifecycle.cleanup_terminal/1`.
     defstruct dispatcher_pid: nil,
               original_stty: nil,
+              logger_level: nil,
               termbox_state: :uninitialized,
               init_retries: 0,
               io_terminal_state: nil,
@@ -170,10 +174,9 @@ defmodule Raxol.Terminal.Driver do
         # so we must redirect from /dev/tty for stty to affect the real terminal)
         original_stty = Raxol.Terminal.Driver.Stty.save()
 
-        # Raw mode on the actual terminal: no echo, no line buffering, no signals
-        Raxol.Terminal.Driver.Stty.raw!()
-
-        # Suppress Logger console output so it doesn't corrupt the TUI
+        # Suppress Logger console output so it doesn't corrupt the TUI. The
+        # level found here is restored by TermboxLifecycle.cleanup_terminal/1.
+        logger_level = Logger.level()
         Logger.configure(level: :none)
 
         # Enter alternate screen, hide cursor, disable DECAWM (autowrap,
@@ -211,6 +214,14 @@ defmodule Raxol.Terminal.Driver do
         # and sets up trace interception of the reader's output.
         start_stdin_reader(self())
 
+        # Raw mode on the actual terminal: no echo, no line buffering, no
+        # signals. Must run after start_stdin_reader: its reinit writes
+        # prim_tty's own raw mode, which is the termios saved at VM boot
+        # minus ICANON and ECHO, so ISIG comes back on and ^C raises SIGINT
+        # (the BEAM BREAK menu) instead of reaching the app as a key. The
+        # reinit completes before user_drv replies, so this call wins.
+        Raxol.Terminal.Driver.Stty.raw!()
+
         # Query the terminal's capabilities (OSC 11 background + OSC 10
         # foreground + kitty keyboard flags + DECRQM 2026 sync-output +
         # XTVERSION identity) with a DA1 probe as the unsupported-terminal
@@ -227,6 +238,7 @@ defmodule Raxol.Terminal.Driver do
           state
           | termbox_state: :initialized,
             original_stty: original_stty,
+            logger_level: logger_level,
             sigwinch_handler: sigwinch_handler,
             io_terminal_state: %{
               input_reader: Process.whereis(:user_drv_reader),

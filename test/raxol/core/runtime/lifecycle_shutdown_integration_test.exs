@@ -47,6 +47,8 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
   """
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   # Receive deadlines in this file are 10s, not the customary 2s: these
   # assertions pin the ARRIVAL and ORDER of teardown messages (driver
   # teardown ran, tree died with the right reason), not their latency.
@@ -133,6 +135,53 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
     end
   end
 
+  # A driver whose cleanup crashes, as the real one did before #1124 when
+  # stdio had gone: its terminate/2 raises, so GenServer.stop/3 exits.
+  defmodule CrashingDriver do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      recorder = Keyword.fetch!(opts, :recorder)
+      GenServer.start_link(__MODULE__, recorder)
+    end
+
+    @impl true
+    def init(recorder), do: {:ok, recorder}
+
+    @impl true
+    def terminate(_reason, recorder) do
+      send(recorder, :driver_terminated)
+      raise "driver cleanup crashed"
+    end
+  end
+
+  # The real Driver's Logger contract on a TTY: logging off for the session,
+  # the level it found restored by its cleanup.
+  defmodule SilencingDriver do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      recorder = Keyword.fetch!(opts, :recorder)
+      GenServer.start_link(__MODULE__, recorder)
+    end
+
+    @impl true
+    def init(recorder) do
+      level = Logger.level()
+      Logger.configure(level: :none)
+      {:ok, {recorder, level}}
+    end
+
+    @impl true
+    def terminate(_reason, {recorder, level}) do
+      Logger.configure(level: level)
+      send(recorder, :driver_terminated)
+      :ok
+    end
+  end
+
   setup_all do
     case start_supervised(Raxol.DynamicSupervisor) do
       {:ok, _pid} -> :ok
@@ -175,14 +224,20 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
     :ok
   end
 
-  defp start_lifecycle(recorder) do
-    Lifecycle.start_link(TestApp,
-      environment: :terminal,
-      name: :"t28_lifecycle_#{System.unique_integer([:positive])}",
-      driver_module: RecordingDriver,
-      driver_start_opts: [recorder: recorder],
-      engine_module: RecordingEngine,
-      engine_start_opts: [recorder: recorder]
+  defp start_lifecycle(recorder, overrides \\ []) do
+    Lifecycle.start_link(
+      TestApp,
+      Keyword.merge(
+        [
+          environment: :terminal,
+          name: :"t28_lifecycle_#{System.unique_integer([:positive])}",
+          driver_module: RecordingDriver,
+          driver_start_opts: [recorder: recorder],
+          engine_module: RecordingEngine,
+          engine_start_opts: [recorder: recorder]
+        ],
+        overrides
+      )
     )
   end
 
@@ -426,6 +481,53 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
 
       # Must not raise; returns :ok from terminate_manager.
       assert Lifecycle.terminate(:shutdown, state) == :ok
+    end
+  end
+
+  describe "teardown on a quit (#1128)" do
+    # GenServer.stop/3 exits rather than raises when the process it stops
+    # crashes in terminate/2. Shutdown.stop_process/2 only rescued, so the
+    # exit ended the Lifecycle's teardown at the crashing child, and the
+    # Lifecycle died with it, taking down the process linked to it by
+    # start_link: here, this test, which deliberately stays linked.
+    @tag :capture_log
+    test "a child crashing in terminate/2 neither stops the teardown nor kills the caller" do
+      {:ok, pid} = start_lifecycle(self(), driver_module: CrashingDriver)
+      ref = Process.monitor(pid)
+
+      Lifecycle.stop(pid)
+
+      assert next_teardown_event() == :driver
+
+      assert next_teardown_event() == :engine,
+             "the teardown must go on past a child that crashed in terminate/2"
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 10_000
+    end
+
+    # On a TTY the Driver turns Logger off for the session and its cleanup,
+    # which runs first, turns it back on. Everything the rest of the teardown
+    # logged then printed on the terminal the Driver had just restored.
+    @tag :capture_log
+    test "logs nothing once the driver has restored the level, and leaves that level" do
+      found = Logger.level()
+      on_exit(fn -> Logger.configure(level: found) end)
+
+      {:ok, pid} = start_lifecycle(self(), driver_module: SilencingDriver)
+      Process.unlink(pid)
+      ref = Process.monitor(pid)
+
+      teardown_log =
+        capture_log(fn ->
+          Lifecycle.stop(pid)
+
+          assert next_teardown_event() == :driver
+          assert next_teardown_event() == :engine
+          assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 10_000
+        end)
+
+      assert teardown_log == ""
+      assert Logger.level() == found
     end
   end
 end
