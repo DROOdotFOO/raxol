@@ -15,6 +15,7 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
   defmodule FormApp do
     @moduledoc false
     use Raxol.Core.Runtime.Application
+    require Raxol.View.Elements
 
     @impl true
     def init(_context), do: %{form: :none}
@@ -59,6 +60,12 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
     end
 
     defp form_view(:panel_function), do: panel(children: [text("x")])
+
+    defp form_view(:elements_panel_opts) do
+      Raxol.View.Elements.panel title: "T" do
+        text("x")
+      end
+    end
 
     defp form_view(:container), do: container(children: [text("x"), text("y")])
 
@@ -132,6 +139,11 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
     test "function call renders a bordered, padded child" do
       assert ["┌──────────┐", "│          │", "│ x        │" | _] =
                screen_lines(:panel_function)
+    end
+
+    test "Raxol.View.Elements do block with options renders its child" do
+      assert ["┌──────────┐", "│          │", "│ x        │" | _] =
+               screen_lines(:elements_panel_opts)
     end
   end
 
