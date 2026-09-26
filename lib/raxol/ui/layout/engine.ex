@@ -508,7 +508,7 @@ defmodule Raxol.UI.Layout.Engine do
 
   def process_element(%{type: type} = element, space, acc)
       when type in @view_node_types do
-    process_element(ViewNodes.lower(element), space, acc)
+    process_element(ViewNodes.lower(element, space), space, acc)
   end
 
   def process_element(%{type: :scroll} = element, space, acc) do
@@ -967,7 +967,7 @@ defmodule Raxol.UI.Layout.Engine do
 
   def measure_element(%{type: type} = element, available_space)
       when type in @view_node_types do
-    measure_element(ViewNodes.lower(element), available_space)
+    measure_element(ViewNodes.lower(element, available_space), available_space)
   end
 
   def measure_element(%{type: :scroll} = element, available_space) do

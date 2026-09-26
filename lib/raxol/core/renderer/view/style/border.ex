@@ -10,8 +10,8 @@ defmodule Raxol.Core.Renderer.View.Style.Border do
   Creates a border around a view.
 
   ## Options
-    * `:style` - Border style (:single, :double, :rounded, :bold, :dashed,
-      :block, :simple); a style with no glyph set of its own draws as
+    * `:style` - Border style (:single, :double, :rounded, :bold (heavy
+      `┏━┓`), :dashed, :block (solid `█`), :simple); :simple draws as
       :single
     * `:padding` - Space between the border and the view (default 0)
     * `:title` - Optional title to display in the border

@@ -48,6 +48,7 @@ defmodule Raxol.UI.Theming.BorderChars do
           | :bold
           | :dashed
           | :dashed_fine
+          | :block
           | :ascii
           | :none
 
@@ -107,6 +108,16 @@ defmodule Raxol.UI.Theming.BorderChars do
     vertical: "┆"
   }
 
+  # Solid full blocks all round, for the View DSL's `block_border/2`.
+  @block %{
+    top_left: "█",
+    top_right: "█",
+    bottom_left: "█",
+    bottom_right: "█",
+    horizontal: "█",
+    vertical: "█"
+  }
+
   # For terminals with no box-drawing support, and the explicit no-border
   # case. Both are `BorderRenderer`-only today.
   @ascii %{
@@ -135,6 +146,7 @@ defmodule Raxol.UI.Theming.BorderChars do
     bold: @heavy,
     dashed: @dashed,
     dashed_fine: @dashed_fine,
+    block: @block,
     ascii: @ascii,
     none: @none
   }

@@ -388,7 +388,6 @@ defmodule Raxol.Core.Renderer.View do
 
   # Delegate unique Components functions so View is the single complete DSL.
   defdelegate label(opts \\ []), to: Raxol.View.Components
-  defdelegate label(content, opts), to: Raxol.View.Components
   defdelegate input(opts \\ []), to: Raxol.View.Components
   defdelegate list(opts \\ []), to: Raxol.View.Components
   defdelegate spacer(opts \\ []), to: Raxol.View.Components

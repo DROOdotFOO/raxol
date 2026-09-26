@@ -213,7 +213,9 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
        render(fn -> View.block_border(View.text("inside"), title: "Block") end,
          text: "Block",
          text: "inside",
-         text: "┌"
+         line: {0, "█"},
+         text: "██",
+         no_text: "┌"
        )},
       {View, :double_border, [1, 2],
        render(
@@ -231,7 +233,9 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
        render(fn -> View.bold_border(View.text("inside"), title: "Bold") end,
          text: "Bold",
          text: "inside",
-         text: "┌"
+         line: {0, "┏"},
+         text: "┛",
+         no_text: "┌"
        )},
       {View, :simple_border, [1, 2],
        render(
@@ -417,13 +421,13 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          end,
          text: "from a process"
        )},
-      {View, :label, [0, 1, 2],
+      {View, :label, [0, 1],
        render(
          fn ->
            View.column(
              children: [
-               View.label("Name:", style: %{fg: :cyan}),
-               View.label(content: "keyword label")
+               View.label(content: "Name:", style: %{fg: :cyan}),
+               View.label("keyword label")
              ]
            )
          end,
@@ -795,7 +799,14 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
       end
 
     [
-      {Components, :label, [0, 1, 2], {:alias, View}},
+      {Components, :label, [0, 1], {:alias, View}},
+      # `View` has no `label/2`: `use Raxol.Core.Runtime.Application` imports
+      # `View`, and an app's own `label/2` must keep compiling.
+      {Components, :label, [2],
+       render(
+         fn -> Components.label("Name:", style: %{fg: :cyan}) end,
+         styled: {"Name:", fg: :cyan}
+       )},
       {Components, :span, [1, 2], {:alias, View}},
       {Components, :text, [1],
        render(fn -> Components.text(content: "c text", style: %{fg: :red}) end,
@@ -971,6 +982,110 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
           assert check(frame, check), failure(frame, check)
         end
       end
+    end
+  end
+
+  describe "progress given input it cannot draw as is" do
+    # A value or max that is not a number counts as 0, so the bar is empty;
+    # either way the rest of the frame renders.
+    for {label, opts} <- [
+          {"a nil value", [value: nil]},
+          {"a string value", [value: "x"]},
+          {"a nil max", [value: 5, max: nil]}
+        ] do
+      @opts opts
+      test "#{label} draws an empty bar and keeps the frame" do
+        frame =
+          render_frame(
+            View.column(
+              children: [
+                View.text("above"),
+                View.progress(@opts),
+                View.text("below")
+              ]
+            )
+          )
+
+        for check <- [
+              line: {0, "above"},
+              line: {1, "░░░░"},
+              text: " 0%",
+              line: {2, "below"}
+            ] do
+          assert check(frame, check), failure(frame, check)
+        end
+      end
+    end
+
+    test "a float width is truncated" do
+      frame = render_frame(View.progress(value: 50, width: 1.5))
+      check = {:line, {0, "█ 50%"}}
+      assert check(frame, check), failure(frame, check)
+    end
+
+    test "a width wider than the frame is clamped so the whole bar shows" do
+      frame = render_frame(View.progress(value: 100, width: 1_000))
+
+      for check <- [line: {0, "████"}, text: "█ 100%"] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "a width wider than its container is clamped to the container" do
+      frame =
+        render_frame(
+          View.box(
+            border: :single,
+            style: %{width: 14},
+            children: [View.progress(value: 50, width: 1_000)]
+          )
+        )
+
+      for check <- [line: {1, "│████░░░ 50% │"}] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "list items with no label" do
+    test "are not drawn, so a record's fields stay off the screen" do
+      frame =
+        render_frame(
+          View.list(items: [%{secret: "s3cr3t"}, "visible", {:a, :b, :c}])
+        )
+
+      for check <- [
+            line: {0, "visible"},
+            no_text: "s3cr3t",
+            no_text: "%{",
+            no_text: "{:a"
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "an application's own helpers" do
+    test "a local label/2 compiles next to the imported DSL" do
+      [{module, _}] =
+        Code.compile_string(~S'''
+        defmodule Raxol.Core.Renderer.ViewDslConformanceTest.LocalLabelApp do
+          use Raxol.Core.Runtime.Application
+
+          def view(_model), do: label("Name", :cyan)
+
+          defp label(content, color), do: text(content, fg: color)
+        end
+        ''')
+
+      on_exit(fn ->
+        :code.purge(module)
+        :code.delete(module)
+      end)
+
+      frame = render_frame(module.view(%{}))
+      check = {:styled, {"Name", fg: :cyan}}
+      assert check(frame, check), failure(frame, check)
     end
   end
 

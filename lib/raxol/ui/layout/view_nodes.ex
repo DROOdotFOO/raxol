@@ -10,7 +10,7 @@ defmodule Raxol.UI.Layout.ViewNodes do
   field. The layout engine had no clause for any of them, so each drew a
   blank region.
 
-  `lower/1` rewrites a declaration into the text, row, column and box
+  `lower/2` rewrites a declaration into the text, row, column and box
   primitives the engine lays out and measures, keeping its `:id`. `scroll`
   and `shadow` depend on the space they are given, so they are laid out
   here directly (`process_scroll/3`, `process_shadow/3`), each with a
@@ -18,7 +18,19 @@ defmodule Raxol.UI.Layout.ViewNodes do
   """
 
   alias Raxol.Core.Defaults
+  alias Raxol.Core.Runtime.Log
   alias Raxol.UI.Layout.{Engine, StyleInheritance}
+
+  @type lowered_type ::
+          :border
+          | :input
+          | :list
+          | :modal
+          | :progress
+          | :radio_group
+          | :select
+          | :tabs
+          | :textarea
 
   @lowered_types [
     :border,
@@ -34,17 +46,25 @@ defmodule Raxol.UI.Layout.ViewNodes do
 
   @progress_filled "█"
   @progress_empty "░"
+  @progress_default_width 20
+  # The widest label drawn after the bar, " 100%".
+  @progress_label_width 5
   @dim %{dim: true}
 
-  @doc "Node types `lower/1` rewrites into layout primitives."
-  @spec lowered_types() :: [atom()]
+  @doc "Node types `lower/2` rewrites into layout primitives."
+  @spec lowered_types() :: [lowered_type(), ...]
   def lowered_types, do: @lowered_types
 
   @doc """
-  Rewrites a declaration node into the primitives that draw it.
+  Rewrites a declaration node into the primitives that draw it, in the
+  space it is laid out in.
   """
-  @spec lower(map()) :: map()
-  def lower(%{type: :border} = node) do
+  @spec lower(%{:type => lowered_type(), optional(atom()) => term()}, map()) ::
+          %{
+            :type => :box | :column | :row | :text | :text_input,
+            optional(atom()) => term()
+          }
+  def lower(%{type: :border} = node, _space) do
     border = Map.get(node, :border, :single)
 
     %{
@@ -57,9 +77,10 @@ defmodule Raxol.UI.Layout.ViewNodes do
     }
   end
 
-  def lower(%{type: :input} = node), do: Map.put(node, :type, :text_input)
+  def lower(%{type: :input} = node, _space),
+    do: Map.put(node, :type, :text_input)
 
-  def lower(%{type: :list} = node) do
+  def lower(%{type: :list} = node, _space) do
     style = style_of(node)
     selected = Map.get(node, :selected)
 
@@ -67,18 +88,23 @@ defmodule Raxol.UI.Layout.ViewNodes do
       node
       |> Map.get(:items, [])
       |> Enum.with_index()
-      |> Enum.map(fn {item, index} ->
+      |> Enum.flat_map(fn {item, index} ->
         item_node(item, item_style(style, index == selected))
       end)
 
+    log_unlabelled(node, length(Map.get(node, :items, [])) - length(items))
     column(node, items)
   end
 
-  def lower(%{type: :progress} = node) do
-    max = Map.get(node, :max, 100)
-    value = Map.get(node, :value, 0)
-    width = max(Map.get(node, :width) || 20, 0)
-    ratio = if is_number(max) and max > 0, do: clamp(value / max), else: 0.0
+  # A `value` or `max` that is not a number counts as 0 (a `max` of 0 or
+  # less draws an empty bar). The bar is `width` cells (a non-negative
+  # integer; a float is truncated, anything else is the default), clamped
+  # so the bar and its label fit the space's width.
+  def lower(%{type: :progress} = node, space) do
+    max = number_or_zero(Map.get(node, :max, 100))
+    value = number_or_zero(Map.get(node, :value, 0))
+    width = progress_width(Map.get(node, :width), space)
+    ratio = if max > 0, do: clamp(value / max), else: 0.0
     filled = round(ratio * width)
 
     bar =
@@ -88,37 +114,50 @@ defmodule Raxol.UI.Layout.ViewNodes do
     text(node, "#{bar} #{round(ratio * 100)}%", style_of(node))
   end
 
-  def lower(%{type: :select} = node) do
+  def lower(%{type: :select} = node, _space) do
     selected = Map.get(node, :selected)
 
     {label, style} =
       case Enum.find(Map.get(node, :options, []), &option?(&1, selected)) do
         nil ->
-          {Map.get(node, :placeholder) || "", Map.merge(style_of(node), @dim)}
+          placeholder(node)
 
         option ->
-          {label_of(option), style_of(node)}
+          case label_of(option) do
+            nil ->
+              log_unlabelled(node, 1)
+              placeholder(node)
+
+            label ->
+              {label, style_of(node)}
+          end
       end
 
     text(node, "[#{label} ▾]", style)
   end
 
-  def lower(%{type: :radio_group} = node) do
+  def lower(%{type: :radio_group} = node, _space) do
     style = style_of(node)
     selected = Map.get(node, :selected)
+    options = Map.get(node, :options, [])
 
-    options =
-      node
-      |> Map.get(:options, [])
-      |> Enum.map(fn option ->
-        mark = if option?(option, selected), do: "(o)", else: "( )"
-        text(%{}, "#{mark} #{label_of(option)}", style)
+    rows =
+      Enum.flat_map(options, fn option ->
+        case label_of(option) do
+          nil ->
+            []
+
+          label ->
+            mark = if option?(option, selected), do: "(o)", else: "( )"
+            [text(%{}, "#{mark} #{label}", style)]
+        end
       end)
 
-    column(node, options)
+    log_unlabelled(node, length(options) - length(rows))
+    column(node, rows)
   end
 
-  def lower(%{type: :textarea} = node) do
+  def lower(%{type: :textarea} = node, _space) do
     rows = max(Map.get(node, :rows) || 5, 1)
     value = Map.get(node, :value) || ""
 
@@ -138,26 +177,40 @@ defmodule Raxol.UI.Layout.ViewNodes do
     }
   end
 
-  def lower(%{type: :tabs} = node) do
+  def lower(%{type: :tabs} = node, _space) do
     style = style_of(node)
     active = Map.get(node, :active, 0)
     tabs = Map.get(node, :tabs, [])
-    last = length(tabs) - 1
 
-    segments =
+    labelled =
       tabs
       |> Enum.with_index()
       |> Enum.flat_map(fn {tab, index} ->
-        label = label_of(tab)
+        case label_of(tab) do
+          nil -> []
+          label -> [{label, index}]
+        end
+      end)
+
+    log_unlabelled(node, length(tabs) - length(labelled))
+    last = length(labelled) - 1
+
+    segments =
+      labelled
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {{label, index}, position} ->
         active? = index == active or label == active
         tab_text = text(%{}, " #{label} ", item_style(style, active?))
-        if index < last, do: [tab_text, text(%{}, "|", style)], else: [tab_text]
+
+        if position < last,
+          do: [tab_text, text(%{}, "|", style)],
+          else: [tab_text]
       end)
 
     %{type: :row, id: Map.get(node, :id), gap: 0, children: segments}
   end
 
-  def lower(%{type: :modal, visible: true} = node) do
+  def lower(%{type: :modal, visible: true} = node, _space) do
     %{
       type: :box,
       id: Map.get(node, :id),
@@ -169,7 +222,7 @@ defmodule Raxol.UI.Layout.ViewNodes do
   end
 
   # A hidden modal draws and occupies nothing.
-  def lower(%{type: :modal} = node), do: column(node, [])
+  def lower(%{type: :modal} = node, _space), do: column(node, [])
 
   @doc """
   Lays out a `scroll` node: its children in a `:viewport`-sized window
@@ -374,8 +427,14 @@ defmodule Raxol.UI.Layout.ViewNodes do
     %{type: :text, id: Map.get(node, :id), content: content, style: style}
   end
 
-  defp item_node(%{type: _} = element, _style), do: element
-  defp item_node(item, style), do: text(%{}, label_of(item), style)
+  defp item_node(%{type: _} = element, _style), do: [element]
+
+  defp item_node(item, style) do
+    case label_of(item) do
+      nil -> []
+      label -> [text(%{}, label, style)]
+    end
+  end
 
   defp item_style(style, true), do: Map.merge(style, Defaults.selected_style())
   defp item_style(style, false), do: style
@@ -399,12 +458,50 @@ defmodule Raxol.UI.Layout.ViewNodes do
   defp option_value(%{value: value}), do: value
   defp option_value(option), do: option
 
+  # An item's text: a string, the label of a `{label, value}` pair or a
+  # `%{label: ...}` map, or anything with a `String.Chars` implementation.
+  # Anything else (a record, say) has no label and is not drawn: its
+  # `inspect/1` form would put every field, private ones included, on the
+  # screen.
   defp label_of({label, _value}), do: label_of(label)
   defp label_of(%{label: label}), do: label_of(label)
   defp label_of(label) when is_binary(label), do: label
 
   defp label_of(label) do
-    if String.Chars.impl_for(label), do: to_string(label), else: inspect(label)
+    if String.Chars.impl_for(label), do: to_string(label)
+  end
+
+  # One debug line per node, naming neither the items nor their contents.
+  defp log_unlabelled(_node, 0), do: :ok
+
+  defp log_unlabelled(node, count) do
+    Log.debug(
+      "ViewNodes: #{node.type} skipped #{count} item(s) with no label " <>
+        "(not a string, {label, value}, %{label: ...} or String.Chars)"
+    )
+  end
+
+  defp placeholder(node),
+    do: {Map.get(node, :placeholder) || "", Map.merge(style_of(node), @dim)}
+
+  defp number_or_zero(number) when is_number(number), do: number
+  defp number_or_zero(_other), do: 0
+
+  defp progress_width(width, space) do
+    requested =
+      case width do
+        width when is_integer(width) and width >= 0 -> width
+        width when is_float(width) and width >= 0 -> trunc(width)
+        _other -> @progress_default_width
+      end
+
+    case Map.get(space, :width) do
+      available when is_integer(available) ->
+        min(requested, max(available - @progress_label_width, 0))
+
+      _unknown ->
+        requested
+    end
   end
 
   # Top-level `:fg`/`:bg` are shorthands for the same style keys; an

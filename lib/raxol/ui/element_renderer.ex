@@ -4,6 +4,7 @@ defmodule Raxol.UI.ElementRenderer do
   """
 
   alias Raxol.UI.{BorderRenderer, CellManager, StyleProcessor, ThemeResolver}
+  alias Raxol.UI.Theming.BorderChars
 
   @text_attrs [:bold, :italic, :underline, :strikethrough, :reverse, :dim]
 
@@ -216,11 +217,7 @@ defmodule Raxol.UI.ElementRenderer do
          clip_height,
          style
        ) do
-    border_chars =
-      style
-      |> Map.get(:border, :single)
-      |> normalize_border_variant()
-      |> BorderRenderer.get_border_chars()
+    border_chars = style |> Map.get(:border, :single) |> border_glyphs()
 
     BorderRenderer.render_box_borders(
       clip_x,
@@ -252,14 +249,13 @@ defmodule Raxol.UI.ElementRenderer do
 
   # `:border` doubles as the enable flag (checked above) and the variant
   # selector; by the time we're here it is guaranteed truthy and non-:none.
-  # Map anything BorderRenderer.get_border_chars/1 has no glyph set for
-  # (:bold, :dashed, a stray `true`) to a visible default instead of letting
-  # its catch-all fall through to :none, whose horizontal run is a space.
-  defp normalize_border_variant(variant)
-       when variant in [:single, :double, :rounded, :ascii],
-       do: variant
-
-  defp normalize_border_variant(_), do: :single
+  # Every named glyph set draws as itself (`:bold`/`:heavy`, `:dashed`,
+  # `:block` included); anything with no glyph set (`:simple`, a stray
+  # `true`) draws `:single` rather than an invisible run of spaces.
+  # `BorderRenderer.get_border_chars/1` keeps its own five-name contract.
+  defp border_glyphs(variant) do
+    BorderChars.get(variant) || BorderChars.get(:single)
+  end
 
   defp render_text_if_valid_coordinates(x, y, _text, _style)
        when x < 0 or y < 0,
