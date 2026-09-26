@@ -320,9 +320,12 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   end
 
   defp maybe_start_driver(dispatcher_pid, _environment, options) do
+    # self() is the Lifecycle (this runs in its init/1): a second ^C in a
+    # row makes the Driver send it `:quit_runtime`, as Directive.stop/0 does.
     driver_opts =
       [
         dispatcher_pid: dispatcher_pid,
+        runtime_pid: self(),
         mouse: Keyword.get(options, :mouse, true)
       ] ++ Keyword.get(options, :driver_start_opts, [])
 

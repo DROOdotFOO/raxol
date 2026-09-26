@@ -2,8 +2,11 @@
 # pty (tmux/expect) via `Raxol.Terminal.PtyHarness`, NOT as a unit test.
 #
 # Same file protocol as input_canary_app.exs: once the Driver is up it writes
-# `<out>.ready` with what it can see, collects CANARY_N key events, writes one
-# token per line to $CANARY_OUT, and halts.
+# `<out>.ready` with what it can see, collects CANARY_N tokens, writes one per
+# line to $CANARY_OUT, and halts. This process stands in for both the
+# Dispatcher (key events) and the runtime, and like an app that does not bind
+# Ctrl+C it never quits on one: a `:quit_runtime` from the Driver is recorded
+# as the token `quit`.
 #
 # With CANARY_SIGCONT=1 the VM is stopped and continued before `.ready`, as
 # `kill -STOP` and `kill -CONT` from another terminal would.
@@ -22,7 +25,8 @@ defmodule FullscreenIsigApp do
     out = System.get_env("CANARY_OUT") || raise "CANARY_OUT not set"
     n = String.to_integer(System.get_env("CANARY_N") || "1")
 
-    {:ok, _driver} = Raxol.Terminal.Driver.start_link(dispatcher_pid: self())
+    {:ok, _driver} =
+      Raxol.Terminal.Driver.start_link(dispatcher_pid: self(), runtime_pid: self())
 
     sigcont = if System.get_env("CANARY_SIGCONT") == "1", do: stop_and_continue()
 
@@ -64,6 +68,9 @@ defmodule FullscreenIsigApp do
     receive do
       {:"$gen_cast", {:dispatch, %Event{type: :key, data: data}}} ->
         collect(n, [token(data) | acc])
+
+      :quit_runtime ->
+        collect(n, ["quit" | acc])
 
       _ ->
         collect(n, acc)

@@ -31,7 +31,8 @@ defmodule Raxol.Terminal.InputIsigContractTest do
   differently (#1128): its `raw!` ran before the prim_tty reinit in
   `start_stdin_reader/1`, which writes prim_tty's own raw mode with ISIG on, so
   ^C opened the BREAK menu. Its tests boot `fullscreen_isig_app.exs`, and also
-  cover prim_tty writing that raw mode again on SIGCONT.
+  cover prim_tty writing that raw mode again on SIGCONT, and the double ^C that
+  quits an app which does not bind ^C itself.
   """
   use ExUnit.Case, async: false
 
@@ -127,6 +128,46 @@ defmodule Raxol.Terminal.InputIsigContractTest do
 
                #{result.diag}
                """
+    end
+  end
+
+  # With ISIG off, ^C is a key like any other, so an app that does not bind it
+  # could not be interrupted from its own terminal. The fixture app does not
+  # bind it.
+  test "full-screen Driver: a second ^C right after the first asks the runtime to quit" do
+    case PtyHarness.driver() do
+      nil ->
+        IO.puts(:stderr, "[isig contract] skipped: neither tmux nor expect on PATH")
+
+      driver ->
+        keys = [{:named, "C-c"}, {:named, "C-c"}]
+        expected = ["ctrl-c", "quit"]
+        result = PtyHarness.run(driver, keys, expected, app: @fullscreen_app)
+
+        assert result.tokens == expected,
+               PtyHarness.report(result, driver, expected, """
+               The first ^C must reach the app as a key, and a second one \
+               pressed right after it must send the runtime `:quit_runtime` \
+               (what `Directive.stop/0` sends) instead of reaching the app.
+               """)
+    end
+  end
+
+  test "full-screen Driver: a single ^C only reaches the app" do
+    case PtyHarness.driver() do
+      nil ->
+        IO.puts(:stderr, "[isig contract] skipped: neither tmux nor expect on PATH")
+
+      driver ->
+        keys = [{:named, "C-c"}, {:literal, "a"}]
+        expected = ["ctrl-c", "a"]
+        result = PtyHarness.run(driver, keys, expected, app: @fullscreen_app)
+
+        assert result.tokens == expected,
+               PtyHarness.report(result, driver, expected, """
+               One ^C followed by another key must reach the app as two keys; \
+               only a second ^C in a row forces a quit.
+               """)
     end
   end
 
