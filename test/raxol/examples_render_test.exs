@@ -13,6 +13,8 @@ defmodule Raxol.ExamplesRenderTest do
 
   import ExUnit.CaptureIO
 
+  alias Raxol.Core.FocusManager
+  alias Raxol.Core.FocusManager.FocusServer
   alias Raxol.Headless
 
   @examples "examples/**/*.{ex,exs}"
@@ -39,7 +41,46 @@ defmodule Raxol.ExamplesRenderTest do
       _pid -> :ok
     end
 
-    :ok
+    restore_focus_on_exit()
+  end
+
+  # The focus server is node-global, and while it holds focusables the
+  # runtime's dispatcher turns every Tab into a focus change for any app
+  # on the node. An example that registers focusables in `init/1` (the
+  # accessibility demo does) must not leave them behind for the tests
+  # that run after this module: stop the server if the example started
+  # it, or unregister what the example added if it was already running.
+  defp restore_focus_on_exit do
+    before = focusable_ids()
+
+    on_exit(fn ->
+      case {before, Process.whereis(FocusServer)} do
+        {_before, nil} ->
+          :ok
+
+        {nil, pid} ->
+          GenServer.stop(pid, :normal)
+
+        {ids, _pid} ->
+          Enum.each(
+            focusable_ids() -- ids,
+            &FocusManager.unregister_focusable/1
+          )
+      end
+    end)
+  end
+
+  defp focusable_ids do
+    case Process.whereis(FocusServer) do
+      nil ->
+        nil
+
+      pid ->
+        pid
+        |> :sys.get_state()
+        |> Map.fetch!(:focusable_components)
+        |> Map.keys()
+    end
   end
 
   test "the examples are found, and every known-blank entry is one of them" do
