@@ -554,20 +554,29 @@ defmodule Mix.Raxol.Content do
 
   defp ssh_server_config(app) do
     """
-    # The SSH server's options (see Raxol.SSH.serve/2). Anonymous access binds
-    # loopback only and has to state its limits.
+    # The SSH server's options (see Raxol.SSH.Server). It refuses to start
+    # without authentication, so outside development give it
+    # `authorized_keys_dir:`, a directory holding an `authorized_keys` file.
     config :#{app}, :ssh,
       port: 2222,
-      allow_anonymous: true,
       max_connections: 10,
       max_per_ip: 2,
       idle_timeout: :timer.minutes(5),
       max_session_duration: :timer.hours(1)
 
-    # Port 0 takes any free port, so a server started under `mix test` runs
-    # while the app is serving on 2222.
+    # Anonymous access, in development only. It binds loopback, and needs the
+    # limits above stated.
+    if config_env() == :dev do
+      config :#{app}, :ssh, allow_anonymous: true
+    end
+
+    # Under `mix test` the server takes any free port, so it runs while the
+    # app is serving on 2222. It keeps its host key in _build rather than in
+    # ~/.raxol/ssh_keys, and admits no keys: that directory holds no
+    # `authorized_keys` file.
     if config_env() == :test do
-      config :#{app}, :ssh, port: 0
+      ssh_dir = Path.expand("../_build/test/ssh", __DIR__)
+      config :#{app}, :ssh, port: 0, host_keys_dir: ssh_dir, authorized_keys_dir: ssh_dir
     end
     """
   end

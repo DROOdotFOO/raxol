@@ -184,15 +184,34 @@ defmodule Mix.Tasks.Raxol.NewTest do
     {project, _module} = generate(tmp, flags)
     GeneratedApp.compile!(lib_files(project))
 
-    keys_dir = Path.join(tmp, "ssh_host_keys")
-
-    sup =
-      GeneratedApp.start_application!(project, ssh: [host_keys_dir: keys_dir])
+    sup = GeneratedApp.start_application!(project)
 
     assert [{Raxol.SSH.Server, server, :worker, _modules}] =
              Supervisor.which_children(sup)
 
     assert Raxol.SSH.Server.port(server) > 0
+
+    # `mix test` keeps the server's host key in the project, not in the
+    # developer's ~/.raxol/ssh_keys.
+    assert File.exists?(
+             Path.join(project, "_build/test/ssh/ssh_host_ed25519_key")
+           )
+  end
+
+  test "--ssh serves without authentication in dev only", %{tmp: tmp} do
+    {project, _module} = generate(tmp, ["--template", "counter", "--ssh"])
+    app = project |> Path.basename() |> String.to_atom()
+
+    anonymous? = fn env ->
+      config =
+        Config.Reader.read!(Path.join(project, "config/config.exs"), env: env)
+
+      get_in(config, [app, :ssh, :allow_anonymous]) == true
+    end
+
+    assert anonymous?.(:dev)
+    refute anonymous?.(:test)
+    refute anonymous?.(:prod)
   end
 
   # Without --sup nothing starts the server: the generator's instructions run
@@ -202,8 +221,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
     ssh = Module.concat(module, SSH)
     assert ssh in GeneratedApp.compile!(lib_files(project))
 
-    keys_dir = Path.join(tmp, "ssh_host_keys")
-    GeneratedApp.put_config!(project, ssh: [host_keys_dir: keys_dir])
+    GeneratedApp.put_config!(project)
 
     assert {:ok, server} = ssh.start()
     Process.unlink(server)
