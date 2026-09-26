@@ -3,12 +3,11 @@
 # Measures the impact of Phase 4 optimizations:
 # - ETS caching for CSI parser
 # - Cached cell creation
-# - Predictive optimization
 # - Telemetry instrumentation overhead
 
 alias Raxol.Terminal.Escape.Parsers.{CSIParser, CSIParserCached}
 alias Raxol.Terminal.{Cell, CellCached}
-alias Raxol.Performance.{ETSCacheManager, PredictiveOptimizer}
+alias Raxol.Performance.ETSCacheManager
 
 # Ensure cache manager is started (the application starts it with
 # :performance_monitoring on)
@@ -16,8 +15,6 @@ case ETSCacheManager.start_link() do
   {:ok, _} -> :ok
   {:error, {:already_started, _}} -> :ok
 end
-
-{:ok, _} = PredictiveOptimizer.start_link()
 
 # Warm up caches
 CSIParserCached.warm_cache()
@@ -145,11 +142,6 @@ for {cache_name, cache_stats} <- stats do
   end
 end
 
-# Get predictive optimizer recommendations
-IO.puts("\n=== Predictive Optimizer Recommendations ===")
-recommendations = PredictiveOptimizer.get_recommendations()
-IO.inspect(recommendations, pretty: true)
-
 # Calculate improvement percentages
 IO.puts("\n=== Performance Improvements Summary ===")
 
@@ -166,12 +158,7 @@ Based on the benchmarks:
    - Batch creation provides additional optimization
    - Style merging cache reduces redundant computations
 
-3. **Predictive Optimization**:
-   - Proactive cache warming based on patterns
-   - Adaptive cache sizing based on hit rates
-   - Workload classification for targeted optimization
-
-4. **Overall Impact**:
+3. **Overall Impact**:
    - Terminal rendering: 30-50% faster
    - Memory usage: Controlled with LRU eviction
    - Latency: Sub-millisecond for cached operations
