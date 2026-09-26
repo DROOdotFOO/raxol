@@ -1,9 +1,13 @@
 defmodule Raxol.Core.Runtime.Plugins.PluginValidator do
   @moduledoc """
-  Comprehensive validation system for plugins before loading.
+  Checks a plugin module's behaviour, metadata, security (through
+  `Raxol.Core.Runtime.Plugins.Security.BeamAnalyzer`), compatibility,
+  performance and dependencies.
 
-  Validates security, compatibility, performance, and structural
-  correctness to ensure plugins are safe and properly implemented.
+  Nothing on the live load path calls this module: `PluginManager` loads
+  plugins through `PluginLifecycle`, which registers and initializes a plugin
+  without running any of these checks. Call them yourself before loading a
+  plugin you do not trust.
   """
 
   alias Raxol.Core.Runtime.Plugins.Loader

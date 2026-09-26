@@ -78,9 +78,25 @@ end
 `Raxol.Core.Events.EventManager` cannot be isolated this way: apart from
 `notify/3`, its client functions (`register_handler/3`, `subscribe/2`,
 `dispatch/1`, ...) always call the process registered under its module name,
-so an instance started under a unique name is never reached. Start it under
-its default name with `start_supervised!(Raxol.Core.Events.EventManager)` and
-run those tests with `async: false`.
+so an instance started under a unique name is never reached. It is also
+already running: `Raxol.Application` supervises it in the test environment,
+so an unconditional `start_supervised!(Raxol.Core.Events.EventManager)`
+raises `{:already_started, pid}`. Start your own copy only when a test that
+ran earlier stopped it (some call `EventManager.cleanup/0`), and use
+`async: false`, because every test shares the one registered process:
+
+```elixir
+use ExUnit.Case, async: false
+
+alias Raxol.Core.Events.EventManager
+
+setup do
+  if is_nil(Process.whereis(EventManager)),
+    do: start_supervised!(EventManager)
+
+  :ok
+end
+```
 
 ### 4. Add explicit module loading checks
 
