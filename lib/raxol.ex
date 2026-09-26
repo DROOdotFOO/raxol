@@ -189,35 +189,50 @@ defmodule Raxol do
   end
 
   @doc """
-  Sets the default theme for Raxol applications.
+  Sets the theme Raxol renders with.
 
-  This function sets the default theme that will be used by Raxol components.
+  The theme becomes `Raxol.UI.Theming.Theme.current/0`, which the renderers
+  read.
 
   ## Parameters
 
-  * `theme` - A theme created with `Raxol.UI.Theming.Theme.new/1` or one of the built-in themes
+  * `theme` - A theme created with `Raxol.UI.Theming.Theme.new/1`, a built-in
+    theme, or the id of a theme registered with
+    `Raxol.UI.Theming.Theme.register/1`
+
+  ## Returns
+
+  `:ok`, or `{:error, :theme_not_found}` if no theme is registered under the
+  given id.
 
   ## Example
 
   ```elixir
   # Use a built-in theme
-  Raxol.set_theme(Raxol.UI.Theming.Theme.dark())
+  Raxol.set_theme(Raxol.UI.Theming.Theme.dark_theme())
 
   # Create and use a custom theme
-  custom_theme = Raxol.UI.Theming.Theme.new(name: "Custom", colors: %{primary: :green})
+  custom_theme =
+    Raxol.UI.Theming.Theme.new(%{id: :custom, name: "Custom", colors: %{primary: :green}})
+
   Raxol.set_theme(custom_theme)
+
+  # Switch to a registered theme by id
+  Raxol.UI.Theming.Theme.register(custom_theme)
+  Raxol.set_theme(:custom)
   ```
   """
   def set_theme(theme) do
-    :application.set_env(:raxol, :theme, theme)
+    Raxol.UI.Theming.Theme.apply_theme(theme)
   end
 
   @doc """
-  Gets the current default theme.
+  Gets the theme Raxol renders with, the same as
+  `Raxol.UI.Theming.Theme.current/0`.
 
   ## Returns
 
-  The current theme map.
+  The current theme.
 
   ## Example
 
@@ -226,7 +241,7 @@ defmodule Raxol do
   ```
   """
   def current_theme do
-    Application.get_env(:raxol, :theme, Raxol.UI.Theming.Theme.default_theme())
+    Raxol.UI.Theming.Theme.current()
   end
 
   @doc """

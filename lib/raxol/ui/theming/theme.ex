@@ -384,6 +384,10 @@ defmodule Raxol.UI.Theming.Theme do
 
   @doc """
   Applies a theme by name or struct.
+
+  A name must be the id of a registered theme (or `:default`); any other
+  name returns `{:error, :theme_not_found}` and leaves the current theme
+  unchanged.
   """
   def apply_theme(%__MODULE__{} = theme) do
     Application.put_env(:raxol, :current_theme, theme)
@@ -391,9 +395,16 @@ defmodule Raxol.UI.Theming.Theme do
   end
 
   def apply_theme(theme_name) when is_atom(theme_name) do
-    case get(theme_name) do
-      nil -> {:error, :theme_not_found}
-      theme -> apply_theme(theme)
+    case fetch_registered(theme_name) do
+      {:ok, theme} -> apply_theme(theme)
+      :error -> {:error, :theme_not_found}
+    end
+  end
+
+  defp fetch_registered(theme_id) do
+    case Map.fetch(Application.get_env(:raxol, :themes, %{}), theme_id) do
+      :error when theme_id == :default -> {:ok, default_theme()}
+      result -> result
     end
   end
 
