@@ -445,14 +445,12 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          text: "typed",
          text: "┌"
        )},
-      # The selected item is laid out in reverse video; the frame cannot
-      # show it until the cell-to-buffer bridge keeps `:reverse` (reported
-      # with #1129: `Backends.apply_cells_to_buffer/2` keeps only bold,
-      # underline and italic).
       {View, :list, [0, 1],
        render(fn -> View.list(items: ["Elixir", "Rust"], selected: 1) end,
          line: {0, "Elixir"},
-         line: {1, "Rust"}
+         line: {1, "Rust"},
+         styled: {"Rust", reverse: true},
+         styled: {"Elixir", reverse: false}
        )},
       {View, :spacer, [0, 1],
        render(
@@ -557,10 +555,11 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          line: {2, "after"},
          no_text: "overflows"
        )},
-      # The active tab is laid out in reverse video; see the `list` row.
       {View, :tabs, [0, 1],
        render(fn -> View.tabs(tabs: ["Overview", "Details"], active: 1) end,
-         line: {0, " Overview | Details "}
+         line: {0, " Overview | Details "},
+         styled: {"Details", reverse: true},
+         styled: {"Overview", reverse: false}
        )},
       {View, :span, [1, 2],
        render(
@@ -699,8 +698,22 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          text: "inside"
        )},
       {Elements, :text, [1, 2],
-       render(fn -> Elements.text("e text", fg: :red) end,
-         styled: {"e text", fg: :red}
+       render(
+         fn ->
+           Elements.column(
+             children: [
+               Elements.text("e text", fg: :red),
+               Elements.text("dimmed", style: [:dim]),
+               Elements.text("reversed", style: [:reverse]),
+               Elements.text("struck", style: [:strikethrough])
+             ]
+           )
+         end,
+         styled: {"e text", fg: :red},
+         styled: {"dimmed", dim: true},
+         styled: {"reversed", reverse: true},
+         styled: {"struck", strikethrough: true},
+         styled: {"e text", dim: false, reverse: false, strikethrough: false}
        )},
       {Elements, :button, [1, 2],
        render(
