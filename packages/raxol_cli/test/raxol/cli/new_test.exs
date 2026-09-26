@@ -65,6 +65,18 @@ defmodule Raxol.CLI.NewTest do
       app = Module.concat([Macro.camelize(name)])
       assert GeneratedApp.compile!([Path.join([base, name, "lib", "#{name}.ex"])]) == [app]
       assert GeneratedApp.render!(app, "Count: 0") =~ "+/- to change, q to quit"
+      assert GeneratedApp.render!(app, "Count: 1", keys: ["+", "+", "-"])
+    end
+
+    test "scaffolds a mix format-clean project" do
+      base = Path.join(System.tmp_dir!(), "raxol_cli_fmt_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+
+      name = "counter_#{System.unique_integer([:positive])}"
+      capture_io(fn -> assert File.cd!(base, fn -> New.run([name]) end) == 0 end)
+
+      GeneratedApp.assert_formatted!(Path.join(base, name))
     end
   end
 end

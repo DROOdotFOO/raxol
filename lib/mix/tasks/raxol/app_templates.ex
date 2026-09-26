@@ -84,7 +84,9 @@ defmodule Mix.Raxol.AppTemplates do
           :increment -> {%{model | count: model.count + 1}, []}
           :decrement -> {%{model | count: model.count - 1}, []}
 
-          %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "="}} ->
+          # "=" too: it is "+" without Shift on most keyboards.
+          %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: char}}
+          when char in ["+", "="] ->
             {%{model | count: model.count + 1}, []}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "-"}} ->
@@ -110,11 +112,11 @@ defmodule Mix.Raxol.AppTemplates do
             end,
             row style: %{gap: 1} do
               [
-                button("=", on_click: :increment),
+                button("+", on_click: :increment),
                 button("-", on_click: :decrement)
               ]
             end,
-            text("Press '='/'-' or click buttons. 'q' to quit.")
+            text("Press '+'/'-' or click buttons. 'q' to quit.")
           ]
         end
       end
@@ -283,10 +285,16 @@ defmodule Mix.Raxol.AppTemplates do
             {%{model | active_panel: rem(model.active_panel + 1, length(model.panels))}, []}
 
           :prev_panel ->
-            {%{model | active_panel: rem(model.active_panel - 1 + length(model.panels), length(model.panels))}, []}
+            count = length(model.panels)
+            {%{model | active_panel: rem(model.active_panel - 1 + count, count)}, []}
 
           :tick ->
-            stats = %{model.stats | uptime: model.stats.uptime + 1, requests: model.stats.requests + Enum.random(0..5)}
+            stats = %{
+              model.stats
+              | uptime: model.stats.uptime + 1,
+                requests: model.stats.requests + Enum.random(0..5)
+            }
+
             {%{model | stats: stats, tick: model.tick + 1}, []}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
@@ -342,8 +350,10 @@ defmodule Mix.Raxol.AppTemplates do
       defp render_panel(%{active_panel: 1} = model) do
         box style: %{border: :single, padding: 1, width: 50} do
           column style: %{gap: 0} do
-            [text("Recent Logs", style: [:bold]) |
-              Enum.map(model.logs, fn log -> text("  " <> log, style: [:dim]) end)]
+            [
+              text("Recent Logs", style: [:bold])
+              | Enum.map(model.logs, fn log -> text("  " <> log, style: [:dim]) end)
+            ]
           end
         end
       end

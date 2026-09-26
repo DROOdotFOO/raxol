@@ -73,6 +73,69 @@ defmodule Mix.Tasks.Raxol.NewTest do
     end
   end
 
+  test "counter binds the keys its hint names", %{tmp: tmp} do
+    {project, module} = generate(tmp, ["--template", "counter"])
+    assert module in GeneratedApp.compile!(lib_files(project))
+
+    assert GeneratedApp.render!(module, "Count: 0") =~
+             "Press '+'/'-' or click buttons. 'q' to quit."
+
+    # "=" is "+" without Shift, so it counts up as well.
+    assert GeneratedApp.render!(module, "Count: 2", keys: ["+", "=", "+", "-"])
+  end
+
+  # `mix run --no-halt`, which a --sup app's README and the generator's
+  # instructions give as the way to run it, only starts the application.
+  test "--sup starts the TUI with its application, and quitting ends both",
+       %{tmp: tmp} do
+    {project, _module} = generate(tmp, ["--template", "counter", "--sup"])
+    GeneratedApp.compile!(lib_files(project))
+
+    sup = GeneratedApp.start_application!(project)
+
+    assert [{_id, tui, :worker, _modules}] = Supervisor.which_children(sup)
+    assert GeneratedApp.frame!(tui, "Count: 0") =~ "'q' to quit."
+
+    # Quitting ends the TUI normally. Restarting it would bring back an app
+    # the user just quit, so the supervisor has to shut down instead.
+    ref = Process.monitor(sup)
+    Raxol.Core.Runtime.Lifecycle.stop_application(tui)
+    assert_receive {:DOWN, ^ref, :process, ^sup, :shutdown}, 5_000
+  end
+
+  test "--sup --ssh serves the app over SSH when its application starts",
+       %{tmp: tmp} do
+    flags = ["--template", "counter", "--sup", "--ssh"]
+    {project, _module} = generate(tmp, flags)
+    GeneratedApp.compile!(lib_files(project))
+
+    keys_dir = Path.join(tmp, "ssh_host_keys")
+
+    sup =
+      GeneratedApp.start_application!(project, ssh: [host_keys_dir: keys_dir])
+
+    assert [{Raxol.SSH.Server, server, :worker, _modules}] =
+             Supervisor.which_children(sup)
+
+    assert Raxol.SSH.Server.port(server) > 0
+  end
+
+  # The generated --ci workflow runs `mix format --check-formatted`, so every
+  # combination of the flags that shape generated Elixir has to pass it as
+  # generated.
+  for template <- Map.keys(@first_frames),
+      sup <- [[], ["--sup"]],
+      ssh <- [[], ["--ssh"]],
+      liveview <- [[], ["--liveview"]] do
+    flags = ["--template", template, "--ci"] ++ sup ++ ssh ++ liveview
+
+    test "#{Enum.join(flags, " ")} generates a mix format-clean project",
+         %{tmp: tmp} do
+      {project, _module} = generate(tmp, unquote(flags))
+      GeneratedApp.assert_formatted!(project)
+    end
+  end
+
   defp generate(tmp, flags) do
     name = "gen_#{System.unique_integer([:positive])}"
     project = Path.join(tmp, name)

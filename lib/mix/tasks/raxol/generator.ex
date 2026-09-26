@@ -129,8 +129,18 @@ defmodule Mix.Raxol.Generator do
   defp write_file(path, filename, content) do
     filepath = Path.join(path, filename)
     filepath |> Path.dirname() |> File.mkdir_p!()
-    File.write!(filepath, content)
+    File.write!(filepath, format(filename, content))
     Mix.shell().info(["  ", :green, "* creating ", :reset, filename])
+  end
+
+  # The generated `.formatter.exs` sets no options, so the defaults here are
+  # what `mix format` in the new project, and its --ci workflow, apply.
+  # Formatting on the way out holds every template to that whatever the module
+  # name, whose length moves line breaks.
+  defp format(filename, content) do
+    if Path.extname(filename) in [".ex", ".exs"],
+      do: [Code.format_string!(content, file: filename), "\n"],
+      else: content
   end
 
   defp git_init(path) do
