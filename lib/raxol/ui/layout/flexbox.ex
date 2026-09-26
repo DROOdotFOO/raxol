@@ -39,6 +39,10 @@ defmodule Raxol.UI.Layout.Flexbox do
 
   @doc """
   Processes a flex container, calculating layout for it and its children.
+
+  A child with a `:position` offset takes no part in the flex layout: it is
+  laid out from the content origin and drawn over the flowed children.
+  Children's `:z_index` then orders the drawing (`Engine.stack_layers/1`).
   """
   def process_flex(%{type: :flex, children: children} = flex, space, acc)
       when is_list(children) do
@@ -46,16 +50,21 @@ defmodule Raxol.UI.Layout.Flexbox do
     flex_props = parse_flex_properties(attrs)
     content_space = apply_padding(space, flex_props.padding)
     children = inherit_styles(flex, children)
-    sorted_children = sort_children_by_order(children)
+    {positioned, flow} = Enum.split_with(children, &Engine.positioned?/1)
+    sorted_children = sort_children_by_order(flow)
 
     positioned_children =
       calculate_flex_layout(sorted_children, content_space, flex_props)
 
-    elements =
-      Enum.flat_map(positioned_children, fn {child, child_space} ->
-        Engine.process_element(child, child_space, [])
+    flow_layers =
+      Enum.map(positioned_children, fn {child, child_space} ->
+        {child, Engine.process_element(child, child_space, [])}
       end)
 
+    positioned_layers =
+      Enum.map(positioned, &{&1, Engine.process_element(&1, content_space, [])})
+
+    elements = Engine.stack_layers(flow_layers ++ positioned_layers)
     elements = Engine.apply_container_overflow(elements, flex, space)
 
     elements ++ acc
@@ -64,7 +73,8 @@ defmodule Raxol.UI.Layout.Flexbox do
   def process_flex(_, _space, acc), do: acc
 
   @doc """
-  Measures the space needed by a flex container.
+  Measures the space needed by a flex container. Children with a
+  `:position` offset take no space in it.
   """
   def measure_flex(%{type: :flex, children: children} = flex, available_space)
       when is_list(children) do
@@ -73,9 +83,9 @@ defmodule Raxol.UI.Layout.Flexbox do
     content_space = apply_padding(available_space, flex_props.padding)
 
     child_dimensions =
-      Enum.map(children, fn child ->
-        measure_flex_child(child, content_space, flex_props)
-      end)
+      children
+      |> Enum.reject(&Engine.positioned?/1)
+      |> Enum.map(&measure_flex_child(&1, content_space, flex_props))
 
     container_size =
       Calculator.calculate_container_size(

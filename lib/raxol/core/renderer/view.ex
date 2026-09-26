@@ -23,8 +23,15 @@ defmodule Raxol.Core.Renderer.View do
 
   ## Options
     * `:type` - The type of view to create
-    * `:position` - Position of the view {x, y}
-    * `:z_index` - Z-index for layering
+    * `:position` - `{x, y}` offset from the content origin of the container
+      that lays the view out: inside a box's border and padding, a row's or
+      column's padding edge, the screen's corner for the root view. A
+      positioned view is out of flow: its siblings are laid out as if it
+      were not there, and it draws over them. Default `nil`, in flow.
+    * `:z_index` - Drawing order among siblings: a view draws over every
+      sibling with a lower `:z_index` where they overlap, whatever their
+      order in `:children`; equal values keep the container's own order.
+      Default `0`.
     * `:size` - Size of the view {width, height}; omitted, it fills the
       space the layout gives it
     * `:style` - Style options for the view
@@ -40,7 +47,7 @@ defmodule Raxol.Core.Renderer.View do
 
     defaults = %{
       type: type,
-      position: {0, 0},
+      position: nil,
       z_index: 0,
       size: nil,
       style: %{},

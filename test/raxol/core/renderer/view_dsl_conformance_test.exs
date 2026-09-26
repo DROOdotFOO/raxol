@@ -1397,6 +1397,63 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
       end
     end
   end
+
+  describe "View.new position" do
+    test "places the view at its offset from the content origin, out of flow" do
+      frame =
+        render_frame(
+          View.box(
+            border: :single,
+            padding: 1,
+            children: [
+              View.column(
+                children: [
+                  View.text("first"),
+                  View.new(:box,
+                    position: {10, 3},
+                    children: [View.text("POS")]
+                  ),
+                  View.text("second")
+                ]
+              )
+            ]
+          )
+        )
+
+      # The box's content origin is (2, 2): inside its border and padding.
+      for check <- [
+            line: {2, "│ first"},
+            line: {3, "│ second"},
+            cell: {12, 5, char: "P"},
+            cell: {13, 5, char: "O"},
+            cell: {14, 5, char: "S"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "View.new z_index" do
+    # Both views sit at the same origin; "HIGH" covers all of "lo".
+    test "draws the higher of two overlapping views over the lower, in any order" do
+      high = View.new(:text, content: "HIGH", z_index: 2)
+      low = View.new(:text, content: "lo", z_index: 1)
+      positioned = &Map.put(&1, :position, {0, 0})
+
+      for parent <- [
+            View.box(children: [high, low]),
+            View.box(children: [low, high]),
+            View.column(children: [positioned.(high), positioned.(low)]),
+            View.column(children: [positioned.(low), positioned.(high)])
+          ] do
+        frame = render_frame(parent)
+
+        for check <- [line: {0, "HIGH"}, no_text: "lo"] do
+          assert check(frame, check), failure(frame, check)
+        end
+      end
+    end
+  end
   describe "an application's own helpers" do
     test "a local label/2 compiles next to the imported DSL" do
       [{module, _}] =

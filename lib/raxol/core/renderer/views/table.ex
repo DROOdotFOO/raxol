@@ -241,8 +241,7 @@ defmodule Raxol.Core.Renderer.Views.Table do
             type: :text,
             content: pad_cell_content(col.header, col),
             style: context.style || [],
-            size: {col.width, :auto},
-            position: {0, 0}
+            size: {col.width, :auto}
           }
         end),
       direction: :row,
@@ -265,8 +264,7 @@ defmodule Raxol.Core.Renderer.Views.Table do
           type: :text,
           content: String.duplicate("─", total_width),
           style: [:dim],
-          size: {total_width, :auto},
-          position: {0, 0}
+          size: {total_width, :auto}
         }
       ],
       direction: :row,
@@ -286,8 +284,7 @@ defmodule Raxol.Core.Renderer.Views.Table do
             type: :text,
             content: pad_cell_content(Map.get(row, col.key), col),
             style: style,
-            size: {col.width, :auto},
-            position: {0, 0}
+            size: {col.width, :auto}
           }
         end),
       direction: :row,
