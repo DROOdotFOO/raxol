@@ -106,13 +106,16 @@ defmodule MyApp do
   # 4. Subscriptions (optional)
   @impl true
   def subscribe(_model), do: []
-end
 
-# Start the app
-{:ok, pid} = Raxol.start_link(MyApp, [])
-ref = Process.monitor(pid)
-receive do
-  {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+  # Run the app in this terminal until it quits
+  def start do
+    {:ok, pid} = Raxol.start_link(__MODULE__, [])
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
+  end
 end
 ```
 
@@ -120,11 +123,12 @@ end
 - `update/2` pattern-matches on messages and returns `{new_state, commands}`. The empty list `[]` means "no side effects"
 - `view/1` builds the UI from state using the View DSL macros (`column`, `row`, `box`)
 - `Directive.stop()` tells the runtime to shut down (the `Directive` alias comes from `use Raxol.Core.Runtime.Application`)
+- `start/0` starts the app and waits for it to quit. It lives inside the module because `mix compile` runs any code in `lib/` that sits outside one
 
 Save as `lib/my_app.ex` and run:
 
 ```bash
-mix run lib/my_app.ex
+mix run -e "MyApp.start()"
 ```
 
 ## How it works

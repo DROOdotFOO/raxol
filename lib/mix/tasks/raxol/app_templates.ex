@@ -3,22 +3,37 @@ defmodule Mix.Raxol.AppTemplates do
   TEA module source templates for `mix raxol.new`.
 
   Each function returns the source code for a generated app module.
+
+  Containers take their children as a list. A `column` or `row` whose block
+  evaluates to a single element draws nothing, so single children are
+  wrapped too.
   """
+
+  @doc """
+  The command that runs a generated app.
+
+  A standalone app runs through its `start/0` rather than through code at the
+  bottom of `lib/<app>.ex`: `mix compile` evaluates every file under `lib/`,
+  so top-level code there would launch the app inside the compiler.
+  """
+  @spec run_command(map()) :: String.t()
+  def run_command(%{sup: true}), do: "mix run --no-halt"
+  def run_command(%{module: module}), do: ~s|mix run -e "#{module}.start()"|
 
   @spec render(String.t(), map()) :: String.t()
   def render(template, bindings)
 
-  def render("blank", %{app: app, module: module}) do
+  def render("blank", %{module: module} = bindings) do
     """
     defmodule #{module} do
       @moduledoc \"\"\"
       A Raxol application.
 
-      Run with: mix run lib/#{app}.ex
+      Run with: #{run_command(bindings)}
       \"\"\"
 
       use Raxol.Core.Runtime.Application
-
+    #{start_function(bindings)}
       @impl true
       def init(_context), do: %{}
 
@@ -39,7 +54,7 @@ defmodule Mix.Raxol.AppTemplates do
       @impl true
       def view(_model) do
         column style: %{padding: 1, align_items: :center} do
-          text("#{module} -- edit this view!", style: [:bold])
+          [text("#{module} -- edit this view!", style: [:bold])]
         end
       end
 
@@ -49,17 +64,17 @@ defmodule Mix.Raxol.AppTemplates do
     """
   end
 
-  def render("counter", %{app: app, module: module}) do
+  def render("counter", %{module: module} = bindings) do
     """
     defmodule #{module} do
       @moduledoc \"\"\"
       A Raxol counter application using The Elm Architecture (TEA).
 
-      Run with: mix run lib/#{app}.ex
+      Run with: #{run_command(bindings)}
       \"\"\"
 
       use Raxol.Core.Runtime.Application
-
+    #{start_function(bindings)}
       @impl true
       def init(_context), do: %{count: 0}
 
@@ -110,17 +125,17 @@ defmodule Mix.Raxol.AppTemplates do
     """
   end
 
-  def render("todo", %{app: app, module: module}) do
+  def render("todo", %{module: module} = bindings) do
     """
     defmodule #{module} do
       @moduledoc \"\"\"
       A Raxol todo application using The Elm Architecture (TEA).
 
-      Run with: mix run lib/#{app}.ex
+      Run with: #{run_command(bindings)}
       \"\"\"
 
       use Raxol.Core.Runtime.Application
-
+    #{start_function(bindings)}
       defmodule Todo do
         defstruct [:id, :text, done: false]
       end
@@ -203,7 +218,7 @@ defmodule Mix.Raxol.AppTemplates do
             box style: %{border: :single, padding: 1, width: 40} do
               column style: %{gap: 0} do
                 if model.todos == [] do
-                  text("No todos yet. Press 'a' to add one.")
+                  [text("No todos yet. Press 'a' to add one.")]
                 else
                   Enum.with_index(model.todos)
                   |> Enum.map(fn {todo, i} ->
@@ -239,17 +254,17 @@ defmodule Mix.Raxol.AppTemplates do
           "unknown template #{inspect(template)}, expected one of: #{inspect(@supported_templates)}"
   end
 
-  def render("dashboard", %{app: app, module: module}) do
+  def render("dashboard", %{module: module} = bindings) do
     """
     defmodule #{module} do
       @moduledoc \"\"\"
       A Raxol dashboard application using The Elm Architecture (TEA).
 
-      Run with: mix run lib/#{app}.ex
+      Run with: #{run_command(bindings)}
       \"\"\"
 
       use Raxol.Core.Runtime.Application
-
+    #{start_function(bindings)}
       @impl true
       def init(_context) do
         %{
@@ -341,7 +356,7 @@ defmodule Mix.Raxol.AppTemplates do
               text("Requests: \#{model.stats.requests}"),
               row style: %{gap: 0} do
                 bar = String.duplicate("#", min(model.stats.requests, 30))
-                text("[" <> bar <> "]")
+                [text("[" <> bar <> "]")]
               end
             ]
           end
@@ -353,6 +368,26 @@ defmodule Mix.Raxol.AppTemplates do
         [subscribe_interval(1000, :tick)]
       end
     end
+    """
+  end
+
+  # Goes right after `use`. Only a standalone app gets one: `run_command/1`
+  # runs a --sup app with `mix run --no-halt` instead. It waits for the app to
+  # quit, because `mix run -e` halts the VM as soon as its expression returns.
+  defp start_function(%{sup: true}), do: ""
+
+  defp start_function(_bindings) do
+    """
+
+      @doc "Runs the app in this terminal and returns once it quits."
+      def start do
+        {:ok, pid} = Raxol.start_link(__MODULE__, [])
+        ref = Process.monitor(pid)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+        end
+      end
     """
   end
 end

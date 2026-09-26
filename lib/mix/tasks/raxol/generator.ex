@@ -6,9 +6,9 @@ defmodule Mix.Raxol.Generator do
   optional dependency installation, and post-generation output.
   """
 
-  alias Mix.Raxol.Content
+  alias Mix.Raxol.{AppTemplates, Content}
 
-  @compile {:no_warn_undefined, Mix.Raxol.Content}
+  @compile {:no_warn_undefined, [Mix.Raxol.AppTemplates, Mix.Raxol.Content]}
 
   @doc "Generates the full project structure at `path` with the given opts."
   def generate(name, opts, raxol_version) do
@@ -231,18 +231,14 @@ defmodule Mix.Raxol.Generator do
     Mix.shell().info("")
   end
 
-  defp print_setup_commands(%{app: app, sup: sup?}, name, installed?) do
+  defp print_setup_commands(bindings, name, installed?) do
     unless installed? do
       Mix.shell().info(["    ", :cyan, "cd #{name}", :reset])
       Mix.shell().info(["    ", :cyan, "mix deps.get", :reset])
     end
 
-    if sup? do
-      Mix.shell().info(["    ", :cyan, "mix run --no-halt", :reset])
-    else
-      Mix.shell().info(["    ", :cyan, "mix run lib/#{app}.ex", :reset])
-    end
-
+    run_command = AppTemplates.run_command(bindings)
+    Mix.shell().info(["    ", :cyan, run_command, :reset])
     Mix.shell().info("")
   end
 
