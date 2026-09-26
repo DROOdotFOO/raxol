@@ -4,7 +4,7 @@ defmodule RaxolTest do
 
   alias Raxol.UI.Theming.Theme
 
-  @env_keys [:theme, :current_theme, :themes]
+  @env_keys [:theme, :current_theme, :themes, :high_contrast_restore]
 
   setup do
     saved = Map.new(@env_keys, &{&1, Application.fetch_env(:raxol, &1)})
@@ -59,6 +59,45 @@ defmodule RaxolTest do
 
       assert Theme.current() == theme
       assert Raxol.current_theme() == theme
+    end
+  end
+
+  describe "set_accessibility/1" do
+    test "options other than :high_contrast leave the theme alone", %{
+      theme: theme
+    } do
+      :ok = Raxol.set_theme(theme)
+
+      assert :ok = Raxol.set_accessibility(screen_reader: true)
+      assert :ok = Raxol.set_accessibility(reduced_motion: false)
+
+      assert Theme.current() == theme
+    end
+
+    test "high_contrast raises the current theme's contrast and turning it off restores it",
+         %{theme: theme} do
+      :ok = Raxol.set_theme(theme)
+      high_contrast = Theme.adjust_for_high_contrast(theme)
+      refute high_contrast == theme
+
+      assert :ok = Raxol.set_accessibility(high_contrast: true)
+      assert Theme.current() == high_contrast
+
+      assert :ok = Raxol.set_accessibility(high_contrast: true)
+      assert Theme.current() == high_contrast
+
+      assert :ok = Raxol.set_accessibility(high_contrast: false)
+      assert Theme.current() == theme
+    end
+
+    test "turning high_contrast off keeps a theme set while it was on", %{
+      theme: theme
+    } do
+      :ok = Raxol.set_accessibility(high_contrast: true)
+      :ok = Raxol.set_theme(theme)
+
+      assert :ok = Raxol.set_accessibility(high_contrast: false)
+      assert Theme.current() == theme
     end
   end
 end

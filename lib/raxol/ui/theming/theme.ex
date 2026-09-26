@@ -128,7 +128,7 @@ defmodule Raxol.UI.Theming.Theme do
   """
   def create_high_contrast_variant(%__MODULE__{} = theme) do
     high_contrast_colors =
-      Enum.map(theme.colors, fn {name, color} ->
+      Enum.map(theme.colors || %{}, fn {name, color} ->
         {name, Utilities.increase_contrast(color)}
       end)
       |> Map.new()
@@ -137,7 +137,7 @@ defmodule Raxol.UI.Theming.Theme do
       theme
       | colors: high_contrast_colors,
         variants:
-          Map.put(theme.variants, :high_contrast, %{
+          Map.put(theme.variants || %{}, :high_contrast, %{
             colors: high_contrast_colors
           })
     }
