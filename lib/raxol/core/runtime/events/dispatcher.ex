@@ -24,6 +24,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               model: nil,
               # %{%Subscription{} => subscription_id} -- the subscriptions
               # currently running. Re-derived from the model after every update.
+              # An events subscription runs as one entry per event type.
               active_subscriptions: %{},
               width: 0,
               height: 0,
@@ -555,11 +556,24 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   # EventManager delivers matches for a `Subscription.events/1` subscription
-  # in this shape; the app's update/2 receives the message unchanged.
+  # in this shape; the app's update/2 receives the message unchanged. Only a
+  # type a running subscription lists gets through: an event queued before the
+  # model dropped its subscription, or one sent by any other process, is not
+  # the app's to see.
   @impl true
   def handle_manager_info({:event, event_type, _event_data} = msg, state)
       when is_atom(event_type) do
-    dispatch_raw_message(msg, state)
+    subscription = Raxol.Core.Runtime.Subscription.events([event_type])
+
+    if Map.has_key?(state.active_subscriptions, subscription) do
+      dispatch_raw_message(msg, state)
+    else
+      Raxol.Core.Runtime.Log.debug(
+        "[Dispatcher] Dropped #{inspect(event_type)} event: no active subscription lists it"
+      )
+
+      {:noreply, state}
+    end
   end
 
   @impl true
@@ -933,7 +947,10 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     if function_exported?(state.app_module, :subscribe, 1) do
       case state.app_module.subscribe(state.model) do
         subs when is_list(subs) ->
-          Enum.filter(subs, &match?(%Raxol.Core.Runtime.Subscription{}, &1))
+          subs
+          |> Enum.filter(&match?(%Raxol.Core.Runtime.Subscription{}, &1))
+          |> Enum.flat_map(&per_event_type/1)
+          |> Enum.uniq()
 
         _ ->
           []
@@ -946,6 +963,19 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       Logger.debug("Subscription sync failed: #{Exception.message(e)}")
       []
   end
+
+  # EventManager's {:event, type, data} carries no subscription ref, so two
+  # running subscriptions that list one type would each deliver every event of
+  # it. An events subscription therefore runs as one subscription per type,
+  # shared by every declaration that lists the type.
+  defp per_event_type(%Raxol.Core.Runtime.Subscription{
+         type: :events,
+         data: event_types
+       })
+       when is_list(event_types),
+       do: Enum.map(event_types, &Raxol.Core.Runtime.Subscription.events([&1]))
+
+  defp per_event_type(subscription), do: [subscription]
 
   defp broadcast_event_if_valid(event_type, event_data)
        when is_atom(event_type) and is_map(event_data) do

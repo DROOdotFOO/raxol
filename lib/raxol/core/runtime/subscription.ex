@@ -76,7 +76,11 @@ defmodule Raxol.Core.Runtime.Subscription do
   `EventManager.notify/3`).
 
   Each matching event reaches the app's `update/2` as
-  `{:event, event_type, event_data}`.
+  `{:event, event_type, event_data}`, once per event even when several
+  declared subscriptions list its type.
+
+  Delivery stops if EventManager restarts: the subscription lived in the
+  stopped EventManager and is not re-established with the new one.
 
   Only EventManager-dispatched events arrive this way. Terminal input (key
   presses, mouse, resize, focus) is not routed through EventManager: it reaches
@@ -197,6 +201,9 @@ defmodule Raxol.Core.Runtime.Subscription do
   defp stop_events(actual_id)
        when is_integer(actual_id) or is_reference(actual_id) do
     Raxol.Core.Events.EventManager.unsubscribe(actual_id)
+  catch
+    # EventManager is down, and its subscriptions went with it.
+    :exit, {:noproc, _} -> {:error, :subscription_not_found}
   end
 
   defp stop_events(_actual_id) do
