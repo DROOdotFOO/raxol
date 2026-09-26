@@ -210,10 +210,11 @@ defmodule Mix.Raxol.Content do
   Generates Application module for --sup.
 
   Its children are what `mix run --no-halt` runs: the TUI, or with --ssh the
-  SSH server that runs the TUI per connection. The TUI child is `:transient`
-  and `significant`, so quitting it is not a crash to restart: it shuts the
-  supervisor down, and `stop/1` then stops the VM that `--no-halt` would
-  otherwise keep up.
+  SSH server that runs the TUI per connection. The TUI runs under a process
+  that stops the VM `--no-halt` keeps up once the TUI exits (0 when the user
+  quit, 1 when it failed), and that stops only the TUI when the application
+  is stopped. Under IEx the TUI is not started: it would read the keys typed
+  into IEx, and IEx would evaluate them.
   """
   def application_module(%{module: module, app: app, ssh: true}) do
     """
@@ -247,30 +248,49 @@ defmodule Mix.Raxol.Content do
 
       @impl true
       def start(_type, _args) do
-        # Runs #{module}.App in this terminal, with the options under
-        # `config :#{app}, :raxol`. Quitting it ends it normally, which is not
-        # a crash to restart: being significant, it takes the supervisor down.
-        children = [
-          %{
-            id: #{module}.App,
-            start: {Raxol, :start_link, [#{module}.App, Application.get_env(:#{app}, :raxol, [])]},
-            restart: :transient,
-            significant: true
-          }
-        ]
-
-        opts = [
-          strategy: :one_for_one,
-          auto_shutdown: :any_significant,
-          name: #{module}.Supervisor
-        ]
-
-        Supervisor.start_link(children, opts)
+        Supervisor.start_link(children(), strategy: :one_for_one, name: #{module}.Supervisor)
       end
 
-      # The app has quit. `mix run --no-halt` would keep the VM running without it.
-      @impl true
-      def stop(_state), do: System.stop()
+      # IEx reads this terminal too: under `iex -S mix`, what you type into the
+      # TUI would also reach IEx, which would evaluate it.
+      defp children do
+        if Code.ensure_loaded?(IEx) and IEx.started?() do
+          IO.puts("#{module}.App is not started under IEx. Run it with: mix run --no-halt")
+          []
+        else
+          [
+            %{
+              id: #{module}.App,
+              start: {:proc_lib, :start_link, [__MODULE__, :run, []]},
+              restart: :temporary
+            }
+          ]
+        end
+      end
+
+      # Runs #{module}.App in this terminal, with the options under
+      # `config :#{app}, :raxol`. When it exits, this stops the VM, which
+      # `mix run --no-halt` would keep running: with status 0 when the user
+      # quit, 1 when it failed. When the application is stopped instead, this
+      # stops the TUI and leaves the VM running.
+      @doc false
+      def run do
+        Process.flag(:trap_exit, true)
+        {:ok, tui} = Raxol.start_link(#{module}.App, Application.get_env(:#{app}, :raxol, []))
+        :proc_lib.init_ack({:ok, self()})
+
+        receive do
+          {:EXIT, ^tui, reason} ->
+            System.stop(if reason == :normal, do: 0, else: 1)
+
+          {:EXIT, _supervisor, reason} ->
+            Process.exit(tui, reason)
+
+            receive do
+              {:EXIT, ^tui, _} -> exit(reason)
+            end
+        end
+      end
     end
     """
   end

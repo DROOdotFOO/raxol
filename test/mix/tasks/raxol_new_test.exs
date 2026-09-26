@@ -108,21 +108,74 @@ defmodule Mix.Tasks.Raxol.NewTest do
 
   # `mix run --no-halt`, which a --sup app's README and the generator's
   # instructions give as the way to run it, only starts the application.
-  test "--sup starts the TUI with its application, and quitting ends both",
-       %{tmp: tmp} do
+  test "--sup starts the TUI with its application", %{tmp: tmp} do
     {project, _module} = generate(tmp, ["--template", "counter", "--sup"])
     GeneratedApp.compile!(lib_files(project))
 
-    sup = GeneratedApp.start_application!(project)
+    tui = :"#{Path.basename(project)}_tui"
+    GeneratedApp.start_application!(project, raxol: [name: tui])
 
-    assert [{_id, tui, :worker, _modules}] = Supervisor.which_children(sup)
-    assert GeneratedApp.frame!(tui, "Count: 0") =~ "'q' to quit."
+    assert GeneratedApp.frame!(Process.whereis(tui), "Count: 0") =~
+             "'q' to quit."
+  end
 
-    # Quitting ends the TUI normally. Restarting it would bring back an app
-    # the user just quit, so the supervisor has to shut down instead.
-    ref = Process.monitor(sup)
-    Raxol.Core.Runtime.Lifecycle.stop_application(tui)
-    assert_receive {:DOWN, ^ref, :process, ^sup, :shutdown}, 5_000
+  # Once the TUI is gone, `--no-halt` would keep the VM running with nothing
+  # in it, so the application stops the VM. That is only right when the TUI
+  # ended: a test that stops the application must not end the test run. The
+  # application runs in a VM of its own, since it stops that VM.
+  for {ending, ends_tui, status} <- [
+        {"quits", "Raxol.Core.Runtime.Lifecycle.stop_application(tui)", 0},
+        {"fails", "Process.exit(tui, :crash)", 1}
+      ] do
+    test "--sup stops the VM with status #{status} when its TUI #{ending}, " <>
+           "not when its application stops",
+         %{tmp: tmp} do
+      {project, module} = generate(tmp, ["--template", "counter", "--sup"])
+
+      {output, exit_status} =
+        GeneratedApp.run_application(
+          project,
+          """
+          stopping? = fn -> match?({:stopping, _}, :init.get_status()) end
+
+          :ok = Application.stop(app)
+          IO.puts("stopping after Application.stop: \#{stopping?.()}")
+          {:ok, _started} = Application.ensure_all_started(app)
+
+          [{_id, runner, _type, _modules}] =
+            Supervisor.which_children(#{inspect(Module.concat(module, Supervisor))})
+
+          ref = Process.monitor(runner)
+          tui = Process.whereis(:generated_tui)
+          #{unquote(ends_tui)}
+          receive do: ({:DOWN, ^ref, _, _, _} -> :ok)
+
+          # Nothing stopped the VM: say so rather than wait forever.
+          unless stopping?.(), do: System.halt(2)
+          Process.sleep(:infinity)
+          """,
+          raxol: [name: :generated_tui]
+        )
+
+      assert output =~ "stopping after Application.stop: false"
+      assert exit_status == unquote(status)
+    end
+  end
+
+  # IEx reads the same terminal: a TUI started under `iex -S mix` would pass
+  # every key typed into it to IEx as well, which evaluates them.
+  test "--sup does not start the TUI under IEx", %{tmp: tmp} do
+    {project, _module} = generate(tmp, ["--template", "counter", "--sup"])
+    GeneratedApp.compile!(lib_files(project))
+
+    {:ok, started} = Application.ensure_all_started(:iex)
+    on_exit(fn -> Enum.each(started, &Application.stop/1) end)
+
+    {sup, output} =
+      with_io(fn -> GeneratedApp.start_application!(project) end)
+
+    assert Supervisor.which_children(sup) == []
+    assert output =~ "mix run --no-halt"
   end
 
   test "--sup --ssh serves the app over SSH when its application starts",

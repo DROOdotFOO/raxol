@@ -134,6 +134,52 @@ defmodule Raxol.Test.GeneratedApp do
   end
 
   @doc """
+  Starts the application of the generated project at `project` in a VM of its
+  own, evaluates `code` there with `app` bound to the application's name, and
+  returns that VM's output and exit status.
+
+  For what a test's own VM could not survive, such as an application that
+  stops the VM. The new VM is `mix run` of this build, compiles the project's
+  `lib/` itself, and reads its `config/config.exs` for the test env, with
+  `overrides` merged in as `start_application!/2` does.
+  """
+  @spec run_application(Path.t(), String.t(), keyword()) ::
+          {String.t(), non_neg_integer()}
+  def run_application(project, code, overrides \\ []) do
+    {app, mod} = mix_application(project)
+    mod || flunk("#{project}/mix.exs names no application callback (`mod:`)")
+
+    script = """
+    app = #{inspect(app)}
+    lib = Path.wildcard(#{inspect(Path.join(project, "lib/**/*.ex"))})
+    {:ok, modules, _warnings} = Kernel.ParallelCompiler.compile(lib)
+
+    #{inspect(Path.join(project, "config/config.exs"))}
+    |> Config.Reader.read!(env: :test)
+    |> Config.Reader.merge([{app, #{inspect(overrides)}}])
+    |> Application.put_all_env()
+
+    spec = [
+      description: ~c"generated",
+      vsn: ~c"0.1.0",
+      modules: modules,
+      applications: [:kernel, :stdlib, :elixir, :logger],
+      mod: #{inspect(mod)}
+    ]
+
+    :ok = :application.load({:application, app, spec})
+    {:ok, _started} = Application.ensure_all_started(app)
+    """
+
+    System.cmd(
+      "mix",
+      ["run", "--no-compile", "--no-deps-check", "-e", script <> code],
+      env: [{"MIX_ENV", "test"}],
+      stderr_to_stdout: true
+    )
+  end
+
+  @doc """
   Runs `mix format --check-formatted` in the generated project at `project`,
   under the `.formatter.exs` it generated, and fails naming every file the
   formatter would change.
