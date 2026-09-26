@@ -26,6 +26,8 @@ defmodule Raxol.Terminal.Driver do
   alias Raxol.Terminal.Driver.BackgroundQuery
   alias Raxol.Terminal.Driver.Dispatch
   alias Raxol.Terminal.Driver.InputBuffer
+  alias Raxol.Terminal.Driver.IsigGuard
+  alias Raxol.Terminal.Driver.Stty
   alias Raxol.Terminal.Driver.TermboxLifecycle
 
   @compile {:no_warn_undefined, Raxol.Terminal.Driver.Dispatch}
@@ -218,8 +220,13 @@ defmodule Raxol.Terminal.Driver do
         # signals. Must run after start_stdin_reader: its reinit writes
         # prim_tty's own raw mode, which is the termios saved at VM boot
         # minus ICANON and ECHO, so ISIG comes back on and ^C raises SIGINT
-        # (the BEAM BREAK menu) instead of reaching the app as a key. The
-        # reinit completes before user_drv replies, so this call wins.
+        # (the BEAM BREAK menu) instead of reaching the app as a key. On OTP
+        # 29 that write lands before user_drv replies to the start_shell
+        # call, so this call comes after it; on OTP 26/27 the reinit leaves
+        # the tty cooked (see InlineDriver's start_stdin_reader/1) and this
+        # call is what makes it raw. prim_tty writes its raw mode again on
+        # every SIGCONT, at a moment of its choosing, which is why
+        # handle_manager_info(:sigcont, _) runs IsigGuard's verify loop.
         Raxol.Terminal.Driver.Stty.raw!()
 
         # Query the terminal's capabilities (OSC 11 background + OSC 10
@@ -313,6 +320,17 @@ defmodule Raxol.Terminal.Driver do
   @impl true
   def handle_manager_info(:sigwinch, state), do: {:noreply, state}
 
+  # The VM was stopped and continued (`kill -STOP`/`kill -CONT`, a shell's
+  # `fg`), and prim_tty is writing its own raw mode, ISIG on, again: ^C
+  # would be SIGINT for the rest of the session. On OTP 29 the signal comes
+  # through :erl_signal_server (SigwinchHandler forwards it); on OTP 26/27
+  # through the prim_tty reader, whose sends are traced (clause below).
+  @impl true
+  def handle_manager_info(:sigcont, state) do
+    _ = IsigGuard.reassert_until_off(&Stty.raw!/0)
+    {:noreply, state}
+  end
+
   @impl true
   def handle_manager_info({:register_dispatcher, pid}, state)
       when is_pid(pid) do
@@ -388,6 +406,11 @@ defmodule Raxol.Terminal.Driver do
     else
       {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_manager_info({:trace, _reader, :send, {_ref, {:signal, :cont}}, _to}, state) do
+    handle_manager_info(:sigcont, state)
   end
 
   # Ignore other trace messages from the reader (signals, receives, etc.)

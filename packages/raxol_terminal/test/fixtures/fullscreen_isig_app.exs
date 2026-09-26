@@ -5,6 +5,9 @@
 # `<out>.ready` with what it can see, collects CANARY_N key events, writes one
 # token per line to $CANARY_OUT, and halts.
 #
+# With CANARY_SIGCONT=1 the VM is stopped and continued before `.ready`, as
+# `kill -STOP` and `kill -CONT` from another terminal would.
+#
 # The Driver skips all terminal setup while MIX_ENV is "test"
 # (`Raxol.Terminal.Env.test?/0`), and the harness boots this from the test
 # build, so the variable is cleared before the Driver starts: the point is its
@@ -13,6 +16,7 @@ System.delete_env("MIX_ENV")
 
 defmodule FullscreenIsigApp do
   alias Raxol.Core.Events.Event
+  alias Raxol.Terminal.Driver.Stty
 
   def run do
     out = System.get_env("CANARY_OUT") || raise "CANARY_OUT not set"
@@ -20,10 +24,13 @@ defmodule FullscreenIsigApp do
 
     {:ok, _driver} = Raxol.Terminal.Driver.start_link(dispatcher_pid: self())
 
-    # The live flags once init has returned, which is what a ^C meets.
+    sigcont = if System.get_env("CANARY_SIGCONT") == "1", do: stop_and_continue()
+
+    # The live flags once init (and any SIGCONT) is behind us, which is what a
+    # ^C meets.
     File.write!(
       out <> ".ready",
-      "otp=#{System.otp_release()} isig_off=#{Raxol.Terminal.Driver.Stty.isig_off?()}"
+      "otp=#{System.otp_release()} isig_off=#{Stty.isig_off?()} sigcont=#{sigcont}"
     )
 
     tokens = collect(n, [])
@@ -31,6 +38,24 @@ defmodule FullscreenIsigApp do
 
     # Exit at once so the pty closes; the terminal is the harness's to discard.
     System.halt(0)
+  end
+
+  # prim_tty writes its own termios, ISIG on, again on SIGCONT. Returns
+  # `:settled` once the live flags show `-isig` on three reads in a row, or
+  # `:unsettled` when they never do.
+  defp stop_and_continue do
+    pid = System.pid()
+    {_, 0} = System.cmd("sh", ["-c", "kill -STOP #{pid}; kill -CONT #{pid}"])
+    settle_isig_off(60, 0)
+  end
+
+  defp settle_isig_off(_tries, 3), do: :settled
+  defp settle_isig_off(0, _in_a_row), do: :unsettled
+
+  defp settle_isig_off(tries, in_a_row) do
+    in_a_row = if Stty.isig_off?(), do: in_a_row + 1, else: 0
+    Process.sleep(50)
+    settle_isig_off(tries - 1, in_a_row)
   end
 
   defp collect(n, acc) when length(acc) >= n, do: Enum.reverse(acc)

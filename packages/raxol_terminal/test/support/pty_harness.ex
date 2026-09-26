@@ -85,12 +85,13 @@ defmodule Raxol.Terminal.PtyHarness do
   retry while a real failure returns promptly with its evidence intact.
 
   `opts[:app]` is the fixture script to boot (default: the `InlineDriver`
-  canary app).
+  canary app). `opts[:env]` is extra `{name, value}` environment for it.
   """
   @spec run(:tmux | :expect, [key()], [String.t()], keyword()) :: result()
   def run(driver, keys, expected, opts \\ []) do
     app = Keyword.get(opts, :app, @default_app)
-    run_attempts(driver, app, keys, expected, @max_attempts, 1)
+    env = Enum.map_join(Keyword.get(opts, :env, []), fn {name, value} -> "#{name}=#{value} " end)
+    run_attempts(driver, {env, app}, keys, expected, @max_attempts, 1)
   end
 
   defp run_attempts(driver, app, keys, expected, attempts_left, attempt) do
@@ -160,12 +161,12 @@ defmodule Raxol.Terminal.PtyHarness do
     end
   end
 
-  defp drive(:tmux, app, out, keys) do
+  defp drive(:tmux, {env, app}, out, keys) do
     session = "raxol-input-canary-#{unique()}"
 
     cmd =
       "cd #{@pkg_dir} && CANARY_OUT=#{out} CANARY_N=#{length(keys)} " <>
-        "MIX_ENV=test mix run --no-compile #{app}"
+        "#{env}MIX_ENV=test mix run --no-compile #{app}"
 
     try do
       {_, 0} =
@@ -190,7 +191,7 @@ defmodule Raxol.Terminal.PtyHarness do
     end
   end
 
-  defp drive(:expect, app, out, keys) do
+  defp drive(:expect, {env, app}, out, keys) do
     # The app `System.halt/0`s right after writing output, so `eof` returns
     # promptly. `--no-compile`: the parent test already compiled, so the nested
     # run must not recompile under lock contention.
@@ -201,7 +202,7 @@ defmodule Raxol.Terminal.PtyHarness do
 
     script = """
     set timeout 120
-    spawn env CANARY_OUT=#{out} CANARY_N=#{length(keys)} MIX_ENV=test mix run --no-compile #{app}
+    spawn env CANARY_OUT=#{out} CANARY_N=#{length(keys)} #{env}MIX_ENV=test mix run --no-compile #{app}
     set t 0
     while {![file exists "#{out}.ready"] && $t < #{@ready_tries}} { after 100; incr t }
     after #{@settle_ms}

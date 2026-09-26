@@ -30,7 +30,8 @@ defmodule Raxol.Terminal.InputIsigContractTest do
   The full-screen `Raxol.Terminal.Driver` makes the same promise, and broke it
   differently (#1128): its `raw!` ran before the prim_tty reinit in
   `start_stdin_reader/1`, which writes prim_tty's own raw mode with ISIG on, so
-  ^C opened the BREAK menu. Its test boots `fullscreen_isig_app.exs`.
+  ^C opened the BREAK menu. Its tests boot `fullscreen_isig_app.exs`, and also
+  cover prim_tty writing that raw mode again on SIGCONT.
   """
   use ExUnit.Case, async: false
 
@@ -95,6 +96,34 @@ defmodule Raxol.Terminal.InputIsigContractTest do
                ^C decoded, but the Driver left ISIG ON after init. Its `Stty.raw!/0` \
                must run after `start_stdin_reader/1`, whose prim_tty reinit turns \
                ISIG back on.
+
+               #{result.diag}
+               """
+    end
+  end
+
+  # prim_tty writes its own termios, ISIG on, again whenever the VM gets
+  # SIGCONT (`kill -STOP` then `kill -CONT` from another terminal, or a
+  # shell's `fg`), so the Driver has to take `-isig` back each time.
+  test "full-screen Driver: ^C is still a key after the VM is stopped and continued" do
+    case PtyHarness.driver() do
+      nil ->
+        IO.puts(:stderr, "[isig contract] skipped: neither tmux nor expect on PATH")
+
+      driver ->
+        result =
+          PtyHarness.run(driver, @keys, @expected,
+            app: @fullscreen_app,
+            env: [{"CANARY_SIGCONT", "1"}]
+          )
+
+        assert result.tokens == @expected,
+               PtyHarness.report(result, driver, @expected, explain(result.stage))
+
+        assert result.diag =~ "isig_off=true",
+               """
+               ^C decoded, but ISIG was still ON after SIGCONT: prim_tty's \
+               termios write won and the Driver did not take `-isig` back.
 
                #{result.diag}
                """
