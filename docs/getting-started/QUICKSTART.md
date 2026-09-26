@@ -78,6 +78,9 @@ defmodule MyApp do
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
         {model, [Directive.stop()]}
 
+      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
+        {model, [Directive.stop()]}
+
       _ ->
         {model, []}
     end

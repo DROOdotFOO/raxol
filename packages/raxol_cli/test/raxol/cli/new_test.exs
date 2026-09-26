@@ -80,6 +80,10 @@ defmodule Raxol.CLI.NewTest do
       app = Module.concat([Macro.camelize(name)])
       assert GeneratedApp.compile!([Path.join([base, name, "lib", "#{name}.ex"])]) == [app]
       assert GeneratedApp.render!(app, "Count: 0") =~ "+/- to change, q to quit"
+
+      ctrl_c = %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}}
+      assert {_model, [quit]} = app.update(ctrl_c, app.init(%{}))
+      assert quit == Raxol.Core.Runtime.Directive.stop()
     end
   end
 end

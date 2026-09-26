@@ -118,10 +118,20 @@ defmodule Raxol.CLI.New do
       @impl true
       def update(message, model) do
         case message do
-          key_match("+") -> {%{model | count: model.count + 1}, []}
-          key_match("-") -> {%{model | count: model.count - 1}, []}
-          key_match("q") -> {model, [Directive.stop()]}
-          _ -> {model, []}
+          key_match("+") ->
+            {%{model | count: model.count + 1}, []}
+
+          key_match("-") ->
+            {%{model | count: model.count - 1}, []}
+
+          key_match("q") ->
+            {model, [Directive.stop()]}
+
+          %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
+            {model, [Directive.stop()]}
+
+          _ ->
+            {model, []}
         end
       end
 

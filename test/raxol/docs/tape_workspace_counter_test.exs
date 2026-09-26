@@ -10,9 +10,18 @@ defmodule Raxol.Docs.TapeWorkspaceCounterTest do
   @counter Path.expand("../../../assets/tapes/workspace/counter.exs", __DIR__)
 
   test "the tape workspace counter compiles and renders" do
-    assert [Counter] = GeneratedApp.compile!([@counter])
+    assert [counter] = GeneratedApp.compile!([@counter])
+    assert counter == Counter
 
-    assert GeneratedApp.render!(Counter, "count: 0") =~
+    assert GeneratedApp.render!(counter, "count: 0") =~
              "+/- to change, q to quit"
+
+    ctrl_c = %Raxol.Core.Events.Event{
+      type: :key,
+      data: %{key: :char, char: "c", ctrl: true}
+    }
+
+    assert {_model, [quit]} = counter.update(ctrl_c, counter.init(nil))
+    assert quit == Raxol.Core.Runtime.Directive.stop()
   end
 end

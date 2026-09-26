@@ -7,6 +7,7 @@ defmodule Counter do
   def update(key_match("+"), model), do: {%{model | count: model.count + 1}, []}
   def update(key_match("-"), model), do: {%{model | count: model.count - 1}, []}
   def update(key_match("q"), model), do: {model, [Directive.stop()]}
+  def update(key_match("c", ctrl: true), model), do: {model, [Directive.stop()]}
   def update(_, model), do: {model, []}
 
   def view(model) do
