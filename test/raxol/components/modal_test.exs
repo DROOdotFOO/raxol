@@ -486,10 +486,9 @@ defmodule Raxol.UI.Components.ModalTest do
     assert length(field1_elements) == 2
     # Error is second element
     error1_row = Enum.at(field1_elements, 1)
-    # Error row structure: %{type: :row, children: %{type: :label, ...}}
-    # The label map IS the child of the row
-    error1_label_map = error1_row.children
-    assert is_map(error1_label_map)
+    # Error row structure: %{type: :row, children: [%{type: :label, ...}]}
+    # The label is the row's only child (#1114: a one-child block is a list)
+    assert [error1_label_map] = error1_row.children
     assert Map.has_key?(error1_label_map, :type)
     assert error1_label_map.type == :label
     # assert error1_label_map.attrs.content == "Invalid input"
@@ -505,9 +504,8 @@ defmodule Raxol.UI.Components.ModalTest do
     # Row + Error Row
     assert length(field2_elements) == 2
     error2_row = Enum.at(field2_elements, 1)
-    # The label map IS the child of the row
-    error2_label_map = error2_row.children
-    assert is_map(error2_label_map)
+    # The label is the row's only child
+    assert [error2_label_map] = error2_row.children
     assert Map.has_key?(error2_label_map, :type)
     assert error2_label_map.type == :label
     # assert error2_label_map.attrs.content == "Invalid input"

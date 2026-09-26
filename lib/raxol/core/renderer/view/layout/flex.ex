@@ -10,6 +10,8 @@ defmodule Raxol.Core.Renderer.View.Layout.Flex do
   pattern-matches on those maps directly, independent of this module.
   """
 
+  alias Raxol.UI.Layout.StyleInheritance
+
   @doc """
   Creates a row layout container that arranges its children horizontally.
 
@@ -29,7 +31,7 @@ defmodule Raxol.Core.Renderer.View.Layout.Flex do
     align = Keyword.get(opts, :align, :stretch)
     justify = Keyword.get(opts, :justify, :start)
     gap = Keyword.get(opts, :gap, 0)
-    style = Keyword.get(opts, :style, [])
+    style = StyleInheritance.ensure_style_map(opts[:style])
 
     %{
       type: :flex,
@@ -80,7 +82,7 @@ defmodule Raxol.Core.Renderer.View.Layout.Flex do
     justify = Keyword.get(opts, :justify, :start)
     gap = Keyword.get(opts, :gap, 0)
     wrap = Keyword.get(opts, :wrap, false)
-    style = Keyword.get(opts, :style, [])
+    style = StyleInheritance.ensure_style_map(opts[:style])
 
     %{
       type: :flex,
@@ -114,7 +116,7 @@ defmodule Raxol.Core.Renderer.View.Layout.Flex do
     align = Keyword.get(opts, :align, :stretch)
     justify = Keyword.get(opts, :justify, :start)
     gap = Keyword.get(opts, :gap, 0)
-    style = Keyword.get(opts, :style, [])
+    style = StyleInheritance.ensure_style_map(opts[:style])
 
     %{
       type: :flex,
