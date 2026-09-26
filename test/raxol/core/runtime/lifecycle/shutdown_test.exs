@@ -26,7 +26,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.ShutdownTest do
 
       # Should not raise
       result = Shutdown.stop_process(pid, "dead_agent")
-      # Returns nil (from the if branch not executing) or :ok from rescue
+      # Returns nil (from the if branch not executing) or :ok from the catch
       assert result in [nil, :ok]
     end
   end

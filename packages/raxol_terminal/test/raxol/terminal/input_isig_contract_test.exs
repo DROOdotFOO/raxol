@@ -26,6 +26,11 @@ defmodule Raxol.Terminal.InputIsigContractTest do
   keystroke produces -- so the fixture prefixes ctrl chords. Without that a
   decoded ^C and a typed `c` are the same token and this test would pass for
   the wrong reason.
+
+  The full-screen `Raxol.Terminal.Driver` makes the same promise, and broke it
+  differently (#1128): its `raw!` ran before the prim_tty reinit in
+  `start_stdin_reader/1`, which writes prim_tty's own raw mode with ISIG on, so
+  ^C opened the BREAK menu. Its test boots `fullscreen_isig_app.exs`.
   """
   use ExUnit.Case, async: false
 
@@ -66,6 +71,30 @@ defmodule Raxol.Terminal.InputIsigContractTest do
                loop (`reassert_raw_until_isig_off/1`) gave up. That is the \
                signature of `stty` silently no-oping -- check \
                `Stty.tty_device/0` resolution before anything else.
+
+               #{result.diag}
+               """
+    end
+  end
+
+  @fullscreen_app Path.expand("../../fixtures/fullscreen_isig_app.exs", __DIR__)
+
+  test "full-screen Driver: ^C arrives as byte 0x03 instead of raising SIGINT" do
+    case PtyHarness.driver() do
+      nil ->
+        IO.puts(:stderr, "[isig contract] skipped: neither tmux nor expect on PATH")
+
+      driver ->
+        result = PtyHarness.run(driver, @keys, @expected, app: @fullscreen_app)
+
+        assert result.tokens == @expected,
+               PtyHarness.report(result, driver, @expected, explain(result.stage))
+
+        assert result.diag =~ "isig_off=true",
+               """
+               ^C decoded, but the Driver left ISIG ON after init. Its `Stty.raw!/0` \
+               must run after `start_stdin_reader/1`, whose prim_tty reinit turns \
+               ISIG back on.
 
                #{result.diag}
                """

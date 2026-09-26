@@ -437,8 +437,15 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   @impl GenServer
   def terminate(reason, state) do
     maybe_leave_alternate_screen(state)
-    stop_dependent_processes(state)
-    terminate_manager(reason, state)
+
+    # Logger at :none means the session ran silent (the Terminal Driver does
+    # that on a TTY). Keep the whole teardown silent too: the Driver's cleanup
+    # restores the level first thing, and anything logged after it would
+    # print on the terminal it has just restored.
+    Shutdown.quietly(Logger.level() == :none, fn ->
+      stop_dependent_processes(state)
+      terminate_manager(reason, state)
+    end)
   end
 
   # Stops every linked child Lifecycle started, in an order that lets the
