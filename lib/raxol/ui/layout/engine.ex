@@ -1078,10 +1078,14 @@ defmodule Raxol.UI.Layout.Engine do
     StyleInheritance.ensure_style_map(Map.get(element, :style))
   end
 
+  # A top-level `gap` (from `container(gap: n)`) wins over `style.gap`;
+  # without either the column is gapless.
   defp container_as_column(element) do
+    gap = Map.get(element, :gap) || Map.get(resolve_style(element), :gap) || 0
+
     element
     |> Map.put(:type, :column)
-    |> Map.put_new(:gap, 0)
+    |> Map.put(:gap, gap)
   end
 
   # Per-side padding as {top, right, bottom, left}. Accepts a bare integer

@@ -409,6 +409,9 @@ defmodule Raxol.View.Components do
 
   @doc """
   Creates a container component with optional scrolling.
+
+  Children stack vertically with no gap; `gap: n` (or `style: %{gap: n}`)
+  puts `n` blank rows between them.
   """
   @spec container(keyword() | map()) :: map()
   def container(opts \\ []) do
@@ -418,6 +421,7 @@ defmodule Raxol.View.Components do
       type: :container,
       children: Map.get(opts, :children, []),
       scrollable: Map.get(opts, :scrollable, false),
+      gap: Map.get(opts, :gap),
       style: Map.get(opts, :style, %{}),
       id: Map.get(opts, :id)
     }

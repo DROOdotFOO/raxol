@@ -69,6 +69,15 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
 
     defp form_view(:container), do: container(children: [text("x"), text("y")])
 
+    defp form_view(:container_gap),
+      do: container(gap: 1, children: [text("x"), text("y")])
+
+    defp form_view(:container_style_gap),
+      do: container(style: %{gap: 1}, children: [text("x"), text("y")])
+
+    defp form_view(:box_string_style),
+      do: box(style: ["bold"], children: [text("x")])
+
     defp form_view(:row_keyword_style),
       do: row(style: [gap: 2], children: [text("x"), text("y")])
 
@@ -77,6 +86,12 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
 
     defp form_view(:element_map_nil_style),
       do: %{type: :box, style: nil, children: [text("x")]}
+
+    defp form_view(:element_map_string_style),
+      do: %{type: :box, style: ["bold"], children: [text("x")]}
+
+    defp form_view(:element_map_triple_style),
+      do: %{type: :box, style: [{:fg, :red, 1}], children: [text("x")]}
   end
 
   setup do
@@ -128,6 +143,10 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
       interior = buffer.cells |> Enum.at(2) |> Enum.at(5)
       assert interior.style.background == :blue
     end
+
+    test "a string style entry is ignored and the child renders" do
+      assert ["x" | _] = screen_lines(:box_string_style)
+    end
   end
 
   describe "panel" do
@@ -151,6 +170,14 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
     test "stacks its children" do
       assert ["x", "y" | _] = screen_lines(:container)
     end
+
+    test "a top-level gap spaces the children" do
+      assert ["x", "", "y" | _] = screen_lines(:container_gap)
+    end
+
+    test "a style gap spaces the children" do
+      assert ["x", "", "y" | _] = screen_lines(:container_style_gap)
+    end
   end
 
   describe "row" do
@@ -167,6 +194,14 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
 
     test "a nil style renders" do
       assert ["x" | _] = screen_lines(:element_map_nil_style)
+    end
+
+    test "a string style entry is ignored and the child renders" do
+      assert ["x" | _] = screen_lines(:element_map_string_style)
+    end
+
+    test "a style entry that is not a pair is ignored and the child renders" do
+      assert ["x" | _] = screen_lines(:element_map_triple_style)
     end
   end
 end
