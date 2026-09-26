@@ -14,6 +14,7 @@ defmodule Mix.Raxol.Generator do
   def generate(name, opts, raxol_version) do
     path = Path.expand(name)
     app = validate_app_name!(Path.basename(path))
+    validate_module_name!(opts[:module])
 
     if File.exists?(path) do
       Mix.raise("Directory #{path} already exists")
@@ -137,6 +138,19 @@ defmodule Mix.Raxol.Generator do
     end
 
     name
+  end
+
+  # The name is written into every generated module, so one that is not an
+  # alias would fail to parse once files are already on disk.
+  defp validate_module_name!(nil), do: :ok
+
+  defp validate_module_name!(module) do
+    unless module =~ ~r/\A[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*\z/ do
+      Mix.raise(
+        "Module name must be an alias such as MyApp or MyApp.Tui, " <>
+          "segments starting with an uppercase letter. Got: #{inspect(module)}"
+      )
+    end
   end
 
   defp write_file(path, filename, content) do

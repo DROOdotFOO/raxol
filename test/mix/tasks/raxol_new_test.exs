@@ -230,6 +230,27 @@ defmodule Mix.Tasks.Raxol.NewTest do
     assert Raxol.SSH.Server.port(server) > 0
   end
 
+  # The module name goes into every generated file, which the generator
+  # formats, so a name that does not parse would fail with files written.
+  test "--module that is not an alias fails before creating anything",
+       %{tmp: tmp} do
+    project = Path.join(tmp, "bad_module")
+
+    assert_raise Mix.Error, fn ->
+      capture_io(fn ->
+        Mix.Tasks.Raxol.New.run([
+          project,
+          "--template",
+          "counter",
+          "--module",
+          "My App"
+        ])
+      end)
+    end
+
+    refute File.exists?(project)
+  end
+
   # The generated --ci workflow runs `mix format --check-formatted`, so every
   # combination of the flags that shape generated Elixir has to pass it as
   # generated.
