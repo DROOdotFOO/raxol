@@ -8,8 +8,9 @@ defmodule Raxol.Terminal.Integration.RendererTest do
 
   # These run the real-terminal branch, which calls the termbox2 NIF. No
   # tb_init/0 happens here, so termbox itself rejects every call with
-  # TB_ERR_NOT_INIT; the NIF discards that code and returns its own success
-  # value, which is what the renderer has to classify.
+  # TB_ERR_NOT_INIT. tb_set_cursor/2, tb_clear/0 and tb_present/0 discard that
+  # status, so the renderer's documented contract is :ok regardless: it can
+  # tell only whether the NIF call went through, not whether termbox accepted it.
   @moduletag :unix_only
 
   setup do
@@ -26,11 +27,13 @@ defmodule Raxol.Terminal.Integration.RendererTest do
     %{state: %State{}}
   end
 
-  test "move_cursor/3 returns :ok", %{state: state} do
+  test "move_cursor/3 returns :ok without reporting termbox's status",
+       %{state: state} do
     assert Renderer.move_cursor(state, 10, 5) == :ok
   end
 
-  test "clear_screen/1 returns :ok", %{state: state} do
+  test "clear_screen/1 returns :ok without reporting termbox's status",
+       %{state: state} do
     assert Renderer.clear_screen(state) == :ok
   end
 

@@ -1,6 +1,13 @@
 defmodule Raxol.Terminal.Integration.Renderer do
   @moduledoc """
   Handles terminal output rendering and display management using Termbox2.
+
+  `:termbox2_nif.tb_set_cursor/2`, `tb_clear/0` and `tb_present/0` discard
+  termbox's status and always return `:ok`, so the calls built on them
+  (`clear_screen/1`, `move_cursor/3`, `set_cursor_visibility/2` and the cursor
+  and present steps of `render/1`) cannot report a termbox failure: they
+  return `:ok` even when termbox rejected the call, for example before
+  `init_terminal/0`.
   """
 
   alias Raxol.Core.Runtime.Log
@@ -58,26 +65,22 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   @doc """
-  Clears the terminal screen (specifically, the back buffer).
-  Call present/0 afterwards to make it visible.
-  Returns :ok or {:error, reason}.
+  Clears the terminal screen (specifically, the back buffer) and presents it.
+  Returns `:ok`; termbox failures are not reported (see the moduledoc).
   """
   def clear_screen(%State{} = _state) do
     clear_screen_by_mode(Application.get_env(:raxol, :terminal_test_mode, false))
   end
 
   defp clear_and_present do
-    case :termbox2_nif.tb_clear() do
-      :ok -> present_buffer()
-      clear_error_code -> {:error, {:clear_failed, clear_error_code}}
-    end
+    :ok = :termbox2_nif.tb_clear()
+    present_buffer()
   end
 
   @doc """
-  Moves the hardware cursor to a specific position on the screen.
-  Call present/0 afterwards if you want to ensure it's shown with other changes.
-  The cursor position is typically updated with present/0.
-  Returns :ok or {:error, reason}.
+  Moves the hardware cursor to a specific position on the screen and presents
+  it. Returns `:ok`; termbox failures are not reported (see the moduledoc).
+  Coordinates that are not 32-bit integers raise `ArgumentError`.
   """
   def move_cursor(%State{} = _state, x, y) do
     move_cursor_by_mode(
@@ -88,13 +91,8 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   defp set_cursor_and_present(x, y) do
-    case :termbox2_nif.tb_set_cursor(x, y) do
-      :ok ->
-        present_buffer()
-
-      set_cursor_error_code ->
-        {:error, {:set_cursor_failed, set_cursor_error_code}}
-    end
+    :ok = :termbox2_nif.tb_set_cursor(x, y)
+    present_buffer()
   end
 
   @doc """
@@ -427,10 +425,8 @@ defmodule Raxol.Terminal.Integration.Renderer do
   defp handle_cursor_by_mode(state, false) do
     {cursor_x, cursor_y} = CursorManager.get_position(state.cursor_manager)
 
-    case :termbox2_nif.tb_set_cursor(cursor_x, cursor_y) do
-      :ok -> present_buffer()
-      error_code -> {:error, {:set_cursor_failed, error_code}}
-    end
+    :ok = :termbox2_nif.tb_set_cursor(cursor_x, cursor_y)
+    present_buffer()
   end
 
   defp present_buffer_by_mode(true) do
@@ -439,10 +435,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   defp present_buffer_by_mode(false) do
-    case :termbox2_nif.tb_present() do
-      :ok -> :ok
-      error_code -> {:error, {:present_failed, error_code}}
-    end
+    :ok = :termbox2_nif.tb_present()
   end
 
   defp get_dimensions_by_mode(true) do
@@ -511,17 +504,8 @@ defmodule Raxol.Terminal.Integration.Renderer do
 
   defp set_cursor_visibility_by_mode(state, visible, false) do
     # In real mode, use termbox2 to hide/show cursor
-    case set_terminal_cursor_visibility(visible) do
-      :ok ->
-        %{
-          state
-          | config: Map.put(state.config || %{}, :cursor_visible, visible)
-        }
-
-      {:error, reason} ->
-        Log.error("Failed to set cursor visibility: #{inspect(reason)}")
-        state
-    end
+    :ok = set_terminal_cursor_visibility(visible)
+    %{state | config: Map.put(state.config || %{}, :cursor_visible, visible)}
   end
 
   defp set_title_by_mode(state, title, true) do
@@ -564,9 +548,6 @@ defmodule Raxol.Terminal.Integration.Renderer do
 
   defp set_cursor_visibility_state(false) do
     # Hide cursor by setting it to -1, -1
-    case :termbox2_nif.tb_set_cursor(-1, -1) do
-      :ok -> :ok
-      error_code -> {:error, {:hide_cursor_failed, error_code}}
-    end
+    :ok = :termbox2_nif.tb_set_cursor(-1, -1)
   end
 end
