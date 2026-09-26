@@ -36,4 +36,14 @@ defmodule Raxol.UI.StyleHelper do
     base_style = merge_component_styles(state, context, component_name)
     Raxol.UI.FocusHelper.maybe_focus_style(state[:id], context, base_style)
   end
+
+  @text_attributes [:bold, :italic, :underline, :strikethrough, :reverse, :dim]
+
+  @doc """
+  The text attributes (`:bold`, `:italic`, `:underline`, `:strikethrough`,
+  `:reverse`, `:dim`) set in a merged component style, for a component that
+  builds its own element style from it.
+  """
+  @spec text_attributes(map()) :: map()
+  def text_attributes(style), do: Map.take(style, @text_attributes)
 end

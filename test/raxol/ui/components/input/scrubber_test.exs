@@ -280,6 +280,35 @@ defmodule Raxol.UI.Components.Input.ScrubberTest do
                &(&1.id == "s-speed")
              )
     end
+
+    test "draws every text attribute its style sets" do
+      state =
+        Scrubber.new(
+          id: "s",
+          min: 0,
+          max: 9,
+          label: "Replay",
+          style: %{bold: true, dim: true, reverse: true, strikethrough: true}
+        )
+
+      cells =
+        state
+        |> Scrubber.render(%{})
+        |> Raxol.UI.Layout.Engine.apply_layout(%{width: 60, height: 1})
+        |> Raxol.UI.Renderer.render_to_cells(nil)
+
+      label_cells =
+        Enum.filter(cells, fn {x, _y, _char, _fg, _bg, _attrs} -> x < 6 end)
+
+      assert Enum.map_join(label_cells, fn {_x, _y, char, _, _, _} -> char end) ==
+               "Replay"
+
+      for {_x, _y, _char, _fg, _bg, attrs} <- label_cells,
+          attr <- [:bold, :dim, :reverse, :strikethrough] do
+        assert attr in attrs,
+               "label cell attrs #{inspect(attrs)} lack #{inspect(attr)}"
+      end
+    end
   end
 
   describe "declaration node" do

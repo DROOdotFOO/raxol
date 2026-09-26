@@ -635,7 +635,7 @@ defmodule Raxol.UI.Components.Input.Scrubber do
 
   defp text_attrs(base_style, bg) do
     base_style
-    |> Map.take([:bold, :underline, :italic])
+    |> StyleHelper.text_attributes()
     |> Map.put(:bg, bg)
   end
 
