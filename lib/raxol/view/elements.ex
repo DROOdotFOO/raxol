@@ -31,6 +31,21 @@ defmodule Raxol.View.Elements do
     end
   end
 
+  # View has no `panel/2` macro: it is imported by every app, and apps
+  # (and the cookbooks) define their own `panel/2` helpers. This module is
+  # called by its full or aliased name, so the `do` form lives here.
+  defmacro panel(opts, do: block) do
+    quote do
+      Raxol.Core.Renderer.View.panel(
+        Keyword.put(
+          unquote(opts),
+          :children,
+          Raxol.Core.Renderer.View.children_from_block(unquote(block))
+        )
+      )
+    end
+  end
+
   # --- Functions (delegate to View) ---
 
   def row(opts \\ []), do: View.row(opts)
@@ -42,6 +57,7 @@ defmodule Raxol.View.Elements do
   def text_input(opts \\ []), do: View.text_input(opts)
   def table(opts \\ []), do: View.table(opts)
   def label(opts \\ []), do: View.label(opts)
+  def label(content, opts), do: View.label(content, opts)
   def panel(opts \\ []), do: View.panel(opts)
   def border(view, opts \\ []), do: View.border(view, opts)
   def scroll(view, opts \\ []), do: View.scroll(view, opts)

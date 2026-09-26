@@ -25,7 +25,8 @@ defmodule Raxol.Core.Renderer.View do
     * `:type` - The type of view to create
     * `:position` - Position of the view {x, y}
     * `:z_index` - Z-index for layering
-    * `:size` - Size of the view {width, height}
+    * `:size` - Size of the view {width, height}; omitted, it fills the
+      space the layout gives it
     * `:style` - Style options for the view
     * `:fg` / `:bg` - Foreground / background color
     * `:border` - Border style
@@ -41,7 +42,7 @@ defmodule Raxol.Core.Renderer.View do
       type: type,
       position: {0, 0},
       z_index: 0,
-      size: {0, 0},
+      size: nil,
       style: %{},
       fg: nil,
       bg: nil,
@@ -74,7 +75,7 @@ defmodule Raxol.Core.Renderer.View do
         "View.box macro"
       )
 
-      children = unquote(block)
+      children = Raxol.Core.Renderer.View.children_from_block(unquote(block))
 
       Raxol.Core.Renderer.View.Components.Box.new(
         Keyword.merge(unquote(opts), children: children)
@@ -98,7 +99,10 @@ defmodule Raxol.Core.Renderer.View do
       Raxol.Core.Renderer.View.Layout.Flex.row(
         Keyword.merge(
           Raxol.Core.Renderer.View.ensure_keyword(unquote(opts)),
-          Raxol.Core.Renderer.View.ensure_keyword(children: unquote(block))
+          Raxol.Core.Renderer.View.ensure_keyword(
+            children:
+              Raxol.Core.Renderer.View.children_from_block(unquote(block))
+          )
         )
       )
     end
@@ -112,7 +116,7 @@ defmodule Raxol.Core.Renderer.View do
         "View.flex macro"
       )
 
-      children = unquote(block)
+      children = Raxol.Core.Renderer.View.children_from_block(unquote(block))
 
       Raxol.Core.Renderer.View.Layout.Flex.container(
         Keyword.merge(unquote(opts), children: children)
@@ -199,7 +203,7 @@ defmodule Raxol.Core.Renderer.View do
 
   @doc "Creates a new panel view (box with border and children)."
   def panel(opts \\ []) do
-    LayoutHelpers.panel(opts)
+    LayoutHelpers.panel(promote_do_to_children(opts))
   end
 
   @doc "Creates a new column layout."
@@ -221,12 +225,34 @@ defmodule Raxol.Core.Renderer.View do
   """
   def promote_do_to_children(opts) when is_list(opts) do
     case Keyword.pop(opts, :do) do
-      {nil, opts} -> opts
-      {block, opts} -> Keyword.put_new(opts, :children, List.wrap(block))
+      {nil, opts} ->
+        opts
+
+      {block, opts} ->
+        Keyword.put_new(opts, :children, children_from_block(block))
     end
   end
 
   def promote_do_to_children(opts), do: opts
+
+  @doc """
+  Turns the value of a container's `do` block into its children list.
+
+  A block with a single expression evaluates to that one element rather
+  than a list; `nil` (an `if` without `else`) means no children. Every
+  container macro and `promote_do_to_children/1` go through this so a
+  one-child block renders its child.
+
+  A list block may nest lists, as in `[header, for(row <- rows, do: ...)]`
+  or a `case` whose branch is itself a list, and hold `nil`s from `if`s
+  without `else`. Nesting is flattened and `nil`s dropped: the layout
+  engine lays out elements, and a list in a child's place failed the whole
+  frame.
+  """
+  @spec children_from_block(term()) :: list()
+  def children_from_block(block) do
+    block |> List.wrap() |> List.flatten() |> Enum.reject(&is_nil/1)
+  end
 
   defmacro column(opts, do: block) do
     quote do
@@ -238,7 +264,10 @@ defmodule Raxol.Core.Renderer.View do
       Raxol.Core.Renderer.View.Layout.Flex.column(
         Keyword.merge(
           Raxol.Core.Renderer.View.ensure_keyword(unquote(opts)),
-          Raxol.Core.Renderer.View.ensure_keyword(children: unquote(block))
+          Raxol.Core.Renderer.View.ensure_keyword(
+            children:
+              Raxol.Core.Renderer.View.children_from_block(unquote(block))
+          )
         )
       )
     end
@@ -252,7 +281,7 @@ defmodule Raxol.Core.Renderer.View do
         ratio: Keyword.get(unquote(opts), :ratio, {1, 1}),
         min_size: Keyword.get(unquote(opts), :min_size, 5),
         id: Keyword.get(unquote(opts), :id),
-        children: unquote(block)
+        children: Raxol.Core.Renderer.View.children_from_block(unquote(block))
       )
     end
   end
@@ -261,7 +290,7 @@ defmodule Raxol.Core.Renderer.View do
     quote do
       Raxol.UI.Layout.SplitPane.new(
         direction: unquote(direction),
-        children: unquote(block)
+        children: Raxol.Core.Renderer.View.children_from_block(unquote(block))
       )
     end
   end
@@ -269,21 +298,44 @@ defmodule Raxol.Core.Renderer.View do
   @doc "Creates a split pane from a named preset."
   defmacro split_layout(preset, do: block) do
     quote do
-      Raxol.UI.Layout.SplitPane.from_preset(unquote(preset), unquote(block))
+      Raxol.UI.Layout.SplitPane.from_preset(
+        unquote(preset),
+        Raxol.Core.Renderer.View.children_from_block(unquote(block))
+      )
     end
   end
 
   defdelegate split_pane(opts \\ []), to: Raxol.UI.Layout.SplitPane, as: :new
 
-  @doc "Creates a button element."
-  def button(text, opts \\ []) do
-    Components.button(text, opts)
+  @doc """
+  Creates a button element.
+
+  Takes the label first, `button("Save", on_click: :save)`, or as an
+  option, `button(label: "Save", on_click: :save)`.
+  """
+  def button(text_or_opts, opts \\ [])
+
+  def button(opts, []) when is_list(opts) do
+    {label, opts} = Keyword.pop(opts, :label, "")
+    Components.button(label, opts)
   end
 
-  @doc "Creates a checkbox element."
-  def checkbox(label, opts \\ []) do
+  def button(text, opts), do: Components.button(text, opts)
+
+  @doc """
+  Creates a checkbox element.
+
+  Takes the label first, `checkbox("Accept terms", checked: true)`, or as an
+  option, `checkbox(label: "Accept terms", checked: true)`.
+  """
+  def checkbox(label_or_opts, opts \\ [])
+
+  def checkbox(opts, []) when is_list(opts) do
+    {label, opts} = Keyword.pop(opts, :label, "")
     Components.checkbox(label, opts)
   end
+
+  def checkbox(label, opts), do: Components.checkbox(label, opts)
 
   @doc "Creates a text input element."
   def text_input(opts \\ []) do
@@ -317,7 +369,11 @@ defmodule Raxol.Core.Renderer.View do
     LayoutHelpers.flex(constraints)
   end
 
-  @doc "Creates a shadow effect for a view."
+  @doc """
+  Draws its `:children` with a drop shadow.
+
+  See `Raxol.Core.Renderer.View.Components.shadow/1` for the options.
+  """
   def shadow(opts \\ []) do
     Components.shadow(opts)
   end
@@ -329,6 +385,7 @@ defmodule Raxol.Core.Renderer.View do
 
   # Delegate unique Components functions so View is the single complete DSL.
   defdelegate label(opts \\ []), to: Raxol.View.Components
+  defdelegate label(content, opts), to: Raxol.View.Components
   defdelegate input(opts \\ []), to: Raxol.View.Components
   defdelegate list(opts \\ []), to: Raxol.View.Components
   defdelegate spacer(opts \\ []), to: Raxol.View.Components

@@ -144,8 +144,6 @@ defmodule Raxol.UI.RegistryConformanceTest do
     :password_field,
     :select_list,
     :menu,
-    :tabs,
-    :modal,
     :tree,
     :viewport,
     :bar_chart,

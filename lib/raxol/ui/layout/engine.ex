@@ -9,6 +9,8 @@ defmodule Raxol.UI.Layout.Engine do
   """
 
   alias Raxol.Core.Boundary.TermText
+  alias Raxol.UI.Components.Input.TextWrapping
+  alias Raxol.UI.{TextLayout, TextMeasure}
 
   alias Raxol.UI.Layout.{
     CSSGrid,
@@ -20,7 +22,9 @@ defmodule Raxol.UI.Layout.Engine do
     PreparedElement,
     Responsive,
     SplitPane,
-    Table
+    StyleInheritance,
+    Table,
+    ViewNodes
   }
 
   @known_style_attrs [
@@ -31,6 +35,9 @@ defmodule Raxol.UI.Layout.Engine do
     :reverse,
     :dim
   ]
+
+  # View DSL declarations with no layout of their own; see ViewNodes.
+  @view_node_types ViewNodes.lowered_types()
 
   @typedoc """
   Terminal viewport dimensions in cells.
@@ -181,6 +188,14 @@ defmodule Raxol.UI.Layout.Engine do
   """
   @spec process_element(element() | any(), space(), [positioned_element()]) ::
           [positioned_element()]
+  # A container given one bare child map instead of a list (e.g. hand-built
+  # nodes, or `children: child`) lays it out as a one-element list, so no
+  # container type silently drops or mis-iterates it.
+  def process_element(%{children: child} = element, space, acc)
+      when is_map(child) do
+    process_element(%{element | children: [child]}, space, acc)
+  end
+
   # Process a view element
   def process_element(%{type: :view, children: children}, space, acc)
       when is_list(children) do
@@ -259,50 +274,15 @@ defmodule Raxol.UI.Layout.Engine do
     [text_element | acc]
   end
 
-  # Process text elements in new widget format (flat map with :content)
+  # Process text elements in new widget format (flat map with :content).
+  # `text/2`'s `:wrap` and `:align` are resolved against the space's width:
+  # the content is wrapped to it and each line placed by the alignment.
   def process_element(%{type: :text, content: content} = element, space, acc)
       when is_binary(content) do
-    style_map = style_to_map(Map.get(element, :style, %{}))
-
-    # A text element may carry a relative `:position` offset in its style
-    # (chart cells emitted by `Raxol.UI.Charts.ViewBridge` use this to draw
-    # cells at specific (x, y) coordinates inside the container's space).
-    # Apply the offset so the cell lands where the chart asked.
-    {dx, dy} =
-      case Map.get(style_map, :position) || Map.get(element, :position) do
-        {x, y} when is_integer(x) and is_integer(y) -> {x, y}
-        _ -> {0, 0}
-      end
-
-    text_element =
-      %{
-        type: :text,
-        # Carry the declaration id and explicit geometry at the top level so
-        # accessibility surfaces can map this cell span back to the source node
-        # (Browser data-raxol-id, ARIA). The renderer already honors an explicit
-        # width/height, so setting them here is behavior-preserving.
-        id: Map.get(element, :id),
-        x: space.x + dx,
-        y: space.y + dy,
-        width: Raxol.UI.TextMeasure.display_width(content),
-        # Match measure_element's line count: the renderer paints one row per
-        # `\n`-split line, so layout must reserve the same rows or later
-        # siblings get painted over.
-        height: content |> String.split("\n") |> length(),
-        text: content,
-        fg: Map.get(element, :fg),
-        bg: Map.get(element, :bg),
-        style: style_map,
-        link: sanitize_link(Map.get(element, :link)),
-        attrs: %{
-          style: style_map,
-          id: Map.get(element, :id),
-          original_type: :text
-        }
-      }
-      |> stamp_paint_bound(space)
-
-    [text_element | acc]
+    case text_lines(element, content, space) do
+      nil -> [positioned_text(element, content, space) | acc]
+      lines -> place_text_lines(element, lines, space, acc)
+    end
   end
 
   def process_element(%{type: :button, attrs: attrs} = element, space, acc) do
@@ -350,6 +330,8 @@ defmodule Raxol.UI.Layout.Engine do
     text_input_elements = [
       # Input box. Carry the declaration id so accessibility surfaces can map
       # the box's cell span back to the text_input node (data-raxol-id, ARIA).
+      # Like a button's, the field is framed: declare the border (the
+      # renderer paints none by default); the text is inset to match.
       %{
         type: :box,
         id: Map.get(element, :id),
@@ -358,7 +340,7 @@ defmodule Raxol.UI.Layout.Engine do
         width:
           min(Raxol.UI.TextMeasure.display_width(display_text) + 4, space.width),
         height: 3,
-        style: style_map,
+        style: Map.put_new(style_map, :border, :single),
         attrs: component_attrs
       },
       # Input text (or placeholder)
@@ -380,6 +362,19 @@ defmodule Raxol.UI.Layout.Engine do
     ]
 
     text_input_elements ++ acc
+  end
+
+  # `checkbox/2` builds an element with top-level keys instead of `:attrs`.
+  # Rewrite into the `:attrs`-shaped form and forward.
+  def process_element(%{type: :checkbox} = element, space, acc)
+      when not is_map_key(element, :attrs) do
+    attrs =
+      element
+      |> Map.take([:checked, :label, :style, :fg, :bg])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    process_element(Map.put(element, :attrs, attrs), space, acc)
   end
 
   def process_element(%{type: :checkbox, attrs: attrs} = element, space, acc) do
@@ -417,15 +412,16 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   # Process box elements in new View DSL format (no :attrs key)
-  def process_element(%{type: :box, children: %{} = child} = box, space, acc) do
-    process_element(%{box | children: [child]}, space, acc)
-  end
-
   def process_element(%{type: :box, children: children} = box, space, acc)
       when is_list(children) do
-    style = resolve_style(box)
     padding = Map.get(box, :padding, 0)
+    style = box_style(box)
     border = Map.get(box, :border) || Map.get(style, :border, :none)
+
+    style =
+      if border in [:none, false],
+        do: style,
+        else: Map.put(style, :border, border)
 
     # Honor explicit width/height (style or element), clamped to available
     # space; boxes without explicit dimensions keep filling the space.
@@ -447,7 +443,6 @@ defmodule Raxol.UI.Layout.Engine do
     children_space =
       stamp_text_paint_bound(inner_space, style, border, explicit_w)
 
-    box_style = Map.get(box, :style, %{})
     animation_hints = Map.get(box, :animation_hints, [])
 
     box_element = %{
@@ -456,16 +451,18 @@ defmodule Raxol.UI.Layout.Engine do
       # cell span back to the source node (Browser data-raxol-id, ARIA),
       # matching how text/button/text_input boxes already do it.
       id: Map.get(box, :id),
+      # Drawn in the top border by the renderer.
+      title: Map.get(box, :title),
       x: space.x,
       y: space.y,
       width: width,
       height: height,
-      style: box_style,
+      style: style,
       animation_hints: animation_hints,
       attrs: %{
         border: border,
         padding: padding,
-        style: box_style
+        style: style
       }
     }
 
@@ -493,6 +490,35 @@ defmodule Raxol.UI.Layout.Engine do
     process_element(%{element | type: :row}, space, acc)
   end
 
+  # `container/1` (and components such as SelectList) emit a generic
+  # `:container` that stacks its children with no gap unless one is given,
+  # so it lays out as a gapless column. A `scrollable: true` one is a
+  # scroll window over that column.
+  def process_element(
+        %{type: :container, scrollable: true} = element,
+        space,
+        acc
+      ) do
+    ViewNodes.process_scroll(scrollable_container(element), space, acc)
+  end
+
+  def process_element(%{type: :container} = element, space, acc) do
+    process_element(container_as_column(element), space, acc)
+  end
+
+  def process_element(%{type: type} = element, space, acc)
+      when type in @view_node_types do
+    process_element(ViewNodes.lower(element), space, acc)
+  end
+
+  def process_element(%{type: :scroll} = element, space, acc) do
+    ViewNodes.process_scroll(element, space, acc)
+  end
+
+  def process_element(%{type: :shadow} = element, space, acc) do
+    ViewNodes.process_shadow(element, space, acc)
+  end
+
   # Process button elements in new View DSL format (no :attrs key)
   def process_element(%{type: :button, text: text} = button, space, acc)
       when is_binary(text) do
@@ -509,6 +535,12 @@ defmodule Raxol.UI.Layout.Engine do
 
     build_button_elements(text, component_attrs, space, Map.get(button, :id)) ++
       acc
+  end
+
+  # `Raxol.View.Components.button/1` keeps its label under `:content`.
+  def process_element(%{type: :button, content: content} = button, space, acc)
+      when is_binary(content) and not is_map_key(button, :text) do
+    process_element(Map.put(button, :text, content), space, acc)
   end
 
   def process_element(%{type: :split_pane} = split, space, acc) do
@@ -688,6 +720,122 @@ defmodule Raxol.UI.Layout.Engine do
     ]
   end
 
+  # One positioned text element per `{line, offset}`, a row apart.
+  defp place_text_lines(element, lines, space, acc) do
+    lines
+    |> Enum.with_index()
+    |> Enum.reduce(acc, fn {{line, dx}, row}, lines_acc ->
+      line_space = %{
+        space
+        | x: space.x + dx,
+          y: space.y + row,
+          width: max(space.width - dx, 0)
+      }
+
+      [positioned_text(element, line, line_space) | lines_acc]
+    end)
+  end
+
+  defp positioned_text(element, content, space) do
+    style_map = style_to_map(Map.get(element, :style, %{}))
+    {dx, dy} = position_offset(style_map, element)
+
+    %{
+      type: :text,
+      # Carry the declaration id and explicit geometry at the top level so
+      # accessibility surfaces can map this cell span back to the source node
+      # (Browser data-raxol-id, ARIA). The renderer already honors an explicit
+      # width/height, so setting them here is behavior-preserving.
+      id: Map.get(element, :id),
+      x: space.x + dx,
+      y: space.y + dy,
+      width: Raxol.UI.TextMeasure.display_width(content),
+      # Match measure_element's line count: the renderer paints one row per
+      # `\n`-split line, so layout must reserve the same rows or later
+      # siblings get painted over.
+      height: content |> String.split("\n") |> length(),
+      text: content,
+      fg: Map.get(element, :fg),
+      bg: Map.get(element, :bg),
+      style: style_map,
+      link: sanitize_link(Map.get(element, :link)),
+      attrs: %{
+        style: style_map,
+        id: Map.get(element, :id),
+        original_type: :text
+      }
+    }
+    |> stamp_paint_bound(space)
+  end
+
+  # A text element may carry a relative `:position` offset in its style
+  # (chart cells emitted by `Raxol.UI.Charts.ViewBridge` use this to draw
+  # cells at specific (x, y) coordinates inside the container's space).
+  # Apply the offset so the cell lands where the chart asked.
+  defp position_offset(style_map, element) do
+    case Map.get(style_map, :position) || Map.get(element, :position) do
+      {x, y} when is_integer(x) and is_integer(y) -> {x, y}
+      _ -> {0, 0}
+    end
+  end
+
+  # The lines of a text element with `:wrap` (`:word`/`:char`) or `:align`
+  # (`:center`/`:right`), each with its offset from the space's left edge;
+  # nil when neither is set or the space has no width to resolve them in.
+  defp text_lines(element, content, %{width: width})
+       when is_integer(width) and width > 0 do
+    wrap = Map.get(element, :wrap, :none)
+    align = Map.get(element, :align, :left)
+
+    if wrap in [:word, :char] or align in [:center, :right] do
+      content
+      |> wrap_text_lines(wrap, width)
+      |> Enum.map(
+        &{&1, align_offset(align, width, TextMeasure.display_width(&1))}
+      )
+    end
+  end
+
+  defp text_lines(_element, _content, _space), do: nil
+
+  defp wrap_text_lines(content, :word, width) do
+    content
+    |> String.split("\n")
+    |> Enum.flat_map(&TextLayout.wrap(&1, width, :normal))
+  end
+
+  defp wrap_text_lines(content, :char, width) do
+    content
+    |> String.split("\n")
+    |> Enum.flat_map(&TextWrapping.wrap_line_by_char(&1, width))
+  end
+
+  defp wrap_text_lines(content, _no_wrap, _width),
+    do: String.split(content, "\n")
+
+  defp align_offset(:right, width, line_width), do: max(width - line_width, 0)
+
+  defp align_offset(:center, width, line_width),
+    do: max(div(width - line_width, 2), 0)
+
+  defp align_offset(_left, _width, _line_width), do: 0
+
+  defp measure_text(content, available_space) do
+    case lookup_in_cache(available_space[:prepared_cache], :text, content) do
+      {w, h} -> %{width: w, height: h}
+      nil -> content |> String.split("\n") |> measure_lines()
+    end
+  end
+
+  defp measure_lines(lines) do
+    width =
+      lines
+      |> Enum.map(&TextMeasure.display_width/1)
+      |> Enum.max(fn -> 0 end)
+
+    %{width: width, height: length(lines)}
+  end
+
   # Process children of a container element (Helper).
   # Each child is dispatched through process_element/3 which already handles
   # all element types (containers, primitives, catch-all).
@@ -785,6 +933,51 @@ defmodule Raxol.UI.Layout.Engine do
   @spec measure_element(element() | any(), map()) :: measurement()
   def measure_element(element, available_space \\ %{})
 
+  # Single bare child map: measure as a one-element list (see process_element/3).
+  def measure_element(%{children: child} = element, available_space)
+      when is_map(child) do
+    measure_element(%{element | children: [child]}, available_space)
+  end
+
+  # Type aliases come before the `:attrs` clause below: an alias node may
+  # carry `:attrs` (SelectList's `:container` does), and that clause would
+  # measure it by the alias name, which it does not know.
+
+  # charts are :box under a discovery type alias; measure must mirror the
+  # layout-side rewrite or charts measure 0x0 and siblings paint over them
+  def measure_element(%{type: type} = element, available_space)
+      when type in [:line_chart, :bar_chart, :scatter_chart, :heatmap] do
+    measure_element(Map.put(element, :type, :box), available_space)
+  end
+
+  # Same mirror for the scrubber's :row alias.
+  def measure_element(%{type: :scrubber} = element, available_space) do
+    measure_element(Map.put(element, :type, :row), available_space)
+  end
+
+  # Same mirror for `:container`'s :column alias, and a scrollable
+  # container's scroll window.
+  def measure_element(%{type: :container, scrollable: true} = element, space) do
+    ViewNodes.measure_scroll(scrollable_container(element), space)
+  end
+
+  def measure_element(%{type: :container} = element, available_space) do
+    measure_element(container_as_column(element), available_space)
+  end
+
+  def measure_element(%{type: type} = element, available_space)
+      when type in @view_node_types do
+    measure_element(ViewNodes.lower(element), available_space)
+  end
+
+  def measure_element(%{type: :scroll} = element, available_space) do
+    ViewNodes.measure_scroll(element, available_space)
+  end
+
+  def measure_element(%{type: :shadow} = element, available_space) do
+    ViewNodes.measure_shadow(element, available_space)
+  end
+
   # Handles valid elements (maps with :type and :attrs)
   def measure_element(%{type: type, attrs: attrs} = element, available_space)
       when is_atom(type) do
@@ -794,21 +987,14 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   # Handles new widget format (flat maps with :content/:children, no :attrs)
-  def measure_element(%{type: :text, content: content}, available_space)
+  def measure_element(
+        %{type: :text, content: content} = element,
+        available_space
+      )
       when is_binary(content) do
-    case lookup_in_cache(available_space[:prepared_cache], :text, content) do
-      {w, h} ->
-        %{width: w, height: h}
-
-      nil ->
-        lines = String.split(content, "\n")
-
-        width =
-          lines
-          |> Enum.map(&Raxol.UI.TextMeasure.display_width/1)
-          |> Enum.max(fn -> 0 end)
-
-        %{width: width, height: length(lines)}
+    case text_lines(element, content, available_space) do
+      nil -> measure_text(content, available_space)
+      lines -> measure_lines(Enum.map(lines, &elem(&1, 0)))
     end
   end
 
@@ -816,6 +1002,12 @@ defmodule Raxol.UI.Layout.Engine do
   def measure_element(%{type: :button, text: text} = _element, available_space) do
     label = text || "Button"
     Inputs.measure(:button, %{label: label}, available_space)
+  end
+
+  # `Raxol.View.Components.button/1` keeps its label under `:content`.
+  def measure_element(%{type: :button, content: content} = element, space)
+      when is_binary(content) and not is_map_key(element, :text) do
+    Inputs.measure(:button, %{label: content}, space)
   end
 
   # Checkbox with top-level :label key (new View DSL format)
@@ -838,26 +1030,6 @@ defmodule Raxol.UI.Layout.Engine do
     }
 
     Inputs.measure(:text_input, attrs_map, available_space)
-  end
-
-  # charts are :box under a discovery type alias; measure must mirror the
-  # layout-side rewrite or charts measure 0x0 and siblings paint over them
-  def measure_element(%{type: type} = element, available_space)
-      when type in [:line_chart, :bar_chart, :scatter_chart, :heatmap] do
-    measure_element(Map.put(element, :type, :box), available_space)
-  end
-
-  # Same mirror for the scrubber's :row alias.
-  def measure_element(%{type: :scrubber} = element, available_space) do
-    measure_element(Map.put(element, :type, :row), available_space)
-  end
-
-  # Box with single map child (View DSL produces map, not list, for single child)
-  def measure_element(
-        %{type: :box, children: %{} = child} = element,
-        available_space
-      ) do
-    measure_element(%{element | children: [child]}, available_space)
   end
 
   # Box with top-level properties (new View DSL format from Box.new/1)
@@ -1048,8 +1220,11 @@ defmodule Raxol.UI.Layout.Engine do
   defp convert_attrs_to_map(attrs) when is_list(attrs), do: Map.new(attrs)
   defp convert_attrs_to_map(attrs), do: attrs
 
+  # Style lists mix bare attribute atoms (`[:bold]`) with keyword pairs
+  # (`[fg: :red]`); keep both.
   defp style_to_map(styles) when is_list(styles) do
     Enum.reduce(styles, %{}, fn
+      {key, value}, acc when is_atom(key) -> Map.put(acc, key, value)
       attr, acc when attr in @known_style_attrs -> Map.put(acc, attr, true)
       _other, acc -> acc
     end)
@@ -1058,13 +1233,51 @@ defmodule Raxol.UI.Layout.Engine do
   defp style_to_map(styles) when is_map(styles), do: styles
   defp style_to_map(_), do: %{}
 
-  # Resolve style map from an element, defaulting to empty map.
+  # Resolve an element's style as a map; keyword and atom-list styles are
+  # normalized, anything else is an empty map.
   defp resolve_style(element) do
-    case Map.get(element, :style) do
-      s when is_map(s) -> s
-      _ -> %{}
-    end
+    StyleInheritance.ensure_style_map(Map.get(element, :style))
   end
+
+  # `Box.new/1` folds its `:fg`/`:bg` shorthands into `:style`; other box
+  # nodes (`View.new/2`, hand-built maps) carry them top-level, so fold them
+  # here too. An explicit style entry wins.
+  defp box_style(box) do
+    box
+    |> Map.take([:fg, :bg])
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+    |> Map.merge(resolve_style(box))
+  end
+
+  defp container_as_column(element) do
+    element
+    |> Map.put(:type, :column)
+    |> Map.put_new(:gap, 0)
+  end
+
+  # A `scrollable: true` container is a scroll window over its gapless
+  # column, sized by its style's `:width`/`:height` (the space it is given
+  # where unset).
+  defp scrollable_container(element) do
+    style = resolve_style(element)
+
+    column =
+      element
+      |> Map.put(:scrollable, false)
+      |> Map.put(:style, Map.drop(style, [:width, :height]))
+      |> container_as_column()
+
+    %{
+      type: :scroll,
+      id: Map.get(element, :id),
+      viewport: {cell_count(style[:width]), cell_count(style[:height])},
+      children: [column]
+    }
+  end
+
+  defp cell_count(n) when is_integer(n) and n >= 0, do: n
+  defp cell_count(_other), do: nil
 
   # Per-side padding as {top, right, bottom, left}. Accepts a bare integer
   # or the tuples produced by Components.Box.normalize_spacing/1.
@@ -1383,7 +1596,7 @@ defmodule Raxol.UI.Layout.Engine do
   defp get_display_text("", placeholder), do: placeholder
   defp get_display_text(value, _placeholder), do: value
 
-  defp get_checkbox_text(true), do: "[[OK]]"
+  defp get_checkbox_text(true), do: "[x]"
   defp get_checkbox_text(false), do: "[ ]"
 
   # --- End Measurement Logic ---

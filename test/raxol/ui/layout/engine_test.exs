@@ -527,7 +527,7 @@ defmodule Raxol.UI.Layout.EngineTest do
       el = positioned_by_id(view, "agree")
 
       assert el.type == :text
-      assert el.width == Raxol.UI.TextMeasure.display_width("[[OK]] Agree")
+      assert el.width == Raxol.UI.TextMeasure.display_width("[x] Agree")
       assert el.height == 1
     end
 

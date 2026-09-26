@@ -8,12 +8,20 @@ defmodule Raxol.Core.Renderer.View.Components.Box do
   independently of this module.
   """
 
+  alias Raxol.UI.Layout.StyleInheritance
+
+  # Top-level options that are shorthands for the same `style:` keys, as in
+  # `box(border: :single, bg: :blue)`. The renderer reads them from the
+  # style map, so they are folded in; an explicit `style:` entry wins.
+  @style_shorthands [:border, :padding, :fg, :bg, :border_bg, :background_clip]
+
   @doc """
   Creates a new box view.
 
   ## Options
     * `:children` - List of child views
     * `:title` - Optional title rendered in the top border
+    * `:style` - Style map or keyword list
     * `:padding` - Padding around content (integer or {top, right, bottom, left})
     * `:margin` - Margin around box (integer or {top, right, bottom, left})
     * `:border` - Border style (:none, :single, :double, :rounded, :bold, :dashed)
@@ -21,16 +29,19 @@ defmodule Raxol.Core.Renderer.View.Components.Box do
     * `:bg` - Background color
     * `:size` - Box size {width, height}
 
+  `:padding`, `:border`, `:fg`, `:bg`, `:border_bg` and `:background_clip`
+  are shorthands for the matching `:style` keys; a value given in `:style`
+  takes precedence.
+
   ## Examples
 
       Box.new(children: [view1, view2], padding: 1)
       Box.new(padding: {1, 2, 1, 2}, border: :single)
   """
   def new(opts \\ []) do
-    style = Keyword.get(opts, :style, [])
-    style_map = if is_map(style), do: style, else: Map.new(style)
-    border = Map.get(style_map, :border, Keyword.get(opts, :border, :none))
-    padding = Map.get(style_map, :padding, Keyword.get(opts, :padding, 0))
+    style = build_style(opts)
+    border = Map.get(style, :border, :none)
+    padding = Map.get(style, :padding, 0)
 
     animation_hints = build_animation_hints(opts)
 
@@ -47,6 +58,16 @@ defmodule Raxol.Core.Renderer.View.Components.Box do
       style: style,
       animation_hints: animation_hints
     }
+  end
+
+  defp build_style(opts) do
+    shorthands =
+      opts
+      |> Keyword.take(@style_shorthands)
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    Map.merge(shorthands, StyleInheritance.ensure_style_map(opts[:style]))
   end
 
   # Helper function to normalize spacing values
