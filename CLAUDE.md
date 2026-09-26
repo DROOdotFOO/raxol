@@ -300,7 +300,7 @@ Raxol is a multi-surface application runtime for Elixir built on OTP. One TEA mo
 **TEA (The Elm Architecture) is the canonical app model.** Applications implement `init/1`, `update/2`, and `view/1` callbacks, mapped to a GenServer via `Raxol.start_link/2` which delegates to `Raxol.Core.Runtime.Lifecycle.start_link/2`. Do not introduce competing application models (e.g., LiveView-style `mount/render`).
 
 ```elixir
-use Raxol.UI, framework: :react      # React patterns (TEA)
+use Raxol.UI, framework: :react      # React-style components (not a TEA app)
 use Raxol.UI, framework: :liveview   # Phoenix LiveView patterns
 use Raxol.UI, framework: :heex       # Phoenix templates
 use Raxol.UI, framework: :raw        # Direct terminal control

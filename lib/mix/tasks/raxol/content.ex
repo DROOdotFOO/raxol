@@ -9,18 +9,24 @@ defmodule Mix.Raxol.Content do
   def mix_exs(%{
         app: app,
         module: module,
-        ssh: ssh?,
+        sup: sup?,
         liveview: liveview?,
         version: version
       }) do
     extra_deps =
       []
-      |> maybe_add(ssh?, ~s|{:ssh_subsystem_fwup, "~> 0.6", optional: true}|)
       |> maybe_add(liveview?, ~s|{:phoenix_live_view, "~> 1.0"}|)
       |> maybe_add(liveview?, ~s|{:phoenix, "~> 1.7"}|)
 
     all_deps = [~s|{:raxol, "~> #{version}"}| | extra_deps]
     deps_lines = Enum.map_join(all_deps, ",\n", &("      " <> &1))
+
+    # A --sup app is started by its application callback, so `mix run` starts
+    # it. Without `mod:` the supervision tree in `Application` never runs.
+    application_lines =
+      ["extra_applications: [:logger]"]
+      |> maybe_add(sup?, "mod: {#{module}.Application, []}")
+      |> Enum.map_join(",\n", &("      " <> &1))
 
     """
     defmodule #{module}.MixProject do
@@ -38,7 +44,7 @@ defmodule Mix.Raxol.Content do
 
       def application do
         [
-          extra_applications: [:logger]
+    #{application_lines}
         ]
       end
 
@@ -51,55 +57,22 @@ defmodule Mix.Raxol.Content do
     """
   end
 
-  @doc "Generates config/config.exs content."
-  def config_exs(%{app: app, ssh: ssh?, liveview: liveview?}) do
-    ssh_config =
-      if ssh? do
-        """
+  @doc """
+  Generates config/config.exs content.
 
-        # SSH server configuration
-        # config :#{app}, :ssh,
-        #   port: 2222,
-        #   host_keys_dir: "/tmp/#{app}_ssh_keys"
-        """
-      else
-        ""
-      end
+  A --sup app's `Application` reads the TUI's options from
+  `config :<app>, :raxol`. With --ssh, `<Module>.SSH.start/1` and the --sup
+  `Application` read the SSH server's from `config :<app>, :ssh`, so those
+  sections are live config.
+  """
+  def config_exs(%{app: app, sup: sup?, ssh: ssh?, liveview: liveview?}) do
+    sections =
+      [base_config(app)]
+      |> maybe_add(sup? and not ssh?, tui_config(app))
+      |> maybe_add(ssh?, ssh_server_config(app))
+      |> maybe_add(liveview?, liveview_config_hint(app))
 
-    liveview_config =
-      if liveview? do
-        """
-
-        # LiveView configuration
-        # config :#{app}, :liveview,
-        #   pubsub: #{Macro.camelize(app)}.PubSub
-        """
-      else
-        ""
-      end
-
-    """
-    import Config
-
-    # Raxol application configuration
-    #
-    # config :#{app}, :raxol,
-    #   fps: 60,                           # Target frames per second
-    #   title: "#{Macro.camelize(app)}",    # Window title
-    #   quit_keys: [{:ctrl, ?c}]            # Keys that quit the app
-
-    # Accessibility options
-    # config :#{app}, :accessibility,
-    #   screen_reader: true,
-    #   high_contrast: false,
-    #   large_text: false,
-    #   reduced_motion: false
-
-    # Theme configuration
-    # config :raxol, :theme, Raxol.UI.Theming.Theme.dark_theme()
-    #{String.trim_trailing(ssh_config)}
-    #{String.trim_trailing(liveview_config)}
-    """
+    Enum.join(sections, "\n")
   end
 
   @doc "Generates .formatter.exs content."
@@ -136,8 +109,8 @@ defmodule Mix.Raxol.Content do
   end
 
   @doc "Generates README.md content."
-  def readme(%{app: app, module: module, template: template, sup: sup?}) do
-    run_cmd = if sup?, do: "mix run --no-halt", else: "mix run lib/#{app}.ex"
+  def readme(%{module: module, template: template} = bindings) do
+    run_cmd = Mix.Raxol.AppTemplates.run_command(bindings)
 
     """
     # #{module}
@@ -216,15 +189,16 @@ defmodule Mix.Raxol.Content do
   end
 
   @doc "Generates the main module when --sup is used."
-  def app_module_sup(%{module: module}) do
+  def app_module_sup(%{module: module, app: app}) do
     """
     defmodule #{module} do
       @moduledoc \"\"\"
       #{module} entrypoint. See `#{module}.Application` for the supervision tree.
       \"\"\"
 
+      @doc "Starts the application, which starts the supervision tree."
       def start do
-        #{module}.Application.start(:normal, [])
+        Application.ensure_all_started(:#{app})
       end
 
       defdelegate version, to: Raxol
@@ -232,21 +206,16 @@ defmodule Mix.Raxol.Content do
     """
   end
 
-  @doc "Generates Application module for --sup."
-  def application_module(%{module: module, ssh: ssh?}) do
-    children =
-      if ssh? do
-        """
-            children = [
-              {Raxol.SSH.Server, [app_module: #{module}.App, port: 2222]}
-            ]
-        """
-      else
-        """
-            children = []
-        """
-      end
+  @doc """
+  Generates Application module for --sup.
 
+  Its children are what `mix run --no-halt` runs: the TUI, or with --ssh the
+  SSH server that runs the TUI per connection. The TUI child is `:transient`
+  and `significant`, so quitting it is not a crash to restart: it shuts the
+  supervisor down, and `stop/1` then stops the VM that `--no-halt` would
+  otherwise keep up.
+  """
+  def application_module(%{module: module, app: app, ssh: true}) do
     """
     defmodule #{module}.Application do
       @moduledoc false
@@ -255,11 +224,53 @@ defmodule Mix.Raxol.Content do
 
       @impl true
       def start(_type, _args) do
-    #{String.trim_trailing(children)}
+        # Serves #{module}.App over SSH, one instance per connection, with the
+        # options under `config :#{app}, :ssh`.
+        children = [
+          {Raxol.SSH.Server,
+           [app_module: #{module}.App] ++ Application.get_env(:#{app}, :ssh, [])}
+        ]
 
         opts = [strategy: :one_for_one, name: #{module}.Supervisor]
         Supervisor.start_link(children, opts)
       end
+    end
+    """
+  end
+
+  def application_module(%{module: module, app: app}) do
+    """
+    defmodule #{module}.Application do
+      @moduledoc false
+
+      use Application
+
+      @impl true
+      def start(_type, _args) do
+        # Runs #{module}.App in this terminal, with the options under
+        # `config :#{app}, :raxol`. Quitting it ends it normally, which is not
+        # a crash to restart: being significant, it takes the supervisor down.
+        children = [
+          %{
+            id: #{module}.App,
+            start: {Raxol, :start_link, [#{module}.App, Application.get_env(:#{app}, :raxol, [])]},
+            restart: :transient,
+            significant: true
+          }
+        ]
+
+        opts = [
+          strategy: :one_for_one,
+          auto_shutdown: :any_significant,
+          name: #{module}.Supervisor
+        ]
+
+        Supervisor.start_link(children, opts)
+      end
+
+      # The app has quit. `mix run --no-halt` would keep the VM running without it.
+      @impl true
+      def stop(_state), do: System.stop()
     end
     """
   end
@@ -270,27 +281,24 @@ defmodule Mix.Raxol.Content do
     do_tea_module(template, %{bindings | module: module_name})
   end
 
-  @doc "Generates standalone TEA app module (lib/app.ex without --sup)."
+  @doc """
+  Generates standalone TEA app module (lib/app.ex without --sup).
+
+  The module starts itself through `start/0`; nothing runs at the top level,
+  which `mix compile` would execute.
+  """
   def tea_module_standalone(%{template: template} = bindings) do
-    source = do_tea_module(template, bindings)
-
-    source <>
-      """
-
-      {:ok, pid} = Raxol.start_link(#{bindings.module}, [])
-      ref = Process.monitor(pid)
-
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-      end
-      """
+    do_tea_module(template, bindings)
   end
 
-  @doc "Generates SSH server module."
-  def ssh_module(%{module: module}) do
-    app_mod =
-      if String.ends_with?(module, ".App"), do: module, else: "#{module}.App"
+  @doc """
+  Generates SSH server module.
 
+  `start/1` serves with the options under `config :<app>, :ssh`, which
+  `config_exs/1` fills in: `Raxol.SSH.Server` refuses to start without
+  authentication settings.
+  """
+  def ssh_module(%{module: module, app: app} = bindings) do
     """
     defmodule #{module}.SSH do
       @moduledoc \"\"\"
@@ -305,18 +313,18 @@ defmodule Mix.Raxol.Content do
           ssh localhost -p 2222
       \"\"\"
 
+      @doc "Serves the app with the options under `config :#{app}, :ssh`, overridden by `opts`."
       def start(opts \\\\ []) do
-        port = Keyword.get(opts, :port, 2222)
-        Raxol.SSH.Server.serve(#{app_mod}, port: port)
+        options = Keyword.merge(Application.get_env(:#{app}, :ssh, []), opts)
+        Raxol.SSH.Server.serve(#{tea_module_name(bindings)}, options)
       end
     end
     """
   end
 
   @doc "Generates Phoenix LiveView bridge module."
-  def liveview_module(%{module: module}) do
-    app_mod =
-      if String.ends_with?(module, ".App"), do: module, else: "#{module}.App"
+  def liveview_module(%{module: module} = bindings) do
+    app_mod = tea_module_name(bindings)
 
     """
     defmodule #{module}.Live do
@@ -490,6 +498,71 @@ defmodule Mix.Raxol.Content do
   defp do_tea_module(template, bindings) do
     Mix.Raxol.AppTemplates.render(template, bindings)
   end
+
+  defp base_config(app) do
+    """
+    import Config
+
+    # Raxol application configuration
+    #
+    # config :#{app}, :raxol,
+    #   fps: 60,                           # Target frames per second
+    #   title: "#{Macro.camelize(app)}",    # Window title
+    #   quit_keys: [{:ctrl, ?c}]            # Keys that quit the app
+
+    # Accessibility options
+    # config :#{app}, :accessibility,
+    #   screen_reader: true,
+    #   high_contrast: false,
+    #   large_text: false,
+    #   reduced_motion: false
+
+    # Theme configuration
+    # config :raxol, :theme, Raxol.UI.Theming.Theme.dark_theme()
+    """
+  end
+
+  defp tui_config(app) do
+    """
+    # `mix test` starts the application, and with it the TUI. Run it headless
+    # there, so it leaves the terminal to the test run.
+    if config_env() == :test do
+      config :#{app}, :raxol, environment: :agent
+    end
+    """
+  end
+
+  defp ssh_server_config(app) do
+    """
+    # The SSH server's options (see Raxol.SSH.serve/2). Anonymous access binds
+    # loopback only and has to state its limits.
+    config :#{app}, :ssh,
+      port: 2222,
+      allow_anonymous: true,
+      max_connections: 10,
+      max_per_ip: 2,
+      idle_timeout: :timer.minutes(5),
+      max_session_duration: :timer.hours(1)
+
+    # Port 0 takes any free port, so a server started under `mix test` runs
+    # while the app is serving on 2222.
+    if config_env() == :test do
+      config :#{app}, :ssh, port: 0
+    end
+    """
+  end
+
+  defp liveview_config_hint(app) do
+    """
+    # LiveView configuration
+    # config :#{app}, :liveview,
+    #   pubsub: #{Macro.camelize(app)}.PubSub
+    """
+  end
+
+  # The TEA module: `<Module>.App` with --sup, the main module without.
+  defp tea_module_name(%{sup: true, module: module}), do: "#{module}.App"
+  defp tea_module_name(%{module: module}), do: module
 
   # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
   defp maybe_add(list, true, item), do: list ++ [item]

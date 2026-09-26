@@ -6,9 +6,9 @@ defmodule Mix.Raxol.Generator do
   optional dependency installation, and post-generation output.
   """
 
-  alias Mix.Raxol.Content
+  alias Mix.Raxol.{AppTemplates, Content}
 
-  @compile {:no_warn_undefined, Mix.Raxol.Content}
+  @compile {:no_warn_undefined, [Mix.Raxol.AppTemplates, Mix.Raxol.Content]}
 
   @doc "Generates the full project structure at `path` with the given opts."
   def generate(name, opts, raxol_version) do
@@ -129,8 +129,18 @@ defmodule Mix.Raxol.Generator do
   defp write_file(path, filename, content) do
     filepath = Path.join(path, filename)
     filepath |> Path.dirname() |> File.mkdir_p!()
-    File.write!(filepath, content)
+    File.write!(filepath, format(filename, content))
     Mix.shell().info(["  ", :green, "* creating ", :reset, filename])
+  end
+
+  # The generated `.formatter.exs` sets no options, so the defaults here are
+  # what `mix format` in the new project, and its --ci workflow, apply.
+  # Formatting on the way out holds every template to that whatever the module
+  # name, whose length moves line breaks.
+  defp format(filename, content) do
+    if Path.extname(filename) in [".ex", ".exs"],
+      do: [Code.format_string!(content, file: filename), "\n"],
+      else: content
   end
 
   defp git_init(path) do
@@ -231,18 +241,14 @@ defmodule Mix.Raxol.Generator do
     Mix.shell().info("")
   end
 
-  defp print_setup_commands(%{app: app, sup: sup?}, name, installed?) do
+  defp print_setup_commands(bindings, name, installed?) do
     unless installed? do
       Mix.shell().info(["    ", :cyan, "cd #{name}", :reset])
       Mix.shell().info(["    ", :cyan, "mix deps.get", :reset])
     end
 
-    if sup? do
-      Mix.shell().info(["    ", :cyan, "mix run --no-halt", :reset])
-    else
-      Mix.shell().info(["    ", :cyan, "mix run lib/#{app}.ex", :reset])
-    end
-
+    run_command = AppTemplates.run_command(bindings)
+    Mix.shell().info(["    ", :cyan, run_command, :reset])
     Mix.shell().info("")
   end
 
@@ -260,9 +266,16 @@ defmodule Mix.Raxol.Generator do
 
   defp print_template_hint(_bindings), do: :ok
 
-  defp print_ssh_hint(%{ssh: true}) do
+  # A --sup app's application starts the server; without --sup nothing does,
+  # so the command starts it through `<Module>.SSH.start/0`.
+  defp print_ssh_hint(%{ssh: true} = bindings) do
+    command =
+      if bindings.sup,
+        do: "mix run --no-halt",
+        else: ~s|mix run --no-halt -e "#{bindings.module}.SSH.start()"|
+
     Mix.shell().info("")
-    Mix.shell().info([:yellow, "SSH server:", :reset, " mix run --no-halt"])
+    Mix.shell().info([:yellow, "SSH server:", :reset, " ", command])
 
     Mix.shell().info([
       "Then connect: ",

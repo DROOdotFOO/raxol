@@ -76,32 +76,50 @@ defmodule Raxol.CLI.New do
     """
   end
 
+  # `Raxol.Core.Runtime.Application` is the app contract `Raxol.start_link/2`
+  # runs, and the one that brings the view DSL, `key_match` and `Directive`
+  # into scope. `use Raxol.UI, framework: :react` builds a component instead,
+  # and gave this template none of the three.
+  #
+  # `start/0` waits for the app to quit: `mix run -e` halts the VM as soon as
+  # its expression returns, which would take a still-running app down with it.
   defp app_ex(mod) do
     """
     defmodule #{mod} do
       @moduledoc "A minimal Raxol counter app (The Elm Architecture)."
-      use Raxol.UI, framework: :react
+      use Raxol.Core.Runtime.Application
 
-      import Raxol.Core.Runtime.Application, only: [key_match: 1]
+      @doc "Runs the app in this terminal and returns once it quits."
+      def start do
+        {:ok, pid} = Raxol.start_link(__MODULE__, [])
+        ref = Process.monitor(pid)
 
-      def start, do: Raxol.start_link(__MODULE__)
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+        end
+      end
 
-      def init(_), do: %{count: 0}
+      @impl true
+      def init(_context), do: %{count: 0}
 
-      def update(msg, model) do
-        case msg do
+      @impl true
+      def update(message, model) do
+        case message do
           key_match("+") -> {%{model | count: model.count + 1}, []}
           key_match("-") -> {%{model | count: model.count - 1}, []}
-          key_match("q") -> {model, [:quit]}
+          key_match("q") -> {model, [Directive.stop()]}
           _ -> {model, []}
         end
       end
 
+      @impl true
       def view(model) do
-        box padding: 1 do
-          column do
-            text("Count: \#{model.count}", fg: :cyan)
-            text("+/- to change, q to quit")
+        box style: %{padding: 1} do
+          column style: %{gap: 1} do
+            [
+              text("Count: \#{model.count}", fg: :cyan),
+              text("+/- to change, q to quit")
+            ]
           end
         end
       end

@@ -4,6 +4,7 @@ defmodule Raxol.CLI.NewTest do
   import ExUnit.CaptureIO
 
   alias Raxol.CLI.New
+  alias Raxol.Test.GeneratedApp
 
   describe "run/1 validation" do
     test "rejects a missing name" do
@@ -48,6 +49,34 @@ defmodule Raxol.CLI.NewTest do
 
       assert File.read!(Path.join([base, "my_app", "README.md"])) =~
                "Requires local Elixir/Mix"
+    end
+
+    # The skeleton test above proves the files exist. This compiles the app
+    # against the raxol this CLI depends on and draws its first frame, which
+    # is what `mix deps.get && mix run` in the new project will attempt.
+    test "scaffolds an app that compiles and renders" do
+      base = Path.join(System.tmp_dir!(), "raxol_cli_app_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+
+      name = "counter_#{System.unique_integer([:positive])}"
+      capture_io(fn -> assert File.cd!(base, fn -> New.run([name]) end) == 0 end)
+
+      app = Module.concat([Macro.camelize(name)])
+      assert GeneratedApp.compile!([Path.join([base, name, "lib", "#{name}.ex"])]) == [app]
+      assert GeneratedApp.render!(app, "Count: 0") =~ "+/- to change, q to quit"
+      assert GeneratedApp.render!(app, "Count: 1", keys: ["+", "+", "-"])
+    end
+
+    test "scaffolds a mix format-clean project" do
+      base = Path.join(System.tmp_dir!(), "raxol_cli_fmt_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+
+      name = "counter_#{System.unique_integer([:positive])}"
+      capture_io(fn -> assert File.cd!(base, fn -> New.run([name]) end) == 0 end)
+
+      GeneratedApp.assert_formatted!(Path.join(base, name))
     end
   end
 end

@@ -148,10 +148,17 @@ defmodule RaxolCli.MixProject do
   end
 
   # The self-update tests serve releases from the same loopback channel the
-  # root updater's own tests use, rather than a second copy of it. Mix takes
-  # an external path only as an absolute directory.
+  # root updater's own tests use, and `raxol new`'s output is compiled and
+  # rendered by the same check root's `mix raxol.new` tests use, rather than
+  # second copies of either. Mix takes an external path only as an absolute
+  # directory.
   defp elixirc_paths(:test),
-    do: ["lib", "test/support", Path.expand("../../test/support/updater", __DIR__)]
+    do: [
+      "lib",
+      "test/support",
+      Path.expand("../../test/support/updater", __DIR__),
+      Path.expand("../../test/support/generated_app", __DIR__)
+    ]
 
   defp elixirc_paths(_), do: ["lib"]
 
