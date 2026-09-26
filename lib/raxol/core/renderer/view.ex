@@ -25,7 +25,8 @@ defmodule Raxol.Core.Renderer.View do
     * `:type` - The type of view to create
     * `:position` - Position of the view {x, y}
     * `:z_index` - Z-index for layering
-    * `:size` - Size of the view {width, height}
+    * `:size` - Size of the view {width, height}; omitted, it fills the
+      space the layout gives it
     * `:style` - Style options for the view
     * `:fg` / `:bg` - Foreground / background color
     * `:border` - Border style
@@ -41,7 +42,7 @@ defmodule Raxol.Core.Renderer.View do
       type: type,
       position: {0, 0},
       z_index: 0,
-      size: {0, 0},
+      size: nil,
       style: %{},
       fg: nil,
       bg: nil,
@@ -241,9 +242,17 @@ defmodule Raxol.Core.Renderer.View do
   than a list; `nil` (an `if` without `else`) means no children. Every
   container macro and `promote_do_to_children/1` go through this so a
   one-child block renders its child.
+
+  A list block may nest lists, as in `[header, for(row <- rows, do: ...)]`
+  or a `case` whose branch is itself a list, and hold `nil`s from `if`s
+  without `else`. Nesting is flattened and `nil`s dropped: the layout
+  engine lays out elements, and a list in a child's place failed the whole
+  frame.
   """
   @spec children_from_block(term()) :: list()
-  def children_from_block(block), do: List.wrap(block)
+  def children_from_block(block) do
+    block |> List.wrap() |> List.flatten() |> Enum.reject(&is_nil/1)
+  end
 
   defmacro column(opts, do: block) do
     quote do
@@ -298,15 +307,35 @@ defmodule Raxol.Core.Renderer.View do
 
   defdelegate split_pane(opts \\ []), to: Raxol.UI.Layout.SplitPane, as: :new
 
-  @doc "Creates a button element."
-  def button(text, opts \\ []) do
-    Components.button(text, opts)
+  @doc """
+  Creates a button element.
+
+  Takes the label first, `button("Save", on_click: :save)`, or as an
+  option, `button(label: "Save", on_click: :save)`.
+  """
+  def button(text_or_opts, opts \\ [])
+
+  def button(opts, []) when is_list(opts) do
+    {label, opts} = Keyword.pop(opts, :label, "")
+    Components.button(label, opts)
   end
 
-  @doc "Creates a checkbox element."
-  def checkbox(label, opts \\ []) do
+  def button(text, opts), do: Components.button(text, opts)
+
+  @doc """
+  Creates a checkbox element.
+
+  Takes the label first, `checkbox("Accept terms", checked: true)`, or as an
+  option, `checkbox(label: "Accept terms", checked: true)`.
+  """
+  def checkbox(label_or_opts, opts \\ [])
+
+  def checkbox(opts, []) when is_list(opts) do
+    {label, opts} = Keyword.pop(opts, :label, "")
     Components.checkbox(label, opts)
   end
+
+  def checkbox(label, opts), do: Components.checkbox(label, opts)
 
   @doc "Creates a text input element."
   def text_input(opts \\ []) do
@@ -340,7 +369,11 @@ defmodule Raxol.Core.Renderer.View do
     LayoutHelpers.flex(constraints)
   end
 
-  @doc "Creates a shadow effect for a view."
+  @doc """
+  Draws its `:children` with a drop shadow.
+
+  See `Raxol.Core.Renderer.View.Components.shadow/1` for the options.
+  """
   def shadow(opts \\ []) do
     Components.shadow(opts)
   end
@@ -352,6 +385,7 @@ defmodule Raxol.Core.Renderer.View do
 
   # Delegate unique Components functions so View is the single complete DSL.
   defdelegate label(opts \\ []), to: Raxol.View.Components
+  defdelegate label(content, opts), to: Raxol.View.Components
   defdelegate input(opts \\ []), to: Raxol.View.Components
   defdelegate list(opts \\ []), to: Raxol.View.Components
   defdelegate spacer(opts \\ []), to: Raxol.View.Components

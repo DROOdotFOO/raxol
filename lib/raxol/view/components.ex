@@ -109,9 +109,16 @@ defmodule Raxol.View.Components do
 
   @doc """
   Creates a label component.
+
+  Takes the content first, `label("Name:", style: %{bold: true})`, or as
+  an option, `label(content: "Name:")`.
   """
-  @spec label(keyword() | map()) :: map()
-  def label(opts \\ []) do
+  @spec label(keyword() | map() | binary()) :: map()
+  def label(content_or_opts \\ [])
+
+  def label(content) when is_binary(content), do: label(content, [])
+
+  def label(opts) do
     opts = if is_list(opts), do: Map.new(opts), else: opts
 
     %{
@@ -124,8 +131,13 @@ defmodule Raxol.View.Components do
     }
   end
 
+  @spec label(binary(), keyword() | map()) :: map()
+  def label(content, opts) when is_binary(content) do
+    opts |> Map.new() |> Map.put(:content, content) |> label()
+  end
+
   @doc """
-  Creates a button component.
+  Creates a button component; `:content` is its label.
   """
   @spec button(keyword() | map()) :: map()
   def button(opts \\ []) do
@@ -141,7 +153,8 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates an input field component.
+  Creates an input field component: a single-line text input, laid out
+  like `text_input/1`.
   """
   @spec input(keyword() | map()) :: map()
   def input(opts \\ []) do
@@ -158,7 +171,12 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a list component.
+  Creates a list component: one row per item.
+
+  ## Options
+  - `:items` - Strings, `{label, value}` tuples or view elements
+  - `:selected` - Index of the item drawn in reverse video
+  - `:style`, `:id`
   """
   @spec list(keyword() | map()) :: map()
   def list(opts \\ []) do
@@ -253,7 +271,13 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a progress bar component.
+  Creates a progress bar component: a `width`-cell bar and a percentage.
+
+  ## Options
+  - `:value` / `:max` - Progress, as `value` out of `max` (default `0`/`100`)
+  - `:width` - Bar width in cells, not counting the percentage (default `20`)
+  - `:style` - Style of the bar and label (e.g. `%{fg: :green}`)
+  - `:id`
   """
   @spec progress(keyword() | map()) :: map()
   def progress(opts \\ []) do
@@ -264,6 +288,7 @@ defmodule Raxol.View.Components do
       value: Map.get(opts, :value, 0),
       max: Map.get(opts, :max, 100),
       style: Map.get(opts, :style, %{}),
+      width: Map.get(opts, :width, 20),
       id: Map.get(opts, :id)
     }
   end
@@ -305,7 +330,14 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a modal component.
+  Creates a modal component: a bordered, titled box around `:content`,
+  drawn where it sits in the layout, and only while `:visible` is true.
+
+  ## Options
+  - `:visible` - Draw the modal (default `false`)
+  - `:title` - Shown in the top border
+  - `:content` - A view element or a string
+  - `:style`, `:id`
   """
   @spec modal(keyword() | map()) :: map()
   def modal(opts \\ []) do
@@ -338,7 +370,14 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a select/dropdown component.
+  Creates a select/dropdown component, drawn closed: the selected option's
+  label, or the placeholder when nothing is selected.
+
+  ## Options
+  - `:options` - Strings or `{label, value}` tuples
+  - `:selected` - The selected option, its label or its value
+  - `:placeholder` - Shown when no option is selected (default `"Select..."`)
+  - `:style`, `:id`, `:on_change`
   """
   @spec select(keyword() | map()) :: map()
   def select(opts \\ []) do
@@ -373,7 +412,12 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a radio button group component.
+  Creates a radio button group component: one `( )`/`(o)` row per option.
+
+  ## Options
+  - `:options` - Strings or `{label, value}` tuples
+  - `:selected` - The selected option, its label or its value
+  - `:style`, `:id`, `:on_change`
   """
   @spec radio_group(keyword() | map()) :: map()
   def radio_group(opts \\ []) do
@@ -390,7 +434,8 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a textarea component.
+  Creates a textarea component: a bordered box `rows` lines tall showing
+  `value`, or `placeholder` while `value` is empty.
   """
   @spec textarea(keyword() | map()) :: map()
   def textarea(opts \\ []) do
@@ -408,7 +453,14 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a container component with optional scrolling.
+  Creates a container component that stacks its children.
+
+  ## Options
+  - `:children` - Child elements
+  - `:scrollable` - Clip the children to the container, with a scrollbar
+    when they overflow it; the container's size comes from `style` `:width`
+    and `:height`, and fills the space it is given without them
+  - `:style`, `:id`
   """
   @spec container(keyword() | map()) :: map()
   def container(opts \\ []) do
@@ -424,7 +476,13 @@ defmodule Raxol.View.Components do
   end
 
   @doc """
-  Creates a tabs component.
+  Creates a tabs component: a row of tab labels with the active one in
+  reverse video.
+
+  ## Options
+  - `:tabs` - Tab labels (strings, or maps with a `:label`)
+  - `:active` - Index of the active tab (default `0`)
+  - `:style`, `:id`, `:on_change`
   """
   @spec tabs(keyword() | map()) :: map()
   def tabs(opts \\ []) do
@@ -573,6 +631,8 @@ defmodule Raxol.View.Components do
       |> Map.put(:series, series)
       |> Map.put(:show_axes, false)
       |> Map.put(:show_legend, false)
+      |> Map.put_new(:width, 20)
+      |> Map.put_new(:height, 3)
 
     render_chart(:line, chart_opts)
   end

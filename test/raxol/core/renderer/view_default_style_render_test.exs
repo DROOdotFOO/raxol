@@ -141,8 +141,8 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
                screen_lines(:panel_function)
     end
 
-    test "Raxol.View.Elements do block with options renders its child" do
-      assert ["┌──────────┐", "│          │", "│ x        │" | _] =
+    test "Raxol.View.Elements do block with options renders its child and title" do
+      assert ["┌─T────────┐", "│          │", "│ x        │" | _] =
                screen_lines(:elements_panel_opts)
     end
   end
