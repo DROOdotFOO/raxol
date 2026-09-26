@@ -37,7 +37,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
   The gate enforces the origin-pull solver pin by default: the pull recipient
   (`to` for ERC-3009, `spender` for Permit2) must equal the canonical Riddler
-  solver `0x97D447561fDe10E959E782a29411D8F89586d80b`, so a forged or MITM'd
+  solver `0x8d7d8AcfC25E999273394F7Ab44C239806724e2B`, so a forged or MITM'd
   quote that retargets the pull aborts before any signature. `XOCHI_LIVE_SOLVER`
   overrides the pinned address; `XOCHI_LIVE_SOLVER_PIN=false` disables the pin
   while debugging. The pin is scoped to this module.
@@ -84,9 +84,9 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
     alias Raxol.Payments.Xochi.Schemas.QuoteRequest
 
-    # Riddler's universal solver (HD index-0), the address it serves as the
-    # origin-pull `to`/`spender`. The default pin; rotate via XOCHI_LIVE_SOLVER.
-    @canonical_solver "0x97D447561fDe10E959E782a29411D8F89586d80b"
+    # Riddler's universal solver (rotated 2026-08-19), the address it serves as
+    # the origin-pull `to`/`spender`. The default pin; rotate via XOCHI_LIVE_SOLVER.
+    @canonical_solver "0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"
 
     defmodule LiveWallet do
       @moduledoc false

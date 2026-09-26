@@ -106,7 +106,7 @@
 #     ./scripts/run_live_gates.sh --asset USDG --route xochi,acp --dry-run
 set -euo pipefail
 
-CANONICAL_SOLVER="0x97D447561fDe10E959E782a29411D8F89586d80b"
+CANONICAL_SOLVER="0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PAYMENTS_DIR="$REPO_ROOT/packages/raxol_payments"

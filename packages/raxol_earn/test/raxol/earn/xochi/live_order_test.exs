@@ -57,7 +57,7 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     alias Raxol.Payments.Xochi.Schemas.QuoteRequest
 
     # Riddler's universal solver (HD index-0); the pinned origin-pull recipient.
-    @canonical_solver "0x97D447561fDe10E959E782a29411D8F89586d80b"
+    @canonical_solver "0x8d7d8AcfC25E999273394F7Ab44C239806724e2B"
     # The six settleable EVM chains. Robinhood Chain (4663) has no USDC, only
     # USDG, so a stablecoin corridor touching it is cross-asset (USDG on the
     # Robinhood leg); see leg_symbol/2. USDG pulls via Permit2, never ERC-3009.
