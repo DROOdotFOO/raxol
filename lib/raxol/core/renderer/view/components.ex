@@ -98,18 +98,23 @@ defmodule Raxol.Core.Renderer.View.Components do
   end
 
   @doc """
-  Creates a shadow effect for a view.
+  Draws `:children` with a drop shadow: a block of `:color` the size of the
+  children, offset by `:offset` and drawn beneath them.
 
   ## Options
-    * `:offset` - Shadow offset as a string or tuple {x, y}
+    * `:children` - The views that cast the shadow
+    * `:offset` - Shadow offset as a string or tuple {x, y} (default {1, 1})
+    * `:color` - Shadow color (default :black)
     * `:blur` - Shadow blur radius
-    * `:color` - Shadow color
     * `:opacity` - Shadow opacity (0.0 to 1.0)
+
+  A terminal cell is either shaded or not, so `:blur` and `:opacity` are
+  kept on the node but do not change what is drawn.
 
   ## Examples
 
-      Components.shadow(offset: "2px 2px", blur: 4, color: :black)
-      Components.shadow(offset: {1, 1}, color: :gray, opacity: 0.5)
+      Components.shadow(color: :blue, children: [View.box(border: :single)])
+      Components.shadow(offset: "2px 2px", blur: 4, color: :black, children: [card])
   """
   def shadow(opts \\ []) do
     offset = parse_offset(Keyword.get(opts, :offset, {1, 1}))
@@ -119,6 +124,7 @@ defmodule Raxol.Core.Renderer.View.Components do
 
     %{
       type: :shadow,
+      children: Keyword.get(opts, :children, []),
       offset: offset,
       blur: blur,
       color: color,

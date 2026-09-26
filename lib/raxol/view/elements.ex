@@ -57,6 +57,7 @@ defmodule Raxol.View.Elements do
   def text_input(opts \\ []), do: View.text_input(opts)
   def table(opts \\ []), do: View.table(opts)
   def label(opts \\ []), do: View.label(opts)
+  def label(content, opts), do: View.label(content, opts)
   def panel(opts \\ []), do: View.panel(opts)
   def border(view, opts \\ []), do: View.border(view, opts)
   def scroll(view, opts \\ []), do: View.scroll(view, opts)

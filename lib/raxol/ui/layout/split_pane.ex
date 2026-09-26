@@ -228,11 +228,14 @@ defmodule Raxol.UI.Layout.SplitPane do
   defp build_divider(:horizontal, offset, index, space, id) do
     x = space.x + offset
 
+    # Side-by-side panes are split by a column: one "|" per row.
     %{
       type: :text,
       x: x,
       y: space.y,
-      text: String.duplicate("|", space.height),
+      width: @divider_thickness,
+      height: space.height,
+      text: Enum.map_join(1..space.height//1, "\n", fn _row -> "|" end),
       style: %{},
       attrs: %{
         component_type: :split_divider,

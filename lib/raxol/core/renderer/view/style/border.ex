@@ -10,7 +10,10 @@ defmodule Raxol.Core.Renderer.View.Style.Border do
   Creates a border around a view.
 
   ## Options
-    * `:style` - Border style (:single, :double, :rounded, :bold, :dashed)
+    * `:style` - Border style (:single, :double, :rounded, :bold, :dashed,
+      :block, :simple); a style with no glyph set of its own draws as
+      :single
+    * `:padding` - Space between the border and the view (default 0)
     * `:title` - Optional title to display in the border
     * `:fg` - Foreground color
     * `:bg` - Background color
@@ -23,8 +26,17 @@ defmodule Raxol.Core.Renderer.View.Style.Border do
   def wrap(view, opts \\ []) do
     border_type = Keyword.get(opts, :border, Keyword.get(opts, :style, :single))
 
-    # Validate border style
-    valid_styles = [:single, :double, :rounded, :bold, :dashed, :none]
+    # `Borders.block_border/2` and `simple_border/2` pass :block and :simple
+    valid_styles = [
+      :single,
+      :double,
+      :rounded,
+      :bold,
+      :dashed,
+      :block,
+      :simple,
+      :none
+    ]
 
     case border_type in valid_styles do
       false ->
