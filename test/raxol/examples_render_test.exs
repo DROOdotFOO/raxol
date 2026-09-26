@@ -25,16 +25,6 @@ defmodule Raxol.ExamplesRenderTest do
             )
             |> Enum.sort()
 
-  # Examples whose first frame is blank for a cause outside the view DSL,
-  # with that cause. An entry fails once its example draws, so it is
-  # removed rather than left to hide a later regression.
-  @known_blank %{
-    "examples/components/accessibility/accessibility_demo.ex" =>
-      "view/1 reads state.form_data, which the demo's struct does not " <>
-        "define, and its root node's type, Raxol.UI.Components.AppContainer, " <>
-        "names no module or layout type"
-  }
-
   setup do
     case Process.whereis(Headless) do
       nil -> start_supervised!({Headless, [name: Headless]})
@@ -83,33 +73,37 @@ defmodule Raxol.ExamplesRenderTest do
     end
   end
 
-  test "the examples are found, and every known-blank entry is one of them" do
+  test "the examples are found" do
     assert length(@examples) > 20
-    assert Map.keys(@known_blank) -- @examples == []
   end
 
   for path <- @examples do
     @path path
     test "#{path} draws its first frame" do
-      frame = first_frame(@path)
+      {frame, compile_output} = first_frame(@path)
 
-      case Map.fetch(@known_blank, @path) do
-        {:ok, cause} ->
-          assert frame == "",
-                 "#{@path} draws now; remove it from @known_blank (#{cause})"
+      assert undefined_calls(compile_output) == [],
+             "#{@path} calls a function or module that does not exist"
 
-        :error ->
-          assert frame != "", "#{@path} rendered a blank first frame"
-      end
+      assert frame != "", "#{@path} rendered a blank first frame"
     end
   end
 
-  # The examples' own compiler warnings are not this test's subject, and
-  # would bury its output; they go to stderr, so capture it.
+  # Compiling an example warns, but does not fail, when it calls something
+  # that does not exist; the call then raises only when that path runs,
+  # which a first frame may never reach.
+  defp undefined_calls(compile_output) do
+    compile_output
+    |> String.split("\n")
+    |> Enum.filter(&(&1 =~ ~r/is undefined or private|is undefined \(module/))
+  end
+
+  # The examples' other compiler warnings are not this test's subject, and
+  # would bury its output; they go to stderr, so capture it and hand it back.
   defp first_frame(path) do
     id = :"example_#{System.unique_integer([:positive])}"
 
-    {result, _stderr} =
+    {result, compile_output} =
       with_io(:stderr, fn ->
         Headless.start(path,
           id: id,
@@ -125,7 +119,7 @@ defmodule Raxol.ExamplesRenderTest do
       {{:ok, screen}, _stderr} =
         with_io(:stderr, fn -> Headless.screenshot(id) end)
 
-      String.trim(screen)
+      {String.trim(screen), compile_output}
     after
       Headless.stop(id)
     end
