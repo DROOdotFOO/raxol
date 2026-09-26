@@ -182,6 +182,58 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
     end
   end
 
+  # SilencingDriver's Logger contract, then a crash at the end of its
+  # cleanup, once the level is back.
+  defmodule SilentCrashingDriver do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      recorder = Keyword.fetch!(opts, :recorder)
+      GenServer.start_link(__MODULE__, recorder)
+    end
+
+    @impl true
+    def init(recorder) do
+      level = Logger.level()
+      Logger.configure(level: :none)
+      {:ok, {recorder, level}}
+    end
+
+    @impl true
+    def terminate(_reason, {recorder, level}) do
+      Logger.configure(level: level)
+      send(recorder, :driver_terminated)
+      raise "driver cleanup crashed"
+    end
+  end
+
+  # A driver whose cleanup never returns.
+  defmodule HangingDriver do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      recorder = Keyword.fetch!(opts, :recorder)
+      GenServer.start_link(__MODULE__, recorder)
+    end
+
+    @impl true
+    def init(recorder) do
+      send(recorder, {:driver_started, self()})
+      {:ok, recorder}
+    end
+
+    @impl true
+    def terminate(_reason, recorder) do
+      send(recorder, :driver_terminated)
+
+      receive do
+        :never_sent -> :ok
+      end
+    end
+  end
+
   setup_all do
     case start_supervised(Raxol.DynamicSupervisor) do
       {:ok, _pid} -> :ok
@@ -487,12 +539,13 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
   describe "teardown on a quit (#1128)" do
     # GenServer.stop/3 exits rather than raises when the process it stops
     # crashes in terminate/2. Shutdown.stop_process/2 only rescued, so the
-    # exit ended the Lifecycle's teardown at the crashing child, and the
-    # Lifecycle died with it, taking down the process linked to it by
-    # start_link: here, this test, which deliberately stays linked.
+    # exit ended the Lifecycle's teardown at the crashing child. The
+    # teardown now goes on, and the quit it was part of does not end
+    # :normal: the process that started the app (`mix run`) exits non-zero.
     @tag :capture_log
-    test "a child crashing in terminate/2 neither stops the teardown nor kills the caller" do
+    test "a child crashing in terminate/2 does not stop the teardown, and the quit is not :normal" do
       {:ok, pid} = start_lifecycle(self(), driver_module: CrashingDriver)
+      Process.unlink(pid)
       ref = Process.monitor(pid)
 
       Lifecycle.stop(pid)
@@ -502,7 +555,56 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
       assert next_teardown_event() == :engine,
              "the teardown must go on past a child that crashed in terminate/2"
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 10_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 10_000
+      assert reason != :normal
+    end
+
+    # On a TTY the teardown runs with the Lifecycle's logging dropped, so a
+    # child that failed to stop left no trace at all, and the Lifecycle still
+    # exited :normal.
+    test "a child failing to stop on a TTY is reported once the terminal is restored" do
+      found = Logger.level()
+      on_exit(fn -> Logger.configure(level: found) end)
+
+      {:ok, pid} = start_lifecycle(self(), driver_module: SilentCrashingDriver)
+      Process.unlink(pid)
+      ref = Process.monitor(pid)
+
+      {reason, teardown_log} =
+        with_log(fn ->
+          Lifecycle.stop(pid)
+
+          assert next_teardown_event() == :driver
+          assert next_teardown_event() == :engine
+          assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 10_000
+          reason
+        end)
+
+      assert reason != :normal
+      assert teardown_log =~ "Terminal Driver"
+      assert teardown_log =~ "driver cleanup crashed"
+      assert Logger.level() == found
+    end
+
+    # GenServer.stop/3 gives up after its timeout without killing the
+    # target. The Lifecycle then exited :normal, which does not take linked
+    # processes down, so the Driver outlived it, possibly still holding the
+    # terminal.
+    @tag :capture_log
+    test "a child overrunning the stop timeout is killed, not left behind" do
+      {:ok, pid} = start_lifecycle(self(), driver_module: HangingDriver)
+      Process.unlink(pid)
+      ref = Process.monitor(pid)
+      assert_receive {:driver_started, driver}
+      driver_ref = Process.monitor(driver)
+
+      Lifecycle.stop(pid)
+
+      assert next_teardown_event() == :driver
+      assert next_teardown_event() == :engine
+      assert_receive {:DOWN, ^driver_ref, :process, ^driver, _reason}, 10_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 10_000
+      assert reason != :normal
     end
 
     # On a TTY the Driver turns Logger off for the session and its cleanup,

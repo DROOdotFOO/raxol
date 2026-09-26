@@ -32,6 +32,12 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   `GenServer.stop` over the surviving children) -- teardown-on-crash is
   intentional, not a correctness break.
 
+  A child that fails to stop (it crashes in its own `terminate/2`, or
+  overruns the stop timeout and is killed) does not stop the teardown. The
+  failures are logged once the teardown is done, and a quit that would have
+  ended `:normal` ends `{:shutdown, {:teardown_failed, failures}}` instead,
+  so a `start_link` caller such as a `mix run` script exits non-zero.
+
   ## Sub-modules
   - `Lifecycle.Initializer` -- component startup sequence
   - `Lifecycle.Shutdown`    -- stop_process, cleanup, registry management
@@ -437,15 +443,47 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   @impl GenServer
   def terminate(reason, state) do
     maybe_leave_alternate_screen(state)
+    children = dependent_processes(state)
+    child_pids = for {pid, _label} <- children, do: pid
 
     # Logger at :none means the session ran silent (the Terminal Driver does
-    # that on a TTY). Keep the whole teardown silent too: the Driver's cleanup
-    # restores the level first thing, and anything logged after it would
-    # print on the terminal it has just restored.
-    Shutdown.quietly(Logger.level() == :none, fn ->
-      stop_dependent_processes(state)
-      terminate_manager(reason, state)
-    end)
+    # that on a TTY). Keep the teardown's own logging silent too: the
+    # Driver's cleanup restores the level first thing, and anything logged
+    # after it would print on the terminal it has just restored.
+    failures =
+      Shutdown.quietly(Logger.level() == :none, child_pids, fn ->
+        failures = stop_dependent_processes(children)
+        terminate_manager(reason, state)
+        failures
+      end)
+
+    # Only now, with the terminal restored and logging back on. A quit whose
+    # teardown failed does not exit :normal, so the process that started the
+    # app (`mix run`) exits non-zero.
+    Shutdown.report_stop_failures(failures)
+
+    if failures != [] and reason == :normal do
+      exit({:shutdown, {:teardown_failed, failures}})
+    end
+
+    :ok
+  end
+
+  # Every linked child Lifecycle started that is still set, in the order
+  # stop_dependent_processes/1 stops them.
+  defp dependent_processes(state) do
+    Enum.filter(
+      [
+        {state.driver_pid, "Terminal Driver"},
+        {state.rendering_engine_pid, "Rendering Engine"},
+        {state.cycle_profiler_pid, "CycleProfiler"},
+        {state.time_travel_pid, "TimeTravel"},
+        {state.code_reloader_pid, "CodeReloader"},
+        {state.dispatcher_pid, "Dispatcher"},
+        {state.plugin_manager, "PluginManager"}
+      ],
+      fn {pid, _label} -> is_pid(pid) end
+    )
   end
 
   # Stops every linked child Lifecycle started, in an order that lets the
@@ -460,16 +498,13 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   # relying solely on terminate_manager's cleanup so its stop is part of the
   # one deterministic ordering; terminate_manager still runs afterward and
   # no-ops on the already-stopped (or shared/adopted) manager. Every stop
-  # is a no-op on a nil or already-dead pid (see Shutdown.stop_process/2),
-  # so a crash that already took a child down is handled safely.
-  defp stop_dependent_processes(state) do
-    Shutdown.stop_process(state.driver_pid, "Terminal Driver")
-    Shutdown.stop_process(state.rendering_engine_pid, "Rendering Engine")
-    Shutdown.stop_process(state.cycle_profiler_pid, "CycleProfiler")
-    Shutdown.stop_process(state.time_travel_pid, "TimeTravel")
-    Shutdown.stop_process(state.code_reloader_pid, "CodeReloader")
-    Shutdown.stop_process(state.dispatcher_pid, "Dispatcher")
-    Shutdown.stop_process(state.plugin_manager, "PluginManager")
+  # is a no-op on an already-dead pid (see Shutdown.stop_process/2), so a
+  # crash that already took a child down is handled safely. Returns the
+  # children that did not stop cleanly, as `{label, pid, reason}`.
+  defp stop_dependent_processes(children) do
+    for {pid, label} <- children,
+        {:error, reason} <- [Shutdown.stop_process(pid, label)],
+        do: {label, pid, reason}
   end
 
   defp terminate_manager(reason, state) do
