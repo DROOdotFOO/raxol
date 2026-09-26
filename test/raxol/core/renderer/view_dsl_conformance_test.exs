@@ -893,7 +893,7 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Core.Renderer.View
-  alias Raxol.Core.Renderer.ViewDslConformanceTest.{ProbeWidget, Rows}
+  alias Raxol.Core.Renderer.ViewDslConformanceTest.Rows
   alias Raxol.Headless
 
   @dsl_modules [View, Raxol.View.Elements, Raxol.View.Components]
@@ -1322,7 +1322,6 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
       %{rows: buffer.cells, lines: Enum.map(buffer.cells, &row_text/1)}
     after
       Headless.stop(id)
-      stop_probe_widgets()
     end
   end
 
@@ -1330,24 +1329,6 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
 
   defp cell_char(%{wide_placeholder: true}), do: ""
   defp cell_char(%{char: char}), do: char
-
-  # The rendering engine starts a component process for a
-  # `process_component` node under `Raxol.DynamicSupervisor`; stop the ones
-  # this table's widget started so they do not outlive the row.
-  defp stop_probe_widgets do
-    for {_, pid, _, _} <-
-          DynamicSupervisor.which_children(Raxol.DynamicSupervisor),
-        is_pid(pid),
-        probe_widget?(pid) do
-      DynamicSupervisor.terminate_child(Raxol.DynamicSupervisor, pid)
-    end
-  end
-
-  defp probe_widget?(pid) do
-    match?(%{module: ProbeWidget}, :sys.get_state(pid, 1_000))
-  catch
-    :exit, _ -> false
-  end
 
   # --- checks --------------------------------------------------------------
 
