@@ -24,6 +24,8 @@ defmodule Raxol.UI.StyleProcessor do
       Raxol.UI.StyleProcessor.flatten_merged_style(parent, child, theme, cache: true)
   """
 
+  alias Raxol.UI.Layout.StyleInheritance
+
   @doc """
   Flattens and merges styles from parent style and child element with proper theme resolution.
 
@@ -76,7 +78,9 @@ defmodule Raxol.UI.StyleProcessor do
   # Priority (highest wins): child top-level attrs > child :style map > parent inherited
   defp flatten_merged_style_direct(parent_style, child_element, theme) do
     parent_style_map = extract_parent_style(parent_style)
-    child_style_map = Map.get(child_element, :style, %{})
+
+    child_style_map =
+      StyleInheritance.ensure_style_map(Map.get(child_element, :style))
 
     inherited = Map.take(parent_style_map, @inheritable_properties)
     merged_style_map = Map.merge(inherited, child_style_map)
@@ -91,9 +95,11 @@ defmodule Raxol.UI.StyleProcessor do
     promote_colors(all_attrs, theme)
   end
 
-  defp extract_parent_style(%{style: style_map} = parent)
-       when is_map(style_map) do
-    Map.merge(style_map, Map.take(parent, [:foreground, :background, :fg, :bg]))
+  defp extract_parent_style(%{style: style} = parent)
+       when is_map(style) or is_list(style) do
+    style
+    |> StyleInheritance.ensure_style_map()
+    |> Map.merge(Map.take(parent, [:foreground, :background, :fg, :bg]))
   end
 
   defp extract_parent_style(style_map) when is_map(style_map), do: style_map
@@ -162,8 +168,11 @@ defmodule Raxol.UI.StyleProcessor do
   # Direct implementation (original logic)
   defp merge_styles_for_inheritance_direct(parent_style, child_style) do
     # Extract style maps from both parent and child
-    parent_style_map = Map.get(parent_style, :style, %{})
-    child_style_map = Map.get(child_style, :style, %{})
+    parent_style_map =
+      StyleInheritance.ensure_style_map(Map.get(parent_style, :style))
+
+    child_style_map =
+      StyleInheritance.ensure_style_map(Map.get(child_style, :style))
 
     # Merge the style maps (child overrides parent)
     merged_style_map = Map.merge(parent_style_map, child_style_map)
