@@ -161,4 +161,30 @@ defmodule Raxol.Core.Renderer.ViewSingleChildTest do
       assert rendered_text(tree) == ["bare child"]
     end
   end
+
+  describe "an application with its own children_from_block/1" do
+    test "compiles, and its container blocks still render their child" do
+      [{module, _}] =
+        Code.compile_string("""
+        defmodule Raxol.Core.Renderer.ViewSingleChildTest.LocalHelperApp do
+          use Raxol.Core.Runtime.Application
+
+          def view(_model) do
+            column style: %{gap: 1} do
+              text(children_from_block("app helper"))
+            end
+          end
+
+          defp children_from_block(label), do: label
+        end
+        """)
+
+      on_exit(fn ->
+        :code.purge(module)
+        :code.delete(module)
+      end)
+
+      assert rendered_text(module.view(%{})) == ["app helper"]
+    end
+  end
 end

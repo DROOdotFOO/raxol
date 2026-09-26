@@ -146,7 +146,7 @@ defmodule Raxol.Core.Runtime.Application do
     quote do
       @behaviour Raxol.Core.Runtime.Application
 
-      import Raxol.Core.Renderer.View, except: [view: 1]
+      import Raxol.Core.Renderer.View, except: [view: 1, children_from_block: 1]
 
       import Raxol.Core.Focus,
         only: [setup_focus: 1, focused?: 1, current_focus: 0]

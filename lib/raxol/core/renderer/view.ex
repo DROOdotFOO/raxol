@@ -234,14 +234,15 @@ defmodule Raxol.Core.Renderer.View do
 
   def promote_do_to_children(opts), do: opts
 
-  @doc """
-  Turns the value of a container's `do` block into its children list.
-
-  A block with a single expression evaluates to that one element rather
-  than a list; `nil` (an `if` without `else`) means no children. Every
-  container macro and `promote_do_to_children/1` go through this so a
-  one-child block renders its child.
-  """
+  # Turns the value of a container's `do` block into its children list.
+  #
+  # A block with a single expression evaluates to that one element rather
+  # than a list; `nil` (an `if` without `else`) means no children. Every
+  # container macro and `promote_do_to_children/1` go through this so a
+  # one-child block renders its child. Macro plumbing: the container macros
+  # call it fully qualified, and `use Raxol.Core.Runtime.Application` /
+  # `use Raxol.View` do not import it, so an app may define its own.
+  @doc false
   @spec children_from_block(term()) :: list()
   def children_from_block(block), do: List.wrap(block)
 

@@ -36,7 +36,7 @@ defmodule Raxol.View do
 
   defmacro __using__(_opts) do
     quote do
-      import Raxol.Core.Renderer.View, except: [view: 1]
+      import Raxol.Core.Renderer.View, except: [view: 1, children_from_block: 1]
     end
   end
 end
