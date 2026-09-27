@@ -1,11 +1,14 @@
 defmodule Raxol.Payments.Prices.CoinGecko do
   @moduledoc """
-  A `price_fn` for native gas tokens, backed by the public CoinGecko REST API.
+  A `price_fn` for native gas tokens and the non-dollar settlement assets it can
+  price, backed by the public CoinGecko REST API.
 
-  Fetches ETH and POL (Polygon) USD prices once when the fn is built and closes
-  over them, so aggregation does not hit the network per lookup. Any failure (or a
-  missing symbol) yields `nil` for that symbol, so `SettlementLedger` aggregations
-  degrade to raw fee/gas totals rather than crashing.
+  Fetches ETH, POL (Polygon), EURe (Monerium EUR e-money, quoted in USD, so about
+  1.1x a dollar rather than par), and RAXOL (Robinhood Chain) once when the fn is
+  built and closes over them, so aggregation does not hit the network per lookup.
+  Any failure (or a missing symbol) yields `nil` for that symbol, so
+  `SettlementLedger` aggregations degrade to raw fee/gas totals rather than
+  crashing -- a leg CoinGecko cannot price is reported unpriced, never at par.
 
       price_fn = Raxol.Payments.Prices.CoinGecko.price_fn()
       Raxol.Payments.SettlementLedger.report(ledger, price_fn: price_fn)
@@ -13,8 +16,16 @@ defmodule Raxol.Payments.Prices.CoinGecko do
 
   @default_url "https://api.coingecko.com/api/v3/simple/price"
 
-  # native symbol -> CoinGecko coin id
-  @ids %{"ETH" => "ethereum", "POL" => "polygon-ecosystem-token"}
+  # symbol -> CoinGecko coin id. Each non-native id is the coin CoinGecko maps
+  # the canonical contract to: "monerium-eur-money-2" carries the current EURe
+  # contracts (Arbitrum 0x0c06...44f8; "monerium-eur-money" is the retired v1
+  # set), and "raxol" carries Robinhood Chain 0xf447...53af.
+  @ids %{
+    "ETH" => "ethereum",
+    "POL" => "polygon-ecosystem-token",
+    "EURe" => "monerium-eur-money-2",
+    "RAXOL" => "raxol"
+  }
 
   @doc """
   Build a `(symbol -> Decimal.t() | nil)` after one REST fetch.

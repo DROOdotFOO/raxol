@@ -4,10 +4,11 @@ defmodule Raxol.Payments.AssetsTest do
   alias Raxol.Payments.Assets
 
   # The Riddler solver fills USDC, USDT, and WETH on the five original EVM chains,
-  # plus USDG and WETH on Robinhood Chain (4663). Each must be a registered Assets
-  # entry: an unregistered token falls back to 6 decimals, wrong for an 18-decimal
-  # token like WETH. This fixture pins the set so a dropped or wrong-decimal entry
-  # fails here. Addresses mirror Riddler's config/token_registry.ex (lowercased).
+  # plus EURe on Arbitrum and USDG, WETH and RAXOL on Robinhood Chain (4663). Each
+  # must be a registered Assets entry: an unregistered token falls back to 6
+  # decimals, wrong for an 18-decimal token like WETH. This fixture pins the set
+  # so a dropped or wrong-decimal entry fails here. Addresses mirror Riddler's
+  # config/token_registry.ex (lowercased).
   @solver_fillable [
     # Ethereum mainnet
     {1, "USDC", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", 6},
@@ -29,9 +30,12 @@ defmodule Raxol.Payments.AssetsTest do
     {42_161, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", 6},
     {42_161, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", 6},
     {42_161, "WETH", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", 18},
+    # "EURe" is the exact mixed-case wire symbol; address/2 must still resolve it.
+    {42_161, "EURe", "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8", 18},
     # Robinhood Chain (USDG is the native stablecoin; WETH also canonical)
     {4663, "USDG", "0x5fc5360d0400a0fd4f2af552add042d716f1d168", 6},
-    {4663, "WETH", "0x0bd7d308f8e1639fab988df18a8011f41eacad73", 18}
+    {4663, "WETH", "0x0bd7d308f8e1639fab988df18a8011f41eacad73", 18},
+    {4663, "RAXOL", "0xf44702b17d9abd53815f703e772f35e9c71a53af", 18}
   ]
 
   describe "solver-fillable token parity" do
@@ -72,7 +76,7 @@ defmodule Raxol.Payments.AssetsTest do
     end
 
     test "symbols/0 is exactly the solver-fillable set" do
-      assert Enum.sort(Assets.symbols()) == ["USDC", "USDG", "USDT", "WETH"]
+      assert Enum.sort(Assets.symbols()) == ["EURe", "RAXOL", "USDC", "USDG", "USDT", "WETH"]
     end
 
     test "symbol_for/2 resolves every fillable (chain, address) back to its symbol" do
