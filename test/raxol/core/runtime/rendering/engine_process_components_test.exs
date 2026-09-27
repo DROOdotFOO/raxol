@@ -26,12 +26,28 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
     def update(:increment, state), do: %{state | count: state.count + 1}
     def update(:break, state), do: %{state | broken: true}
-    def update({:update_props, props}, state), do: %{state | label: props.label}
+    def update_props(props, state), do: %{state | label: props.label}
 
     def render(%{broken: true}, _context), do: raise("render failed")
 
     def render(state, _context),
       do: %{type: :text, content: "#{state.label}=#{state.count}", style: %{}}
+  end
+
+  # Like the FileListWidget example: update/2 handles its own messages only,
+  # and it has no update_props/2.
+  defmodule Refresher do
+    @moduledoc false
+
+    def init(%{test: test, label: label}) do
+      send(test, {:initialised, label, self()})
+      {:ok, %{label: label, count: 0}}
+    end
+
+    def update(:increment, state), do: %{state | count: state.count + 1}
+
+    def render(state, _context),
+      do: %{type: :text, content: "#{state.label}~#{state.count}", style: %{}}
   end
 
   defmodule ShowApp do
@@ -99,7 +115,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
       end)
     end
 
-    test "passes changed props to its running process" do
+    test "passes changed props to update_props/2, keeping the rest of its state" do
       with_session(counter("a"), fn id ->
         frame(id)
         assert_received {:started, "a", pid}
@@ -109,6 +125,24 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
         assert frame(id) =~ "b=1"
         refute_received {:started, _, _}
+      end)
+    end
+
+    test "without update_props/2 re-initialises from changed props, in its process" do
+      refresher = &View.process_component(Refresher, %{test: self(), label: &1})
+
+      with_session(refresher.("a"), fn id ->
+        frame(id)
+        assert_received {:initialised, "a", pid}
+        :ok = ProcessComponent.send_update(pid, :increment)
+        assert frame(id) =~ "a~1"
+
+        :ok = Headless.send_message(id, {:show, refresher.("b")})
+
+        screen = frame(id)
+        assert screen =~ "b~0"
+        refute screen =~ "crashed"
+        assert_received {:initialised, "b", ^pid}
       end)
     end
 

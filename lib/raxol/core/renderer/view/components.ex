@@ -200,12 +200,13 @@ defmodule Raxol.Core.Renderer.View.Components do
   process, and the component's state, last across frames while the node stays
   at the same place in the view (or keeps the same `:id` key, if you put one
   on the node), and stop when the node leaves the view. Changed props reach
-  the running component as `update({:update_props, props}, state)`. If it
+  the running component as `update_props(props, state)` if it exports one;
+  otherwise its state is re-initialised from them with `init/1`. If it
   crashes, the frame draws a placeholder in its place and the next frame
   restarts it with fresh state from `init/1` -- the rest of the app continues.
 
   ## Parameters
-    * `module` - Component module implementing `init/1`, `render/2`, and optionally `update/2`
+    * `module` - Component module implementing `init/1`, `render/2`, and optionally `update/2` and `update_props/2`
     * `props` - Initial properties passed to `init/1`
   """
   def process_component(module, props \\ %{}) do

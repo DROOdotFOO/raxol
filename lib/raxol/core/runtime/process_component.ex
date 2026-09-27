@@ -18,9 +18,11 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
   Components used with ProcessComponent must implement:
   - `init/1` - receives props, returns initial state
   - `render/2` - receives state and context, returns element tree
-  - `update/2` (optional) - receives message and state, returns new state.
-    When the node's props change, the running component receives
-    `{:update_props, new_props}` here; its state is otherwise kept.
+  - `update/2` (optional) - receives message and state, returns new state
+  - `update_props/2` (optional) - receives the node's changed props and the
+    state, returns new state. A component that exports it keeps its state
+    across props changes; one that doesn't is re-initialised from the new
+    props through `init/1` (and `mount/1`) in the same process.
 
   Use the `process_component/2` View DSL helper to embed process components:
 
@@ -50,8 +52,10 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
   end
 
   @doc """
-  Replaces the component's props, keeping its state. The component receives
-  `{:update_props, props}` through `update/2`, if it exports one.
+  Replaces the component's props in its running process. A component that
+  exports `update_props/2` gets `update_props(props, state)` and keeps the
+  state it returns; any other is re-initialised from `props` through `init/1`
+  (and `mount/1`, if exported).
   """
   def update_props(pid, props) do
     GenServer.call(pid, {:update_props, props})
@@ -91,7 +95,7 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
 
   @impl true
   def handle_call({:update_props, props}, _from, %__MODULE__{} = pc) do
-    new_state = dispatch_update(pc.module, {:update_props, props}, pc.state)
+    new_state = dispatch_update_props(pc.module, props, pc.state)
     {:reply, :ok, %{pc | props: props, state: new_state}}
   end
 
@@ -135,6 +139,13 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
     case function_exported?(module, :update, 2) do
       true -> module.update(message, state)
       false -> state
+    end
+  end
+
+  defp dispatch_update_props(module, props, state) do
+    case function_exported?(module, :update_props, 2) do
+      true -> module.update_props(props, state)
+      false -> maybe_mount(module, initialize_component(module, props))
     end
   end
 
