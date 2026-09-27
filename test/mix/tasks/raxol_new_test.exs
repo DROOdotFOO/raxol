@@ -181,7 +181,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
   test "--sup --ssh serves the app over SSH when its application starts",
        %{tmp: tmp} do
     flags = ["--template", "counter", "--sup", "--ssh"]
-    {project, _module} = generate(tmp, flags)
+    {project, module} = generate(tmp, flags)
     GeneratedApp.compile!(lib_files(project))
 
     sup = GeneratedApp.start_application!(project)
@@ -190,6 +190,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
              Supervisor.which_children(sup)
 
     assert Raxol.SSH.Server.port(server) > 0
+    assert_serves_tea_app(server, Module.concat(module, App))
 
     # `mix test` keeps the server's host key in the project, not in the
     # developer's ~/.raxol/ssh_keys.
@@ -228,6 +229,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
     on_exit(fn -> stop(server) end)
 
     assert Raxol.SSH.Server.port(server) > 0
+    assert_serves_tea_app(server, module)
   end
 
   # The module name goes into every generated file, which the generator
@@ -249,6 +251,30 @@ defmodule Mix.Tasks.Raxol.NewTest do
     end
 
     refute File.exists?(project)
+  end
+
+  # `--module Raxol --sup` would redefine `Raxol` and `Raxol.Application`, and
+  # `--module Application` Elixir's `Application`. `Elixir` is the prefix every
+  # alias carries, not a module a project can define.
+  for module <- ["Raxol", "Application", "Elixir"] do
+    test "--module #{module} fails before creating anything", %{tmp: tmp} do
+      project = Path.join(tmp, "gen_module")
+
+      args = [
+        project,
+        "--template",
+        "counter",
+        "--sup",
+        "--module",
+        unquote(module)
+      ]
+
+      assert_raise Mix.Error, fn ->
+        capture_io(fn -> Mix.Tasks.Raxol.New.run(args) end)
+      end
+
+      refute File.exists?(project)
+    end
   end
 
   # The generated --ci workflow runs `mix format --check-formatted`, so every
@@ -273,6 +299,17 @@ defmodule Mix.Tasks.Raxol.NewTest do
     capture_io(fn -> Mix.Tasks.Raxol.New.run([project | flags]) end)
 
     {project, Module.concat([Macro.camelize(name)])}
+  end
+
+  # The server loads its app only when a client connects, so it starts just
+  # the same over a module that does not exist or is not a TEA app.
+  defp assert_serves_tea_app(server, module) do
+    assert %Raxol.SSH.Server{app_module: ^module} = :sys.get_state(server)
+    assert Code.ensure_loaded?(module)
+
+    for {fun, arity} <- [init: 1, update: 2, view: 1] do
+      assert function_exported?(module, fun, arity)
+    end
   end
 
   # The server can exit between the check and the stop.

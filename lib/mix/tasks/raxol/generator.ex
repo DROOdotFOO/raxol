@@ -151,6 +151,11 @@ defmodule Mix.Raxol.Generator do
           "segments starting with an uppercase letter. Got: #{inspect(module)}"
       )
     end
+
+    # `Elixir` is the prefix every alias carries, not a module of its own.
+    if module == "Elixir" do
+      Mix.raise("Module name Elixir is reserved")
+    end
   end
 
   defp write_file(path, filename, content) do
