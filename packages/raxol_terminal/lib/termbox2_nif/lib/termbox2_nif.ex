@@ -110,7 +110,8 @@ defmodule :termbox2_nif do
 
   @doc """
   Hide the cursor.
-  Returns 0 on success, -1 on error.
+  Returns 0 (`TB_OK`) on success, or a negative termbox error code such as
+  -8 (`TB_ERR_NOT_INIT`) before `tb_init/0`.
   """
   def tb_hide_cursor, do: :erlang.nif_error(:nif_not_loaded)
 
