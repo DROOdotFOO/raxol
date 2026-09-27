@@ -20,6 +20,7 @@ defmodule Raxol.UI.Layout.ViewNodes do
   alias Raxol.Core.Defaults
   alias Raxol.Core.Runtime.Log
   alias Raxol.UI.Layout.{Engine, StyleInheritance}
+  alias Raxol.UI.TextMeasure
 
   @type lowered_type ::
           :border
@@ -47,8 +48,6 @@ defmodule Raxol.UI.Layout.ViewNodes do
   @progress_filled "█"
   @progress_empty "░"
   @progress_default_width 20
-  # The widest label drawn after the bar, " 100%".
-  @progress_label_width 5
   @dim %{dim: true}
 
   @doc "Node types `lower/2` rewrites into layout primitives."
@@ -84,16 +83,17 @@ defmodule Raxol.UI.Layout.ViewNodes do
     style = style_of(node)
     selected = Map.get(node, :selected)
 
-    items =
-      node
-      |> Map.get(:items, [])
+    items = collection(node, :items)
+
+    rows =
+      items
       |> Enum.with_index()
       |> Enum.flat_map(fn {item, index} ->
         item_node(item, item_style(style, index == selected))
       end)
 
-    log_unlabelled(node, length(Map.get(node, :items, [])) - length(items))
-    column(node, items)
+    log_unlabelled(node, length(items) - length(rows))
+    column(node, rows)
   end
 
   # A `value` or `max` that is not a number counts as 0 (a `max` of 0 or
@@ -103,22 +103,23 @@ defmodule Raxol.UI.Layout.ViewNodes do
   def lower(%{type: :progress} = node, space) do
     max = number_or_zero(Map.get(node, :max, 100))
     value = number_or_zero(Map.get(node, :value, 0))
-    width = progress_width(Map.get(node, :width), space)
     ratio = if max > 0, do: clamp(value / max), else: 0.0
+    label = " #{round(ratio * 100)}%"
+    width = progress_width(Map.get(node, :width), space, label)
     filled = round(ratio * width)
 
     bar =
       String.duplicate(@progress_filled, filled) <>
         String.duplicate(@progress_empty, width - filled)
 
-    text(node, "#{bar} #{round(ratio * 100)}%", style_of(node))
+    text(node, bar <> label, style_of(node))
   end
 
   def lower(%{type: :select} = node, _space) do
     selected = Map.get(node, :selected)
 
     {label, style} =
-      case Enum.find(Map.get(node, :options, []), &option?(&1, selected)) do
+      case Enum.find(collection(node, :options), &option?(&1, selected)) do
         nil ->
           placeholder(node)
 
@@ -139,7 +140,7 @@ defmodule Raxol.UI.Layout.ViewNodes do
   def lower(%{type: :radio_group} = node, _space) do
     style = style_of(node)
     selected = Map.get(node, :selected)
-    options = Map.get(node, :options, [])
+    options = collection(node, :options)
 
     rows =
       Enum.flat_map(options, fn option ->
@@ -180,7 +181,7 @@ defmodule Raxol.UI.Layout.ViewNodes do
   def lower(%{type: :tabs} = node, _space) do
     style = style_of(node)
     active = Map.get(node, :active, 0)
-    tabs = Map.get(node, :tabs, [])
+    tabs = collection(node, :tabs)
 
     labelled =
       tabs
@@ -291,8 +292,9 @@ defmodule Raxol.UI.Layout.ViewNodes do
   end
 
   @doc """
-  Lays out a `shadow` node: its children at their measured size, over a
-  block of the shadow colour the same size, offset by `:offset`.
+  Lays out a `shadow` node: its children at their measured size, and the
+  part of a same-sized block of the shadow colour, offset by `:offset`,
+  that they do not cover (a strip to their right and one below them).
   """
   @spec process_shadow(map(), Engine.space(), [Engine.positioned_element()]) ::
           [Engine.positioned_element()]
@@ -311,22 +313,28 @@ defmodule Raxol.UI.Layout.ViewNodes do
     height = min(size.height, available.height)
     color = Map.get(node, :color, :black)
 
+    # The block at {dx, dy} less the content's rectangle: the columns past
+    # the content's right edge, then the rows below it under the content.
+    right_x = max(width, dx)
+    bottom_y = max(height, dy)
+
     shade =
-      if width > 0 and height > 0 do
-        [
-          %{
-            type: :box,
-            x: space.x + dx,
-            y: space.y + dy,
-            width: width,
-            height: height,
-            style: %{bg: color},
-            attrs: %{border: :none, padding: 0, style: %{bg: color}}
-          }
-        ]
-      else
-        []
-      end
+      [
+        {right_x, dy, dx + width - right_x, height},
+        {dx, bottom_y, right_x - dx, dy + height - bottom_y}
+      ]
+      |> Enum.filter(fn {_x, _y, w, h} -> w > 0 and h > 0 end)
+      |> Enum.map(fn {x, y, w, h} ->
+        %{
+          type: :box,
+          x: space.x + x,
+          y: space.y + y,
+          width: w,
+          height: h,
+          style: %{bg: color},
+          attrs: %{border: :none, padding: 0, style: %{bg: color}}
+        }
+      end)
 
     shade ++
       Engine.process_element(
@@ -439,6 +447,9 @@ defmodule Raxol.UI.Layout.ViewNodes do
   defp item_style(style, true), do: Map.merge(style, Defaults.selected_style())
   defp item_style(style, false), do: style
 
+  # The builders store what they are given, so an unset collection is nil.
+  defp collection(node, key), do: Map.get(node, key) || []
+
   defp content_children(nil), do: []
 
   defp content_children(content) when is_binary(content),
@@ -456,16 +467,31 @@ defmodule Raxol.UI.Layout.ViewNodes do
 
   defp option_value({_label, value}), do: value
   defp option_value(%{value: value}), do: value
+
+  defp option_value(option) when is_list(option) do
+    if Keyword.keyword?(option), do: Keyword.get(option, :value), else: option
+  end
+
   defp option_value(option), do: option
 
-  # An item's text: a string, the label of a `{label, value}` pair or a
-  # `%{label: ...}` map, or anything with a `String.Chars` implementation.
-  # Anything else (a record, say) has no label and is not drawn: its
-  # `inspect/1` form would put every field, private ones included, on the
-  # screen.
+  # An item's text: a string, the label of a `{label, value}` pair, a
+  # `%{label: ...}` map or a `[label: ...]` keyword list, or anything else
+  # with a `String.Chars` implementation. Anything else (a record, any other
+  # list) has no label and is not drawn: its `inspect/1` form would put
+  # every field, private ones included, on the screen, and `to_string/1` of
+  # a list raises with the list in its message.
   defp label_of({label, _value}), do: label_of(label)
   defp label_of(%{label: label}), do: label_of(label)
   defp label_of(label) when is_binary(label), do: label
+
+  defp label_of(item) when is_list(item) do
+    with true <- Keyword.keyword?(item),
+         {:ok, label} <- Keyword.fetch(item, :label) do
+      label_of(label)
+    else
+      _no_label -> nil
+    end
+  end
 
   defp label_of(label) do
     if String.Chars.impl_for(label), do: to_string(label)
@@ -477,7 +503,8 @@ defmodule Raxol.UI.Layout.ViewNodes do
   defp log_unlabelled(node, count) do
     Log.debug(
       "ViewNodes: #{node.type} skipped #{count} item(s) with no label " <>
-        "(not a string, {label, value}, %{label: ...} or String.Chars)"
+        "(not a string, {label, value}, %{label: ...}, [label: ...] " <>
+        "or String.Chars)"
     )
   end
 
@@ -487,7 +514,7 @@ defmodule Raxol.UI.Layout.ViewNodes do
   defp number_or_zero(number) when is_number(number), do: number
   defp number_or_zero(_other), do: 0
 
-  defp progress_width(width, space) do
+  defp progress_width(width, space, label) do
     requested =
       case width do
         width when is_integer(width) and width >= 0 -> width
@@ -497,7 +524,7 @@ defmodule Raxol.UI.Layout.ViewNodes do
 
     case Map.get(space, :width) do
       available when is_integer(available) ->
-        min(requested, max(available - @progress_label_width, 0))
+        min(requested, max(available - TextMeasure.display_width(label), 0))
 
       _unknown ->
         requested

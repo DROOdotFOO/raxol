@@ -412,7 +412,13 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          cell: {0, 0, char: "┌"},
          text: "lifted",
          cell: {8, 3, bg: :blue},
-         cell: {0, 3, bg: nil}
+         cell: {0, 3, bg: nil},
+         # Only the strips the card does not cover are shaded: the card's
+         # own cells keep the terminal's background.
+         cell: {1, 1, char: "l", bg: nil},
+         cell: {7, 2, char: "┘", bg: nil},
+         cell: {8, 1, bg: :blue},
+         cell: {1, 3, bg: :blue}
        )},
       {View, :process_component, [1, 2],
        render(
@@ -1041,7 +1047,8 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
           )
         )
 
-      for check <- [line: {1, "│████░░░ 50% │"}] do
+      # The 12 inner columns hold the " 50%" label and an 8-cell bar.
+      for check <- [line: {1, "│████░░░░ 50%│"}] do
         assert check(frame, check), failure(frame, check)
       end
     end
@@ -1061,6 +1068,216 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
             no_text: "{:a"
           ] do
         assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "items given as keyword lists" do
+    test "draw their :label in every labelled widget" do
+      frame =
+        render_frame(
+          View.column(
+            children: [
+              View.list(items: [[label: "Alpha", value: 1], [label: "Beta"]]),
+              View.select(options: [[label: "Pick", value: 7]], selected: 7),
+              View.radio_group(
+                options: [[label: "On", value: :on], [label: "Off"]],
+                selected: "On"
+              ),
+              View.tabs(tabs: [[label: "One"], [label: "Two"]])
+            ]
+          )
+        )
+
+      for check <- [
+            line: {0, "Alpha"},
+            line: {1, "Beta"},
+            line: {2, "[Pick ▾]"},
+            line: {3, "(o) On"},
+            line: {4, "( ) Off"},
+            line: {5, " One | Two "}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "keep their other fields out of the frame and the error log" do
+      item = [label: "Account", token: "s3cr3t-token"]
+
+      # A failed frame logs its exception at :error; the rendering engine's
+      # own :debug dump of the whole view is not this widget's to filter.
+      {frame, log} =
+        ExUnit.CaptureLog.with_log([level: :info], fn ->
+          render_frame(
+            View.column(
+              children: [
+                View.list(items: [item, ["not", "keyword"]]),
+                View.select(options: [item], selected: "Account")
+              ]
+            )
+          )
+        end)
+
+      for check <- [
+            line: {0, "Account"},
+            line: {1, "[Account ▾]"},
+            no_text: "s3cr3t",
+            no_text: "keyword"
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+
+      refute log =~ "s3cr3t"
+    end
+  end
+
+  describe "a nil collection" do
+    test "draws as empty and keeps the frame" do
+      frame =
+        render_frame(
+          View.column(
+            children: [
+              View.text("above"),
+              View.list(items: nil),
+              View.select(options: nil, placeholder: "none"),
+              View.radio_group(options: nil),
+              View.tabs(tabs: nil),
+              View.text("below")
+            ]
+          )
+        )
+
+      for check <- [line: {0, "above"}, text: "[none ▾]", text: "below"] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "scroll at the frame's edge" do
+    test "a horizontal offset at column 0 draws the visible part of each line" do
+      frame =
+        render_frame(
+          View.scroll(
+            View.column(
+              children:
+                for(n <- 1..4, do: View.text("abc#{n}xyz")) ++
+                  [View.text("ab日本語")]
+            ),
+            viewport: {40, 5},
+            offset: {3, 0}
+          )
+        )
+
+      # "日" straddles column 0, so only "本語" is drawn, from column 1.
+      for check <- [
+            line: {0, "1xyz"},
+            line: {3, "4xyz"},
+            line: {4, " 本語"},
+            no_text: "abc",
+            no_text: "日"
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "a vertical offset at row 0 draws the visible lines of one text" do
+      log = for n <- 1..12, do: "log #{String.pad_leading("#{n}", 2, "0")}"
+
+      frame =
+        render_frame(
+          View.scroll(View.text(Enum.join(log, "\n")),
+            viewport: {80, 10},
+            offset: {0, 4}
+          )
+        )
+
+      for check <- [
+            line: {0, "log 05"},
+            line: {7, "log 12"},
+            no_text: "log 04"
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "progress in a row" do
+    for value <- [5, 50, 100] do
+      @value value
+      test "at #{value}% draws the whole default-width bar" do
+        filled = div(@value * 20, 100)
+
+        bar =
+          String.duplicate("█", filled) <> String.duplicate("░", 20 - filled)
+
+        frame =
+          render_frame(
+            View.row(children: [View.text("DL "), View.progress(value: @value)])
+          )
+
+        check = {:line, {0, "DL #{bar} #{@value}%"}}
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "a box title of wide characters" do
+    test "draws each glyph whole, truncated to the border by display width" do
+      frame =
+        render_frame(
+          View.column(
+            children: [
+              View.box(
+                title: "日本語",
+                border: :single,
+                children: [View.text("wide title")]
+              ),
+              View.box(
+                title: "日本語日本語",
+                border: :single,
+                style: %{width: 10},
+                children: [View.text("cut")]
+              )
+            ]
+          )
+        )
+
+      for check <- [
+            cell: {2, 0, char: "日"},
+            cell: {4, 0, char: "本"},
+            cell: {6, 0, char: "語"},
+            cell: {2, 3, char: "日"},
+            cell: {6, 3, char: "語"},
+            cell: {9, 3, char: "┐"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "border/2 styles" do
+    test "draw every named glyph set" do
+      for {style, corner} <- [heavy: "┏", ascii: "+", dashed_fine: "┌"] do
+        frame = render_frame(View.border(View.text("inside"), style: style))
+
+        for check <- [text: corner, text: "inside"] do
+          assert check(frame, check), failure(frame, check)
+        end
+
+        frame =
+          render_frame(
+            View.wrap_with_border(View.text("wrapped"), style: style)
+          )
+
+        for check <- [text: corner, text: "wrapped"] do
+          assert check(frame, check), failure(frame, check)
+        end
+      end
+    end
+
+    test "an unknown style still raises" do
+      assert_raise ArgumentError, ~r/Invalid border style: :bogus/, fn ->
+        View.border(View.text("inside"), style: :bogus)
       end
     end
   end
