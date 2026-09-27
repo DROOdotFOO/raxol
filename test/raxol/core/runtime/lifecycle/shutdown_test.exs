@@ -92,6 +92,17 @@ defmodule Raxol.Core.Runtime.Lifecycle.ShutdownTest do
       finish_teardown(second)
       assert primary_filters() == filters
     end
+
+    # Filter ids are atoms, which are never collected. One minted per call
+    # grew the atom table by one on every session end.
+    test "sequential teardowns reuse their filter id" do
+      ids =
+        for _ <- 1..50, uniq: true do
+          Shutdown.quietly(true, [], &own_filter_id/0)
+        end
+
+      assert length(ids) == 1
+    end
   end
 
   describe "cleanup_plugin_manager/2" do
@@ -142,6 +153,18 @@ defmodule Raxol.Core.Runtime.Lifecycle.ShutdownTest do
   end
 
   defp primary_filters, do: :logger.get_primary_config().filters
+
+  # The id of the filter dropping the caller's events.
+  defp own_filter_id do
+    me = self()
+
+    [id] =
+      for {id, {_fun, pids}} <- primary_filters(),
+          is_list(pids) and me in pids,
+          do: id
+
+    id
+  end
 
   # A process that logs on request and acknowledges once the event is out.
   defp start_logger do

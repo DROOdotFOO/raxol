@@ -234,6 +234,72 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
     end
   end
 
+  # SilencingDriver's Logger contract, then a crash in its cleanup before
+  # the level is back, as when the real one's terminal restore raised.
+  defmodule SilentEarlyCrashingDriver do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      recorder = Keyword.fetch!(opts, :recorder)
+      GenServer.start_link(__MODULE__, recorder)
+    end
+
+    @impl true
+    def init(recorder) do
+      Logger.configure(level: :none)
+      {:ok, recorder}
+    end
+
+    @impl true
+    def terminate(_reason, recorder) do
+      send(recorder, :driver_terminated)
+      raise "driver cleanup crashed"
+    end
+  end
+
+  # SilencingDriver's Logger contract, then a cleanup that never returns, so
+  # the Lifecycle kills it with the level still off.
+  defmodule SilentHangingDriver do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      recorder = Keyword.fetch!(opts, :recorder)
+      GenServer.start_link(__MODULE__, recorder)
+    end
+
+    @impl true
+    def init(recorder) do
+      Logger.configure(level: :none)
+      {:ok, recorder}
+    end
+
+    @impl true
+    def terminate(_reason, recorder) do
+      send(recorder, :driver_terminated)
+
+      receive do
+        :never_sent -> :ok
+      end
+    end
+  end
+
+  # Reports the primary logger filters installed while it is being stopped.
+  defmodule FilterReportingEngine do
+    @moduledoc false
+    use GenServer
+
+    @impl true
+    def init(recorder), do: {:ok, recorder}
+
+    @impl true
+    def terminate(_reason, recorder) do
+      send(recorder, {:filters_at_stop, :logger.get_primary_config().filters})
+      :ok
+    end
+  end
+
   setup_all do
     case start_supervised(Raxol.DynamicSupervisor) do
       {:ok, _pid} -> :ok
@@ -631,5 +697,75 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
       assert teardown_log == ""
       assert Logger.level() == found
     end
+
+    # The Driver turns logging back on at the end of its cleanup. One that
+    # crashed or was killed before then left Logger at :none: the node ran on
+    # with logging off, and the report of the failure was dropped.
+    test "a driver crashing before it restores the level: the level comes back and the failure is reported" do
+      found = Logger.level()
+      on_exit(fn -> Logger.configure(level: found) end)
+
+      {reason, teardown_log} = stop_logged(SilentEarlyCrashingDriver)
+
+      assert reason != :normal
+      assert teardown_log =~ "Terminal Driver"
+      assert teardown_log =~ "driver cleanup crashed"
+      assert Logger.level() == found
+    end
+
+    test "a driver killed before it restores the level: the level comes back and the failure is reported" do
+      found = Logger.level()
+      on_exit(fn -> Logger.configure(level: found) end)
+
+      {reason, teardown_log} = stop_logged(SilentHangingDriver)
+
+      assert reason != :normal
+      assert teardown_log =~ "Terminal Driver"
+      assert teardown_log =~ "timeout"
+      assert Logger.level() == found
+    end
+
+    # Logger at :none alone is not a TTY session: TERMINAL_LOG_LEVEL=none
+    # turns it off for the node, SSH and LiveView sessions included.
+    test "a teardown with no Terminal Driver is not silenced, whatever the level" do
+      found = Logger.level()
+      on_exit(fn -> Logger.configure(level: found) end)
+      {:ok, engine} = GenServer.start(FilterReportingEngine, self())
+
+      state = %Lifecycle.State{
+        app_module: TestApp,
+        app_name: :no_driver,
+        options: [environment: :ssh],
+        rendering_engine_pid: engine
+      }
+
+      Logger.configure(level: :none)
+      assert Lifecycle.terminate(:shutdown, state) == :ok
+
+      assert_receive {:filters_at_stop, filters}
+      me = self()
+
+      refute Enum.any?(filters, fn
+               {_id, {_fun, pids}} when is_list(pids) -> me in pids
+               _filter -> false
+             end)
+    end
+  end
+
+  # Starts a Lifecycle over `driver_module`, stops it, and returns its exit
+  # reason with everything logged meanwhile.
+  defp stop_logged(driver_module) do
+    {:ok, pid} = start_lifecycle(self(), driver_module: driver_module)
+    Process.unlink(pid)
+    ref = Process.monitor(pid)
+
+    with_log(fn ->
+      Lifecycle.stop(pid)
+
+      assert next_teardown_event() == :driver
+      assert next_teardown_event() == :engine
+      assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 10_000
+      reason
+    end)
   end
 end

@@ -66,7 +66,8 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
   @doc """
   Cleans up terminal state during shutdown: releases the prim_tty reader,
   closes tty port, restores terminal modes and original stty settings, then
-  the Logger level the Driver found at init.
+  the Logger level the Driver found at init. The level is restored even when
+  a step before it raises.
   """
   @dialyzer {:nowarn_function, cleanup_terminal: 1}
   def cleanup_terminal(state) do
@@ -117,11 +118,12 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
       Raxol.Terminal.Driver.Stty.restore(state.original_stty)
     end
 
-    # Logging back on only once the terminal is restored, at the level init
-    # found (nil: init never turned it off).
-    if state.logger_level, do: Logger.configure(level: state.logger_level)
-
     :ok
+  after
+    # Logging back on only once the terminal is restored, or a step above
+    # raised (a write raises `:terminated` once stdio has gone), at the level
+    # init found (nil: init never turned it off).
+    if state.logger_level, do: Logger.configure(level: state.logger_level)
   end
 
   defp untrace_reader(reader) do

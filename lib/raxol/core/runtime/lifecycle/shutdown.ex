@@ -114,13 +114,9 @@ defmodule Raxol.Core.Runtime.Lifecycle.Shutdown do
     end
   end
 
-  # The filter id is an atom (`:logger` accepts no other), made per call.
   defp hold_quiet_filter(caller, pids) do
     caller_ref = Process.monitor(caller)
-    filter = :"raxol_lifecycle_teardown_#{System.unique_integer([:positive])}"
-
-    :ok =
-      :logger.add_primary_filter(filter, {&__MODULE__.drop_log_event/2, pids})
+    filter = add_quiet_filter({&__MODULE__.drop_log_event/2, pids}, 0)
 
     send(caller, {self(), :silenced})
 
@@ -130,6 +126,21 @@ defmodule Raxol.Core.Runtime.Lifecycle.Shutdown do
     end
 
     :ok = :logger.remove_primary_filter(filter)
+  end
+
+  # The filter id is an atom (`:logger` accepts no other), which is never
+  # collected. Taking the first id not installed keeps the ids, and so the
+  # atoms, to as many as there were teardowns at once.
+  defp add_quiet_filter(filter_config, n) do
+    filter = :"raxol_lifecycle_teardown_#{n}"
+
+    case :logger.add_primary_filter(filter, filter_config) do
+      :ok ->
+        filter
+
+      {:error, {:already_exist, ^filter}} ->
+        add_quiet_filter(filter_config, n + 1)
+    end
   end
 
   @doc false

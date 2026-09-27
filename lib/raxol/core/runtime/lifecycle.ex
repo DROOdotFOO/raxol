@@ -51,6 +51,10 @@ defmodule Raxol.Core.Runtime.Lifecycle do
 
   defmodule State do
     @moduledoc false
+    # `driver_logger_level`: the Logger level found before the Terminal
+    # Driver started, when the Driver turned logging off (it does on a TTY,
+    # for the session); nil otherwise. terminate/2 restores it when the
+    # Driver did not get to.
     @type t :: %__MODULE__{
             app_module: module() | nil,
             options: keyword(),
@@ -63,6 +67,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
             initial_commands: list(),
             dispatcher_pid: pid() | nil,
             driver_pid: pid() | nil,
+            driver_logger_level: Logger.level() | nil,
             rendering_engine_pid: pid() | nil,
             code_reloader_pid: pid() | nil,
             time_travel_pid: pid() | nil,
@@ -84,6 +89,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
               initial_commands: [],
               dispatcher_pid: nil,
               driver_pid: nil,
+              driver_logger_level: nil,
               rendering_engine_pid: nil,
               code_reloader_pid: nil,
               time_travel_pid: nil,
@@ -159,6 +165,8 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   end
 
   defp finish_init(app_module, options) do
+    found_level = Logger.level()
+
     case Initializer.initialize_all(app_module, options) do
       {:ok, registry_table, pm_pid, initialized_model, dispatcher_pid,
        driver_pid, rendering_engine_pid} ->
@@ -176,6 +184,11 @@ defmodule Raxol.Core.Runtime.Lifecycle do
             rendering_engine_pid
           )
 
+        state = %{
+          state
+          | driver_logger_level: driver_logger_level(driver_pid, found_level)
+        }
+
         Log.info_with_context(
           "[#{__MODULE__}] successfully initialized for #{inspect(app_module)}. Dispatcher PID: #{inspect(dispatcher_pid)}"
         )
@@ -190,6 +203,13 @@ defmodule Raxol.Core.Runtime.Lifecycle do
         _ = cleanup_fun.()
         {:stop, reason}
     end
+  end
+
+  # The Driver is started, and on a TTY turns logging off, inside
+  # initialize_all/2; the level it found is the one found before it.
+  defp driver_logger_level(driver_pid, found_level) do
+    if is_pid(driver_pid) and found_level != :none and Logger.level() == :none,
+      do: found_level
   end
 
   @impl GenServer
@@ -446,16 +466,27 @@ defmodule Raxol.Core.Runtime.Lifecycle do
     children = dependent_processes(state)
     child_pids = for {pid, _label} <- children, do: pid
 
-    # Logger at :none means the session ran silent (the Terminal Driver does
-    # that on a TTY). Keep the teardown's own logging silent too: the
-    # Driver's cleanup restores the level first thing, and anything logged
-    # after it would print on the terminal it has just restored.
+    # On a TTY the Terminal Driver runs the session with Logger at :none, and
+    # turns it back on at the end of its cleanup. The Driver is stopped
+    # first, so anything the rest of the teardown logged would print on the
+    # terminal it has just restored: keep the teardown silent too. Logger at
+    # :none with no Driver is not that (TERMINAL_LOG_LEVEL=none sets it for
+    # the node, SSH and LiveView sessions included).
+    silent? = is_pid(state.driver_pid) and Logger.level() == :none
+
     failures =
-      Shutdown.quietly(Logger.level() == :none, child_pids, fn ->
+      Shutdown.quietly(silent?, child_pids, fn ->
         failures = stop_dependent_processes(children)
         terminate_manager(reason, state)
         failures
       end)
+
+    # A Driver that crashed or was killed before its cleanup turned logging
+    # back on left it off for the node, and the report below with it.
+    if silent? and state.driver_logger_level != nil and
+         Logger.level() == :none do
+      Logger.configure(level: state.driver_logger_level)
+    end
 
     # Only now, with the terminal restored and logging back on. A quit whose
     # teardown failed does not exit :normal, so the process that started the

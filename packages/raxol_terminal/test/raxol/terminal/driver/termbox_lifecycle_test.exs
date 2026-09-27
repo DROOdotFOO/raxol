@@ -62,6 +62,27 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycleTest do
       assert TermboxLifecycle.cleanup_terminal(state) == :ok
       assert Logger.level() == :notice
     end
+
+    # On a TTY a terminal write that raises (`:terminated` once stdio is
+    # gone) ended cleanup before the restore, and the node ran on with
+    # logging off. A state it cannot read raises the same way in a test.
+    test "restores the Logger level when cleanup raises" do
+      found = Logger.level()
+      on_exit(fn -> Logger.configure(level: found) end)
+
+      Logger.configure(level: :notice)
+
+      state = %{
+        state_with_reader(nil)
+        | logger_level: Logger.level(),
+          io_terminal_state: :unreadable
+      }
+
+      Logger.configure(level: :none)
+
+      assert_raise BadMapError, fn -> TermboxLifecycle.cleanup_terminal(state) end
+      assert Logger.level() == :notice
+    end
   end
 
   defp state_with_reader(reader) do
