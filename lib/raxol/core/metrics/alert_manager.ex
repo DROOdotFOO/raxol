@@ -8,6 +8,20 @@ defmodule Raxol.Core.Metrics.AlertManager do
   - Alert state tracking
   - Alert notifications
   - Alert history
+
+  ## Options
+
+  Times are whole seconds, not `:timer` milliseconds.
+
+    * `:check_interval` - how often rules are checked, a positive integer
+      (default 60)
+    * `:default_cooldown` - cooldown for a rule without its own `:cooldown`,
+      a non-negative integer (default 300)
+    * `:default_severity` - severity for a rule without its own `:severity`:
+      `:info`, `:warning`, `:error` or `:critical` (default `:warning`)
+
+  Any other value makes `start_link/1` return
+  `{:error, {:invalid_option, key, value}}`.
   """
 
   alias Raxol.Core.Metrics.{Aggregator, MetricsCollector}
