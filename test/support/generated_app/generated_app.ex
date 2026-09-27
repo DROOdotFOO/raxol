@@ -207,7 +207,7 @@ defmodule Raxol.Test.GeneratedApp do
 
     receive do
       {^port, {:data, data}} ->
-        collect_output(port, [acc | data], deadline)
+        collect_output(port, [acc, data], deadline)
 
       {^port, {:exit_status, status}} ->
         {IO.iodata_to_binary(acc), status}
