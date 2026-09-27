@@ -17,6 +17,10 @@ defmodule Raxol.Test.GeneratedApp do
   alias Raxol.Headless
   alias Raxol.Headless.TextCapture
 
+  # Under ExUnit's 60 s default, so a VM that never exits fails with its
+  # output instead of a bare test timeout.
+  @run_application_timeout_ms 45_000
+
   @doc """
   Compiles `files` together and returns the modules they define, purging them
   when the test exits.
@@ -142,6 +146,10 @@ defmodule Raxol.Test.GeneratedApp do
   stops the VM. The new VM is `mix run` of this build, compiles the project's
   `lib/` itself, and reads its `config/config.exs` for the test env, with
   `overrides` merged in as `start_application!/2` does.
+
+  A VM that has not exited within #{div(@run_application_timeout_ms, 1000)} s is
+  killed and the test fails with everything it printed, which a test timeout
+  (the VM still running under `System.cmd/3`) would throw away.
   """
   @spec run_application(Path.t(), String.t(), keyword()) ::
           {String.t(), non_neg_integer()}
@@ -171,12 +179,50 @@ defmodule Raxol.Test.GeneratedApp do
     {:ok, _started} = Application.ensure_all_started(app)
     """
 
-    System.cmd(
-      "mix",
+    run_bounded(
+      System.find_executable("mix"),
       ["run", "--no-compile", "--no-deps-check", "-e", script <> code],
-      env: [{"MIX_ENV", "test"}],
-      stderr_to_stdout: true
+      [{~c"MIX_ENV", ~c"test"}]
     )
+  end
+
+  defp run_bounded(executable, args, env) do
+    port =
+      Port.open({:spawn_executable, executable}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        args: args,
+        env: env
+      ])
+
+    deadline = System.monotonic_time(:millisecond) + @run_application_timeout_ms
+    collect_output(port, [], deadline)
+  end
+
+  # The bound is on the whole run, not the gap between two writes, so a VM
+  # that hangs while still logging is killed too.
+  defp collect_output(port, acc, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^port, {:data, data}} ->
+        collect_output(port, [acc | data], deadline)
+
+      {^port, {:exit_status, status}} ->
+        {IO.iodata_to_binary(acc), status}
+    after
+      remaining ->
+        {:os_pid, os_pid} = Port.info(port, :os_pid)
+        System.cmd("kill", ["-9", Integer.to_string(os_pid)])
+
+        flunk("""
+        The application's VM had not exited after \
+        #{div(@run_application_timeout_ms, 1000)} s and was killed. It printed:
+
+        #{IO.iodata_to_binary(acc)}
+        """)
+    end
   end
 
   @doc """
