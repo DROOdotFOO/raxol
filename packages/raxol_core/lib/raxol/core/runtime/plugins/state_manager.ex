@@ -32,115 +32,6 @@ defmodule Raxol.Core.Runtime.Plugins.StateManager.Impl do
   @type plugin_state :: term()
 
   @doc """
-  Initializes plugin state for a given plugin module.
-
-  Creates initial state based on the plugin's configuration and stores it
-  in the unified state management system under the plugins namespace.
-  """
-  @spec initialize_plugin_state(plugin_module(), plugin_config()) ::
-          {:ok, plugin_state()}
-  def initialize_plugin_state(plugin_module, config) do
-    # Generate plugin ID from module name
-    plugin_id = generate_plugin_id(plugin_module)
-
-    # Initialize state based on plugin type and config
-    initial_state =
-      case {has_init_callback?(plugin_module), config} do
-        {true, _} ->
-          # Plugin has custom initialization
-          apply(plugin_module, :init_state, [config])
-
-        {false, config} when map_size(config) > 0 ->
-          # Use config as initial state
-          config
-
-        _ ->
-          # Default empty state
-          %{}
-      end
-
-    # Store in unified state manager
-    state_key = [:plugins, :states, plugin_id]
-    _ = StateManager.set_state(state_key, initial_state)
-
-    # Track plugin metadata
-    metadata_key = [:plugins, :metadata, plugin_id]
-
-    metadata = %{
-      module: plugin_module,
-      initialized_at: :os.system_time(:millisecond),
-      config: config,
-      status: :initialized
-    }
-
-    _ = StateManager.set_state(metadata_key, metadata)
-
-    Log.info("Initialized state for plugin #{plugin_id} (#{plugin_module})")
-
-    {:ok, initial_state}
-  rescue
-    error ->
-      Log.error("Failed to initialize plugin state for #{plugin_module}: #{inspect(error)}")
-
-      {:error, error}
-  end
-
-  @doc """
-  Updates plugin state using legacy interface for backward compatibility.
-
-  Maintains state in the unified state manager and supports both
-  functional and imperative update patterns.
-  """
-  @spec update_plugin_state_legacy(plugin_id(), plugin_state(), plugin_config()) ::
-          {:ok, plugin_state()}
-  def update_plugin_state_legacy(plugin_id, state, config) do
-    # Update state in unified state manager
-    state_key = [:plugins, :states, plugin_id]
-
-    # Merge new state with existing state
-    updated_state =
-      case StateManager.get_state(state_key) do
-        nil ->
-          state
-
-        existing_state when is_map(existing_state) and is_map(state) ->
-          Map.merge(existing_state, state)
-
-        _existing_state ->
-          # Replace entirely if types don't match
-          state
-      end
-
-    _ = StateManager.set_state(state_key, updated_state)
-
-    # Update metadata
-    metadata_key = [:plugins, :metadata, plugin_id]
-
-    _ =
-      StateManager.update_state(metadata_key, fn metadata ->
-        case metadata do
-          nil ->
-            %{updated_at: :os.system_time(:millisecond), config: config}
-
-          existing ->
-            Map.merge(existing, %{
-              updated_at: :os.system_time(:millisecond),
-              config: config,
-              status: :updated
-            })
-        end
-      end)
-
-    Log.debug("Updated legacy state for plugin #{plugin_id}")
-    {:ok, updated_state}
-  rescue
-    error ->
-      Log.error("Failed to update legacy plugin state for #{plugin_id}: #{inspect(error)}")
-
-      {:error, error}
-  end
-
-  @doc """
   Gets plugin state by plugin ID.
   """
   @spec get_plugin_state(plugin_id()) ::
@@ -260,28 +151,6 @@ defmodule Raxol.Core.Runtime.Plugins.StateManager.Impl do
     Log.info("Plugin state manager cleaned up")
     :ok
   end
-
-  # Private Implementation
-
-  @spec generate_plugin_id(module()) :: any()
-  defp generate_plugin_id(plugin_module) do
-    plugin_module
-    |> to_string()
-    |> String.replace("Elixir.", "")
-    |> String.downcase()
-    |> String.replace(".", "_")
-  end
-
-  @spec has_init_callback?(module()) :: boolean()
-  defp has_init_callback?(plugin_module) do
-    plugin_module.module_info(:exports)
-    |> Keyword.has_key?(:init_state)
-  rescue
-    e ->
-      Log.warning("Failed to check init callback for #{plugin_module}: #{Exception.message(e)}")
-
-      false
-  end
 end
 
 # The public face of plugin state management. Carries the arity-compatibility
@@ -295,11 +164,6 @@ defmodule Raxol.Core.Runtime.Plugins.StateManager do
   """
 
   alias Raxol.Core.Runtime.Plugins.StateManager.Impl
-
-  defdelegate initialize_plugin_state(plugin_module, config), to: Impl
-
-  defdelegate update_plugin_state_legacy(plugin_id, state, config),
-    to: Impl
 
   defdelegate get_plugin_state(plugin_id), to: Impl
   defdelegate set_plugin_state(plugin_id, state), to: Impl

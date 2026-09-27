@@ -9,9 +9,6 @@ defmodule Raxol.Core.Behaviours.StateManager do
   @type state :: term()
   @type state_key :: term()
   @type state_value :: term()
-  @type plugin_id :: String.t()
-  @type plugin_module :: module()
-  @type plugin_config :: map()
 
   @doc """
   Initializes state management system.
@@ -77,35 +74,6 @@ defmodule Raxol.Core.Behaviours.StateManager do
   - `{:ok, new_state}` on success
   """
   @callback delete_state(state(), state_key()) :: {:ok, state()}
-
-  @doc """
-  Initializes plugin-specific state.
-
-  ## Parameters
-  - plugin_module: The plugin module
-  - config: Plugin configuration
-
-  ## Returns
-  - `{:ok, initial_plugin_state}` on success
-  - `{:error, reason}` on failure
-  """
-  @callback initialize_plugin_state(plugin_module(), plugin_config()) ::
-              {:ok, state()} | {:error, term()}
-
-  @doc """
-  Updates plugin state (legacy interface).
-
-  ## Parameters
-  - plugin_id: Plugin identifier
-  - state: Plugin state
-  - config: Plugin configuration
-
-  ## Returns
-  - `{:ok, updated_state}` on success
-  - `{:error, reason}` on failure
-  """
-  @callback update_plugin_state_legacy(plugin_id(), state(), plugin_config()) ::
-              {:ok, state()} | {:error, term()}
 
   @doc """
   Cleans up state management resources.

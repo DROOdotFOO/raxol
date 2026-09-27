@@ -1,9 +1,13 @@
 defmodule Raxol.Core.Runtime.Plugins.PluginValidator do
   @moduledoc """
-  Comprehensive validation system for plugins before loading.
+  Checks a plugin module's behaviour, metadata, security (through
+  `Raxol.Core.Runtime.Plugins.Security.BeamAnalyzer`), compatibility,
+  performance and dependencies.
 
-  Validates security, compatibility, performance, and structural
-  correctness to ensure plugins are safe and properly implemented.
+  Nothing on the live load path calls this module: `PluginManager` loads
+  plugins through `PluginLifecycle`, which registers and initializes a plugin
+  without running any of these checks. Call them yourself before loading a
+  plugin you do not trust.
   """
 
   alias Raxol.Core.Runtime.Plugins.Loader
@@ -23,22 +27,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginValidator do
   # 10MB limit
   @max_plugin_size 10_000_000
   @supported_api_versions ["1.0", "1.1", "2.0"]
-
-  @doc """
-  Performs comprehensive validation of a plugin.
-  """
-  @spec validate_plugin(String.t(), module(), map(), map()) ::
-          validation_result()
-  def validate_plugin(plugin_id, plugin_module, plugins, options \\ %{}) do
-    with :ok <- validate_not_loaded(plugin_id, plugins),
-         :ok <- validate_behaviour(plugin_module),
-         :ok <- validate_metadata(plugin_module),
-         :ok <- validate_security(plugin_module, options),
-         :ok <- validate_compatibility(plugin_module),
-         :ok <- validate_performance(plugin_module) do
-      validate_dependencies(plugin_module, plugins)
-    end
-  end
 
   @doc """
   Validates that a plugin is not already loaded.

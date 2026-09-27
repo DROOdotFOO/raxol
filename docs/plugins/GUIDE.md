@@ -231,7 +231,7 @@ State persists across hot reloads. If a plugin crashes, its last known state is 
 
 ## Security analysis
 
-Raxol automatically analyzes plugin BEAM bytecode to detect security-sensitive operations.
+Raxol can analyze a plugin's BEAM bytecode to detect security-sensitive operations, but only when you ask it to. Loading does not: `PluginManager` loads plugins through `PluginLifecycle`, which registers and initializes a plugin without analyzing it or checking any policy. Before loading a plugin you do not trust, call `Raxol.Core.Runtime.Plugins.Security.CapabilityDetector.validate_against_policy/2` on its module and load it only if that returns `:ok`.
 
 ### Detected capabilities
 
@@ -256,8 +256,10 @@ policy = CapabilityDetector.create_policy([:file_access])
 # Validate a plugin module
 case CapabilityDetector.validate_against_policy(MyPlugin, policy) do
   :ok -> :load_plugin
-  {:error, :file_access_denied} -> :reject_plugin
-  {:error, :network_access_denied} -> :reject_plugin
+  # :file_access_denied, :network_access_denied, :code_injection_denied,
+  # :system_commands_denied, :cannot_analyze (compiled without debug_info)
+  # or {:analysis_failed, reason}
+  {:error, _reason} -> :reject_plugin
 end
 ```
 

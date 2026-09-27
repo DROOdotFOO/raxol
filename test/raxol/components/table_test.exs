@@ -1,6 +1,6 @@
 defmodule Raxol.UI.Components.TableTest do
   use ExUnit.Case
-    alias Raxol.UI.Components.Table
+  alias Raxol.UI.Components.Table
 
   @test_columns [
     %{
@@ -48,18 +48,6 @@ defmodule Raxol.UI.Components.TableTest do
 
       other_error ->
         flunk("UserPreferences failed to start: #{inspect(other_error)}")
-    end
-
-    case Raxol.Core.Renderer.RendererManager.start_link([]) do
-      {:ok, _pid} ->
-        :ok
-
-      # Ignore if already started
-      {:error, {:already_started, _pid}} ->
-        :ok
-
-      other_error ->
-        flunk("Renderer.Manager failed to start: #{inspect(other_error)}")
     end
 
     # Return the test context
@@ -337,6 +325,7 @@ defmodule Raxol.UI.Components.TableTest do
 
     test "header is rendered with bold style", %{state: state} do
       rendered = Table.render(state, %{available_width: 80})
+
       header =
         Enum.find(table_line_elements(rendered), fn el ->
           :bold in (el[:style] || [])
@@ -413,7 +402,10 @@ defmodule Raxol.UI.Components.TableTest do
       {:ok, state} = result
 
       rendered = Table.render(state, %{available_width: 80})
-      header = Enum.find(table_line_elements(rendered), &(:bold in (&1.style || [])))
+
+      header =
+        Enum.find(table_line_elements(rendered), &(:bold in (&1.style || [])))
+
       assert :underline in header.style
       assert :italic in header.style
     end
@@ -452,6 +444,7 @@ defmodule Raxol.UI.Components.TableTest do
       selected =
         Enum.find(table_line_elements(rendered), fn el ->
           style = el[:style] || []
+
           (:red in style or {:bg, :red} in style) and
             (:black in style or {:fg, :black} in style)
         end)
@@ -524,7 +517,13 @@ defmodule Raxol.UI.Components.TableTest do
       # flattens a row into one text line — selection/row theme still works.
       # This documents the tradeoff of the character-grid renderer.
       custom_columns = [
-        %{id: :id, label: "ID", width: 4, align: :right, style: %{color: :magenta}},
+        %{
+          id: :id,
+          label: "ID",
+          width: 4,
+          align: :right,
+          style: %{color: :magenta}
+        },
         %{id: :name, label: "Name", width: 10, align: :left},
         %{id: :age, label: "Age", width: 5, align: :center}
       ]
@@ -565,6 +564,7 @@ defmodule Raxol.UI.Components.TableTest do
     |> Enum.reject(fn el ->
       content = el[:content] || el[:text] || ""
       style = el[:style] || []
+
       String.contains?(content, "─") or String.contains?(content, "┌") or
         String.contains?(content, "└") or String.contains?(content, "├") or
         :bold in style

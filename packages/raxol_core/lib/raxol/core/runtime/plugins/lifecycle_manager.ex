@@ -1,55 +1,7 @@
 defmodule Raxol.Core.Runtime.Plugins.LifecycleManager do
   @moduledoc """
-  Handles plugin lifecycle operations including loading, unloading, enabling, and disabling plugins.
+  Handles plugin lifecycle operations including loading by module, reloading, enabling, and disabling plugins.
   """
-
-  @doc """
-  Loads a plugin with the given configuration.
-  """
-  def load_plugin(
-        plugin_id,
-        config,
-        plugins,
-        metadata,
-        plugin_states,
-        load_order,
-        command_registry_table,
-        plugin_config
-      ) do
-    Raxol.Core.Runtime.Log.info(
-      "[#{__MODULE__}] Loading plugin: #{plugin_id}",
-      %{plugin_id: plugin_id, config: config}
-    )
-
-    case Raxol.Core.Runtime.Plugins.Discovery.load_plugin(
-           plugin_id,
-           config,
-           plugins,
-           metadata,
-           plugin_states,
-           load_order,
-           command_registry_table,
-           plugin_config
-         ) do
-      {:ok, updated_maps} ->
-        Raxol.Core.Runtime.Log.info(
-          "[#{__MODULE__}] Successfully loaded plugin: #{plugin_id}",
-          %{plugin_id: plugin_id}
-        )
-
-        {:ok, updated_maps}
-
-      {:error, reason} ->
-        Raxol.Core.Runtime.Log.error_with_stacktrace(
-          "[#{__MODULE__}] Failed to load plugin: #{plugin_id}",
-          reason,
-          nil,
-          %{plugin_id: plugin_id, reason: reason}
-        )
-
-        {:error, reason}
-    end
-  end
 
   @doc """
   Loads a plugin by module.
@@ -106,50 +58,6 @@ defmodule Raxol.Core.Runtime.Plugins.LifecycleManager do
           reason,
           nil,
           %{module: module, reason: reason}
-        )
-
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Unloads a plugin.
-  """
-  def unload_plugin(
-        plugin_id,
-        plugins,
-        metadata,
-        plugin_states,
-        command_registry_table,
-        plugin_config
-      ) do
-    Raxol.Core.Runtime.Log.info(
-      "[#{__MODULE__}] Unloading plugin: #{plugin_id}",
-      %{plugin_id: plugin_id}
-    )
-
-    case Raxol.Core.Runtime.Plugins.Discovery.unload_plugin(
-           plugin_id,
-           plugins,
-           metadata,
-           plugin_states,
-           command_registry_table,
-           plugin_config
-         ) do
-      {:ok, {updated_metadata, updated_states, updated_command_table}} ->
-        Raxol.Core.Runtime.Log.info(
-          "[#{__MODULE__}] Successfully unloaded plugin: #{plugin_id}",
-          %{plugin_id: plugin_id}
-        )
-
-        {:ok, {updated_metadata, updated_states, updated_command_table}}
-
-      {:error, reason} ->
-        Raxol.Core.Runtime.Log.error_with_stacktrace(
-          "[#{__MODULE__}] Failed to unload plugin: #{plugin_id}",
-          reason,
-          nil,
-          %{plugin_id: plugin_id, reason: reason}
         )
 
         {:error, reason}

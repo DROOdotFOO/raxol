@@ -6,121 +6,15 @@ defmodule Raxol.Core.Runtime.Plugins.LifecycleHelper do
   @behaviour Raxol.Core.Runtime.Plugins.LifecycleHelper.Behaviour
 
   alias Raxol.Core.Runtime.Plugins.{
-    Loader,
     PluginErrorHandler,
     PluginEventProcessor,
     PluginInitializer,
     PluginLifecycleCallbacks,
-    PluginReloader,
-    PluginUnloader,
-    PluginValidator,
-    StateManager
+    PluginReloader
   }
 
   def init(opts) do
     {:ok, opts}
-  end
-
-  # Not part of the behaviour - internal helper function
-  def load_plugin(
-        plugin_id_or_module,
-        config,
-        plugins,
-        metadata,
-        plugin_states,
-        load_order,
-        _command_table,
-        plugin_config
-      ) do
-    with {:ok, {plugin_id, plugin_module}} <-
-           PluginValidator.resolve_plugin_identity(plugin_id_or_module),
-         :ok <-
-           PluginValidator.validate_plugin(
-             plugin_id,
-             plugin_module,
-             plugins,
-             %{}
-           ),
-         {:ok, plugin_metadata} <- Loader.extract_metadata(plugin_module),
-         {:ok, updated_maps} <-
-           initialize_and_register_plugin(%{
-             plugin_id: plugin_id,
-             plugin_module: plugin_module,
-             plugin_metadata: plugin_metadata,
-             config: config,
-             plugins: plugins,
-             metadata: metadata,
-             plugin_states: plugin_states,
-             load_order: load_order,
-             plugin_config: plugin_config
-           }) do
-      {:ok, updated_maps}
-    else
-      {:error, :already_loaded} ->
-        {:error, "Plugin #{plugin_id_or_module} is already loaded"}
-
-      {:error, :invalid_plugin} ->
-        {:error, "Plugin #{plugin_id_or_module} does not implement required behaviour"}
-
-      {:error, reason} ->
-        PluginErrorHandler.handle_load_error(reason, plugin_id_or_module)
-    end
-  end
-
-  defp initialize_and_register_plugin(%{
-         plugin_id: plugin_id,
-         plugin_module: plugin_module,
-         plugin_metadata: plugin_metadata,
-         config: config,
-         plugins: plugins,
-         metadata: metadata,
-         plugin_states: plugin_states,
-         load_order: load_order,
-         plugin_config: plugin_config
-       }) do
-    with {:ok, initial_state} <-
-           StateManager.initialize_plugin_state(plugin_module, config),
-         {:ok, _} <-
-           StateManager.update_plugin_state_legacy(
-             plugin_id,
-             initial_state,
-             plugin_config
-           ) do
-      {:ok,
-       _build_updated_maps(%{
-         plugin_id: plugin_id,
-         plugin_module: plugin_module,
-         plugin_metadata: plugin_metadata,
-         initial_state: initial_state,
-         config: config,
-         plugins: plugins,
-         metadata: metadata,
-         plugin_states: plugin_states,
-         load_order: load_order,
-         plugin_config: plugin_config
-       })}
-    end
-  end
-
-  defp _build_updated_maps(%{
-         plugin_id: plugin_id,
-         plugin_module: plugin_module,
-         plugin_metadata: plugin_metadata,
-         initial_state: initial_state,
-         config: config,
-         plugins: plugins,
-         metadata: metadata,
-         plugin_states: plugin_states,
-         load_order: load_order,
-         plugin_config: plugin_config
-       }) do
-    %{
-      plugins: Map.put(plugins, plugin_id, plugin_module),
-      metadata: Map.put(metadata, plugin_id, plugin_metadata),
-      plugin_states: Map.put(plugin_states, plugin_id, initial_state),
-      load_order: [plugin_id | load_order],
-      plugin_config: Map.put(plugin_config, plugin_id, config)
-    }
   end
 
   def initialize_plugins(
@@ -256,18 +150,6 @@ defmodule Raxol.Core.Runtime.Plugins.LifecycleHelper do
     PluginReloader.reload_plugin(plugin_id, %{})
   end
 
-  # Not part of the behaviour - internal helper function
-  def unload_plugin(plugin_id, metadata, config, states, command_table, opts) do
-    PluginUnloader.unload_plugin(
-      plugin_id,
-      metadata,
-      config,
-      states,
-      command_table,
-      opts
-    )
-  end
-
   @doc """
   Enables a plugin by updating its state to enabled.
   """
@@ -314,13 +196,6 @@ defmodule Raxol.Core.Runtime.Plugins.LifecycleHelper do
         # Update existing state to disabled
         {:ok, Map.put(existing_state, :enabled, false)}
     end
-  end
-
-  @doc """
-  Catch-all for load_plugin/3. Raises a clear error if called with the wrong arity.
-  """
-  def load_plugin(_a, _b, _c) do
-    {:error, {:not_implemented, "Use load_plugin/8 instead of load_plugin/3"}}
   end
 
   # Implement required behaviour callbacks

@@ -234,35 +234,6 @@ defmodule Raxol.Core.Runtime.Plugins.Discovery do
   end
 
   @doc """
-  Loads a plugin by ID with full configuration.
-  """
-  def load_plugin(
-        plugin_id,
-        config,
-        plugins,
-        metadata,
-        plugin_states,
-        load_order,
-        command_registry_table,
-        plugin_config
-      ) do
-    # Delegate to the lifecycle helper module
-    case Raxol.Core.Runtime.Plugins.LifecycleHelper.load_plugin(
-           plugin_id,
-           config,
-           plugins,
-           metadata,
-           plugin_states,
-           load_order,
-           command_registry_table,
-           plugin_config
-         ) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
   Loads a plugin by module.
   """
   def load_plugin_by_module(module, state) do
@@ -296,31 +267,6 @@ defmodule Raxol.Core.Runtime.Plugins.Discovery do
            metadata,
            plugin_states,
            load_order,
-           command_registry_table,
-           plugin_config
-         ) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Unloads a plugin.
-  """
-  def unload_plugin(
-        plugin_id,
-        plugins,
-        metadata,
-        plugin_states,
-        command_registry_table,
-        plugin_config
-      ) do
-    # Delegate to the lifecycle helper module
-    case Raxol.Core.Runtime.Plugins.LifecycleHelper.unload_plugin(
-           plugin_id,
-           plugins,
-           metadata,
-           plugin_states,
            command_registry_table,
            plugin_config
          ) do
