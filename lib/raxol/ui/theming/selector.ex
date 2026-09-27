@@ -137,9 +137,10 @@ defmodule Raxol.UI.Theming.Selector do
       | state: %{component.state | selected_index: clicked_index}
     }
 
-    # Apply theme on click
+    # Apply theme on click. By struct: its name is a display string, and
+    # apply_theme/1 takes a theme or a registered id.
     selected_theme = Enum.at(updated.state.themes, clicked_index)
-    _ = Theme.apply_theme(selected_theme.name)
+    :ok = Theme.apply_theme(selected_theme)
 
     # Call the onSelect callback if provided
     on_select = component.props[:on_select]
