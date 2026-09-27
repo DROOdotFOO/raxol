@@ -40,10 +40,6 @@ defmodule Raxol.Core.Metrics do
       )
     end)
 
-    fire_and_forget(fn ->
-      Raxol.Core.Metrics.Aggregator.record(name, value, tags)
-    end)
-
     :ok
   end
 

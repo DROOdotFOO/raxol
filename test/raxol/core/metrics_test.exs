@@ -30,6 +30,16 @@ defmodule Raxol.Core.MetricsTest do
     assert metrics == %{}
   end
 
+  test "record/3 stores one entry per call" do
+    start_supervised!({MetricsCollector, auto_collect_system_metrics: false})
+    MetricsCollector.clear_metrics()
+
+    assert :ok = Metrics.record("metrics_test_once", 5, component: "table")
+
+    assert {:ok, [%{value: 5, tags: [component: "table"]}]} =
+             MetricsCollector.get_metrics("metrics_test_once", %{})
+  end
+
   defp stop_if_running(name) do
     case Process.whereis(name) do
       nil -> :ok

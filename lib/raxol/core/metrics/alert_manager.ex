@@ -91,16 +91,24 @@ defmodule Raxol.Core.Metrics.AlertManager do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
-    state = %{
-      rules: %{},
-      next_rule_id: 1,
-      alert_states: %{},
-      alert_history: %{},
-      options: Map.merge(@default_options, Map.new(opts))
-    }
+    options = Map.merge(@default_options, Map.new(opts))
 
-    schedule_check()
-    {:ok, state}
+    case options.check_interval do
+      seconds when is_integer(seconds) and seconds > 0 ->
+        state = %{
+          rules: %{},
+          next_rule_id: 1,
+          alert_states: %{},
+          alert_history: %{},
+          options: options
+        }
+
+        schedule_check(seconds)
+        {:ok, state}
+
+      invalid ->
+        {:stop, {:invalid_option, :check_interval, invalid}}
+    end
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -167,7 +175,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:check_alerts, _timer_id}, state) do
     new_state = check_all_alerts(state)
-    schedule_check()
+    schedule_check(state.options.check_interval)
     {:noreply, new_state}
   end
 
@@ -269,8 +277,10 @@ defmodule Raxol.Core.Metrics.AlertManager do
   defp get_grouped_values(metrics, group_by) do
     metrics
     |> Enum.group_by(fn metric ->
+      tags = MetricsCollector.normalize_tags(metric.tags)
+
       Enum.map_join(group_by, ":", fn key ->
-        Map.get(metric.tags, key) || lookup_atom_tag(metric.tags, key)
+        Map.get(tags, key) || lookup_atom_tag(tags, key)
       end)
     end)
     |> Enum.map(fn {group, group_metrics} ->
@@ -412,13 +422,13 @@ defmodule Raxol.Core.Metrics.AlertManager do
     )
   end
 
-  defp schedule_check do
+  defp schedule_check(interval_seconds) do
     timer_id = System.unique_integer([:positive])
 
     Process.send_after(
       self(),
       {:check_alerts, timer_id},
-      @default_options.check_interval * 1000
+      interval_seconds * 1000
     )
   end
 
