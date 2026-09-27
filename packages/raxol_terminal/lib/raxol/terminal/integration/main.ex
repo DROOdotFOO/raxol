@@ -108,7 +108,7 @@ defmodule Raxol.Terminal.Integration do
     state = Buffer.move_cursor(state, x, y)
 
     # Move cursor on screen
-    state = IntegrationRenderer.move_cursor(state, x, y)
+    :ok = IntegrationRenderer.move_cursor(state, x, y)
 
     state
   end
