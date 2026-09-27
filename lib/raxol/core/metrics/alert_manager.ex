@@ -26,7 +26,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
           tags: map(),
           group_by: [String.t() | atom()],
           # seconds
-          cooldown: pos_integer(),
+          cooldown: non_neg_integer(),
           notification_channels: [String.t()]
         }
 
@@ -38,6 +38,8 @@ defmodule Raxol.Core.Metrics.AlertManager do
     default_cooldown: 300,
     default_severity: :warning
   }
+
+  @severities [:info, :warning, :error, :critical]
 
   # Helper function to get the process name
   defp process_name(pid) when is_pid(pid), do: pid
@@ -93,23 +95,36 @@ defmodule Raxol.Core.Metrics.AlertManager do
   def init_manager(opts) do
     options = Map.merge(@default_options, Map.new(opts))
 
-    case options.check_interval do
-      seconds when is_integer(seconds) and seconds > 0 ->
-        state = %{
-          rules: %{},
-          next_rule_id: 1,
-          alert_states: %{},
-          alert_history: %{},
-          options: options
-        }
+    with :ok <- validate_option(:check_interval, options.check_interval),
+         :ok <- validate_option(:default_cooldown, options.default_cooldown),
+         :ok <- validate_option(:default_severity, options.default_severity) do
+      state = %{
+        rules: %{},
+        next_rule_id: 1,
+        alert_states: %{},
+        alert_history: %{},
+        options: options
+      }
 
-        schedule_check(seconds)
-        {:ok, state}
-
-      invalid ->
-        {:stop, {:invalid_option, :check_interval, invalid}}
+      schedule_check(options.check_interval)
+      {:ok, state}
     end
   end
+
+  defp validate_option(:check_interval, seconds)
+       when is_integer(seconds) and seconds > 0,
+       do: :ok
+
+  defp validate_option(:default_cooldown, seconds)
+       when is_integer(seconds) and seconds >= 0,
+       do: :ok
+
+  defp validate_option(:default_severity, severity)
+       when severity in @severities,
+       do: :ok
+
+  defp validate_option(key, invalid),
+    do: {:stop, {:invalid_option, key, invalid}}
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:add_rule, rule}, _from, state) do

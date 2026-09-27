@@ -453,6 +453,31 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
       assert {:ok, history} = AlertManager.get_alert_history(rule_id, name)
       assert [%{severity: :critical}, %{severity: :critical}] = history
     end
+
+    test "rejects a default_cooldown that is not a non-negative integer number of seconds" do
+      Process.flag(:trap_exit, true)
+
+      for invalid <- [nil, -1, 0.5, "300"] do
+        assert {:error, {:invalid_option, :default_cooldown, ^invalid}} =
+                 AlertManager.start_link(default_cooldown: invalid)
+      end
+    end
+
+    test "rejects a default_severity that is not a known severity" do
+      Process.flag(:trap_exit, true)
+
+      for invalid <- [nil, :warn, "critical", {:error, :x}] do
+        assert {:error, {:invalid_option, :default_severity, ^invalid}} =
+                 AlertManager.start_link(default_severity: invalid)
+      end
+    end
+
+    test "accepts every documented severity" do
+      for severity <- [:info, :warning, :error, :critical] do
+        assert {:ok, pid} = AlertManager.start_link(default_severity: severity)
+        GenServer.stop(pid)
+      end
+    end
   end
 
   describe "error handling" do
