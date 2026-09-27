@@ -66,17 +66,6 @@ defmodule Raxol.Core.Metrics.Aggregator do
   end
 
   @doc """
-  Records a metric for aggregation.
-  """
-  def record(name, value, tags \\ []) do
-    # This is a simple pass-through to the unified collector
-    # The actual aggregation happens based on rules
-    Raxol.Core.Metrics.MetricsCollector.record_metric(name, :custom, value,
-      tags: tags
-    )
-  end
-
-  @doc """
   Stops the aggregator.
   """
   def stop(pid \\ __MODULE__) do
