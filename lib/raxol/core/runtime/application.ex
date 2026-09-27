@@ -31,15 +31,18 @@ defmodule Raxol.Core.Runtime.Application do
         end
 
         def view(model) do
-          view do
-            panel title: "Counter" do
-              row do
-                button(label: "-", on_click: :decrement)
-                text(content: "Count: \#{model.count}")
-                button(label: "+", on_click: :increment)
+          panel(
+            title: "Counter",
+            children: [
+              row style: %{gap: 1} do
+                [
+                  button("-", on_click: :decrement),
+                  text("Count: \#{model.count}"),
+                  button("+", on_click: :increment)
+                ]
               end
-            end
-          end
+            ]
+          )
         end
 
         def subscribe(_model) do

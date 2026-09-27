@@ -43,14 +43,18 @@ defmodule Raxol.UI.Layout.StyleInheritance do
 
   @doc """
   Converts style values to a map. Handles maps, keyword-like lists, and atoms.
+
+  List entries that are neither `{key, value}` pairs nor atoms are skipped,
+  so one malformed entry cannot fail the layout of the whole frame.
   """
   @spec ensure_style_map(term()) :: map()
   def ensure_style_map(style) when is_map(style), do: style
 
   def ensure_style_map(style) when is_list(style) do
-    Enum.into(style, %{}, fn
-      {k, v} -> {k, v}
-      atom when is_atom(atom) -> {atom, true}
+    Enum.reduce(style, %{}, fn
+      {k, v}, acc -> Map.put(acc, k, v)
+      atom, acc when is_atom(atom) -> Map.put(acc, atom, true)
+      _other, acc -> acc
     end)
   end
 
