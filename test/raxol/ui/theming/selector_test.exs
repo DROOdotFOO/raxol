@@ -65,4 +65,76 @@ defmodule Raxol.UI.Theming.SelectorTest do
 
     assert_received {:selected, "Selector Test Theme"}
   end
+
+  defp key(selector, key),
+    do: Selector.handle_event(selector, {:key_press, key, []}, %{})
+
+  # Opens the list from the keyboard and moves the highlight onto `theme`.
+  defp highlight_with_keys(theme, props \\ %{}) do
+    {:ok, opened} = key(Selector.init(props), :enter)
+    assert opened.state.expanded
+
+    target = Enum.find_index(opened.state.themes, &(&1.id == theme.id))
+    steps = target - opened.state.selected_index
+    arrow = if steps < 0, do: :up, else: :down
+
+    Enum.reduce(List.duplicate(arrow, abs(steps)), opened, fn arrow, selector ->
+      {:ok, moved} = key(selector, arrow)
+      moved
+    end)
+  end
+
+  test "Enter on the closed selector opens the list and leaves the theme alone" do
+    before = Theme.current()
+
+    assert {:ok, opened} = key(Selector.init(%{}), :enter)
+
+    assert opened.state.expanded
+    assert Theme.current() == before
+  end
+
+  # A click can only land on a listed theme; Enter picks the highlight,
+  # which an empty list does not have.
+  test "Enter on an empty list closes it and leaves the theme alone" do
+    Application.put_env(:raxol, :themes, %{})
+    before = Theme.current()
+
+    {:ok, opened} = key(Selector.init(%{}), :enter)
+    assert opened.state.themes == []
+
+    assert {:ok, closed} = key(opened, :enter)
+
+    refute closed.state.expanded
+    assert Theme.current() == before
+  end
+
+  for select_key <- [:enter, :space] do
+    test "#{select_key} applies the highlighted theme, closes the list and calls on_select",
+         %{theme: theme} do
+      test_pid = self()
+
+      highlighted =
+        highlight_with_keys(theme, %{
+          on_select: &send(test_pid, {:selected, &1})
+        })
+
+      assert {:ok, selected} = key(highlighted, unquote(select_key))
+
+      assert Theme.current() == theme
+      refute selected.state.expanded
+      assert_received {:selected, "Selector Test Theme"}
+    end
+  end
+
+  test "Escape closes the list without applying the highlighted theme", %{
+    theme: theme
+  } do
+    before = Theme.current()
+    highlighted = highlight_with_keys(theme)
+
+    assert {:ok, closed} = key(highlighted, :escape)
+
+    refute closed.state.expanded
+    assert Theme.current() == before
+  end
 end

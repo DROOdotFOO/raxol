@@ -84,23 +84,31 @@ defmodule Raxol.UI.Theming.Selector do
     {:ok, component}
   end
 
+  # Enter and Space pick the highlighted theme, as the list's footer says.
+  defp handle_key_event_by_expanded_state(true, component, key)
+       when key in [:enter, :space] do
+    select_theme(component, component.state.selected_index)
+  end
+
   defp handle_key_event_by_expanded_state(true, component, key) do
-    # Only handle up/down when expanded
     themes_count = length(component.state.themes)
     current_index = component.state.selected_index
 
-    # Calculate new index based on direction
     new_index =
       case key do
         :up -> max(0, current_index - 1)
         :down -> min(themes_count - 1, current_index + 1)
         :left -> max(0, current_index - 1)
         :right -> min(themes_count - 1, current_index + 1)
-        :enter -> current_index
-        :space -> current_index
       end
 
     {:ok, %{component | state: %{component.state | selected_index: new_index}}}
+  end
+
+  # Enter and Space open the closed selector, as a click does.
+  defp handle_key_event_by_expanded_state(false, component, key)
+       when key in [:enter, :space] do
+    {:ok, %{component | state: %{component.state | expanded: true}}}
   end
 
   defp handle_key_event_by_expanded_state(false, component, _key) do
@@ -131,28 +139,37 @@ defmodule Raxol.UI.Theming.Selector do
   end
 
   defp handle_theme_click_by_validity(true, component, clicked_index) do
-    # Update selected index
-    updated = %{
-      component
-      | state: %{component.state | selected_index: clicked_index}
-    }
-
-    # Apply theme on click. By struct: its name is a display string, and
-    # apply_theme/1 takes a theme or a registered id.
-    selected_theme = Enum.at(updated.state.themes, clicked_index)
-    :ok = Theme.apply_theme(selected_theme)
-
-    # Call the onSelect callback if provided
-    on_select = component.props[:on_select]
-    call_on_select_if_provided(on_select, selected_theme.name)
-
-    # Collapse after selection
-    {:ok, %{updated | state: %{updated.state | expanded: false}}}
+    select_theme(component, clicked_index)
   end
 
   defp handle_theme_click_by_validity(false, component, _clicked_index) do
     # Click outside theme list area, just collapse
     {:ok, %{component | state: %{component.state | expanded: false}}}
+  end
+
+  # Applies the theme at `index`, tells `:on_select` its name, and closes the
+  # list. By struct: a theme's name is a display string, and apply_theme/1
+  # takes a theme or a registered id. With no theme there (an empty list)
+  # it only closes the list.
+  defp select_theme(component, index) do
+    case Enum.at(component.state.themes, index) do
+      nil ->
+        :ok
+
+      selected_theme ->
+        :ok = Theme.apply_theme(selected_theme)
+
+        call_on_select_if_provided(
+          component.props[:on_select],
+          selected_theme.name
+        )
+    end
+
+    {:ok,
+     %{
+       component
+       | state: %{component.state | selected_index: index, expanded: false}
+     }}
   end
 
   defp call_on_select_if_provided(nil, _theme_name), do: :ok
