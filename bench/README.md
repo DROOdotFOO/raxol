@@ -37,7 +37,7 @@ sensitivity and budget-change rules before changing a number.
 | `suites/parser/` | `parser_benchmark.exs`, `ansi_profile.exs`, `parser_chain_profile.exs`, `sgr_comparison.exs` |
 | `suites/terminal/` | `buffer_benchmark.exs`, `cursor_benchmark.exs`, `emulator_profiling.exs`, `lite_emulator_test.exs` |
 | `suites/rendering/` | `render_performance_simple.exs` |
-| `suites/core/` | `performance_summary.exs`, `performance_improvements_benchmark.exs` |
+| `suites/core/` | `performance_summary.exs` |
 | `suites/validation/` | `validate_optimizations.exs`, `verify_optimization.exs` |
 | `suites/comparison/` | `framework_comparison.exs`, the source of the root README's frame-time table |
 | `suites/enhanced/` | `performance_dashboard.exs` |
