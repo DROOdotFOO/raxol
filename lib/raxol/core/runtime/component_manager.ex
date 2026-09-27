@@ -41,13 +41,14 @@ defmodule Raxol.Core.Runtime.ComponentManager do
   subscribes and stopped when the last one leaves. An `{:event, _, _}` message
   for a type no component lists is dropped.
 
-  If EventManager is not running when a type's first component subscribes, a
-  warning is logged and the component is left unsubscribed from that type; it
-  can subscribe again once EventManager is back. Delivery stops if EventManager
-  restarts: the subscriptions lived in the stopped EventManager and are not
-  re-established with the new one, and since the manager still counts them as
-  running, subscribing again does not renew them until every component listing
-  the type has left it.
+  If starting a type's EventManager subscription fails when its first
+  component subscribes (EventManager not running, not answering in time, or
+  stopping during the call), a warning is logged and the component is left
+  unsubscribed from that type; it can subscribe again once EventManager is
+  back. Delivery stops if EventManager restarts: the subscriptions lived in
+  the stopped EventManager and are not re-established with the new one, and
+  since the manager still counts them as running, subscribing again does not
+  renew them until every component listing the type has left it.
 
   EventManager is node-global: a subscribed component receives every event of
   the type dispatched anywhere on the node, whichever session or process
@@ -572,10 +573,12 @@ defmodule Raxol.Core.Runtime.ComponentManager do
     end
   end
 
+  # EventManager may be down (:noproc), stuck (:timeout) or stop during the
+  # call; none of these may take the manager and its components with it.
   defp start_event_subscription(event_type) do
     Subscription.start(Subscription.events([event_type]), %{pid: self()})
   catch
-    :exit, {:noproc, _} -> {:error, :event_manager_not_running}
+    :exit, reason -> {:error, {:event_manager_unavailable, reason}}
   end
 
   defp unsubscribe_component(event_type, component_id, state) do

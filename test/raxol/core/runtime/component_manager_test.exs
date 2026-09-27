@@ -513,6 +513,39 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
       assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
     end
 
+    test "subscribing when EventManager exits during the call leaves the manager serving",
+         %{type: type} do
+      manager = Process.whereis(ComponentManager)
+      a = mount_probe(:a)
+      stop_event_manager()
+
+      # Holds EventManager's name and exits on the subscribe call, as an
+      # EventManager stopping mid-call does: the caller exits with
+      # {:shutdown, {GenServer, :call, _}}, not :noproc.
+      test_pid = self()
+
+      stand_in =
+        spawn(fn ->
+          Process.register(self(), EventManager)
+          send(test_pid, :registered)
+          receive do: ({:"$gen_call", _from, _request} -> exit(:shutdown))
+        end)
+
+      assert_receive :registered
+      stand_in_ref = Process.monitor(stand_in)
+
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      assert_receive {:DOWN, ^stand_in_ref, :process, _, :shutdown}
+      assert Process.whereis(ComponentManager) == manager
+
+      # Nothing was recorded for the failed subscription.
+      start_supervised!(EventManager)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
+    end
+
     test "unsubscribing and unmounting while EventManager is down leave the manager serving",
          %{type: type} do
       manager = Process.whereis(ComponentManager)
