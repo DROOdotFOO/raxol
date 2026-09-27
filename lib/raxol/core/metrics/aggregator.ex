@@ -21,7 +21,7 @@ defmodule Raxol.Core.Metrics.Aggregator do
           window: time_window(),
           metric_name: String.t(),
           tags: map(),
-          group_by: [String.t()]
+          group_by: [String.t() | atom()]
         }
 
   @default_options %{
@@ -267,10 +267,7 @@ defmodule Raxol.Core.Metrics.Aggregator do
     |> Enum.group_by(fn metric ->
       tags = MetricsCollector.normalize_tags(metric.tags)
 
-      group_by
-      |> Enum.map_join(":", fn key ->
-        Map.get(tags, key) || Map.get(tags, String.to_atom(key))
-      end)
+      Enum.map_join(group_by, ":", &MetricsCollector.tag_value(tags, &1))
     end)
   end
 

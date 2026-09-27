@@ -150,6 +150,45 @@ defmodule Raxol.Core.Metrics.AggregatorTest do
              }
     end
 
+    test "groups by an atom key, including metrics without that tag" do
+      {:ok, rule_id} =
+        Aggregator.add_rule(%{
+          type: :sum,
+          metric_name: "atom_grouped_metric",
+          group_by: [:region]
+        })
+
+      record_metrics("atom_grouped_metric", [1, 2], region: "us")
+      record_metrics("atom_grouped_metric", [4], %{"region" => "eu"})
+      record_metrics("atom_grouped_metric", [8], %{service: "untagged"})
+
+      assert {:ok, aggregated} = Aggregator.update_aggregation(rule_id)
+
+      assert aggregated |> Map.new(&{&1.group, &1.value}) == %{
+               "us" => 3,
+               "eu" => 4,
+               "" => 8
+             }
+    end
+
+    test "a string group_by key that no tag uses does not create an atom" do
+      key = "unused_tag_key_#{System.unique_integer([:positive])}"
+
+      {:ok, rule_id} =
+        Aggregator.add_rule(%{
+          type: :sum,
+          metric_name: "string_grouped_metric",
+          group_by: [key]
+        })
+
+      record_metrics("string_grouped_metric", [1, 2])
+
+      assert {:ok, [%{group: "", value: 3}]} =
+               Aggregator.update_aggregation(rule_id)
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(key) end
+    end
+
     test "a rule with no recorded metrics aggregates to nothing", %{
       rule_id: rule_id
     } do

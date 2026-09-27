@@ -24,7 +24,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
           threshold: number(),
           severity: alert_severity(),
           tags: map(),
-          group_by: [String.t()],
+          group_by: [String.t() | atom()],
           # seconds
           cooldown: pos_integer(),
           notification_channels: [String.t()]
@@ -279,26 +279,13 @@ defmodule Raxol.Core.Metrics.AlertManager do
     |> Enum.group_by(fn metric ->
       tags = MetricsCollector.normalize_tags(metric.tags)
 
-      Enum.map_join(group_by, ":", fn key ->
-        Map.get(tags, key) || lookup_atom_tag(tags, key)
-      end)
+      Enum.map_join(group_by, ":", &MetricsCollector.tag_value(tags, &1))
     end)
     |> Enum.map(fn {group, group_metrics} ->
       values = Enum.map(group_metrics, & &1.value)
       {group, Aggregator.calculate_aggregation(values, :mean)}
     end)
   end
-
-  # Looks up tags by atom key when given a string key. Uses
-  # String.to_existing_atom so external telemetry sources can't mint new
-  # atoms; unknown keys resolve to nil and fall through to the next branch.
-  defp lookup_atom_tag(tags, key) when is_binary(key) do
-    Map.get(tags, String.to_existing_atom(key))
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp lookup_atom_tag(_tags, _key), do: nil
 
   defp evaluate_alert(current_value, rule, alert_state) do
     now = DateTime.utc_now()

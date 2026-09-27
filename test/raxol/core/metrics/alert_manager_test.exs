@@ -340,6 +340,43 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
 
       assert Process.alive?(pid)
     end
+
+    test "groups by an atom key over string-keyed tags", %{
+      test_name: test_name,
+      pid: pid
+    } do
+      {:ok, rule_id} =
+        AlertManager.add_rule(
+          %{
+            metric_name: "string_tagged_metric",
+            condition: :above,
+            threshold: 50,
+            group_by: [:component]
+          },
+          test_name
+        )
+
+      Raxol.Core.Metrics.MetricsCollector.record_metric(
+        "string_tagged_metric",
+        :custom,
+        20,
+        tags: %{"component" => "table"}
+      )
+
+      Raxol.Core.Metrics.MetricsCollector.record_metric(
+        "string_tagged_metric",
+        :custom,
+        90,
+        tags: %{"component" => "list"}
+      )
+
+      send(pid, {:check_alerts, 1})
+
+      # One group per component: the largest mean is "list"'s 90.0, where a
+      # single ungrouped mean would be 55.0.
+      assert {:ok, %{active: true, current_value: 90.0}} =
+               AlertManager.get_alert_state(rule_id, test_name)
+    end
   end
 
   describe "scheduled checks" do
