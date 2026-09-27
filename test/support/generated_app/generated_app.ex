@@ -179,10 +179,15 @@ defmodule Raxol.Test.GeneratedApp do
     {:ok, _started} = Application.ensure_all_started(app)
     """
 
+    # HOME as this VM booted with: a test that repoints HOME and does not
+    # restore it would leave `mix` without the Hex under ~/.mix, and the VM
+    # waiting on Hex's install prompt.
+    {:ok, [[home]]} = :init.get_argument(:home)
+
     run_bounded(
       System.find_executable("mix"),
       ["run", "--no-compile", "--no-deps-check", "-e", script <> code],
-      [{~c"MIX_ENV", ~c"test"}]
+      [{~c"MIX_ENV", ~c"test"}, {~c"HOME", home}]
     )
   end
 
@@ -214,7 +219,7 @@ defmodule Raxol.Test.GeneratedApp do
     after
       remaining ->
         {:os_pid, os_pid} = Port.info(port, :os_pid)
-        System.cmd("kill", ["-9", Integer.to_string(os_pid)])
+        _ = System.cmd("kill", ["-9", Integer.to_string(os_pid)])
 
         flunk("""
         The application's VM had not exited after \

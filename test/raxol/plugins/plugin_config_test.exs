@@ -17,9 +17,17 @@ defmodule Raxol.Plugins.PluginConfigTest do
     File.rm_rf!(temp_config_dir)
     File.rm_rf!(real_config_dir)
     File.mkdir_p!(temp_dir)
+    previous_home = System.get_env("HOME")
     System.put_env("HOME", temp_dir)
 
+    # HOME is VM-wide. Left at the temp dir, every later test's subprocess
+    # inherits it; a nested `mix run` then finds no Hex under ~/.mix and
+    # waits on its install prompt.
     on_exit(fn ->
+      if previous_home,
+        do: System.put_env("HOME", previous_home),
+        else: System.delete_env("HOME")
+
       File.rm_rf!(temp_config_dir)
       File.rm_rf!(real_config_dir)
     end)
