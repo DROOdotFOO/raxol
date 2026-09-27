@@ -54,7 +54,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
       {project, module} = generate(tmp, unquote(flags))
       app = if unquote(sup?), do: Module.concat(module, App), else: module
 
-      assert app in GeneratedApp.compile!(lib_files(project))
+      assert app in GeneratedApp.compile!(GeneratedApp.lib_files(project))
 
       [first | _] = lines = unquote(lines)
       frame = GeneratedApp.render!(app, first)
@@ -88,7 +88,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
     flags = ["--template", "counter", "--sup", "--ssh", "--liveview"]
     {project, module} = generate(tmp, flags)
 
-    modules = GeneratedApp.compile!(lib_files(project))
+    modules = GeneratedApp.compile!(GeneratedApp.lib_files(project))
 
     for part <- [Application, App, SSH, Live] do
       assert Module.concat(module, part) in modules
@@ -97,7 +97,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
 
   test "counter binds the keys its hint names", %{tmp: tmp} do
     {project, module} = generate(tmp, ["--template", "counter"])
-    assert module in GeneratedApp.compile!(lib_files(project))
+    assert module in GeneratedApp.compile!(GeneratedApp.lib_files(project))
 
     assert GeneratedApp.render!(module, "Count: 0") =~
              "Press '+'/'-' or click buttons. 'q' to quit."
@@ -110,7 +110,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
   # instructions give as the way to run it, only starts the application.
   test "--sup starts the TUI with its application", %{tmp: tmp} do
     {project, _module} = generate(tmp, ["--template", "counter", "--sup"])
-    GeneratedApp.compile!(lib_files(project))
+    GeneratedApp.compile!(GeneratedApp.lib_files(project))
 
     tui = :"#{Path.basename(project)}_tui"
     GeneratedApp.start_application!(project, raxol: [name: tui])
@@ -166,7 +166,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
   # every key typed into it to IEx as well, which evaluates them.
   test "--sup does not start the TUI under IEx", %{tmp: tmp} do
     {project, _module} = generate(tmp, ["--template", "counter", "--sup"])
-    GeneratedApp.compile!(lib_files(project))
+    GeneratedApp.compile!(GeneratedApp.lib_files(project))
 
     {:ok, started} = Application.ensure_all_started(:iex)
     on_exit(fn -> Enum.each(started, &Application.stop/1) end)
@@ -182,7 +182,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
        %{tmp: tmp} do
     flags = ["--template", "counter", "--sup", "--ssh"]
     {project, module} = generate(tmp, flags)
-    GeneratedApp.compile!(lib_files(project))
+    GeneratedApp.compile!(GeneratedApp.lib_files(project))
 
     sup = GeneratedApp.start_application!(project)
 
@@ -220,7 +220,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
   test "--ssh generates an SSH.start/0 that serves the app", %{tmp: tmp} do
     {project, module} = generate(tmp, ["--template", "counter", "--ssh"])
     ssh = Module.concat(module, SSH)
-    assert ssh in GeneratedApp.compile!(lib_files(project))
+    assert ssh in GeneratedApp.compile!(GeneratedApp.lib_files(project))
 
     GeneratedApp.put_config!(project)
 
@@ -319,7 +319,4 @@ defmodule Mix.Tasks.Raxol.NewTest do
     :exit, :noproc -> :ok
     :exit, {:noproc, _call} -> :ok
   end
-
-  defp lib_files(project),
-    do: Path.wildcard(Path.join([project, "lib", "**", "*.ex"]))
 end
