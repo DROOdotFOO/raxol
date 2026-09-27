@@ -128,6 +128,7 @@ defmodule Raxol.Terminal.InlineDriver do
   alias Raxol.Terminal.ANSI.InputParser
   alias Raxol.Terminal.Capabilities
   alias Raxol.Terminal.Capabilities.Probe
+  alias Raxol.Terminal.Driver.IsigGuard
   alias Raxol.Terminal.Driver.Stty
   alias Raxol.Terminal.InlineDriver.CursorReport
   alias Raxol.Terminal.InlineDriver.Sequences
@@ -141,13 +142,6 @@ defmodule Raxol.Terminal.InlineDriver do
   # answered within this bound (a pipe, a dumb terminal) is treated as
   # one that never will, and the caller falls back honestly.
   @default_cursor_probe_budget_ms 300
-  @isig_confirmations 3
-  # Boot-time verify-then-assert `-isig` budget (see reassert_raw_until_isig_off/1):
-  # at most @isig_reassert_attempts passes, each spaced @isig_reassert_interval_ms
-  # apart. The product is the ~3s boot-window liveness bound named in one place
-  # instead of being the accident of two uncoupled inline literals.
-  @isig_reassert_attempts 60
-  @isig_reassert_interval_ms 50
   # Default wall-clock floor between two real (stty-forking) isig guard
   # passes on the live path. Well under a human keypress-to-keypress gap,
   # so normal typing still re-asserts on the next key, but a burst/paste
@@ -697,7 +691,7 @@ defmodule Raxol.Terminal.InlineDriver do
   event-clocked guard has had to re-assert it.
 
     * `boot_confirmed?` -- the post-reader-arm verify loop saw `-isig`
-      hold for #{@isig_confirmations} consecutive reads at claim time;
+      hold for #{IsigGuard.confirmations()} consecutive reads at claim time;
     * `reasserts` -- how many times the per-input-event guard found
       ISIG flipped back ON mid-session and re-asserted;
     * `isig_off?` -- the LIVE flags right now, read through the same
@@ -1093,40 +1087,14 @@ defmodule Raxol.Terminal.InlineDriver do
   end
 
   # Bounded verify-then-assert for the post-reader-arm `-isig`
-  # guarantee (see run_post_raw_setup/5's comment). prim_tty's termios
-  # write lands asynchronously, so ONE successful read is not proof the
-  # race is won -- it may simply not have landed yet. This therefore
-  # demands `@isig_confirmations` CONSECUTIVE 50ms-spaced reads showing
-  # `-isig`, re-asserting raw! and restarting the confirmation count on
-  # any flip-back, bounded by `attempts` total iterations (~3s boot-
-  # window liveness bound; two-three passes in practice). Only reachable
-  # with `install_reader?: true` on a real tty; the injected-stty test
-  # paths all run readerless. On a device where the flags never confirm
-  # (e.g. no controlling tty, where stty cannot run at all), this gives
-  # up silently -- nothing here may write bytes to the claimed frame;
-  # the result is recorded for `isig_report/1` and the embedder's probe
-  # (the live demo's boot POST termios line) is the honest reporting
-  # channel.
-  defp reassert_raw_until_isig_off(stty_module, attempts \\ @isig_reassert_attempts) do
-    do_reassert_isig(stty_module, attempts, 0)
-  end
-
-  defp do_reassert_isig(_stty_module, 0, _confirmed), do: :gave_up
-
-  defp do_reassert_isig(_stty_module, _attempts, @isig_confirmations),
-    do: :confirmed
-
-  defp do_reassert_isig(stty_module, attempts, confirmed) do
-    confirmed =
-      if Stty.isig_off?() do
-        confirmed + 1
-      else
-        safe_stty_call(stty_module, :raw!, [])
-        0
-      end
-
-    Process.sleep(@isig_reassert_interval_ms)
-    do_reassert_isig(stty_module, attempts - 1, confirmed)
+  # guarantee (see run_post_raw_setup/5's comment and
+  # `Raxol.Terminal.Driver.IsigGuard`, which the full-screen Driver shares).
+  # Only reachable with `install_reader?: true` on a real tty; the
+  # injected-stty test paths all run readerless. The result is recorded for
+  # `isig_report/1`, and the embedder's probe (the live demo's boot POST
+  # termios line) is the honest reporting channel.
+  defp reassert_raw_until_isig_off(stty_module) do
+    IsigGuard.reassert_until_off(fn -> safe_stty_call(stty_module, :raw!, []) end)
   end
 
   # The event-clocked isig guard: every `isig_guard_every` input chunks

@@ -20,8 +20,8 @@ defmodule Raxol.Terminal.Driver.SigwinchTest do
       assert_receive :sigwinch, 500
 
       # Other signals are ignored
-      :ok = :gen_event.notify(manager, :sigcont)
-      refute_receive :sigcont, 50
+      :ok = :gen_event.notify(manager, :sigusr1)
+      refute_receive :sigusr1, 50
 
       :ok = :gen_event.stop(manager)
     end

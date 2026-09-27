@@ -10,6 +10,13 @@ defmodule Raxol.Terminal.Driver do
   - Detecting terminal resize events
   - Sending parsed events to the `Dispatcher`
   - Restoring terminal state on exit
+
+  Raw mode turns ISIG off, so Ctrl+C reaches the app as a key
+  (`%{key: :char, char: "c", ctrl: true}`) rather than as SIGINT. So that an
+  app which does not bind it can still be quit, a second Ctrl+C within a
+  second of the first, with no other key between them, sends the runtime
+  (`:runtime_pid`, the Lifecycle) `:quit_runtime`, as `Directive.stop/0`
+  does, instead of reaching the app.
   """
 
   alias Raxol.Core.Runtime.Log
@@ -26,6 +33,8 @@ defmodule Raxol.Terminal.Driver do
   alias Raxol.Terminal.Driver.BackgroundQuery
   alias Raxol.Terminal.Driver.Dispatch
   alias Raxol.Terminal.Driver.InputBuffer
+  alias Raxol.Terminal.Driver.IsigGuard
+  alias Raxol.Terminal.Driver.Stty
   alias Raxol.Terminal.Driver.TermboxLifecycle
 
   @compile {:no_warn_undefined, Raxol.Terminal.Driver.Dispatch}
@@ -33,6 +42,12 @@ defmodule Raxol.Terminal.Driver do
   @compile {:no_warn_undefined, Raxol.Terminal.Driver.TermboxLifecycle}
 
   @input_buffer_flush_ms 50
+
+  # With ISIG off, ^C reaches the app as a key and nothing else, so an app
+  # that does not bind it could not be interrupted from its own terminal. A
+  # second ^C within this many ms of the first, with no other key between
+  # them, asks the runtime to quit instead of reaching the app.
+  @force_quit_window_ms 1_000
 
   # Check if termbox2_nif is available at compile time
   @termbox2_available Code.ensure_loaded?(:termbox2_nif)
@@ -53,13 +68,24 @@ defmodule Raxol.Terminal.Driver do
 
   defmodule State do
     @moduledoc false
+    # `logger_level`: the Logger level found at init, before the TTY branch
+    # turned logging off; nil when init left Logger alone. Restored by
+    # `TermboxLifecycle.cleanup_terminal/1`.
+    #
+    # `runtime_pid`: where a second ^C in a row sends `:quit_runtime`, the
+    # message `Directive.stop/0` sends (the Lifecycle); nil: ^C only ever
+    # reaches the app. `ctrl_c_at`: when the ^C a next one would follow
+    # arrived (monotonic ms), nil when there is none.
     defstruct dispatcher_pid: nil,
+              runtime_pid: nil,
               original_stty: nil,
+              logger_level: nil,
               termbox_state: :uninitialized,
               init_retries: 0,
               io_terminal_state: nil,
               input_buffer: <<>>,
               flush_timer: nil,
+              ctrl_c_at: nil,
               sigwinch_handler: nil,
               capabilities_probe: nil,
               capabilities_probe_timer: nil
@@ -115,6 +141,7 @@ defmodule Raxol.Terminal.Driver do
 
     state = %State{
       dispatcher_pid: dispatcher_pid,
+      runtime_pid: extract_runtime_pid(opts),
       original_stty: output,
       termbox_state: :uninitialized,
       init_retries: 0
@@ -170,10 +197,9 @@ defmodule Raxol.Terminal.Driver do
         # so we must redirect from /dev/tty for stty to affect the real terminal)
         original_stty = Raxol.Terminal.Driver.Stty.save()
 
-        # Raw mode on the actual terminal: no echo, no line buffering, no signals
-        Raxol.Terminal.Driver.Stty.raw!()
-
-        # Suppress Logger console output so it doesn't corrupt the TUI
+        # Suppress Logger console output so it doesn't corrupt the TUI. The
+        # level found here is restored by TermboxLifecycle.cleanup_terminal/1.
+        logger_level = Logger.level()
         Logger.configure(level: :none)
 
         # Enter alternate screen, hide cursor, disable DECAWM (autowrap,
@@ -211,6 +237,19 @@ defmodule Raxol.Terminal.Driver do
         # and sets up trace interception of the reader's output.
         start_stdin_reader(self())
 
+        # Raw mode on the actual terminal: no echo, no line buffering, no
+        # signals. Must run after start_stdin_reader: its reinit writes
+        # prim_tty's own raw mode, which is the termios saved at VM boot
+        # minus ICANON and ECHO, so ISIG comes back on and ^C raises SIGINT
+        # (the BEAM BREAK menu) instead of reaching the app as a key. On OTP
+        # 29 that write lands before user_drv replies to the start_shell
+        # call, so this call comes after it; on OTP 26/27 the reinit leaves
+        # the tty cooked (see InlineDriver's start_stdin_reader/1) and this
+        # call is what makes it raw. prim_tty writes its raw mode again on
+        # every SIGCONT, at a moment of its choosing, which is why
+        # handle_manager_info(:sigcont, _) runs IsigGuard's verify loop.
+        Raxol.Terminal.Driver.Stty.raw!()
+
         # Query the terminal's capabilities (OSC 11 background + OSC 10
         # foreground + kitty keyboard flags + DECRQM 2026 sync-output +
         # XTVERSION identity) with a DA1 probe as the unsupported-terminal
@@ -227,6 +266,7 @@ defmodule Raxol.Terminal.Driver do
           state
           | termbox_state: :initialized,
             original_stty: original_stty,
+            logger_level: logger_level,
             sigwinch_handler: sigwinch_handler,
             io_terminal_state: %{
               input_reader: Process.whereis(:user_drv_reader),
@@ -300,6 +340,17 @@ defmodule Raxol.Terminal.Driver do
 
   @impl true
   def handle_manager_info(:sigwinch, state), do: {:noreply, state}
+
+  # The VM was stopped and continued (`kill -STOP`/`kill -CONT`, a shell's
+  # `fg`), and prim_tty is writing its own raw mode, ISIG on, again: ^C
+  # would be SIGINT for the rest of the session. On OTP 29 the signal comes
+  # through :erl_signal_server (SigwinchHandler forwards it); on OTP 26/27
+  # through the prim_tty reader, whose sends are traced (clause below).
+  @impl true
+  def handle_manager_info(:sigcont, state) do
+    _ = IsigGuard.reassert_until_off(&Stty.raw!/0)
+    {:noreply, state}
+  end
 
   @impl true
   def handle_manager_info({:register_dispatcher, pid}, state)
@@ -376,6 +427,11 @@ defmodule Raxol.Terminal.Driver do
     else
       {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_manager_info({:trace, _reader, :send, {_ref, {:signal, :cont}}, _to}, state) do
+    handle_manager_info(:sigcont, state)
   end
 
   # Ignore other trace messages from the reader (signals, receives, etc.)
@@ -455,16 +511,44 @@ defmodule Raxol.Terminal.Driver do
   defp dispatch_raw_input(data, state) do
     {data, state} = route_capabilities_input(data, state)
     events = parse_input_safely(data)
-
-    Enum.each(events, fn event ->
-      case state.dispatcher_pid do
-        nil -> :ok
-        pid -> Dispatch.send_event_to_dispatcher(pid, event)
-      end
-    end)
-
-    {:noreply, state}
+    {:noreply, Enum.reduce(events, state, &dispatch_input_event/2)}
   end
+
+  defp dispatch_input_event(
+         %Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} = event,
+         state
+       ) do
+    now = System.monotonic_time(:millisecond)
+
+    if force_quit?(state, now) do
+      send(state.runtime_pid, :quit_runtime)
+      %{state | ctrl_c_at: nil}
+    else
+      send_to_dispatcher(event, state)
+      %{state | ctrl_c_at: now}
+    end
+  end
+
+  defp dispatch_input_event(%Event{type: :key} = event, state) do
+    send_to_dispatcher(event, state)
+    %{state | ctrl_c_at: nil}
+  end
+
+  defp dispatch_input_event(event, state) do
+    send_to_dispatcher(event, state)
+    state
+  end
+
+  defp force_quit?(%State{runtime_pid: pid, ctrl_c_at: at}, now)
+       when is_pid(pid) and is_integer(at),
+       do: now - at <= @force_quit_window_ms
+
+  defp force_quit?(_state, _now), do: false
+
+  defp send_to_dispatcher(_event, %State{dispatcher_pid: nil}), do: :ok
+
+  defp send_to_dispatcher(event, %State{dispatcher_pid: pid}),
+    do: Dispatch.send_event_to_dispatcher(pid, event)
 
   # Last-resort net: InputParser.parse/1 is written to be total over the
   # ANSI/CSI grammar, but a parser bug here must never crash the Driver --
@@ -738,6 +822,9 @@ defmodule Raxol.Terminal.Driver do
 
   defp extract_dispatcher_pid(pid) when is_pid(pid), do: pid
   defp extract_dispatcher_pid(_), do: nil
+
+  defp extract_runtime_pid(opts) when is_list(opts), do: Keyword.get(opts, :runtime_pid)
+  defp extract_runtime_pid(_), do: nil
 
   def terminate(_reason, %{termbox_state: :initialized} = state) do
     Raxol.Core.Runtime.Log.info("Terminal Driver terminating.")

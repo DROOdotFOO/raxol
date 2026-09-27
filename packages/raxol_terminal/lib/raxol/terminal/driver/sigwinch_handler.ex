@@ -2,6 +2,10 @@ defmodule Raxol.Terminal.Driver.SigwinchHandler do
   @moduledoc """
   `:gen_event` handler on `:erl_signal_server` that forwards SIGWINCH to the
   Driver, because prim_tty sends it to `user_drv`, not the traced reader.
+
+  It forwards SIGCONT too, when prim_tty has asked for it (OTP 29's
+  `prim_tty_sighandler` does): prim_tty then writes its own raw mode, ISIG
+  on, which the Driver has to undo.
   """
 
   @behaviour :gen_event
@@ -20,6 +24,11 @@ defmodule Raxol.Terminal.Driver.SigwinchHandler do
   @impl true
   def handle_event(:sigwinch, %{driver: driver_pid} = state) do
     send(driver_pid, :sigwinch)
+    {:ok, state}
+  end
+
+  def handle_event(:sigcont, %{driver: driver_pid} = state) do
+    send(driver_pid, :sigcont)
     {:ok, state}
   end
 

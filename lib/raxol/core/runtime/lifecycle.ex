@@ -32,6 +32,12 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   `GenServer.stop` over the surviving children) -- teardown-on-crash is
   intentional, not a correctness break.
 
+  A child that fails to stop (it crashes in its own `terminate/2`, or
+  overruns the stop timeout and is killed) does not stop the teardown. The
+  failures are logged once the teardown is done, and a quit that would have
+  ended `:normal` ends `{:shutdown, {:teardown_failed, failures}}` instead,
+  so a `start_link` caller such as a `mix run` script exits non-zero.
+
   ## Sub-modules
   - `Lifecycle.Initializer` -- component startup sequence
   - `Lifecycle.Shutdown`    -- stop_process, cleanup, registry management
@@ -45,6 +51,10 @@ defmodule Raxol.Core.Runtime.Lifecycle do
 
   defmodule State do
     @moduledoc false
+    # `driver_logger_level`: the Logger level found before the Terminal
+    # Driver started, when the Driver turned logging off (it does on a TTY,
+    # for the session); nil otherwise. terminate/2 restores it when the
+    # Driver did not get to.
     @type t :: %__MODULE__{
             app_module: module() | nil,
             options: keyword(),
@@ -57,6 +67,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
             initial_commands: list(),
             dispatcher_pid: pid() | nil,
             driver_pid: pid() | nil,
+            driver_logger_level: Logger.level() | nil,
             rendering_engine_pid: pid() | nil,
             code_reloader_pid: pid() | nil,
             time_travel_pid: pid() | nil,
@@ -78,6 +89,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
               initial_commands: [],
               dispatcher_pid: nil,
               driver_pid: nil,
+              driver_logger_level: nil,
               rendering_engine_pid: nil,
               code_reloader_pid: nil,
               time_travel_pid: nil,
@@ -153,6 +165,8 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   end
 
   defp finish_init(app_module, options) do
+    found_level = Logger.level()
+
     case Initializer.initialize_all(app_module, options) do
       {:ok, registry_table, pm_pid, initialized_model, dispatcher_pid,
        driver_pid, rendering_engine_pid} ->
@@ -170,6 +184,11 @@ defmodule Raxol.Core.Runtime.Lifecycle do
             rendering_engine_pid
           )
 
+        state = %{
+          state
+          | driver_logger_level: driver_logger_level(driver_pid, found_level)
+        }
+
         Log.info_with_context(
           "[#{__MODULE__}] successfully initialized for #{inspect(app_module)}. Dispatcher PID: #{inspect(dispatcher_pid)}"
         )
@@ -184,6 +203,13 @@ defmodule Raxol.Core.Runtime.Lifecycle do
         _ = cleanup_fun.()
         {:stop, reason}
     end
+  end
+
+  # The Driver is started, and on a TTY turns logging off, inside
+  # initialize_all/2; the level it found is the one found before it.
+  defp driver_logger_level(driver_pid, found_level) do
+    if is_pid(driver_pid) and found_level != :none and Logger.level() == :none,
+      do: found_level
   end
 
   @impl GenServer
@@ -437,8 +463,58 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   @impl GenServer
   def terminate(reason, state) do
     maybe_leave_alternate_screen(state)
-    stop_dependent_processes(state)
-    terminate_manager(reason, state)
+    children = dependent_processes(state)
+    child_pids = for {pid, _label} <- children, do: pid
+
+    # On a TTY the Terminal Driver runs the session with Logger at :none, and
+    # turns it back on at the end of its cleanup. The Driver is stopped
+    # first, so anything the rest of the teardown logged would print on the
+    # terminal it has just restored: keep the teardown silent too. Logger at
+    # :none with no Driver is not that (TERMINAL_LOG_LEVEL=none sets it for
+    # the node, SSH and LiveView sessions included).
+    silent? = is_pid(state.driver_pid) and Logger.level() == :none
+
+    failures =
+      Shutdown.quietly(silent?, child_pids, fn ->
+        failures = stop_dependent_processes(children)
+        terminate_manager(reason, state)
+        failures
+      end)
+
+    # A Driver that crashed or was killed before its cleanup turned logging
+    # back on left it off for the node, and the report below with it.
+    if silent? and state.driver_logger_level != nil and
+         Logger.level() == :none do
+      Logger.configure(level: state.driver_logger_level)
+    end
+
+    # Only now, with the terminal restored and logging back on. A quit whose
+    # teardown failed does not exit :normal, so the process that started the
+    # app (`mix run`) exits non-zero.
+    Shutdown.report_stop_failures(failures)
+
+    if failures != [] and reason == :normal do
+      exit({:shutdown, {:teardown_failed, failures}})
+    end
+
+    :ok
+  end
+
+  # Every linked child Lifecycle started that is still set, in the order
+  # stop_dependent_processes/1 stops them.
+  defp dependent_processes(state) do
+    Enum.filter(
+      [
+        {state.driver_pid, "Terminal Driver"},
+        {state.rendering_engine_pid, "Rendering Engine"},
+        {state.cycle_profiler_pid, "CycleProfiler"},
+        {state.time_travel_pid, "TimeTravel"},
+        {state.code_reloader_pid, "CodeReloader"},
+        {state.dispatcher_pid, "Dispatcher"},
+        {state.plugin_manager, "PluginManager"}
+      ],
+      fn {pid, _label} -> is_pid(pid) end
+    )
   end
 
   # Stops every linked child Lifecycle started, in an order that lets the
@@ -453,16 +529,13 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   # relying solely on terminate_manager's cleanup so its stop is part of the
   # one deterministic ordering; terminate_manager still runs afterward and
   # no-ops on the already-stopped (or shared/adopted) manager. Every stop
-  # is a no-op on a nil or already-dead pid (see Shutdown.stop_process/2),
-  # so a crash that already took a child down is handled safely.
-  defp stop_dependent_processes(state) do
-    Shutdown.stop_process(state.driver_pid, "Terminal Driver")
-    Shutdown.stop_process(state.rendering_engine_pid, "Rendering Engine")
-    Shutdown.stop_process(state.cycle_profiler_pid, "CycleProfiler")
-    Shutdown.stop_process(state.time_travel_pid, "TimeTravel")
-    Shutdown.stop_process(state.code_reloader_pid, "CodeReloader")
-    Shutdown.stop_process(state.dispatcher_pid, "Dispatcher")
-    Shutdown.stop_process(state.plugin_manager, "PluginManager")
+  # is a no-op on an already-dead pid (see Shutdown.stop_process/2), so a
+  # crash that already took a child down is handled safely. Returns the
+  # children that did not stop cleanly, as `{label, pid, reason}`.
+  defp stop_dependent_processes(children) do
+    for {pid, label} <- children,
+        {:error, reason} <- [Shutdown.stop_process(pid, label)],
+        do: {label, pid, reason}
   end
 
   defp terminate_manager(reason, state) do
