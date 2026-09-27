@@ -1,10 +1,12 @@
 defmodule Raxol.Core.Runtime.ComponentManagerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
+  alias Raxol.Core.Events.EventManager
   alias Raxol.Core.Runtime.ComponentManager
 
   alias Raxol.Test.ComponentManagerTestMocks.Raxol.Core.Runtime.ComponentManagerTest.TestComponent
-
 
   setup do
     # Start ComponentManager with clean state
@@ -168,6 +170,38 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
     end
   end
 
+  # Answers the :go event with a broadcast of :bump, which every other
+  # component counts. {:shout, data} broadcasts {:bump, data}; its `:reply`
+  # prop picks how update/2 answers {:bump, data}: `{state, []}` by default,
+  # `{:ok, state}`, or a non-state `:garbage`.
+  defmodule BroadcastPeer do
+    def init(props), do: Map.put(props, :bumps, 0)
+    def mount(state), do: {state, []}
+    def unmount(state), do: state
+
+    def update(:bump, state), do: {%{state | bumps: state.bumps + 1}, []}
+
+    def update({:bump, _data}, state) do
+      bumped = %{state | bumps: state.bumps + 1}
+
+      case Map.get(state, :reply) do
+        nil -> {bumped, []}
+        :ok_tuple -> {:ok, bumped}
+        :garbage -> :garbage
+      end
+    end
+
+    def update({:shout, data}, state),
+      do: {state, [{:broadcast, {:bump, data}}]}
+
+    def update(_message, state), do: {state, []}
+
+    def handle_event(:go, state, _context),
+      do: {state, [{:broadcast, :bump}]}
+
+    def handle_event(_event, state, _context), do: {state, []}
+  end
+
   describe "event dispatch" do
     test ~c"dispatch_event sends events to components" do
       {:ok, component_id} = ComponentManager.mount(TestComponent)
@@ -185,6 +219,77 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
       # Verify it was queued for render
       render_queue = ComponentManager.get_render_queue()
       assert component_id in render_queue
+    end
+
+    test "a broadcast from one component's handle_event/3 reaches the others whatever the order" do
+      {:ok, a} = ComponentManager.mount(BroadcastPeer)
+      {:ok, b} = ComponentManager.mount(BroadcastPeer)
+
+      ComponentManager.dispatch_event(:go)
+      # The cast has been handled once the manager answers a later call.
+      _ = :sys.get_state(ComponentManager)
+
+      # Each component broadcast :bump once, and the other one counted it.
+      assert ComponentManager.get_component(a).state.bumps == 1
+      assert ComponentManager.get_component(b).state.bumps == 1
+    end
+  end
+
+  describe "update/2 returns for broadcast and scheduled messages" do
+    test "a broadcast answered with {:ok, state} updates the component" do
+      {:ok, a} = ComponentManager.mount(BroadcastPeer)
+      {:ok, b} = ComponentManager.mount(BroadcastPeer, %{reply: :ok_tuple})
+
+      assert {:ok, _} = ComponentManager.update(a, {:shout, :hi})
+
+      assert %{bumps: 1} = ComponentManager.get_component(b).state
+    end
+
+    test "a broadcast answered with an invalid return keeps the state and is logged without the data" do
+      manager = Process.whereis(ComponentManager)
+      {:ok, a} = ComponentManager.mount(BroadcastPeer)
+      {:ok, bad} = ComponentManager.mount(BroadcastPeer, %{reply: :garbage})
+      {:ok, good} = ComponentManager.mount(BroadcastPeer)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _} =
+                   ComponentManager.update(a, {:shout, "s3cr3t-payload"})
+        end)
+
+      assert Process.whereis(ComponentManager) == manager
+      assert %{bumps: 0} = ComponentManager.get_component(bad).state
+      assert %{bumps: 1} = ComponentManager.get_component(good).state
+      assert log =~ ~r/#{Regex.escape(bad)}.*:bump/
+      refute log =~ "s3cr3t-payload"
+    end
+
+    test "a scheduled message answered with {:ok, state} updates the component" do
+      {:ok, b} = ComponentManager.mount(BroadcastPeer, %{reply: :ok_tuple})
+
+      # What a {:schedule, message, delay} command's timer delivers.
+      send(Process.whereis(ComponentManager), {:update, b, {:bump, :hi}})
+      _ = :sys.get_state(ComponentManager)
+
+      assert %{bumps: 1} = ComponentManager.get_component(b).state
+    end
+
+    test "a scheduled message answered with an invalid return keeps the state and is logged without the data" do
+      {:ok, bad} = ComponentManager.mount(BroadcastPeer, %{reply: :garbage})
+
+      log =
+        capture_log(fn ->
+          send(
+            Process.whereis(ComponentManager),
+            {:update, bad, {:bump, "s3cr3t-payload"}}
+          )
+
+          _ = :sys.get_state(ComponentManager)
+        end)
+
+      assert %{bumps: 0} = ComponentManager.get_component(bad).state
+      assert log =~ ~r/#{Regex.escape(bad)}.*:bump/
+      refute log =~ "s3cr3t-payload"
     end
   end
 
@@ -252,5 +357,320 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
       assert component1.state.last_message == :trigger_broadcast
       assert component2.state.last_message == :broadcast_message
     end
+  end
+
+  # Reports every {:event, type, data} it receives to the test process, and
+  # returns {:subscribe, types} / {:unsubscribe, types} messages (and
+  # {:subscribe_to, types} events) as the matching component commands. Its
+  # `:reply` prop picks how update/2 answers an event: `{state, []}` by
+  # default, `{:ok, state}`, a non-state `:garbage`, or a raise.
+  defmodule EventProbe do
+    def init(props), do: props
+
+    def mount(%{subscribe_on_mount: types} = state),
+      do: {state, [{:command, {:subscribe, types}}]}
+
+    def mount(state), do: {state, []}
+
+    def unmount(state), do: state
+
+    def update({:event, _type, _data} = event, state) do
+      send(state.test_pid, {:component_event, state.name, event})
+
+      case Map.get(state, :reply) do
+        nil -> {state, []}
+        :ok_tuple -> {:ok, Map.put(state, :last_event, event)}
+        :garbage -> :garbage
+        :raise -> raise "could not take #{inspect(event)}"
+      end
+    end
+
+    def update({op, types}, state) when op in [:subscribe, :unsubscribe],
+      do: {state, [{:command, {op, types}}]}
+
+    def update(_message, state), do: {state, []}
+
+    def handle_event({:subscribe_to, types}, state, _context),
+      do: {state, [{:command, {:subscribe, types}}]}
+
+    def handle_event(_event, state, _context), do: {state, []}
+  end
+
+  describe "event subscriptions" do
+    setup do
+      # Supervised by the application; a sync test elsewhere may have stopped it.
+      if is_nil(Process.whereis(EventManager)),
+        do: start_supervised!(EventManager)
+
+      %{type: :"component_sub_test_#{System.unique_integer([:positive])}"}
+    end
+
+    test "a subscribed component receives EventManager events as {:event, type, data}",
+         %{type: type} do
+      a = mount_probe(:a)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
+
+      :ok = EventManager.notify(type, %{n: 2})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 2}}}
+    end
+
+    test "a subscription made in mount/1 delivers events", %{type: type} do
+      mount_probe(:a, %{subscribe_on_mount: [type]})
+
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
+    end
+
+    test "a subscription made in handle_event/3 delivers events until unmount",
+         %{type: type} do
+      a = mount_probe(:a)
+      ComponentManager.dispatch_event({:subscribe_to, [type]})
+      # The cast has subscribed once the manager answers a later call.
+      _ = :sys.get_state(ComponentManager)
+
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
+
+      assert {:ok, _} = ComponentManager.unmount(a)
+      assert event_manager_sends(type) == 0
+    end
+
+    test "components with overlapping subscriptions each receive an event once",
+         %{type: type} do
+      other = :"#{type}_other"
+      a = mount_probe(:a)
+      b = mount_probe(:b)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type, other]})
+      assert {:ok, _} = ComponentManager.update(b, {:subscribe, [type]})
+
+      # One EventManager subscription per type, however many components list it.
+      assert event_manager_sends(type) == 1
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, _}}
+      assert_received {:component_event, :b, {:event, ^type, _}}
+      refute_received {:component_event, _, {:event, ^type, _}}
+
+      :ok = EventManager.dispatch(other, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^other, %{n: 1}}}
+      refute_received {:component_event, _, {:event, ^other, _}}
+    end
+
+    test "a component that subscribes to a type twice receives each event once",
+         %{type: type} do
+      a = mount_probe(:a)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type, type]})
+
+      assert event_manager_sends(type) == 1
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, _}}
+      refute_received {:component_event, :a, {:event, ^type, _}}
+    end
+
+    test "unsubscribing by type stops delivery, and the last one out releases the type",
+         %{type: type} do
+      a = mount_probe(:a)
+      b = mount_probe(:b)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      assert {:ok, _} = ComponentManager.update(b, {:subscribe, [type]})
+
+      assert {:ok, _} = ComponentManager.update(a, {:unsubscribe, [type]})
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :b, {:event, ^type, %{n: 1}}}
+      refute_received {:component_event, :a, {:event, ^type, _}}
+
+      assert {:ok, _} = ComponentManager.update(b, {:unsubscribe, [type]})
+      assert event_manager_sends(type) == 0
+      settle()
+      refute_received {:component_event, _, {:event, ^type, _}}
+    end
+
+    test "unmounting a component stops delivery to it and releases its types",
+         %{type: type} do
+      a = mount_probe(:a)
+      b = mount_probe(:b)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      assert {:ok, _} = ComponentManager.update(b, {:subscribe, [type]})
+
+      assert {:ok, _} = ComponentManager.unmount(a)
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :b, {:event, ^type, %{n: 1}}}
+      refute_received {:component_event, :a, {:event, ^type, _}}
+
+      assert {:ok, _} = ComponentManager.unmount(b)
+      assert event_manager_sends(type) == 0
+    end
+
+    test "a component whose update/2 returns {:ok, state} takes delivered events",
+         %{type: type} do
+      a = mount_probe(:a, %{reply: :ok_tuple})
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+
+      assert ComponentManager.get_component(a).state.last_event ==
+               {:event, type, %{n: 1}}
+
+      assert {:ok, %{last_event: {:event, ^type, %{n: 2}}}} =
+               ComponentManager.update(a, {:event, type, %{n: 2}})
+    end
+
+    test "a component that cannot take an event is logged by id and type, without the payload",
+         %{type: type} do
+      garbage = mount_probe(:garbage, %{reply: :garbage})
+      raising = mount_probe(:raising, %{reply: :raise})
+      healthy = mount_probe(:healthy)
+
+      for id <- [garbage, raising, healthy],
+          do:
+            assert({:ok, _} = ComponentManager.update(id, {:subscribe, [type]}))
+
+      log =
+        capture_log(fn ->
+          :ok = EventManager.dispatch(type, %{secret: "s3cr3t-payload"})
+          settle()
+        end)
+
+      for id <- [garbage, raising] do
+        assert log =~ ~r/#{Regex.escape(id)}.*#{Regex.escape(inspect(type))}/
+      end
+
+      refute log =~ "s3cr3t-payload"
+
+      assert_received {:component_event, :healthy,
+                       {:event, ^type, %{secret: "s3cr3t-payload"}}}
+    end
+
+    test "an {:event, type, data} message for a type no component lists is not delivered",
+         %{type: type} do
+      a = mount_probe(:a)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+
+      forged = :"#{type}_forged"
+      send(Process.whereis(ComponentManager), {:event, forged, %{forged: true}})
+      settle()
+      refute_received {:component_event, _, {:event, ^forged, _}}
+
+      # The manager is still serving its subscribers.
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
+    end
+
+    test "subscribing while EventManager is down leaves the manager serving and the component unsubscribed",
+         %{type: type} do
+      manager = Process.whereis(ComponentManager)
+      a = mount_probe(:a)
+      stop_event_manager()
+
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      assert Process.whereis(ComponentManager) == manager
+      assert {:ok, _} = ComponentManager.update(a, :ping)
+
+      # Nothing was recorded for the failed subscription, so subscribing again
+      # once EventManager is back starts a real one.
+      start_supervised!(EventManager)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
+    end
+
+    test "subscribing when EventManager exits during the call leaves the manager serving",
+         %{type: type} do
+      manager = Process.whereis(ComponentManager)
+      a = mount_probe(:a)
+      stop_event_manager()
+
+      # Holds EventManager's name and exits on the subscribe call, as an
+      # EventManager stopping mid-call does: the caller exits with
+      # {:shutdown, {GenServer, :call, _}}, not :noproc.
+      test_pid = self()
+
+      stand_in =
+        spawn(fn ->
+          Process.register(self(), EventManager)
+          send(test_pid, :registered)
+          receive do: ({:"$gen_call", _from, _request} -> exit(:shutdown))
+        end)
+
+      assert_receive :registered
+      stand_in_ref = Process.monitor(stand_in)
+
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      assert_receive {:DOWN, ^stand_in_ref, :process, _, :shutdown}
+      assert Process.whereis(ComponentManager) == manager
+
+      # Nothing was recorded for the failed subscription.
+      start_supervised!(EventManager)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+      assert_received {:component_event, :a, {:event, ^type, %{n: 1}}}
+    end
+
+    test "unsubscribing and unmounting while EventManager is down leave the manager serving",
+         %{type: type} do
+      manager = Process.whereis(ComponentManager)
+      a = mount_probe(:a)
+      b = mount_probe(:b)
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+      assert {:ok, _} = ComponentManager.update(b, {:subscribe, [type]})
+      stop_event_manager()
+
+      assert {:ok, _} = ComponentManager.update(a, {:unsubscribe, [type]})
+      assert {:ok, _} = ComponentManager.unmount(b)
+      assert Process.whereis(ComponentManager) == manager
+      assert {:ok, _} = ComponentManager.update(a, :ping)
+    end
+  end
+
+  defp mount_probe(name, props \\ %{}) do
+    {:ok, id} =
+      ComponentManager.mount(
+        EventProbe,
+        Map.merge(%{test_pid: self(), name: name}, props)
+      )
+
+    id
+  end
+
+  # EventManager.dispatch/2 and notify/3 cast. Once EventManager answers a
+  # later call it has sent the event to every subscriber, and once
+  # ComponentManager answers one it has handled that message, so every
+  # component the event reached has reported it to the test process.
+  defp settle do
+    _ = EventManager.get_handlers()
+    _ = :sys.get_state(ComponentManager)
+    :ok
+  end
+
+  # Dispatches an event of `type` and counts the copies EventManager sends to
+  # ComponentManager: one per EventManager subscription listing the type.
+  defp event_manager_sends(type) do
+    manager = Process.whereis(ComponentManager)
+    :ok = :sys.suspend(manager)
+    :ok = EventManager.dispatch(type, %{counted: true})
+    _ = EventManager.get_handlers()
+    {:messages, messages} = Process.info(manager, :messages)
+    :ok = :sys.resume(manager)
+    Enum.count(messages, &match?({:event, ^type, _}, &1))
+  end
+
+  defp stop_event_manager do
+    _ = stop_supervised(EventManager)
+    :ok = EventManager.cleanup()
+    assert is_nil(Process.whereis(EventManager))
   end
 end
