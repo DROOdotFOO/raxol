@@ -314,21 +314,23 @@ defmodule Raxol do
 
   # High contrast raises the contrast of the current theme and remembers the
   # theme it replaced, so turning it off restores that theme. Other options
-  # leave the theme alone.
+  # leave the theme alone. A theme set while high contrast was on has its
+  # contrast raised by the next `true`.
   defp apply_high_contrast(true) do
+    current = current_theme()
+
     case Elixir.Application.fetch_env(:raxol, :high_contrast_restore) do
-      {:ok, _already_on} ->
+      {:ok, {_prior, ^current}} ->
         :ok
 
-      :error ->
-        prior = current_theme()
-        high_contrast = Raxol.UI.Theming.Theme.adjust_for_high_contrast(prior)
+      _off_or_stale ->
+        high_contrast = Raxol.UI.Theming.Theme.adjust_for_high_contrast(current)
 
         with :ok <- set_theme(high_contrast) do
           Elixir.Application.put_env(
             :raxol,
             :high_contrast_restore,
-            {prior, high_contrast}
+            {current, high_contrast}
           )
         end
     end

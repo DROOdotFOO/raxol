@@ -2,7 +2,25 @@ defmodule RaxolTest do
   # set_theme/1 writes the application env, which is global.
   use ExUnit.Case, async: false
 
+  alias Raxol.Headless
   alias Raxol.UI.Theming.Theme
+
+  defmodule ThemedApp do
+    @moduledoc false
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("Themed")
+
+    @impl true
+    def subscriptions(_model), do: []
+  end
 
   @env_keys [:theme, :current_theme, :themes, :high_contrast_restore]
 
@@ -62,6 +80,60 @@ defmodule RaxolTest do
     end
   end
 
+  describe "set_theme/1 in a running app" do
+    setup do
+      pid =
+        case Process.whereis(Headless) do
+          nil -> start_supervised!({Headless, [name: Headless]})
+          existing -> existing
+        end
+
+      on_exit(fn ->
+        if Process.alive?(pid) do
+          try do
+            GenServer.call(pid, {:stop_session, :raxol_test_themed_app}, 2_000)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      :ok
+    end
+
+    test "the next frame renders with the new theme" do
+      {:ok, id} =
+        Headless.start(ThemedApp,
+          id: :raxol_test_themed_app,
+          width: 20,
+          height: 3
+        )
+
+      {:ok, before} = Headless.get_buffer(id)
+      refute foreground_at(before, 0, 0) == :magenta
+
+      :ok =
+        Raxol.set_theme(
+          Theme.new(%{
+            id: :raxol_test_render_theme,
+            name: "Raxol Test Render Theme",
+            colors: %{foreground: :magenta}
+          })
+        )
+
+      {:ok, after_set} = Headless.get_buffer(id)
+      assert foreground_at(after_set, 0, 0) == :magenta
+    end
+  end
+
+  defp foreground_at(buffer, x, y),
+    do:
+      buffer.cells
+      |> Enum.at(y)
+      |> Enum.at(x)
+      |> Map.fetch!(:style)
+      |> Map.fetch!(:foreground)
+
   describe "set_accessibility/1" do
     test "options other than :high_contrast leave the theme alone", %{
       theme: theme
@@ -95,6 +167,31 @@ defmodule RaxolTest do
     } do
       :ok = Raxol.set_accessibility(high_contrast: true)
       :ok = Raxol.set_theme(theme)
+
+      assert :ok = Raxol.set_accessibility(high_contrast: false)
+      assert Theme.current() == theme
+    end
+
+    test "high_contrast works on a theme whose colours are not RGB" do
+      theme =
+        Theme.new(%{id: :custom, name: "Custom", colors: %{primary: :green}})
+
+      :ok = Raxol.set_theme(theme)
+
+      assert :ok = Raxol.set_accessibility(high_contrast: true)
+      assert Theme.current().colors.primary == :green
+
+      assert :ok = Raxol.set_accessibility(high_contrast: false)
+      assert Theme.current() == theme
+    end
+
+    test "turning high_contrast on again raises the contrast of a theme set meanwhile",
+         %{theme: theme} do
+      :ok = Raxol.set_accessibility(high_contrast: true)
+      :ok = Raxol.set_theme(theme)
+
+      assert :ok = Raxol.set_accessibility(high_contrast: true)
+      assert Theme.current() == Theme.adjust_for_high_contrast(theme)
 
       assert :ok = Raxol.set_accessibility(high_contrast: false)
       assert Theme.current() == theme

@@ -125,11 +125,15 @@ defmodule Raxol.UI.Theming.Theme do
 
   @doc """
   Creates a high contrast variant of the theme.
+
+  Colours without RGB components (named colours such as `:green`, 256-colour
+  indexes, the `{:error, :invalid_hex}` of a bad hex string) are kept as they
+  are.
   """
   def create_high_contrast_variant(%__MODULE__{} = theme) do
     high_contrast_colors =
       Enum.map(theme.colors || %{}, fn {name, color} ->
-        {name, Utilities.increase_contrast(color)}
+        {name, increase_contrast(color)}
       end)
       |> Map.new()
 
@@ -142,6 +146,14 @@ defmodule Raxol.UI.Theming.Theme do
           })
     }
   end
+
+  defp increase_contrast(%Color{} = color),
+    do: Utilities.increase_contrast(color)
+
+  defp increase_contrast({_r, _g, _b} = rgb),
+    do: Utilities.increase_contrast(rgb)
+
+  defp increase_contrast(color), do: color
 
   @doc """
   Returns a high-contrast version of the given theme, for accessibility support.
