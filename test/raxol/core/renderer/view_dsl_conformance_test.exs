@@ -1316,7 +1316,7 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
     end
 
     test "draws the style it names" do
-      frame = render_frame(View.table(@table ++ [border: :double]))
+      frame = render_frame(View.table(Keyword.put(@table, :border, :double)))
 
       for check <- [
             line: {0, "╔════════════╗"},
@@ -1333,7 +1333,7 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
         render_frame(
           View.column(
             children: [
-              View.table(@table ++ [border: :none]),
+              View.table(Keyword.put(@table, :border, :none)),
               View.text("below")
             ]
           )
@@ -1473,6 +1473,7 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
       end
     end
   end
+
   describe "an application's own helpers" do
     test "a local label/2 compiles next to the imported DSL" do
       [{module, _}] =
