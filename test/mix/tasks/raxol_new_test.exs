@@ -95,12 +95,229 @@ defmodule Mix.Tasks.Raxol.NewTest do
     end
   end
 
+  test "counter binds the keys its hint names", %{tmp: tmp} do
+    {project, module} = generate(tmp, ["--template", "counter"])
+    assert module in GeneratedApp.compile!(lib_files(project))
+
+    assert GeneratedApp.render!(module, "Count: 0") =~
+             "Press '+'/'-' or click buttons. 'q' to quit."
+
+    # "=" is "+" without Shift, so it counts up as well.
+    assert GeneratedApp.render!(module, "Count: 2", keys: ["+", "=", "+", "-"])
+  end
+
+  # `mix run --no-halt`, which a --sup app's README and the generator's
+  # instructions give as the way to run it, only starts the application.
+  test "--sup starts the TUI with its application", %{tmp: tmp} do
+    {project, _module} = generate(tmp, ["--template", "counter", "--sup"])
+    GeneratedApp.compile!(lib_files(project))
+
+    tui = :"#{Path.basename(project)}_tui"
+    GeneratedApp.start_application!(project, raxol: [name: tui])
+
+    assert GeneratedApp.frame!(Process.whereis(tui), "Count: 0") =~
+             "'q' to quit."
+  end
+
+  # Once the TUI is gone, `--no-halt` would keep the VM running with nothing
+  # in it, so the application stops the VM. That is only right when the TUI
+  # ended: a test that stops the application must not end the test run. The
+  # application runs in a VM of its own, since it stops that VM.
+  for {ending, ends_tui, status} <- [
+        {"quits", "Raxol.Core.Runtime.Lifecycle.stop_application(tui)", 0},
+        {"fails", "Process.exit(tui, :crash)", 1}
+      ] do
+    test "--sup stops the VM with status #{status} when its TUI #{ending}, " <>
+           "not when its application stops",
+         %{tmp: tmp} do
+      {project, module} = generate(tmp, ["--template", "counter", "--sup"])
+
+      {output, exit_status} =
+        GeneratedApp.run_application(
+          project,
+          """
+          stopping? = fn -> match?({:stopping, _}, :init.get_status()) end
+
+          :ok = Application.stop(app)
+          IO.puts("stopping after Application.stop: \#{stopping?.()}")
+          {:ok, _started} = Application.ensure_all_started(app)
+
+          [{_id, runner, _type, _modules}] =
+            Supervisor.which_children(#{inspect(Module.concat(module, Supervisor))})
+
+          ref = Process.monitor(runner)
+          tui = Process.whereis(:generated_tui)
+          #{unquote(ends_tui)}
+          receive do: ({:DOWN, ^ref, _, _, _} -> :ok)
+
+          # Nothing stopped the VM: say so rather than wait forever.
+          unless stopping?.(), do: System.halt(2)
+          Process.sleep(:infinity)
+          """,
+          raxol: [name: :generated_tui]
+        )
+
+      assert output =~ "stopping after Application.stop: false"
+      assert exit_status == unquote(status)
+    end
+  end
+
+  # IEx reads the same terminal: a TUI started under `iex -S mix` would pass
+  # every key typed into it to IEx as well, which evaluates them.
+  test "--sup does not start the TUI under IEx", %{tmp: tmp} do
+    {project, _module} = generate(tmp, ["--template", "counter", "--sup"])
+    GeneratedApp.compile!(lib_files(project))
+
+    {:ok, started} = Application.ensure_all_started(:iex)
+    on_exit(fn -> Enum.each(started, &Application.stop/1) end)
+
+    {sup, output} =
+      with_io(fn -> GeneratedApp.start_application!(project) end)
+
+    assert Supervisor.which_children(sup) == []
+    assert output =~ "mix run --no-halt"
+  end
+
+  test "--sup --ssh serves the app over SSH when its application starts",
+       %{tmp: tmp} do
+    flags = ["--template", "counter", "--sup", "--ssh"]
+    {project, module} = generate(tmp, flags)
+    GeneratedApp.compile!(lib_files(project))
+
+    sup = GeneratedApp.start_application!(project)
+
+    assert [{Raxol.SSH.Server, server, :worker, _modules}] =
+             Supervisor.which_children(sup)
+
+    assert Raxol.SSH.Server.port(server) > 0
+    assert_serves_tea_app(server, Module.concat(module, App))
+
+    # `mix test` keeps the server's host key in the project, not in the
+    # developer's ~/.raxol/ssh_keys.
+    assert File.exists?(
+             Path.join(project, "_build/test/ssh/ssh_host_ed25519_key")
+           )
+  end
+
+  test "--ssh serves without authentication in dev only", %{tmp: tmp} do
+    {project, _module} = generate(tmp, ["--template", "counter", "--ssh"])
+    app = project |> Path.basename() |> String.to_atom()
+
+    anonymous? = fn env ->
+      config =
+        Config.Reader.read!(Path.join(project, "config/config.exs"), env: env)
+
+      get_in(config, [app, :ssh, :allow_anonymous]) == true
+    end
+
+    assert anonymous?.(:dev)
+    refute anonymous?.(:test)
+    refute anonymous?.(:prod)
+  end
+
+  # Without --sup nothing starts the server: the generator's instructions run
+  # `<Module>.SSH.start()`, which has to find its settings in the config.
+  test "--ssh generates an SSH.start/0 that serves the app", %{tmp: tmp} do
+    {project, module} = generate(tmp, ["--template", "counter", "--ssh"])
+    ssh = Module.concat(module, SSH)
+    assert ssh in GeneratedApp.compile!(lib_files(project))
+
+    GeneratedApp.put_config!(project)
+
+    assert {:ok, server} = ssh.start()
+    Process.unlink(server)
+    on_exit(fn -> stop(server) end)
+
+    assert Raxol.SSH.Server.port(server) > 0
+    assert_serves_tea_app(server, module)
+  end
+
+  # The module name goes into every generated file, which the generator
+  # formats, so a name that does not parse would fail with files written.
+  test "--module that is not an alias fails before creating anything",
+       %{tmp: tmp} do
+    project = Path.join(tmp, "bad_module")
+
+    assert_raise Mix.Error, fn ->
+      capture_io(fn ->
+        Mix.Tasks.Raxol.New.run([
+          project,
+          "--template",
+          "counter",
+          "--module",
+          "My App"
+        ])
+      end)
+    end
+
+    refute File.exists?(project)
+  end
+
+  # `--module Raxol --sup` would redefine `Raxol` and `Raxol.Application`, and
+  # `--module Application` Elixir's `Application`. `Elixir` is the prefix every
+  # alias carries, not a module a project can define.
+  for module <- ["Raxol", "Application", "Elixir"] do
+    test "--module #{module} fails before creating anything", %{tmp: tmp} do
+      project = Path.join(tmp, "gen_module")
+
+      args = [
+        project,
+        "--template",
+        "counter",
+        "--sup",
+        "--module",
+        unquote(module)
+      ]
+
+      assert_raise Mix.Error, fn ->
+        capture_io(fn -> Mix.Tasks.Raxol.New.run(args) end)
+      end
+
+      refute File.exists?(project)
+    end
+  end
+
+  # The generated --ci workflow runs `mix format --check-formatted`, so every
+  # combination of the flags that shape generated Elixir has to pass it as
+  # generated.
+  for template <- Map.keys(@first_frames),
+      sup <- [[], ["--sup"]],
+      ssh <- [[], ["--ssh"]],
+      liveview <- [[], ["--liveview"]] do
+    flags = ["--template", template, "--ci"] ++ sup ++ ssh ++ liveview
+
+    test "#{Enum.join(flags, " ")} generates a mix format-clean project",
+         %{tmp: tmp} do
+      {project, _module} = generate(tmp, unquote(flags))
+      GeneratedApp.assert_formatted!(project)
+    end
+  end
+
   defp generate(tmp, flags) do
     name = "gen_#{System.unique_integer([:positive])}"
     project = Path.join(tmp, name)
     capture_io(fn -> Mix.Tasks.Raxol.New.run([project | flags]) end)
 
     {project, Module.concat([Macro.camelize(name)])}
+  end
+
+  # The server loads its app only when a client connects, so it starts just
+  # the same over a module that does not exist or is not a TEA app.
+  defp assert_serves_tea_app(server, module) do
+    assert %Raxol.SSH.Server{app_module: ^module} = :sys.get_state(server)
+    assert Code.ensure_loaded?(module)
+
+    for {fun, arity} <- [init: 1, update: 2, view: 1] do
+      assert function_exported?(module, fun, arity)
+    end
+  end
+
+  # The server can exit between the check and the stop.
+  defp stop(server) do
+    if Process.alive?(server), do: GenServer.stop(server)
+  catch
+    :exit, :noproc -> :ok
+    :exit, {:noproc, _call} -> :ok
   end
 
   defp lib_files(project),

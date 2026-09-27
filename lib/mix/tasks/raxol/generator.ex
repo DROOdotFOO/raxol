@@ -14,6 +14,7 @@ defmodule Mix.Raxol.Generator do
   def generate(name, opts, raxol_version) do
     path = Path.expand(name)
     app = validate_app_name!(Path.basename(path))
+    validate_module_name!(opts[:module])
 
     if File.exists?(path) do
       Mix.raise("Directory #{path} already exists")
@@ -139,11 +140,39 @@ defmodule Mix.Raxol.Generator do
     name
   end
 
+  # The name is written into every generated module, so one that is not an
+  # alias would fail to parse once files are already on disk.
+  defp validate_module_name!(nil), do: :ok
+
+  defp validate_module_name!(module) do
+    unless module =~ ~r/\A[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*\z/ do
+      Mix.raise(
+        "Module name must be an alias such as MyApp or MyApp.Tui, " <>
+          "segments starting with an uppercase letter. Got: #{inspect(module)}"
+      )
+    end
+
+    # `Elixir` is the prefix every alias carries, not a module of its own.
+    if module == "Elixir" do
+      Mix.raise("Module name Elixir is reserved")
+    end
+  end
+
   defp write_file(path, filename, content) do
     filepath = Path.join(path, filename)
     filepath |> Path.dirname() |> File.mkdir_p!()
-    File.write!(filepath, content)
+    File.write!(filepath, format(filename, content))
     Mix.shell().info(["  ", :green, "* creating ", :reset, filename])
+  end
+
+  # The generated `.formatter.exs` sets no options, so the defaults here are
+  # what `mix format` in the new project, and its --ci workflow, apply.
+  # Formatting on the way out holds every template to that whatever the module
+  # name, whose length moves line breaks.
+  defp format(filename, content) do
+    if Path.extname(filename) in [".ex", ".exs"],
+      do: [Code.format_string!(content, file: filename), "\n"],
+      else: content
   end
 
   defp git_init(path) do
@@ -269,9 +298,16 @@ defmodule Mix.Raxol.Generator do
 
   defp print_template_hint(_bindings), do: :ok
 
-  defp print_ssh_hint(%{ssh: true}) do
+  # A --sup app's application starts the server; without --sup nothing does,
+  # so the command starts it through `<Module>.SSH.start/0`.
+  defp print_ssh_hint(%{ssh: true} = bindings) do
+    command =
+      if bindings.sup,
+        do: "mix run --no-halt",
+        else: ~s|mix run --no-halt -e "#{bindings.module}.SSH.start()"|
+
     Mix.shell().info("")
-    Mix.shell().info([:yellow, "SSH server:", :reset, " mix run --no-halt"])
+    Mix.shell().info([:yellow, "SSH server:", :reset, " ", command])
 
     Mix.shell().info([
       "Then connect: ",
