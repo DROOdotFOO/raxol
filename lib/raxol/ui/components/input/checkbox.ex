@@ -112,9 +112,9 @@ defmodule Raxol.UI.Components.Input.Checkbox do
 
     {fg, bg} = get_checkbox_colors(state, base_style)
 
-    # Support bold/underline/other attrs if present
     attrs =
-      Map.take(base_style, [:bold, :underline, :italic])
+      base_style
+      |> StyleHelper.text_attributes()
       |> Map.merge(%{fg: fg, bg: bg})
 
     check_char = get_check_character(state.checked)

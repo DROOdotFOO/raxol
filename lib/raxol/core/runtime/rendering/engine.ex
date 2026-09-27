@@ -12,6 +12,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
   use GenServer
 
+  alias Raxol.Core.Runtime.ProcessComponent
   alias Raxol.Core.Runtime.Rendering.Backends
   alias Raxol.Terminal.ScreenBuffer
   alias Raxol.UI.Layout.Engine, as: LayoutEngine
@@ -34,7 +35,8 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
               liveview_topic: nil,
               # Writer function for SSH rendering
               io_writer: nil,
-              # Registry of running process components {id => pid}
+              # Component processes this engine owns, one per process_component
+              # node: {module, id or position} => %{pid: pid, props: props}
               process_components: %{},
               # Whether terminal supports Mode 2026 synchronized output
               sync_output: false,
@@ -202,6 +204,16 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     {:reply, {:ok, state.buffer}, state}
   end
 
+  # The component processes live under Raxol.DynamicSupervisor, not this
+  # process, so they go with the engine here. (Each also monitors the engine
+  # and stops if it dies without running this.)
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state.process_components, fn {_key, %{pid: pid}} ->
+      stop_component(pid)
+    end)
+  end
+
   # --- Private Helpers ---
 
   # The dispatcher's theme id is the default unless the app (a model
@@ -226,7 +238,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       {:nil_view} ->
         {:ok, state}
 
-      {:ok, view, prepared_tree, t0, t1, mem_before} ->
+      {:ok, view, prepared_tree, t0, t1, mem_before, state} ->
         render_prepared_view(
           view,
           prepared_tree,
@@ -248,11 +260,13 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
     with {:ok, view} <- safe_get_view(state.app_module, model),
          false <- is_nil(view) do
+      {view, state} = resolve_process_components(view, state)
+
       prepared_tree =
         Raxol.UI.Layout.Preparer.prepare_incremental(view, state.prepared_tree)
 
       t1 = profiler_now(state.cycle_profiler)
-      {:ok, view, prepared_tree, t0, t1, mem_before}
+      {:ok, view, prepared_tree, t0, t1, mem_before, state}
     else
       true -> {:nil_view}
       {:error, reason} -> {:error, reason}
@@ -436,13 +450,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   defp resolve_view_result(nil), do: {:ok, nil}
 
   defp resolve_view_result(view) when is_map(view) do
-    resolved = resolve_process_components(view)
+    Raxol.Core.Runtime.Log.debug("Rendering Engine: Got view: #{inspect(view)}")
 
-    Raxol.Core.Runtime.Log.debug(
-      "Rendering Engine: Got view: #{inspect(resolved)}"
-    )
-
-    {:ok, resolved}
+    {:ok, view}
   end
 
   defp resolve_view_result(_other), do: {:error, :invalid_view}
@@ -580,35 +590,143 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
   # --- Process Component Resolution ---
 
-  defp resolve_process_components(
-         %{type: :process_component, module: mod, props: props} = node
+  # Replaces each :process_component node with its component's render tree.
+  # The engine owns one component process per node, keyed by the node's module
+  # and its `:id` or, without one, its position in the view, so the process
+  # and the component's state last across frames. The processes of nodes that
+  # left the view are stopped.
+  defp resolve_process_components(view, state) do
+    {resolved, {stale, live}} =
+      resolve_node(view, [], {state.process_components, %{}})
+
+    Enum.each(stale, fn {_key, %{pid: pid}} -> stop_component(pid) end)
+    {resolved, %{state | process_components: live}}
+  end
+
+  defp resolve_node(
+         %{type: :process_component, module: mod, props: props} = node,
+         path,
+         acc
        ) do
-    id = Map.get(node, :id, "pc-#{inspect(mod)}")
+    id = Map.get(node, :id)
+    key = {mod, id || {:position, path}}
+    {entry, acc} = take_component(acc, key)
+    label = component_label(id, mod)
+    {tree, entry} = render_component(entry, mod, props, label)
+    {tree, keep_component(acc, key, entry)}
+  end
 
-    pid =
-      case DynamicSupervisor.start_child(
-             Raxol.DynamicSupervisor,
-             {Raxol.Core.Runtime.ProcessComponent,
-              [module: mod, props: props, id: id]}
-           ) do
-        {:ok, pid} -> pid
-        {:error, {:already_started, pid}} -> pid
-        _ -> nil
-      end
+  defp resolve_node(%{children: children} = node, path, acc)
+       when is_list(children) do
+    {children, {_index, acc}} =
+      Enum.map_reduce(children, {0, acc}, fn child, {index, acc} ->
+        {child, acc} = resolve_node(child, [index | path], acc)
+        {child, {index + 1, acc}}
+      end)
 
-    if pid do
-      Raxol.Core.Runtime.ProcessComponent.get_render_tree(pid, %{})
-    else
-      %{type: :text, content: "[#{id}: failed to start]", style: %{}}
+    {%{node | children: children}, acc}
+  end
+
+  defp resolve_node(node, _path, acc), do: {node, acc}
+
+  # A key already resolved this frame (two nodes with one :id) shares that
+  # process; otherwise the process from the last frame, if any, carries over.
+  defp take_component({stale, live}, key) do
+    case Map.fetch(live, key) do
+      {:ok, entry} ->
+        {entry, {stale, live}}
+
+      :error ->
+        {entry, stale} = Map.pop(stale, key)
+        {entry, {stale, live}}
     end
   end
 
-  defp resolve_process_components(%{children: children} = node)
-       when is_list(children) do
-    %{node | children: Enum.map(children, &resolve_process_components/1)}
+  defp keep_component(acc, _key, nil), do: acc
+
+  defp keep_component({stale, live}, key, entry),
+    do: {stale, Map.put(live, key, entry)}
+
+  defp render_component(entry, mod, props, label) do
+    case ensure_component(entry, mod, props, label) do
+      {:ok, entry} ->
+        render_live_component(entry, props, label)
+
+      {:error, reason} ->
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "Rendering Engine: process component failed to start",
+          %{component: label, reason: reason}
+        )
+
+        {component_fallback(label, "failed to start"), nil}
+    end
   end
 
-  defp resolve_process_components(node), do: node
+  defp ensure_component(entry, mod, props, label) do
+    if entry && Process.alive?(entry.pid) do
+      {:ok, entry}
+    else
+      start_component(mod, props, label)
+    end
+  end
+
+  defp start_component(mod, props, label) do
+    spec =
+      {ProcessComponent,
+       module: mod, props: props, id: label, parent_pid: self()}
+
+    case DynamicSupervisor.start_child(Raxol.DynamicSupervisor, spec) do
+      {:ok, pid} -> {:ok, %{pid: pid, props: props}}
+      {:error, reason} -> {:error, reason}
+      :ignore -> {:error, :ignore}
+    end
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  # A component that crashes, or outlasts the call timeout, is stopped and
+  # drawn as a placeholder for this frame; the next frame starts it afresh.
+  defp render_live_component(%{pid: pid} = entry, props, label) do
+    case call_component(pid, props, entry.props) do
+      {:ok, tree} ->
+        {tree, %{entry | props: props}}
+
+      {:error, reason} ->
+        stop_component(pid)
+
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "Rendering Engine: process component crashed",
+          %{component: label, reason: reason}
+        )
+
+        {component_fallback(label, "crashed"), nil}
+    end
+  end
+
+  defp call_component(pid, props, previous_props) do
+    if props != previous_props,
+      do: :ok = ProcessComponent.update_props(pid, props)
+
+    {:ok, ProcessComponent.get_render_tree(pid, %{})}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  # terminate_child/2 is a no-op for a component that already exited; an
+  # exit here means Raxol.DynamicSupervisor is down, and its children with it.
+  defp stop_component(pid) do
+    _ = DynamicSupervisor.terminate_child(Raxol.DynamicSupervisor, pid)
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp component_label(nil, mod), do: "pc-#{inspect(mod)}"
+  defp component_label(id, _mod) when is_binary(id), do: id
+  defp component_label(id, _mod), do: inspect(id)
+
+  defp component_fallback(label, problem),
+    do: %{type: :text, content: "[#{label}: #{problem}]", style: %{}}
 
   defp apply_plugin_transforms(cells, state) do
     Raxol.Core.Runtime.Log.debug(

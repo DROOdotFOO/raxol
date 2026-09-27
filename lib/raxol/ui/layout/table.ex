@@ -5,24 +5,41 @@ defmodule Raxol.UI.Layout.Table do
   Provides advanced table layout functionality including:
   - Column width calculation
   - Row height computation
-  - Cell positioning
   - Table scrolling support
   - Responsive column sizing
+
+  A table's `:border` (`:single`, the default, `:double`, `:rounded`,
+  `:bold`, ... or `:none`) frames it: one row above and below, one column
+  either side, and a header rule under the header row. `:none` draws none of
+  them and takes no space for them. `measure/2` counts exactly the rows and
+  columns `Raxol.UI.ElementRenderer.render_table/6` draws.
   """
 
   @default_column_width 10
   @default_row_height 1
   @header_height 1
-  @border_width 1
   @cell_padding 2
+  @default_border :single
   @fallback_available_width Raxol.Core.Defaults.terminal_width()
 
   @doc """
+  Whether `border` draws a frame: anything but `:none`, `false` or `nil`.
+  """
+  @spec framed?(term()) :: boolean()
+  def framed?(border), do: border not in [:none, false, nil]
+
+  @doc """
   Normalizes DSL top-level `headers`/`rows`/`data` into `attrs.columns`/`attrs.rows`;
-  existing `attrs.columns` wins.
+  existing `attrs.columns` wins. The top-level `:border` lands in
+  `attrs.border` (default `:single`) unless attrs already name one.
   """
   def normalize_table_attrs(table_element) do
-    attrs = Map.get(table_element, :attrs, %{})
+    attrs =
+      table_element
+      |> Map.get(:attrs, %{})
+      |> Map.put_new_lazy(:border, fn ->
+        Map.get(table_element, :border, @default_border)
+      end)
 
     if Map.get(attrs, :columns) do
       attrs
@@ -60,24 +77,26 @@ defmodule Raxol.UI.Layout.Table do
   Calculates the required dimensions for a table based on:
   - Column widths (auto-sized or fixed)
   - Row count and height
-  - Headers and borders
+  - The header row, and the frame and header rule of a bordered table
   - Available space constraints
   """
   def measure(attrs_map, available_space) do
     columns = Map.get(attrs_map, :columns, [])
     # Support both 'rows' and 'data' attributes
     rows = Map.get(attrs_map, :rows, Map.get(attrs_map, :data, []))
-    show_header = Map.get(attrs_map, :show_header, true)
-    show_borders = Map.get(attrs_map, :show_borders, true)
 
-    # Calculate column widths (passing rows for auto-sizing)
-    column_widths = calculate_column_widths(columns, rows, available_space)
+    header? =
+      columns != [] and
+        Map.get(attrs_map, :show_header, true) not in [false, nil]
 
-    # Calculate total dimensions
-    total_width = calculate_total_width(column_widths, show_borders)
+    framed? = attrs_map |> Map.get(:border, @default_border) |> framed?()
 
-    total_height =
-      calculate_total_height(rows, show_header, show_borders, columns)
+    # Columns share what is left inside the frame
+    column_space = inside_frame(available_space, framed?)
+    column_widths = calculate_column_widths(columns, rows, column_space)
+
+    total_width = calculate_total_width(column_widths, framed?)
+    total_height = calculate_total_height(rows, header?, framed?, columns)
 
     # Constrain to available space
     %{
@@ -92,77 +111,21 @@ defmodule Raxol.UI.Layout.Table do
   end
 
   @doc """
-  Measures and positions a table element.
-
-  Performs full layout calculation including:
-  - Cell positioning within the table grid
-  - Header row positioning
-  - Border and separator positioning
-  - Scrollable area configuration
+  Measures and positions a table element, prepending the positioned table
+  to `acc` (the layout engine's `process_element/3` contract).
   """
-  def measure_and_position(table_element, space, acc) do
-    # Track if we started with an empty list
-    return_list = acc == []
-
-    # Ensure acc is a map, convert if it's an empty list
-    acc =
-      case acc do
-        [] -> %{elements: [], measurements: %{}}
-        acc when is_map(acc) -> acc
-        _ -> %{elements: [], measurements: %{}}
-      end
-
+  def measure_and_position(table_element, space, acc) when is_list(acc) do
     attrs = normalize_table_attrs(table_element)
-    columns = Map.get(attrs, :columns, [])
-    # Support both 'rows' and 'data' attributes
-    rows = Map.get(attrs, :rows, Map.get(attrs, :data, []))
-    show_header = Map.get(attrs, :show_header, true)
-    show_borders = Map.get(attrs, :show_borders, true)
-
-    # Get base measurements
     measurements = measure(attrs, space)
 
-    # Calculate cell positions
-    cell_positions =
-      calculate_cell_positions(
-        columns,
-        rows,
-        measurements.column_widths,
-        measurements.row_heights,
-        show_header,
-        show_borders
-      )
-
-    positioned_elements =
-      build_positioned_elements(
+    [
+      build_positioned_element(
         Map.put(table_element, :attrs, attrs),
-        cell_positions,
         measurements,
         space
       )
-
-    # Update accumulator with positioned table
-    result =
-      Map.put(
-        acc,
-        :elements,
-        Map.get(acc, :elements, []) ++ positioned_elements
-      )
-      |> Map.put(
-        :measurements,
-        Map.put(
-          Map.get(acc, :measurements, %{}),
-          Map.get(table_element, :id, :table),
-          measurements
-        )
-      )
-
-    # Return just the elements list if we started with an empty list
-    if return_list do
-      Map.get(result, :elements, [])
-    else
-      result
-    end
+      | acc
+    ]
   end
 
   # Private functions
@@ -349,32 +312,38 @@ defmodule Raxol.UI.Layout.Table do
 
   defp extract_cell_content(_row, _column, _col_idx), do: ""
 
-  defp calculate_total_width(column_widths, show_borders) do
-    base_width = Enum.sum(column_widths)
+  # A frame takes a column either side and a row above and below.
+  defp calculate_total_width([], _framed?), do: 0
 
-    case {length(column_widths), show_borders} do
-      {0, _} -> 0
-      {1, true} -> base_width
-      {2, true} -> base_width + 2 * @border_width + @border_width
-      {col_count, true} -> base_width + col_count * 2 * @border_width
-      {_, false} -> base_width
-    end
+  defp calculate_total_width(column_widths, true),
+    do: Enum.sum(column_widths) + 2
+
+  defp calculate_total_width(column_widths, false), do: Enum.sum(column_widths)
+
+  defp calculate_total_height([], _header?, _framed?, []), do: 0
+
+  defp calculate_total_height(rows, header?, framed?, _columns) do
+    row_space = length(rows) * @default_row_height
+
+    # A framed header row has the header rule under it
+    header_space =
+      case {header?, framed?} do
+        {false, _} -> 0
+        {true, true} -> @header_height + 1
+        {true, false} -> @header_height
+      end
+
+    frame_space = if framed?, do: 2, else: 0
+
+    row_space + header_space + frame_space
   end
 
-  defp calculate_total_height(rows, _show_header, _show_borders, columns)
-       when rows == [] and columns == [] do
-    0
-  end
+  defp inside_frame(space, false), do: space
 
-  defp calculate_total_height(rows, show_header, show_borders, _columns) do
-    row_count = length(rows)
-    row_space = row_count * @default_row_height
-    header_space = if show_header, do: @header_height, else: 0
-    border_space = if show_borders, do: @border_width, else: 0
-
-    case {row_count, header_space, border_space} do
-      {0, 0, 0} -> 0
-      _ -> row_space + header_space + border_space
+  defp inside_frame(space, true) do
+    case Map.fetch(space, :width) do
+      {:ok, width} when is_integer(width) -> %{space | width: max(width - 2, 0)}
+      _ -> space
     end
   end
 
@@ -384,67 +353,9 @@ defmodule Raxol.UI.Layout.Table do
     Enum.map(rows, fn _ -> @default_row_height end)
   end
 
-  defp calculate_cell_positions(
-         columns,
-         rows,
-         column_widths,
-         row_heights,
-         show_header,
-         show_borders
-       ) do
-    header_offset = if show_header, do: @header_height, else: 0
-    border_offset = if show_borders, do: @border_width, else: 0
-
-    # Calculate column x positions
-    x_positions = calculate_x_positions(column_widths, border_offset)
-
-    # Calculate row y positions
-    y_positions =
-      calculate_y_positions(row_heights, header_offset, border_offset)
-
-    # Build cell position map
-    cells =
-      for {_row, row_idx} <- Enum.with_index(rows),
-          {_col, col_idx} <- Enum.with_index(columns) do
-        {{row_idx, col_idx},
-         %{
-           x: Enum.at(x_positions, col_idx),
-           y: Enum.at(y_positions, row_idx),
-           width: Enum.at(column_widths, col_idx),
-           height: Enum.at(row_heights, row_idx)
-         }}
-      end
-
-    Map.new(cells)
-  end
-
-  defp calculate_x_positions(column_widths, border_offset) do
-    {positions, _} =
-      Enum.reduce(column_widths, {[], border_offset}, fn width, {acc, offset} ->
-        {[offset | acc], offset + width + border_offset}
-      end)
-
-    Enum.reverse(positions)
-  end
-
-  defp calculate_y_positions(row_heights, header_offset, border_offset) do
-    {positions, _} =
-      Enum.reduce(row_heights, {[], header_offset + border_offset}, fn height,
-                                                                       {acc,
-                                                                        offset} ->
-        {[offset | acc], offset + height + border_offset}
-      end)
-
-    Enum.reverse(positions)
-  end
-
-  defp build_positioned_elements(
-         table_element,
-         _cell_positions,
-         measurements,
-         space
-       ) do
-    # Produces the _headers/_data/_col_widths contract ElementRenderer.render_table consumes.
+  defp build_positioned_element(table_element, measurements, space) do
+    # Produces the _headers/_data/_col_widths/border contract
+    # ElementRenderer.render_table consumes.
     attrs = Map.get(table_element, :attrs, %{})
 
     headers =
@@ -460,14 +371,11 @@ defmodule Raxol.UI.Layout.Table do
       |> Map.put_new(:_headers, headers)
       |> Map.put_new(:_data, Map.get(attrs, :rows, Map.get(attrs, :data, [])))
 
-    enriched_table =
-      table_element
-      |> Map.put(:attrs, enriched_attrs)
-      |> Map.put(:x, Map.get(space, :x, 0))
-      |> Map.put(:y, Map.get(space, :y, 0))
-      |> Map.put(:width, measurements.width)
-      |> Map.put(:height, measurements.height)
-
-    [enriched_table]
+    table_element
+    |> Map.put(:attrs, enriched_attrs)
+    |> Map.put(:x, Map.get(space, :x, 0))
+    |> Map.put(:y, Map.get(space, :y, 0))
+    |> Map.put(:width, measurements.width)
+    |> Map.put(:height, measurements.height)
   end
 end

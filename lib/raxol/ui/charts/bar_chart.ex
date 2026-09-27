@@ -450,7 +450,7 @@ defmodule Raxol.UI.Charts.BarChart do
     bar_len = round(normalized) |> ChartUtils.clamp(0, layout.pw) |> trunc()
 
     bar_cells =
-      for col <- 0..(bar_len - 1), row <- 0..(bar_h - 1), bar_len > 0 do
+      for col <- 0..(bar_len - 1)//1, row <- 0..(bar_h - 1)//1 do
         {layout.px + col, bar_y + row, "█", color, :default, %{}}
       end
 
@@ -496,7 +496,7 @@ defmodule Raxol.UI.Charts.BarChart do
        ) do
     # Full blocks from bottom
     full_cells =
-      for row <- 0..(full_blocks - 1), col <- 0..(bar_w - 1), full_blocks > 0 do
+      for row <- 0..(full_blocks - 1)//1, col <- 0..(bar_w - 1)//1 do
         {bar_x + col, region_y + region_h - 1 - row, "█", color, :default, %{}}
       end
 
@@ -506,7 +506,7 @@ defmodule Raxol.UI.Charts.BarChart do
         char = Enum.at(@block_chars, remainder - 1)
         partial_y = region_y + region_h - 1 - full_blocks
 
-        for col <- 0..(bar_w - 1) do
+        for col <- 0..(bar_w - 1)//1 do
           {bar_x + col, partial_y, char, color, :default, %{}}
         end
       else

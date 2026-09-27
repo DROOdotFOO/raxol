@@ -784,7 +784,7 @@ defmodule Raxol.LiveView.TerminalBridge do
     |> Enum.join(" ")
   end
 
-  @style_attrs [:bold, :italic, :underline, :reverse, :strikethrough]
+  @style_attrs [:bold, :italic, :underline, :reverse, :strikethrough, :faint]
 
   defp text_attr_classes(style, css_prefix) do
     Enum.reduce(@style_attrs, [], fn attr, acc ->
@@ -808,6 +808,11 @@ defmodule Raxol.LiveView.TerminalBridge do
 
   @doc """
   Converts a style map to inline CSS styles.
+
+  `:reverse` swaps the text and background colours; a side left at the
+  terminal default swaps in the theme's default (`--raxol-bg` for the text,
+  `--raxol-fg` for the background). `:faint` draws the text colour at half
+  strength and leaves the background alone.
 
   ## Examples
 
@@ -847,35 +852,56 @@ defmodule Raxol.LiveView.TerminalBridge do
         parts -> ["text-decoration: #{Enum.join(parts, " ")}" | styles]
       end
 
-    # Foreground color (supports both :fg_color and :foreground keys)
-    fg = Map.get(style, :fg_color) || Map.get(style, :foreground)
-    styles = add_color_style(styles, "color", fg)
-
-    # Background color (supports both :bg_color and :background keys)
-    bg = Map.get(style, :bg_color) || Map.get(style, :background)
-    styles = add_color_style(styles, "background-color", bg)
+    {text_color, fill_color} = text_and_fill_colors(style)
 
     styles
+    |> add_declaration("color", faint_color(text_color, Map.get(style, :faint)))
+    |> add_declaration("background-color", fill_color)
     |> Enum.reverse()
     |> Enum.join("; ")
   end
 
-  defp add_color_style(styles, _prop, nil), do: styles
+  # Foreground and background each accept both key spellings (:fg_color for
+  # the compat Buffer, :foreground for the ScreenBuffer).
+  defp text_and_fill_colors(style) do
+    fg = Map.get(style, :fg_color) || Map.get(style, :foreground)
+    bg = Map.get(style, :bg_color) || Map.get(style, :background)
 
-  defp add_color_style(styles, prop, {r, g, b}),
-    do: ["#{prop}: rgb(#{r}, #{g}, #{b})" | styles]
+    if Map.get(style, :reverse),
+      do: {swapped_color_css(bg, "var(--raxol-bg)"), swapped_color_css(fg, "var(--raxol-fg)")},
+      else: {color_css(fg), color_css(bg)}
+  end
 
-  defp add_color_style(styles, prop, n) when is_integer(n) do
+  defp swapped_color_css(color, theme_default) when color in [nil, :default],
+    do: theme_default
+
+  defp swapped_color_css(color, theme_default), do: color_css(color) || theme_default
+
+  defp faint_color(color, faint) when faint in [nil, false], do: color
+
+  # The default foreground renders as `inherit`, which is not a <color> and
+  # would void the whole color-mix(); `currentColor` is the inherited colour.
+  defp faint_color(color, _faint) when color in [nil, "inherit"],
+    do: "color-mix(in srgb, currentColor 50%, transparent)"
+
+  defp faint_color(color, _faint),
+    do: "color-mix(in srgb, #{color} 50%, transparent)"
+
+  defp add_declaration(styles, _prop, nil), do: styles
+  defp add_declaration(styles, prop, value), do: ["#{prop}: #{value}" | styles]
+
+  defp color_css(nil), do: nil
+  defp color_css({r, g, b}), do: "rgb(#{r}, #{g}, #{b})"
+
+  defp color_css(n) when is_integer(n) do
     {r, g, b} = color_256_to_rgb(n)
-    ["#{prop}: rgb(#{r}, #{g}, #{b})" | styles]
+    "rgb(#{r}, #{g}, #{b})"
   end
 
-  defp add_color_style(styles, prop, color)
-       when is_atom(color) and color != false do
-    ["#{prop}: #{named_color_to_hex(color)}" | styles]
-  end
+  defp color_css(color) when is_atom(color) and color != false,
+    do: named_color_to_hex(color)
 
-  defp add_color_style(styles, _prop, _), do: styles
+  defp color_css(_), do: nil
 
   # HTML escaping
   @spec escape_html(String.t()) :: String.t()

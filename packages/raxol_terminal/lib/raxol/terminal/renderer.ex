@@ -5,7 +5,7 @@ defmodule Raxol.Terminal.Renderer do
   This module handles rendering of terminal output using ANSI escape codes,
   including:
   - Character cell rendering
-  - Text styling (colors, bold, italic, underline)
+  - Text styling (colors, bold, italic, underline, faint, reverse, strikethrough)
   - Cursor rendering
   - Performance optimizations (style batching, caching)
 
@@ -78,6 +78,9 @@ defmodule Raxol.Terminal.Renderer do
   @ansi_bold "\e[1m"
   @ansi_italic "\e[3m"
   @ansi_underline "\e[4m"
+
+  # Attributes that each map to one fixed SGR code.
+  @ansi_plain_attributes [faint: "\e[2m", reverse: "\e[7m", strikethrough: "\e[9m"]
 
   # Standard foreground color codes
   @fg_color_codes %{
@@ -363,6 +366,11 @@ defmodule Raxol.Terminal.Renderer do
         nil -> codes
         code -> [code | codes]
       end
+
+    codes =
+      Enum.reduce(@ansi_plain_attributes, codes, fn {attr, code}, acc ->
+        if Map.get(style_map, attr, false), do: [code | acc], else: acc
+      end)
 
     case codes do
       [] -> ""

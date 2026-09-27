@@ -97,6 +97,7 @@
 .raxol-underline   { text-decoration: underline; }
 .raxol-reverse     { filter: invert(1); }
 .raxol-strikethrough { text-decoration: line-through; }
+.raxol-faint       { opacity: 0.5; }
 
 /* ------------------------------------------------------------------ */
 /* Named foreground color classes                                     */

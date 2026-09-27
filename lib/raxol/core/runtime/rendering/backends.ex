@@ -370,21 +370,44 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
 
   # --- Private Helpers ---
 
+  # Cell attrs lists speak the UI style vocabulary (`Raxol.UI.ElementRenderer`
+  # emits it); the ScreenBuffer speaks `Raxol.Terminal.ANSI.TextFormatting`'s,
+  # which calls `:dim` `:faint`. Every emitter reads the buffer, so an
+  # attribute missing here is missing on every surface. Entries that are not
+  # text attributes (a border variant such as `:single`, `image: true`) have
+  # no buffer key and are dropped.
+  @cell_attr_styles %{
+    bold: :bold,
+    italic: :italic,
+    underline: :underline,
+    strikethrough: :strikethrough,
+    reverse: :reverse,
+    dim: :faint
+  }
+
   defp transform_cells_for_update(cells) when is_list(cells) do
     Enum.map(cells, fn {x, y, char, fg, bg, attrs_list} ->
       {hyperlink, style_atoms} = split_hyperlink(attrs_list || [])
-      attrs_map = Enum.into(style_atoms, %{}, fn atom -> {atom, true} end)
 
       cell_attrs =
         %{
           foreground: fg,
           background: bg
         }
-        |> Map.merge(Map.take(attrs_map, [:bold, :underline, :italic]))
+        |> put_text_attributes(style_atoms)
         |> put_hyperlink(hyperlink)
 
       cell = %Raxol.Terminal.Cell{char: sanitize_char(char), style: cell_attrs}
       {x, y, cell}
+    end)
+  end
+
+  defp put_text_attributes(style, attrs) do
+    Enum.reduce(attrs, style, fn attr, acc ->
+      case Map.fetch(@cell_attr_styles, attr) do
+        {:ok, key} -> Map.put(acc, key, true)
+        :error -> acc
+      end
     end)
   end
 

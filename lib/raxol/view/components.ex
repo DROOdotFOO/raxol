@@ -355,18 +355,28 @@ defmodule Raxol.View.Components do
 
   @doc """
   Creates a table component.
+
+  ## Options
+  - `:headers`, `:rows`
+  - `:border` - Frame style (default `:single`); `:none` draws no frame or
+    header rule
+  - `:style`, `:id`
   """
   @spec table(keyword() | map()) :: map()
   def table(opts \\ []) do
     opts = if is_list(opts), do: Map.new(opts), else: opts
 
-    %{
-      type: :table,
-      headers: Map.get(opts, :headers, []),
-      rows: Map.get(opts, :rows, []),
-      style: Map.get(opts, :style, %{}),
-      id: Map.get(opts, :id)
-    }
+    Map.merge(
+      %{
+        type: :table,
+        headers: Map.get(opts, :headers, []),
+        rows: Map.get(opts, :rows, []),
+        style: Map.get(opts, :style, %{}),
+        id: Map.get(opts, :id)
+      },
+      # Only when given, so the layout's default border applies otherwise.
+      Map.take(opts, [:border])
+    )
   end
 
   @doc """

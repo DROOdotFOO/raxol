@@ -196,6 +196,23 @@ defmodule Raxol.UI.Layout.Engine do
     process_element(%{element | children: [child]}, space, acc)
   end
 
+  # A view with a `:position` offset (`Raxol.Core.Renderer.View.new/2`) is
+  # laid out from that offset into the rest of the space it is given. The
+  # flow containers (box, view, row, column, flex) give it their content
+  # space rather than a slot, and leave it out of their flow.
+  def process_element(%{position: {dx, dy}} = element, space, acc)
+      when is_integer(dx) and is_integer(dy) do
+    offset_space = %{
+      space
+      | x: space.x + dx,
+        y: space.y + dy,
+        width: max(space.width - dx, 0),
+        height: max(space.height - dy, 0)
+    }
+
+    process_element(Map.delete(element, :position), offset_space, acc)
+  end
+
   # Process a view element
   def process_element(%{type: :view, children: children}, space, acc)
       when is_list(children) do
@@ -738,7 +755,7 @@ defmodule Raxol.UI.Layout.Engine do
 
   defp positioned_text(element, content, space) do
     style_map = style_to_map(Map.get(element, :style, %{}))
-    {dx, dy} = position_offset(style_map, element)
+    {dx, dy} = position_offset(style_map)
 
     %{
       type: :text,
@@ -771,9 +788,11 @@ defmodule Raxol.UI.Layout.Engine do
   # A text element may carry a relative `:position` offset in its style
   # (chart cells emitted by `Raxol.UI.Charts.ViewBridge` use this to draw
   # cells at specific (x, y) coordinates inside the container's space).
-  # Apply the offset so the cell lands where the chart asked.
-  defp position_offset(style_map, element) do
-    case Map.get(style_map, :position) || Map.get(element, :position) do
+  # Apply the offset so the cell lands where the chart asked. A top-level
+  # `:position` never gets here: the positioned-view clause of
+  # `process_element/3` has already applied and dropped it.
+  defp position_offset(style_map) do
+    case Map.get(style_map, :position) do
       {x, y} when is_integer(x) and is_integer(y) -> {x, y}
       _ -> {0, 0}
     end
@@ -836,14 +855,57 @@ defmodule Raxol.UI.Layout.Engine do
     %{width: width, height: length(lines)}
   end
 
-  # Process children of a container element (Helper).
-  # Each child is dispatched through process_element/3 which already handles
-  # all element types (containers, primitives, catch-all).
+  # Process children of a container element (Helper) whose children all
+  # share its content space (a box's children overlap). Each child is laid
+  # out on its own as one layer: the positioned children over the rest, then
+  # `stack_layers/1` orders the layers by `:z_index`. Within each group a
+  # later child's elements come first, under an earlier child's, as they
+  # always have.
   defp process_children(children, space, acc) when is_list(children) do
-    Enum.reduce(children, acc, fn child, current_acc ->
-      process_element(child, space, current_acc)
+    {positioned, flow} = Enum.split_with(children, &positioned?/1)
+
+    stack_layers(child_layers(flow, space) ++ child_layers(positioned, space)) ++
+      acc
+  end
+
+  defp child_layers(children, space) do
+    Enum.reduce(children, [], fn child, layers ->
+      [{child, process_element(child, space, [])} | layers]
     end)
   end
+
+  @doc """
+  Whether `element` carries a `:position` offset, which takes it out of its
+  container's flow (`Raxol.Core.Renderer.View.new/2`).
+  """
+  @spec positioned?(term()) :: boolean()
+  def positioned?(%{position: {x, y}}) when is_integer(x) and is_integer(y),
+    do: true
+
+  def positioned?(_element), do: false
+
+  @doc """
+  Flattens a container's sibling layers into draw order. `layers` is
+  `[{child, elements}]` in the container's own order, a later layer drawing
+  over an earlier one; a child's `:z_index` (default 0) lifts its layer over
+  every layer with a lower one, and equal values keep the container's order.
+  """
+  @spec stack_layers([{element(), [positioned_element()]}]) ::
+          [positioned_element()]
+  def stack_layers(layers) do
+    layers
+    |> sort_by_z_index()
+    |> Enum.flat_map(&elem(&1, 1))
+  end
+
+  defp sort_by_z_index(layers) do
+    if Enum.all?(layers, fn {child, _elements} -> z_index(child) == 0 end),
+      do: layers,
+      else: Enum.sort_by(layers, fn {child, _elements} -> z_index(child) end)
+  end
+
+  defp z_index(%{z_index: z}) when is_integer(z), do: z
+  defp z_index(_child), do: 0
 
   # Resolve an overlay descriptor into a positioned space inside `parent_space`
   # and dispatch the overlay's element through process_element/3. Coordinates
@@ -978,6 +1040,17 @@ defmodule Raxol.UI.Layout.Engine do
     ViewNodes.measure_shadow(element, available_space)
   end
 
+  # A table measures as `process_element/3` lays it out, with or without
+  # `:attrs`: normalized, so the top-level headers, rows and border count.
+  def measure_element(%{type: :table} = element, available_space) do
+    measured =
+      element
+      |> Table.normalize_table_attrs()
+      |> Table.measure(available_space)
+
+    Map.take(measured, [:width, :height])
+  end
+
   # Handles valid elements (maps with :type and :attrs)
   def measure_element(%{type: type, attrs: attrs} = element, available_space)
       when is_atom(type) do
@@ -1063,16 +1136,6 @@ defmodule Raxol.UI.Layout.Engine do
     measure_element_by_type(container_type, element, %{}, available_space)
   end
 
-  # normalize DSL top-level headers/rows for measure
-  def measure_element(%{type: :table} = element, available_space) do
-    measured =
-      element
-      |> Table.normalize_table_attrs()
-      |> Table.measure(available_space)
-
-    Map.take(measured, [:width, :height])
-  end
-
   # Absolute layer measures as its flow child measures -- overlays are
   # non-flow (positioned independently in process_element/3) and
   # intentionally contribute nothing to intrinsic size.
@@ -1135,9 +1198,6 @@ defmodule Raxol.UI.Layout.Engine do
              :split_pane
            ] ->
         measure_container_element(type, element, available_space)
-
-      :table ->
-        Table.measure(attrs_map, available_space)
 
       _ ->
         handle_unknown_element(type)

@@ -4,7 +4,14 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
 
   Each ProcessComponent runs in its own process under `Raxol.DynamicSupervisor`,
   so a crash in one component does not bring down the rest of the application.
-  On crash, the DynamicSupervisor restarts the component with fresh state.
+
+  The rendering engine that draws a `process_component/2` node owns its
+  process: it starts it on the first frame the node is in the view, keeps it
+  (and the component's state) across frames, and stops it when the node
+  leaves the view or the engine stops. A process also stops when its owner
+  (`:parent_pid`) exits. The supervisor does not restart a crashed component;
+  the frame draws a placeholder in its place and the next frame starts it
+  again with fresh state from `init/1`.
 
   ## Usage
 
@@ -12,13 +19,17 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
   - `init/1` - receives props, returns initial state
   - `render/2` - receives state and context, returns element tree
   - `update/2` (optional) - receives message and state, returns new state
+  - `update_props/2` (optional) - receives the node's changed props and the
+    state, returns new state. A component that exports it keeps its state
+    across props changes; one that doesn't is re-initialised from the new
+    props through `init/1` (and `mount/1`) in the same process.
 
   Use the `process_component/2` View DSL helper to embed process components:
 
       process_component(MyHeavyWidget, %{path: "/tmp"})
   """
 
-  use GenServer
+  use GenServer, restart: :temporary
 
   defstruct [:module, :state, :props, :parent_pid, :id]
 
@@ -40,6 +51,16 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
     GenServer.call(pid, {:update, message})
   end
 
+  @doc """
+  Replaces the component's props in its running process. A component that
+  exports `update_props/2` gets `update_props(props, state)` and keeps the
+  state it returns; any other is re-initialised from `props` through `init/1`
+  (and `mount/1`, if exported).
+  """
+  def update_props(pid, props) do
+    GenServer.call(pid, {:update_props, props})
+  end
+
   def get_render_tree(pid, context) do
     GenServer.call(pid, {:render, context})
   end
@@ -49,6 +70,8 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
     Raxol.Core.Runtime.Log.info(
       "[ProcessComponent] Starting #{inspect(module)} (#{id})"
     )
+
+    Process.monitor(parent_pid)
 
     component_state = initialize_component(module, props)
 
@@ -71,6 +94,12 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
   end
 
   @impl true
+  def handle_call({:update_props, props}, _from, %__MODULE__{} = pc) do
+    new_state = dispatch_update_props(pc.module, props, pc.state)
+    {:reply, :ok, %{pc | props: props, state: new_state}}
+  end
+
+  @impl true
   def handle_call({:render, context}, _from, %__MODULE__{} = pc) do
     tree = dispatch_render(pc.module, pc.state, context, pc.id)
     {:reply, tree, pc}
@@ -80,6 +109,12 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
   def handle_call(_msg, _from, state), do: {:reply, {:error, :unknown}, state}
 
   @impl true
+  def handle_info(
+        {:DOWN, _ref, :process, owner, _reason},
+        %__MODULE__{parent_pid: owner} = pc
+      ),
+      do: {:stop, :normal, pc}
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp initialize_component(module, props) do
@@ -104,6 +139,13 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
     case function_exported?(module, :update, 2) do
       true -> module.update(message, state)
       false -> state
+    end
+  end
+
+  defp dispatch_update_props(module, props, state) do
+    case function_exported?(module, :update_props, 2) do
+      true -> module.update_props(props, state)
+      false -> maybe_mount(module, initialize_component(module, props))
     end
   end
 

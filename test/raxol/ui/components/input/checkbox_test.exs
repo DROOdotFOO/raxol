@@ -116,6 +116,30 @@ defmodule Raxol.UI.Components.Input.CheckboxTest do
       assert length(row_element.children) == 2
       assert row_element.style == %{fg: :gray, bg: :default}
     end
+
+    test "draws every text attribute its style sets" do
+      style = %{bold: true, dim: true, reverse: true, strikethrough: true}
+      {:ok, state} = Checkbox.init(label: "Option", style: style)
+
+      cells =
+        state
+        |> Checkbox.render(default_context())
+        |> Raxol.UI.Layout.Engine.apply_layout(%{width: 20, height: 1})
+        |> Raxol.UI.Renderer.render_to_cells(nil)
+
+      label_cells =
+        Enum.filter(cells, fn {_x, _y, char, _fg, _bg, _attrs} ->
+          char in String.graphemes("Option")
+        end)
+
+      assert length(label_cells) == 6
+
+      for {_x, _y, _char, _fg, _bg, attrs} <- label_cells,
+          attr <- [:bold, :dim, :reverse, :strikethrough] do
+        assert attr in attrs,
+               "label cell attrs #{inspect(attrs)} lack #{inspect(attr)}"
+      end
+    end
   end
 
   # Tests for update/2 and handle_event/3

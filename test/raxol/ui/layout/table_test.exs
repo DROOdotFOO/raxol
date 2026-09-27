@@ -34,12 +34,12 @@ defmodule Raxol.UI.Layout.TableTest do
       assert calculated_widths == [10, 20]
 
       # Assert on the final width/height of the positioned element
-      # Total width = col_widths_sum + separator_width = (10 + 20) + 3 = 33
-      # Total height = header(1) + separator(1) + data_rows(1) = 3
+      # Total width = col_widths_sum + frame = (10 + 20) + 2 = 32
+      # Total height = frame(2) + header(1) + rule(1) + data_rows(1) = 5
       # Assuming space (80x24) is large enough, final dimensions should match calculated ones.
       assert [%{width: final_width, height: final_height}] = result
-      assert final_width == 33
-      assert final_height == 3
+      assert final_width == 32
+      assert final_height == 5
     end
 
     test "clamps width when content exceeds available space" do
@@ -50,7 +50,7 @@ defmodule Raxol.UI.Layout.TableTest do
           columns: [
             %{header: "Col A", key: :a, width: 20},
             %{header: "Col B", key: :b, width: 25},
-            # Total width = 20+25+30 + 3+3 = 81
+            # Total width = 20+25+30 + 2 = 77
             %{header: "Col C", key: :c, width: 30}
           ],
           data: [%{a: 1, b: 2, c: 3}],
@@ -77,8 +77,8 @@ defmodule Raxol.UI.Layout.TableTest do
       # Final width should be clamped to space.width
       assert final_width == 50
 
-      # Final height should be calculated (header+sep+data = 1+1+1=3) and not clamped
-      assert final_height == 3
+      # Final height should be calculated (frame+header+rule+data = 2+1+1+1=5) and not clamped
+      assert final_height == 5
     end
 
     test "calculates fallback widths when columns are missing" do
@@ -113,10 +113,10 @@ defmodule Raxol.UI.Layout.TableTest do
       # So max widths should be: 7, 5, 13
       assert calculated_widths == [7, 5, 13]
 
-      # Total width should be sum of column widths + separators
-      # 7 + 5 + 13 + (2 * 3) = 31
+      # Total width should be sum of column widths + frame
+      # 7 + 5 + 13 + 2 = 27
       assert [%{width: final_width}] = result
-      assert final_width == 31
+      assert final_width == 27
     end
 
     test "handles auto column widths correctly" do
@@ -154,10 +154,10 @@ defmodule Raxol.UI.Layout.TableTest do
       # vs "Chicago" (7) -> max 11 + 2 = 13
       assert calculated_widths == [15, 5, 13]
 
-      # Total width should be sum of column widths + separators
-      # 15 + 5 + 13 + (2 * 3) = 39
+      # Total width should be sum of column widths + frame
+      # 15 + 5 + 13 + 2 = 35
       assert [%{width: final_width}] = result
-      assert final_width == 39
+      assert final_width == 35
     end
 
     test "handles mixed fixed and auto column widths" do
@@ -193,10 +193,10 @@ defmodule Raxol.UI.Layout.TableTest do
       # Location: "Location" (8) vs "New York" (8) vs "Los Angeles" (11) -> max 11 + 2 = 13
       assert calculated_widths == [7, 8, 13]
 
-      # Total width should be sum of column widths + separators
-      # 7 + 8 + 13 + (2 * 3) = 34
+      # Total width should be sum of column widths + frame
+      # 7 + 8 + 13 + 2 = 30
       assert [%{width: final_width}] = result
-      assert final_width == 34
+      assert final_width == 30
     end
 
     test "clamps height when content exceeds available space" do
@@ -235,11 +235,11 @@ defmodule Raxol.UI.Layout.TableTest do
       # Column widths should be preserved
       assert calculated_widths == [10, 10]
 
-      # Width should be calculated normally (10 + 10 + 3 = 23)
-      assert final_width == 23
+      # Width should be calculated normally (10 + 10 + 2 = 22)
+      assert final_width == 22
 
       # Height should be clamped to available space (4)
-      # Content height would be: header(1) + separator(1) + data(5) = 7
+      # Content height would be: frame(2) + header(1) + rule(1) + data(5) = 9
       # But should be clamped to space.height = 4
       assert final_height == 4
     end
@@ -268,14 +268,14 @@ defmodule Raxol.UI.Layout.TableTest do
       # Should have 2 columns with fixed widths
       assert calculated_widths == [10, 8]
 
-      # Height should be header(1) + separator(1) + data(0) = 2
+      # Height should be frame(2) + header(1) + rule(1) + data(0) = 4
       assert [%{height: final_height}] = result
-      assert final_height == 2
+      assert final_height == 4
 
-      # Width should be sum of column widths + separator
-      # 10 + 8 + 3 = 21
+      # Width should be sum of column widths + frame
+      # 10 + 8 + 2 = 20
       assert [%{width: final_width}] = result
-      assert final_width == 21
+      assert final_width == 20
     end
 
     test "handles empty data without columns" do
@@ -298,11 +298,11 @@ defmodule Raxol.UI.Layout.TableTest do
       # Should have 0 columns when no data and no columns
       assert calculated_widths == []
 
-      # Height should be 0 (no header, no separator, no data)
+      # Height should be 0 (nothing to frame: no header, no data)
       assert [%{height: final_height}] = result
       assert final_height == 0
 
-      # Width should be 0 (no columns, no separators)
+      # Width should be 0 (no columns, no frame)
       assert [%{width: final_width}] = result
       assert final_width == 0
     end
@@ -332,13 +332,13 @@ defmodule Raxol.UI.Layout.TableTest do
       # Should have 1 column
       assert calculated_widths == [15]
 
-      # Width should be just the column width (no separators for single column)
+      # Width should be the column width + frame (15 + 2 = 17)
       assert [%{width: final_width}] = result
-      assert final_width == 15
+      assert final_width == 17
 
-      # Height should be header(1) + separator(1) + data(2) = 4
+      # Height should be frame(2) + header(1) + rule(1) + data(2) = 6
       assert [%{height: final_height}] = result
-      assert final_height == 4
+      assert final_height == 6
     end
   end
 end

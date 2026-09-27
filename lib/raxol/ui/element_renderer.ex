@@ -29,9 +29,15 @@ defmodule Raxol.UI.ElementRenderer do
   end
 
   @doc """
-  Renders a table element.
+  Renders a table element into its `width` x `height` box.
+
+  `attrs.border` (default `:none`, as for boxes: the layout always stamps
+  it) names the frame: a glyph set from `Raxol.UI.Theming.BorderChars`
+  drawn round the box, with the header rule under the header row, and each
+  cell inset by a column. `:none` draws neither: the header row, then the
+  data rows straight under it. Either way a cell draws inside its column.
   """
-  def render_table(x, y, _width, _height, attrs, theme) do
+  def render_table(x, y, width, height, attrs, theme) do
     headers = Map.get(attrs, :_headers, [])
     data = Map.get(attrs, :_data, [])
     col_widths = Map.get(attrs, :_col_widths, [])
@@ -48,27 +54,71 @@ defmodule Raxol.UI.ElementRenderer do
       Map.get(attrs, :row_style, %{})
       |> Map.merge(Map.get(table_styles, :data, %{}))
 
-    cells = []
+    case Map.get(attrs, :border, :none) do
+      border when border in [:none, false, nil] ->
+        headers
+        |> table_lines(header_style, data, data_style, y, 0)
+        |> render_table_lines(x, col_widths, 0)
 
-    # Render headers
-    cells =
-      add_headers_if_present(cells, headers, x, y, col_widths, header_style)
+      border ->
+        glyphs = border_glyphs(border)
+        frame_style = Map.get(attrs, :_frame_style, %{})
+        inner = {x + 1, y + 1, x + width - 2, y + height - 2}
 
-    # Calculate starting y position for data rows
-    data_start_y = calculate_data_start_y(headers, y)
+        header_rule =
+          if headers == [] or width < 3 do
+            []
+          else
+            x
+            |> BorderRenderer.render_horizontal_line(
+              y + 2,
+              width,
+              glyphs.horizontal,
+              frame_style,
+              theme
+            )
+            |> CellManager.clip_cells_to_bounds(inner)
+          end
 
-    # Render data rows
-    cells =
-      data
-      |> Enum.with_index()
-      |> Enum.reduce(cells, fn {row, index}, acc ->
-        row_cells =
-          render_table_row(x, data_start_y + index, row, col_widths, data_style)
+        cells =
+          headers
+          |> table_lines(header_style, data, data_style, y + 1, 1)
+          |> render_table_lines(x + 1, col_widths, 1)
+          |> CellManager.clip_cells_to_bounds(inner)
 
-        acc ++ row_cells
-      end)
+        BorderRenderer.render_box_borders(
+          x,
+          y,
+          width,
+          height,
+          glyphs,
+          frame_style
+        ) ++ header_rule ++ cells
+    end
+  end
 
-    cells
+  # `{cells, style, y}` for each drawn row from `top`: the header row, when
+  # there is one, then `rule_rows` left for its rule, then the data rows.
+  defp table_lines([], _header_style, data, data_style, top, _rule_rows),
+    do: data_lines(data, data_style, top)
+
+  defp table_lines(headers, header_style, data, data_style, top, rule_rows) do
+    [
+      {headers, header_style, top}
+      | data_lines(data, data_style, top + 1 + rule_rows)
+    ]
+  end
+
+  defp data_lines(data, style, top) do
+    data
+    |> Enum.with_index(top)
+    |> Enum.map(fn {row, row_y} -> {row, style, row_y} end)
+  end
+
+  defp render_table_lines(lines, x, col_widths, pad) do
+    Enum.flat_map(lines, fn {row, style, row_y} ->
+      render_table_row(x, row_y, row, col_widths, style, pad)
+    end)
   end
 
   @doc """
@@ -96,14 +146,6 @@ defmodule Raxol.UI.ElementRenderer do
   end
 
   @doc """
-  Calculates table width based on headers, data, and column widths.
-  """
-  def calculate_table_width(headers, data, column_widths) do
-    # If column widths are provided, use their sum
-    calculate_table_width_from_columns_or_content(column_widths, headers, data)
-  end
-
-  @doc """
   Builds table attributes with data and styles.
   """
   def build_table_attrs(table_element, headers, data, column_widths) do
@@ -127,66 +169,34 @@ defmodule Raxol.UI.ElementRenderer do
     end)
   end
 
-  # Helper function to calculate width based on content
-  defp calculate_content_based_width(headers, data) do
-    all_rows = [headers | data]
-    max_columns = get_max_columns(all_rows)
-    column_max_widths = calculate_column_widths(all_rows, max_columns)
-
-    # Add padding and borders
-    total_width =
-      Enum.sum(column_max_widths) + length(column_max_widths) * 3 + 2
-
-    # Minimum width of 20
-    max(total_width, 20)
-  end
-
-  defp get_max_columns(all_rows) do
-    Enum.reduce(all_rows, 0, fn row, max_cols ->
-      max(length(row), max_cols)
-    end)
-  end
-
-  defp calculate_column_widths(all_rows, max_columns) do
-    for col_index <- 0..(max_columns - 1) do
-      column_content = get_column_content(all_rows, col_index)
-      get_max_column_width(column_content)
-    end
-  end
-
-  defp get_column_content(all_rows, col_index) do
-    Enum.map(all_rows, fn row ->
-      Enum.at(row, col_index, "")
-    end)
-  end
-
-  defp get_max_column_width(column_content) do
-    Enum.reduce(column_content, 0, fn cell, max_width ->
-      cell_width = Raxol.UI.TextMeasure.display_width(to_string(cell))
-      max(cell_width, max_width)
-    end)
-  end
-
-  defp render_table_row(x, y, row, col_widths, style) do
+  # Each cell draws `pad` columns in from its column's edges and never past
+  # them, so a long value cannot run into the next column or the frame.
+  defp render_table_row(x, y, row, col_widths, style, pad) do
     Enum.reduce(Enum.with_index(row), {[], x}, fn {cell, index}, {acc, cur_x} ->
-      cell_cells =
-        render_table_cell(cell, cur_x, y, Enum.at(col_widths, index, 5), style)
+      col_width = Enum.at(col_widths, index, 5)
 
-      {acc ++ cell_cells, cur_x + Enum.at(col_widths, index, 5)}
+      cell_cells =
+        render_table_cell(cell, cur_x + pad, y, col_width - 2 * pad, style)
+
+      {acc ++ cell_cells, cur_x + col_width}
     end)
     |> elem(0)
   end
 
-  defp render_table_cell(cell, x, y, _col_width, style) do
+  defp render_table_cell(cell, x, y, max_width, style) do
     cell_text = to_string(cell)
     fg = resolve_fg(style)
     bg = resolve_bg(style)
     attrs = extract_text_attrs(style)
+    limit = x + max_width
 
     String.graphemes(cell_text)
-    |> Enum.reduce({[], x}, fn char, {cells, cur_x} ->
+    |> Enum.reduce_while({[], x}, fn char, {cells, cur_x} ->
       w = Raxol.UI.TextMeasure.char_display_width(char)
-      {[{cur_x, y, char, fg, bg, attrs} | cells], cur_x + w}
+
+      if cur_x + w > limit,
+        do: {:halt, {cells, cur_x}},
+        else: {:cont, {[{cur_x, y, char, fg, bg, attrs} | cells], cur_x + w}}
     end)
     |> elem(0)
     |> Enum.reverse()
@@ -312,32 +322,10 @@ defmodule Raxol.UI.ElementRenderer do
     |> Enum.reverse()
   end
 
-  defp add_headers_if_present(cells, [], _x, _y, _col_widths, _header_style),
-    do: cells
-
-  defp add_headers_if_present(cells, headers, x, y, col_widths, header_style) do
-    cells ++ render_table_row(x, y, headers, col_widths, header_style)
-  end
-
-  defp calculate_data_start_y([], y), do: y
-  defp calculate_data_start_y(_headers, y), do: y + 2
-
   defp calculate_clip_bounds(false, _x, _y, _width, _height), do: nil
 
   defp calculate_clip_bounds(true, x, y, width, height) do
     {x, y, x + width - 1, y + height - 1}
-  end
-
-  defp calculate_table_width_from_columns_or_content([], headers, data) do
-    calculate_content_based_width(headers, data)
-  end
-
-  defp calculate_table_width_from_columns_or_content(
-         column_widths,
-         _headers,
-         _data
-       ) do
-    Enum.sum(column_widths)
   end
 
   defp add_clip_bounds_if_present(child, nil), do: child

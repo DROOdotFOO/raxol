@@ -445,14 +445,12 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          text: "typed",
          text: "┌"
        )},
-      # The selected item is laid out in reverse video; the frame cannot
-      # show it until the cell-to-buffer bridge keeps `:reverse` (reported
-      # with #1129: `Backends.apply_cells_to_buffer/2` keeps only bold,
-      # underline and italic).
       {View, :list, [0, 1],
        render(fn -> View.list(items: ["Elixir", "Rust"], selected: 1) end,
          line: {0, "Elixir"},
-         line: {1, "Rust"}
+         line: {1, "Rust"},
+         styled: {"Rust", reverse: true},
+         styled: {"Elixir", reverse: false}
        )},
       {View, :spacer, [0, 1],
        render(
@@ -557,10 +555,11 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          line: {2, "after"},
          no_text: "overflows"
        )},
-      # The active tab is laid out in reverse video; see the `list` row.
       {View, :tabs, [0, 1],
        render(fn -> View.tabs(tabs: ["Overview", "Details"], active: 1) end,
-         line: {0, " Overview | Details "}
+         line: {0, " Overview | Details "},
+         styled: {"Details", reverse: true},
+         styled: {"Overview", reverse: false}
        )},
       {View, :span, [1, 2],
        render(
@@ -699,8 +698,22 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
          text: "inside"
        )},
       {Elements, :text, [1, 2],
-       render(fn -> Elements.text("e text", fg: :red) end,
-         styled: {"e text", fg: :red}
+       render(
+         fn ->
+           Elements.column(
+             children: [
+               Elements.text("e text", fg: :red),
+               Elements.text("dimmed", style: [:dim]),
+               Elements.text("reversed", style: [:reverse]),
+               Elements.text("struck", style: [:strikethrough])
+             ]
+           )
+         end,
+         styled: {"e text", fg: :red},
+         styled: {"dimmed", dim: true},
+         styled: {"reversed", reverse: true},
+         styled: {"struck", strikethrough: true},
+         styled: {"e text", dim: false, reverse: false, strikethrough: false}
        )},
       {Elements, :button, [1, 2],
        render(
@@ -893,7 +906,7 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Core.Renderer.View
-  alias Raxol.Core.Renderer.ViewDslConformanceTest.{ProbeWidget, Rows}
+  alias Raxol.Core.Renderer.ViewDslConformanceTest.Rows
   alias Raxol.Headless
 
   @dsl_modules [View, Raxol.View.Elements, Raxol.View.Components]
@@ -1284,6 +1297,183 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
     end
   end
 
+  describe "a table's border" do
+    @table [headers: ["Name", "Qty"], data: [["apple", "3"], ["kiwi", "12"]]]
+
+    test "defaults to :single: a frame, and a rule under the header" do
+      frame = render_frame(View.table(@table))
+
+      for check <- [
+            line: {0, "┌────────────┐"},
+            line: {1, "│ Name   Qty │"},
+            line: {2, "│────────────│"},
+            line: {3, "│ apple  3   │"},
+            line: {4, "│ kiwi   12  │"},
+            line: {5, "└────────────┘"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "draws the style it names" do
+      frame = render_frame(View.table(Keyword.put(@table, :border, :double)))
+
+      for check <- [
+            line: {0, "╔════════════╗"},
+            line: {1, "║ Name   Qty ║"},
+            line: {2, "║════════════║"},
+            line: {5, "╚════════════╝"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test ":none draws no frame or rule, and takes no space for them" do
+      frame =
+        render_frame(
+          View.column(
+            children: [
+              View.table(Keyword.put(@table, :border, :none)),
+              View.text("below")
+            ]
+          )
+        )
+
+      for check <- [
+            line: {0, "Name   Qty"},
+            line: {1, "apple  3"},
+            line: {2, "kiwi   12"},
+            line: {3, "below"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "Components.table/1 passes :border on, so :none draws no frame" do
+      frame =
+        render_frame(
+          Raxol.View.Components.table(
+            headers: ["Name", "Qty"],
+            rows: [["apple", "3"]],
+            border: :none
+          )
+        )
+
+      for check <- [
+            line: {0, "Name   Qty"},
+            line: {1, "apple  3"},
+            no_text: "─"
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "is measured, so the next sibling starts just past it" do
+      below =
+        render_frame(
+          View.column(children: [View.table(@table), View.text("below")])
+        )
+
+      beside =
+        render_frame(View.row(children: [View.table(@table), View.text("R")]))
+
+      for {frame, check} <- [
+            {below, {:line, {5, "└────────────┘"}}},
+            {below, {:line, {6, "below"}}},
+            {beside, {:line, {0, "┌────────────┐R"}}},
+            {beside, {:line, {5, "└────────────┘"}}}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "keeps a cell's text inside its column" do
+      frame =
+        render_frame(%{
+          type: :table,
+          attrs: %{
+            columns: [
+              %{label: "Long header", width: 6},
+              %{label: "B", width: 4}
+            ],
+            rows: [["abcdefghij", "xy"]]
+          }
+        })
+
+      for check <- [line: {1, "│ Long  B  │"}, line: {3, "│ abcd  xy │"}] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
+    test "draws after a sibling in the same box" do
+      frame =
+        render_frame(
+          View.box(children: [View.text("above"), View.table(@table)])
+        )
+
+      for check <- [text: "above", line: {1, "│ Name   Qty │"}] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "View.new position" do
+    test "places the view at its offset from the content origin, out of flow" do
+      frame =
+        render_frame(
+          View.box(
+            border: :single,
+            padding: 1,
+            children: [
+              View.column(
+                children: [
+                  View.text("first"),
+                  View.new(:box,
+                    position: {10, 3},
+                    children: [View.text("POS")]
+                  ),
+                  View.text("second")
+                ]
+              )
+            ]
+          )
+        )
+
+      # The box's content origin is (2, 2): inside its border and padding.
+      for check <- [
+            line: {2, "│ first"},
+            line: {3, "│ second"},
+            cell: {12, 5, char: "P"},
+            cell: {13, 5, char: "O"},
+            cell: {14, 5, char: "S"}
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+  end
+
+  describe "View.new z_index" do
+    # Both views sit at the same origin; "HIGH" covers all of "lo".
+    test "draws the higher of two overlapping views over the lower, in any order" do
+      high = View.new(:text, content: "HIGH", z_index: 2)
+      low = View.new(:text, content: "lo", z_index: 1)
+      positioned = &Map.put(&1, :position, {0, 0})
+
+      for parent <- [
+            View.box(children: [high, low]),
+            View.box(children: [low, high]),
+            View.column(children: [positioned.(high), positioned.(low)]),
+            View.column(children: [positioned.(low), positioned.(high)])
+          ] do
+        frame = render_frame(parent)
+
+        for check <- [line: {0, "HIGH"}, no_text: "lo"] do
+          assert check(frame, check), failure(frame, check)
+        end
+      end
+    end
+  end
+
   describe "an application's own helpers" do
     test "a local label/2 compiles next to the imported DSL" do
       [{module, _}] =
@@ -1322,7 +1512,6 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
       %{rows: buffer.cells, lines: Enum.map(buffer.cells, &row_text/1)}
     after
       Headless.stop(id)
-      stop_probe_widgets()
     end
   end
 
@@ -1330,24 +1519,6 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
 
   defp cell_char(%{wide_placeholder: true}), do: ""
   defp cell_char(%{char: char}), do: char
-
-  # The rendering engine starts a component process for a
-  # `process_component` node under `Raxol.DynamicSupervisor`; stop the ones
-  # this table's widget started so they do not outlive the row.
-  defp stop_probe_widgets do
-    for {_, pid, _, _} <-
-          DynamicSupervisor.which_children(Raxol.DynamicSupervisor),
-        is_pid(pid),
-        probe_widget?(pid) do
-      DynamicSupervisor.terminate_child(Raxol.DynamicSupervisor, pid)
-    end
-  end
-
-  defp probe_widget?(pid) do
-    match?(%{module: ProbeWidget}, :sys.get_state(pid, 1_000))
-  catch
-    :exit, _ -> false
-  end
 
   # --- checks --------------------------------------------------------------
 

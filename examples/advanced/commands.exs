@@ -20,10 +20,10 @@ defmodule CommandsExample do
     case message do
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "t"}} ->
         id = model.next_id
-        task = Directive.spawn(fn -> {id, do_work()} end)
+        task = Directive.spawn_task(fn -> {:task_result, {id, do_work()}} end)
         {%{model | next_id: id + 1, pending: model.pending + 1}, [task]}
 
-      {:task_result, {id, result}} ->
+      {:command_result, {:task_result, {id, result}}} ->
         entry = "##{id}: #{result}"
         results = [entry | model.results] |> Enum.take(10)
         {%{model | results: results, pending: model.pending - 1}, []}

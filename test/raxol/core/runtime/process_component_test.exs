@@ -77,6 +77,22 @@ defmodule Raxol.Core.Runtime.ProcessComponentTest do
 
       GenServer.stop(pid)
     end
+
+    test "stops when the process that owns it exits" do
+      owner = spawn(fn -> receive do: (:exit -> :ok) end)
+
+      {:ok, pid} =
+        ProcessComponent.start_link(
+          module: TestWidget,
+          props: %{initial: 0},
+          parent_pid: owner
+        )
+
+      ref = Process.monitor(pid)
+      send(owner, :exit)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    end
   end
 
   describe "crash isolation" do
@@ -95,19 +111,6 @@ defmodule Raxol.Core.Runtime.ProcessComponentTest do
       refute Process.alive?(pid)
       # The test process (caller) is still alive
       assert Process.alive?(self())
-    end
-  end
-
-  describe "process_component view helper" do
-    test "returns correct map structure" do
-      result = Raxol.Core.Renderer.View.process_component(TestWidget, %{initial: 1})
-
-      assert result == %{
-               type: :process_component,
-               module: TestWidget,
-               props: %{initial: 1},
-               id: "pc-#{inspect(TestWidget)}"
-             }
     end
   end
 end
