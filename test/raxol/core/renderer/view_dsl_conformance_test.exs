@@ -1349,6 +1349,25 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
       end
     end
 
+    test "Components.table/1 passes :border on, so :none draws no frame" do
+      frame =
+        render_frame(
+          Raxol.View.Components.table(
+            headers: ["Name", "Qty"],
+            rows: [["apple", "3"]],
+            border: :none
+          )
+        )
+
+      for check <- [
+            line: {0, "Name   Qty"},
+            line: {1, "apple  3"},
+            no_text: "─"
+          ] do
+        assert check(frame, check), failure(frame, check)
+      end
+    end
+
     test "is measured, so the next sibling starts just past it" do
       below =
         render_frame(
