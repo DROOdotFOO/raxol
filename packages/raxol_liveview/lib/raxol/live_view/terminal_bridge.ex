@@ -879,8 +879,13 @@ defmodule Raxol.LiveView.TerminalBridge do
 
   defp faint_color(color, faint) when faint in [nil, false], do: color
 
+  # The default foreground renders as `inherit`, which is not a <color> and
+  # would void the whole color-mix(); `currentColor` is the inherited colour.
+  defp faint_color(color, _faint) when color in [nil, "inherit"],
+    do: "color-mix(in srgb, currentColor 50%, transparent)"
+
   defp faint_color(color, _faint),
-    do: "color-mix(in srgb, #{color || "currentColor"} 50%, transparent)"
+    do: "color-mix(in srgb, #{color} 50%, transparent)"
 
   defp add_declaration(styles, _prop, nil), do: styles
   defp add_declaration(styles, prop, value), do: ["#{prop}: #{value}" | styles]

@@ -19,15 +19,16 @@ defmodule Raxol.UI.TextAttributesLivePathTest do
   alias Raxol.UI.Renderer, as: UIRenderer
 
   @width 40
-  @height 4
+  @height 5
 
-  # One line per attribute, plus an unstyled control line.
+  # One line per attribute, faint over reverse, plus an unstyled control line.
   defp cells do
     View.column(
       children: [
-        View.text("dimmed", style: [:dim]),
+        View.text("dimmed", style: [:dim], fg: :default),
         View.text("reversed", style: [:reverse], fg: :red, bg: :blue),
         View.text("struck", style: [:strikethrough]),
+        View.text("faded", style: [:dim, :reverse]),
         View.text("plain")
       ]
     )
@@ -101,8 +102,15 @@ defmodule Raxol.UI.TextAttributesLivePathTest do
       assert_receive {:render_update, html, _animation_css}
 
       # Faint: the text colour at half strength, the cell background untouched.
+      # The dimmed line has the default foreground, which has to mix
+      # `currentColor`: `inherit` is not a colour, so the browser would drop
+      # the declaration and draw the text at full strength.
       assert span_style(html, "dimmed") =~
-               ~r/(^|; )color: color-mix\(in srgb, [^;]+ 50%, transparent\)/
+               ~r/(^|; )color: color-mix\(in srgb, currentColor 50%, transparent\)(;|$)/
+
+      # Faint over reverse video mixes the swapped-in theme background.
+      assert span_style(html, "faded") =~
+               ~r/(^|; )color: color-mix\(in srgb, var\(--raxol-bg\) 50%, transparent\)(;|$)/
 
       # Reverse video swaps the two colours.
       reversed = span_style(html, "reversed")
