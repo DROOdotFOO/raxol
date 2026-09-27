@@ -11,6 +11,43 @@ defmodule Raxol.Core.Runtime.ComponentManager do
   - Safe component operation wrappers
   - Proper error telemetry integration
   - Full backward compatibility maintained
+
+  ## Event subscriptions
+
+  A component subscribes to events dispatched through
+  `Raxol.Core.Events.EventManager` (`EventManager.dispatch/1,2` or
+  `EventManager.notify/3`) by returning a command from `mount/1`,
+  `handle_event/3`, or `update/2` (for a `ComponentManager.update/2` call or a
+  delivered event):
+
+    * `{:command, {:subscribe, event_types}}` adds the component to each listed
+      type.
+    * `{:command, {:unsubscribe, event_types}}` removes it from each listed
+      type. Unmounting a component removes it from every type.
+
+  Each matching event reaches the component's `update/2` as
+  `{:event, event_type, event_data}`, through the same path as
+  `ComponentManager.update/2` (commands it returns are processed, and the
+  component is queued for render if its state changed). A component receives
+  an event once, however often it subscribed to the type; subscribing again
+  changes nothing, and one unsubscribe removes it.
+
+  The manager holds one EventManager subscription per event type, shared by
+  every component listing the type: it is started when the first component
+  subscribes and stopped when the last one leaves. An `{:event, _, _}` message
+  for a type no component lists is dropped.
+
+  If EventManager is not running when a type's first component subscribes, a
+  warning is logged and the component is left unsubscribed from that type; it
+  can subscribe again once EventManager is back. Delivery stops if EventManager
+  restarts: the subscriptions lived in the stopped EventManager and are not
+  re-established with the new one, and since the manager still counts them as
+  running, subscribing again does not renew them until every component listing
+  the type has left it.
+
+  EventManager is node-global: a subscribed component receives every event of
+  the type dispatched anywhere on the node, whichever session or process
+  dispatched it.
   """
 
   alias Raxol.Core.Runtime.Log
@@ -84,7 +121,7 @@ defmodule Raxol.Core.Runtime.ComponentManager do
      %{
        # component_id => component_state
        components: %{},
-       # subscription_id => component_id
+       # event_type => %{subscription: subscription_id, components: MapSet}
        subscriptions: %{},
        # list of component_ids needing render
        render_queue: [],
@@ -139,24 +176,8 @@ defmodule Raxol.Core.Runtime.ComponentManager do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:update, component_id, message}, _from, state) do
-    case Map.get(state.components, component_id) do
-      nil ->
-        {:reply, {:error, :not_found}, state}
-
-      component ->
-        case safe_component_update(component, message) do
-          {:ok, result} ->
-            process_update_result(result, component_id, component, state)
-
-          {:error, reason} ->
-            Raxol.Core.Runtime.Log.warning_with_context(
-              "Component update failed: #{inspect(reason)}",
-              %{component_id: component_id, message: message}
-            )
-
-            {:reply, {:error, :component_error}, state}
-        end
-    end
+    {reply, state} = update_component(component_id, message, state)
+    {:reply, reply, state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -242,6 +263,32 @@ defmodule Raxol.Core.Runtime.ComponentManager do
     handle_info({:update, component_id, message}, state)
   end
 
+  # EventManager delivers every event of a subscribed type in this shape, with
+  # no subscription ref; each component listing the type gets it once, through
+  # the same path as update/2. A type no component lists (an event queued
+  # before its last subscriber left, or a message from any other process) is
+  # dropped.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:event, event_type, _event_data} = message, state) do
+    case Map.get(state.subscriptions, event_type) do
+      nil ->
+        Raxol.Core.Runtime.Log.debug(
+          "[ComponentManager] Dropped #{inspect(event_type)} event: no component subscribes to it"
+        )
+
+        {:noreply, state}
+
+      %{components: component_ids} ->
+        state =
+          Enum.reduce(component_ids, state, fn component_id, acc ->
+            {_reply, acc} = update_component(component_id, message, acc)
+            acc
+          end)
+
+        {:noreply, state}
+    end
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:dispatch_event, event}, state) do
     # Dispatch event to all components
@@ -254,7 +301,7 @@ defmodule Raxol.Core.Runtime.ComponentManager do
         acc = put_in(acc.components[component_id].state, new_state)
 
         # Process any commands from event handling
-        process_commands(commands, component_id, acc)
+        acc = process_commands(commands, component_id, acc)
 
         # Queue re-render if state changed
         queue_render_if_state_changed(
@@ -434,13 +481,26 @@ defmodule Raxol.Core.Runtime.ComponentManager do
           | {:noreply, any()}
   defp handle_component_command(command, component_id, state) do
     case command do
-      {:subscribe, events} when is_list(events) ->
-        handle_subscription_command(events, component_id, state)
+      {:subscribe, event_types} when is_list(event_types) ->
+        Enum.reduce(
+          event_types,
+          state,
+          &subscribe_component(&1, component_id, &2)
+        )
 
-      {:unsubscribe, sub_id} ->
-        handle_unsubscribe_command(sub_id, state)
+      {:unsubscribe, event_types} when is_list(event_types) ->
+        Enum.reduce(
+          event_types,
+          state,
+          &unsubscribe_component(&1, component_id, &2)
+        )
 
       _ ->
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "Unknown component command: #{inspect(command)}",
+          %{component_id: component_id}
+        )
+
         state
     end
   end
@@ -467,53 +527,80 @@ defmodule Raxol.Core.Runtime.ComponentManager do
     state
   end
 
-  defp handle_subscription_command(events, component_id, state) do
-    {:ok, sub_id} =
-      Subscription.start(%Subscription{type: :events, data: events}, %{
-        pid: self()
-      })
+  # One EventManager subscription per event type, shared by every component
+  # that lists the type: EventManager's {:event, type, data} carries no
+  # subscription ref, so per-component subscriptions to one type could not be
+  # told apart and would each deliver every event.
+  defp subscribe_component(event_type, component_id, state) do
+    case Map.get(state.subscriptions, event_type) do
+      %{components: component_ids} = entry ->
+        entry = %{entry | components: MapSet.put(component_ids, component_id)}
+        put_in(state.subscriptions[event_type], entry)
 
-    put_in(state.subscriptions[sub_id], component_id)
+      nil ->
+        case start_event_subscription(event_type) do
+          {:ok, subscription_id} ->
+            put_in(state.subscriptions[event_type], %{
+              subscription: subscription_id,
+              components: MapSet.new([component_id])
+            })
+
+          {:error, reason} ->
+            Raxol.Core.Runtime.Log.warning_with_context(
+              "Failed to subscribe component to #{inspect(event_type)} events: #{inspect(reason)}",
+              %{component_id: component_id}
+            )
+
+            state
+        end
+    end
   end
 
-  defp handle_unsubscribe_command(sub_id, state) do
-    case Subscription.stop(sub_id) do
+  defp start_event_subscription(event_type) do
+    Subscription.start(Subscription.events([event_type]), %{pid: self()})
+  catch
+    :exit, {:noproc, _} -> {:error, :event_manager_not_running}
+  end
+
+  defp unsubscribe_component(event_type, component_id, state) do
+    case Map.get(state.subscriptions, event_type) do
+      nil ->
+        state
+
+      %{subscription: subscription_id, components: component_ids} = entry ->
+        component_ids = MapSet.delete(component_ids, component_id)
+
+        if MapSet.size(component_ids) == 0 do
+          stop_event_subscription(event_type, subscription_id)
+          update_in(state.subscriptions, &Map.delete(&1, event_type))
+        else
+          put_in(state.subscriptions[event_type], %{
+            entry
+            | components: component_ids
+          })
+        end
+    end
+  end
+
+  defp stop_event_subscription(event_type, subscription_id) do
+    case Subscription.stop(subscription_id) do
       :ok ->
-        update_in(state.subscriptions, &Map.delete(&1, sub_id))
+        :ok
 
       {:error, reason} ->
         Raxol.Core.Runtime.Log.warning_with_context(
-          "Failed to stop subscription #{inspect(sub_id)}: #{inspect(reason)}",
-          %{}
+          "Failed to stop #{inspect(event_type)} event subscription: #{inspect(reason)}",
+          %{subscription: subscription_id}
         )
-
-        update_in(state.subscriptions, &Map.delete(&1, sub_id))
     end
   end
 
   defp cleanup_subscriptions(component_id, state) do
-    # Find and remove all subscriptions for this component
-    {to_remove, remaining} =
-      Enum.split_with(state.subscriptions, fn {_, cid} ->
-        cid == component_id
-      end)
-
-    # Unsubscribe from each using aliased Subscription module
-    Enum.each(to_remove, fn {sub_id, _} ->
-      case Subscription.stop(sub_id) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Raxol.Core.Runtime.Log.warning_with_context(
-            "Failed to stop subscription #{inspect(sub_id)}: #{inspect(reason)}",
-            %{}
-          )
-      end
-    end)
-
-    # Update state
-    %{state | subscriptions: Map.new(remaining)}
+    Enum.reduce(
+      Map.keys(state.subscriptions),
+      state,
+      &unsubscribe_component(&1, component_id, &2)
+    )
   end
 
   @spec mount_component(module(), map(), any(), String.t() | integer(), map()) ::
@@ -537,7 +624,7 @@ defmodule Raxol.Core.Runtime.ComponentManager do
       })
 
     # Process any commands from mounting
-    process_commands(commands, component_id, new_state)
+    new_state = process_commands(commands, component_id, new_state)
 
     # Queue initial render (avoid duplicates)
     new_state =
@@ -662,6 +749,27 @@ defmodule Raxol.Core.Runtime.ComponentManager do
     send(runtime_pid, {:component_queued_for_render, component_id})
   end
 
+  defp update_component(component_id, message, state) do
+    case Map.get(state.components, component_id) do
+      nil ->
+        {{:error, :not_found}, state}
+
+      component ->
+        case safe_component_update(component, message) do
+          {:ok, result} ->
+            process_update_result(result, component_id, component, state)
+
+          {:error, reason} ->
+            Raxol.Core.Runtime.Log.warning_with_context(
+              "Component update failed: #{inspect(reason)}",
+              %{component_id: component_id, message: message}
+            )
+
+            {{:error, :component_error}, state}
+        end
+    end
+  end
+
   defp process_update_result(result, component_id, component, state) do
     case result do
       {new_state, commands} when is_map(new_state) ->
@@ -677,7 +785,7 @@ defmodule Raxol.Core.Runtime.ComponentManager do
         apply_component_update(new_state, [], component_id, component, state)
 
       _ ->
-        {:reply, {:error, :invalid_component_return}, state}
+        {{:error, :invalid_component_return}, state}
     end
   end
 
@@ -695,7 +803,7 @@ defmodule Raxol.Core.Runtime.ComponentManager do
       queue_render_if_changed(state, component_id, new_state, component.state)
 
     send_component_updated_if_runtime_pid(state.runtime_pid, component_id)
-    {:reply, {:ok, new_state}, state}
+    {{:ok, new_state}, state}
   end
 
   defp process_scheduled_update_result(result, component_id, state) do
