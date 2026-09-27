@@ -19,6 +19,8 @@ defmodule Mix.Raxol.Generator do
       Mix.raise("Directory #{path} already exists")
     end
 
+    validate_module_available!(opts[:module] || Macro.camelize(app))
+
     bindings = build_bindings(app, opts, raxol_version)
     install? = Keyword.get(opts, :install, false)
     skip_test = Keyword.get(opts, :no_test, false)
@@ -111,8 +113,19 @@ defmodule Mix.Raxol.Generator do
 
   # --- Private ---
 
+  # `mix new`'s rule, which `raxol new` keeps too: the project's module must
+  # not already exist, or the project redefines it (`enum` would compile
+  # `Enum`).
+  defp validate_module_available!(module) do
+    if Code.ensure_loaded?(Module.concat([module])) do
+      Mix.raise(
+        "Module #{module} already exists; the new project would redefine it"
+      )
+    end
+  end
+
   defp validate_app_name!(name) do
-    unless name =~ ~r/^[a-z][a-z0-9_]*$/ do
+    unless name =~ ~r/\A[a-z][a-z0-9_]*\z/ do
       Mix.raise(
         "App name must start with a lowercase letter and contain only " <>
           "lowercase letters, numbers, and underscores. Got: #{name}"

@@ -62,6 +62,28 @@ defmodule Mix.Tasks.Raxol.NewTest do
     end
   end
 
+  # `mix new`'s rule, which `raxol new` keeps too: a project whose module
+  # already exists would redefine it (`enum` would compile `Enum`). A name
+  # with a trailing newline is not a name at all.
+  for {name, flags} <- [
+        {"agent", []},
+        {"enum", []},
+        {"gen\n", []},
+        {"gen_enum", ["--module", "Enum"]}
+      ] do
+    test "#{inspect(Enum.join([name | flags], " "))} fails before creating anything",
+         %{tmp: tmp} do
+      project = Path.join(tmp, unquote(name))
+      args = [project, "--template", "counter" | unquote(flags)]
+
+      assert_raise Mix.Error, fn ->
+        capture_io(fn -> Mix.Tasks.Raxol.New.run(args) end)
+      end
+
+      refute File.exists?(project)
+    end
+  end
+
   test "--ssh and --liveview modules compile with the app", %{tmp: tmp} do
     flags = ["--template", "counter", "--sup", "--ssh", "--liveview"]
     {project, module} = generate(tmp, flags)
