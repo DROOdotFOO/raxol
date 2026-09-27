@@ -74,7 +74,7 @@ defmodule Raxol.Core.Renderer.View do
         "View.box macro"
       )
 
-      children = unquote(block)
+      children = Raxol.Core.Renderer.View.children_from_block(unquote(block))
 
       Raxol.Core.Renderer.View.Components.Box.new(
         Keyword.merge(unquote(opts), children: children)
@@ -98,7 +98,10 @@ defmodule Raxol.Core.Renderer.View do
       Raxol.Core.Renderer.View.Layout.Flex.row(
         Keyword.merge(
           Raxol.Core.Renderer.View.ensure_keyword(unquote(opts)),
-          Raxol.Core.Renderer.View.ensure_keyword(children: unquote(block))
+          Raxol.Core.Renderer.View.ensure_keyword(
+            children:
+              Raxol.Core.Renderer.View.children_from_block(unquote(block))
+          )
         )
       )
     end
@@ -112,7 +115,7 @@ defmodule Raxol.Core.Renderer.View do
         "View.flex macro"
       )
 
-      children = unquote(block)
+      children = Raxol.Core.Renderer.View.children_from_block(unquote(block))
 
       Raxol.Core.Renderer.View.Layout.Flex.container(
         Keyword.merge(unquote(opts), children: children)
@@ -199,7 +202,7 @@ defmodule Raxol.Core.Renderer.View do
 
   @doc "Creates a new panel view (box with border and children)."
   def panel(opts \\ []) do
-    LayoutHelpers.panel(opts)
+    LayoutHelpers.panel(promote_do_to_children(opts))
   end
 
   @doc "Creates a new column layout."
@@ -221,12 +224,27 @@ defmodule Raxol.Core.Renderer.View do
   """
   def promote_do_to_children(opts) when is_list(opts) do
     case Keyword.pop(opts, :do) do
-      {nil, opts} -> opts
-      {block, opts} -> Keyword.put_new(opts, :children, List.wrap(block))
+      {nil, opts} ->
+        opts
+
+      {block, opts} ->
+        Keyword.put_new(opts, :children, children_from_block(block))
     end
   end
 
   def promote_do_to_children(opts), do: opts
+
+  # Turns the value of a container's `do` block into its children list.
+  #
+  # A block with a single expression evaluates to that one element rather
+  # than a list; `nil` (an `if` without `else`) means no children. Every
+  # container macro and `promote_do_to_children/1` go through this so a
+  # one-child block renders its child. Macro plumbing: the container macros
+  # call it fully qualified, and `use Raxol.Core.Runtime.Application` /
+  # `use Raxol.View` do not import it, so an app may define its own.
+  @doc false
+  @spec children_from_block(term()) :: list()
+  def children_from_block(block), do: List.wrap(block)
 
   defmacro column(opts, do: block) do
     quote do
@@ -238,7 +256,10 @@ defmodule Raxol.Core.Renderer.View do
       Raxol.Core.Renderer.View.Layout.Flex.column(
         Keyword.merge(
           Raxol.Core.Renderer.View.ensure_keyword(unquote(opts)),
-          Raxol.Core.Renderer.View.ensure_keyword(children: unquote(block))
+          Raxol.Core.Renderer.View.ensure_keyword(
+            children:
+              Raxol.Core.Renderer.View.children_from_block(unquote(block))
+          )
         )
       )
     end
@@ -252,7 +273,7 @@ defmodule Raxol.Core.Renderer.View do
         ratio: Keyword.get(unquote(opts), :ratio, {1, 1}),
         min_size: Keyword.get(unquote(opts), :min_size, 5),
         id: Keyword.get(unquote(opts), :id),
-        children: unquote(block)
+        children: Raxol.Core.Renderer.View.children_from_block(unquote(block))
       )
     end
   end
@@ -261,7 +282,7 @@ defmodule Raxol.Core.Renderer.View do
     quote do
       Raxol.UI.Layout.SplitPane.new(
         direction: unquote(direction),
-        children: unquote(block)
+        children: Raxol.Core.Renderer.View.children_from_block(unquote(block))
       )
     end
   end
@@ -269,7 +290,10 @@ defmodule Raxol.Core.Renderer.View do
   @doc "Creates a split pane from a named preset."
   defmacro split_layout(preset, do: block) do
     quote do
-      Raxol.UI.Layout.SplitPane.from_preset(unquote(preset), unquote(block))
+      Raxol.UI.Layout.SplitPane.from_preset(
+        unquote(preset),
+        Raxol.Core.Renderer.View.children_from_block(unquote(block))
+      )
     end
   end
 

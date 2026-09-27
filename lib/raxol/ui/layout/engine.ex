@@ -181,6 +181,14 @@ defmodule Raxol.UI.Layout.Engine do
   """
   @spec process_element(element() | any(), space(), [positioned_element()]) ::
           [positioned_element()]
+  # A container given one bare child map instead of a list (e.g. hand-built
+  # nodes, or `children: child`) lays it out as a one-element list, so no
+  # container type silently drops or mis-iterates it.
+  def process_element(%{children: child} = element, space, acc)
+      when is_map(child) do
+    process_element(%{element | children: [child]}, space, acc)
+  end
+
   # Process a view element
   def process_element(%{type: :view, children: children}, space, acc)
       when is_list(children) do
@@ -417,10 +425,6 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   # Process box elements in new View DSL format (no :attrs key)
-  def process_element(%{type: :box, children: %{} = child} = box, space, acc) do
-    process_element(%{box | children: [child]}, space, acc)
-  end
-
   def process_element(%{type: :box, children: children} = box, space, acc)
       when is_list(children) do
     style = resolve_style(box)
@@ -785,6 +789,12 @@ defmodule Raxol.UI.Layout.Engine do
   @spec measure_element(element() | any(), map()) :: measurement()
   def measure_element(element, available_space \\ %{})
 
+  # Single bare child map: measure as a one-element list (see process_element/3).
+  def measure_element(%{children: child} = element, available_space)
+      when is_map(child) do
+    measure_element(%{element | children: [child]}, available_space)
+  end
+
   # Handles valid elements (maps with :type and :attrs)
   def measure_element(%{type: type, attrs: attrs} = element, available_space)
       when is_atom(type) do
@@ -850,14 +860,6 @@ defmodule Raxol.UI.Layout.Engine do
   # Same mirror for the scrubber's :row alias.
   def measure_element(%{type: :scrubber} = element, available_space) do
     measure_element(Map.put(element, :type, :row), available_space)
-  end
-
-  # Box with single map child (View DSL produces map, not list, for single child)
-  def measure_element(
-        %{type: :box, children: %{} = child} = element,
-        available_space
-      ) do
-    measure_element(%{element | children: [child]}, available_space)
   end
 
   # Box with top-level properties (new View DSL format from Box.new/1)
