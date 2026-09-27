@@ -38,10 +38,7 @@ defmodule Raxol.Test.MetricsHelper do
     alert_manager =
       start_or_reuse(
         Raxol.Core.Metrics.AlertManager,
-        Keyword.get(opts, :alert_manager_opts,
-          check_interval: 1,
-          default_cooldown: 5
-        )
+        Keyword.get(opts, :alert_manager_opts, check_interval: 1)
       )
 
     %{
@@ -205,77 +202,6 @@ defmodule Raxol.Test.MetricsHelper do
           end_time
         )
     end
-  end
-
-  @doc """
-  Creates a test aggregation rule.
-
-  ## Parameters
-    * `name` - The rule name
-    * `metric_name` - The metric to aggregate
-    * `type` - The aggregation type
-    * `opts` - Additional options (time_window, group_by)
-
-  ## Examples
-      iex> create_test_rule("hourly_ops", "buffer_operations", :mean, time_window: :timer.hours(1))
-      :ok
-  """
-  def create_test_rule(name, metric_name, type, opts \\ []) do
-    Raxol.Core.Metrics.Aggregator.add_rule(%{
-      name: name,
-      metric_name: metric_name,
-      type: type,
-      time_window: Keyword.get(opts, :time_window, :timer.minutes(5)),
-      group_by: Keyword.get(opts, :group_by, [])
-    })
-  end
-
-  @doc """
-  Creates a test alert rule.
-
-  ## Parameters
-    * `name` - The rule name
-    * `metric_name` - The metric to monitor
-    * `condition` - The alert condition
-    * `opts` - Additional options (severity, cooldown, notification)
-
-  ## Examples
-      iex> create_test_alert("high_usage", "memory_usage", {:above, 90}, severity: :warning)
-      :ok
-  """
-  def create_test_alert(name, metric_name, condition, opts \\ []) do
-    Raxol.Core.Metrics.AlertManager.add_rule(%{
-      name: name,
-      metric_name: metric_name,
-      condition: condition,
-      severity: Keyword.get(opts, :severity, :warning),
-      cooldown: Keyword.get(opts, :cooldown, 300),
-      notification: Keyword.get(opts, :notification, %{type: :test})
-    })
-  end
-
-  @doc """
-  Creates a test chart.
-
-  ## Parameters
-    * `metric_name` - The metric to visualize
-    * `chart_type` - The type of chart
-    * `opts` - Additional options (title, time_range, group_by)
-
-  ## Examples
-      iex> create_test_chart("buffer_operations", :line, title: "Buffer Operations")
-      {:ok, chart_id}
-  """
-  def create_test_chart(metric_name, chart_type, opts \\ []) do
-    Raxol.Core.Metrics.Visualizer.create_chart(
-      metric_name,
-      chart_type,
-      %{
-        title: Keyword.get(opts, :title, "Test Chart"),
-        time_range: Keyword.get(opts, :time_range, :timer.minutes(5)),
-        group_by: Keyword.get(opts, :group_by, [])
-      }
-    )
   end
 
   @doc """
