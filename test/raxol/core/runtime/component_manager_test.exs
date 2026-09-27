@@ -171,13 +171,29 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
   end
 
   # Answers the :go event with a broadcast of :bump, which every other
-  # component counts.
+  # component counts. {:shout, data} broadcasts {:bump, data}; its `:reply`
+  # prop picks how update/2 answers {:bump, data}: `{state, []}` by default,
+  # `{:ok, state}`, or a non-state `:garbage`.
   defmodule BroadcastPeer do
     def init(props), do: Map.put(props, :bumps, 0)
     def mount(state), do: {state, []}
     def unmount(state), do: state
 
     def update(:bump, state), do: {%{state | bumps: state.bumps + 1}, []}
+
+    def update({:bump, _data}, state) do
+      bumped = %{state | bumps: state.bumps + 1}
+
+      case Map.get(state, :reply) do
+        nil -> {bumped, []}
+        :ok_tuple -> {:ok, bumped}
+        :garbage -> :garbage
+      end
+    end
+
+    def update({:shout, data}, state),
+      do: {state, [{:broadcast, {:bump, data}}]}
+
     def update(_message, state), do: {state, []}
 
     def handle_event(:go, state, _context),
@@ -216,6 +232,64 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
       # Each component broadcast :bump once, and the other one counted it.
       assert ComponentManager.get_component(a).state.bumps == 1
       assert ComponentManager.get_component(b).state.bumps == 1
+    end
+  end
+
+  describe "update/2 returns for broadcast and scheduled messages" do
+    test "a broadcast answered with {:ok, state} updates the component" do
+      {:ok, a} = ComponentManager.mount(BroadcastPeer)
+      {:ok, b} = ComponentManager.mount(BroadcastPeer, %{reply: :ok_tuple})
+
+      assert {:ok, _} = ComponentManager.update(a, {:shout, :hi})
+
+      assert %{bumps: 1} = ComponentManager.get_component(b).state
+    end
+
+    test "a broadcast answered with an invalid return keeps the state and is logged without the data" do
+      manager = Process.whereis(ComponentManager)
+      {:ok, a} = ComponentManager.mount(BroadcastPeer)
+      {:ok, bad} = ComponentManager.mount(BroadcastPeer, %{reply: :garbage})
+      {:ok, good} = ComponentManager.mount(BroadcastPeer)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _} =
+                   ComponentManager.update(a, {:shout, "s3cr3t-payload"})
+        end)
+
+      assert Process.whereis(ComponentManager) == manager
+      assert %{bumps: 0} = ComponentManager.get_component(bad).state
+      assert %{bumps: 1} = ComponentManager.get_component(good).state
+      assert log =~ ~r/#{Regex.escape(bad)}.*:bump/
+      refute log =~ "s3cr3t-payload"
+    end
+
+    test "a scheduled message answered with {:ok, state} updates the component" do
+      {:ok, b} = ComponentManager.mount(BroadcastPeer, %{reply: :ok_tuple})
+
+      # What a {:schedule, message, delay} command's timer delivers.
+      send(Process.whereis(ComponentManager), {:update, b, {:bump, :hi}})
+      _ = :sys.get_state(ComponentManager)
+
+      assert %{bumps: 1} = ComponentManager.get_component(b).state
+    end
+
+    test "a scheduled message answered with an invalid return keeps the state and is logged without the data" do
+      {:ok, bad} = ComponentManager.mount(BroadcastPeer, %{reply: :garbage})
+
+      log =
+        capture_log(fn ->
+          send(
+            Process.whereis(ComponentManager),
+            {:update, bad, {:bump, "s3cr3t-payload"}}
+          )
+
+          _ = :sys.get_state(ComponentManager)
+        end)
+
+      assert %{bumps: 0} = ComponentManager.get_component(bad).state
+      assert log =~ ~r/#{Regex.escape(bad)}.*:bump/
+      refute log =~ "s3cr3t-payload"
     end
   end
 
