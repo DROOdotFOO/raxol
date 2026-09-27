@@ -8,6 +8,20 @@ defmodule Raxol.Core.Metrics.AlertManager do
   - Alert state tracking
   - Alert notifications
   - Alert history
+
+  ## Options
+
+  Times are whole seconds, not `:timer` milliseconds.
+
+    * `:check_interval` - how often rules are checked, a positive integer
+      (default 60)
+    * `:default_cooldown` - cooldown for a rule without its own `:cooldown`,
+      a non-negative integer (default 300)
+    * `:default_severity` - severity for a rule without its own `:severity`:
+      `:info`, `:warning`, `:error` or `:critical` (default `:warning`)
+
+  Any other value makes `start_link/1` return
+  `{:error, {:invalid_option, key, value}}`.
   """
 
   alias Raxol.Core.Metrics.{Aggregator, MetricsCollector}
@@ -24,9 +38,9 @@ defmodule Raxol.Core.Metrics.AlertManager do
           threshold: number(),
           severity: alert_severity(),
           tags: map(),
-          group_by: [String.t()],
+          group_by: [String.t() | atom()],
           # seconds
-          cooldown: pos_integer(),
+          cooldown: non_neg_integer(),
           notification_channels: [String.t()]
         }
 
@@ -38,6 +52,8 @@ defmodule Raxol.Core.Metrics.AlertManager do
     default_cooldown: 300,
     default_severity: :warning
   }
+
+  @severities [:info, :warning, :error, :critical]
 
   # Helper function to get the process name
   defp process_name(pid) when is_pid(pid), do: pid
@@ -93,28 +109,41 @@ defmodule Raxol.Core.Metrics.AlertManager do
   def init_manager(opts) do
     options = Map.merge(@default_options, Map.new(opts))
 
-    case options.check_interval do
-      seconds when is_integer(seconds) and seconds > 0 ->
-        state = %{
-          rules: %{},
-          next_rule_id: 1,
-          alert_states: %{},
-          alert_history: %{},
-          options: options
-        }
+    with :ok <- validate_option(:check_interval, options.check_interval),
+         :ok <- validate_option(:default_cooldown, options.default_cooldown),
+         :ok <- validate_option(:default_severity, options.default_severity) do
+      state = %{
+        rules: %{},
+        next_rule_id: 1,
+        alert_states: %{},
+        alert_history: %{},
+        options: options
+      }
 
-        schedule_check(seconds)
-        {:ok, state}
-
-      invalid ->
-        {:stop, {:invalid_option, :check_interval, invalid}}
+      schedule_check(options.check_interval)
+      {:ok, state}
     end
   end
+
+  defp validate_option(:check_interval, seconds)
+       when is_integer(seconds) and seconds > 0,
+       do: :ok
+
+  defp validate_option(:default_cooldown, seconds)
+       when is_integer(seconds) and seconds >= 0,
+       do: :ok
+
+  defp validate_option(:default_severity, severity)
+       when severity in @severities,
+       do: :ok
+
+  defp validate_option(key, invalid),
+    do: {:stop, {:invalid_option, key, invalid}}
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:add_rule, rule}, _from, state) do
     rule_id = state.next_rule_id
-    validated_rule = validate_rule(rule)
+    validated_rule = validate_rule(rule, state.options)
 
     new_state = %{
       state
@@ -179,7 +208,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
     {:noreply, new_state}
   end
 
-  @spec validate_rule(map()) :: %{
+  @spec validate_rule(map(), map()) :: %{
           name: String.t(),
           description: String.t(),
           metric_name: any(),
@@ -191,17 +220,17 @@ defmodule Raxol.Core.Metrics.AlertManager do
           cooldown: integer(),
           notification_channels: list()
         }
-  defp validate_rule(rule) do
+  defp validate_rule(rule, options) do
     %{
       name: Map.get(rule, :name, "Unnamed Alert"),
       description: Map.get(rule, :description, ""),
       metric_name: Map.get(rule, :metric_name),
       condition: Map.get(rule, :condition, :above),
       threshold: Map.get(rule, :threshold),
-      severity: Map.get(rule, :severity, @default_options.default_severity),
+      severity: Map.get(rule, :severity, options.default_severity),
       tags: Map.get(rule, :tags, %{}),
       group_by: Map.get(rule, :group_by, []),
-      cooldown: Map.get(rule, :cooldown, @default_options.default_cooldown),
+      cooldown: Map.get(rule, :cooldown, options.default_cooldown),
       notification_channels: Map.get(rule, :notification_channels, [])
     }
   end
@@ -279,26 +308,13 @@ defmodule Raxol.Core.Metrics.AlertManager do
     |> Enum.group_by(fn metric ->
       tags = MetricsCollector.normalize_tags(metric.tags)
 
-      Enum.map_join(group_by, ":", fn key ->
-        Map.get(tags, key) || lookup_atom_tag(tags, key)
-      end)
+      Enum.map_join(group_by, ":", &MetricsCollector.tag_value(tags, &1))
     end)
     |> Enum.map(fn {group, group_metrics} ->
       values = Enum.map(group_metrics, & &1.value)
       {group, Aggregator.calculate_aggregation(values, :mean)}
     end)
   end
-
-  # Looks up tags by atom key when given a string key. Uses
-  # String.to_existing_atom so external telemetry sources can't mint new
-  # atoms; unknown keys resolve to nil and fall through to the next branch.
-  defp lookup_atom_tag(tags, key) when is_binary(key) do
-    Map.get(tags, String.to_existing_atom(key))
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp lookup_atom_tag(_tags, _key), do: nil
 
   defp evaluate_alert(current_value, rule, alert_state) do
     now = DateTime.utc_now()

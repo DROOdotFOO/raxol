@@ -196,6 +196,31 @@ defmodule Raxol.Core.Metrics.MetricsCollector do
   def normalize_tags(_), do: %{}
 
   @doc """
+  Looks up a tag in a map from `normalize_tags/1` by a string or atom key,
+  trying the other key form when the given one is absent. A string key is
+  converted with `String.to_existing_atom/1`, so a key no tag uses never
+  creates an atom. Returns `nil` when neither form is present.
+  """
+  @spec tag_value(map(), term()) :: term()
+  def tag_value(tags, key) when is_map(tags) do
+    case Map.fetch(tags, key) do
+      {:ok, value} -> value
+      :error -> alternate_tag_value(tags, key)
+    end
+  end
+
+  defp alternate_tag_value(tags, key) when is_binary(key) do
+    Map.get(tags, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp alternate_tag_value(tags, key) when is_atom(key),
+    do: Map.get(tags, Atom.to_string(key))
+
+  defp alternate_tag_value(_tags, _key), do: nil
+
+  @doc """
   Gets all metrics grouped by type.
 
   ## Examples

@@ -21,7 +21,7 @@ defmodule Raxol.Core.Metrics.Aggregator do
           window: time_window(),
           metric_name: String.t(),
           tags: map(),
-          group_by: [String.t()]
+          group_by: [String.t() | atom()]
         }
 
   @default_options %{
@@ -63,17 +63,6 @@ defmodule Raxol.Core.Metrics.Aggregator do
   """
   def get_rules do
     GenServer.call(__MODULE__, :get_rules)
-  end
-
-  @doc """
-  Records a metric for aggregation.
-  """
-  def record(name, value, tags \\ []) do
-    # This is a simple pass-through to the unified collector
-    # The actual aggregation happens based on rules
-    Raxol.Core.Metrics.MetricsCollector.record_metric(name, :custom, value,
-      tags: tags
-    )
   end
 
   @doc """
@@ -267,10 +256,7 @@ defmodule Raxol.Core.Metrics.Aggregator do
     |> Enum.group_by(fn metric ->
       tags = MetricsCollector.normalize_tags(metric.tags)
 
-      group_by
-      |> Enum.map_join(":", fn key ->
-        Map.get(tags, key) || Map.get(tags, String.to_atom(key))
-      end)
+      Enum.map_join(group_by, ":", &MetricsCollector.tag_value(tags, &1))
     end)
   end
 
