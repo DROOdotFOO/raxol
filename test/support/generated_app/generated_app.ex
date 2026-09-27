@@ -195,6 +195,18 @@ defmodule Raxol.Test.GeneratedApp do
     {:ok, _started} = Application.ensure_all_started(app)
     """
 
+    # From a file, not `-e`: on Windows `mix` is a .bat, and cmd.exe ends the
+    # argument at its first newline, so the VM ran only `app = ...` and
+    # exited 0.
+    script_path =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol_generated_app_#{System.unique_integer([:positive])}.exs"
+      )
+
+    File.write!(script_path, script <> code)
+    on_exit(fn -> File.rm(script_path) end)
+
     # HOME as this VM booted with: a test that repoints HOME and does not
     # restore it would leave `mix` without the Hex under ~/.mix, and the VM
     # waiting on Hex's install prompt.
@@ -202,7 +214,7 @@ defmodule Raxol.Test.GeneratedApp do
 
     run_bounded(
       System.find_executable("mix"),
-      ["run", "--no-compile", "--no-deps-check", "-e", script <> code],
+      ["run", "--no-compile", "--no-deps-check", script_path],
       [{~c"MIX_ENV", ~c"test"}, {~c"HOME", home}]
     )
   end
