@@ -23,10 +23,7 @@ defmodule Raxol.Test.MetricsHelper do
     aggregator =
       start_or_reuse(
         Raxol.Core.Metrics.Aggregator,
-        Keyword.get(opts, :aggregator_opts,
-          update_interval: 1,
-          max_rules: 10
-        )
+        Keyword.get(opts, :aggregator_opts, update_interval: 1)
       )
 
     visualizer =
@@ -43,8 +40,7 @@ defmodule Raxol.Test.MetricsHelper do
         Raxol.Core.Metrics.AlertManager,
         Keyword.get(opts, :alert_manager_opts,
           check_interval: 1,
-          max_rules: 10,
-          default_cooldown: :timer.seconds(5)
+          default_cooldown: 5
         )
       )
 
@@ -253,7 +249,7 @@ defmodule Raxol.Test.MetricsHelper do
       metric_name: metric_name,
       condition: condition,
       severity: Keyword.get(opts, :severity, :warning),
-      cooldown: Keyword.get(opts, :cooldown, :timer.minutes(5)),
+      cooldown: Keyword.get(opts, :cooldown, 300),
       notification: Keyword.get(opts, :notification, %{type: :test})
     })
   end

@@ -114,7 +114,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:add_rule, rule}, _from, state) do
     rule_id = state.next_rule_id
-    validated_rule = validate_rule(rule)
+    validated_rule = validate_rule(rule, state.options)
 
     new_state = %{
       state
@@ -179,7 +179,7 @@ defmodule Raxol.Core.Metrics.AlertManager do
     {:noreply, new_state}
   end
 
-  @spec validate_rule(map()) :: %{
+  @spec validate_rule(map(), map()) :: %{
           name: String.t(),
           description: String.t(),
           metric_name: any(),
@@ -191,17 +191,17 @@ defmodule Raxol.Core.Metrics.AlertManager do
           cooldown: integer(),
           notification_channels: list()
         }
-  defp validate_rule(rule) do
+  defp validate_rule(rule, options) do
     %{
       name: Map.get(rule, :name, "Unnamed Alert"),
       description: Map.get(rule, :description, ""),
       metric_name: Map.get(rule, :metric_name),
       condition: Map.get(rule, :condition, :above),
       threshold: Map.get(rule, :threshold),
-      severity: Map.get(rule, :severity, @default_options.default_severity),
+      severity: Map.get(rule, :severity, options.default_severity),
       tags: Map.get(rule, :tags, %{}),
       group_by: Map.get(rule, :group_by, []),
-      cooldown: Map.get(rule, :cooldown, @default_options.default_cooldown),
+      cooldown: Map.get(rule, :cooldown, options.default_cooldown),
       notification_channels: Map.get(rule, :notification_channels, [])
     }
   end

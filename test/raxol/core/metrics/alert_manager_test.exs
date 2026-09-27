@@ -385,6 +385,39 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
     end
   end
 
+  describe "default_cooldown and default_severity options" do
+    test "apply to rules that set neither" do
+      name = :alert_manager_defaults_test
+
+      pid =
+        start_supervised!(
+          {AlertManager,
+           name: name, default_cooldown: 0, default_severity: :critical}
+        )
+
+      {:ok, rule_id} =
+        AlertManager.add_rule(
+          %{metric_name: "defaults_metric", condition: :above, threshold: 50},
+          name
+        )
+
+      Raxol.Core.Metrics.MetricsCollector.record_metric(
+        "defaults_metric",
+        :custom,
+        60
+      )
+
+      # Two back-to-back checks. A zero-second cooldown lets the second one
+      # fire again; the built-in 300 s default would suppress it.
+      send(pid, {:check_alerts, 1})
+      send(pid, {:check_alerts, 2})
+
+      # The call queues behind both checks.
+      assert {:ok, history} = AlertManager.get_alert_history(rule_id, name)
+      assert [%{severity: :critical}, %{severity: :critical}] = history
+    end
+  end
+
   describe "error handling" do
     test "returns error for non-existent rule", %{test_name: test_name} do
       assert {:error, :rule_not_found} =
