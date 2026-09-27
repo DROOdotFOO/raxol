@@ -1160,8 +1160,10 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
           View.scroll(
             View.column(
               children:
-                for(n <- 1..4, do: View.text("abc#{n}xyz")) ++
-                  [View.text("ab日本語")]
+                for(
+                  line <- ["abc1xyz", "abc2xyz", "abc3xyz", "abc4xyz", "ab日本語"],
+                  do: View.text(line)
+                )
             ),
             viewport: {40, 5},
             offset: {3, 0}
