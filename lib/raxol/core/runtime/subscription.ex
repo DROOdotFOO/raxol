@@ -5,13 +5,15 @@ defmodule Raxol.Core.Runtime.Subscription do
   Subscriptions allow applications to receive messages over time without
   explicitly requesting them. This is useful for:
   * Timer-based updates (animation, polling)
-  * System events (window resize, focus change)
+  * Events dispatched through `Raxol.Core.Events.EventManager`
   * External data streams (file changes, network events)
 
   ## Types of Subscriptions
 
   * `:interval` - Regular time-based updates
-  * `:events` - System or component events
+  * `:events` - Events dispatched through `Raxol.Core.Events.EventManager`.
+    EventManager is one process per node, so a subscription receives every
+    event of its types from every session on the node (see `events/1`)
   * `:file_watch` - File system changes
   * `:custom` - Custom event sources
 
@@ -20,8 +22,8 @@ defmodule Raxol.Core.Runtime.Subscription do
       # Update every second
       Subscription.interval(1000, :tick)
 
-      # Listen for specific events
-      Subscription.events([:key_press, :mouse_click])
+      # Listen for specific EventManager events
+      Subscription.events([:theme_changed, :accessibility_enabled])
 
       # Watch a file for changes
       Subscription.file_watch("config.json", [:modify, :delete])
@@ -71,15 +73,34 @@ defmodule Raxol.Core.Runtime.Subscription do
   end
 
   @doc """
-  Creates a subscription for system or component events.
+  Creates a subscription for events dispatched through
+  `Raxol.Core.Events.EventManager` (`EventManager.dispatch/1,2` or
+  `EventManager.notify/3`).
 
-  ## Event Types
-    * `:key_press` - Keyboard events
-    * `:mouse_click` - Mouse click events
-    * `:mouse_move` - Mouse movement events
-    * `:window_resize` - Terminal window resize
-    * `:focus_change` - Terminal focus change
-    * `:component` - Component-specific events
+  Each matching event reaches the app's `update/2` as
+  `{:event, event_type, event_data}`, once per event even when several
+  declared subscriptions list its type.
+
+  Delivery stops if EventManager restarts: the subscription lived in the
+  stopped EventManager and is not re-established with the new one.
+
+  EventManager is node-global: every session on the node (SSH, LiveView,
+  headless) whose app subscribes to a type receives every event of that type,
+  whichever session or process dispatched it. Nothing filters by session.
+
+  Only EventManager-dispatched events arrive this way. Terminal input (key
+  presses, mouse, resize, focus) is not routed through EventManager: it reaches
+  `update/2` as a `Raxol.Core.Events.Event` struct without any subscription.
+  Events the framework dispatches include `:theme_changed`,
+  `:high_contrast_changed`, `:accessibility_enabled`,
+  `:accessibility_disabled` and `:accessibility_preference_changed`.
+
+  `:screen_reader_announcement`, `:activate` and `:dismiss` also go through
+  EventManager, but they carry other sessions' data: the announcement queue
+  and keyboard navigator that dispatch them are node-global singletons with no
+  session identity, so a subscriber receives the announcement text and focused
+  component ids of every session on the node. Do not subscribe to them in an
+  app served to more than one user.
   """
   def events(event_types) when is_list(event_types) do
     new(:events, event_types)
@@ -192,6 +213,9 @@ defmodule Raxol.Core.Runtime.Subscription do
   defp stop_events(actual_id)
        when is_integer(actual_id) or is_reference(actual_id) do
     Raxol.Core.Events.EventManager.unsubscribe(actual_id)
+  catch
+    # EventManager is down, and its subscriptions went with it.
+    :exit, {:noproc, _} -> {:error, :subscription_not_found}
   end
 
   defp stop_events(_actual_id) do
