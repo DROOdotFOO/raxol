@@ -183,10 +183,15 @@ defmodule Raxol.UI.Theming.Theme do
   end
 
   @doc """
-  Returns the current theme.
+  Returns the current theme: the one last applied (`apply_theme/1`,
+  `Raxol.set_theme/1`), else the theme registered under the default id,
+  else the built-in `default_theme/0`.
   """
   def current do
-    Application.get_env(:raxol, :current_theme, default_theme())
+    case Application.fetch_env(:raxol, :current_theme) do
+      {:ok, theme} -> theme
+      :error -> get(default_theme_id())
+    end
   end
 
   @doc """

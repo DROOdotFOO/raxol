@@ -51,7 +51,9 @@ defmodule Raxol.Plugins.Examples.RainbowThemePluginTest do
   end
 
   test "rotation keeps the rest of the current theme", %{state: state} do
-    base = Theme.default_theme()
+    # The theme in force before the rotation: with no theme applied, the one
+    # registered under the default id (the suite's test_helper registers one).
+    base = Theme.current()
 
     {:ok, _state, _} = RainbowThemePlugin.handle_rainbow_next([], state)
 

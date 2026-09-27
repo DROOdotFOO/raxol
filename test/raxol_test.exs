@@ -124,6 +124,31 @@ defmodule RaxolTest do
       {:ok, after_set} = Headless.get_buffer(id)
       assert foreground_at(after_set, 0, 0) == :magenta
     end
+
+    # Registering a theme under the default id is how an app replaces the
+    # built-in default; frames render it until set_theme/1 picks another.
+    test "a theme registered under the default id renders before any set_theme/1" do
+      Application.delete_env(:raxol, :current_theme)
+
+      :ok =
+        Theme.register(
+          Theme.new(%{
+            id: Theme.default_theme_id(),
+            name: "Raxol Test Registered Default",
+            colors: %{foreground: :cyan}
+          })
+        )
+
+      {:ok, id} =
+        Headless.start(ThemedApp,
+          id: :raxol_test_themed_app,
+          width: 20,
+          height: 3
+        )
+
+      {:ok, buffer} = Headless.get_buffer(id)
+      assert foreground_at(buffer, 0, 0) == :cyan
+    end
   end
 
   defp foreground_at(buffer, x, y),
