@@ -6,7 +6,12 @@ defmodule Raxol.CLI.New do
   a minimal runnable TEA app: `mix.exs`, a counter module, and a README.
   """
 
-  @name_re ~r/^[a-z][a-z0-9_]*$/
+  @name_re ~r/\A[a-z][a-z0-9_]*\z/
+
+  # The names `Mix.Raxol.Generator.validate_app_name!/1` reserves. This package
+  # builds against raxol from Hex, where that check is private, so the list is
+  # kept in step by hand.
+  @reserved ~w(raxol elixir mix test lib config)
 
   @doc "Generate a new app under `./<name>`, returning an exit code."
   @spec run([String.t()]) :: non_neg_integer()
@@ -14,6 +19,14 @@ defmodule Raxol.CLI.New do
     cond do
       not Regex.match?(@name_re, name) ->
         err("invalid app name #{inspect(name)} (use snake_case: my_app)")
+
+      name in @reserved ->
+        err("app name #{name} is reserved")
+
+      # `mix new`'s rule: the app's module must not already exist, or the new
+      # project redefines it (`enum` would try to compile `Enum`).
+      Code.ensure_loaded?(Module.concat([Macro.camelize(name)])) ->
+        err("app name #{name} would redefine the existing module #{Macro.camelize(name)}")
 
       File.exists?(name) ->
         err("#{name}/ already exists")
@@ -76,32 +89,60 @@ defmodule Raxol.CLI.New do
     """
   end
 
+  # `Raxol.Core.Runtime.Application` is the app contract `Raxol.start_link/2`
+  # runs, and the one that brings the view DSL, `key_match` and `Directive`
+  # into scope. `use Raxol.UI, framework: :react` builds a component instead,
+  # and gave this template none of the three.
+  #
+  # `start/0` waits for the app to quit: `mix run -e` halts the VM as soon as
+  # its expression returns, which would take a still-running app down with it.
   defp app_ex(mod) do
     """
     defmodule #{mod} do
       @moduledoc "A minimal Raxol counter app (The Elm Architecture)."
-      use Raxol.UI, framework: :react
+      use Raxol.Core.Runtime.Application
 
-      import Raxol.Core.Runtime.Application, only: [key_match: 1]
+      @doc "Runs the app in this terminal and returns once it quits."
+      def start do
+        {:ok, pid} = Raxol.start_link(__MODULE__, [])
+        ref = Process.monitor(pid)
 
-      def start, do: Raxol.start_link(__MODULE__)
-
-      def init(_), do: %{count: 0}
-
-      def update(msg, model) do
-        case msg do
-          key_match("+") -> {%{model | count: model.count + 1}, []}
-          key_match("-") -> {%{model | count: model.count - 1}, []}
-          key_match("q") -> {model, [:quit]}
-          _ -> {model, []}
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
         end
       end
 
+      @impl true
+      def init(_context), do: %{count: 0}
+
+      @impl true
+      def update(message, model) do
+        case message do
+          key_match("+") ->
+            {%{model | count: model.count + 1}, []}
+
+          key_match("-") ->
+            {%{model | count: model.count - 1}, []}
+
+          key_match("q") ->
+            {model, [Directive.stop()]}
+
+          %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
+            {model, [Directive.stop()]}
+
+          _ ->
+            {model, []}
+        end
+      end
+
+      @impl true
       def view(model) do
-        box padding: 1 do
-          column do
-            text("Count: \#{model.count}", fg: :cyan)
-            text("+/- to change, q to quit")
+        box style: %{padding: 1} do
+          column style: %{gap: 1} do
+            [
+              text("Count: \#{model.count}", fg: :cyan),
+              text("+/- to change, q to quit")
+            ]
           end
         end
       end

@@ -6,9 +6,9 @@ defmodule Mix.Raxol.Generator do
   optional dependency installation, and post-generation output.
   """
 
-  alias Mix.Raxol.Content
+  alias Mix.Raxol.{AppTemplates, Content}
 
-  @compile {:no_warn_undefined, Mix.Raxol.Content}
+  @compile {:no_warn_undefined, [Mix.Raxol.AppTemplates, Mix.Raxol.Content]}
 
   @doc "Generates the full project structure at `path` with the given opts."
   def generate(name, opts, raxol_version) do
@@ -18,6 +18,8 @@ defmodule Mix.Raxol.Generator do
     if File.exists?(path) do
       Mix.raise("Directory #{path} already exists")
     end
+
+    validate_module_available!(opts[:module] || Macro.camelize(app))
 
     bindings = build_bindings(app, opts, raxol_version)
     install? = Keyword.get(opts, :install, false)
@@ -111,8 +113,19 @@ defmodule Mix.Raxol.Generator do
 
   # --- Private ---
 
+  # `mix new`'s rule, which `raxol new` keeps too: the project's module must
+  # not already exist, or the project redefines it (`enum` would compile
+  # `Enum`).
+  defp validate_module_available!(module) do
+    if Code.ensure_loaded?(Module.concat([module])) do
+      Mix.raise(
+        "Module #{module} already exists; the new project would redefine it"
+      )
+    end
+  end
+
   defp validate_app_name!(name) do
-    unless name =~ ~r/^[a-z][a-z0-9_]*$/ do
+    unless name =~ ~r/\A[a-z][a-z0-9_]*\z/ do
       Mix.raise(
         "App name must start with a lowercase letter and contain only " <>
           "lowercase letters, numbers, and underscores. Got: #{name}"
@@ -231,18 +244,14 @@ defmodule Mix.Raxol.Generator do
     Mix.shell().info("")
   end
 
-  defp print_setup_commands(%{app: app, sup: sup?}, name, installed?) do
+  defp print_setup_commands(bindings, name, installed?) do
     unless installed? do
       Mix.shell().info(["    ", :cyan, "cd #{name}", :reset])
       Mix.shell().info(["    ", :cyan, "mix deps.get", :reset])
     end
 
-    if sup? do
-      Mix.shell().info(["    ", :cyan, "mix run --no-halt", :reset])
-    else
-      Mix.shell().info(["    ", :cyan, "mix run lib/#{app}.ex", :reset])
-    end
-
+    run_command = AppTemplates.run_command(bindings)
+    Mix.shell().info(["    ", :cyan, run_command, :reset])
     Mix.shell().info("")
   end
 

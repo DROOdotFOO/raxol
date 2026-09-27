@@ -9,7 +9,7 @@ defmodule Raxol.MCP.ResourceProvider do
   ## Example
 
       defmodule MyApp do
-        use Raxol.UI, framework: :react
+        use Raxol.Core.Runtime.Application
         @behaviour Raxol.MCP.ResourceProvider
 
         @impl Raxol.MCP.ResourceProvider

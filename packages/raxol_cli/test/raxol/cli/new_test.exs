@@ -4,6 +4,7 @@ defmodule Raxol.CLI.NewTest do
   import ExUnit.CaptureIO
 
   alias Raxol.CLI.New
+  alias Raxol.Test.GeneratedApp
 
   describe "run/1 validation" do
     test "rejects a missing name" do
@@ -27,6 +28,21 @@ defmodule Raxol.CLI.NewTest do
       name = Path.basename(dir)
       assert capture_io(:stderr, fn -> assert New.run([name]) == 1 end) =~ "already exists"
     end
+
+    test "rejects names that would not compile, creating nothing" do
+      base =
+        Path.join(System.tmp_dir!(), "raxol_cli_badname_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+
+      # A trailing newline, a stdlib module, and the dependency itself.
+      for name <- ["trail\n", "enum", "raxol"] do
+        capture_io(:stderr, fn -> assert File.cd!(base, fn -> New.run([name]) end) == 1 end)
+      end
+
+      assert File.ls!(base) == []
+    end
   end
 
   describe "run/1 generation" do
@@ -48,6 +64,26 @@ defmodule Raxol.CLI.NewTest do
 
       assert File.read!(Path.join([base, "my_app", "README.md"])) =~
                "Requires local Elixir/Mix"
+    end
+
+    # The skeleton test above proves the files exist. This compiles the app
+    # against the raxol this CLI depends on and draws its first frame, which
+    # is what `mix deps.get && mix run` in the new project will attempt.
+    test "scaffolds an app that compiles and renders" do
+      base = Path.join(System.tmp_dir!(), "raxol_cli_app_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+
+      name = "counter_#{System.unique_integer([:positive])}"
+      capture_io(fn -> assert File.cd!(base, fn -> New.run([name]) end) == 0 end)
+
+      app = Module.concat([Macro.camelize(name)])
+      assert GeneratedApp.compile!([Path.join([base, name, "lib", "#{name}.ex"])]) == [app]
+      assert GeneratedApp.render!(app, "Count: 0") =~ "+/- to change, q to quit"
+
+      ctrl_c = %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}}
+      assert {_model, [quit]} = app.update(ctrl_c, app.init(%{}))
+      assert quit == Raxol.Core.Runtime.Directive.stop()
     end
   end
 end

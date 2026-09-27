@@ -136,8 +136,8 @@ defmodule Mix.Raxol.Content do
   end
 
   @doc "Generates README.md content."
-  def readme(%{app: app, module: module, template: template, sup: sup?}) do
-    run_cmd = if sup?, do: "mix run --no-halt", else: "mix run lib/#{app}.ex"
+  def readme(%{module: module, template: template} = bindings) do
+    run_cmd = Mix.Raxol.AppTemplates.run_command(bindings)
 
     """
     # #{module}
@@ -270,20 +270,14 @@ defmodule Mix.Raxol.Content do
     do_tea_module(template, %{bindings | module: module_name})
   end
 
-  @doc "Generates standalone TEA app module (lib/app.ex without --sup)."
+  @doc """
+  Generates standalone TEA app module (lib/app.ex without --sup).
+
+  The module starts itself through `start/0`; nothing runs at the top level,
+  which `mix compile` would execute.
+  """
   def tea_module_standalone(%{template: template} = bindings) do
-    source = do_tea_module(template, bindings)
-
-    source <>
-      """
-
-      {:ok, pid} = Raxol.start_link(#{bindings.module}, [])
-      ref = Process.monitor(pid)
-
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-      end
-      """
+    do_tea_module(template, bindings)
   end
 
   @doc "Generates SSH server module."
