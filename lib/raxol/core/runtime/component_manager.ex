@@ -291,9 +291,12 @@ defmodule Raxol.Core.Runtime.ComponentManager do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:dispatch_event, event}, state) do
-    # Dispatch event to all components
+    # Dispatch event to all components. Each one's current state is read from
+    # the accumulator: a broadcast from an earlier component may have changed it.
     state =
-      Enum.reduce(state.components, state, fn {component_id, component}, acc ->
+      Enum.reduce(Map.keys(state.components), state, fn component_id, acc ->
+        component = acc.components[component_id]
+
         {new_state, commands} =
           component.module.handle_event(event, component.state, %{})
 

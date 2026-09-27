@@ -168,6 +168,22 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
     end
   end
 
+  # Answers the :go event with a broadcast of :bump, which every other
+  # component counts.
+  defmodule BroadcastPeer do
+    def init(props), do: Map.put(props, :bumps, 0)
+    def mount(state), do: {state, []}
+    def unmount(state), do: state
+
+    def update(:bump, state), do: {%{state | bumps: state.bumps + 1}, []}
+    def update(_message, state), do: {state, []}
+
+    def handle_event(:go, state, _context),
+      do: {state, [{:broadcast, :bump}]}
+
+    def handle_event(_event, state, _context), do: {state, []}
+  end
+
   describe "event dispatch" do
     test ~c"dispatch_event sends events to components" do
       {:ok, component_id} = ComponentManager.mount(TestComponent)
@@ -185,6 +201,19 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
       # Verify it was queued for render
       render_queue = ComponentManager.get_render_queue()
       assert component_id in render_queue
+    end
+
+    test "a broadcast from one component's handle_event/3 reaches the others whatever the order" do
+      {:ok, a} = ComponentManager.mount(BroadcastPeer)
+      {:ok, b} = ComponentManager.mount(BroadcastPeer)
+
+      ComponentManager.dispatch_event(:go)
+      # The cast has been handled once the manager answers a later call.
+      _ = :sys.get_state(ComponentManager)
+
+      # Each component broadcast :bump once, and the other one counted it.
+      assert ComponentManager.get_component(a).state.bumps == 1
+      assert ComponentManager.get_component(b).state.bumps == 1
     end
   end
 
