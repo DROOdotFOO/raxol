@@ -31,12 +31,13 @@ defmodule Raxol.UI.BorderRenderer do
   # Glyph sets come from `Raxol.UI.Theming.BorderChars`, narrowed to the five
   # style names this module has always accepted.
   #
-  # `BorderChars.get/1` knows nine (`:bold`, `:heavy`, `:dashed` and
-  # `:dashed_fine` as well), so delegating to it directly widened this public
-  # function's accepted set from five to nine -- those four returned glyphs
-  # where they had previously fallen through to `:none` -- while `@type
-  # border_style` above and this very comment still said five. Widen the type
-  # deliberately if that is wanted; do not widen it by delegation.
+  # `BorderChars.get/1` knows more (`:bold`, `:heavy`, `:dashed`,
+  # `:dashed_fine` and `:block` as well), so delegating to it directly
+  # widened this public function's accepted set from five to nine -- those
+  # four returned glyphs where they had previously fallen through to
+  # `:none` -- while `@type border_style` above and this very comment still
+  # said five. Widen the type deliberately if that is wanted; do not widen
+  # it by delegation.
   #
   # The `:none` fallback stays here rather than in `BorderChars` because
   # `Raxol.Core.Box` falls back to `:single` instead, so there is no single

@@ -305,6 +305,10 @@ defmodule Raxol.UI.Layout.FlexItem do
   defp axis_dims(:horizontal), do: {:width, :height}
   defp axis_dims(:vertical), do: {:height, :width}
 
+  # A `progress` node's own `:width` is its bar, not counting the
+  # percentage drawn after it, so its size is its measured content.
+  defp axis_style(style, %{type: :progress}, dim), do: Map.get(style, dim)
+
   defp axis_style(style, child, dim) do
     Map.get(style, dim) || Map.get(child, dim)
   end

@@ -4,6 +4,7 @@ defmodule Raxol.UI.ElementRenderer do
   """
 
   alias Raxol.UI.{BorderRenderer, CellManager, StyleProcessor, ThemeResolver}
+  alias Raxol.UI.Theming.BorderChars
 
   @text_attrs [:bold, :italic, :underline, :strikethrough, :reverse, :dim]
 
@@ -18,11 +19,13 @@ defmodule Raxol.UI.ElementRenderer do
   end
 
   @doc """
-  Renders a text element.
+  Renders a text element. Text starting left of column 0 or above row 0
+  (content scrolled past the screen's edge) draws only its on-screen part:
+  lines above row 0 are skipped, and so are the graphemes left of column
+  0, a wide one straddling it included.
   """
   def render_text(x, y, text, style, _theme) do
-    # Handle negative coordinates
-    render_text_if_valid_coordinates(x, y, text, style)
+    render_text_lines(x, y, text, style)
   end
 
   @doc """
@@ -216,11 +219,7 @@ defmodule Raxol.UI.ElementRenderer do
          clip_height,
          style
        ) do
-    border_chars =
-      style
-      |> Map.get(:border, :single)
-      |> normalize_border_variant()
-      |> BorderRenderer.get_border_chars()
+    border_chars = style |> Map.get(:border, :single) |> border_glyphs()
 
     BorderRenderer.render_box_borders(
       clip_x,
@@ -252,20 +251,15 @@ defmodule Raxol.UI.ElementRenderer do
 
   # `:border` doubles as the enable flag (checked above) and the variant
   # selector; by the time we're here it is guaranteed truthy and non-:none.
-  # Map anything BorderRenderer.get_border_chars/1 has no glyph set for
-  # (:bold, :dashed, a stray `true`) to a visible default instead of letting
-  # its catch-all fall through to :none, whose horizontal run is a space.
-  defp normalize_border_variant(variant)
-       when variant in [:single, :double, :rounded, :ascii],
-       do: variant
+  # Every named glyph set draws as itself (`:bold`/`:heavy`, `:dashed`,
+  # `:block` included); anything with no glyph set (`:simple`, a stray
+  # `true`) draws `:single` rather than an invisible run of spaces.
+  # `BorderRenderer.get_border_chars/1` keeps its own five-name contract.
+  defp border_glyphs(variant) do
+    BorderChars.get(variant) || BorderChars.get(:single)
+  end
 
-  defp normalize_border_variant(_), do: :single
-
-  defp render_text_if_valid_coordinates(x, y, _text, _style)
-       when x < 0 or y < 0,
-       do: []
-
-  defp render_text_if_valid_coordinates(x, y, text, style) do
+  defp render_text_lines(x, y, text, style) do
     fg = resolve_fg(style)
     bg = resolve_bg(style)
     attrs = extract_text_attrs(style) ++ hyperlink_attrs(style)
@@ -281,10 +275,14 @@ defmodule Raxol.UI.ElementRenderer do
     text
     |> String.split("\n")
     |> Enum.with_index()
-    |> Enum.flat_map(fn {line, row_offset} ->
-      line
-      |> bound_line(max_width, overflow_mode)
-      |> render_text_line(x, y + row_offset, fg, bg, attrs)
+    |> Enum.flat_map(fn
+      {_line, row_offset} when y + row_offset < 0 ->
+        []
+
+      {line, row_offset} ->
+        line
+        |> bound_line(max_width, overflow_mode)
+        |> render_text_line(x, y + row_offset, fg, bg, attrs)
     end)
   end
 
@@ -297,13 +295,18 @@ defmodule Raxol.UI.ElementRenderer do
     Raxol.UI.TextLayout.truncate(line, max_width, mode)
   end
 
-  # Width-aware text rendering - CJK/fullwidth chars advance x by 2
+  # Width-aware text rendering - CJK/fullwidth chars advance x by 2. A
+  # grapheme that starts left of column 0 is not drawn.
   defp render_text_line(line, x, y, fg, bg, attrs) do
     line
     |> String.graphemes()
-    |> Enum.reduce({[], x}, fn char, {cells, cur_x} ->
-      w = Raxol.UI.TextMeasure.char_display_width(char)
-      {[{cur_x, y, char, fg, bg, attrs} | cells], cur_x + w}
+    |> Enum.reduce({[], x}, fn
+      char, {cells, cur_x} when cur_x < 0 ->
+        {cells, cur_x + Raxol.UI.TextMeasure.char_display_width(char)}
+
+      char, {cells, cur_x} ->
+        w = Raxol.UI.TextMeasure.char_display_width(char)
+        {[{cur_x, y, char, fg, bg, attrs} | cells], cur_x + w}
     end)
     |> elem(0)
     |> Enum.reverse()

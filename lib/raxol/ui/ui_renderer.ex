@@ -6,7 +6,13 @@ defmodule Raxol.UI.Renderer do
   including panels, boxes, text, and tables with theme support.
   """
 
-  alias Raxol.UI.{CellManager, ElementRenderer, StyleProcessor, ThemeResolver}
+  alias Raxol.UI.{
+    CellManager,
+    ElementRenderer,
+    StyleProcessor,
+    TextMeasure,
+    ThemeResolver
+  }
 
   @doc """
   Renders a single element or list of elements to cells using the default theme.
@@ -181,8 +187,13 @@ defmodule Raxol.UI.Renderer do
       render_box_children(box_element, clip_bounds, theme, merged_style)
 
     title_cells = render_box_title(box_element, x, y, w, merged_style)
-    all_cells = CellManager.merge_cells(box_cells, children_cells)
-    all_cells = CellManager.merge_cells(all_cells, title_cells)
+
+    all_cells =
+      box_cells
+      |> CellManager.merge_cells(children_cells)
+      |> drop_wide_title_tails(title_cells)
+      |> CellManager.merge_cells(title_cells)
+
     CellManager.clip_cells_to_bounds(all_cells, clip_bounds)
   end
 
@@ -316,20 +327,42 @@ defmodule Raxol.UI.Renderer do
     border_offset = if(has_border, do: 2, else: 0)
 
     title_x = x + border_offset
-    max_len = w - border_offset * 2
-    truncated = String.slice(title, 0, max(0, max_len))
+    max_width = w - border_offset * 2
+
+    {truncated, _rest} =
+      TextMeasure.split_at_display_width(title, max(0, max_width))
 
     {fg, bg, attrs} = resolve_title_style(style)
 
+    # A wide (CJK) grapheme takes two columns, so x advances by each one's
+    # display width.
     truncated
     |> String.graphemes()
-    |> Enum.with_index()
-    |> Enum.map(fn {char, i} ->
-      {title_x + i, y, char, fg, bg, attrs}
+    |> Enum.map_reduce(title_x, fn char, cur_x ->
+      {{cur_x, y, char, fg, bg, attrs},
+       cur_x + TextMeasure.char_display_width(char)}
     end)
+    |> elem(0)
   end
 
   defp render_box_title(_box_element, _x, _y, _w, _style), do: []
+
+  # A wide title glyph also covers the column after it, where the border
+  # line has its own cell; drawn after the glyph, that cell would overwrite
+  # the glyph's second half and blank it, so it is dropped.
+  defp drop_wide_title_tails(cells, []), do: cells
+
+  defp drop_wide_title_tails(cells, title_cells) do
+    tails =
+      for {x, y, char, _fg, _bg, _attrs} <- title_cells,
+          TextMeasure.char_display_width(char) == 2,
+          into: MapSet.new(),
+          do: {x + 1, y}
+
+    Enum.reject(cells, fn {x, y, _char, _fg, _bg, _attrs} ->
+      MapSet.member?(tails, {x, y})
+    end)
+  end
 
   defp resolve_title_style(style) do
     fg = Map.get(style, :fg, Map.get(style, :fg_color, :white))

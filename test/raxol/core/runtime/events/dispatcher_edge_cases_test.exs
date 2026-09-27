@@ -108,11 +108,17 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEdgeCasesTest do
   end
 
   setup do
-    # Start UserPreferences in test mode to avoid process not alive errors
-    case Raxol.Core.UserPreferences.start_link(test_mode?: true) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
+    # UserPreferences and the event registry are usually already running
+    # under the application supervisor. Only what this setup starts is
+    # stopped on exit: stopping the application's own copies after every
+    # test makes the supervisor restart them, and a module's worth of
+    # restarts exceeds its restart intensity and stops the :raxol
+    # application for every test that runs after this module.
+    started_prefs =
+      case Raxol.Core.UserPreferences.start_link(test_mode?: true) do
+        {:ok, pid} -> pid
+        {:error, {:already_started, _pid}} -> nil
+      end
 
     # Stub all ThemeBehaviour callbacks to prevent missing function errors
     Mox.stub(ThemeMock, :register, fn _ -> :ok end)
@@ -128,7 +134,14 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEdgeCasesTest do
     Mox.stub(ThemeMock, :current_version, fn -> "1.0.0" end)
 
     # Registry for events
-    Registry.start_link(keys: :duplicate, name: :raxol_event_subscriptions)
+    started_registry =
+      case Registry.start_link(
+             keys: :duplicate,
+             name: :raxol_event_subscriptions
+           ) do
+        {:ok, pid} -> pid
+        {:error, {:already_started, _pid}} -> nil
+      end
 
     # ETS for command registry
     :ets.new(:raxol_command_registry, [
@@ -188,22 +201,13 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEdgeCasesTest do
         :exit, _ -> :ok
       end
 
-      # Cleanup UserPreferences process
-      try do
-        GenServer.stop(Raxol.Core.UserPreferences, :normal, 5000)
-      catch
-        :exit, {:noproc, _} -> :ok
-        :exit, _ -> :ok
-      end
-
-      # Cleanup for Registry by its registered name
-      try do
-        GenServer.stop(:raxol_event_subscriptions, :normal, 5000)
-      catch
-        # Process not found, already stopped
-        :exit, {:noproc, _} -> :ok
-        # Other exit during stop, consider it cleaned for test purposes
-        :exit, _ -> :ok
+      # Stop only the UserPreferences and registry this setup started
+      for pid <- [started_prefs, started_registry], is_pid(pid) do
+        try do
+          GenServer.stop(pid, :normal, 5000)
+        catch
+          :exit, _ -> :ok
+        end
       end
 
       # Cleanup for ETS table by its name
@@ -235,7 +239,9 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEdgeCasesTest do
       # Verify the event passed through
       current_state = :sys.get_state(dispatcher)
       assert current_state.model.count == 1
-      assert %Event{type: :key, data: %{key: :enter}} = current_state.model.last_event
+
+      assert %Event{type: :key, data: %{key: :enter}} =
+               current_state.model.last_event
 
       # Check that plugin manager was called with event
       events = GenServer.call(pm, :get_events)
@@ -426,7 +432,8 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEdgeCasesTest do
       current_state = :sys.get_state(dispatcher)
       assert current_state.model.count == 1
 
-      assert %Event{type: :key, data: %{key: {:timeout, _}}} = current_state.model.last_event
+      assert %Event{type: :key, data: %{key: {:timeout, _}}} =
+               current_state.model.last_event
 
       # Verify the operation took at least the sleep time
       assert elapsed >= 200
@@ -447,7 +454,9 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEdgeCasesTest do
       # Verify all events were processed
       current_state = :sys.get_state(dispatcher)
       assert current_state.model.count == 10
-      assert %Event{type: :key, data: %{key: "key10"}} = current_state.model.last_event
+
+      assert %Event{type: :key, data: %{key: "key10"}} =
+               current_state.model.last_event
     end
   end
 

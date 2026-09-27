@@ -148,6 +148,19 @@ defmodule Raxol.Core.Renderer.ViewSingleChildTest do
 
       assert rendered_text(tree) == ["first", "second"]
     end
+
+    test "a list holding lists and nils renders every element (#1129)" do
+      tree =
+        column style: %{gap: 1} do
+          [
+            text("first"),
+            for(label <- ["second", "third"], do: text(label)),
+            if(false, do: text("hidden"))
+          ]
+        end
+
+      assert rendered_text(tree) == ["first", "second", "third"]
+    end
   end
 
   describe "layout of a container given a bare child instead of a list" do

@@ -21,8 +21,9 @@ defmodule Raxol.UI.Layout.Inputs do
   end
 
   def measure(:text_input, attrs_map, available_space) do
-    value = Map.get(attrs_map, :value, "")
-    placeholder = Map.get(attrs_map, :placeholder, "")
+    # An unset value or placeholder may arrive as nil.
+    value = Map.get(attrs_map, :value) || ""
+    placeholder = Map.get(attrs_map, :placeholder) || ""
 
     display_text =
       case value == "" do

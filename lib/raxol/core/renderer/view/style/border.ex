@@ -5,12 +5,21 @@ defmodule Raxol.Core.Renderer.View.Style.Border do
   """
 
   alias Raxol.Core.Renderer.View.Types
+  alias Raxol.UI.Theming.BorderChars
+
+  # Every style the box renderer has glyphs for, plus :simple (from
+  # `Borders.simple_border/2`), which draws as :single.
+  @valid_styles Map.keys(BorderChars.all()) ++ [:simple]
 
   @doc """
   Creates a border around a view.
 
   ## Options
-    * `:style` - Border style (:single, :double, :rounded, :bold, :dashed)
+    * `:style` - Border style, any `Raxol.UI.Theming.BorderChars` set
+      (:single, :double, :rounded, :heavy or :bold (`┏━┓`), :dashed,
+      :dashed_fine, :block (solid `█`), :ascii, :none) or :simple, which
+      draws as :single
+    * `:padding` - Space between the border and the view (default 0)
     * `:title` - Optional title to display in the border
     * `:fg` - Foreground color
     * `:bg` - Background color
@@ -23,10 +32,7 @@ defmodule Raxol.Core.Renderer.View.Style.Border do
   def wrap(view, opts \\ []) do
     border_type = Keyword.get(opts, :border, Keyword.get(opts, :style, :single))
 
-    # Validate border style
-    valid_styles = [:single, :double, :rounded, :bold, :dashed, :none]
-
-    case border_type in valid_styles do
+    case border_type in @valid_styles do
       false ->
         raise ArgumentError, "Invalid border style: #{inspect(border_type)}"
 
