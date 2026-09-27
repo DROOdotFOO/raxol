@@ -1,6 +1,17 @@
 defmodule Raxol.Terminal.Integration.Renderer do
   @moduledoc """
   Handles terminal output rendering and display management using Termbox2.
+
+  `:termbox2_nif.tb_set_cursor/2`, `tb_clear/0` and `tb_present/0` discard
+  termbox's status and always return `:ok`, so the calls built on them
+  (`clear_screen/1`, `move_cursor/3`, showing the cursor with
+  `set_cursor_visibility/2`, and the cursor and present steps of `render/1`)
+  cannot report a termbox failure: they return `:ok` even when termbox
+  rejected the call, for example before `init_terminal/0`.
+
+  Hiding the cursor uses `:termbox2_nif.tb_hide_cursor/0`, which does return
+  termbox's status, so a rejected hide is reported. While the cursor is
+  hidden, `render/1` leaves it hidden instead of placing it.
   """
 
   alias Raxol.Core.Runtime.Log
@@ -58,26 +69,22 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   @doc """
-  Clears the terminal screen (specifically, the back buffer).
-  Call present/0 afterwards to make it visible.
-  Returns :ok or {:error, reason}.
+  Clears the terminal screen (specifically, the back buffer) and presents it.
+  Returns `:ok`; termbox failures are not reported (see the moduledoc).
   """
   def clear_screen(%State{} = _state) do
     clear_screen_by_mode(Application.get_env(:raxol, :terminal_test_mode, false))
   end
 
   defp clear_and_present do
-    case :termbox2_nif.tb_clear() do
-      0 -> present_buffer()
-      clear_error_code -> {:error, {:clear_failed, clear_error_code}}
-    end
+    :ok = :termbox2_nif.tb_clear()
+    present_buffer()
   end
 
   @doc """
-  Moves the hardware cursor to a specific position on the screen.
-  Call present/0 afterwards if you want to ensure it's shown with other changes.
-  The cursor position is typically updated with present/0.
-  Returns :ok or {:error, reason}.
+  Moves the hardware cursor to a specific position on the screen and presents
+  it. Returns `:ok`; termbox failures are not reported (see the moduledoc).
+  Coordinates that are not 32-bit integers raise `ArgumentError`.
   """
   def move_cursor(%State{} = _state, x, y) do
     move_cursor_by_mode(
@@ -88,13 +95,8 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   defp set_cursor_and_present(x, y) do
-    case :termbox2_nif.tb_set_cursor(x, y) do
-      0 ->
-        present_buffer()
-
-      set_cursor_error_code ->
-        {:error, {:set_cursor_failed, set_cursor_error_code}}
-    end
+    :ok = :termbox2_nif.tb_set_cursor(x, y)
+    present_buffer()
   end
 
   @doc """
@@ -147,7 +149,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
     updated_config = Map.put(state.config || %{}, key, value)
 
     # Apply the configuration change
-    case apply_config_value(key, value) do
+    case apply_config_value(state, key, value) do
       :ok ->
         %{state | config: updated_config}
 
@@ -191,7 +193,10 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   @doc """
-  Sets the cursor visibility.
+  Shows or hides the cursor and records `:cursor_visible` in the config.
+
+  Showing places the cursor at the cursor manager's position. If termbox
+  rejects a hide, the error is logged and the state is returned unchanged.
   """
   def set_cursor_visibility(%State{} = state, visible)
       when is_boolean(visible) do
@@ -263,23 +268,23 @@ defmodule Raxol.Terminal.Integration.Renderer do
     apply_theme_if_present(config)
   end
 
-  defp apply_config_value(:cursor_visible, visible) do
-    set_terminal_cursor_visibility(visible)
+  defp apply_config_value(state, :cursor_visible, visible) do
+    set_terminal_cursor_visibility(state, visible)
   end
 
-  defp apply_config_value(:title, title) do
+  defp apply_config_value(_state, :title, title) do
     case :termbox2_nif.tb_set_title(title) do
-      {:ok, "set"} -> :ok
+      {:ok, ~c"set"} -> :ok
       {:error, reason} -> {:error, reason}
       other -> {:error, {:unexpected_response, other}}
     end
   end
 
-  defp apply_config_value(:theme, theme) do
+  defp apply_config_value(_state, :theme, theme) do
     apply_theme_config(theme)
   end
 
-  defp apply_config_value(_key, _value) do
+  defp apply_config_value(_state, _key, _value) do
     # For other config values, just return success
     :ok
   end
@@ -294,8 +299,8 @@ defmodule Raxol.Terminal.Integration.Renderer do
     end
   end
 
-  defp set_terminal_cursor_visibility(visible) do
-    set_cursor_visibility_state(visible)
+  defp set_terminal_cursor_visibility(state, visible) do
+    set_cursor_visibility_state(state, visible)
   end
 
   defp validate_dimensions(width, _height) when width <= 0 do
@@ -425,12 +430,12 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   defp handle_cursor_by_mode(state, false) do
-    {cursor_x, cursor_y} = CursorManager.get_position(state.cursor_manager)
-
-    case :termbox2_nif.tb_set_cursor(cursor_x, cursor_y) do
-      0 -> present_buffer()
-      error_code -> {:error, {:set_cursor_failed, error_code}}
+    if Map.get(state.config || %{}, :cursor_visible, true) do
+      {cursor_x, cursor_y} = CursorManager.get_position(state.cursor_manager)
+      :ok = :termbox2_nif.tb_set_cursor(cursor_x, cursor_y)
     end
+
+    present_buffer()
   end
 
   defp present_buffer_by_mode(true) do
@@ -439,10 +444,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
   end
 
   defp present_buffer_by_mode(false) do
-    case :termbox2_nif.tb_present() do
-      0 -> :ok
-      error_code -> {:error, {:present_failed, error_code}}
-    end
+    :ok = :termbox2_nif.tb_present()
   end
 
   defp get_dimensions_by_mode(true) do
@@ -511,12 +513,9 @@ defmodule Raxol.Terminal.Integration.Renderer do
 
   defp set_cursor_visibility_by_mode(state, visible, false) do
     # In real mode, use termbox2 to hide/show cursor
-    case set_terminal_cursor_visibility(visible) do
+    case set_terminal_cursor_visibility(state, visible) do
       :ok ->
-        %{
-          state
-          | config: Map.put(state.config || %{}, :cursor_visible, visible)
-        }
+        %{state | config: Map.put(state.config || %{}, :cursor_visible, visible)}
 
       {:error, reason} ->
         Log.error("Failed to set cursor visibility: #{inspect(reason)}")
@@ -532,7 +531,7 @@ defmodule Raxol.Terminal.Integration.Renderer do
   defp set_title_by_mode(state, title, false) do
     # In real mode, use termbox2 to set the title
     case :termbox2_nif.tb_set_title(title) do
-      {:ok, "set"} ->
+      {:ok, ~c"set"} ->
         %{state | config: Map.put(state.config || %{}, :title, title)}
 
       {:error, reason} ->
@@ -557,15 +556,17 @@ defmodule Raxol.Terminal.Integration.Renderer do
     :ok
   end
 
-  defp set_cursor_visibility_state(true) do
-    # Show cursor by setting it to a valid position (will be updated during render)
-    :ok
+  defp set_cursor_visibility_state(state, true) do
+    # termbox2 has no show call: setting a position shows a hidden cursor
+    {cursor_x, cursor_y} = CursorManager.get_position(state.cursor_manager)
+    set_cursor_and_present(cursor_x, cursor_y)
   end
 
-  defp set_cursor_visibility_state(false) do
-    # Hide cursor by setting it to -1, -1
-    case :termbox2_nif.tb_set_cursor(-1, -1) do
-      :ok -> :ok
+  defp set_cursor_visibility_state(_state, false) do
+    # tb_set_cursor/2 clamps negative coordinates to 0 and shows the cursor,
+    # so hiding needs tb_hide_cursor/0 (0 is TB_OK)
+    case :termbox2_nif.tb_hide_cursor() do
+      0 -> present_buffer()
       error_code -> {:error, {:hide_cursor_failed, error_code}}
     end
   end

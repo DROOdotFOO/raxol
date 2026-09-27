@@ -110,7 +110,8 @@ defmodule :termbox2_nif do
 
   @doc """
   Hide the cursor.
-  Returns 0 on success, -1 on error.
+  Returns 0 (`TB_OK`) on success, or a negative termbox error code such as
+  -8 (`TB_ERR_NOT_INIT`) before `tb_init/0`.
   """
   def tb_hide_cursor, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -149,13 +150,13 @@ defmodule :termbox2_nif do
 
   @doc """
   Set the terminal title.
-  Returns {:ok, "set"} on success, {:error, reason} on failure.
+  Returns `{:ok, ~c"set"}` on success, `{:error, reason}` on failure.
   """
   def tb_set_title(_title), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Set the terminal window position.
-  Returns {:ok, "set"} on success, {:error, reason} on failure.
+  Returns `{:ok, ~c"set"}` on success, `{:error, reason}` on failure.
   """
   def tb_set_position(_x, _y), do: :erlang.nif_error(:nif_not_loaded)
 end
