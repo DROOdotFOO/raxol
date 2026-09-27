@@ -27,10 +27,14 @@ defmodule Raxol.Core.Runtime.ComponentManager do
 
   Each matching event reaches the component's `update/2` as
   `{:event, event_type, event_data}`, through the same path as
-  `ComponentManager.update/2` (commands it returns are processed, and the
-  component is queued for render if its state changed). A component receives
-  an event once, however often it subscribed to the type; subscribing again
-  changes nothing, and one unsubscribe removes it.
+  `ComponentManager.update/2`: `update/2` may return `new_state`,
+  `{:ok, new_state}` or `{new_state, commands}`, the commands are processed,
+  and the component is queued for render if its state changed. If `update/2`
+  raises or returns anything else, the component keeps its state, a warning
+  names the component and the event type (not the event data), and the other
+  subscribers still get the event. A component receives an event once,
+  however often it subscribed to the type; subscribing again changes nothing,
+  and one unsubscribe removes it.
 
   The manager holds one EventManager subscription per event type, shared by
   every component listing the type: it is started when the first component
@@ -176,8 +180,18 @@ defmodule Raxol.Core.Runtime.ComponentManager do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:update, component_id, message}, _from, state) do
-    {reply, state} = update_component(component_id, message, state)
-    {:reply, reply, state}
+    case update_component(component_id, message, state) do
+      {{:error, {:component_error, reason}}, state} ->
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "Component update failed: #{inspect(reason)}",
+          %{component_id: component_id, message: message}
+        )
+
+        {:reply, {:error, :component_error}, state}
+
+      {reply, state} ->
+        {:reply, reply, state}
+    end
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -281,8 +295,7 @@ defmodule Raxol.Core.Runtime.ComponentManager do
       %{components: component_ids} ->
         state =
           Enum.reduce(component_ids, state, fn component_id, acc ->
-            {_reply, acc} = update_component(component_id, message, acc)
-            acc
+            deliver_event(component_id, message, acc)
           end)
 
         {:noreply, state}
@@ -752,6 +765,31 @@ defmodule Raxol.Core.Runtime.ComponentManager do
     send(runtime_pid, {:component_queued_for_render, component_id})
   end
 
+  # The event data may be another session's (EventManager is node-global), so
+  # a failed delivery logs the component and the event type, never the data or
+  # a crash reason that could quote it.
+  defp deliver_event(
+         component_id,
+         {:event, event_type, _event_data} = message,
+         state
+       ) do
+    case update_component(component_id, message, state) do
+      {{:ok, _new_state}, state} ->
+        state
+
+      {{:error, reason}, state} ->
+        Raxol.Core.Runtime.Log.warning(
+          "[ComponentManager] Component #{component_id} did not take a #{inspect(event_type)} event: #{inspect(delivery_error(reason))}"
+        )
+
+        state
+    end
+  end
+
+  defp delivery_error({:component_error, _reason}), do: :component_error
+  defp delivery_error(reason), do: reason
+
+  # Callers log a failure: only they know whether the message may be logged.
   defp update_component(component_id, message, state) do
     case Map.get(state.components, component_id) do
       nil ->
@@ -763,18 +801,16 @@ defmodule Raxol.Core.Runtime.ComponentManager do
             process_update_result(result, component_id, component, state)
 
           {:error, reason} ->
-            Raxol.Core.Runtime.Log.warning_with_context(
-              "Component update failed: #{inspect(reason)}",
-              %{component_id: component_id, message: message}
-            )
-
-            {{:error, :component_error}, state}
+            {{:error, {:component_error, reason}}, state}
         end
     end
   end
 
   defp process_update_result(result, component_id, component, state) do
     case result do
+      {:ok, new_state} when is_map(new_state) ->
+        apply_component_update(new_state, [], component_id, component, state)
+
       {new_state, commands} when is_map(new_state) ->
         apply_component_update(
           new_state,

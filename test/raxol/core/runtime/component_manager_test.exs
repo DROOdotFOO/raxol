@@ -1,6 +1,8 @@
 defmodule Raxol.Core.Runtime.ComponentManagerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Core.Events.EventManager
   alias Raxol.Core.Runtime.ComponentManager
 
@@ -285,7 +287,9 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
 
   # Reports every {:event, type, data} it receives to the test process, and
   # returns {:subscribe, types} / {:unsubscribe, types} messages (and
-  # {:subscribe_to, types} events) as the matching component commands.
+  # {:subscribe_to, types} events) as the matching component commands. Its
+  # `:reply` prop picks how update/2 answers an event: `{state, []}` by
+  # default, `{:ok, state}`, a non-state `:garbage`, or a raise.
   defmodule EventProbe do
     def init(props), do: props
 
@@ -298,7 +302,13 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
 
     def update({:event, _type, _data} = event, state) do
       send(state.test_pid, {:component_event, state.name, event})
-      {state, []}
+
+      case Map.get(state, :reply) do
+        nil -> {state, []}
+        :ok_tuple -> {:ok, Map.put(state, :last_event, event)}
+        :garbage -> :garbage
+        :raise -> raise "could not take #{inspect(event)}"
+      end
     end
 
     def update({op, types}, state) when op in [:subscribe, :unsubscribe],
@@ -425,6 +435,47 @@ defmodule Raxol.Core.Runtime.ComponentManagerTest do
 
       assert {:ok, _} = ComponentManager.unmount(b)
       assert event_manager_sends(type) == 0
+    end
+
+    test "a component whose update/2 returns {:ok, state} takes delivered events",
+         %{type: type} do
+      a = mount_probe(:a, %{reply: :ok_tuple})
+      assert {:ok, _} = ComponentManager.update(a, {:subscribe, [type]})
+
+      :ok = EventManager.dispatch(type, %{n: 1})
+      settle()
+
+      assert ComponentManager.get_component(a).state.last_event ==
+               {:event, type, %{n: 1}}
+
+      assert {:ok, %{last_event: {:event, ^type, %{n: 2}}}} =
+               ComponentManager.update(a, {:event, type, %{n: 2}})
+    end
+
+    test "a component that cannot take an event is logged by id and type, without the payload",
+         %{type: type} do
+      garbage = mount_probe(:garbage, %{reply: :garbage})
+      raising = mount_probe(:raising, %{reply: :raise})
+      healthy = mount_probe(:healthy)
+
+      for id <- [garbage, raising, healthy],
+          do:
+            assert({:ok, _} = ComponentManager.update(id, {:subscribe, [type]}))
+
+      log =
+        capture_log(fn ->
+          :ok = EventManager.dispatch(type, %{secret: "s3cr3t-payload"})
+          settle()
+        end)
+
+      for id <- [garbage, raising] do
+        assert log =~ ~r/#{Regex.escape(id)}.*#{Regex.escape(inspect(type))}/
+      end
+
+      refute log =~ "s3cr3t-payload"
+
+      assert_received {:component_event, :healthy,
+                       {:event, ^type, %{secret: "s3cr3t-payload"}}}
     end
 
     test "an {:event, type, data} message for a type no component lists is not delivered",
