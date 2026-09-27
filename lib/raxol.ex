@@ -189,35 +189,60 @@ defmodule Raxol do
   end
 
   @doc """
-  Sets the default theme for Raxol applications.
+  Sets the theme Raxol renders with.
 
-  This function sets the default theme that will be used by Raxol components.
+  The theme becomes `Raxol.UI.Theming.Theme.current/0`, which the renderers
+  read.
+
+  The theme is node-global: it is stored in the `:raxol` application
+  environment, so every session on the node (each SSH and LiveView session
+  included) renders with it, not just the caller's.
 
   ## Parameters
 
-  * `theme` - A theme created with `Raxol.UI.Theming.Theme.new/1` or one of the built-in themes
+  * `theme` - A theme created with `Raxol.UI.Theming.Theme.new/1`, a built-in
+    theme struct (e.g. `Raxol.UI.Theming.Theme.dark_theme/0`), or the id of a
+    theme registered with `Raxol.UI.Theming.Theme.register/1` (`:default`
+    needs no registration). Strings and plain maps are not accepted.
+
+  ## Returns
+
+  `:ok`, or `{:error, :theme_not_found}` if no theme is registered under the
+  given id.
 
   ## Example
 
   ```elixir
   # Use a built-in theme
-  Raxol.set_theme(Raxol.UI.Theming.Theme.dark())
+  Raxol.set_theme(Raxol.UI.Theming.Theme.dark_theme())
 
   # Create and use a custom theme
-  custom_theme = Raxol.UI.Theming.Theme.new(name: "Custom", colors: %{primary: :green})
+  custom_theme =
+    Raxol.UI.Theming.Theme.new(%{id: :custom, name: "Custom", colors: %{primary: :green}})
+
   Raxol.set_theme(custom_theme)
+
+  # Switch to a registered theme by id
+  Raxol.UI.Theming.Theme.register(custom_theme)
+  Raxol.set_theme(:custom)
   ```
   """
+  @spec set_theme(Raxol.UI.Theming.Theme.t() | atom()) ::
+          :ok | {:error, :theme_not_found}
   def set_theme(theme) do
-    :application.set_env(:raxol, :theme, theme)
+    Raxol.UI.Theming.Theme.apply_theme(theme)
   end
 
   @doc """
-  Gets the current default theme.
+  Gets the theme Raxol renders with, the same as
+  `Raxol.UI.Theming.Theme.current/0`.
+
+  Like `set_theme/1`, this is node-global: every session on the node sees
+  the same theme.
 
   ## Returns
 
-  The current theme map.
+  The current theme.
 
   ## Example
 
@@ -226,7 +251,7 @@ defmodule Raxol do
   ```
   """
   def current_theme do
-    Application.get_env(:raxol, :theme, Raxol.UI.Theming.Theme.default_theme())
+    Raxol.UI.Theming.Theme.current()
   end
 
   @doc """
@@ -239,7 +264,11 @@ defmodule Raxol do
   ## Options
 
   * `:screen_reader` - Enable screen reader support
-  * `:high_contrast` - Enable high contrast mode
+  * `:high_contrast` - `true` raises the contrast of the current theme
+    (`Raxol.UI.Theming.Theme.adjust_for_high_contrast/1`); `false` restores
+    the theme it replaced, unless another theme was set meanwhile. The theme
+    is node-global (see `set_theme/1`). Without this option the theme is left
+    alone.
   * `:large_text` - Enable large text mode
   * `:reduced_motion` - Reduce or eliminate animations
 
@@ -250,8 +279,10 @@ defmodule Raxol do
   ```
   """
   def set_accessibility(opts \\ []) do
-    apply_accessibility_theme(opts[:high_contrast])
-    :ok
+    case Access.fetch(opts, :high_contrast) do
+      {:ok, enabled?} -> apply_high_contrast(enabled?)
+      :error -> :ok
+    end
   end
 
   @doc """
@@ -281,12 +312,41 @@ defmodule Raxol do
     })
   end
 
-  defp apply_accessibility_theme(true) do
-    set_theme(Raxol.UI.Theming.Theme.dark_theme())
+  # High contrast raises the contrast of the current theme and remembers the
+  # theme it replaced, so turning it off restores that theme. Other options
+  # leave the theme alone. A theme set while high contrast was on has its
+  # contrast raised by the next `true`.
+  defp apply_high_contrast(true) do
+    current = current_theme()
+
+    case Elixir.Application.fetch_env(:raxol, :high_contrast_restore) do
+      {:ok, {_prior, ^current}} ->
+        :ok
+
+      _off_or_stale ->
+        high_contrast = Raxol.UI.Theming.Theme.adjust_for_high_contrast(current)
+
+        with :ok <- set_theme(high_contrast) do
+          Elixir.Application.put_env(
+            :raxol,
+            :high_contrast_restore,
+            {current, high_contrast}
+          )
+        end
+    end
   end
 
-  defp apply_accessibility_theme(_) do
-    set_theme(Raxol.UI.Theming.Theme.default_theme())
+  # A theme set while high contrast was on is kept.
+  defp apply_high_contrast(_off) do
+    case Elixir.Application.fetch_env(:raxol, :high_contrast_restore) do
+      {:ok, {prior, high_contrast}} ->
+        Elixir.Application.delete_env(:raxol, :high_contrast_restore)
+
+        if current_theme() == high_contrast, do: set_theme(prior), else: :ok
+
+      :error ->
+        :ok
+    end
   end
 
   @doc """

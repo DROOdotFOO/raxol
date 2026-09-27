@@ -125,11 +125,15 @@ defmodule Raxol.UI.Theming.Theme do
 
   @doc """
   Creates a high contrast variant of the theme.
+
+  Colours without RGB components (named colours such as `:green`, 256-colour
+  indexes, the `{:error, :invalid_hex}` of a bad hex string) are kept as they
+  are.
   """
   def create_high_contrast_variant(%__MODULE__{} = theme) do
     high_contrast_colors =
-      Enum.map(theme.colors, fn {name, color} ->
-        {name, Utilities.increase_contrast(color)}
+      Enum.map(theme.colors || %{}, fn {name, color} ->
+        {name, increase_contrast(color)}
       end)
       |> Map.new()
 
@@ -137,11 +141,19 @@ defmodule Raxol.UI.Theming.Theme do
       theme
       | colors: high_contrast_colors,
         variants:
-          Map.put(theme.variants, :high_contrast, %{
+          Map.put(theme.variants || %{}, :high_contrast, %{
             colors: high_contrast_colors
           })
     }
   end
+
+  defp increase_contrast(%Color{} = color),
+    do: Utilities.increase_contrast(color)
+
+  defp increase_contrast({_r, _g, _b} = rgb),
+    do: Utilities.increase_contrast(rgb)
+
+  defp increase_contrast(color), do: color
 
   @doc """
   Returns a high-contrast version of the given theme, for accessibility support.
@@ -171,10 +183,15 @@ defmodule Raxol.UI.Theming.Theme do
   end
 
   @doc """
-  Returns the current theme.
+  Returns the current theme: the one last applied (`apply_theme/1`,
+  `Raxol.set_theme/1`), else the theme registered under the default id,
+  else the built-in `default_theme/0`.
   """
   def current do
-    Application.get_env(:raxol, :current_theme, default_theme())
+    case Application.fetch_env(:raxol, :current_theme) do
+      {:ok, theme} -> theme
+      :error -> get(default_theme_id())
+    end
   end
 
   @doc """
@@ -384,6 +401,10 @@ defmodule Raxol.UI.Theming.Theme do
 
   @doc """
   Applies a theme by name or struct.
+
+  A name must be the id of a registered theme (or `:default`); any other
+  name returns `{:error, :theme_not_found}` and leaves the current theme
+  unchanged.
   """
   def apply_theme(%__MODULE__{} = theme) do
     Application.put_env(:raxol, :current_theme, theme)
@@ -391,9 +412,16 @@ defmodule Raxol.UI.Theming.Theme do
   end
 
   def apply_theme(theme_name) when is_atom(theme_name) do
-    case get(theme_name) do
-      nil -> {:error, :theme_not_found}
-      theme -> apply_theme(theme)
+    case fetch_registered(theme_name) do
+      {:ok, theme} -> apply_theme(theme)
+      :error -> {:error, :theme_not_found}
+    end
+  end
+
+  defp fetch_registered(theme_id) do
+    case Map.fetch(Application.get_env(:raxol, :themes, %{}), theme_id) do
+      :error when theme_id == :default -> {:ok, default_theme()}
+      result -> result
     end
   end
 

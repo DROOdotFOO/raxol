@@ -120,9 +120,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
             :exit, _ -> current_model
           end
 
-        # Fetch the actual theme struct using the ID
-        theme =
-          Theme.get(current_theme_id) || Theme.get(Theme.default_theme_id())
+        theme = render_theme(current_theme_id)
 
         case do_render_frame(animated_model, theme, state) do
           {:ok, new_state} ->
@@ -184,8 +182,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
             :exit, _ -> current_model
           end
 
-        theme =
-          Theme.get(current_theme_id) || Theme.get(Theme.default_theme_id())
+        theme = render_theme(current_theme_id)
 
         case do_render_frame(animated_model, theme, state) do
           {:ok, new_state} ->
@@ -206,6 +203,18 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   end
 
   # --- Private Helpers ---
+
+  # The dispatcher's theme id is the default unless the app (a model
+  # `:current_theme_id`) or the user's preferences chose another. The default
+  # renders `Theme.current/0`, the theme `Raxol.set_theme/1` sets; a chosen id
+  # renders the theme registered under it, or `Theme.current/0` if none is.
+  defp render_theme(theme_id) do
+    if theme_id in [nil, Theme.default_theme_id()] do
+      Theme.current()
+    else
+      Enum.find(Theme.list_themes(), Theme.current(), &(&1.id == theme_id))
+    end
+  end
 
   # Functional rendering pipeline replacing try/catch
   defp do_render_frame(model, theme, state) do
