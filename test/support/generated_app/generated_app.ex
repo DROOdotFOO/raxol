@@ -138,6 +138,21 @@ defmodule Raxol.Test.GeneratedApp do
   end
 
   @doc """
+  The `lib/**/*.ex` files of the generated project at `project`.
+
+  `Path.wildcard/1` reads a backslash as an escape, so on Windows a project
+  under `System.tmp_dir!/0` (`C:\\Users\\...`) matched no file at all. The
+  glob is built with forward slashes, which Windows paths accept too.
+  """
+  @spec lib_files(Path.t()) :: [Path.t()]
+  def lib_files(project) do
+    project
+    |> String.replace("\\", "/")
+    |> Path.join("lib/**/*.ex")
+    |> Path.wildcard()
+  end
+
+  @doc """
   Starts the application of the generated project at `project` in a VM of its
   own, evaluates `code` there with `app` bound to the application's name, and
   returns that VM's output and exit status.
@@ -156,11 +171,12 @@ defmodule Raxol.Test.GeneratedApp do
   def run_application(project, code, overrides \\ []) do
     {app, mod} = mix_application(project)
     mod || flunk("#{project}/mix.exs names no application callback (`mod:`)")
+    lib = lib_files(project)
+    lib != [] || flunk("#{project} has no lib/**/*.ex files")
 
     script = """
     app = #{inspect(app)}
-    lib = Path.wildcard(#{inspect(Path.join(project, "lib/**/*.ex"))})
-    {:ok, modules, _warnings} = Kernel.ParallelCompiler.compile(lib)
+    {:ok, modules, _warnings} = Kernel.ParallelCompiler.compile(#{inspect(lib)})
 
     #{inspect(Path.join(project, "config/config.exs"))}
     |> Config.Reader.read!(env: :test)
@@ -219,7 +235,7 @@ defmodule Raxol.Test.GeneratedApp do
     after
       remaining ->
         {:os_pid, os_pid} = Port.info(port, :os_pid)
-        _ = System.cmd("kill", ["-9", Integer.to_string(os_pid)])
+        kill_os_process(os_pid)
 
         flunk("""
         The application's VM had not exited after \
@@ -228,6 +244,19 @@ defmodule Raxol.Test.GeneratedApp do
         #{IO.iodata_to_binary(acc)}
         """)
     end
+  end
+
+  # `mix` on Windows is a .bat that starts the VM as its child, hence /T.
+  defp kill_os_process(os_pid) do
+    pid = Integer.to_string(os_pid)
+
+    _ =
+      case :os.type() do
+        {:win32, _} -> System.cmd("taskkill", ["/F", "/T", "/PID", pid])
+        _ -> System.cmd("kill", ["-9", pid])
+      end
+
+    :ok
   end
 
   @doc """
