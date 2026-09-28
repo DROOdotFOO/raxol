@@ -13,6 +13,11 @@ defmodule Raxol.Speech.Recognizer do
       30_000). The FIRST call after boot also pays the XLA graph
       compilation, which can take minutes on CPU; give a cold deployment
       a generous budget or warm the serving up front.
+    * `:load_model` - load the model at start (default `true`). Loading
+      fetches it from the Hugging Face Hub unless Bumblebee has it cached.
+      With `false` the recognizer starts without one: `available?/0` is
+      `false` and `recognize/1` returns `{:error, :bumblebee_not_available}`,
+      as in a build without Bumblebee.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -79,7 +84,7 @@ defmodule Raxol.Speech.Recognizer do
     model_name = Keyword.get(opts, :model, @default_model)
 
     serving =
-      if bumblebee_available?() do
+      if Keyword.get(opts, :load_model, true) and bumblebee_available?() do
         load_whisper_serving(model_name, opts)
       else
         nil
