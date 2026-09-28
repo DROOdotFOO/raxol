@@ -85,6 +85,15 @@ defmodule Raxol.Payments.Protocols.MPPTest do
     test "returns a Decimal for an integer atomic amount" do
       assert Decimal.equal?(MPP.amount(%{amount: 100}), Decimal.new(100))
     end
+
+    test "an all-digit amount past 34 digits equals its integer form" do
+      atomic = Integer.pow(10, 40)
+
+      assert Decimal.equal?(
+               MPP.amount(%{amount: Integer.to_string(atomic)}),
+               MPP.amount(%{amount: atomic})
+             )
+    end
   end
 
   describe "gate cap and signed amount stay the same unit" do

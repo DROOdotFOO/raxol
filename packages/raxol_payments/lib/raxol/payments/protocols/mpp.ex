@@ -126,14 +126,17 @@ defmodule Raxol.Payments.Protocols.MPP do
   @spec amount(map()) :: Decimal.t()
   # MPP amounts are atomic units: `parse_challenge` accepts only an integer or
   # an all-digit string (see `validate_positive_amount`), so this is always a
-  # valid Decimal integer -- the same value the signed credential carries, so a
+  # valid integer -- the same value the signed credential carries, so a
   # `SpendingPolicy` cap must be written in the targeted server's atomic unit
   # (Stripe cents, or EVM token base units). Mapping atomic units to a human
   # amount per method (via `Assets.to_human`) needs that server's token/decimals
-  # and lands with the first concrete MPP integration.
+  # and lands with the first concrete MPP integration. It goes through the
+  # integer because decimal's string parse rejects more than 34 digits, and an
+  # oversized server amount must reach the budget gate, not raise here.
   def amount(challenge) do
     challenge.amount
     |> to_string()
+    |> String.to_integer()
     |> Decimal.new()
   end
 

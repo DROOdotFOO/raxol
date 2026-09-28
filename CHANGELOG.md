@@ -140,6 +140,7 @@
 ### Security
 
 - **`raxol_payments` and `raxol_earn` require `decimal ~> 3.0` (was `~> 2.0`)**, so no consumer can resolve a decimal with EEF-CVE-2026-32686; `raxol_payments` parses amounts from payment servers and config. For consumers: decimal 3's default context is decimal128, precision 34 (was 28) with `emax: 6_144` / `emin: -6_143` and over/underflow signalled, and `Decimal.new/1`, `parse/1` and `cast/1` reject strings of more than 34 digits or with an exponent past 6_144. The package locks, and those of `raxol_console` and `raxol_symphony`, which build on them, move to decimal 3.1.1 (and req 0.7.4 in the two packages).
+- **`raxol_payments`: an x402 or MPP amount string of more than 34 digits no longer raises out of `Req.AutoPay`.** Both protocols accept any all-digit atomic amount, but under decimal 3 `X402.amount/1` (through `Assets.to_human/2`) and `MPP.amount/1` built it with the string parse, so a server's oversized amount raised `Decimal.Error` from the Req response step. An all-digit string now converts as the integer it is, as an integer amount already did, and the amount is refused by the budget gate. New tests failed before (`Decimal.Error`).
 
 ## [2.7.0] - 2026-09-09
 

@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and RAXOL. Neither is a settlement-ledger stablecoin, so an unpriced leg
   reports `nil`, never $1.
 
+### Fixed
+
+- An x402 or MPP amount that is an all-digit string of more than 34 digits
+  no longer raises `Decimal.Error` out of `Req.AutoPay`: `Assets.to_human/2`
+  and `MPP.amount/1` convert it as an integer, so the budget gate refuses it.
+
 ### Security
 
 - Requires `decimal ~> 3.0` (was `~> 2.0`) for EEF-CVE-2026-32686 (unbounded

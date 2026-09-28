@@ -419,7 +419,15 @@ defmodule Raxol.Payments.Assets do
 
   defp to_decimal(%Decimal{} = d), do: d
   defp to_decimal(n) when is_integer(n), do: Decimal.new(n)
-  defp to_decimal(s) when is_binary(s), do: Decimal.new(s)
+  # An all-digit string is an atomic amount: convert it as the integer it is.
+  # decimal 3's string parse rejects more than 34 digits, which would make a
+  # server-supplied atomic string raise where the same integer converts.
+  defp to_decimal(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} -> Decimal.new(n)
+      _ -> Decimal.new(s)
+    end
+  end
 
   defp pow10(decimals), do: Decimal.new(Integer.pow(10, decimals))
 
