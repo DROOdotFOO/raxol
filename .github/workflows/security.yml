@@ -100,16 +100,22 @@ jobs:
   # fixable HIGH advisories (mint, phoenix, cowlib, hackney) sat in them
   # unseen.
   #
-  # Blocking. An advisory with no fixed release is acknowledged in THAT
-  # project's mix.exs with `hex: [ignore_advisories: [...]]` next to a comment
-  # saying why, not by softening this job: `mix hex.audit` then lists it under
-  # "Ignored advisories" and exits 0, and says the entry can be removed once
-  # it no longer matches anything in the lock. The cowlib 2.20.0 pair is
-  # handled that way; see #921.
+  # Fails this workflow, including the daily scheduled run, which files an
+  # issue. It is not a required check (`CI Status` is the only one), so a
+  # newly published advisory turns runs red without blocking unrelated merges.
+  #
+  # An advisory with no fixed release is acknowledged in THAT project's
+  # mix.exs with `hex: [ignore_advisories: [...]]` next to a comment saying
+  # why, not by softening this job: `mix hex.audit` then lists it under
+  # "Ignored advisories" and exits 0. Once the lock moves past it, hex.audit
+  # says the entry "can be removed" but still exits 0, so this job fails on
+  # that message: the entry (and its comment) goes in the PR that makes it
+  # stale. The cowlib 2.20.0 pair is handled that way; see #921.
   #
   # Every project is checked even after one fails, so a single run names all
-  # of them. `--check-locked` first: auditing a lock that `deps.get` would
-  # rewrite would audit something CI never builds.
+  # of them. `mix hex.audit` refuses to run until the project's deps are
+  # fetched, hence `mix deps.get` first; `--check-locked` makes the fetched
+  # set the committed lock rather than one `deps.get` would rewrite.
   hex-advisories:
     name: Hex Advisories
     runs-on: ubuntu-latest
@@ -146,13 +152,22 @@ jobs:
             [ -f "$dir/mix.lock" ] || continue
             checked=$((checked + 1))
             echo "::group::$dir"
-            if (cd "$dir" && mix deps.get --check-locked && mix hex.audit); then
-              result=ok
-            else
+            result=ok
+            if ! (cd "$dir" && mix deps.get --check-locked); then
               result=FAILED
-              failed+=("$dir")
+            else
+              audit_rc=0
+              audit=$(cd "$dir" && mix hex.audit 2>&1) || audit_rc=$?
+              echo "$audit"
+              if [ "$audit_rc" -ne 0 ]; then
+                result=FAILED
+              elif grep -q "can be removed" <<<"$audit"; then
+                result="FAILED (stale ignore_advisories entry)"
+                echo "::error title=$dir::an ignore_advisories entry in $dir/mix.exs matches no advisory in the lock; remove it"
+              fi
             fi
             echo "::endgroup::"
+            [ "$result" = ok ] || failed+=("$dir")
             echo "$dir: $result"
           done
 
@@ -162,7 +177,7 @@ jobs:
             echo "Checked $checked projects."
             if [ "${#failed[@]}" -gt 0 ]; then
               echo ""
-              echo "Failing (\`mix deps.get --check-locked\` or \`mix hex.audit\`):"
+              echo "Failing (\`mix deps.get --check-locked\`, \`mix hex.audit\`, or a stale \`ignore_advisories\` entry):"
               for dir in "${failed[@]}"; do echo "- \`$dir\`"; done
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
@@ -399,6 +414,12 @@ jobs:
     name: Security Report
     needs: [dependency-audit, hex-advisories, static-analysis, semgrep, secrets-scan, npm-audit, snyk-cli]
     runs-on: ubuntu-latest
+    # The workflow grants only contents: read and security-events: write, so
+    # `Create issue for critical findings` got a 403 on every scheduled
+    # failure and never filed an issue.
+    permissions:
+      contents: read
+      issues: write
     if: always()
     
     steps:
