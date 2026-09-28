@@ -34,6 +34,9 @@ defmodule Raxol.Plugins.Lifecycle.ErrorHandling do
   def format_error({:circular_dependency, name}, _module),
     do: "Dependency cycle detected involving #{name}"
 
+  def format_error(reason, module),
+    do: "Failed to load plugin #{module}: #{inspect(reason)}"
+
   def format_version_mismatch_error(mismatches, chain, module) do
     chain_str = Enum.join(chain, " -> ")
 

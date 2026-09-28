@@ -75,7 +75,7 @@ defmodule Raxol.Plugins.Examples.StatusLinePlugin do
     }
 
     # Start update timer
-    timer_ref = start_update_timer(config.update_interval || 1000)
+    timer_ref = start_update_timer(config_get(config, :update_interval, 1000))
 
     {:ok, %{state | timer_ref: timer_ref}}
   end
@@ -104,7 +104,9 @@ defmodule Raxol.Plugins.Examples.StatusLinePlugin do
       last_update: DateTime.utc_now()
     }
 
-    timer_ref = start_update_timer(new_config.update_interval || 1000)
+    timer_ref =
+      start_update_timer(config_get(new_config, :update_interval, 1000))
+
     %{state | timer_ref: timer_ref}
   end
 
@@ -181,7 +183,8 @@ defmodule Raxol.Plugins.Examples.StatusLinePlugin do
     memory = get_memory_usage()
 
     # Schedule next update
-    timer_ref = start_update_timer(state.config.update_interval || 1000)
+    timer_ref =
+      start_update_timer(config_get(state.config, :update_interval, 1000))
 
     %{
       state
@@ -203,7 +206,11 @@ defmodule Raxol.Plugins.Examples.StatusLinePlugin do
     formatted_line = format_status_line(components, width, state.config)
 
     # Send to emulator
-    send_status_line(state.emulator_pid, formatted_line, state.config.position)
+    send_status_line(
+      state.emulator_pid,
+      formatted_line,
+      config_get(state.config, :position, "bottom")
+    )
   end
 
   defp build_status_components(state) do
@@ -401,6 +408,12 @@ defmodule Raxol.Plugins.Examples.StatusLinePlugin do
   end
 
   defp get_theme(_), do: get_theme("default")
+
+  defp config_get(config, key, default) when is_map(config),
+    do: Map.get(config, key, default)
+
+  defp config_get(config, key, default) when is_list(config),
+    do: Keyword.get(config, key, default)
 
   # Helpers
   defp apply_style(text, style) do

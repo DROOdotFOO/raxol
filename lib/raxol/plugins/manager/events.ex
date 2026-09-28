@@ -6,6 +6,7 @@ defmodule Raxol.Plugins.Manager.Events do
 
   alias Raxol.Plugins.EventHandler
   alias Raxol.Plugins.Manager
+  alias Raxol.Core.Runtime.Plugins.PluginLifecycle
 
   @doc """
   Processes input through all enabled plugins.
@@ -60,36 +61,13 @@ defmodule Raxol.Plugins.Manager.Events do
   end
 
   defp broadcast_plugin_event({_name, plugin}, {:ok, acc_manager}, event) do
-    case plugin.enabled do
-      true ->
-        module = plugin.__struct__
-
-        case function_exported?(module, :handle_event, 2) do
-          true ->
-            handle_plugin_event(module, plugin, event, acc_manager)
-
-          false ->
-            {:cont, {:ok, acc_manager}}
-        end
-
-      false ->
-        {:cont, {:ok, acc_manager}}
-    end
-  end
-
-  defp handle_plugin_event(module, plugin, event, acc_manager) do
-    case module.handle_event(plugin, event) do
-      {:ok, updated_plugin} ->
-        updated_manager =
-          Manager.update_plugins(
-            acc_manager,
-            Map.put(acc_manager.plugins, plugin.name, updated_plugin)
-          )
-
-        {:cont, {:ok, updated_manager}}
-
-      {:error, reason} ->
-        {:halt, {:error, reason}}
+    if plugin.enabled and function_exported?(plugin.module, :handle_event, 2) do
+      case PluginLifecycle.handle_event(plugin.name, event) do
+        {:ok, _state} -> {:cont, {:ok, acc_manager}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    else
+      {:cont, {:ok, acc_manager}}
     end
   end
 

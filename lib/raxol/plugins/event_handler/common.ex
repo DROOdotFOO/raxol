@@ -3,8 +3,7 @@ defmodule Raxol.Plugins.EventHandler.Common do
   Common utilities and helper functions for event handling across plugins.
   """
 
-  alias Raxol.Plugins.Lifecycle.Dependencies
-  alias Raxol.Plugins.Manager
+  alias Raxol.Core.Runtime.Plugins.PluginRuntime
 
   @type event :: map()
   @type plugin :: map()
@@ -81,30 +80,13 @@ defmodule Raxol.Plugins.EventHandler.Common do
   Updates the manager state with a new plugin state.
   """
   @spec update_manager_state(map(), plugin(), map()) :: map()
-  def update_manager_state(manager, plugin, new_plugin_state) do
-    plugin_name = Dependencies.normalize_plugin_key(plugin.name)
-
-    %{
-      manager
-      | plugin_states:
-          Map.put(manager.plugin_states, plugin_name, new_plugin_state)
-    }
-  end
+  def update_manager_state(manager, _plugin, _new_plugin_state), do: manager
 
   @doc """
   Updates a plugin instance in the manager.
   """
   @spec update_manager_plugin(map(), plugin(), plugin()) :: map()
-  def update_manager_plugin(manager, _old_plugin, updated_plugin) do
-    plugin_name = Dependencies.normalize_plugin_key(updated_plugin.name)
-
-    %{
-      manager
-      | plugins: Map.put(manager.plugins, plugin_name, updated_plugin),
-        loaded_plugins:
-          Map.put(manager.loaded_plugins, plugin_name, updated_plugin)
-    }
-  end
+  def update_manager_plugin(manager, _old_plugin, _updated_plugin), do: manager
 
   @doc """
   Extracts plugin state from a plugin struct.
@@ -133,20 +115,13 @@ defmodule Raxol.Plugins.EventHandler.Common do
   end
 
   defp execute_plugin_callback(plugin, callback_name, args, acc, result_handler) do
-    case Raxol.Core.ErrorHandling.safe_call(fn ->
-           # Get the plugin from the manager
-           plugin_instance = Manager.get_plugin(acc.manager, plugin.name)
-           # Prepend the plugin instance to the args
-           full_args = [plugin_instance | args]
-           result = apply(plugin.module, callback_name, full_args)
-           result_handler.(acc, plugin, callback_name, result)
-         end) do
-      {:ok, result} ->
-        result
-
-      {:error, error} ->
+    case PluginRuntime.invoke(plugin.name, callback_name, args, :first) do
+      {:error, {:crashed, error}} ->
         log_plugin_crash(plugin, callback_name, error)
         {:cont, acc}
+
+      result ->
+        result_handler.(acc, plugin, callback_name, result)
     end
   end
 

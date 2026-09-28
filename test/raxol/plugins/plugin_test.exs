@@ -3,6 +3,8 @@ defmodule Raxol.Plugins.PluginTest do
   alias Raxol.Plugins.HyperlinkPlugin
   alias Raxol.Plugins.Manager.Events, as: PluginManager
 
+  alias Raxol.Core.Runtime.Plugins.{PluginLifecycle, PluginSupervisor}
+
   alias Raxol.Test.PluginTestFixtures.{
     BadReturnPlugin,
     CircularDependencyPlugin,
@@ -11,6 +13,12 @@ defmodule Raxol.Plugins.PluginTest do
     TestPlugin,
     TimeoutPlugin
   }
+
+  setup do
+    start_supervised!(PluginSupervisor)
+    start_supervised!(PluginLifecycle)
+    :ok
+  end
 
   describe "plugin manager" do
     test "creates a new plugin manager" do

@@ -127,11 +127,15 @@ runtime and active tasks. Every violation emits
 `[:raxol, :plugins, :resource_budget, :exceeded]` telemetry with the plugin ID,
 configured action, measured usage, and budget.
 
-Each loaded plugin has one supervised `PluginRuntime` process. `init/1`,
-`handle_event/2`, `filter_event/2`, commands, and hooks execute serially there.
-`self()` is stable for the loaded lifetime, so `Process.send_after(self(), ...)`
-and interval timer messages are delivered back through `handle_event/2`.
-Unloading or reloading a plugin terminates that runtime.
+Each loaded plugin has one supervised `PluginRuntime` process. Both
+`Raxol.Core.Runtime.Plugins.PluginLifecycle` and the root
+`Raxol.Plugins.Manager` facade load into that runtime; the root manager keeps
+only plugin metadata and configuration. `init/1`, `handle_event/2`,
+`filter_event/2`, commands, root event callbacks, and hooks execute serially in
+the runtime. `self()` is stable for the loaded lifetime, so
+`Process.send_after(self(), ...)` and interval timer messages are delivered
+back through `handle_event/2`. Unloading or reloading a plugin terminates that
+runtime.
 
 There is no `dependencies:` map for Hex packages, no `capabilities:` enforcement, no `trust_level:` field, and no `config_schema:`. Plugin config is whatever map the host passes to `init/1`.
 
@@ -246,10 +250,13 @@ end
 
 ## State management
 
-Plugin state lives in the plugin's `PluginRuntime` process and is isolated from
-other plugins. Successful `handle_event/2` and `handle_command/3` callbacks
-replace that state atomically before the next callback runs. State is reset by
-unload, reload, or runtime restart; persist durable data outside plugin state.
+Plugin state lives only in the plugin's `PluginRuntime` process and is isolated
+from other plugins. Use `PluginLifecycle.get_state/1` or
+`Raxol.Plugins.Manager.get_plugin_state/2`; manager structs do not contain a
+state snapshot. Successful `handle_event/2`, `handle_command/3`, and root
+stateful callbacks replace runtime state atomically before the next callback
+runs. State is reset by unload, reload, or runtime restart; persist durable
+data outside plugin state.
 
 ## Security analysis
 

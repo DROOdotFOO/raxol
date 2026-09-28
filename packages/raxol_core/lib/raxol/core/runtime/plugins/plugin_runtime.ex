@@ -23,17 +23,20 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRuntime do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     plugin_id = Keyword.fetch!(opts, :plugin_id)
+
     GenServer.start_link(__MODULE__, opts, name: PluginInstanceSupervisor.runtime_name(plugin_id))
   end
 
-  @spec handle_event(plugin_id(), term(), timeout()) :: {:ok, term()} | {:error, term()}
+  @spec handle_event(plugin_id(), term(), timeout()) ::
+          {:ok, term()} | {:error, term()}
   def handle_event(plugin_id, event, timeout \\ 5_000) do
     with :ok <- ResourceBudget.admit(plugin_id) do
       call(plugin_id, {:handle_event, event}, timeout)
     end
   end
 
-  @spec filter_event(plugin_id(), term(), timeout()) :: {:ok, term()} | :halt | {:error, term()}
+  @spec filter_event(plugin_id(), term(), timeout()) ::
+          {:ok, term()} | :halt | {:error, term()}
   def filter_event(plugin_id, event, timeout \\ 1_000) do
     with :ok <- ResourceBudget.admit(plugin_id) do
       call(plugin_id, {:filter_event, event}, timeout)
@@ -58,7 +61,30 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRuntime do
   def get_state(plugin_id), do: call(plugin_id, :get_state)
 
   @spec set_state(plugin_id(), term()) :: :ok | {:error, :not_found}
-  def set_state(plugin_id, plugin_state), do: call(plugin_id, {:set_state, plugin_state})
+  def set_state(plugin_id, plugin_state),
+    do: call(plugin_id, {:set_state, plugin_state})
+
+  @doc """
+  Invokes a stateful plugin callback inside the stable runtime.
+
+  `state_position` supports plugin contracts that place state either before or
+  after callback arguments. Callback results using `{:ok, state}`,
+  `{:ok, state, value}`, `{:cont, state}`, or `{:halt, state}` replace the
+  runtime-owned state.
+  """
+  @spec invoke(plugin_id(), atom(), list(), :first | :last, timeout()) ::
+          term() | {:error, term()}
+  def invoke(
+        plugin_id,
+        callback,
+        args \\ [],
+        state_position \\ :first,
+        timeout \\ 5_000
+      ) do
+    with :ok <- ResourceBudget.admit(plugin_id) do
+      call(plugin_id, {:invoke, callback, args, state_position}, timeout)
+    end
+  end
 
   @impl GenServer
   def init(opts) do
@@ -68,7 +94,12 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRuntime do
 
     case initialize(module, config) do
       {:ok, plugin_state} ->
-        {:ok, %__MODULE__{plugin_id: plugin_id, module: module, plugin_state: plugin_state}}
+        {:ok,
+         %__MODULE__{
+           plugin_id: plugin_id,
+           module: module,
+           plugin_state: plugin_state
+         }}
 
       {:error, reason} ->
         {:stop, {:plugin_init_failed, reason}}
@@ -106,6 +137,11 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRuntime do
 
   def handle_call({:handle_command, command, args}, _from, state) do
     {reply, state} = invoke_command(command, args, state)
+    {:reply, reply, state}
+  end
+
+  def handle_call({:invoke, callback, args, state_position}, _from, state) do
+    {reply, state} = invoke_callback(callback, args, state_position, state)
     {:reply, reply, state}
   end
 
@@ -159,9 +195,14 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRuntime do
   defp invoke_event(event, state) do
     if function_exported?(state.module, :handle_event, 2) do
       case state.module.handle_event(event, state.plugin_state) do
-        {:ok, plugin_state} -> {{:ok, plugin_state}, %{state | plugin_state: plugin_state}}
-        {:error, reason} -> {{:error, reason}, state}
-        other -> {{:error, {:unexpected_return, other}}, state}
+        {:ok, plugin_state} ->
+          {{:ok, plugin_state}, %{state | plugin_state: plugin_state}}
+
+        {:error, reason} ->
+          {{:error, reason}, state}
+
+        other ->
+          {{:error, {:unexpected_return, other}}, state}
       end
     else
       {{:ok, state.plugin_state}, state}
@@ -176,6 +217,42 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRuntime do
   catch
     kind, value -> {{:error, {:crashed, {kind, value}}}, state}
   end
+
+  defp invoke_callback(callback, args, state_position, state) do
+    callback_args =
+      case state_position do
+        :first -> [state.plugin_state | args]
+        :last -> args ++ [state.plugin_state]
+      end
+
+    if function_exported?(state.module, callback, length(callback_args)) do
+      result = apply(state.module, callback, callback_args)
+      {result, update_callback_state(state, result)}
+    else
+      {{:error, :callback_not_supported}, state}
+    end
+  rescue
+    error -> {{:error, {:crashed, error}}, state}
+  catch
+    kind, value -> {{:error, {:crashed, {kind, value}}}, state}
+  end
+
+  defp update_callback_state(state, {:ok, plugin_state}),
+    do: %{state | plugin_state: plugin_state}
+
+  defp update_callback_state(state, {:ok, plugin_state, _value, _commands}),
+    do: %{state | plugin_state: plugin_state}
+
+  defp update_callback_state(state, {:ok, plugin_state, _value}),
+    do: %{state | plugin_state: plugin_state}
+
+  defp update_callback_state(state, {:cont, plugin_state}),
+    do: %{state | plugin_state: plugin_state}
+
+  defp update_callback_state(state, {:halt, plugin_state}),
+    do: %{state | plugin_state: plugin_state}
+
+  defp update_callback_state(state, _result), do: state
 
   defp invoke_command(command, args, state) do
     if function_exported?(state.module, :handle_command, 3) do

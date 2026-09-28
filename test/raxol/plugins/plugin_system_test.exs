@@ -16,6 +16,27 @@ defmodule Raxol.Plugins.PluginSystemTest do
   alias Raxol.Plugins.ThemePlugin
   alias Raxol.Terminal.Emulator.Struct, as: Emulator
 
+  alias Raxol.Core.Runtime.Plugins.{PluginLifecycle, PluginSupervisor}
+
+  setup do
+    start_supervised!(PluginSupervisor)
+    start_supervised!(PluginLifecycle)
+    unload_all_plugins()
+    on_exit(&unload_all_plugins/0)
+    :ok
+  end
+
+  defp unload_all_plugins do
+    if Process.whereis(Raxol.Core.Runtime.Plugins.PluginLifecycle) do
+      Enum.each(
+        Raxol.Core.Runtime.Plugins.PluginLifecycle.list_with_status(),
+        fn {plugin_id, _status} ->
+          Raxol.Core.Runtime.Plugins.PluginLifecycle.unload(plugin_id)
+        end
+      )
+    end
+  end
+
   describe "Plugin Manager" do
     test "creates a new plugin manager" do
       {:ok, manager} = Raxol.Plugins.Manager.new()
@@ -135,8 +156,10 @@ defmodule Raxol.Plugins.PluginSystemTest do
 
       assert Map.has_key?(updated_manager.plugins, "test_config")
 
-      assert updated_manager.plugins["test_config"].custom_setting ==
-               "test_value"
+      assert Raxol.Plugins.Manager.get_plugin(
+               updated_manager,
+               "test_config"
+             ).custom_setting == "test_value"
     end
 
     test "unloads a plugin" do
@@ -219,7 +242,7 @@ defmodule Raxol.Plugins.PluginSystemTest do
 
       # Debug: Call the plugin directly with 2 args for coverage
       HyperlinkPlugin.handle_output(
-        manager_with_plugin.plugins["hyperlink"],
+        Raxol.Plugins.Manager.get_plugin(manager_with_plugin, "hyperlink"),
         "Visit https://example.com"
       )
     end
@@ -236,7 +259,10 @@ defmodule Raxol.Plugins.PluginSystemTest do
           "/search example"
         )
 
-      assert updated_manager.plugins["search"].search_term == "example"
+      assert Raxol.Plugins.Manager.get_plugin(
+               updated_manager,
+               "search"
+             ).search_term == "example"
     end
 
     test "processes mouse events through plugins" do
