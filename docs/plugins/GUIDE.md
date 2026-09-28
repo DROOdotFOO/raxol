@@ -114,22 +114,24 @@ end
 
 `resource_budget` accepts `max_memory_mb`, `max_cpu_percent`,
 `max_ets_tables`, and `max_processes`. Omitted keys use the defaults of 50 MB,
-10% CPU, two ETS tables, and 20 processes. Measurements cover work running
-through `Raxol.Core.Runtime.Plugins.PluginSupervisor`; CPU is the plugin tasks'
-share of BEAM reductions between samples.
+10% CPU, two ETS tables, and 20 processes. Measurements cover each plugin's
+stable runtime and auxiliary work running through
+`Raxol.Core.Runtime.Plugins.PluginSupervisor`; CPU is their share of BEAM
+reductions between samples.
 
 The host selects the response with
 `Raxol.Core.Runtime.Plugins.ResourceBudget.set_action/2`: `:warn` logs only,
-`:throttle` rate-limits new plugin tasks until usage falls below the budget, and
-`:kill` terminates active tasks and unloads the plugin. Every violation emits
+`:throttle` rejects new events, filters, commands, and auxiliary tasks until
+usage falls below the budget, and `:kill` unloads the plugin and terminates its
+runtime and active tasks. Every violation emits
 `[:raxol, :plugins, :resource_budget, :exceeded]` telemetry with the plugin ID,
 configured action, measured usage, and budget.
 
-Plugin callbacks run in short-lived supervised tasks. Code inside `init/1`,
-`handle_event/2`, `filter_event/2`, and hooks must not use `self()` as a stable
-plugin process or retain process-owned resources after returning. Use host
-timer, subscription, and supervised-process APIs for work that must outlive a
-callback.
+Each loaded plugin has one supervised `PluginRuntime` process. `init/1`,
+`handle_event/2`, `filter_event/2`, commands, and hooks execute serially there.
+`self()` is stable for the loaded lifetime, so `Process.send_after(self(), ...)`
+and interval timer messages are delivered back through `handle_event/2`.
+Unloading or reloading a plugin terminates that runtime.
 
 There is no `dependencies:` map for Hex packages, no `capabilities:` enforcement, no `trust_level:` field, and no `config_schema:`. Plugin config is whatever map the host passes to `init/1`.
 
@@ -244,9 +246,10 @@ end
 
 ## State management
 
-Plugin state is managed through an ETS-backed `StateManager` for concurrent access and crash recovery. Each plugin's state is isolated. State updates from `filter_event/2` and `handle_command/3` are automatically persisted.
-
-State persists across hot reloads. If a plugin crashes, its last known state is preserved and restored on restart.
+Plugin state lives in the plugin's `PluginRuntime` process and is isolated from
+other plugins. Successful `handle_event/2` and `handle_command/3` callbacks
+replace that state atomically before the next callback runs. State is reset by
+unload, reload, or runtime restart; persist durable data outside plugin state.
 
 ## Security analysis
 
