@@ -124,15 +124,16 @@ defmodule Raxol.Payments.Protocols.MPP do
 
   @impl true
   @spec amount(map()) :: Decimal.t()
-  # MPP amounts are atomic units: `parse_challenge` accepts only an integer or
-  # an all-digit string (see `validate_positive_amount`), so this is always a
-  # valid integer -- the same value the signed credential carries, so a
-  # `SpendingPolicy` cap must be written in the targeted server's atomic unit
-  # (Stripe cents, or EVM token base units). Mapping atomic units to a human
-  # amount per method (via `Assets.to_human`) needs that server's token/decimals
-  # and lands with the first concrete MPP integration. It goes through the
-  # integer because decimal's string parse rejects more than 34 digits, and an
-  # oversized server amount must reach the budget gate, not raise here.
+  # MPP amounts are atomic units: `parse_challenge` accepts only a positive
+  # integer or an all-digit string no wider than a uint256 (see
+  # `validate_positive_amount`), so this is always a valid integer -- the same
+  # value the signed credential carries, so a `SpendingPolicy` cap must be
+  # written in the targeted server's atomic unit (Stripe cents, or EVM token
+  # base units). Mapping atomic units to a human amount per method (via
+  # `Assets.to_human`) needs that server's token/decimals and lands with the
+  # first concrete MPP integration. It goes through the integer because
+  # decimal's string parse rejects more than 34 digits, and a wider amount that
+  # parsed must reach the budget gate, not raise here.
   def amount(challenge) do
     challenge.amount
     |> to_string()
@@ -156,22 +157,19 @@ defmodule Raxol.Payments.Protocols.MPP do
   end
 
   # MPP amounts are atomic units: a positive integer, or an all-digit string
-  # (Stripe cents, or EVM token base units), matching the x402 convention. A
-  # float or a decimal string is malformed as atomic units, so the challenge is
-  # rejected at parse time -- fail closed rather than guess the unit. Once a
-  # concrete MPP server pins the per-method token/decimals, `amount/1` routes
-  # through `Assets.to_human` and this validation matches that convention.
-  defp validate_positive_amount(amount) when is_integer(amount) and amount > 0,
-    do: :ok
-
-  defp validate_positive_amount(amount) when is_binary(amount) do
-    case Integer.parse(amount) do
-      {int, ""} when int > 0 -> :ok
-      _ -> {:error, {:invalid_amount, amount}}
+  # (Stripe cents, or EVM token base units), no wider than a uint256
+  # (`Assets.parse_atomic/1`), matching the x402 convention. A float or a
+  # decimal string is malformed as atomic units, and a wider amount can never be
+  # signed, so the challenge is rejected at parse time -- fail closed rather
+  # than guess the unit. Once a concrete MPP server pins the per-method
+  # token/decimals, `amount/1` routes through `Assets.to_human` and this
+  # validation matches that convention.
+  defp validate_positive_amount(amount) do
+    case Raxol.Payments.Assets.parse_atomic(amount) do
+      {:ok, _} -> :ok
+      :error -> {:error, {:invalid_amount, amount}}
     end
   end
-
-  defp validate_positive_amount(amount), do: {:error, {:invalid_amount, amount}}
 
   defp select_method([]), do: "evm"
 

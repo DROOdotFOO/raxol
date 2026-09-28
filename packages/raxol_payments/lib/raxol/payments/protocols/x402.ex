@@ -188,20 +188,17 @@ defmodule Raxol.Payments.Protocols.X402 do
   end
 
   # x402 `maxAmountRequired` is atomic token units: a positive integer, or an
-  # all-digit string. A float or a decimal string is malformed as atomic units
-  # (and would crash the atomic->human conversion in `amount/1`), so the
-  # challenge is rejected at parse time -- fail closed rather than guess or crash.
-  defp validate_positive_amount(amount) when is_integer(amount) and amount > 0,
-    do: :ok
-
-  defp validate_positive_amount(amount) when is_binary(amount) do
-    case Integer.parse(amount) do
-      {int, ""} when int > 0 -> :ok
-      _ -> {:error, {:invalid_amount, amount}}
+  # all-digit string, no wider than a uint256 (`Assets.parse_atomic/1`). A float
+  # or a decimal string is malformed as atomic units (and would crash the
+  # atomic->human conversion in `amount/1`), and a wider amount can never be
+  # signed, so the challenge is rejected at parse time -- fail closed rather
+  # than guess or crash.
+  defp validate_positive_amount(amount) do
+    case Raxol.Payments.Assets.parse_atomic(amount) do
+      {:ok, _} -> :ok
+      :error -> {:error, {:invalid_amount, amount}}
     end
   end
-
-  defp validate_positive_amount(amount), do: {:error, {:invalid_amount, amount}}
 
   @address_regex ~r/\A0x[0-9a-fA-F]{40}\z/
 

@@ -17,15 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Raxol.Payments.Prices.CoinGecko` prices EURe (USD quote, not dollar par)
   and RAXOL. Neither is a settlement-ledger stablecoin, so an unpriced leg
   reports `nil`, never $1.
+- `Assets.parse_atomic/1` parses a positive atomic amount no wider than a
+  uint256, and `Assets.to_decimal/1` converts an amount to a `Decimal`, taking
+  an integer string of up to 78 digits through the integer (decimal 3's
+  string parse stops at 34 digits).
 
 ### Fixed
 
-- An x402 or MPP amount that is an all-digit string of more than 34 digits
-  no longer raises `Decimal.Error` out of `Req.AutoPay`: `Assets.to_human/2`
-  and `MPP.amount/1` convert it as an integer, so the budget gate refuses it.
+- Under decimal 3, an x402 or MPP amount string of 35 to 78 digits no longer
+  raises `Decimal.Error` out of `Req.AutoPay`, and `SettlementLedger` no longer
+  crashes (losing its table) recording such an amount: x402 and the ledger
+  convert through `Assets.to_decimal/1`, MPP through the integer. The amount
+  then reaches the policy and budget gates, which refuse it when a
+  `SpendingPolicy` and ledger are configured.
 
 ### Security
 
+- x402 and MPP challenges whose atomic amount is wider than a uint256 (more
+  than 78 digits, or above 2^256 - 1) are rejected at parse time as
+  `{:invalid_amount, _}`. No such amount can be signed. The bound is checked
+  before the string is parsed, so a hostile server can no longer make the
+  client parse a header-sized number, run a quadratic `Decimal.div` on it, or
+  hand `on_confirm` and the telemetry logger a `Decimal` too wide for decimal
+  3's 6_178-digit `to_string` limit (which raised, or detached the logger).
 - Requires `decimal ~> 3.0` (was `~> 2.0`) for EEF-CVE-2026-32686 (unbounded
   exponent DoS). Decimal 3 defaults to the decimal128 context: precision 34
   (was 28), `emax: 6_144` / `emin: -6_143` with over/underflow signalled, and

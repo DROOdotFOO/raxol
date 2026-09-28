@@ -75,6 +75,30 @@ defmodule Raxol.Payments.Protocols.MPPTest do
       assert {:error, {:invalid_amount, 0}} =
                MPP.parse_challenge(challenge_headers(%{"amount" => 0}))
     end
+
+    test "accepts the largest uint256 amount, as a string or an integer" do
+      max = Integer.pow(2, 256) - 1
+
+      assert {:ok, _} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => Integer.to_string(max)}))
+
+      assert {:ok, _} = MPP.parse_challenge(challenge_headers(%{"amount" => max}))
+    end
+
+    test "rejects an amount wider than a uint256, however it is sent" do
+      over = Integer.pow(2, 256)
+
+      assert {:error, {:invalid_amount, _}} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => Integer.to_string(over)}))
+
+      assert {:error, {:invalid_amount, _}} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => over}))
+
+      assert {:error, {:invalid_amount, _}} =
+               MPP.parse_challenge(
+                 challenge_headers(%{"amount" => "1" <> String.duplicate("0", 7_000)})
+               )
+    end
   end
 
   describe "amount/1" do
