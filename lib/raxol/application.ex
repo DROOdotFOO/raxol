@@ -205,6 +205,7 @@ defmodule Raxol.Application do
       {Registry, keys: :duplicate, name: :raxol_event_subscriptions},
       Raxol.Core.Runtime.EmitBus,
       Raxol.Core.Runtime.Plugins.PluginSupervisor,
+      Raxol.Core.Runtime.Plugins.PluginLifecycle,
       # MCP server (registry + server, works in all environments)
       maybe_add_mcp_supervisor(),
       # Headless session manager for programmatic app interaction

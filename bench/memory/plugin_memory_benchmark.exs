@@ -7,15 +7,16 @@
 
 defmodule PluginMemoryBenchmark do
   @moduledoc """
-  Memory benchmarks for the plugin manager: loading, the enable/disable cycle,
-  reload, config updates, and unloading.
+  Memory benchmarks for the canonical plugin runtime: loading, the
+  enable/disable cycle, reload, config updates, and unloading.
 
-  These drive `Raxol.Plugins.Manager` directly rather than a supervised
-  manager process, so each scenario is a pure fold over an in-memory struct
-  and Benchee can attribute allocations to the operation under test.
+  The runtime supervisor is started once. Scenarios clean up any plugin left by
+  the preceding Benchee iteration before measuring the next lifecycle operation.
   """
 
   alias Raxol.Plugins.Manager
+
+  alias Raxol.Core.Runtime.Plugins.{PluginLifecycle, PluginSupervisor}
 
   @scenarios %{
     "manager_create" => :manager_create,
@@ -27,6 +28,8 @@ defmodule PluginMemoryBenchmark do
   }
 
   def run_benchmarks(opts \\ []) do
+    ensure_plugin_runtime_started()
+
     config =
       [
         time: 3,
@@ -52,12 +55,19 @@ defmodule PluginMemoryBenchmark do
   end
 
   def single_plugin_load do
+    unload_if_loaded("hyperlink")
     {:ok, manager} = Manager.new()
     {:ok, manager} = Manager.load_plugin(manager, Raxol.Plugins.HyperlinkPlugin)
     manager
   end
 
   def multiple_plugin_load do
+    Enum.each(plugin_modules(), fn module ->
+      module
+      |> plugin_name()
+      |> unload_if_loaded()
+    end)
+
     {:ok, manager} = Manager.new()
 
     Enum.reduce(plugin_modules(), manager, fn module, acc ->
@@ -69,6 +79,7 @@ defmodule PluginMemoryBenchmark do
   end
 
   def plugin_lifecycle do
+    unload_if_loaded("hyperlink")
     {:ok, manager} = Manager.new()
     {:ok, manager} = Manager.load_plugin(manager, Raxol.Plugins.HyperlinkPlugin)
     {:ok, manager} = Manager.disable_plugin(manager, "hyperlink")
@@ -78,6 +89,7 @@ defmodule PluginMemoryBenchmark do
   end
 
   def plugin_reload do
+    unload_if_loaded("hyperlink")
     {:ok, manager} = Manager.new()
 
     Enum.reduce(1..5, manager, fn _i, acc ->
@@ -105,6 +117,28 @@ defmodule PluginMemoryBenchmark do
       Raxol.Plugins.Lifecycle.Dependencies.resolve_plugin_order(plugins)
 
     order
+  end
+
+  defp ensure_plugin_runtime_started do
+    if Process.whereis(PluginSupervisor) == nil do
+      {:ok, _pid} = PluginSupervisor.start_link()
+    end
+
+    if Process.whereis(PluginLifecycle) == nil do
+      {:ok, _pid} = PluginLifecycle.start_link()
+    end
+  end
+
+  defp unload_if_loaded(plugin_name) do
+    case PluginLifecycle.get_status(plugin_name) do
+      nil -> :ok
+      _status -> PluginLifecycle.unload(plugin_name)
+    end
+  end
+
+  defp plugin_name(module) do
+    module
+    |> Raxol.Plugins.Lifecycle.Initialization.get_plugin_id_from_metadata()
   end
 
   defp plugin_modules do

@@ -11,24 +11,20 @@ defmodule Raxol.Plugins.Manager do
 
   @type t :: %__MODULE__{
           plugins: %{String.t() => Plugin.t()},
-          plugin_states: %{String.t() => any()},
           plugin_config: PluginConfig.t(),
           metadata: map(),
           event_handler: function() | nil,
           api_version: String.t(),
-          loaded_plugins: %{String.t() => Plugin.t()},
           config: map(),
           load_order: [String.t()]
         }
 
   defstruct [
     :plugins,
-    :plugin_states,
     :plugin_config,
     :metadata,
     :event_handler,
     api_version: "1.0",
-    loaded_plugins: %{},
     config: %{},
     load_order: []
   ]
@@ -41,12 +37,10 @@ defmodule Raxol.Plugins.Manager do
 
     manager = %__MODULE__{
       plugins: %{},
-      plugin_states: %{},
       plugin_config: plugin_config,
       metadata: %{},
       event_handler: nil,
       api_version: "1.0",
-      loaded_plugins: %{},
       config: plugin_config
     }
 
@@ -61,47 +55,47 @@ defmodule Raxol.Plugins.Manager do
   end
 
   @doc """
-  Gets a plugin by name.
+  Gets a plugin's runtime-owned state by name.
   """
   def get_plugin(%__MODULE__{} = manager, name) when is_binary(name) do
-    plugin_key = normalize_plugin_key(name)
-    Map.get(manager.plugins, plugin_key)
+    if Map.has_key?(manager.plugins, normalize_plugin_key(name)),
+      do: get_plugin_state(manager, name),
+      else: nil
   end
 
   @doc """
-  Gets a plugin's state by name.
+  Gets a plugin's runtime-owned state by name.
   """
-  def get_plugin_state(%__MODULE__{} = manager, name) when is_binary(name) do
-    plugin_key = normalize_plugin_key(name)
-    Map.get(manager.plugin_states, plugin_key)
+  def get_plugin_state(%__MODULE__{}, name) when is_binary(name) do
+    case Raxol.Core.Runtime.Plugins.PluginLifecycle.get_state(name) do
+      {:ok, state} -> state
+      {:error, _reason} -> nil
+    end
   end
 
   @doc """
-  Sets a plugin's state by name.
+  Replaces a plugin's runtime-owned state by name.
   """
   def set_plugin_state(%__MODULE__{} = manager, name, state)
       when is_binary(name) do
-    plugin_key = normalize_plugin_key(name)
-
-    %{
-      manager
-      | plugin_states: Map.put(manager.plugin_states, plugin_key, state)
-    }
+    :ok = Raxol.Core.Runtime.Plugins.PluginLifecycle.set_state(name, state)
+    manager
   end
 
   @doc """
-  Updates a plugin's state using a function.
+  Updates a plugin's runtime-owned state using a function.
   """
   def update_plugin_state(%__MODULE__{} = manager, name, update_fun)
       when is_binary(name) and is_function(update_fun, 1) do
-    plugin_key = normalize_plugin_key(name)
-    current_state = Map.get(manager.plugin_states, plugin_key, %{})
-    new_state = update_fun.(current_state)
+    current_state = get_plugin_state(manager, name)
 
-    %{
-      manager
-      | plugin_states: Map.put(manager.plugin_states, plugin_key, new_state)
-    }
+    :ok =
+      Raxol.Core.Runtime.Plugins.PluginLifecycle.set_state(
+        name,
+        update_fun.(current_state)
+      )
+
+    manager
   end
 
   @doc """
@@ -114,15 +108,13 @@ defmodule Raxol.Plugins.Manager do
   @doc """
   Returns a map of loaded plugin names to plugin structs (for test compatibility).
   """
-  def loaded_plugins(%__MODULE__{} = manager) do
-    manager.loaded_plugins
-  end
+  def loaded_plugins(%__MODULE__{} = manager), do: manager.plugins
 
   @doc """
-  Updates the plugins map in the manager and keeps loaded_plugins in sync.
+  Replaces the loaded plugin metadata map.
   """
   def update_plugins(%__MODULE__{} = manager, plugins) when is_map(plugins) do
-    %{manager | plugins: plugins, loaded_plugins: plugins}
+    %{manager | plugins: plugins}
   end
 
   @doc """
@@ -146,6 +138,21 @@ defmodule Raxol.Plugins.Manager do
   def load_plugin(%__MODULE__{} = manager, module, config)
       when is_atom(module) and is_map(config) do
     Raxol.Plugins.Lifecycle.load_plugin(manager, module, config)
+  end
+
+  @doc """
+  Executes a command in a plugin's stable runtime.
+  """
+  def handle_command(%__MODULE__{} = manager, plugin_name, command, args)
+      when is_binary(plugin_name) and is_list(args) do
+    case Raxol.Core.Runtime.Plugins.PluginLifecycle.handle_command(
+           plugin_name,
+           command,
+           args
+         ) do
+      {:ok, _state, result} -> {:ok, manager, result}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """

@@ -3,6 +3,7 @@ defmodule Raxol.Plugins.Manager.Hooks do
   Handles plugin hook execution.
   Provides functions for running various plugin hooks and collecting their results.
   """
+  alias Raxol.Core.Runtime.Plugins.PluginRuntime
 
   alias Raxol.Plugins.Manager
 
@@ -180,31 +181,19 @@ defmodule Raxol.Plugins.Manager.Hooks do
   end
 
   defp handle_plugin_hook(
-         module,
+         _module,
          plugin,
          hook_name,
          args,
          acc_manager,
          acc_results
        ) do
-    case apply(module, hook_name, [plugin | args]) do
-      {:ok, updated_plugin, result} ->
-        updated_manager =
-          Manager.update_plugins(
-            acc_manager,
-            Map.put(acc_manager.plugins, plugin.name, updated_plugin)
-          )
+    case PluginRuntime.invoke(plugin.name, hook_name, args, :first) do
+      {:ok, _updated_state, result} ->
+        {:ok, acc_manager, [result | acc_results]}
 
-        {:ok, updated_manager, [result | acc_results]}
-
-      {:ok, updated_plugin} ->
-        updated_manager =
-          Manager.update_plugins(
-            acc_manager,
-            Map.put(acc_manager.plugins, plugin.name, updated_plugin)
-          )
-
-        {:ok, updated_manager, acc_results}
+      {:ok, _updated_state} ->
+        {:ok, acc_manager, acc_results}
 
       result ->
         {:ok, acc_manager, [result | acc_results]}
