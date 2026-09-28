@@ -26,6 +26,12 @@ defmodule Raxol.Payments.PolicyGatePropertyTest do
     |> map(&Enum.join(&1, "."))
   end
 
+  defp same_or_subdomain?(host, approved) do
+    host = String.downcase(host)
+    approved = String.downcase(approved)
+    host == approved or String.ends_with?(host, "." <> approved)
+  end
+
   defp positive_amount do
     map(integer(1..1_000_000), &Decimal.new/1)
   end
@@ -45,8 +51,9 @@ defmodule Raxol.Payments.PolicyGatePropertyTest do
     check all(
             approved_host <- host(),
             attempted_host <- host(),
-            attempted_host != approved_host,
-            not String.ends_with?(attempted_host, "." <> approved_host),
+            # Domains match case-insensitively (`SpendingPolicy.domain_approved?/2`),
+            # so a host differing from the approved one only in case is approved.
+            not same_or_subdomain?(attempted_host, approved_host),
             amount <- positive_amount()
           ) do
       policy = %{
@@ -68,8 +75,9 @@ defmodule Raxol.Payments.PolicyGatePropertyTest do
     check all(
             approved_host <- host(),
             attempted_host <- host(),
-            attempted_host != approved_host,
-            not String.ends_with?(attempted_host, "." <> approved_host),
+            # Domains match case-insensitively (`SpendingPolicy.domain_approved?/2`),
+            # so a host differing from the approved one only in case is approved.
+            not same_or_subdomain?(attempted_host, approved_host),
             amount <- positive_amount()
           ) do
       policy = %{
