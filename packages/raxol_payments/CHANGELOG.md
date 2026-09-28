@@ -5,6 +5,19 @@ All notable changes to `raxol_payments` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Registered Monerium EURe on Arbitrum (`0x0c06...44f8`, 18 decimals) and
+  RAXOL on Robinhood Chain (`0xf447...53af`, 18 decimals) in
+  `Raxol.Payments.Assets`, so the Xochi client sizes, resolves and classifies
+  USDC->EURe, EURe->RAXOL and USDC/USDT/USDG->RAXOL legs. `address/2` matches
+  the mixed-case wire symbol `"EURe"` case-insensitively.
+- `Raxol.Payments.Prices.CoinGecko` prices EURe (USD quote, not dollar par)
+  and RAXOL. Neither is a settlement-ledger stablecoin, so an unpriced leg
+  reports `nil`, never $1.
+
 ## [0.2.1] - 2026-09-09
 
 ### Added

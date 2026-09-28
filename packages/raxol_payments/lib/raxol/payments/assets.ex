@@ -51,7 +51,10 @@ defmodule Raxol.Payments.Assets do
       # DAI
       "0x6b175474e89094c44da98b954eedeac495271d0f" => 18,
       # WETH
-      "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2" => 18
+      "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2" => 18,
+      # EURe (Monerium EUR e-money). Registered with Riddler but not advertised
+      # on Ethereum, so it is tracked for decimals only (not in @evm_tokens).
+      "0x39b8b6385416f4ca36a20319f70d28621895279d" => 18
     },
     # Optimism
     10 => %{
@@ -66,7 +69,9 @@ defmodule Raxol.Payments.Assets do
     42_161 => %{
       "0xaf88d065e77c8cc2239327c5edb3a432268e5831" => 6,
       "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" => 6,
-      "0x82af49447d8a07e3bd95bd0d56f35241523fbab1" => 18
+      "0x82af49447d8a07e3bd95bd0d56f35241523fbab1" => 18,
+      # EURe (Monerium EUR e-money) -- EUR-denominated, not a dollar stablecoin
+      "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8" => 18
     },
     # Polygon
     137 => %{
@@ -84,7 +89,9 @@ defmodule Raxol.Payments.Assets do
       # USDG (Global Dollar, Paxos) -- the chain's native stablecoin
       "0x5fc5360d0400a0fd4f2af552add042d716f1d168" => 6,
       # WETH
-      "0x0bd7d308f8e1639fab988df18a8011f41eacad73" => 18
+      "0x0bd7d308f8e1639fab988df18a8011f41eacad73" => 18,
+      # RAXOL -- volatile, transfer-fee token (taxes transfers with its v2 pair)
+      "0xf44702b17d9abd53815f703e772f35e9c71a53af" => 18
     },
     # Tron mainnet (TRC-20). Keys are lowercased to match the lookup; Tron
     # addresses are case-sensitive but USDT/USDC both use 6 decimals.
@@ -110,7 +117,8 @@ defmodule Raxol.Payments.Assets do
     137 => ["0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"]
   }
 
-  # Currency ticker fallback for protocols that don't carry an address.
+  # Currency ticker fallback for protocols that don't carry an address. Keys are
+  # upcased because lookups upcase the ticker ("EURe" resolves via "EURE").
   @tickers %{
     "USDC" => 6,
     "USDT" => 6,
@@ -119,14 +127,19 @@ defmodule Raxol.Payments.Assets do
     "PYUSD" => 6,
     "DAI" => 18,
     "ETH" => 18,
-    "WETH" => 18
+    "WETH" => 18,
+    "EURE" => 18,
+    "RAXOL" => 18
   }
 
   # Solver-fillable EVM tokens: symbol -> chain id -> lowercase address. Mirrors
   # Riddler's config/token_registry.ex for the six supported EVM chains
   # (Ethereum, Optimism, Polygon, Base, Arbitrum, Robinhood Chain). Decimals live
   # in `@addresses`. USDG is Robinhood Chain's native stablecoin (Permit2 pull,
-  # no ERC-3009); WETH is also canonical there.
+  # no ERC-3009); WETH is also canonical there. EURe (Monerium EUR e-money,
+  # Arbitrum) is EUR-denominated and RAXOL (Robinhood Chain) is volatile, so
+  # neither is a dollar stablecoin. Keys are the exact wire symbols ("EURe" is
+  # mixed-case); lookups match them case-insensitively via @canonical_symbols.
   @evm_tokens %{
     "USDC" => %{
       1 => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -144,6 +157,12 @@ defmodule Raxol.Payments.Assets do
     },
     "USDG" => %{
       4663 => "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    },
+    "EURe" => %{
+      42_161 => "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8"
+    },
+    "RAXOL" => %{
+      4663 => "0xf44702b17d9abd53815f703e772f35e9c71a53af"
     },
     "WETH" => %{
       1 => "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
@@ -169,6 +188,10 @@ defmodule Raxol.Payments.Assets do
                             &Map.put(&1, address, symbol)
                           )
                       end)
+
+  # Upcased symbol -> exact wire symbol. `address/2` matches case-insensitively,
+  # and a plain `String.upcase/1` key lookup would miss the mixed-case "EURe".
+  @canonical_symbols Map.new(@evm_tokens, fn {symbol, _} -> {String.upcase(symbol), symbol} end)
 
   @doc """
   Look up decimals by chain id and ERC-20 contract address.
@@ -231,26 +254,30 @@ defmodule Raxol.Payments.Assets do
   @doc """
   Resolve a token symbol to its contract address on `chain_id`.
 
-  Covers the solver-fillable set (USDC, USDT, WETH, plus USDG on Robinhood
-  Chain) across the six supported EVM chains (1, 10, 137, 8453, 42161, 4663).
-  The symbol is case-insensitive; the chain id accepts an integer or a CAIP-2
-  string. Returns `:error` for an unknown `(chain, symbol)` pair.
+  Covers the solver-fillable set (USDC, USDT, WETH, plus USDG and RAXOL on
+  Robinhood Chain and EURe on Arbitrum) across the six supported EVM chains
+  (1, 10, 137, 8453, 42161, 4663). The symbol is case-insensitive (`"EURe"`,
+  `"eure"` and `"EURE"` all resolve); the chain id accepts an integer or a
+  CAIP-2 string. Returns `:error` for an unknown `(chain, symbol)` pair.
   """
   @spec address(integer() | String.t() | nil, String.t() | nil) ::
           {:ok, String.t()} | :error
   def address(chain_id, symbol) when is_binary(symbol) do
     chain = normalize_chain_id(chain_id)
 
-    case @evm_tokens |> Map.get(String.upcase(symbol), %{}) |> Map.get(chain) do
-      nil -> :error
-      address -> {:ok, address}
+    with {:ok, canonical} <- Map.fetch(@canonical_symbols, String.upcase(symbol)),
+         address when is_binary(address) <- @evm_tokens |> Map.fetch!(canonical) |> Map.get(chain) do
+      {:ok, address}
+    else
+      _ -> :error
     end
   end
 
   def address(_chain, _symbol), do: :error
 
   @doc """
-  The token symbols with a resolvable `address/2` (USDC, USDT, WETH).
+  The token symbols with a resolvable `address/2`, spelled exactly as on the
+  wire (`"EURe"`, not `"EURE"`).
   """
   @spec symbols() :: [String.t()]
   def symbols, do: Map.keys(@evm_tokens)
@@ -296,10 +323,11 @@ defmodule Raxol.Payments.Assets do
 
   @doc """
   Resolve a `(chain_id, contract_address)` back to its token symbol: the reverse
-  of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH, plus USDG on
-  Robinhood Chain) on the six EVM chains. Case-insensitive; accepts an integer
-  chain id or a CAIP-2 string. Returns `nil` for an unregistered pair, so a
-  caller can tell "same asset" from "unknown" without guessing.
+  of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH, plus USDG and
+  RAXOL on Robinhood Chain and EURe on Arbitrum) on the six EVM chains. The
+  returned symbol is the exact wire spelling. Case-insensitive; accepts an
+  integer chain id or a CAIP-2 string. Returns `nil` for an unregistered pair,
+  so a caller can tell "same asset" from "unknown" without guessing.
   """
   @spec symbol_for(integer() | String.t() | nil, String.t() | nil) :: String.t() | nil
   def symbol_for(chain_id, address) when is_binary(address) and address != "" do
