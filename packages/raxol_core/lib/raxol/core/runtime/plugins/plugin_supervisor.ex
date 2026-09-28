@@ -2,10 +2,12 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   @moduledoc """
   Supervises, tracks, and admits plugin tasks.
 
-  Plugin operations run under `Task.Supervisor` for crash isolation. Each live
-  task is associated with its plugin ID so `ResourceBudget` can measure process
-  memory, ETS ownership, process count, and CPU reduction share. New work passes
-  through the budget admission check before it starts.
+  Plugin operations run under `Task.Supervisor` for crash isolation. Callback
+  processes are intentionally short-lived; plugin code must not treat `self()`
+  as stable across callbacks. Each live task is associated with its plugin ID so
+  `ResourceBudget` can measure process memory, ETS ownership, process count, and
+  CPU reduction share. New work passes through the budget admission check
+  before it starts.
 
   Initialization and cleanup still use this supervisor, but lifecycle code can
   bypass admission with `enforce_budget: false` so an already-throttled plugin
@@ -44,10 +46,16 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   use Supervisor
 
   alias Raxol.Core.Runtime.Log
-  alias Raxol.Core.Runtime.Plugins.ResourceBudget
+
+  alias Raxol.Core.Runtime.Plugins.{
+    PluginRegistry,
+    ResourceBudget
+  }
 
   @task_supervisor_name Raxol.Core.Runtime.Plugins.TaskSupervisor
   @task_registry :raxol_plugin_supervised_tasks
+  @throttle_registry :raxol_plugin_throttles
+  @cleanup_registry :raxol_plugin_cleanups
   @default_timeout 5_000
 
   # ============================================================================
@@ -60,7 +68,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
 
   @impl Supervisor
   def init(opts) do
-    init_task_registry()
+    PluginRegistry.init()
+    init_registry(@task_registry, :set)
+    init_registry(@throttle_registry, :set)
+    init_registry(@cleanup_registry, :set)
 
     children = [
       {Task.Supervisor, name: @task_supervisor_name, max_restarts: 100, max_seconds: 60},
@@ -96,9 +107,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
       end)
 
   """
-  @spec run_plugin_task(atom(), (-> term()), keyword()) ::
+  @spec run_plugin_task(atom() | String.t(), (-> term()), keyword()) ::
           {:ok, term()} | {:error, term()}
   def run_plugin_task(plugin_id, func, opts \\ []) do
+    plugin_id = normalize_plugin_id(plugin_id)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     with :ok <- maybe_admit(plugin_id, opts) do
@@ -135,9 +147,11 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
       end)
 
   """
-  @spec async_plugin_task(atom(), (-> term())) :: :ok | {:error, :throttled}
+  @spec async_plugin_task(atom() | String.t(), (-> term())) :: :ok | {:error, :throttled}
   def async_plugin_task(plugin_id, func) do
-    with :ok <- ResourceBudget.admit(plugin_id) do
+    plugin_id = normalize_plugin_id(plugin_id)
+
+    with :ok <- admit(plugin_id) do
       case Task.Supervisor.start_child(@task_supervisor_name, fn ->
              run_registered(plugin_id, fn ->
                try do
@@ -191,9 +205,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
       # => [{:ok, data}, {:ok, config}]
 
   """
-  @spec run_plugin_tasks_concurrent(atom(), [(-> term())], keyword()) ::
+  @spec run_plugin_tasks_concurrent(atom() | String.t(), [(-> term())], keyword()) ::
           [{:ok, term()} | {:error, term()}]
   def run_plugin_tasks_concurrent(plugin_id, funcs, opts \\ []) do
+    plugin_id = normalize_plugin_id(plugin_id)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     case maybe_admit(plugin_id, opts) do
@@ -275,8 +290,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   end
 
   @doc "Returns the live supervised task processes owned by a plugin."
-  @spec task_pids(atom()) :: [pid()]
+  @spec task_pids(atom() | String.t()) :: [pid()]
   def task_pids(plugin_id) do
+    plugin_id = normalize_plugin_id(plugin_id)
+
     case :ets.whereis(@task_registry) do
       :undefined ->
         []
@@ -300,32 +317,126 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   end
 
   @doc "Terminates every live supervised task owned by a plugin."
-  @spec terminate_plugin_tasks(atom()) :: non_neg_integer()
+  @spec terminate_plugin_tasks(atom() | String.t()) :: non_neg_integer()
   def terminate_plugin_tasks(plugin_id) do
     pids = task_pids(plugin_id)
-    Enum.each(pids, &Process.exit(&1, :kill))
+
+    Enum.each(pids, fn pid ->
+      :ets.delete(@task_registry, pid)
+      Process.exit(pid, :kill)
+    end)
+
     length(pids)
   end
 
-  defp init_task_registry do
-    case :ets.whereis(@task_registry) do
-      :undefined ->
-        :ets.new(@task_registry, [
-          :named_table,
-          :public,
-          :set,
-          read_concurrency: true,
-          write_concurrency: true
-        ])
+  @doc false
+  @spec admit(atom() | String.t()) :: :ok | {:error, :throttled}
+  def admit(plugin_id) do
+    plugin_id = normalize_plugin_id(plugin_id)
 
-      table ->
-        table
+    case :ets.whereis(@throttle_registry) do
+      :undefined -> :ok
+      _table -> admit_from_registry(plugin_id)
+    end
+  end
+
+  @doc false
+  def throttle(plugin_id, interval_ms) do
+    plugin_id = normalize_plugin_id(plugin_id)
+    deadline = System.monotonic_time(:millisecond) + interval_ms
+    :ets.insert_new(@throttle_registry, {plugin_id, deadline, interval_ms})
+    :ok
+  end
+
+  @doc false
+  def clear_throttle(plugin_id) do
+    :ets.delete(@throttle_registry, normalize_plugin_id(plugin_id))
+    :ok
+  end
+
+  @doc false
+  def block(plugin_id) do
+    plugin_id = normalize_plugin_id(plugin_id)
+    :ets.insert(@throttle_registry, {plugin_id, :infinity, 0})
+    :ok
+  end
+
+  @doc false
+  def throttled?(plugin_id) do
+    case :ets.whereis(@throttle_registry) do
+      :undefined -> false
+      _table -> :ets.member(@throttle_registry, normalize_plugin_id(plugin_id))
+    end
+  end
+
+  @doc false
+  def start_cleanup(plugin_id, func) when is_function(func, 0) do
+    plugin_id = normalize_plugin_id(plugin_id)
+
+    if :ets.insert_new(@cleanup_registry, {plugin_id}) do
+      result =
+        Task.Supervisor.start_child(@task_supervisor_name, fn ->
+          try do
+            func.()
+          after
+            :ets.delete(@cleanup_registry, plugin_id)
+          end
+        end)
+
+      if match?({:error, _reason}, result) do
+        :ets.delete(@cleanup_registry, plugin_id)
+      end
+
+      result
+    else
+      {:error, :already_started}
+    end
+  end
+
+  defp init_registry(name, type) do
+    :ets.new(name, [
+      :named_table,
+      :public,
+      type,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+  rescue
+    ArgumentError ->
+      case :ets.whereis(name) do
+        :undefined -> init_registry(name, type)
+        table -> table
+      end
+  end
+
+  defp admit_from_registry(plugin_id) do
+    case :ets.lookup(@throttle_registry, plugin_id) do
+      [] ->
+        :ok
+
+      [{^plugin_id, :infinity, _interval_ms}] ->
+        {:error, :throttled}
+
+      [{^plugin_id, deadline, interval_ms}] ->
+        now = System.monotonic_time(:millisecond)
+
+        if now < deadline do
+          {:error, :throttled}
+        else
+          replacement = {plugin_id, now + interval_ms, interval_ms}
+          match_spec = [{{plugin_id, deadline, interval_ms}, [], [replacement]}]
+
+          case :ets.select_replace(@throttle_registry, match_spec) do
+            1 -> :ok
+            0 -> admit_from_registry(plugin_id)
+          end
+        end
     end
   end
 
   defp maybe_admit(plugin_id, opts) do
     if Keyword.get(opts, :enforce_budget, true) do
-      ResourceBudget.admit(plugin_id)
+      admit(plugin_id)
     else
       :ok
     end
@@ -339,6 +450,14 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
     after
       :ets.delete(@task_registry, self())
     end
+  end
+
+  defp normalize_plugin_id(id) when is_atom(id), do: id
+
+  defp normalize_plugin_id(id) when is_binary(id) do
+    String.to_existing_atom(id)
+  rescue
+    ArgumentError -> id
   end
 
   # ============================================================================

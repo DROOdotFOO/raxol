@@ -338,6 +338,9 @@ defmodule Raxol.Core.Runtime.Plugins.PluginEventProcessor do
       {:ok, {:error, reason}} ->
         {:error, reason}
 
+      {:error, :throttled} ->
+        {:ok, event}
+
       {:error, reason} ->
         log_filter_error(plugin_id, event, reason)
         {:ok, event}

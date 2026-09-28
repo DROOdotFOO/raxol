@@ -54,8 +54,6 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
     throttle_interval_ms: @default_throttle_interval_ms,
     plugin_actions: %{},
     violation_counts: %{},
-    throttled: MapSet.new(),
-    throttle_deadlines: %{},
     cpu_samples: %{}
   ]
 
@@ -68,13 +66,13 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
   @doc "Checks current supervised resource usage for one plugin."
   @spec check(plugin_id()) :: {:ok, usage()} | {:over_budget, usage(), budget()}
   def check(plugin_id) do
-    GenServer.call(__MODULE__, {:check, plugin_id})
+    GenServer.call(__MODULE__, {:check, normalize_plugin_id(plugin_id)})
   end
 
-  @doc "Sets the exact enforcement action for a plugin."
+  @doc "Sets the exact enforcement action for a registered plugin."
   @spec set_action(plugin_id(), action()) :: :ok
   def set_action(plugin_id, action) when action in [:warn, :throttle, :kill] do
-    GenServer.call(__MODULE__, {:set_action, plugin_id, action})
+    GenServer.call(__MODULE__, {:set_action, normalize_plugin_id(plugin_id), action})
   end
 
   @doc "Checks all registered plugins without applying enforcement actions."
@@ -91,18 +89,11 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
 
   @doc "Returns whether new work for a plugin is currently rate-limited."
   @spec throttled?(plugin_id()) :: boolean()
-  def throttled?(plugin_id) do
-    GenServer.call(__MODULE__, {:throttled?, plugin_id})
-  end
+  def throttled?(plugin_id), do: PluginSupervisor.throttled?(plugin_id)
 
   @doc false
   @spec admit(plugin_id()) :: :ok | {:error, :throttled}
-  def admit(plugin_id) do
-    case Process.whereis(__MODULE__) do
-      nil -> :ok
-      _pid -> GenServer.call(__MODULE__, {:admit, plugin_id})
-    end
-  end
+  def admit(plugin_id), do: PluginSupervisor.admit(plugin_id)
 
   # -- Server ----------------------------------------------------------------
 
@@ -127,6 +118,7 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
   end
 
   def handle_call({:set_action, plugin_id, action}, _from, state) do
+    _result = PluginRegistry.update_metadata(plugin_id, %{resource_budget_action: action})
     {:reply, :ok, %{state | plugin_actions: Map.put(state.plugin_actions, plugin_id, action)}}
   end
 
@@ -138,32 +130,6 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
   def handle_call(:enforce_now, _from, state) do
     {results, state} = enforce_budgets(state)
     {:reply, results, state}
-  end
-
-  def handle_call({:throttled?, plugin_id}, _from, state) do
-    {:reply, MapSet.member?(state.throttled, plugin_id), state}
-  end
-
-  def handle_call({:admit, plugin_id}, _from, state) do
-    if MapSet.member?(state.throttled, plugin_id) do
-      now = System.monotonic_time(:millisecond)
-      deadline = Map.get(state.throttle_deadlines, plugin_id, now)
-
-      if now >= deadline do
-        deadlines =
-          Map.put(
-            state.throttle_deadlines,
-            plugin_id,
-            now + state.throttle_interval_ms
-          )
-
-        {:reply, :ok, %{state | throttle_deadlines: deadlines}}
-      else
-        {:reply, {:error, :throttled}, state}
-      end
-    else
-      {:reply, :ok, state}
-    end
   end
 
   @impl GenServer
@@ -300,7 +266,7 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
             | violation_counts: Map.put(acc.violation_counts, plugin_id, count)
           }
 
-          action = Map.get(acc.plugin_actions, plugin_id, @default_action)
+          action = action_for(plugin_id, acc)
           acc = enforce_action(plugin_id, action, usage, budget, acc)
           emit_violation(plugin_id, action, usage, budget, count)
           acc
@@ -317,59 +283,63 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
 
   defp enforce_action(plugin_id, :throttle, _usage, _budget, state) do
     Log.warning("[ResourceBudget] Throttling plugin #{plugin_id}")
-    now = System.monotonic_time(:millisecond)
-
-    %{
-      state
-      | throttled: MapSet.put(state.throttled, plugin_id),
-        throttle_deadlines:
-          Map.put_new(
-            state.throttle_deadlines,
-            plugin_id,
-            now + state.throttle_interval_ms
-          )
-    }
+    PluginSupervisor.throttle(plugin_id, state.throttle_interval_ms)
+    state
   end
 
   defp enforce_action(plugin_id, :kill, _usage, _budget, state) do
     Log.warning("[ResourceBudget] Killing over-budget plugin #{plugin_id}")
+    PluginSupervisor.block(plugin_id)
     _terminated = PluginSupervisor.terminate_plugin_tasks(plugin_id)
     unload_plugin(plugin_id)
 
     %{
       state
-      | throttled: MapSet.delete(state.throttled, plugin_id),
-        throttle_deadlines: Map.delete(state.throttle_deadlines, plugin_id)
+      | violation_counts: Map.delete(state.violation_counts, plugin_id),
+        cpu_samples: Map.delete(state.cpu_samples, plugin_id)
     }
   end
 
   defp clear_violation(plugin_id, state) do
-    %{
-      state
-      | violation_counts: Map.delete(state.violation_counts, plugin_id),
-        throttled: MapSet.delete(state.throttled, plugin_id),
-        throttle_deadlines: Map.delete(state.throttle_deadlines, plugin_id)
-    }
+    PluginSupervisor.clear_throttle(plugin_id)
+    %{state | violation_counts: Map.delete(state.violation_counts, plugin_id)}
   end
 
   defp unload_plugin(plugin_id) do
     case Process.whereis(PluginLifecycle) do
       nil ->
         PluginRegistry.unregister(plugin_id)
+        PluginSupervisor.clear_throttle(plugin_id)
 
       _pid ->
-        case PluginLifecycle.unload(plugin_id) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Log.warning(
-              "[ResourceBudget] Lifecycle unload failed for #{plugin_id}: #{inspect(reason)}; unregistering directly"
-            )
-
-            PluginRegistry.unregister(plugin_id)
+        case PluginSupervisor.start_cleanup(plugin_id, fn -> unload_plugin_safely(plugin_id) end) do
+          {:ok, _pid} -> :ok
+          {:error, :already_started} -> :ok
+          {:error, reason} -> unload_fallback(plugin_id, reason)
         end
     end
+  end
+
+  defp unload_plugin_safely(plugin_id) do
+    try do
+      case PluginLifecycle.unload(plugin_id) do
+        :ok -> :ok
+        {:error, reason} -> unload_fallback(plugin_id, reason)
+      end
+    catch
+      :exit, reason -> unload_fallback(plugin_id, reason)
+    after
+      PluginSupervisor.clear_throttle(plugin_id)
+    end
+  end
+
+  defp unload_fallback(plugin_id, reason) do
+    Log.warning(
+      "[ResourceBudget] Lifecycle unload failed for #{plugin_id}: #{inspect(reason)}; unregistering directly"
+    )
+
+    PluginRegistry.unregister(plugin_id)
+    PluginSupervisor.clear_throttle(plugin_id)
   end
 
   defp emit_violation(plugin_id, action, usage, budget, count) do
@@ -397,20 +367,67 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
 
     case PluginRegistry.get(plugin_id) do
       {:ok, entry} ->
-        entry
-        |> Map.get(:metadata, %{})
-        |> Map.get(:resource_budget, %{})
-        |> then(&Map.merge(default, &1))
+        budget =
+          entry
+          |> Map.get(:metadata, %{})
+          |> Map.get(:resource_budget, %{})
+
+        if valid_budget?(budget) do
+          Map.merge(default, budget)
+        else
+          default
+        end
 
       :error ->
         default
     end
   end
 
+  defp action_for(plugin_id, state) do
+    case PluginRegistry.get(plugin_id) do
+      {:ok, %{metadata: %{resource_budget_action: action}}}
+      when action in [:warn, :throttle, :kill] ->
+        action
+
+      _ ->
+        Map.get(state.plugin_actions, plugin_id, @default_action)
+    end
+  end
+
+  defp valid_budget?(budget) when is_map(budget) do
+    Enum.all?(
+      [
+        {:max_memory_mb, :number},
+        {:max_cpu_percent, :number},
+        {:max_ets_tables, :integer},
+        {:max_processes, :integer}
+      ],
+      fn
+        {key, :number} ->
+          value = Map.get(budget, key, 0)
+          is_number(value) and value >= 0
+
+        {key, :integer} ->
+          value = Map.get(budget, key, 0)
+          is_integer(value) and value >= 0
+      end
+    )
+  end
+
+  defp valid_budget?(_budget), do: false
+
   defp over_budget?(usage, budget) do
     usage.memory_mb > budget.max_memory_mb or
       usage.cpu_percent > budget.max_cpu_percent or
       usage.ets_tables > budget.max_ets_tables or
       usage.processes > budget.max_processes
+  end
+
+  defp normalize_plugin_id(id) when is_atom(id), do: id
+
+  defp normalize_plugin_id(id) when is_binary(id) do
+    String.to_existing_atom(id)
+  rescue
+    ArgumentError -> id
   end
 end
