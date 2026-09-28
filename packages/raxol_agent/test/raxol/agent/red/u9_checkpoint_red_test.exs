@@ -489,7 +489,7 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
     test "an unknown reason is TOLERATED on READ (forward-compat) — journal healthy, restore works",
          %{base: base} do
-      {j, _session, dir} = seed_conversation!(base)
+      {j, session, dir} = seed_conversation!(base)
       {ref, hash} = CR.stage_snapshot!(dir, %{"applied" => [1, 2, 3]})
 
       # A checkpoint written by a FUTURE producer with a reason this version has
@@ -510,7 +510,17 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
                  "unknown reason preserved raw"
         end)
 
-      refute log =~ "corruption"
+      # capture_log/1 collects Logger events from EVERY process while it runs,
+      # and async siblings corrupt their own journals on purpose — so only a
+      # corruption alarm naming a segment of THIS session's dir counts.
+      own_dir = FileStore.session_dir(session, base_dir: base) <> "/"
+
+      own_alarms =
+        log
+        |> String.split("\n")
+        |> Enum.filter(&(&1 =~ "corruption" and String.contains?(&1, own_dir)))
+
+      assert own_alarms == [], "an unknown reason must not flag this journal corrupt"
       assert FileStore.status(j) == :ok
 
       # Restore must still work off a checkpoint whose reason is unknown.
