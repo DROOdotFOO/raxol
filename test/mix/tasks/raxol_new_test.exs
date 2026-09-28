@@ -22,13 +22,23 @@ defmodule Mix.Tasks.Raxol.NewTest do
   # config that signs commits can stop on a signing prompt. Without the global
   # and system files the commit asks nothing; whether it lands does not matter
   # here.
-  @git_without_config [
+  #
+  # A commit that lands starts `git maintenance run --auto --detach`, which
+  # outlives the commit. Since git 2.54 that repacks even a new project's few
+  # loose objects whenever two of them fall in objects/17, the one directory
+  # git samples to estimate their number. It could then still be writing .git
+  # while on_exit removed tmp, and the removal failed with :eexist.
+  # maintenance.auto=false keeps the commit from starting it.
+  @git_env [
     {"GIT_CONFIG_GLOBAL", "/dev/null"},
-    {"GIT_CONFIG_NOSYSTEM", "1"}
+    {"GIT_CONFIG_NOSYSTEM", "1"},
+    {"GIT_CONFIG_COUNT", "1"},
+    {"GIT_CONFIG_KEY_0", "maintenance.auto"},
+    {"GIT_CONFIG_VALUE_0", "false"}
   ]
 
   setup do
-    for {key, value} <- @git_without_config do
+    for {key, value} <- @git_env do
       previous = System.get_env(key)
       System.put_env(key, value)
 
