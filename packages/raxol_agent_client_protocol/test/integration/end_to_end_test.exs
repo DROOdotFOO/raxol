@@ -348,11 +348,6 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
       end
     end)
 
-    # Barrier: both Connections must have adopted their transport (left :booting)
-    # before the first frame, else a Paired frame to a not-yet-owned handle drops.
-    assert_adopted(agent_conn)
-    assert_adopted(client_conn)
-
     {:ok, _} =
       Connection.request(
         client_conn,
@@ -370,18 +365,6 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
     |> Enum.find_value(fn {_id, pid, _type, mods} ->
       if is_pid(pid) and Connection in mods, do: pid
     end)
-  end
-
-  defp assert_adopted(conn) do
-    wait_until(fn -> :sys.get_state(conn).phase != :booting end)
-  end
-
-  defp wait_until(fun, tries \\ 200) do
-    cond do
-      fun.() -> :ok
-      tries <= 0 -> flunk("condition not met in time")
-      true -> Process.sleep(5) && wait_until(fun, tries - 1)
-    end
   end
 
   # Drain a tagged client's inbound record frames until a quiet period. Returns

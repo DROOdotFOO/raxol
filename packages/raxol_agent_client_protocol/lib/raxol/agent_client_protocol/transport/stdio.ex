@@ -65,9 +65,10 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   ## Ownership
 
   Mirrors `Raxol.AgentClientProtocol.Transport.Paired`: a freshly created
-  handle has no owner (`nil`) — inbound messages are silently dropped
-  until `set_owner/2` adopts it, so a supervisor can create the transport
-  before the `Connection` process that will own it exists.
+  handle has no owner (`nil`) — inbound messages are held until
+  `set_owner/2` adopts it and then delivered in arrival order, so a
+  supervisor can create the transport before the `Connection` process
+  that will own it exists.
   """
 
   use GenServer

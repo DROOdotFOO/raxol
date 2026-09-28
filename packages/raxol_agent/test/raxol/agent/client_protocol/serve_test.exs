@@ -125,8 +125,8 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
         send(test, {:acp_exit, self(), code})
       end)
 
-    # Paired drops frames sent before the Connection adopts the handle, so wait
-    # for the adoption rather than racing it.
+    # Tests reach the Connection through the handle's owner (`connection_of/1`),
+    # which is set only once the Connection adopts the handle.
     wait_until(fn -> match?({:ok, _}, connection_of(handle)) end)
     pid
   end
