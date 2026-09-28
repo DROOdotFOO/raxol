@@ -85,6 +85,13 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
   (`JobSession` + `HookClient` -> `AgenticCommerceV3`) is the only runtime.
   See `MIGRATION_V2.md`.
 
+### Security
+
+- Requires `decimal ~> 3.0` (was `~> 2.0`) for EEF-CVE-2026-32686 (unbounded
+  exponent DoS). Decimal 3 defaults to the decimal128 context: precision 34
+  (was 28), `emax: 6_144` / `emin: -6_143` with over/underflow signalled, and
+  string parses reject more than 34 digits or an exponent past 6_144.
+
 ### Notes
 
 - Pre-alpha. The public surface is unstable inside 0.x.

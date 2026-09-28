@@ -137,6 +137,10 @@
 - **`Raxol.Core.Metrics.Aggregator.record/3` (#1120).** It only passed its arguments on to `MetricsCollector.record_metric/4` as a `:custom` metric, and since #1106 nothing in the repository calls it. Record through `Raxol.Core.Metrics.record/3` or `MetricsCollector.record_metric/4`; aggregation rules read whatever the collector holds.
 - **`raxol_terminal`: `Raxol.Terminal.Escape.Parsers.CSIParserCached` and `Raxol.Terminal.CellCached`, and `bench/suites/core/performance_improvements_benchmark.exs` (#1120).** Neither module cached anything: `warm_cache/0` returned `:ok`, and `parse/1`, `new/2`, `batch_new/1` and `merge_styles/2` called `CSIParser.parse/1`, `Cell.new/2` and `Map.merge/2` directly. The benchmark, their only caller, timed those against the same uncached calls, printed `Raxol.Performance.ETSCacheManager.stats/0` (every table at 0 entries after `warm_cache`, since nothing wrote to them) and then a fixed summary of improvements it never measured ("60-80%" for CSI parsing, "40-60%" for cells, rendering "30-50% faster"). **Breaking** for `raxol_terminal` users: both were public modules of the published package. Call `CSIParser.parse/1` and `Cell.new/2`, which is what they did.
 
+### Security
+
+- **`raxol_payments` and `raxol_earn` require `decimal ~> 3.0` (was `~> 2.0`)**, so no consumer can resolve a decimal with EEF-CVE-2026-32686; `raxol_payments` parses amounts from payment servers and config. For consumers: decimal 3's default context is decimal128, precision 34 (was 28) with `emax: 6_144` / `emin: -6_143` and over/underflow signalled, and `Decimal.new/1`, `parse/1` and `cast/1` reject strings of more than 34 digits or with an exponent past 6_144. The package locks, and those of `raxol_console` and `raxol_symphony`, which build on them, move to decimal 3.1.1 (and req 0.7.4 in the two packages).
+
 ## [2.7.0] - 2026-09-09
 
 ### Added
