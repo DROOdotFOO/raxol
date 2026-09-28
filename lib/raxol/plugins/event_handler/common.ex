@@ -4,6 +4,7 @@ defmodule Raxol.Plugins.EventHandler.Common do
   """
 
   alias Raxol.Core.Runtime.Plugins.PluginRuntime
+  alias Raxol.Plugins.Manager
 
   @type event :: map()
   @type plugin :: map()

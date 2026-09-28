@@ -1,8 +1,8 @@
 defmodule Raxol.Plugins.StableRuntimeTracerTest do
   use ExUnit.Case, async: false
 
-  alias Raxol.Plugins.{EventHandler, Manager}
   alias Raxol.Core.Runtime.Plugins.{PluginLifecycle, PluginSupervisor}
+  alias Raxol.Plugins.{EventHandler, Manager}
 
   defmodule TracerPlugin do
     @behaviour Raxol.Plugins.Plugin

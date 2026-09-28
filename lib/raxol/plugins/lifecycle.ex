@@ -74,8 +74,17 @@ defmodule Raxol.Plugins.Lifecycle do
       {:ok, updated_manager}
     else
       {:error, reason} ->
-        RuntimeLifecycle.unload(plugin_name)
+        rollback_failed_load(plugin_name, reason)
+    end
+  end
+
+  defp rollback_failed_load(plugin_name, reason) do
+    case RuntimeLifecycle.unload(plugin_name) do
+      :ok ->
         {:error, reason}
+
+      {:error, cleanup_reason} ->
+        {:error, {reason, {:rollback_failed, cleanup_reason}}}
     end
   end
 
