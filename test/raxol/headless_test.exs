@@ -155,7 +155,6 @@ defmodule Raxol.HeadlessTest do
   describe "screenshot/1" do
     test "captures text from the rendered buffer" do
       {:ok, _} = Headless.start(TestApp, id: :ss_test, width: 40, height: 10)
-      Process.sleep(300)
 
       {:ok, text} = Headless.screenshot(:ss_test)
       assert text =~ "Count: 0"
@@ -165,12 +164,41 @@ defmodule Raxol.HeadlessTest do
     test "returns error for nonexistent session" do
       assert {:error, :not_found} = Headless.screenshot(:no_such)
     end
+
+    # The frame is the one the render drew, from that call's reply. A cast
+    # the engine takes between drawing and a separate read used to blank it:
+    # `{:update_size, _}`, which the dispatcher sends once it learns the
+    # engine and which swaps in a fresh buffer, is one the runtime always
+    # sends just after start.
+    test "returns the drawn frame when a resize reaches the engine first" do
+      {:ok, id} = Headless.start(TestApp, id: :ss_race, width: 40, height: 10)
+
+      %{lifecycle: lifecycle, dispatcher: dispatcher, engine: engine} =
+        session_pids(id)
+
+      # Let the startup messages land, so the engine's queue holds only what
+      # this test puts there.
+      for pid <- [lifecycle, dispatcher, engine], do: :sys.get_state(pid)
+
+      :ok = :sys.suspend(engine)
+      :erlang.trace(engine, true, [:receive])
+      screenshot = Task.async(fn -> Headless.screenshot(id) end)
+
+      assert_receive {:trace, ^engine, :receive,
+                      {:"$gen_call", _, :render_frame_sync_buffer}}
+
+      # Queued behind the render call: a local send lands before cast returns.
+      GenServer.cast(engine, {:update_size, %{width: 40, height: 10}})
+      :ok = :sys.resume(engine)
+
+      assert {:ok, text} = Task.await(screenshot)
+      assert text =~ "Count: 0"
+    end
   end
 
   describe "send_key/3" do
     test "dispatches a key event" do
       {:ok, _} = Headless.start(TestApp, id: :key_test)
-      Process.sleep(200)
 
       :ok = Headless.send_key(:key_test, "=")
       Process.sleep(100)
@@ -183,7 +211,6 @@ defmodule Raxol.HeadlessTest do
   describe "send_key_and_screenshot/3" do
     test "sends key and returns updated screenshot" do
       {:ok, _} = Headless.start(TestApp, id: :kas_test, width: 40, height: 10)
-      Process.sleep(300)
 
       {:ok, text} = Headless.send_key_and_screenshot(:kas_test, "=")
       assert text =~ "Count: 1"
@@ -191,7 +218,6 @@ defmodule Raxol.HeadlessTest do
 
     test "handles special keys" do
       {:ok, _} = Headless.start(TestApp, id: :tab_test, width: 40, height: 10)
-      Process.sleep(300)
 
       {:ok, text} = Headless.send_key_and_screenshot(:tab_test, :tab)
       assert text =~ "Panel: b"
@@ -201,7 +227,6 @@ defmodule Raxol.HeadlessTest do
   describe "get_model/1" do
     test "returns the current model" do
       {:ok, _} = Headless.start(TestApp, id: :model_test)
-      Process.sleep(200)
 
       {:ok, model} = Headless.get_model(:model_test)
       assert model.count == 0
@@ -231,7 +256,6 @@ defmodule Raxol.HeadlessTest do
   describe "process monitoring" do
     test "removes session when lifecycle process dies" do
       {:ok, _} = Headless.start(TestApp, id: :monitor_test)
-      Process.sleep(200)
 
       {:ok, model} = Headless.get_model(:monitor_test)
       assert model.count == 0
@@ -297,7 +321,6 @@ defmodule Raxol.HeadlessTest do
         )
 
       assert id == :counter_test
-      Process.sleep(300)
 
       {:ok, text} = Headless.screenshot(:counter_test)
       assert text =~ "Count"
@@ -538,11 +561,108 @@ defmodule Raxol.HeadlessTest do
   describe "custom dimensions" do
     test "respects width and height options" do
       {:ok, _} = Headless.start(TestApp, id: :dim_test, width: 60, height: 15)
-      Process.sleep(300)
 
       {:ok, text} = Headless.screenshot(:dim_test)
       lines = String.split(text, "\n")
       assert length(lines) <= 15
     end
+  end
+
+  # On a VM attached to a terminal `:io.columns/0` and `:io.rows/0` answer.
+  # The rendering engine used to take that size in every environment, and
+  # only the dispatcher's `{:update_size, _}` brought a headless session back
+  # to the size it asked for; a frame drawn before then was the terminal's
+  # size. Here the Headless server's group leader answers like a 132x43
+  # terminal and, should the engine still measure it, holds the dispatcher
+  # from that moment until the read's render call is in the engine's queue,
+  # so the correction lands behind it.
+  describe "start/2 on a VM attached to a terminal" do
+    test "renders at the requested size, not the terminal's" do
+      headless = Process.whereis(Headless)
+      {:group_leader, original} = Process.info(headless, :group_leader)
+      test_pid = self()
+      tty = spawn_link(fn -> terminal(original, test_pid, 132, 43) end)
+      true = Process.group_leader(headless, tty)
+
+      started =
+        try do
+          Headless.start(TestApp, id: :tty_size, width: 50, height: 12)
+        after
+          Process.group_leader(headless, original)
+        end
+
+      assert {:ok, id} = started
+
+      # `session_pids/1` asks the Lifecycle for its state, which it gives only
+      # after it has cast the engine its initial renders; those renders block
+      # on a held dispatcher, so the read's call queues behind them.
+      %{engine: engine} = session_pids(id)
+      :erlang.trace(engine, true, [:receive])
+      buffer = Task.async(fn -> Headless.get_buffer(id) end)
+
+      receive do
+        {:held_dispatcher, dispatcher} ->
+          assert_receive {:trace, ^engine, :receive,
+                          {:"$gen_call", _, :render_frame_sync_buffer}}
+
+          :ok = :sys.resume(dispatcher)
+      after
+        0 -> :ok
+      end
+
+      assert {:ok, frame} = Task.await(buffer)
+      assert {frame.width, frame.height} == {50, 12}
+    end
+  end
+
+  # An IO device that answers geometry requests as a `columns` x `rows`
+  # terminal and relays every other request to `original`. The process asking
+  # for the columns is a Lifecycle in its init/1; its dispatcher is already
+  # running, and is suspended before the answer goes back.
+  defp terminal(original, test_pid, columns, rows) do
+    receive do
+      {:io_request, from, reply_as, {:get_geometry, :columns}} ->
+        dispatcher = linked_dispatcher(from)
+        :ok = :sys.suspend(dispatcher)
+        send(test_pid, {:held_dispatcher, dispatcher})
+        send(from, {:io_reply, reply_as, columns})
+
+      {:io_request, from, reply_as, {:get_geometry, :rows}} ->
+        send(from, {:io_reply, reply_as, rows})
+
+      other ->
+        send(original, other)
+    end
+
+    terminal(original, test_pid, columns, rows)
+  end
+
+  defp linked_dispatcher(lifecycle) do
+    {:links, links} = Process.info(lifecycle, :links)
+
+    Enum.find(links, fn pid ->
+      is_pid(pid) and
+        initial_call(pid) == {Raxol.Core.Runtime.Events.Dispatcher, :init, 1}
+    end)
+  end
+
+  defp initial_call(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dict} -> Keyword.get(dict, :"$initial_call")
+      nil -> nil
+    end
+  end
+
+  defp session_pids(id) do
+    %{sessions: %{^id => %{lifecycle_pid: lifecycle}}} =
+      :sys.get_state(Headless)
+
+    state = GenServer.call(lifecycle, :get_full_state)
+
+    %{
+      lifecycle: lifecycle,
+      dispatcher: state.dispatcher_pid,
+      engine: state.rendering_engine_pid
+    }
   end
 end

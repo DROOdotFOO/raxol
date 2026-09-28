@@ -672,9 +672,7 @@ defmodule Raxol.Headless do
 
   defp take_screenshot(session) do
     with_engine(session, fn engine_pid ->
-      GenServer.call(engine_pid, :render_frame_sync)
-
-      case GenServer.call(engine_pid, :get_buffer) do
+      case render_frame(engine_pid) do
         {:ok, buffer} when not is_nil(buffer) ->
           {:ok, TextCapture.capture(buffer)}
 
@@ -689,14 +687,26 @@ defmodule Raxol.Headless do
 
   defp take_buffer(session) do
     with_engine(session, fn engine_pid ->
-      GenServer.call(engine_pid, :render_frame_sync)
-
-      case GenServer.call(engine_pid, :get_buffer) do
+      case render_frame(engine_pid) do
         {:ok, buffer} when not is_nil(buffer) -> {:ok, buffer}
         {:ok, nil} -> {:error, :no_buffer}
         error -> error
       end
     end)
+  end
+
+  # The frame is the one the synchronous render drew, taken from that call's
+  # reply. Reading it back with a second `:get_buffer` call let a cast queued at
+  # the engine in between run first, and one always can be: `Lifecycle` init
+  # casts `{:set_rendering_engine, _}` to the dispatcher, which may still be
+  # unhandled when `start/2` returns, and the dispatcher answers it with an
+  # `{:update_size, _}` that swaps a blank buffer in over the rendered frame.
+  # A render that fails reads the buffer as it stands, as it always has.
+  defp render_frame(engine_pid) do
+    case GenServer.call(engine_pid, :render_frame_sync_buffer) do
+      {:ok, buffer} -> {:ok, buffer}
+      {:error, _reason} -> GenServer.call(engine_pid, :get_buffer)
+    end
   end
 
   defp dispatch_key(session, key, opts) do

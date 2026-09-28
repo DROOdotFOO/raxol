@@ -90,7 +90,6 @@ defmodule Raxol.CrossTerminal.MultilineTextRenderTest do
     {:ok, id} =
       Headless.start(CodePanelApp, id: :ml_text, width: 60, height: 20)
 
-    Process.sleep(300)
     {:ok, buffer} = Headless.get_buffer(id)
     text = Queries.get_text(buffer)
     lines = String.split(text, "\n")
@@ -137,7 +136,6 @@ defmodule Raxol.CrossTerminal.MultilineTextRenderTest do
     {:ok, id} =
       Headless.start(StackedSiblingApp, id: :ml_stack, width: 40, height: 20)
 
-    Process.sleep(300)
     {:ok, buffer} = Headless.get_buffer(id)
     text = Queries.get_text(buffer)
     lines = String.split(text, "\n")

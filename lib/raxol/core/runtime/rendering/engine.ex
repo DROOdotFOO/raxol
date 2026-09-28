@@ -173,29 +173,25 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     {:reply, state, state}
   end
 
+  # Renders the current model now. Replies `:ok`; a caller that only needs the
+  # render done (the gateway's per-event barrier) gets no copy of the buffer.
   @impl true
   def handle_call(:render_frame_sync, _from, state) do
-    case GenServer.call(state.dispatcher_pid, :get_render_context) do
-      {:ok, %{model: current_model, theme_id: current_theme_id}} ->
-        animated_model =
-          try do
-            Raxol.Animation.Framework.apply_animations_to_state(current_model)
-          catch
-            :exit, _ -> current_model
-          end
+    case render_sync(state) do
+      {:ok, new_state} -> {:reply, :ok, new_state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
+    end
+  end
 
-        theme = render_theme(current_theme_id)
-
-        case do_render_frame(animated_model, theme, state) do
-          {:ok, new_state} ->
-            {:reply, :ok, new_state}
-
-          {:error, _reason, current_state} ->
-            {:reply, {:error, :render_failed}, current_state}
-        end
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+  # Renders the current model now and replies `{:ok, buffer}` with the frame
+  # it drew. Reading that frame back with a later `:get_buffer` instead lets a
+  # cast queued here in between run first: the dispatcher's `{:update_size, _}`
+  # swaps in a blank buffer. `Raxol.Headless` reads its frames this way.
+  @impl true
+  def handle_call(:render_frame_sync_buffer, _from, state) do
+    case render_sync(state) do
+      {:ok, new_state} -> {:reply, {:ok, new_state.buffer}, new_state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -215,6 +211,31 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   end
 
   # --- Private Helpers ---
+
+  defp render_sync(state) do
+    case GenServer.call(state.dispatcher_pid, :get_render_context) do
+      {:ok, %{model: current_model, theme_id: current_theme_id}} ->
+        animated_model =
+          try do
+            Raxol.Animation.Framework.apply_animations_to_state(current_model)
+          catch
+            :exit, _ -> current_model
+          end
+
+        theme = render_theme(current_theme_id)
+
+        case do_render_frame(animated_model, theme, state) do
+          {:ok, new_state} ->
+            {:ok, new_state}
+
+          {:error, _reason, current_state} ->
+            {:error, :render_failed, current_state}
+        end
+
+      {:error, reason} ->
+        {:error, reason, state}
+    end
+  end
 
   # The dispatcher's theme id is the default unless the app (a model
   # `:current_theme_id`) or the user's preferences chose another. The default

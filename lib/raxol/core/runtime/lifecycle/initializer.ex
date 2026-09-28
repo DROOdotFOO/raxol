@@ -8,6 +8,10 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   alias Raxol.Core.Runtime.Log
   alias Raxol.Core.Runtime.Plugins.PluginManager, as: Manager
 
+  # One Lifecycle per session or channel (the list in Lifecycle.start_link/2):
+  # the dispatcher is unnamed, and the engine takes its size from the options.
+  @multi_instance_environments [:agent, :liveview, :ssh, :telegram, :gateway]
+
   @doc """
   Initializes all components in order: registry table, plugin manager, app model,
   dispatcher, terminal driver, rendering engine.
@@ -251,7 +255,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
     # Dispatcher via state.dispatcher_pid, so dropping the registered name
     # is safe.
     dispatcher_opts =
-      if environment in [:agent, :liveview, :ssh, :telegram, :gateway],
+      if environment in @multi_instance_environments,
         do: [name: nil],
         else: []
 
@@ -354,15 +358,16 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   end
 
   defp start_rendering_engine(app_module, dispatcher_pid, options) do
-    {actual_w, actual_h} = detect_terminal_size(options)
+    environment = Keyword.get(options, :environment, :terminal)
+    {width, height} = engine_size(environment, options)
 
     engine_opts =
       [
         app_module: app_module,
         dispatcher_pid: dispatcher_pid,
-        width: actual_w,
-        height: actual_h,
-        environment: Keyword.get(options, :environment, :terminal)
+        width: width,
+        height: height,
+        environment: environment
       ]
       |> maybe_add_opt(:liveview_topic, Keyword.get(options, :liveview_topic))
       |> maybe_add_opt(:io_writer, Keyword.get(options, :io_writer))
@@ -398,6 +403,19 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
         {:ok, nil}
     end
   end
+
+  # A session on a remote or virtual surface is the size its options give; the
+  # dispatcher corrects the engine to that size (`{:update_size, _}`) as soon as
+  # it learns the engine's pid anyway. Measuring the host's terminal here only
+  # opened a window, from start until that correction, in which such a session
+  # rendered at the size of whatever TTY the VM happened to be attached to.
+  defp engine_size(environment, options)
+       when environment in @multi_instance_environments do
+    {Keyword.get(options, :width, Raxol.Constants.default_terminal_width()),
+     Keyword.get(options, :height, Raxol.Constants.default_terminal_height())}
+  end
+
+  defp engine_size(_environment, options), do: detect_terminal_size(options)
 
   defp maybe_add_opt(opts, _key, nil), do: opts
   defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)

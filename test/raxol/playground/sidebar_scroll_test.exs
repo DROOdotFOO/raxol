@@ -101,8 +101,6 @@ defmodule Raxol.Playground.SidebarScrollTest do
       assert {:ok, ^id} =
                Headless.start(App, id: id, width: @width, height: @height)
 
-      Process.sleep(150)
-
       {:ok, text} = Headless.screenshot(id)
       sidebar = sidebar_text(text)
 

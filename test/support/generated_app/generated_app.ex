@@ -55,7 +55,7 @@ defmodule Raxol.Test.GeneratedApp do
 
   @doc """
   Starts `app` in a headless session (subscriptions unarmed) and returns the
-  text of its first rendered frame that contains `marker`.
+  text of its frame, which must contain `marker`.
 
   With `keys:`, presses those keys first, in order.
   """
@@ -79,19 +79,19 @@ defmodule Raxol.Test.GeneratedApp do
     on_exit(fn -> if Process.whereis(Headless), do: Headless.stop(id) end)
 
     press(id, Keyword.get(opts, :keys, []))
-    capture_until(inspect(id), marker, fn -> screenshot!(id) end)
+    frame_with!(inspect(id), marker, screenshot!(id))
   end
 
   @doc """
-  Returns the text of the first frame containing `marker` that the TUI running
-  under `lifecycle`, a pid `Raxol.start_link/2` returned, renders.
+  Returns the text of the frame that the TUI running under `lifecycle`, a pid
+  `Raxol.start_link/2` returned, renders; it must contain `marker`.
   """
   @spec frame!(pid(), String.t()) :: String.t()
   def frame!(lifecycle, marker) do
     %{rendering_engine_pid: engine} =
       GenServer.call(lifecycle, :get_full_state)
 
-    capture_until(inspect(lifecycle), marker, fn -> capture!(engine) end)
+    frame_with!(inspect(lifecycle), marker, capture!(engine))
   end
 
   @doc """
@@ -290,22 +290,10 @@ defmodule Raxol.Test.GeneratedApp do
       flunk("#{project} is not `mix format` clean:\n" <> error.message)
   end
 
-  # The first capture after `start` can land before the frame's cells reach
-  # the buffer. Each capture re-renders synchronously, so a bounded retry
-  # converges without sleeping, and an app that never draws `marker` fails at
-  # the bound with what it did draw.
-  defp capture_until(label, marker, capture, attempts \\ 50, last \\ "")
-
-  defp capture_until(label, marker, _capture, 0, last) do
-    flunk("#{label} never rendered #{inspect(marker)}; last frame:\n#{last}")
-  end
-
-  defp capture_until(label, marker, capture, attempts, _last) do
-    text = capture.()
-
+  defp frame_with!(label, marker, text) do
     if String.contains?(text, marker),
       do: text,
-      else: capture_until(label, marker, capture, attempts - 1, text)
+      else: flunk("#{label} did not render #{inspect(marker)}; frame:\n#{text}")
   end
 
   defp press(_id, []), do: :ok
@@ -323,10 +311,11 @@ defmodule Raxol.Test.GeneratedApp do
     text
   end
 
+  # The frame from the render's own reply: a cast the engine takes between
+  # drawing and a separate `:get_buffer` (the dispatcher's `{:update_size, _}`
+  # after start swaps in a blank buffer) would otherwise be what is read.
   defp capture!(engine) do
-    GenServer.call(engine, :render_frame_sync)
-
-    case GenServer.call(engine, :get_buffer) do
+    case GenServer.call(engine, :render_frame_sync_buffer) do
       {:ok, nil} -> ""
       {:ok, buffer} -> TextCapture.capture(buffer)
     end

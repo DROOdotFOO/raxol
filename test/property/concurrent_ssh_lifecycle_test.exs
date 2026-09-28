@@ -7,13 +7,11 @@ defmodule Raxol.Property.ConcurrentSshLifecycleTest do
   `:liveview`. The `:ssh` env was missed, so a second concurrent SSH session
   failed with `{:error, {:already_started, _}}`.
 
-  Two regressions guard against this returning:
-
-    1. Behavioural: starting N Dispatchers with `[name: nil]` succeeds and
-       yields N distinct pids. Proves the underlying mechanism is sound.
-
-    2. Source guard: the initializer's env list contains `:ssh`. Proves the
-       wire-up that uses [name: nil] for the SSH env stays in place.
+  Starting N Dispatchers with `[name: nil]` succeeds and yields N distinct
+  pids, which proves the underlying mechanism is sound. That the `:ssh`
+  environment is wired to it is proved end to end by
+  `concurrent_lifecycle_integration_test.exs`, which starts concurrent `:ssh`
+  Lifecycles.
   """
   use ExUnit.Case, async: false
 
@@ -82,25 +80,6 @@ defmodule Raxol.Property.ConcurrentSshLifecycleTest do
 
       drain_mailbox()
       stop_all(pids)
-    end
-  end
-
-  describe "source guard for #228" do
-    @initializer_path Path.join([
-                        __DIR__,
-                        "../..",
-                        "lib/raxol/core/runtime/lifecycle/initializer.ex"
-                      ])
-
-    test "Initializer dispatcher_opts list includes :ssh" do
-      source = File.read!(@initializer_path)
-
-      # Match membership, not the exact literal: the multi-instance list also
-      # carries :telegram/:gateway and may grow further.
-      assert source =~ ~r/environment in \[[^\]]*:ssh[^\]]*\]/,
-             "initializer.ex must keep :ssh in the Dispatcher [name: nil] list. " <>
-               "Without it, concurrent :ssh Lifecycles collide on the registered " <>
-               "Dispatcher name (regression of #228)."
     end
   end
 end
