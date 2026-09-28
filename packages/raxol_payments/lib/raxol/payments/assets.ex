@@ -252,6 +252,21 @@ defmodule Raxol.Payments.Assets do
   def known?(_chain, _address), do: false
 
   @doc """
+  Strict `decimals/2`: `{:ok, decimals}` for a registered `(chain_id, address)`,
+  `:error` otherwise. Fund-moving paths use this instead of `decimals/2`, whose
+  6-decimal fallback would mis-scale an unregistered token's amount.
+  """
+  @spec fetch_decimals(integer() | String.t() | nil, String.t() | nil) ::
+          {:ok, pos_integer()} | :error
+  def fetch_decimals(chain_id, address) when is_binary(address) and address != "" do
+    @addresses
+    |> Map.get(normalize_chain_id(chain_id), %{})
+    |> Map.fetch(String.downcase(address))
+  end
+
+  def fetch_decimals(_chain, _address), do: :error
+
+  @doc """
   Resolve a token symbol to its contract address on `chain_id`.
 
   Covers the solver-fillable set (USDC, USDT, WETH, plus USDG and RAXOL on

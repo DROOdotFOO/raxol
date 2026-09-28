@@ -32,6 +32,7 @@ defmodule Raxol.Payments.Xochi.Stealth do
   - Scheme ID 1: secp256k1 with view tags
   """
 
+  alias Raxol.Payments.Assets
   alias Raxol.Payments.Secret
 
   @erc5564_announcer "0x55649E01B5Df198D18D95b5cc5051630cfD45564"
@@ -221,9 +222,21 @@ defmodule Raxol.Payments.Xochi.Stealth do
 
   @doc """
   Decode a meta-address from ERC-6538 st:eth:0x format.
+
+  `chain_id` must be a registered EVM chain (`Raxol.Payments.Assets.supported_chain_ids/0`):
+  ERC-5564 stealth addresses are secp256k1/keccak EVM addresses, so any other
+  chain -- Tron, Solana, or one this build does not know -- returns
+  `{:error, :stealth_unsupported_on_chain}` rather than deriving an address the
+  destination cannot hold.
   """
   @spec decode_meta_address(String.t(), pos_integer()) :: {:ok, meta_address()} | {:error, term()}
-  def decode_meta_address("st:eth:0x" <> hex, chain_id) when byte_size(hex) == 132 do
+  def decode_meta_address(meta, chain_id) do
+    if chain_id in Assets.supported_chain_ids(),
+      do: decode_evm_meta_address(meta, chain_id),
+      else: {:error, :stealth_unsupported_on_chain}
+  end
+
+  defp decode_evm_meta_address("st:eth:0x" <> hex, chain_id) when byte_size(hex) == 132 do
     <<spending_hex::binary-size(66), viewing_hex::binary-size(66)>> = hex
 
     with {:ok, spending} <- decode_hex(spending_hex),
@@ -241,7 +254,7 @@ defmodule Raxol.Payments.Xochi.Stealth do
     end
   end
 
-  def decode_meta_address(_, _), do: {:error, :invalid_format}
+  defp decode_evm_meta_address(_, _), do: {:error, :invalid_format}
 
   @doc """
   Validate a compressed secp256k1 public key (33 bytes, 02/03 prefix).

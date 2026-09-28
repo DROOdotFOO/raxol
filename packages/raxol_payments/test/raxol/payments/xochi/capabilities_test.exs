@@ -83,8 +83,22 @@ defmodule Raxol.Payments.Xochi.CapabilitiesTest do
       assert Capabilities.vm_type(caps, @tron) == :tvm
       assert Capabilities.vm_type(caps, @solana) == :svm
       assert Capabilities.vm_type(caps, 8453) == :evm
-      # Unknown chain defaults conservatively.
-      assert Capabilities.vm_type(caps, 999) == :evm
+      # A chain the matrix does not list is never assumed EVM.
+      assert Capabilities.vm_type(caps, 999_999) == nil
+      refute Capabilities.valid_address?(caps, 999_999, "0x" <> String.duplicate("ab", 20))
+    end
+
+    test "drops a chain whose vm_type is present but unrecognised" do
+      wire =
+        Map.update!(
+          @wire_evm,
+          "chains",
+          &(&1 ++ [%{"chain_id" => 999_999, "chain_name" => "Future", "vm_type" => "movevm"}])
+        )
+
+      assert {:ok, caps} = Capabilities.parse(wire)
+      refute 999_999 in Capabilities.chain_ids(caps)
+      assert Capabilities.vm_type(caps, 999_999) == nil
     end
 
     test "drops malformed entries and unknown vm types without failing" do

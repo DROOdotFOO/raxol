@@ -45,6 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (was 28), `emax: 6_144` / `emin: -6_143` with over/underflow signalled, and
   string parses reject more than 34 digits or an exponent past 6_144.
 
+## [Unreleased]
+
+### Fixed
+
+- Unknown chains and tokens now fail closed on the Xochi path instead of
+  being treated as EVM or 6-decimal (#1149). `ExecuteXochiIntent` refuses an
+  unregistered source token, an unregistered destination token without
+  `min_to_amount`, and stealth to a non-EVM chain, and routes with chain ids so
+  a Tron leg is sent to Relay. `Xochi.Capabilities.vm_type/2` returns `nil` for
+  an unlisted chain, and a chain with an unrecognised `vm_type` is dropped.
+  `Xochi.Stealth.decode_meta_address/2` rejects chains outside the EVM
+  registry. New `Assets.fetch_decimals/2` is the strict lookup.
+
 ## [0.2.1] - 2026-09-09
 
 ### Added

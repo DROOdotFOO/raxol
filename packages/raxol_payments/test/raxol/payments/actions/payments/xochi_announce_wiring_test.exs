@@ -12,6 +12,7 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
   @agent_address "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
   @topic "verifytopicabcdef1234"
   @usdc "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
 
   defmodule AgentWallet do
     @moduledoc false
@@ -120,7 +121,7 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
       from_chain_id: 8453,
       to_chain_id: 42_161,
       from_token: @usdc,
-      to_token: @usdc,
+      to_token: @usdc_arb,
       settlement: "public",
       recipient_address: "0x" <> String.duplicate("cc", 20)
     }
