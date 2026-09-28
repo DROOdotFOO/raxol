@@ -90,12 +90,15 @@ jobs:
       # (EEF-CVE-2026-43966 MEDIUM, -43969 LOW), reached transitively through
       # cowboy. (-43971 is fixed in 2.20.0.)
       #
-      # Neither vulnerable encoder is called anywhere in the tree: cowboy,
-      # plug and phoenix only call cow_http_hd PARSERS. The structured-header
-      # encoders that reach cow_http_struct_hd:escape_string/2 (variant_key/1,
-      # variants/1, wt_available_protocols/1, wt_protocol/1) have no callers,
-      # and neither does cow_cookie:cookie/1, a client-side request encoder
-      # (cowboy uses setcookie/3 and the parsers). Tracked in #921.
+      # Neither vulnerable function is called anywhere in the tree. -43966 is
+      # in cow_http_struct_hd:escape_string/2, reached only through the
+      # structured-header encoders cow_http_hd:variant_key/1, variants/1,
+      # wt_available_protocols/1 and wt_protocol/1; -43969 is in
+      # cow_cookie:cookie/1, a client-side Cookie request encoder. None of
+      # them has a caller: cowboy, plug and phoenix call cow_http_hd parsers
+      # plus allow/1 (which joins method names and never reaches
+      # escape_string/2), and cowboy's cookie calls are setcookie/3 and the
+      # parsers. Tracked in #921.
       #
       # Advisory rather than blocking, and deliberately: 2.20.0 is the latest
       # cowlib release, so there is no version to move to and a blocking gate
