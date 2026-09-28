@@ -18,7 +18,6 @@ defmodule Raxol.Test.TestUtils do
   import ExUnit.Callbacks
 
   alias Raxol.Core.Events.Event
-  require Raxol.Core.Runtime.Log
 
   # =============================================================================
   # ENVIRONMENT SETUP & CONFIGURATION
@@ -404,61 +403,6 @@ defmodule Raxol.Test.TestUtils do
   end
 
   @doc """
-  Creates a test component with comprehensive state normalization.
-  """
-  def create_test_component(module, opts \\ %{}) do
-    # Handle both simple and complex component creation
-    state =
-      if function_exported?(module, :new, 1) do
-        result = module.new(opts)
-
-        case result do
-          {:ok, actual_state} -> actual_state
-          actual_state -> actual_state
-        end
-      else
-        Map.merge(%{module: module}, opts)
-      end
-
-    # Normalize component state with comprehensive defaults
-    normalized_state =
-      state
-      |> ensure_field(:style, %{})
-      |> ensure_field(:disabled, false)
-      |> ensure_field(:focused, false)
-      |> normalize_component_attrs()
-
-    # Return consistent component structure
-    if is_map(state) and Map.has_key?(state, :module) do
-      # Advanced component structure
-      %{
-        module: module,
-        state: normalized_state,
-        subscriptions: [],
-        rendered: nil
-      }
-    else
-      # Simple component structure
-      %{
-        module: module,
-        state: normalized_state,
-        props: %{},
-        children: []
-      }
-    end
-  end
-
-  @doc """
-  Simulates a sequence of events on a component.
-  """
-  def simulate_event_sequence(component, events) when is_list(events) do
-    Enum.reduce(events, {component, []}, fn event, {comp, all_commands} ->
-      {updated_comp, commands} = Raxol.Test.Unit.simulate_event(comp, event)
-      {updated_comp, all_commands ++ commands}
-    end)
-  end
-
-  @doc """
   Generates test styles for component rendering.
   """
   def test_styles do
@@ -508,28 +452,6 @@ defmodule Raxol.Test.TestUtils do
         height: 24
       }
     }
-  end
-
-  @doc """
-  Returns a complete theme struct for tests, merging any overrides provided.
-  """
-  def test_theme(overrides \\ %{}) do
-    base = Raxol.UI.Theming.Theme.default_theme()
-
-    # Merge overrides deeply for component_styles
-    override_styles = Map.get(overrides, :component_styles, %{})
-
-    merged_styles =
-      Map.merge(base.component_styles, override_styles, fn _k, v1, v2 ->
-        Map.merge(v1, v2)
-      end)
-
-    # Ensure all keys from base are present
-    merged_styles = Map.merge(base.component_styles, merged_styles)
-
-    base
-    |> Map.merge(overrides)
-    |> Map.put(:component_styles, merged_styles)
   end
 
   # =============================================================================
@@ -584,28 +506,6 @@ defmodule Raxol.Test.TestUtils do
 
   defp set_environment(emulator, env) do
     Raxol.Terminal.Config.Manager.set_environment_variables(emulator, env)
-  end
-
-  # Component state normalization helpers
-  defp ensure_field(state, field, default) do
-    case Map.has_key?(state, field) do
-      true -> state
-      false -> Map.put(state, field, default)
-    end
-  end
-
-  defp normalize_component_attrs(state) do
-    attrs = Map.get(state, :attrs, %{})
-    normalized_attrs = normalize_attrs(attrs)
-    Map.put(state, :attrs, normalized_attrs)
-  end
-
-  defp normalize_attrs(attrs) do
-    cond do
-      is_list(attrs) -> Map.new(attrs)
-      is_map(attrs) -> attrs
-      true -> %{}
-    end
   end
 
   # Wait condition implementation

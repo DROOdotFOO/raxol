@@ -3,8 +3,13 @@ defmodule Raxol.Speech.RecognizerTest do
 
   alias Raxol.Speech.Recognizer
 
+  # Without a model. Loading one fetches openai/whisper-tiny (~160 MB) from
+  # huggingface.co whenever Bumblebee's cache lacks it, which in CI is every
+  # run, and a failed fetch is logged and leaves no model, so these tests
+  # would take a different path depending on the network and the cache. The
+  # :stt_live test below starts its own recognizer with the model.
   setup do
-    start_supervised!(Recognizer)
+    start_supervised!({Recognizer, load_model: false})
     :ok
   end
 
@@ -22,9 +27,9 @@ defmodule Raxol.Speech.RecognizerTest do
   end
 
   describe "available?/0" do
-    test "returns a boolean" do
-      result = Recognizer.available?()
-      assert is_boolean(result)
+    test "is false without a loaded model, and recognize/1 then refuses valid PCM" do
+      refute Recognizer.available?()
+      assert Recognizer.recognize(<<0.0::float-32-little>>) == {:error, :bumblebee_not_available}
     end
   end
 
