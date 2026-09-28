@@ -112,6 +112,19 @@ def manifest do
 end
 ```
 
+`resource_budget` accepts `max_memory_mb`, `max_cpu_percent`,
+`max_ets_tables`, and `max_processes`. Omitted keys use the defaults of 50 MB,
+10% CPU, two ETS tables, and 20 processes. Measurements cover work running
+through `Raxol.Core.Runtime.Plugins.PluginSupervisor`; CPU is the plugin tasks'
+share of BEAM reductions between samples.
+
+The host selects the response with
+`Raxol.Core.Runtime.Plugins.ResourceBudget.set_action/2`: `:warn` logs only,
+`:throttle` rate-limits new plugin tasks until usage falls below the budget, and
+`:kill` terminates active tasks and unloads the plugin. Every violation emits
+`[:raxol, :plugins, :resource_budget, :exceeded]` telemetry with the plugin ID,
+configured action, measured usage, and budget.
+
 There is no `dependencies:` map for Hex packages, no `capabilities:` enforcement, no `trust_level:` field, and no `config_schema:`. Plugin config is whatever map the host passes to `init/1`.
 
 ## Event system

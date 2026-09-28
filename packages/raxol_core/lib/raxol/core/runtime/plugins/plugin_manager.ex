@@ -47,8 +47,12 @@ defmodule Raxol.Core.Runtime.Plugins.PluginManager do
   """
 
   alias Raxol.Core.Runtime.Log
-  alias Raxol.Core.Runtime.Plugins.PluginLifecycle
-  alias Raxol.Core.Runtime.Plugins.PluginRegistry
+
+  alias Raxol.Core.Runtime.Plugins.{
+    PluginLifecycle,
+    PluginRegistry,
+    PluginSupervisor
+  }
 
   @type plugin_id :: atom() | String.t()
   @type plugin_metadata :: map()
@@ -326,15 +330,14 @@ defmodule Raxol.Core.Runtime.Plugins.PluginManager do
         {:error, :plugin_not_found}
 
       module ->
-        if function_exported?(module, hook_name, length(args)) do
-          try do
-            result = apply(module, hook_name, args)
-            {:ok, result}
-          rescue
-            e -> {:error, e}
-          end
-        else
-          {:error, :hook_not_found}
+        case PluginSupervisor.call_plugin_callback(
+               plugin_id,
+               module,
+               hook_name,
+               args
+             ) do
+          :not_exported -> {:error, :hook_not_found}
+          result -> result
         end
     end
   end

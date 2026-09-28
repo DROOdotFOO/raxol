@@ -2017,3 +2017,5 @@ mix credo
   - Added automatic pool size management to prevent memory overflow
   - Resolved TODO item for buffer eviction implementation
   - Improved memory management efficiency
+
+- **Plugin resource budgets now constrain supervised plugin work.** `PluginSupervisor` tracks each task by plugin ID and starts `ResourceBudget` in its supervision tree; the monitor measures live process memory, ETS ownership, process count, and BEAM reduction share instead of returning zeroes. Manifest limits now reach the registry, `:warn` emits telemetry, `:throttle` blocks new event/filter/hook work until usage recovers, and `:kill` terminates active tasks and unloads the plugin. End-to-end regressions cross zero-sized limits with a real supervised task for all three actions.

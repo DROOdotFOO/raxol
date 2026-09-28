@@ -37,8 +37,13 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   use GenServer
 
   alias Raxol.Core.Runtime.Log
-  alias Raxol.Core.Runtime.Plugins.PluginRegistry
-  alias Raxol.Core.Runtime.Plugins.PluginSupervisor
+
+  alias Raxol.Core.Runtime.Plugins.{
+    Manifest,
+    PluginRegistry,
+    PluginSupervisor
+  }
+
   alias Raxol.Core.Runtime.Plugins.StateManager, as: PluginStateManager
   alias Raxol.Core.Utils.Debounce
 
@@ -413,10 +418,7 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   # ============================================================================
 
   defp do_load_plugin(plugin_id, module, config, state) do
-    # Register in registry
-    case PluginRegistry.register(plugin_id, module, %{
-           loaded_at: DateTime.utc_now()
-         }) do
+    case PluginRegistry.register(plugin_id, module, plugin_metadata(module)) do
       :ok ->
         # Initialize plugin state using centralized StateManager
         initial_state = initialize_plugin_state(module, config)
@@ -462,8 +464,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   end
 
   defp initialize_plugin_state(module, config) do
-    # Use PluginSupervisor for isolated plugin initialization
-    case PluginSupervisor.call_plugin_callback(:init, module, :init, [config], timeout: 5_000) do
+    case PluginSupervisor.call_plugin_callback(:init, module, :init, [config],
+           timeout: 5_000,
+           enforce_budget: false
+         ) do
       {:ok, {:ok, state}} ->
         state
 
@@ -485,8 +489,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
         :ok
 
       module ->
-        # Use PluginSupervisor for isolated hook execution (fire and forget)
-        case PluginSupervisor.call_plugin_callback(plugin_id, module, hook, [], timeout: 2_000) do
+        case PluginSupervisor.call_plugin_callback(plugin_id, module, hook, [],
+               timeout: 2_000,
+               enforce_budget: false
+             ) do
           {:ok, _result} ->
             :ok
 
@@ -498,6 +504,24 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
           :not_exported ->
             :ok
         end
+    end
+  end
+
+  defp plugin_metadata(module) do
+    base = %{
+      loaded_at: DateTime.utc_now(),
+      resource_budget: Manifest.default_budget()
+    }
+
+    case Manifest.from_module(module) do
+      {:ok, manifest} ->
+        Map.merge(base, %{
+          manifest: manifest,
+          resource_budget: manifest.resource_budget
+        })
+
+      {:error, _reason} ->
+        base
     end
   end
 
