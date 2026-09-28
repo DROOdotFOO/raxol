@@ -15,10 +15,14 @@ defmodule Raxol.Agent.ClientProtocol.BudgetTest do
 
   defp profile(env), do: BenchmarkProfile.from_env(env) |> elem(1)
 
+  # Under the test supervisor rather than linked to the test process, so
+  # ExUnit stops the named Agent, and waits for it, before on_exit and the
+  # next test. A child whose start_link returns :ignore comes back as
+  # {:ok, :undefined}.
   defp start(env) do
-    case Budget.start_link(profile(env)) do
-      {:ok, pid} -> on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
-      :ignore -> :ignore
+    case start_supervised({Budget, profile(env)}) do
+      {:ok, pid} when is_pid(pid) -> pid
+      {:ok, :undefined} -> :ignore
     end
   end
 
