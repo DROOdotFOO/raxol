@@ -86,9 +86,16 @@ jobs:
       # `mix deps.audit` and `mix hex.audit` read DIFFERENT databases:
       # mix_audit uses the Elixir Security Advisories mirror, hex.audit uses
       # Hex's own OSV-backed data. They disagree today -- deps.audit is clean
-      # while hex.audit reports three advisories against cowlib 2.20.0
-      # (EEF-CVE-2026-43966 and -43971 MEDIUM, -43969 LOW), reached
-      # transitively through cowboy.
+      # while hex.audit reports two advisories against cowlib 2.20.0
+      # (EEF-CVE-2026-43966 MEDIUM, -43969 LOW), reached transitively through
+      # cowboy. (-43971 is fixed in 2.20.0.)
+      #
+      # Neither vulnerable encoder is called anywhere in the tree: cowboy,
+      # plug and phoenix only call cow_http_hd PARSERS. The structured-header
+      # encoders that reach cow_http_struct_hd:escape_string/2 (variant_key/1,
+      # variants/1, wt_available_protocols/1, wt_protocol/1) have no callers,
+      # and neither does cow_cookie:cookie/1, a client-side request encoder
+      # (cowboy uses setcookie/3 and the parsers). Tracked in #921.
       #
       # Advisory rather than blocking, and deliberately: 2.20.0 is the latest
       # cowlib release, so there is no version to move to and a blocking gate
