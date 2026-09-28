@@ -51,7 +51,7 @@ defmodule Raxol.Core.Runtime.Plugins.PluginManager do
   alias Raxol.Core.Runtime.Plugins.{
     PluginLifecycle,
     PluginRegistry,
-    PluginSupervisor
+    PluginRuntime
   }
 
   @type plugin_id :: atom() | String.t()
@@ -325,20 +325,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginManager do
   Calls a hook on a plugin.
   """
   def call_hook(plugin_id, hook_name, args) do
-    case PluginRegistry.get_module(plugin_id) do
-      nil ->
-        {:error, :plugin_not_found}
-
-      module ->
-        case PluginSupervisor.call_plugin_callback(
-               plugin_id,
-               module,
-               hook_name,
-               args
-             ) do
-          :not_exported -> {:error, :hook_not_found}
-          result -> result
-        end
+    case PluginRuntime.call_hook(plugin_id, hook_name, args) do
+      {:error, :not_found} -> {:error, :plugin_not_found}
+      :not_exported -> {:error, :hook_not_found}
+      result -> result
     end
   end
 

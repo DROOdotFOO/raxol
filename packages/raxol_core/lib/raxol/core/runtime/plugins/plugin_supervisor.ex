@@ -1,45 +1,23 @@
 defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   @moduledoc """
-  Supervises, tracks, and admits plugin tasks.
+  Supervises stable plugin runtimes and isolated plugin tasks.
 
-  Plugin operations run under `Task.Supervisor` for crash isolation. Callback
-  processes are intentionally short-lived; plugin code must not treat `self()`
-  as stable across callbacks. Each live task is associated with its plugin ID so
-  `ResourceBudget` can measure process memory, ETS ownership, process count, and
-  CPU reduction share. New work passes through the budget admission check
-  before it starts.
+  Each loaded plugin owns a long-lived `PluginRuntime` process below a dynamic
+  supervisor. Stateful callbacks run serially in that process, so timers and
+  messages sent to `self()` remain valid for the plugin's loaded lifetime.
+  Auxiliary work can still run below `Task.Supervisor`; those tasks are tracked
+  by plugin ID for resource accounting and termination.
 
-  Initialization and cleanup still use this supervisor, but lifecycle code can
-  bypass admission with `enforce_budget: false` so an already-throttled plugin
-  can always be unloaded.
-
-  ## Operations
-
-    * Plugin initialization and lifecycle hooks
-    * Event handling and filtering
-    * Scheduled and asynchronous tasks
+  `ResourceBudget` measures the stable runtime together with active auxiliary
+  tasks. New auxiliary work passes through budget admission before it starts.
 
   ## Guarantees
 
-    * Plugin crashes do not bring down the caller
-    * Synchronous work has configurable timeouts
-    * Crashes and timeouts are logged with plugin context
-    * Active work is attributable to a plugin budget
-
-  ## Usage
-
-      # Start plugin initialization in isolation
-      {:ok, result} = PluginSupervisor.run_plugin_task(:my_plugin, fn ->
-        MyPlugin.init(%{})
-      end)
-
-      # Fire and forget (for side-effect operations)
-      PluginSupervisor.async_plugin_task(:my_plugin, fn ->
-        MyPlugin.on_event(event)
-      end)
-
-      # With custom timeout
-      PluginSupervisor.run_plugin_task(:my_plugin, fn -> slow_op() end, timeout: 10_000)
+    * One stable, isolated runtime process per loaded plugin
+    * Plugin state is owned by its runtime process
+    * Auxiliary task crashes do not bring down the caller
+    * Synchronous auxiliary work has configurable timeouts
+    * Live plugin processes are attributable to a plugin budget
 
   """
 
@@ -48,6 +26,7 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   alias Raxol.Core.Runtime.Log
 
   alias Raxol.Core.Runtime.Plugins.{
+    PluginInstanceSupervisor,
     PluginRegistry,
     ResourceBudget
   }
@@ -74,6 +53,9 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
     init_registry(@cleanup_registry, :set)
 
     children = [
+      {Registry, keys: :unique, name: Raxol.Core.Runtime.Plugins.ProcessRegistry},
+      {DynamicSupervisor,
+       name: Raxol.Core.Runtime.Plugins.InstanceDynamicSupervisor, strategy: :one_for_one},
       {Task.Supervisor, name: @task_supervisor_name, max_restarts: 100, max_seconds: 60},
       {ResourceBudget, Keyword.get(opts, :resource_budget, [])}
     ]
@@ -313,6 +295,15 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
           _entry ->
             []
         end)
+    end
+  end
+
+  @doc "Returns the stable runtime and live auxiliary task processes for a plugin."
+  @spec plugin_pids(atom() | String.t()) :: [pid()]
+  def plugin_pids(plugin_id) do
+    case PluginInstanceSupervisor.runtime_pid(plugin_id) do
+      nil -> task_pids(plugin_id)
+      runtime_pid -> [runtime_pid | task_pids(plugin_id)]
     end
   end
 
