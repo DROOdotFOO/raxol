@@ -420,9 +420,12 @@ jobs:
     # default 6h job timeout would let it sit there. Raised from 20 for
     # raxol_agent, whose 2426 tests take ~6 minutes on an 8-core dev box on top
     # of compiling main raxol and the termbox2 NIF, so 20 left no headroom on a
-    # two-core runner. raxol_terminal, the largest package, runs its 2421 tests
-    # in ~25s on that box; raxol_speech is the one cell that downloads XLA and
-    # builds EXLA's NIF on a cache miss (69s at -j2 there).
+    # two-core runner. raxol_terminal, the largest package, ran its 2421 tests
+    # in ~25s on that box with deps and the NIF already built. raxol_speech
+    # fetches nothing at test time; on a cache miss its compile downloads the
+    # XLA archive (98 MB for darwin-arm64) from GitHub and builds EXLA's NIF,
+    # which took 69s at -j2 on that box with the archive already on disk, so
+    # the download is not in that figure.
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -528,13 +531,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y inotify-tools
 
-      # raxol_terminal's real-pty tests (the input canary and the ^C / -isig
-      # contract) drive a terminal multiplexer through PtyHarness, and the
-      # runner image ships neither tmux nor expect. Without one they print
-      # "skipped" and pass, which is how #1130 merged four full-screen ^C
-      # tests that failed on every nightly leg the next morning. Same
-      # reasoning as inotify-tools above; the input-canary job still owns the
-      # canary's own per-PR signal.
+      # raxol_terminal's real-pty tests (the ^C / -isig contract, and the input
+      # canary, which nothing here excludes) drive a terminal multiplexer
+      # through PtyHarness, and the runner image ships neither tmux nor expect.
+      # Without one they print "skipped" and pass, so this cell needs one to
+      # run them at all. The four full-screen ^C tests #1130 added were caught
+      # only by the nightly, because no per-PR job ran their file. The
+      # input-canary job below remains the dedicated OTP-bump signal. Same
+      # reasoning as inotify-tools above.
       - name: Install tmux
         if: matrix.package == 'raxol_terminal'
         run: |
