@@ -420,7 +420,9 @@ jobs:
     # default 6h job timeout would let it sit there. Raised from 20 for
     # raxol_agent, whose 2426 tests take ~6 minutes on an 8-core dev box on top
     # of compiling main raxol and the termbox2 NIF, so 20 left no headroom on a
-    # two-core runner.
+    # two-core runner. raxol_terminal, the largest package, runs its 2421 tests
+    # in ~25s on that box; raxol_speech is the one cell that downloads XLA and
+    # builds EXLA's NIF on a cache miss (69s at -j2 there).
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -460,10 +462,23 @@ jobs:
         # options it refuses. Landing it ungated would repeat exactly the gap
         # the packages above were added here to close.
         #
-        # Keep on ONE line: test/raxol/formatter_delegation_test.exs parses this
-        # matrix with `^\s*package: \[...\]` to prove every gated package is also
-        # delegated by the root .formatter.exs. A block sequence parses as absent.
-        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony, raxol_web3]
+        # raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor,
+        # raxol_speech and raxol_watch were the last six packages nothing in
+        # per-PR CI ran (#1117). raxol_terminal is the one that cost something:
+        # #1101 and #1110 both changed it and shipped on local RED/GREEN alone,
+        # because the input canary below runs one file of its suite. Gating it
+        # found what had rotted unseen: test/support no longer compiled under
+        # --warnings-as-errors, the full-screen ^C contract fixture ran the
+        # Driver's test branch whenever SKIP_TERMBOX2_TESTS was set (every
+        # nightly leg went red on it after #1130), and Integration.init/0
+        # called the real tb_init() because the suite never set
+        # :terminal_test_mode. The other five join already clean.
+        #
+        # Keep on ONE line. test/raxol/formatter_delegation_test.exs parsed it
+        # with `^\s*package: \[...\]` until #906 made that test enumerate
+        # packages/*/mix.exs instead. Nothing reads it now; one line keeps the
+        # whole gated set on the line a grep for any one package lands on.
+        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony, raxol_web3, raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor, raxol_speech, raxol_watch]
 
     steps:
       - uses: actions/checkout@v7
@@ -513,6 +528,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y inotify-tools
 
+      # raxol_terminal's real-pty tests (the input canary and the ^C / -isig
+      # contract) drive a terminal multiplexer through PtyHarness, and the
+      # runner image ships neither tmux nor expect. Without one they print
+      # "skipped" and pass, which is how #1130 merged four full-screen ^C
+      # tests that failed on every nightly leg the next morning. Same
+      # reasoning as inotify-tools above; the input-canary job still owns the
+      # canary's own per-PR signal.
+      - name: Install tmux
+        if: matrix.package == 'raxol_terminal'
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
+          sudo apt-get update
+          sudo apt-get install -y tmux
+
       # `--check-locked` rather than a bare `deps.get`: a plain fetch REWRITES
       # a stale mix.lock in place and carries on, so a package whose committed
       # lock does not match what resolution produces builds green in CI and
@@ -540,7 +569,9 @@ jobs:
       # workflow-global here. raxol_agent's test_helper never wired it up, so its
       # one tagged test (a chmod-0500 write-failure fault in the journal Writer)
       # was inert. Excluding it here applies the convention rather than inventing
-      # a package-local one. No other gated package uses the tag.
+      # a package-local one. raxol_terminal's one tagged module (the IOTerminal
+      # fallback, which needs the termbox2 NIF absent) is excluded by its own
+      # test_helper as well.
       - name: Run package tests
         working-directory: packages/${{ matrix.package }}
         run: |
