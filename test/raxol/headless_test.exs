@@ -181,10 +181,14 @@ defmodule Raxol.HeadlessTest do
       for pid <- [lifecycle, dispatcher, engine], do: :sys.get_state(pid)
 
       :ok = :sys.suspend(engine)
+      :erlang.trace(engine, true, [:receive])
       screenshot = Task.async(fn -> Headless.screenshot(id) end)
-      await("the screenshot's render call", fn -> queue_len(engine) == 1 end)
+
+      assert_receive {:trace, ^engine, :receive,
+                      {:"$gen_call", _, :render_frame_sync_buffer}}
+
+      # Queued behind the render call: a local send lands before cast returns.
       GenServer.cast(engine, {:update_size, %{width: 40, height: 10}})
-      await("the resize behind it", fn -> queue_len(engine) == 2 end)
       :ok = :sys.resume(engine)
 
       assert {:ok, text} = Task.await(screenshot)
@@ -593,14 +597,13 @@ defmodule Raxol.HeadlessTest do
       # after it has cast the engine its initial renders; those renders block
       # on a held dispatcher, so the read's call queues behind them.
       %{engine: engine} = session_pids(id)
+      :erlang.trace(engine, true, [:receive])
       buffer = Task.async(fn -> Headless.get_buffer(id) end)
 
       receive do
         {:held_dispatcher, dispatcher} ->
-          await("the read's render call at the engine", fn ->
-            {:messages, queued} = Process.info(engine, :messages)
-            Enum.any?(queued, &match?({:"$gen_call", _, _}, &1))
-          end)
+          assert_receive {:trace, ^engine, :receive,
+                          {:"$gen_call", _, :render_frame_sync_buffer}}
 
           :ok = :sys.resume(dispatcher)
       after
@@ -661,25 +664,5 @@ defmodule Raxol.HeadlessTest do
       dispatcher: state.dispatcher_pid,
       engine: state.rendering_engine_pid
     }
-  end
-
-  defp queue_len(pid) do
-    {:message_queue_len, len} = Process.info(pid, :message_queue_len)
-    len
-  end
-
-  # Polls a condition on processes that are suspended or blocked in a call,
-  # so once it holds nothing they would do can undo it.
-  defp await(what, check, attempts \\ 5_000)
-
-  defp await(what, _check, 0), do: flunk("timed out waiting for #{what}")
-
-  defp await(what, check, attempts) do
-    if check.() do
-      :ok
-    else
-      Process.sleep(1)
-      await(what, check, attempts - 1)
-    end
   end
 end
