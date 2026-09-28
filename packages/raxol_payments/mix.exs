@@ -46,7 +46,7 @@ defmodule RaxolPayments.MixProject do
       {:ex_secp256k1, "~> 0.8"},
       {:ex_keccak, "~> 0.7"},
       {:jason, "~> 1.4"},
-      {:decimal, "~> 2.0"},
+      {:decimal, "~> 3.0"},
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},

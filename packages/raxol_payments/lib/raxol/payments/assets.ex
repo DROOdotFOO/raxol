@@ -417,9 +417,60 @@ defmodule Raxol.Payments.Assets do
     |> Decimal.to_integer()
   end
 
-  defp to_decimal(%Decimal{} = d), do: d
-  defp to_decimal(n) when is_integer(n), do: Decimal.new(n)
-  defp to_decimal(s) when is_binary(s), do: Decimal.new(s)
+  # The widest on-chain token amount (a uint256, e.g. ERC-3009's `value`), and
+  # its length in decimal digits.
+  @max_uint256 Integer.pow(2, 256) - 1
+  @max_uint256_digits 78
+
+  @doc """
+  Parse a positive atomic-unit amount from a payment challenge: a positive
+  integer, or a string of digits, no larger than a uint256. Returns
+  `{:ok, integer}` or `:error`.
+
+  No wider amount can be signed on-chain. A string longer than 78 bytes is
+  refused before it is parsed, so a server cannot make the client parse a
+  header-sized number, and an accepted amount always takes `to_decimal/1`'s
+  integer route.
+  """
+  @spec parse_atomic(term()) :: {:ok, pos_integer()} | :error
+  def parse_atomic(amount)
+      when is_integer(amount) and amount > 0 and amount <= @max_uint256,
+      do: {:ok, amount}
+
+  def parse_atomic(amount) when is_binary(amount) and byte_size(amount) <= @max_uint256_digits do
+    case Integer.parse(amount) do
+      {n, ""} when n > 0 and n <= @max_uint256 -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  def parse_atomic(_amount), do: :error
+
+  @doc """
+  Convert an amount to a `Decimal.t/0`. A `Decimal` passes through, an integer
+  converts exactly, and a string goes through `Decimal.new/1`, except a string
+  of at most 78 bytes that parses fully as an integer, which converts through
+  that integer.
+
+  decimal 3's string parse rejects more than 34 digits, and an atomic amount of
+  an 18-decimal token can be wider, so without the integer route a
+  server-supplied atomic string would raise where the same integer converts.
+  The 78-byte bound (a uint256) keeps a hostile string from becoming a
+  `Decimal` too wide to render (`Decimal.to_string/2` stops at 6_178 digits):
+  a longer string raises `Decimal.Error`, as a malformed one does.
+  """
+  @spec to_decimal(integer() | String.t() | Decimal.t()) :: Decimal.t()
+  def to_decimal(%Decimal{} = d), do: d
+  def to_decimal(n) when is_integer(n), do: Decimal.new(n)
+
+  def to_decimal(s) when is_binary(s) and byte_size(s) <= @max_uint256_digits do
+    case Integer.parse(s) do
+      {n, ""} -> Decimal.new(n)
+      _ -> Decimal.new(s)
+    end
+  end
+
+  def to_decimal(s) when is_binary(s), do: Decimal.new(s)
 
   defp pow10(decimals), do: Decimal.new(Integer.pow(10, decimals))
 

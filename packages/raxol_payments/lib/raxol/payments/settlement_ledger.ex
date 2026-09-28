@@ -343,7 +343,7 @@ defmodule Raxol.Payments.SettlementLedger do
         [{^intent_id, %{gas_native: nil} = entry}] ->
           updated = %{
             entry
-            | gas_native: to_decimal(gas_native),
+            | gas_native: Assets.to_decimal(gas_native),
               gas_status: Keyword.get(opts, :gas_status, :confirmed)
           }
 
@@ -390,7 +390,7 @@ defmodule Raxol.Payments.SettlementLedger do
       to_chain_id: Map.get(input, :to_chain_id),
       token_symbol: Map.get(input, :token_symbol),
       token_address: Map.get(input, :token_address),
-      fee_collected: to_decimal(Map.get(input, :fee_collected, 0)),
+      fee_collected: Assets.to_decimal(Map.get(input, :fee_collected, 0)),
       fee_currency: Map.get(input, :fee_currency, "USDC"),
       fee_decimals: fee_decimals,
       from_amount: to_decimal_or_nil(Map.get(input, :from_amount)),
@@ -563,9 +563,5 @@ defmodule Raxol.Payments.SettlementLedger do
   defp add_or_keep(%Decimal{} = acc, %Decimal{} = val), do: Decimal.add(acc, val)
 
   defp to_decimal_or_nil(nil), do: nil
-  defp to_decimal_or_nil(v), do: to_decimal(v)
-
-  defp to_decimal(%Decimal{} = d), do: d
-  defp to_decimal(n) when is_integer(n), do: Decimal.new(n)
-  defp to_decimal(s) when is_binary(s), do: Decimal.new(s)
+  defp to_decimal_or_nil(v), do: Assets.to_decimal(v)
 end

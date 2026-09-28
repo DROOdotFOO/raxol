@@ -62,7 +62,7 @@ defmodule RaxolEarn.MixProject do
       {:req, "~> 0.5"},
       {:ex_keccak, "~> 0.7"},
       {:jason, "~> 1.4"},
-      {:decimal, "~> 2.0"},
+      {:decimal, "~> 3.0"},
       {:mint_web_socket, "~> 1.0"},
       {:cowboy, "~> 2.10"},
       {:stream_data, "~> 1.0", only: :test},

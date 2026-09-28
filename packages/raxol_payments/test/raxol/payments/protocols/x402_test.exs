@@ -314,5 +314,24 @@ defmodule Raxol.Payments.Protocols.X402Test do
     test "rejects a zero price" do
       assert {:error, {:invalid_amount, _}} = X402.parse_challenge(challenge_header(0))
     end
+
+    test "accepts the largest uint256 price, as a string or an integer" do
+      max = Integer.pow(2, 256) - 1
+
+      assert {:ok, _} = X402.parse_challenge(challenge_header(Integer.to_string(max)))
+      assert {:ok, _} = X402.parse_challenge(challenge_header(max))
+    end
+
+    test "rejects a price wider than a uint256, however it is sent" do
+      over = Integer.pow(2, 256)
+
+      assert {:error, {:invalid_amount, _}} =
+               X402.parse_challenge(challenge_header(Integer.to_string(over)))
+
+      assert {:error, {:invalid_amount, _}} = X402.parse_challenge(challenge_header(over))
+
+      assert {:error, {:invalid_amount, _}} =
+               X402.parse_challenge(challenge_header("1" <> String.duplicate("0", 7_000)))
+    end
   end
 end

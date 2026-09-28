@@ -38,6 +38,18 @@ defmodule Raxol.Payments.SettlementLedgerTest do
     assert length(SettlementLedger.list_settlements(ledger)) == 1
   end
 
+  test "records an atomic amount wider than a 34-digit decimal string", %{ledger: ledger} do
+    # A 40-digit atomic `to_amount` is still a valid uint256. decimal 3's string
+    # parse stops at 34 digits; the ledger must record the amount exactly, not
+    # crash (taking its table of recorded settlements with it).
+    wide = Integer.pow(10, 39)
+    fill = l1_fill(%{to_amount: Integer.to_string(wide), to_symbol: "USDC", to_decimals: 6})
+
+    assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, fill)
+    assert [%{to_amount: amount}] = SettlementLedger.list_settlements(ledger)
+    assert Decimal.equal?(amount, Decimal.new(wide))
+  end
+
   test "emits a settlement event on record, never on a duplicate", %{ledger: ledger} do
     test_pid = self()
     handler = "sl-tele-#{System.unique_integer([:positive])}"

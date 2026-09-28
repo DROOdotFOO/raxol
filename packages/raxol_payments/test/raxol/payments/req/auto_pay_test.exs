@@ -410,5 +410,20 @@ defmodule Raxol.Payments.Req.AutoPayTest do
       :timer.sleep(20)
       assert Decimal.equal?(Ledger.get_totals(ledger, :test, policy).lifetime, "0")
     end
+
+    test "an all-digit price past 34 digits is refused by the budget, not raised", %{
+      ledger: ledger,
+      policy: policy
+    } do
+      # Valid atomic units by the parse rule (all digits), but wider than a
+      # decimal128 string parse accepts. The server controls this value, so it
+      # must reach the budget gate and be refused there, never crash the step.
+      price = "1" <> String.duplicate("0", 40)
+      resp = autopay_req(ledger, policy, stub_402_then_ok(price)) |> Req.Request.run!()
+
+      assert resp.status == 402
+      assert %{error: :budget_exceeded} = resp.body
+      refute_received :wallet_signed
+    end
   end
 end

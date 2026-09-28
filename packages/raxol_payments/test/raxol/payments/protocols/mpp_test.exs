@@ -75,6 +75,30 @@ defmodule Raxol.Payments.Protocols.MPPTest do
       assert {:error, {:invalid_amount, 0}} =
                MPP.parse_challenge(challenge_headers(%{"amount" => 0}))
     end
+
+    test "accepts the largest uint256 amount, as a string or an integer" do
+      max = Integer.pow(2, 256) - 1
+
+      assert {:ok, _} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => Integer.to_string(max)}))
+
+      assert {:ok, _} = MPP.parse_challenge(challenge_headers(%{"amount" => max}))
+    end
+
+    test "rejects an amount wider than a uint256, however it is sent" do
+      over = Integer.pow(2, 256)
+
+      assert {:error, {:invalid_amount, _}} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => Integer.to_string(over)}))
+
+      assert {:error, {:invalid_amount, _}} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => over}))
+
+      assert {:error, {:invalid_amount, _}} =
+               MPP.parse_challenge(
+                 challenge_headers(%{"amount" => "1" <> String.duplicate("0", 7_000)})
+               )
+    end
   end
 
   describe "amount/1" do
@@ -84,6 +108,15 @@ defmodule Raxol.Payments.Protocols.MPPTest do
 
     test "returns a Decimal for an integer atomic amount" do
       assert Decimal.equal?(MPP.amount(%{amount: 100}), Decimal.new(100))
+    end
+
+    test "an all-digit amount past 34 digits equals its integer form" do
+      atomic = Integer.pow(10, 40)
+
+      assert Decimal.equal?(
+               MPP.amount(%{amount: Integer.to_string(atomic)}),
+               MPP.amount(%{amount: atomic})
+             )
     end
   end
 
