@@ -8,6 +8,8 @@ defmodule RaxolPlayground.MixProject do
       elixir: "~> 1.17 or ~> 1.18 or ~> 1.19 or ~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      # cowlib 2.20.0 is the latest release and neither vulnerable function is called; see #921.
+      hex: [ignore_advisories: ["EEF-CVE-2026-43966", "EEF-CVE-2026-43969"]],
       releases: releases(),
       aliases: aliases(),
       # Phoenix 1.8 drives dev code reloading through Mix's compiler-listener

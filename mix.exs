@@ -27,6 +27,8 @@ defmodule Raxol.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
+      # cowlib 2.20.0 is the latest release and neither vulnerable function is called; see #921.
+      hex: [ignore_advisories: ["EEF-CVE-2026-43966", "EEF-CVE-2026-43969"]],
       releases: releases(),
       description: description(),
       package: package(),
