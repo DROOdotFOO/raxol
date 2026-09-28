@@ -15,7 +15,8 @@ defmodule Raxol.Core.Runtime.Plugins.Plugin do
   Called when the plugin is first initialized.
 
   Should return `{:ok, initial_state}` or `{:error, reason}`.
-  The `initial_state` will be managed by the plugin manager.
+  The plugin's stable runtime process owns `initial_state` for the loaded
+  lifetime.
   """
   @callback init(config :: config()) :: {:ok, state()} | {:error, any()}
 

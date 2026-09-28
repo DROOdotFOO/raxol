@@ -40,28 +40,25 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
 
   alias Raxol.Core.Runtime.Plugins.{
     Manifest,
+    PluginInstanceSupervisor,
     PluginRegistry,
+    PluginRuntime,
     PluginSupervisor
   }
 
-  alias Raxol.Core.Runtime.Plugins.StateManager, as: PluginStateManager
   alias Raxol.Core.Utils.Debounce
 
   @type plugin_id :: atom() | String.t()
   @type plugin_status :: :loaded | :enabled | :disabled | :error
   @type plugin_state :: term()
 
-  defstruct [
-    :runtime_pid,
-    # plugin_states removed - now managed by PluginStateManager (ETS-backed)
-    plugin_configs: %{},
-    plugin_status: %{},
-    initialized: false,
-    debounce: nil,
-    file_watcher_pid: nil,
-    file_watching_enabled: false,
-    plugin_dirs: []
-  ]
+  defstruct plugin_configs: %{},
+            plugin_status: %{},
+            initialized: false,
+            debounce: nil,
+            file_watcher_pid: nil,
+            file_watching_enabled: false,
+            plugin_dirs: []
 
   # ============================================================================
   # Client API
@@ -127,6 +124,43 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   @spec set_state(plugin_id(), plugin_state()) :: :ok | {:error, :not_found}
   def set_state(plugin_id, state) do
     GenServer.call(__MODULE__, {:set_state, plugin_id, state})
+  end
+
+  @doc """
+  Delivers an event to a loaded, enabled plugin runtime.
+  """
+  @spec handle_event(plugin_id(), term()) :: {:ok, plugin_state()} | {:error, term()}
+  def handle_event(plugin_id, event) do
+    id = normalize_id(plugin_id)
+
+    case get_status(id) do
+      nil -> {:error, :not_found}
+      :disabled -> {:error, :disabled}
+      _status -> PluginRuntime.handle_event(id, event)
+    end
+  end
+
+  @doc """
+  Executes a command in the plugin's stable runtime and persists returned state.
+  """
+  @spec handle_command(plugin_id(), term(), list()) ::
+          {:ok, plugin_state(), term()} | {:error, term()}
+  def handle_command(plugin_id, command, args) do
+    id = normalize_id(plugin_id)
+
+    case get_status(id) do
+      nil -> {:error, :not_found}
+      :disabled -> {:error, :disabled}
+      _status -> PluginRuntime.handle_command(id, command, args)
+    end
+  end
+
+  @doc """
+  Passes an event through each loaded, enabled plugin filter.
+  """
+  @spec filter_event(term()) :: {:ok, term()} | :halt
+  def filter_event(event) do
+    GenServer.call(__MODULE__, {:filter_event, event})
   end
 
   @doc """
@@ -198,7 +232,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
     PluginRegistry.init()
 
     state = %__MODULE__{
-      runtime_pid: Keyword.get(opts, :runtime_pid),
       plugin_dirs: Keyword.get(opts, :plugin_dirs, []),
       file_watching_enabled: Keyword.get(opts, :enable_file_watching, false),
       debounce: Debounce.new(),
@@ -222,16 +255,28 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   end
 
   def handle_call({:filter_event, event}, _from, state) do
-    # No plugins loaded means no filtering; otherwise the loaded plugins'
-    # filter_event/2 callbacks run through EventFilter.
-    if map_size(state.plugin_configs) == 0 do
-      {:reply, {:ok, event}, state}
-    else
-      filtered =
-        Raxol.Core.Runtime.Plugins.EventFilter.filter_event(state, event)
+    filtered =
+      state.plugin_status
+      |> Enum.sort_by(fn {plugin_id, _status} -> plugin_id end)
+      |> Enum.reduce_while({:ok, event}, fn
+        {_plugin_id, :disabled}, result ->
+          {:cont, result}
 
-      {:reply, filtered, state}
-    end
+        {plugin_id, _status}, {:ok, current_event} ->
+          case PluginRuntime.filter_event(plugin_id, current_event) do
+            {:ok, filtered_event} ->
+              {:cont, {:ok, filtered_event}}
+
+            :halt ->
+              {:halt, :halt}
+
+            {:error, reason} ->
+              Log.warning("Plugin filter failed for #{plugin_id}: #{inspect(reason)}")
+              {:cont, {:ok, current_event}}
+          end
+      end)
+
+    {:reply, filtered, state}
   end
 
   def handle_call({:unload, plugin_id}, _from, state) do
@@ -303,26 +348,12 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
 
   def handle_call({:get_state, plugin_id}, _from, state) do
     id = normalize_id(plugin_id)
-
-    # Use centralized StateManager (ETS-backed) for plugin state
-    case PluginStateManager.get_plugin_state(to_string(id)) do
-      {:ok, plugin_state} -> {:reply, {:ok, plugin_state}, state}
-      {:error, :not_found} -> {:reply, {:error, :not_found}, state}
-    end
+    {:reply, PluginRuntime.get_state(id), state}
   end
 
   def handle_call({:set_state, plugin_id, plugin_state}, _from, state) do
     id = normalize_id(plugin_id)
-
-    case Map.has_key?(state.plugin_status, id) do
-      true ->
-        # Use centralized StateManager (ETS-backed) for plugin state
-        PluginStateManager.set_plugin_state(to_string(id), plugin_state)
-        {:reply, :ok, state}
-
-      false ->
-        {:reply, {:error, :not_found}, state}
-    end
+    {:reply, PluginRuntime.set_state(id, plugin_state), state}
   end
 
   def handle_call({:get_config, plugin_id}, _from, state) do
@@ -418,24 +449,29 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   # ============================================================================
 
   defp do_load_plugin(plugin_id, module, config, state) do
-    case PluginRegistry.register(plugin_id, module, plugin_metadata(plugin_id, module)) do
-      :ok ->
-        # Initialize plugin state using centralized StateManager
-        initial_state = initialize_plugin_state(module, config)
-        plugin_id_str = to_string(plugin_id)
-        PluginStateManager.set_plugin_state(plugin_id_str, initial_state)
+    case PluginInstanceSupervisor.start_plugin(plugin_id, module, config) do
+      {:ok, _instance_pid} ->
+        case PluginRegistry.register(plugin_id, module, plugin_metadata(plugin_id, module)) do
+          :ok ->
+            new_state = %{
+              state
+              | plugin_configs: Map.put(state.plugin_configs, plugin_id, config),
+                plugin_status: Map.put(state.plugin_status, plugin_id, :loaded)
+            }
 
-        new_state = %{
-          state
-          | plugin_configs: Map.put(state.plugin_configs, plugin_id, config),
-            plugin_status: Map.put(state.plugin_status, plugin_id, :loaded)
-        }
+            maybe_call_hook(plugin_id, :on_load, new_state)
+            {:ok, new_state}
 
-        maybe_call_hook(plugin_id, :on_load, new_state)
-        {:ok, new_state}
+          {:error, :already_registered} ->
+            PluginInstanceSupervisor.stop_plugin(plugin_id)
+            {:error, :already_loaded}
+        end
 
-      {:error, :already_registered} ->
+      {:error, {:already_started, _pid}} ->
         {:error, :already_loaded}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -446,12 +482,8 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
 
       _status ->
         maybe_call_hook(plugin_id, :on_unload, state)
-
-        # Unregister from registry
+        PluginInstanceSupervisor.stop_plugin(plugin_id)
         PluginRegistry.unregister(plugin_id)
-
-        # Clean up state using centralized StateManager
-        PluginStateManager.remove_plugin(to_string(plugin_id))
 
         new_state = %{
           state
@@ -463,47 +495,17 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
     end
   end
 
-  defp initialize_plugin_state(module, config) do
-    case PluginSupervisor.call_plugin_callback(:init, module, :init, [config],
-           timeout: 5_000,
-           enforce_budget: false
-         ) do
-      {:ok, {:ok, state}} ->
-        state
-
-      {:ok, state} when is_map(state) ->
-        state
-
-      {:error, reason} ->
-        Log.warning("Plugin init failed: #{inspect(reason)}, using empty state")
-        %{}
-
-      :not_exported ->
-        %{}
-    end
-  end
-
   defp maybe_call_hook(plugin_id, hook, _state) do
-    case PluginRegistry.get_module(plugin_id) do
-      nil ->
+    case PluginRuntime.call_hook(plugin_id, hook, [], 2_000) do
+      {:ok, _result} ->
         :ok
 
-      module ->
-        case PluginSupervisor.call_plugin_callback(plugin_id, module, hook, [],
-               timeout: 2_000,
-               enforce_budget: false
-             ) do
-          {:ok, _result} ->
-            :ok
+      {:error, reason} ->
+        Log.warning("Plugin hook #{hook} failed for #{plugin_id}: #{inspect(reason)}")
+        :ok
 
-          {:error, reason} ->
-            Log.warning("Plugin hook #{hook} failed for #{plugin_id}: #{inspect(reason)}")
-
-            :ok
-
-          :not_exported ->
-            :ok
-        end
+      :not_exported ->
+        :ok
     end
   end
 

@@ -2,10 +2,11 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
   @moduledoc """
   Enforces runtime resource budgets for supervised plugin work.
 
-  `Raxol.Core.Runtime.Plugins.PluginSupervisor` registers each active plugin
-  task. This server samples those task processes, their memory, their owned ETS
-  tables, and their share of BEAM reductions. Budgets come from plugin manifest
-  metadata stored in `PluginRegistry`.
+  `Raxol.Core.Runtime.Plugins.PluginSupervisor` associates each stable plugin
+  runtime and active auxiliary task with its plugin ID. This server samples
+  those processes, their memory, their owned ETS tables, and their share of
+  BEAM reductions. Budgets come from plugin manifest metadata stored in
+  `PluginRegistry`.
 
   Actions are configured per plugin:
 
@@ -166,7 +167,7 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudget do
   end
 
   defp measure_usage(plugin_id, state) do
-    pids = PluginSupervisor.task_pids(plugin_id)
+    pids = PluginSupervisor.plugin_pids(plugin_id)
     process_set = MapSet.new(pids)
 
     memory_bytes =
