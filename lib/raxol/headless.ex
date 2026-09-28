@@ -703,7 +703,7 @@ defmodule Raxol.Headless do
   # `{:update_size, _}` that swaps a blank buffer in over the rendered frame.
   # A render that fails reads the buffer as it stands, as it always has.
   defp render_frame(engine_pid) do
-    case GenServer.call(engine_pid, :render_frame_sync) do
+    case GenServer.call(engine_pid, :render_frame_sync_buffer) do
       {:ok, buffer} -> {:ok, buffer}
       {:error, _reason} -> GenServer.call(engine_pid, :get_buffer)
     end
