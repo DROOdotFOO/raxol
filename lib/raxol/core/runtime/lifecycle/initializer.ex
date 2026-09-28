@@ -8,6 +8,10 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   alias Raxol.Core.Runtime.Log
   alias Raxol.Core.Runtime.Plugins.PluginManager, as: Manager
 
+  # One Lifecycle per session or channel (the list in Lifecycle.start_link/2):
+  # the dispatcher is unnamed, and the engine takes its size from the options.
+  @multi_instance_environments [:agent, :liveview, :ssh, :telegram, :gateway]
+
   @doc """
   Initializes all components in order: registry table, plugin manager, app model,
   dispatcher, terminal driver, rendering engine.
@@ -251,7 +255,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
     # Dispatcher via state.dispatcher_pid, so dropping the registered name
     # is safe.
     dispatcher_opts =
-      if environment in [:agent, :liveview, :ssh, :telegram, :gateway],
+      if environment in @multi_instance_environments,
         do: [name: nil],
         else: []
 
@@ -406,7 +410,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   # opened a window, from start until that correction, in which such a session
   # rendered at the size of whatever TTY the VM happened to be attached to.
   defp engine_size(environment, options)
-       when environment in [:agent, :liveview, :ssh, :telegram, :gateway] do
+       when environment in @multi_instance_environments do
     {Keyword.get(options, :width, Raxol.Constants.default_terminal_width()),
      Keyword.get(options, :height, Raxol.Constants.default_terminal_height())}
   end
