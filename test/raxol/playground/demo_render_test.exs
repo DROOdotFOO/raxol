@@ -27,9 +27,6 @@ defmodule Raxol.Playground.DemoRenderTest do
   alias Raxol.Headless
   alias Raxol.Playground.Catalog
 
-  # Wait for the demo's first render frame to settle before snapping.
-  @initial_settle_ms 150
-
   # Minimum number of "content" lines (non-blank, not made entirely of
   # divider/border characters) every demo must produce. Empirically every
   # working demo emits ten or more rows; broken ones (the bug that
@@ -108,9 +105,6 @@ defmodule Raxol.Playground.DemoRenderTest do
     } do
       assert {:ok, ^id} =
                Headless.start(@component.module, id: id, width: 80, height: 24)
-
-      # Let the Engine push its first frame through the pipeline.
-      Process.sleep(@initial_settle_ms)
 
       assert {:ok, initial_text} = Headless.screenshot(id)
       assert {:ok, buffer} = Headless.get_buffer(id)
