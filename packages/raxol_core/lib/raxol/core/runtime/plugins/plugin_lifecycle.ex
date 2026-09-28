@@ -418,7 +418,7 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   # ============================================================================
 
   defp do_load_plugin(plugin_id, module, config, state) do
-    case PluginRegistry.register(plugin_id, module, plugin_metadata(module)) do
+    case PluginRegistry.register(plugin_id, module, plugin_metadata(plugin_id, module)) do
       :ok ->
         # Initialize plugin state using centralized StateManager
         initial_state = initialize_plugin_state(module, config)
@@ -507,20 +507,24 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
     end
   end
 
-  defp plugin_metadata(module) do
+  defp plugin_metadata(plugin_id, module) do
     base = %{
       loaded_at: DateTime.utc_now(),
       resource_budget: Manifest.default_budget()
     }
 
-    case Manifest.from_module(module) do
-      {:ok, manifest} ->
+    case PluginSupervisor.run_plugin_task(
+           plugin_id,
+           fn -> Manifest.from_module(module) end,
+           enforce_budget: false
+         ) do
+      {:ok, {:ok, manifest}} ->
         Map.merge(base, %{
           manifest: manifest,
           resource_budget: manifest.resource_budget
         })
 
-      {:error, _reason} ->
+      _error ->
         base
     end
   end
