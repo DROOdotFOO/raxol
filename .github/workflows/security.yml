@@ -4,7 +4,6 @@ on:
   push:
     branches: [main, master]
     paths-ignore:
-      - 'web/**'
       - 'docs/**'
       - 'assets/**'
       - '**.md'
@@ -13,7 +12,6 @@ on:
   pull_request:
     branches: [main, master]
     paths-ignore:
-      - 'web/**'
       - 'docs/**'
       - 'assets/**'
       - '**.md'
@@ -80,34 +78,13 @@ jobs:
       # reported SUCCESS, so the gate had never actually audited anything. A
       # fallback that silently swaps a working tool for a broken one is worse
       # than no fallback: fail loudly if the dep is missing.
+      #
+      # This is one of two vulnerability checks, and they read DIFFERENT
+      # databases: mix_audit uses the Elixir Security Advisories mirror, `mix
+      # hex.audit` (the `hex-advisories` job below) uses Hex's own OSV-backed
+      # data. They disagree in practice, so neither replaces the other.
       - name: Check for vulnerable dependencies
         run: mix deps.audit
-
-      # `mix deps.audit` and `mix hex.audit` read DIFFERENT databases:
-      # mix_audit uses the Elixir Security Advisories mirror, hex.audit uses
-      # Hex's own OSV-backed data. They disagree today -- deps.audit is clean
-      # while hex.audit reports two advisories against cowlib 2.20.0
-      # (EEF-CVE-2026-43966 MEDIUM, -43969 LOW), reached transitively through
-      # cowboy. (-43971 is fixed in 2.20.0.)
-      #
-      # Neither vulnerable function is called anywhere in the tree. -43966 is
-      # in cow_http_struct_hd:escape_string/2, reached only through the
-      # structured-header encoders cow_http_hd:variant_key/1, variants/1,
-      # wt_available_protocols/1 and wt_protocol/1; -43969 is in
-      # cow_cookie:cookie/1, a client-side Cookie request encoder. None of
-      # them has a caller: cowboy, plug and phoenix call cow_http_hd parsers
-      # plus allow/1 (which joins method names and never reaches
-      # escape_string/2), and cowboy's cookie calls are setcookie/3 and the
-      # parsers. Tracked in #921.
-      #
-      # Advisory rather than blocking, and deliberately: 2.20.0 is the latest
-      # cowlib release, so there is no version to move to and a blocking gate
-      # here would be permanently red on something nobody can fix. Blocking on
-      # an unfixable finding is how a gate gets ignored. Revisit when cowlib
-      # publishes a fix; `mix hex.audit` is what will say so.
-      - name: Check Hex advisories (OSV)
-        run: mix hex.audit
-        continue-on-error: true
 
       # Advisory: being behind is not a vulnerability, and `mix hex.outdated`
       # exits nonzero for any available upgrade.
@@ -115,6 +92,97 @@ jobs:
         run: |
           mix hex.outdated
         continue-on-error: true
+
+  # `mix hex.audit` in every Mix project that has a lockfile: the root, web/,
+  # and each packages/*/ (discovered by glob, so a new package is audited
+  # without editing this list). The old check ran in the root only and under
+  # `continue-on-error`, so nothing audited web/ or the package locks, and
+  # fixable HIGH advisories (mint, phoenix, cowlib, hackney) sat in them
+  # unseen.
+  #
+  # Fails this workflow, including the daily scheduled run, which files an
+  # issue. It is not a required check (`CI Status` is the only one), so a
+  # newly published advisory turns runs red without blocking unrelated merges.
+  #
+  # An advisory with no fixed release is acknowledged in THAT project's
+  # mix.exs with `hex: [ignore_advisories: [...]]` next to a comment saying
+  # why, not by softening this job: `mix hex.audit` then lists it under
+  # "Ignored advisories" and exits 0. Once the lock moves past it, hex.audit
+  # says the entry "can be removed" but still exits 0, so this job fails on
+  # that message: the entry (and its comment) goes in the PR that makes it
+  # stale. The cowlib 2.20.0 pair is handled that way; see #921.
+  #
+  # Every project is checked even after one fails, so a single run names all
+  # of them. `mix hex.audit` refuses to run until the project's deps are
+  # fetched, hence `mix deps.get` first; `--check-locked` makes the fetched
+  # set the committed lock rather than one `deps.get` would rewrite.
+  hex-advisories:
+    name: Hex Advisories
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      # Only the downloaded package tarballs; the audit itself always reads
+      # the advisory data fresh.
+      - name: Cache Hex packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.hex/packages
+          key: hex-packages-${{ runner.os }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: hex-packages-${{ runner.os }}-
+
+      - name: Audit every lockfile
+        run: |
+          failed=()
+          checked=0
+          for dir in . web packages/*/; do
+            dir="${dir%/}"
+            [ -f "$dir/mix.lock" ] || continue
+            checked=$((checked + 1))
+            echo "::group::$dir"
+            result=ok
+            if ! (cd "$dir" && mix deps.get --check-locked); then
+              result=FAILED
+            else
+              audit_rc=0
+              audit=$(cd "$dir" && mix hex.audit 2>&1) || audit_rc=$?
+              echo "$audit"
+              if [ "$audit_rc" -ne 0 ]; then
+                result=FAILED
+              elif grep -q "can be removed" <<<"$audit"; then
+                result="FAILED (stale ignore_advisories entry)"
+                echo "::error title=$dir::an ignore_advisories entry in $dir/mix.exs matches no advisory in the lock; remove it"
+              fi
+            fi
+            echo "::endgroup::"
+            [ "$result" = ok ] || failed+=("$dir")
+            echo "$dir: $result"
+          done
+
+          {
+            echo "### Hex advisories"
+            echo ""
+            echo "Checked $checked projects."
+            if [ "${#failed[@]}" -gt 0 ]; then
+              echo ""
+              echo "Failing (\`mix deps.get --check-locked\`, \`mix hex.audit\`, or a stale \`ignore_advisories\` entry):"
+              for dir in "${failed[@]}"; do echo "- \`$dir\`"; done
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          [ "${#failed[@]}" -eq 0 ]
 
   static-analysis:
     name: Static Security Analysis
@@ -344,8 +412,14 @@ jobs:
 
   security-report:
     name: Security Report
-    needs: [dependency-audit, static-analysis, semgrep, secrets-scan, npm-audit, snyk-cli]
+    needs: [dependency-audit, hex-advisories, static-analysis, semgrep, secrets-scan, npm-audit, snyk-cli]
     runs-on: ubuntu-latest
+    # The workflow grants only contents: read and security-events: write, so
+    # `Create issue for critical findings` got a 403 on every scheduled
+    # failure and never filed an issue.
+    permissions:
+      contents: read
+      issues: write
     if: always()
     
     steps:
@@ -356,6 +430,7 @@ jobs:
           echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Dependency Audit | ${{ needs.dependency-audit.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Hex Advisories | ${{ needs.hex-advisories.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Static Analysis | ${{ needs.static-analysis.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Semgrep | ${{ needs.semgrep.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Secret Detection | ${{ needs.secrets-scan.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
@@ -365,7 +440,7 @@ jobs:
           echo "Run time: $(date)" >> $GITHUB_STEP_SUMMARY
       
       - name: Create issue for critical findings
-        if: github.event_name == 'schedule' && (needs.dependency-audit.result == 'failure' || needs.secrets-scan.result == 'failure')
+        if: github.event_name == 'schedule' && (needs.dependency-audit.result == 'failure' || needs.hex-advisories.result == 'failure' || needs.secrets-scan.result == 'failure')
         uses: actions/github-script@v9
         with:
           script: |
