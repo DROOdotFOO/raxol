@@ -1,7 +1,12 @@
 defmodule Raxol.Core.Runtime.Plugins.EventFilterTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
-  alias Raxol.Core.Runtime.Plugins.EventFilter
+  alias Raxol.Core.Runtime.Plugins.{EventFilter, PluginSupervisor}
+
+  setup do
+    start_supervised!(PluginSupervisor)
+    :ok
+  end
 
   # Fixture modules
 

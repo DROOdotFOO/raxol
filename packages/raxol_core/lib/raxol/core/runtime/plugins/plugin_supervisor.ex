@@ -1,25 +1,28 @@
 defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   @moduledoc """
-  Supervisor for plugin tasks and processes.
+  Supervises, tracks, and admits plugin tasks.
 
-  This module provides isolation for plugin operations, ensuring that a plugin crash
-  doesn't destabilize the core application. All plugin operations that could fail
-  (initialization, event handling, cleanup) should run through this supervisor.
+  Plugin operations run under `Task.Supervisor` for crash isolation. Each live
+  task is associated with its plugin ID so `ResourceBudget` can measure process
+  memory, ETS ownership, process count, and CPU reduction share. New work passes
+  through the budget admission check before it starts.
 
-  ## Design
+  Initialization and cleanup still use this supervisor, but lifecycle code can
+  bypass admission with `enforce_budget: false` so an already-throttled plugin
+  can always be unloaded.
 
-  Uses `Task.Supervisor` for fire-and-forget and async plugin operations:
-  - Plugin initialization
-  - Event handling
-  - Scheduled tasks
-  - Cleanup operations
+  ## Operations
 
-  ## Benefits
+    * Plugin initialization and lifecycle hooks
+    * Event handling and filtering
+    * Scheduled and asynchronous tasks
 
-  - **Crash Isolation**: Plugin crashes don't bring down the main application
-  - **Timeout Control**: Operations have configurable timeouts
-  - **Logging**: All crashes are logged with plugin context
-  - **Metrics**: Crash counts tracked for monitoring
+  ## Guarantees
+
+    * Plugin crashes do not bring down the caller
+    * Synchronous work has configurable timeouts
+    * Crashes and timeouts are logged with plugin context
+    * Active work is attributable to a plugin budget
 
   ## Usage
 
@@ -41,8 +44,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   use Supervisor
 
   alias Raxol.Core.Runtime.Log
+  alias Raxol.Core.Runtime.Plugins.ResourceBudget
 
   @task_supervisor_name Raxol.Core.Runtime.Plugins.TaskSupervisor
+  @task_registry :raxol_plugin_supervised_tasks
   @default_timeout 5_000
 
   # ============================================================================
@@ -54,9 +59,12 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   end
 
   @impl Supervisor
-  def init(_opts) do
+  def init(opts) do
+    init_task_registry()
+
     children = [
-      {Task.Supervisor, name: @task_supervisor_name, max_restarts: 100, max_seconds: 60}
+      {Task.Supervisor, name: @task_supervisor_name, max_restarts: 100, max_seconds: 60},
+      {ResourceBudget, Keyword.get(opts, :resource_budget, [])}
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -75,7 +83,8 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   ## Options
 
     * `:timeout` - Maximum time in milliseconds (default: 5000)
-
+    * `:enforce_budget` - Set to `false` only for host-controlled lifecycle
+      cleanup that must run while a plugin is throttled
   ## Examples
 
       {:ok, state} = PluginSupervisor.run_plugin_task(:my_plugin, fn ->
@@ -92,22 +101,24 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   def run_plugin_task(plugin_id, func, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    task =
-      Task.Supervisor.async_nolink(@task_supervisor_name, fn ->
-        func.()
-      end)
+    with :ok <- maybe_admit(plugin_id, opts) do
+      task =
+        Task.Supervisor.async_nolink(@task_supervisor_name, fn ->
+          run_registered(plugin_id, func)
+        end)
 
-    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} ->
-        {:ok, result}
+      case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} ->
+          {:ok, result}
 
-      {:exit, reason} ->
-        log_plugin_crash(plugin_id, reason)
-        {:error, {:crashed, reason}}
+        {:exit, reason} ->
+          log_plugin_crash(plugin_id, reason)
+          {:error, {:crashed, reason}}
 
-      nil ->
-        log_plugin_timeout(plugin_id, timeout)
-        {:error, {:timeout, timeout}}
+        nil ->
+          log_plugin_timeout(plugin_id, timeout)
+          {:error, {:timeout, timeout}}
+      end
     end
   end
 
@@ -124,36 +135,40 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
       end)
 
   """
-  @spec async_plugin_task(atom(), (-> term())) :: :ok
+  @spec async_plugin_task(atom(), (-> term())) :: :ok | {:error, :throttled}
   def async_plugin_task(plugin_id, func) do
-    case Task.Supervisor.start_child(@task_supervisor_name, fn ->
-           try do
-             func.()
-           rescue
-             error ->
-               log_plugin_crash(plugin_id, error)
-               {:error, {:crashed, error}}
-           catch
-             kind, value ->
-               log_plugin_crash(plugin_id, {kind, value})
-               {:error, {:crashed, {kind, value}}}
-           end
-         end) do
-      {:ok, _pid} ->
-        :ok
+    with :ok <- ResourceBudget.admit(plugin_id) do
+      case Task.Supervisor.start_child(@task_supervisor_name, fn ->
+             run_registered(plugin_id, fn ->
+               try do
+                 func.()
+               rescue
+                 error ->
+                   log_plugin_crash(plugin_id, error)
+                   {:error, {:crashed, error}}
+               catch
+                 kind, value ->
+                   log_plugin_crash(plugin_id, {kind, value})
+                   {:error, {:crashed, {kind, value}}}
+               end
+             end)
+           end) do
+        {:ok, _pid} ->
+          :ok
 
-      {:ok, _pid, _info} ->
-        :ok
+        {:ok, _pid, _info} ->
+          :ok
 
-      :ignore ->
-        :ok
+        :ignore ->
+          :ok
 
-      {:error, reason} ->
-        Log.error(
-          "[PluginSupervisor] Failed to start async task for #{inspect(plugin_id)}: #{inspect(reason)}"
-        )
+        {:error, reason} ->
+          Log.error(
+            "[PluginSupervisor] Failed to start async task for #{inspect(plugin_id)}: #{inspect(reason)}"
+          )
 
-        :ok
+          :ok
+      end
     end
   end
 
@@ -181,28 +196,34 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
   def run_plugin_tasks_concurrent(plugin_id, funcs, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    tasks =
-      Enum.map(funcs, fn func ->
-        Task.Supervisor.async_nolink(@task_supervisor_name, fn ->
-          func.()
+    case maybe_admit(plugin_id, opts) do
+      :ok ->
+        tasks =
+          Enum.map(funcs, fn func ->
+            Task.Supervisor.async_nolink(@task_supervisor_name, fn ->
+              run_registered(plugin_id, func)
+            end)
+          end)
+
+        Task.yield_many(tasks, timeout)
+        |> Enum.map(fn
+          {_task, {:ok, result}} ->
+            {:ok, result}
+
+          {task, {:exit, reason}} ->
+            log_plugin_crash(plugin_id, reason)
+            shutdown_task(task)
+            {:error, {:crashed, reason}}
+
+          {task, nil} ->
+            log_plugin_timeout(plugin_id, timeout)
+            shutdown_task(task)
+            {:error, {:timeout, timeout}}
         end)
-      end)
 
-    Task.yield_many(tasks, timeout)
-    |> Enum.map(fn
-      {_task, {:ok, result}} ->
-        {:ok, result}
-
-      {task, {:exit, reason}} ->
-        log_plugin_crash(plugin_id, reason)
-        shutdown_task(task)
-        {:error, {:crashed, reason}}
-
-      {task, nil} ->
-        log_plugin_timeout(plugin_id, timeout)
-        shutdown_task(task)
-        {:error, {:timeout, timeout}}
-    end)
+      {:error, _reason} = error ->
+        List.duplicate(error, length(funcs))
+    end
   end
 
   @doc """
@@ -251,6 +272,73 @@ defmodule Raxol.Core.Runtime.Plugins.PluginSupervisor do
       active_tasks: Task.Supervisor.children(@task_supervisor_name) |> length(),
       supervisor_info: Process.info(Process.whereis(@task_supervisor_name))
     }
+  end
+
+  @doc "Returns the live supervised task processes owned by a plugin."
+  @spec task_pids(atom()) :: [pid()]
+  def task_pids(plugin_id) do
+    case :ets.whereis(@task_registry) do
+      :undefined ->
+        []
+
+      _table ->
+        @task_registry
+        |> :ets.tab2list()
+        |> Enum.flat_map(fn
+          {pid, ^plugin_id} when is_pid(pid) ->
+            if Process.alive?(pid) do
+              [pid]
+            else
+              :ets.delete(@task_registry, pid)
+              []
+            end
+
+          _entry ->
+            []
+        end)
+    end
+  end
+
+  @doc "Terminates every live supervised task owned by a plugin."
+  @spec terminate_plugin_tasks(atom()) :: non_neg_integer()
+  def terminate_plugin_tasks(plugin_id) do
+    pids = task_pids(plugin_id)
+    Enum.each(pids, &Process.exit(&1, :kill))
+    length(pids)
+  end
+
+  defp init_task_registry do
+    case :ets.whereis(@task_registry) do
+      :undefined ->
+        :ets.new(@task_registry, [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
+
+      table ->
+        table
+    end
+  end
+
+  defp maybe_admit(plugin_id, opts) do
+    if Keyword.get(opts, :enforce_budget, true) do
+      ResourceBudget.admit(plugin_id)
+    else
+      :ok
+    end
+  end
+
+  defp run_registered(plugin_id, func) do
+    true = :ets.insert(@task_registry, {self(), plugin_id})
+
+    try do
+      func.()
+    after
+      :ets.delete(@task_registry, self())
+    end
   end
 
   # ============================================================================
