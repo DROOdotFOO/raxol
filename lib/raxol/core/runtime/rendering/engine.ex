@@ -173,6 +173,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     {:reply, state, state}
   end
 
+  # Replies with the buffer this render drew, so a caller that wants the frame
+  # needs no second call to read it: casts queued here in between (the
+  # dispatcher's `{:update_size, _}` swaps in a blank buffer) would run first.
   @impl true
   def handle_call(:render_frame_sync, _from, state) do
     case GenServer.call(state.dispatcher_pid, :get_render_context) do
@@ -188,7 +191,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
         case do_render_frame(animated_model, theme, state) do
           {:ok, new_state} ->
-            {:reply, :ok, new_state}
+            {:reply, {:ok, new_state.buffer}, new_state}
 
           {:error, _reason, current_state} ->
             {:reply, {:error, :render_failed}, current_state}
