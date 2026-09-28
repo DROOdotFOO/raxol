@@ -2,6 +2,7 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudgetTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Core.Runtime.Plugins.{
+    PluginLifecycle,
     PluginRegistry,
     PluginSupervisor,
     ResourceBudget
@@ -11,8 +12,6 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudgetTest do
   end
 
   setup do
-    PluginRegistry.init()
-
     start_supervised!(
       {PluginSupervisor, resource_budget: [interval_ms: 60_000, throttle_interval_ms: 60_000]}
     )
@@ -33,6 +32,15 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudgetTest do
       assert usage.ets_tables > budget.max_ets_tables
 
       stop_budget_task(task)
+    end
+
+    test "falls back to defaults for malformed registry metadata" do
+      plugin_id = unique_plugin_id(:malformed)
+      assert :ok = PluginRegistry.register(plugin_id, BudgetPlugin, %{resource_budget: :infinity})
+
+      assert {:ok, usage} = ResourceBudget.check(plugin_id)
+      assert usage.processes == 0
+      assert Process.alive?(Process.whereis(ResourceBudget))
     end
   end
 
@@ -83,6 +91,78 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudgetTest do
       assert_receive {:DOWN, ^ref, :process, ^task, :killed}
       refute PluginRegistry.registered?(plugin_id)
       refute ResourceBudget.throttled?(plugin_id)
+    end
+
+    test "normalizes string IDs for measurement and throttle admission" do
+      plugin_id = unique_plugin_id(:string_id)
+      plugin_id_string = Atom.to_string(plugin_id)
+      register_tiny_budget(plugin_id)
+      :ok = ResourceBudget.set_action(plugin_id_string, :throttle)
+      {task, _ref} = start_budget_task(plugin_id_string)
+
+      assert [{^plugin_id, :over_budget}] = ResourceBudget.enforce_now()
+
+      assert {:error, :throttled} =
+               PluginSupervisor.run_plugin_task(plugin_id_string, fn -> :should_not_run end)
+
+      stop_budget_task(task)
+    end
+
+    test "retains the configured action when the monitor restarts" do
+      plugin_id = unique_plugin_id(:restart)
+      register_tiny_budget(plugin_id)
+      :ok = ResourceBudget.set_action(plugin_id, :kill)
+
+      assert :ok = Supervisor.terminate_child(PluginSupervisor, ResourceBudget)
+      assert {:ok, _pid} = Supervisor.restart_child(PluginSupervisor, ResourceBudget)
+
+      {task, ref} = start_budget_task(plugin_id)
+      assert [{^plugin_id, :over_budget}] = ResourceBudget.enforce_now()
+      assert_receive {:DOWN, ^ref, :process, ^task, :killed}
+      refute PluginRegistry.registered?(plugin_id)
+    end
+
+    test "admission does not wait for the sampling server" do
+      plugin_id = unique_plugin_id(:admission)
+      register_tiny_budget(plugin_id)
+      budget_pid = Process.whereis(ResourceBudget)
+      :ok = :sys.suspend(budget_pid)
+      on_exit(fn -> if Process.alive?(budget_pid), do: :sys.resume(budget_pid) end)
+
+      assert {:ok, :allowed} = PluginSupervisor.run_plugin_task(plugin_id, fn -> :allowed end)
+      :ok = :sys.resume(budget_pid)
+    end
+
+    test "kill blocks admission while lifecycle unload is pending" do
+      plugin_id = unique_plugin_id(:pending_unload)
+      register_tiny_budget(plugin_id)
+      :ok = ResourceBudget.set_action(plugin_id, :kill)
+      parent = self()
+
+      lifecycle =
+        spawn(fn ->
+          receive do
+            {:"$gen_call", from, {:unload, ^plugin_id}} ->
+              send(parent, :unload_started)
+
+              receive do
+                :finish_unload -> GenServer.reply(from, :ok)
+              end
+          end
+        end)
+
+      true = Process.register(lifecycle, PluginLifecycle)
+      on_exit(fn -> if Process.alive?(lifecycle), do: Process.exit(lifecycle, :kill) end)
+      {_task, _ref} = start_budget_task(plugin_id)
+
+      assert [{^plugin_id, :over_budget}] = ResourceBudget.enforce_now()
+      assert_receive :unload_started
+      assert ResourceBudget.throttled?(plugin_id)
+
+      assert {:error, :throttled} =
+               PluginSupervisor.run_plugin_task(plugin_id, fn -> :should_not_run end)
+
+      send(lifecycle, :finish_unload)
     end
   end
 

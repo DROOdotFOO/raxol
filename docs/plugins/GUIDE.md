@@ -125,6 +125,12 @@ The host selects the response with
 `[:raxol, :plugins, :resource_budget, :exceeded]` telemetry with the plugin ID,
 configured action, measured usage, and budget.
 
+Plugin callbacks run in short-lived supervised tasks. Code inside `init/1`,
+`handle_event/2`, `filter_event/2`, and hooks must not use `self()` as a stable
+plugin process or retain process-owned resources after returning. Use host
+timer, subscription, and supervised-process APIs for work that must outlive a
+callback.
+
 There is no `dependencies:` map for Hex packages, no `capabilities:` enforcement, no `trust_level:` field, and no `config_schema:`. Plugin config is whatever map the host passes to `init/1`.
 
 ## Event system
