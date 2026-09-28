@@ -11,11 +11,13 @@
 # With CANARY_SIGCONT=1 the VM is stopped and continued before `.ready`, as
 # `kill -STOP` and `kill -CONT` from another terminal would.
 #
-# The Driver skips all terminal setup while MIX_ENV is "test"
-# (`Raxol.Terminal.Env.test?/0`), and the harness boots this from the test
-# build, so the variable is cleared before the Driver starts: the point is its
-# real TTY branch.
+# The Driver skips all terminal setup while MIX_ENV is "test" or
+# SKIP_TERMBOX2_TESTS is "true" (`Raxol.Terminal.Env.test?/0`). The harness
+# boots this from the test build and CI sets SKIP_TERMBOX2_TESTS workflow-wide,
+# so both are cleared before the Driver starts: the point is its real TTY
+# branch.
 System.delete_env("MIX_ENV")
+System.delete_env("SKIP_TERMBOX2_TESTS")
 
 defmodule FullscreenIsigApp do
   alias Raxol.Core.Events.Event

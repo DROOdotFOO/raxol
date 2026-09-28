@@ -3,9 +3,6 @@ defmodule Raxol.Test.EmulatorHelpers do
   Helper functions for testing terminal emulators.
   """
 
-  require Raxol.Core.Runtime.Log
-  require Logger
-
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ScreenBuffer
 
