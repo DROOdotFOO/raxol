@@ -164,17 +164,36 @@ defmodule Raxol.AgentClientProtocol.Transport.PairedTest do
       assert_receive {:new_owner_got, %{"seq" => 2}}
     end
 
-    test "a handle with no owner set silently drops inbound messages", %{left: left} do
-      {right_no_owner_left, _right_no_owner_right} = Paired.create_pair()
-      :ok = Paired.set_owner(right_no_owner_left, self())
-      # Deliberately do not set an owner on right_no_owner_right.
+    test "frames arriving before an owner is set are delivered on adopt, ahead of later frames" do
+      {sender, unowned} = Paired.create_pair()
 
-      {:ok, _} = Paired.send_message(right_no_owner_left, %{"a" => 1})
-      refute_receive {:acp_transport, _ref, {:message, %{"a" => 1}}}, 50
+      {:ok, _} = Paired.send_message(sender, %{"early" => 1})
+      {:ok, _} = Paired.send_message(sender, %{"early" => 2})
 
-      # Sanity: unrelated pair from setup still works fine.
-      {:ok, _} = Paired.send_message(left, %{"b" => 2})
-      assert_receive {:acp_transport, _ref, {:message, %{"b" => 2}}}
+      :ok = Paired.set_owner(unowned, self())
+      {:ok, _} = Paired.send_message(sender, %{"late" => true})
+
+      unowned_pid = unowned.pid
+
+      for expected <- [%{"early" => 1}, %{"early" => 2}, %{"late" => true}] do
+        assert_receive {:acp_transport, ^unowned_pid, {:message, message}}
+        assert message == expected
+      end
+    end
+
+    test "a peer close before an owner is set is delivered on adopt, after earlier frames" do
+      {sender, unowned} = Paired.create_pair()
+
+      {:ok, _} = Paired.send_message(sender, %{"early" => 1})
+      :ok = Paired.close(sender)
+
+      :ok = Paired.set_owner(unowned, self())
+      unowned_pid = unowned.pid
+
+      assert_receive {:acp_transport, ^unowned_pid, first}
+      assert first == {:message, %{"early" => 1}}
+      assert_receive {:acp_transport, ^unowned_pid, second}
+      assert second == {:closed, :peer_closed}
     end
   end
 

@@ -14,11 +14,14 @@ defmodule Raxol.AgentClientProtocol.Transport.Paired do
 
   ## Ownership
 
-  A freshly created handle has no owner (`nil`): messages arriving before
-  an owner is set are silently dropped, by design, so a supervisor can
+  A freshly created handle has no owner (`nil`), so a supervisor can
   create the pair before the `Connection` process that will adopt it
-  exists. Call `set_owner/2` to adopt (or re-adopt — handoff to a new
-  owner is supported at any time, including mid-stream).
+  exists. Whatever arrives before an owner is set — peer frames and a
+  peer close — is held, and `set_owner/2` delivers it to the new owner in
+  arrival order before anything later: the other side may start sending
+  (e.g. a client's `initialize`) before this side's `Connection` has
+  adopted its handle. Call `set_owner/2` to adopt (or re-adopt — handoff
+  to a new owner is supported at any time, including mid-stream).
 
   ## Ordering
 
@@ -63,14 +66,15 @@ defmodule Raxol.AgentClientProtocol.Transport.Paired do
   @typep server_state :: %{
            owner: pid() | nil,
            peer: pid() | nil,
-           closed: boolean()
+           closed: boolean(),
+           pending: [{:message, map()} | {:closed, term()}]
          }
 
   @doc """
   Create a connected pair of transport handles: `{left, right}`.
 
-  Neither handle has an owner yet — call `set_owner/2` on each before
-  relying on inbound delivery.
+  Neither handle has an owner yet; inbound traffic is held until
+  `set_owner/2` adopts the handle.
   """
   @spec create_pair() :: {t(), t()}
   def create_pair do
@@ -86,7 +90,8 @@ defmodule Raxol.AgentClientProtocol.Transport.Paired do
   @doc """
   Set (or replace) the owner process for a handle. The owner is the
   process that will receive `{:acp_transport, transport_ref, ...}`
-  messages for this handle going forward.
+  messages for this handle going forward, starting with any held since
+  the handle was created.
   """
   @spec set_owner(t(), pid()) :: :ok
   def set_owner(%__MODULE__{pid: pid}, owner) when is_pid(owner) do
@@ -128,7 +133,12 @@ defmodule Raxol.AgentClientProtocol.Transport.Paired do
   end
 
   def handle_call({:set_owner, owner}, _from, state) when is_pid(owner) do
-    {:reply, :ok, %{state | owner: owner}}
+    # `pending` is prepend-built, so reverse to deliver in arrival order.
+    state.pending
+    |> Enum.reverse()
+    |> Enum.each(&deliver_to_owner(owner, &1))
+
+    {:reply, :ok, %{state | owner: owner, pending: []}}
   end
 
   def handle_call({:send, _message}, _from, %{closed: true} = state) do
@@ -152,22 +162,21 @@ defmodule Raxol.AgentClientProtocol.Transport.Paired do
   @impl GenServer
   def handle_cast({:deliver, _message}, %{closed: true} = state), do: {:noreply, state}
 
-  def handle_cast({:deliver, message}, %{owner: owner} = state) do
-    deliver_to_owner(owner, {:message, message})
-    {:noreply, state}
+  def handle_cast({:deliver, message}, state) do
+    {:noreply, emit(state, {:message, message})}
   end
 
   def handle_cast(:peer_closed, %{closed: true} = state), do: {:noreply, state}
 
-  def handle_cast(:peer_closed, %{owner: owner} = state) do
-    deliver_to_owner(owner, {:closed, :peer_closed})
+  def handle_cast(:peer_closed, state) do
+    state = emit(state, {:closed, :peer_closed})
     {:noreply, %{state | closed: true}}
   end
 
   # -- Helpers ------------------------------------------------------------
 
   @spec initial_state() :: server_state()
-  defp initial_state, do: %{owner: nil, peer: nil, closed: false}
+  defp initial_state, do: %{owner: nil, peer: nil, closed: false, pending: []}
 
   @spec forward_to_peer(pid() | nil, map()) :: :ok
   defp forward_to_peer(nil, _message), do: :ok
@@ -185,9 +194,19 @@ defmodule Raxol.AgentClientProtocol.Transport.Paired do
     :ok
   end
 
-  @spec deliver_to_owner(pid() | nil, {:message, map()} | {:closed, term()}) :: :ok
-  defp deliver_to_owner(nil, _payload), do: :ok
+  # Deliver to the owner, or hold (prepend, O(1)) until `set_owner/2` adopts
+  # the handle and flushes in arrival order.
+  @spec emit(server_state(), {:message, map()} | {:closed, term()}) :: server_state()
+  defp emit(%{owner: nil} = state, payload) do
+    %{state | pending: [payload | state.pending]}
+  end
 
+  defp emit(%{owner: owner} = state, payload) do
+    deliver_to_owner(owner, payload)
+    state
+  end
+
+  @spec deliver_to_owner(pid(), {:message, map()} | {:closed, term()}) :: :ok
   defp deliver_to_owner(owner, payload) do
     send(owner, {:acp_transport, self(), payload})
     :ok
