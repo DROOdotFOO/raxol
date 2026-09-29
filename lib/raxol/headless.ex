@@ -35,7 +35,6 @@ defmodule Raxol.Headless do
 
   @default_width 120
   @default_height 40
-  @default_dispatch_wait_ms 50
 
   # Deliberately SHORTER than the 5s the other calls in this module give
   # themselves: the compile happens inside `handle_call`, so this budget is also
@@ -205,22 +204,17 @@ defmodule Raxol.Headless do
   end
 
   @doc """
-  Sends a key and returns a screenshot after waiting for re-render.
+  Sends a key and returns a screenshot of the frame it produced.
 
-  ## Options
-
-    * `:wait_ms` - Milliseconds to wait for dispatch processing (default: 50)
-    * All key modifier options (`:ctrl`, `:alt`, `:shift`)
+  `send_key/3` followed by `screenshot/1`: the screenshot is rendered after
+  `update/2` has handled the key. Takes the same options as `send_key/3`.
   """
   @spec send_key_and_screenshot(atom(), String.t() | atom(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_key_and_screenshot(id, key, opts \\ []) do
-    wait_ms = Keyword.get(opts, :wait_ms, @default_dispatch_wait_ms)
-    key_opts = Keyword.drop(opts, [:wait_ms])
-
     GenServer.call(
       __MODULE__,
-      {:send_key_and_screenshot, id, key, key_opts, wait_ms},
+      {:send_key_and_screenshot, id, key, opts},
       10_000
     )
   end
@@ -318,18 +312,11 @@ defmodule Raxol.Headless do
   end
 
   @impl true
-  def handle_call(
-        {:send_key_and_screenshot, id, key, key_opts, wait_ms},
-        _from,
-        state
-      ) do
+  def handle_call({:send_key_and_screenshot, id, key, key_opts}, _from, state) do
     case get_session(state, id) do
       {:ok, session} ->
         case dispatch_key(session, key, key_opts) do
           :ok ->
-            # Wait for dispatcher to process the key event (async cast)
-            Process.sleep(wait_ms)
-            # Synchronous render + screenshot
             {:reply, take_screenshot(session), state}
 
           error ->

@@ -116,10 +116,10 @@ defmodule Raxol.Headless.McpTools do
       %{
         name: "raxol_send_key",
         description: """
-        Sends a keystroke to a headless Raxol session and returns the
-        updated screen content. Supports character keys ("q", "j", " "),
-        special keys ("tab", "enter", "escape", "backspace", "up", "down",
-        "left", "right"), and modifiers (ctrl, alt, shift).
+        Sends a keystroke to a headless Raxol session and returns the screen
+        once the app has handled the key. Supports character keys ("q", "j",
+        " "), special keys ("tab", "enter", "escape", "backspace", "up",
+        "down", "left", "right"), and modifiers (ctrl, alt, shift).
 
         Examples:
           {"id": "demo", "key": "tab"}
@@ -150,11 +150,6 @@ defmodule Raxol.Headless.McpTools do
             shift: %{
               type: "boolean",
               description: "Hold Shift modifier (default: false)"
-            },
-            wait_ms: %{
-              type: "integer",
-              description:
-                "Milliseconds to wait for dispatch processing before screenshot (default: 50)"
             }
           }
         },
@@ -561,7 +556,6 @@ defmodule Raxol.Headless.McpTools do
         |> maybe_add(args, "ctrl", :ctrl)
         |> maybe_add(args, "alt", :alt)
         |> maybe_add(args, "shift", :shift)
-        |> maybe_add_int(args, "wait_ms", :wait_ms)
 
       case Raxol.Headless.send_key_and_screenshot(id, key, opts) do
         {:ok, text} -> {:ok, text}
@@ -793,14 +787,6 @@ defmodule Raxol.Headless.McpTools do
 
   defp maybe_add(opts, args, json_key, opt_key) do
     if Map.get(args, json_key, false), do: [{opt_key, true} | opts], else: opts
-  end
-
-  defp maybe_add_int(opts, args, json_key, opt_key) do
-    case Map.get(args, json_key) do
-      nil -> opts
-      val when is_integer(val) -> [{opt_key, val} | opts]
-      _ -> opts
-    end
   end
 
   defp safe_to_atom(str) when is_binary(str) do

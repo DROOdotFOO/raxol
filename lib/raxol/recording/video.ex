@@ -147,7 +147,6 @@ defmodule Raxol.Recording.Video do
     * `:output` - output path (default: `"raxol_clip.gif"`)
     * `:events` - `[{ms, {:key, key}}]` or `[{ms, {:key, key, key_opts}}]`
     * `:width` / `:height` - session dimensions
-    * `:event_settle_ms` - wait after firing events so the update lands (default: 40)
     * plus all `render_frame/2` options (`:theme`, `:rasterizer`, ...)
   """
   @spec capture_clip(module() | Path.t(), keyword()) ::
@@ -197,18 +196,17 @@ defmodule Raxol.Recording.Video do
     frames = max(1, round(Keyword.get(opts, :duration_ms, 2_000) / 1000 * fps))
     dt = max(1, div(1000, fps))
     events = normalize_events(Keyword.get(opts, :events, []))
-    settle = Keyword.get(opts, :event_settle_ms, 40)
     output = Keyword.get(opts, :output, "raxol_clip.gif")
 
-    with :ok <- render_frames(id, dir, frames, dt, events, settle, opts) do
+    with :ok <- render_frames(id, dir, frames, dt, events, opts) do
       Raxol.Recording.Video.Encoder.encode(dir, fps, output, opts)
     end
   end
 
-  defp render_frames(id, dir, frames, dt, events, settle, opts) do
+  defp render_frames(id, dir, frames, dt, events, opts) do
     Enum.reduce_while(0..(frames - 1), :ok, fn n, _acc ->
       Raxol.Animation.Clock.freeze(n * dt)
-      inject_due_events(id, events, n * dt, dt, settle)
+      inject_due_events(id, events, n * dt, dt)
 
       case capture_frame_png(id, n, dir, opts) do
         :ok -> {:cont, :ok}
@@ -226,7 +224,9 @@ defmodule Raxol.Recording.Video do
     end
   end
 
-  defp inject_due_events(id, events, window_start, dt, settle) do
+  # `send_key/3` returns once update/2 has handled the key, so the frame
+  # captured next already shows it.
+  defp inject_due_events(id, events, window_start, dt) do
     due =
       Enum.filter(events, fn {ms, _ev} ->
         ms >= window_start and ms < window_start + dt
@@ -235,8 +235,6 @@ defmodule Raxol.Recording.Video do
     Enum.each(due, fn {_ms, {:key, key, key_opts}} ->
       Raxol.Headless.send_key(id, key, key_opts)
     end)
-
-    if due != [], do: Process.sleep(settle)
   end
 
   defp normalize_events(events) do
