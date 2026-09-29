@@ -103,6 +103,22 @@ defmodule Raxol.Payments.Assets do
     }
   }
 
+  # Circle USDC on the EVM testnets the live Xochi gate runs against (the same
+  # contracts `Assets.UsdcDomains` pins). Registered for decimals and symbol
+  # only: they are deliberately NOT in @evm_tokens or @usdc, so they never join
+  # `supported_chain_ids/0`, the capabilities fallback, or advertised corridors.
+  @testnet_usdc %{
+    11_155_111 => "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
+    11_155_420 => "0x5fd84259d66cd46123540766be93dfe6d43130d7",
+    84_532 => "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    421_614 => "0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d"
+  }
+
+  @addresses Map.merge(
+               @addresses,
+               Map.new(@testnet_usdc, fn {chain, addr} -> {chain, %{addr => 6}} end)
+             )
+
   # EVM USDC contracts per chain (lowercase). Used to enforce the ERC-3009
   # USDC-only rule: ERC-3009 signs against the USDC contract as the EIP-712
   # verifying contract, so using it for any other token is silently invalid.
@@ -188,6 +204,9 @@ defmodule Raxol.Payments.Assets do
                             &Map.put(&1, address, symbol)
                           )
                       end)
+                     |> Map.merge(
+                       Map.new(@testnet_usdc, fn {chain, addr} -> {chain, %{addr => "USDC"}} end)
+                     )
 
   # Upcased symbol -> exact wire symbol. `address/2` matches case-insensitively,
   # and a plain `String.upcase/1` key lookup would miss the mixed-case "EURe".
@@ -320,6 +339,14 @@ defmodule Raxol.Payments.Assets do
     |> Enum.uniq()
     |> Enum.sort()
   end
+
+  @doc """
+  Every EVM chain id this registry knows: the mainnet `supported_chain_ids/0`
+  plus the registered testnets. The set an EVM-only feature (ERC-5564 stealth)
+  may target; Tron and unregistered chains are outside it.
+  """
+  @spec evm_chain_ids() :: [pos_integer()]
+  def evm_chain_ids, do: Enum.sort(supported_chain_ids() ++ Map.keys(@testnet_usdc))
 
   @doc "Human-readable chain name, or `\"Chain <id>\"` when unknown."
   @spec chain_name(integer() | String.t() | nil) :: String.t()

@@ -234,22 +234,6 @@ defmodule Raxol.Payments.Xochi.StealthTest do
       bad = "st:eth:0x01" <> String.duplicate("a", 64) <> "03" <> String.duplicate("b", 64)
       assert {:error, :invalid_meta_address} = Stealth.decode_meta_address(bad, 1)
     end
-
-    test "refuses a non-EVM or unknown destination chain" do
-      {_, spending_pub} = generate_keypair()
-      {_, viewing_pub} = generate_keypair()
-
-      encoded =
-        Stealth.encode_meta_address(%{
-          spending_pub_key: spending_pub,
-          viewing_pub_key: viewing_pub
-        })
-
-      for chain <- [728_126_428, 999_999] do
-        assert {:error, :stealth_unsupported_on_chain} =
-                 Stealth.decode_meta_address(encoded, chain)
-      end
-    end
   end
 
   describe "valid_compressed_pubkey?/1" do

@@ -215,21 +215,27 @@ defmodule Raxol.Payments.Failure do
   def from({:invalid_to_token, _} = detail), do: invalid_request(detail)
   def from({:invalid_chain_id, _} = detail), do: invalid_request(detail)
 
-  # A token/chain this build has no registry entry for: its decimals (and, on
-  # the destination, its symbol for the delivery floor) are unknown, so the
-  # amount cannot be scaled or bounded. Refused rather than assumed.
-  def from({:unknown_asset, %{side: :destination}} = detail),
+  # A token with no registered decimals on its chain (including any chain this
+  # build does not know): an amount in it cannot be scaled or bounded, so the
+  # payment is refused rather than assumed. Not retryable with other params.
+  def from({:unknown_asset, %{side: side}} = detail),
     do:
       build(
-        :invalid_request,
-        "The destination token is not registered; pass min_to_amount to bound delivery.",
+        :route_unsupported,
+        "The #{side} token is not supported on this chain.",
         false,
         detail
       )
 
-  def from({:unknown_asset, _} = detail),
+  # A zero, negative, or unparseable floor bounds nothing; refused, not ignored.
+  def from({:invalid_min_to_amount, _} = detail),
     do:
-      build(:invalid_request, "The source token is not registered on this chain.", false, detail)
+      build(
+        :invalid_request,
+        "min_to_amount must be a positive integer in destination atomic units.",
+        false,
+        detail
+      )
 
   # Relay (Tron) route and address validation.
   def from({:invalid_route, _} = detail),

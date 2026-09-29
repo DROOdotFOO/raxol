@@ -481,6 +481,13 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       refute_received :wallet_signed
     end
+
+    test "errors when wallet is missing" do
+      assert {:error, %Failure{reason: :config_error}} =
+               ExecuteXochiIntent.run(base_params(%{}), %{
+                 xochi_config: config()
+               })
+    end
   end
 
   # A chain/token this build does not know must be refused, never assumed EVM
@@ -493,27 +500,27 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       assert {:error,
               %Failure{
-                reason: :invalid_request,
+                reason: :route_unsupported,
                 detail: {:unknown_asset, %{side: :source, chain_id: @unknown_chain}}
               }} = ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
 
       refute_received :wallet_signed
     end
 
-    test "stealth to an unknown destination chain is refused" do
-      params = base_params(%{to_chain_id: @unknown_chain})
+    # No quote stub: the refusal must land before any network call.
+    test "an unregistered destination is refused even with min_to_amount" do
+      for extra <- [%{}, %{min_to_amount: "950000"}] do
+        params =
+          base_params(Map.merge(%{to_chain_id: @unknown_chain, settlement: "public"}, extra))
 
-      assert {:error, %Failure{reason: :stealth_unsupported}} =
-               ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
+        assert {:error,
+                %Failure{
+                  reason: :route_unsupported,
+                  detail: {:unknown_asset, %{side: :destination, chain_id: @unknown_chain}}
+                }} = ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
+      end
 
       refute_received :wallet_signed
-    end
-
-    test "errors when wallet is missing" do
-      assert {:error, %Failure{reason: :config_error}} =
-               ExecuteXochiIntent.run(base_params(%{}), %{
-                 xochi_config: config()
-               })
     end
   end
 
@@ -1313,28 +1320,17 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert_received :wallet_signed
     end
 
-    test "an unregistered destination with no min_to_amount is refused before signing" do
+    test "a zero or unparseable min_to_amount is refused, not treated as no floor" do
       stub_floor_quote("1")
+      ctx = floor_ctx()
 
-      assert {:error,
-              %Failure{
-                reason: :invalid_request,
-                detail: {:unknown_asset, %{side: :destination, chain_id: 999_999}}
-              }} = ExecuteXochiIntent.run(floor_params(%{to_chain_id: 999_999}), floor_ctx())
+      for bad <- ["0", 0, "-5", "abc"] do
+        assert {:error,
+                %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, ^bad}}} =
+                 ExecuteXochiIntent.run(floor_params(%{min_to_amount: bad}), ctx)
+      end
 
       refute_received :wallet_signed
-    end
-
-    test "an unregistered destination is allowed once min_to_amount bounds it" do
-      stub_floor_quote("960000")
-
-      assert {:ok, _} =
-               ExecuteXochiIntent.run(
-                 floor_params(%{to_chain_id: 999_999, min_to_amount: "950000"}),
-                 floor_ctx()
-               )
-
-      assert_received :wallet_signed
     end
   end
 end

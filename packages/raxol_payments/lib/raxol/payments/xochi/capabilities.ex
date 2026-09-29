@@ -347,9 +347,15 @@ defmodule Raxol.Payments.Xochi.Capabilities do
 
   defp parse_chain(_), do: []
 
-  # Absent is the pre-WP-E wire, which only ever listed EVM chains.
+  # Absent is the pre-WP-E wire, which only ever listed EVM chains. Matching is
+  # case/whitespace-insensitive so "EVM" does not silently drop a live chain; a
+  # genuinely unknown family still drops it.
   defp parse_vm_type(nil), do: {:ok, :evm}
-  defp parse_vm_type(vm_type), do: Map.fetch(@vm_types, vm_type)
+
+  defp parse_vm_type(vm_type) when is_binary(vm_type),
+    do: Map.fetch(@vm_types, vm_type |> String.trim() |> String.downcase())
+
+  defp parse_vm_type(_), do: :error
 
   defp parse_token(%{"symbol" => symbol} = token) when is_binary(symbol) and symbol != "" do
     [

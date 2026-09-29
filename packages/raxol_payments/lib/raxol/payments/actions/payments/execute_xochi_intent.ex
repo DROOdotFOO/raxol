@@ -300,22 +300,18 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # serve a punitive `to_amount` (deliver ~0 while pulling the full origin amount)
   # and the gate would not catch it.
   #
-  # An explicit `min_to_amount` (destination atomic units) is authoritative for
-  # any corridor. Without one, a same-asset corridor (same token symbol both
-  # sides) gets an automatic floor: delivery must be at least `:min_delivery_bps`
-  # of par (default 8000 = 80%). This is a theft backstop, not a pricing check --
-  # Xochi enforces pricing; legitimate fees and slippage stay well inside 80%. A
-  # cross-asset corridor between registered tokens has no on-client price, so it
-  # is bound only by an explicit `min_to_amount`. An unregistered destination
-  # token cannot be classified or scaled at all, so without `min_to_amount` it is
-  # refused rather than let through unfloored.
+  # An explicit `min_to_amount` (destination atomic units, must be positive) is
+  # authoritative for any corridor. Without one, a same-asset corridor (same
+  # token symbol both sides) gets an automatic floor: delivery must be at least
+  # `:min_delivery_bps` of par (default 8000 = 80%). This is a theft backstop,
+  # not a pricing check -- Xochi enforces pricing; legitimate fees and slippage
+  # stay well inside 80%. A cross-asset corridor has no on-client price, so it
+  # is bound only by an explicit `min_to_amount`. Both tokens have registered
+  # decimals by this point (`build_request/2` refuses anything else).
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
     case delivery_floor(request, params) do
       :none ->
         :ok
-
-      {:error, _} = error ->
-        error
 
       {:floor, min_out} ->
         case parse_uint(quote.to_amount) do
@@ -338,41 +334,38 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   defp same_asset_floor(%QuoteRequest{} = request) do
     from_symbol = Assets.symbol_for(request.from_chain_id, request.from_token)
+    to_symbol = Assets.symbol_for(request.to_chain_id, request.to_token)
 
-    with {:ok, to_symbol, to_decimals} <- destination_asset(request) do
-      if not is_nil(from_symbol) and from_symbol == to_symbol do
-        {:ok, from_decimals} = Assets.fetch_decimals(request.from_chain_id, request.from_token)
-
-        par_out =
-          Assets.to_atomic(Assets.to_human(request.from_amount, from_decimals), to_decimals)
-
-        bps = Application.get_env(:raxol_payments, :min_delivery_bps, 8000)
-        {:floor, div(par_out * bps, 10_000)}
-      else
-        :none
-      end
-    end
-  end
-
-  defp destination_asset(%QuoteRequest{to_chain_id: chain, to_token: token}) do
-    with symbol when is_binary(symbol) <- Assets.symbol_for(chain, token),
-         {:ok, decimals} <- Assets.fetch_decimals(chain, token) do
-      {:ok, symbol, decimals}
+    with true <- not is_nil(from_symbol) and from_symbol == to_symbol,
+         {:ok, from_decimals} <- Assets.fetch_decimals(request.from_chain_id, request.from_token),
+         {:ok, to_decimals} <- Assets.fetch_decimals(request.to_chain_id, request.to_token) do
+      par_out = Assets.to_atomic(Assets.to_human(request.from_amount, from_decimals), to_decimals)
+      bps = Application.get_env(:raxol_payments, :min_delivery_bps, 8000)
+      {:floor, div(par_out * bps, 10_000)}
     else
-      _ -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: :destination}}}
+      _ -> :none
     end
   end
 
-  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
+  # Strictly positive: a zero floor bounds nothing, so it is rejected rather
+  # than accepted as "any delivery is fine".
+  defp parse_uint(v) when is_integer(v) and v > 0, do: v
 
   defp parse_uint(v) when is_binary(v) do
     case Integer.parse(String.trim(v)) do
-      {n, ""} when n >= 0 -> n
+      {n, ""} when n > 0 -> n
       _ -> nil
     end
   end
 
   defp parse_uint(_), do: nil
+
+  defp validate_min_to_amount(params) do
+    case Map.get(params, :min_to_amount) do
+      nil -> :ok
+      value -> if parse_uint(value), do: :ok, else: {:error, {:invalid_min_to_amount, value}}
+    end
+  end
 
   defp fetch(context, key) do
     case Map.fetch(context, key) do
@@ -387,7 +380,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     from_chain = Map.fetch!(params, :from_chain_id)
     settlement = settlement(params)
 
-    with {:ok, decimals} <- source_decimals(from_chain, from_token),
+    with {:ok, decimals} <- registered_asset(from_chain, from_token, :source),
+         {:ok, _} <-
+           registered_asset(
+             Map.fetch!(params, :to_chain_id),
+             Map.fetch!(params, :to_token),
+             :destination
+           ),
+         :ok <- validate_min_to_amount(params),
          {:ok, spending_key, viewing_key} <- stealth_keys(settlement, params) do
       from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
 
@@ -410,12 +410,15 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     end
   end
 
-  # The atomic amount signed and sent is scaled by these decimals; a guessed
-  # value would move 10^n times the intended amount.
-  defp source_decimals(chain, token) do
+  # Both legs must have registered decimals. The source amount is scaled by
+  # them -- a guess would move 10^n the intended amount -- and a destination
+  # amount (a `min_to_amount`, the same-asset floor) means nothing without them.
+  # `min_to_amount` does not waive this: the caller setting it cannot know an
+  # unregistered token's decimals either.
+  defp registered_asset(chain, token, side) do
     case Assets.fetch_decimals(chain, token) do
       {:ok, decimals} -> {:ok, decimals}
-      :error -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: :source}}}
+      :error -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: side}}}
     end
   end
 
@@ -430,9 +433,6 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     case Stealth.decode_meta_address(meta, chain) do
       {:ok, %{spending_pub_key: spending, viewing_pub_key: viewing}} ->
         {:ok, encode_pub_key(spending), encode_pub_key(viewing)}
-
-      {:error, :stealth_unsupported_on_chain} ->
-        {:error, :stealth_unsupported_on_chain}
 
       {:error, reason} ->
         {:error, {:invalid_meta_address, reason}}

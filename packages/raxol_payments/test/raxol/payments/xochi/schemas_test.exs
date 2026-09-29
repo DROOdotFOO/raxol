@@ -317,6 +317,35 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
 
       assert {:error, {:stealth_keys_required, _}} = QuoteRequest.validate(req)
     end
+
+    # Tron, a synthetic unknown chain, and a registered testnet (allowed).
+    test "stealth settlement is refused on any chain outside the EVM registry" do
+      stealth = %QuoteRequest{
+        wallet: @valid_addr,
+        from_chain_id: 8453,
+        to_chain_id: 1,
+        from_token: @valid_addr,
+        to_token: @valid_addr,
+        from_amount: "1000000",
+        settlement_preference: "stealth",
+        stealth_spending_pub_key: "0x02" <> String.duplicate("ab", 32),
+        stealth_viewing_pub_key: "0x03" <> String.duplicate("cd", 32)
+      }
+
+      for chain <- [728_126_428, 999_999] do
+        assert {:error, :stealth_unsupported_on_chain} =
+                 QuoteRequest.validate(%{stealth | to_chain_id: chain})
+      end
+
+      assert :ok = QuoteRequest.validate(%{stealth | to_chain_id: 84_532})
+
+      assert :ok =
+               QuoteRequest.validate(%{
+                 stealth
+                 | to_chain_id: 999_999,
+                   settlement_preference: "public"
+               })
+    end
   end
 
   describe "QuoteResponse.from_json/1" do

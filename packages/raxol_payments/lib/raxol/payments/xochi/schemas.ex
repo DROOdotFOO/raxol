@@ -99,6 +99,13 @@ defmodule Raxol.Payments.Xochi.Schemas do
            {:stealth_keys_required,
             "stealth settlement requires compressed spending and viewing public keys"}}
 
+        # ERC-5564 stealth addresses are secp256k1/keccak EVM addresses. Checked
+        # here, on the request every quote path sends, so no caller can ask for a
+        # stealth settlement on Tron, Solana, or a chain this build does not know.
+        req.settlement_preference == "stealth" and
+            req.to_chain_id not in Raxol.Payments.Assets.evm_chain_ids() ->
+          {:error, :stealth_unsupported_on_chain}
+
         not recipient_address_valid?(req.recipient_address) ->
           {:error, {:invalid_recipient_address, "must be a non-empty string when set"}}
 
