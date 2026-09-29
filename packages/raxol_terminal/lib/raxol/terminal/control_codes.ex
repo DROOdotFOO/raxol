@@ -327,14 +327,19 @@ defmodule Raxol.Terminal.ControlCodes do
     |> handle_cr()
   end
 
-  @dialyzer {:nowarn_function, handle_hts: 1}
   @spec handle_hts(Emulator.t()) :: Emulator.t()
   # ESC H - Horizontal Tabulation Set
   def handle_hts(emulator) do
-    # Set a tab stop at the current cursor column.
-    {x, _y} = Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
-    new_tab_stops = MapSet.put(emulator.tab_stops, x)
-    %{emulator | tab_stops: new_tab_stops}
+    # Set a tab stop at the current cursor column. Stops are distinct columns,
+    # so a flood of HTS keeps at most one per column.
+    {_row, col} = Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
+
+    tab_stops =
+      if col in emulator.tab_stops,
+        do: emulator.tab_stops,
+        else: Enum.sort([col | emulator.tab_stops])
+
+    %{emulator | tab_stops: tab_stops}
   end
 
   @doc "Handle Reverse Index (RI) - ESC M"

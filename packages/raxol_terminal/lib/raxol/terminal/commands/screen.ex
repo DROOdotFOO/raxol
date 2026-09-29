@@ -34,6 +34,9 @@ defmodule Raxol.Terminal.Commands.Screen do
         2 -> ScreenBuffer.erase_all(buffer)
         # Clear entire screen and scrollback
         3 -> ScreenBuffer.erase_all(buffer)
+        # Any other mode is ignored, as in xterm; it used to match no clause
+        # and crash the emulator.
+        _ -> buffer
       end
 
     emulator = Emulator.update_active_buffer(emulator, new_buffer)
