@@ -30,7 +30,6 @@ defmodule Raxol.Headless do
 
   use GenServer
 
-  alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Headless.EventBuilder
   alias Raxol.Headless.TextCapture
 
@@ -146,7 +145,26 @@ defmodule Raxol.Headless do
     GenServer.call(__MODULE__, {:get_buffer, id}, 5_000)
   end
 
-  @doc "Sends a key event to the session's dispatcher."
+  @doc """
+  Sends a key event to the session and returns once the application's
+  `update/2` has handled it.
+
+  The dispatcher answers after the key has been through focus navigation,
+  event bubbling and `update/2`, so on `:ok` the model already reflects the
+  key: a following `get_model/1`, `screenshot/1` or `get_buffer/1` sees it,
+  with nothing to wait for in between.
+
+  Commands that `update/2` returns are started, not awaited. A Task, an
+  interval, or any other command that completes asynchronously can still
+  land after this returns.
+
+  Returns `{:error, {:dispatch_failed, reason}}` when the dispatcher exits
+  or does not answer in time.
+
+  ## Options
+
+    * `:ctrl`, `:alt`, `:shift` - hold the modifier (default: `false`)
+  """
   @spec send_key(atom(), String.t() | atom(), keyword()) ::
           :ok | {:error, term()}
   def send_key(id, key, opts \\ []) do
@@ -169,11 +187,14 @@ defmodule Raxol.Headless do
   end
 
   @doc """
-  Sends a terminal resize event to the session's dispatcher.
+  Sends a terminal resize event to the session and returns once the
+  application's `update/2` has handled it.
 
   The dispatcher forwards the new dimensions to the rendering engine
   (resizing its buffer) and to the application's `update/2` as a
-  `%Event{type: :resize, data: %{width: w, height: h}}`.
+  `%Event{type: :resize, data: %{width: w, height: h}}`, both before it
+  answers, so a following `get_buffer/1` renders at the new size. Commands
+  `update/2` returns are not awaited, as with `send_key/3`.
   """
   @spec send_resize(atom(), pos_integer(), pos_integer()) ::
           :ok | {:error, term()}
@@ -710,17 +731,7 @@ defmodule Raxol.Headless do
   end
 
   defp dispatch_key(session, key, opts) do
-    with_dispatcher(session, fn dispatcher_pid ->
-      event = EventBuilder.key(key, opts)
-
-      _ =
-        Backpressure.cast(dispatcher_pid, {:dispatch, event},
-          label: :headless_dispatch,
-          policy: :call_when_full
-        )
-
-      :ok
-    end)
+    dispatch_event(session, EventBuilder.key(key, opts))
   end
 
   # Send, then fence with a synchronous call: the dispatcher's mailbox is
@@ -736,19 +747,28 @@ defmodule Raxol.Headless do
   end
 
   defp dispatch_resize(session, width, height) do
+    dispatch_event(session, %Raxol.Core.Events.Event{
+      type: :resize,
+      data: %{width: width, height: height}
+    })
+  end
+
+  # A call, not a cast: the dispatcher replies once the event has been through
+  # update/2, and that reply is what `send_key/3` and `send_resize/3` promise
+  # their caller. A cast returned while the event was still queued, so the
+  # caller learned nothing about when update/2 would take it.
+  #
+  # The call blocks this process, which holds every other caller's session, so
+  # a dispatcher that dies on the event or does not answer is an error for this
+  # caller rather than an exit that takes the session manager down with it.
+  defp dispatch_event(session, event) do
     with_dispatcher(session, fn dispatcher_pid ->
-      event = %Raxol.Core.Events.Event{
-        type: :resize,
-        data: %{width: width, height: height}
-      }
-
-      _ =
-        Backpressure.cast(dispatcher_pid, {:dispatch, event},
-          label: :headless_dispatch,
-          policy: :call_when_full
-        )
-
-      :ok
+      try do
+        GenServer.call(dispatcher_pid, {:dispatch, event})
+      catch
+        :exit, {reason, {GenServer, :call, _args}} ->
+          {:error, {:dispatch_failed, reason}}
+      end
     end)
   end
 

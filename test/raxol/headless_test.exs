@@ -220,14 +220,38 @@ defmodule Raxol.HeadlessTest do
   end
 
   describe "send_key/3" do
-    test "dispatches a key event" do
-      {:ok, _} = Headless.start(TestApp, id: :key_test)
+    test "returns only once update/2 has handled the key" do
+      {:ok, id} = Headless.start(TestApp, id: :key_handled)
 
-      :ok = Headless.send_key(:key_test, "=")
-      Process.sleep(100)
+      assert :ok = answer_with_dispatcher_held(id, &Headless.send_key(&1, "="))
+      assert {:ok, %{count: 1}} = Headless.get_model(id)
+    end
 
-      {:ok, model} = Headless.get_model(:key_test)
-      assert model.count == 1
+    # The call holds the session manager, which serves every other session,
+    # so losing the dispatcher mid-call must cost this caller alone.
+    test "answers an error, and keeps serving, when the dispatcher dies on the key" do
+      {:ok, id} = Headless.start(TestApp, id: :key_lost)
+      {:ok, bystander} = Headless.start(TestApp, id: :key_bystander)
+
+      assert {:error, {:dispatch_failed, :killed}} =
+               answer_with_dispatcher_held(
+                 id,
+                 &Headless.send_key(&1, "="),
+                 &Process.exit(&1, :kill)
+               )
+
+      assert {:ok, %{count: 0}} = Headless.get_model(bystander)
+    end
+  end
+
+  describe "send_resize/3" do
+    test "returns only once update/2 has handled the resize" do
+      {:ok, id} = Headless.start(TestApp, id: :resize_handled)
+
+      assert :ok =
+               answer_with_dispatcher_held(id, &Headless.send_resize(&1, 30, 8))
+
+      assert {:ok, %{width: 30, height: 8}} = Headless.get_buffer(id)
     end
   end
 
@@ -731,6 +755,40 @@ defmodule Raxol.HeadlessTest do
       {:dictionary, dict} -> Keyword.get(dict, :"$initial_call")
       nil -> nil
     end
+  end
+
+  # Runs `input` against session `id` with its dispatcher suspended, and
+  # answers what `input` returned. While the dispatcher is suspended nothing
+  # can run update/2, so an `input` that returns then has not waited for its
+  # event to be handled: that fails the test. One that waits is holding a call
+  # the dispatcher has yet to take, and once that call arrives `release` is
+  # applied to the dispatcher.
+  defp answer_with_dispatcher_held(id, input, release \\ &:sys.resume/1) do
+    %{lifecycle: lifecycle, dispatcher: dispatcher, engine: engine} =
+      session_pids(id)
+
+    # Let the startup messages land, so no call but the one `input` makes
+    # reaches the dispatcher.
+    for pid <- [lifecycle, dispatcher, engine], do: :sys.get_state(pid)
+
+    :ok = :sys.suspend(dispatcher)
+    :erlang.trace(dispatcher, true, [:receive])
+    %Task{ref: ref} = task = Task.async(fn -> input.(id) end)
+
+    receive do
+      {^ref, result} ->
+        :ok = :sys.resume(dispatcher)
+
+        flunk(
+          "returned #{inspect(result)} while the dispatcher was suspended, " <>
+            "before update/2 could run"
+        )
+
+      {:trace, ^dispatcher, :receive, {:"$gen_call", _from, _request}} ->
+        release.(dispatcher)
+    end
+
+    Task.await(task)
   end
 
   defp session_pids(id) do
