@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
 
   import Bitwise
 
+  alias Raxol.Core.Defaults
+
   @behaviour Raxol.Terminal.ANSI.Behaviours.SixelGraphics
 
   @moduledoc """
@@ -395,7 +397,23 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
   """
   @spec process_sequence(t(), binary()) :: {t(), :ok | {:error, term()}}
   @impl true
-  def process_sequence(state, data) when is_binary(data) do
+  def process_sequence(state, data) when is_binary(data),
+    do: process_sequence(state, data, Defaults.image_size_ceiling())
+
+  @doc """
+  Processes a sequence of Sixel data, keeping only the pixels that fall inside
+  `extent` (`%{width: w, height: h}` from the image's origin, each clamped to
+  `Raxol.Core.Defaults.image_size_ceiling/0`). The emulator passes the part of
+  the screen an image drawn at the cursor can reach.
+  """
+  @spec process_sequence(t(), binary(), %{
+          required(:width) => non_neg_integer(),
+          required(:height) => non_neg_integer(),
+          optional(atom()) => term()
+        }) :: {t(), :ok | {:error, term()}}
+  def process_sequence(state, data, %{width: max_width, height: max_height})
+      when is_binary(data) do
+    ceiling = Defaults.image_size_ceiling()
     Logger.debug("SixelGraphics: processing #{byte_size(data)} bytes")
 
     # Ensure palette is initialized
@@ -426,7 +444,9 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
              raster_attrs: state_with_palette.attributes,
              pixel_buffer: state_with_palette.pixel_buffer,
              max_x: 0,
-             max_y: 0
+             max_y: 0,
+             max_width: min(max_width, ceiling.width),
+             max_height: min(max_height, ceiling.height)
            }
          ) do
       {:ok, parser_state} ->
