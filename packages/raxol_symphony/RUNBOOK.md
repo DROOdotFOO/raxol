@@ -116,10 +116,14 @@ Once at least one issue has been driven to a PR with evidence captured:
 cd packages/raxol_symphony
 HEX_BUILD=1 mix deps.get
 HEX_BUILD=1 mix hex.publish
+git checkout -- mix.lock
 ```
 
 `HEX_BUILD=1` strips the local `path:` deps so the build sees only Hex
-packages. `raxol_symphony` publishes **independently of `raxol_earn`**: the
+packages. It also rewrites `mix.lock` with Hex entries for the path siblings;
+never commit that lock. Such entries unpin their whole dependency subtree on
+the next `mix deps.get`, and `scripts/check_lock_path_shadows.exs` fails CI on
+them. `raxol_symphony` publishes **independently of `raxol_earn`**: the
 `raxol_earn` dependency is `only: :test` (`mix.exs`), so it is not a published
 requirement. `raxol_core`, `raxol`, `raxol_agent` and `raxol_mcp` are already
 on Hex at `~> 2.6`.
