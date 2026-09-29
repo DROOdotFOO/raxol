@@ -3,6 +3,36 @@ defmodule Raxol.Headless.McpToolsTest do
 
   alias Raxol.Headless.McpTools
 
+  # Its update/2 on "x" starts a linked process that raises with a credential
+  # in the message, then waits: the link takes the dispatcher down with the
+  # exception, stacktrace and all, as its exit reason.
+  defmodule LeakyApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{}
+
+    @impl true
+    def update(%Raxol.Core.Events.Event{type: :key, data: %{char: "x"}}, model) do
+      {:ok, _pid} =
+        Task.start_link(fn ->
+          raise "GET https://api.example.com/v1/x failed: 500 (payload LEAK-MARKER-7Q)"
+        end)
+
+      receive do
+        :never -> {model, []}
+      end
+    end
+
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("leaky")
+
+    @impl true
+    def subscriptions(_model), do: []
+  end
+
   # Owns `:tidewave_tools` the way Tidewave does: a `:sys`-reachable process, so
   # `inject_into_tidewave/0`'s `:sys.replace_state` round trip is exercised for
   # real rather than stubbed out.
@@ -442,6 +472,38 @@ defmodule Raxol.Headless.McpToolsTest do
 
       assert {props.width.minimum, props.width.maximum} == {1, 512}
       assert {props.height.minimum, props.height.maximum} == {1, 256}
+    end
+  end
+
+  # A dispatcher that dies on a key takes its exit reason with it, and an
+  # exception in that reason carries whatever its message held: a URL, a token.
+  # The tool result reaches a model, so it gets the class of the exit and never
+  # the payload, as `Raxol.MCP.Registry` does for a callback that exits.
+  describe "raxol_send_key when the dispatcher dies on the key" do
+    setup do
+      case Process.whereis(Raxol.Headless) do
+        nil -> start_supervised!({Raxol.Headless, [name: Raxol.Headless]})
+        pid -> pid
+      end
+
+      {:ok, id} = Raxol.Headless.start(LeakyApp, id: :leaky_send_key)
+
+      on_exit(fn ->
+        if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop(id)
+      end)
+
+      %{id: id}
+    end
+
+    @tag capture_log: true
+    test "answers the exit's class, not the exception's message", %{id: id} do
+      send_key = Enum.find(McpTools.tools(), &(&1.name == "raxol_send_key"))
+
+      assert {:error, message} =
+               send_key.callback.(%{"id" => Atom.to_string(id), "key" => "x"})
+
+      refute message =~ "LEAK-MARKER-7Q"
+      assert message == inspect({:dispatch_failed, :unknown})
     end
   end
 

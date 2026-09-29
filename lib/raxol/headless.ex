@@ -26,9 +26,44 @@ defmodule Raxol.Headless do
 
       # Stop
       :ok = Raxol.Headless.stop(:demo)
+
+  ## Processes
+
+  The `Raxol.Headless` server holds the session registry and serializes what
+  reads or changes it: `start/2` (compiling a script path included, bounded
+  by the compile budget), `stop/1`, `list/0`, and resolving an id to its
+  session. Every other function makes that one lookup (5 s) and then runs in
+  the calling process: it asks the session's Lifecycle for its processes and
+  calls its dispatcher (the model, and the event for `send_key/3`,
+  `send_resize/3` and `send_message/2`) or its rendering engine
+  (`screenshot/1`, `get_buffer/1`), each call with a 5 s timeout, or
+  `send_key/3`'s `:timeout` for the key. A slow app therefore holds up only
+  the process calling it. `Raxol.MCP.Server` runs every tool call in its one
+  process, so over MCP that process is shared by every client.
+
+  Those functions answer rather than exit when the session or its processes
+  fail:
+
+    * `{:error, :not_found}` - no session has that id, or it ended during
+      the call
+    * `{:error, {:session_unavailable, class}}` - the session is alive but
+      one of its processes did not answer
+    * `{:error, {:dispatch_failed, class}}` - `send_key/3` or
+      `send_resize/3`: the dispatcher exited or did not answer in time
+    * `{:error, :called_from_own_update}` - called from the session's own
+      `update/2`, whose dispatcher could only wait on itself
+    * `{:error, :dispatcher_not_available}` and
+      `{:error, :rendering_engine_not_available}` - the Lifecycle reports no
+      live process for that role
+
+  `class` is the exit reason's atom (for example `:timeout`, `:noproc`,
+  `:killed`), else `:unknown`; the full reason is logged, never returned. The
+  lookup itself exits if the server is not running; `list/0` answers `[]`.
   """
 
   use GenServer
+
+  require Logger
 
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Headless.EventBuilder
@@ -36,7 +71,7 @@ defmodule Raxol.Headless do
 
   @default_width 120
   @default_height 40
-  @default_dispatch_wait_ms 50
+  @default_dispatch_timeout_ms 5_000
 
   # Deliberately SHORTER than the 5s the other calls in this module give
   # themselves: the compile happens inside `handle_call`, so this budget is also
@@ -131,7 +166,7 @@ defmodule Raxol.Headless do
   @doc "Takes a text screenshot of the session's current screen."
   @spec screenshot(atom()) :: {:ok, String.t()} | {:error, term()}
   def screenshot(id) do
-    GenServer.call(__MODULE__, {:screenshot, id}, 5_000)
+    with {:ok, session} <- lookup_session(id), do: take_screenshot(session)
   end
 
   @doc """
@@ -143,14 +178,69 @@ defmodule Raxol.Headless do
   """
   @spec get_buffer(atom()) :: {:ok, map()} | {:error, term()}
   def get_buffer(id) do
-    GenServer.call(__MODULE__, {:get_buffer, id}, 5_000)
+    with {:ok, session} <- lookup_session(id), do: take_buffer(session)
   end
 
-  @doc "Sends a key event to the session's dispatcher."
+  @doc """
+  Sends a key event to the session and returns once the application's
+  `update/2` has handled it.
+
+  The dispatcher answers after the key has been through focus navigation,
+  event bubbling and `update/2`, so on `:ok` the model already reflects the
+  key: a following `get_model/1`, `screenshot/1` or `get_buffer/1` sees it,
+  with nothing to wait for in between.
+
+  Commands that `update/2` returns are started, not awaited. A Task, an
+  interval, or any other command that completes asynchronously can still
+  land after this returns.
+
+  The wait happens in the calling process, not in the `Raxol.Headless`
+  server, so a slow `update/2` holds up only its own caller: other sessions
+  answer meanwhile. That isolation is per process. `Raxol.MCP.Server` runs
+  every tool call in its one process, so over MCP a slow session holds every
+  client's tool calls, not just the caller's.
+
+  From inside an app's `update/2`, `list/0`, `start/2` and calls on other
+  sessions work. Calls on the app's own session answer
+  `{:error, :called_from_own_update}`: its dispatcher is the process running
+  `update/2`, so they could only wait on themselves.
+
+  `wait: false` skips the wait: the call returns once the key is queued at
+  the dispatcher and says nothing about when `update/2` takes it. It is for
+  callers that only enqueue, such as `Raxol.MCP.AgentBridge`'s `agent.send`.
+  Past 1000 queued messages the dispatcher applies backpressure and the
+  call waits for it to take the key, as the live input path does.
+
+  Returns `{:error, {:dispatch_failed, class}}` when the dispatcher exits or
+  does not answer within `:timeout`. `class` is the exit reason's atom (for
+  example `:timeout`, `:noproc`, `:killed`, `:shutdown`), else `:unknown`,
+  never its payload: an exception that killed the dispatcher is logged, not
+  returned.
+  A timeout only ends the wait. The key is still in the dispatcher's queue,
+  so `update/2` may yet handle it after this returns.
+
+  ## Options
+
+    * `:ctrl`, `:alt`, `:shift` - hold the modifier (default: `false`)
+    * `:timeout` - how long to wait for `update/2`, in milliseconds or
+      `:infinity` (default: #{@default_dispatch_timeout_ms})
+    * `:wait` - `false` returns once the key is queued (default: `true`)
+  """
   @spec send_key(atom(), String.t() | atom(), keyword()) ::
           :ok | {:error, term()}
   def send_key(id, key, opts \\ []) do
-    GenServer.call(__MODULE__, {:send_key, id, key, opts}, 5_000)
+    {wait, opts} = Keyword.pop(opts, :wait, true)
+
+    {timeout, key_opts} =
+      Keyword.pop(opts, :timeout, @default_dispatch_timeout_ms)
+
+    with {:ok, session} <- lookup_session(id) do
+      event = EventBuilder.key(key, key_opts)
+
+      if wait,
+        do: dispatch_event(session, event, timeout),
+        else: enqueue_event(session, event)
+    end
   end
 
   @doc """
@@ -165,49 +255,51 @@ defmodule Raxol.Headless do
   """
   @spec send_message(atom(), term()) :: :ok | {:error, term()}
   def send_message(id, msg) do
-    GenServer.call(__MODULE__, {:send_message, id, msg}, 5_000)
+    with {:ok, session} <- lookup_session(id),
+         do: dispatch_message(session, msg)
   end
 
   @doc """
-  Sends a terminal resize event to the session's dispatcher.
+  Sends a terminal resize event to the session and returns once the
+  application's `update/2` has handled it.
 
   The dispatcher forwards the new dimensions to the rendering engine
   (resizing its buffer) and to the application's `update/2` as a
-  `%Event{type: :resize, data: %{width: w, height: h}}`.
+  `%Event{type: :resize, data: %{width: w, height: h}}`, both before it
+  answers, so a following `get_buffer/1` renders at the new size. Commands
+  `update/2` returns are not awaited. As with `send_key/3`, the wait runs in
+  the caller with the same errors; it gives up after
+  #{@default_dispatch_timeout_ms} ms, and the resize may still be applied
+  after that.
   """
   @spec send_resize(atom(), pos_integer(), pos_integer()) ::
           :ok | {:error, term()}
   def send_resize(id, width, height)
       when is_integer(width) and width > 0 and is_integer(height) and
              height > 0 do
-    GenServer.call(__MODULE__, {:send_resize, id, width, height}, 5_000)
+    with {:ok, session} <- lookup_session(id) do
+      dispatch_resize(session, width, height)
+    end
   end
 
   @doc """
-  Sends a key and returns a screenshot after waiting for re-render.
+  Sends a key and returns a screenshot of the frame it produced.
 
-  ## Options
-
-    * `:wait_ms` - Milliseconds to wait for dispatch processing (default: 50)
-    * All key modifier options (`:ctrl`, `:alt`, `:shift`)
+  `send_key/3` followed by `screenshot/1`: the screenshot is rendered after
+  `update/2` has handled the key. Takes the same options as `send_key/3`,
+  except `:wait`: the screenshot is of the handled key, so it always waits.
   """
   @spec send_key_and_screenshot(atom(), String.t() | atom(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_key_and_screenshot(id, key, opts \\ []) do
-    wait_ms = Keyword.get(opts, :wait_ms, @default_dispatch_wait_ms)
-    key_opts = Keyword.drop(opts, [:wait_ms])
-
-    GenServer.call(
-      __MODULE__,
-      {:send_key_and_screenshot, id, key, key_opts, wait_ms},
-      10_000
-    )
+    with :ok <- send_key(id, key, Keyword.delete(opts, :wait)),
+         do: screenshot(id)
   end
 
   @doc "Returns the application model from the session's dispatcher."
   @spec get_model(atom()) :: {:ok, term()} | {:error, term()}
   def get_model(id) do
-    GenServer.call(__MODULE__, {:get_model, id}, 5_000)
+    with {:ok, session} <- lookup_session(id), do: read_model(session)
   end
 
   @doc "Stops a headless session."
@@ -239,97 +331,14 @@ defmodule Raxol.Headless do
     end
   end
 
+  # The one per-session request this server answers is which session an id
+  # names. Everything after that -- the Lifecycle lookup, the dispatch, the
+  # render -- runs in the caller: made here, each held every other session's
+  # calls for as long as the app took, and an app calling back into this
+  # module waited on itself.
   @impl true
-  def handle_call({:screenshot, id}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        result = take_screenshot(session)
-        {:reply, result, state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_buffer, id}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        {:reply, take_buffer(session), state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:send_key, id, key, opts}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        result = dispatch_key(session, key, opts)
-        {:reply, result, state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:send_message, id, msg}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        {:reply, dispatch_message(session, msg), state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:send_resize, id, width, height}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        {:reply, dispatch_resize(session, width, height), state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call(
-        {:send_key_and_screenshot, id, key, key_opts, wait_ms},
-        _from,
-        state
-      ) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        case dispatch_key(session, key, key_opts) do
-          :ok ->
-            # Wait for dispatcher to process the key event (async cast)
-            Process.sleep(wait_ms)
-            # Synchronous render + screenshot
-            {:reply, take_screenshot(session), state}
-
-          error ->
-            {:reply, error, state}
-        end
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_model, id}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        result = read_model(session)
-        {:reply, result, state}
-
-      error ->
-        {:reply, error, state}
-    end
+  def handle_call({:lookup_session, id}, _from, state) do
+    {:reply, get_session(state, id), state}
   end
 
   @impl true
@@ -663,6 +672,9 @@ defmodule Raxol.Headless do
     end
   end
 
+  defp lookup_session(id),
+    do: GenServer.call(__MODULE__, {:lookup_session, id}, 5_000)
+
   defp get_session(state, id) do
     case Map.get(state.sessions, id) do
       nil -> {:error, :not_found}
@@ -672,7 +684,7 @@ defmodule Raxol.Headless do
 
   defp take_screenshot(session) do
     with_engine(session, fn engine_pid ->
-      case render_frame(engine_pid) do
+      case render_frame(session, engine_pid) do
         {:ok, buffer} when not is_nil(buffer) ->
           {:ok, TextCapture.capture(buffer)}
 
@@ -687,7 +699,7 @@ defmodule Raxol.Headless do
 
   defp take_buffer(session) do
     with_engine(session, fn engine_pid ->
-      case render_frame(engine_pid) do
+      case render_frame(session, engine_pid) do
         {:ok, buffer} when not is_nil(buffer) -> {:ok, buffer}
         {:ok, nil} -> {:error, :no_buffer}
         error -> error
@@ -702,25 +714,18 @@ defmodule Raxol.Headless do
   # unhandled when `start/2` returns, and the dispatcher answers it with an
   # `{:update_size, _}` that swaps a blank buffer in over the rendered frame.
   # A render that fails reads the buffer as it stands, as it always has.
-  defp render_frame(engine_pid) do
-    case GenServer.call(engine_pid, :render_frame_sync_buffer) do
-      {:ok, buffer} -> {:ok, buffer}
-      {:error, _reason} -> GenServer.call(engine_pid, :get_buffer)
+  defp render_frame(session, engine_pid) do
+    case session_call(session, engine_pid, :render_frame_sync_buffer) do
+      {:ok, {:ok, buffer}} ->
+        {:ok, buffer}
+
+      {:ok, {:error, _reason}} ->
+        with {:ok, reply} <- session_call(session, engine_pid, :get_buffer),
+             do: reply
+
+      error ->
+        error
     end
-  end
-
-  defp dispatch_key(session, key, opts) do
-    with_dispatcher(session, fn dispatcher_pid ->
-      event = EventBuilder.key(key, opts)
-
-      _ =
-        Backpressure.cast(dispatcher_pid, {:dispatch, event},
-          label: :headless_dispatch,
-          policy: :call_when_full
-        )
-
-      :ok
-    end)
   end
 
   # Send, then fence with a synchronous call: the dispatcher's mailbox is
@@ -730,54 +735,145 @@ defmodule Raxol.Headless do
   defp dispatch_message(session, msg) do
     with_dispatcher(session, fn dispatcher_pid ->
       send(dispatcher_pid, {:subscription, msg})
-      _ = GenServer.call(dispatcher_pid, :get_model)
-      :ok
+
+      with {:ok, _model} <- session_call(session, dispatcher_pid, :get_model),
+           do: :ok
     end)
   end
 
   defp dispatch_resize(session, width, height) do
+    event = %Raxol.Core.Events.Event{
+      type: :resize,
+      data: %{width: width, height: height}
+    }
+
+    dispatch_event(session, event, @default_dispatch_timeout_ms)
+  end
+
+  # A call, not a cast: the dispatcher replies once the event has been through
+  # update/2, and that reply is what `send_key/3` and `send_resize/3` promise
+  # their caller. A cast returned while the event was still queued, so the
+  # caller learned nothing about when update/2 would take it.
+  #
+  # It runs in the caller's process, so the wait costs no one else. A
+  # dispatcher that dies on the event or does not answer in time is an error
+  # for the caller rather than an exit: the documented return is a value.
+  #
+  # The error carries the exit's class and the log carries the reason. A
+  # dispatcher killed by a linked process that raised exits with that exception,
+  # message and stacktrace included, and `raxol_send_key` hands this error to a
+  # model: whatever the message held (a URL, a token) went with it.
+  defp dispatch_event(session, event, timeout) do
     with_dispatcher(session, fn dispatcher_pid ->
-      event = %Raxol.Core.Events.Event{
-        type: :resize,
-        data: %{width: width, height: height}
-      }
-
-      _ =
-        Backpressure.cast(dispatcher_pid, {:dispatch, event},
-          label: :headless_dispatch,
-          policy: :call_when_full
-        )
-
-      :ok
+      try do
+        GenServer.call(dispatcher_pid, {:dispatch, event}, timeout)
+      catch
+        :exit, reason -> dispatch_failed(session, reason)
+      end
     end)
   end
 
+  # `send_key(id, key, wait: false)`: queue the event and return. Backpressure
+  # turns the cast into a call past its watermark, as on the live input path,
+  # and that call can exit like any other.
+  defp enqueue_event(session, event) do
+    with_dispatcher(session, fn dispatcher_pid ->
+      try do
+        case Backpressure.cast(dispatcher_pid, {:dispatch, event},
+               label: :headless_dispatch,
+               policy: :call_when_full
+             ) do
+          :ok -> :ok
+          {:dropped, reason} -> {:error, {:dispatch_failed, reason}}
+        end
+      catch
+        :exit, reason -> dispatch_failed(session, reason)
+      end
+    end)
+  end
+
+  defp dispatch_failed(session, reason) do
+    Logger.error(
+      "[#{inspect(__MODULE__)}] dispatch to session #{inspect(session.id)} failed: " <>
+        Exception.format_exit(reason)
+    )
+
+    {:error, {:dispatch_failed, exit_class(reason)}}
+  end
+
+  # The shape of an exit, never its payload, as `Raxol.MCP.Registry` reduces a
+  # callback's exit: the reason's atom, or the atom heading a `{atom, detail}`
+  # reason (`:timeout`, `:noproc`, `:killed`, `:calling_self`, ...), else
+  # `:unknown`. `GenServer.call/3` wraps the reason with the call, request
+  # included, so that wrapper comes off first.
+  defp exit_class({reason, {GenServer, :call, _args}}), do: exit_class(reason)
+  defp exit_class(reason) when is_atom(reason), do: reason
+  defp exit_class({reason, _detail}) when is_atom(reason), do: reason
+  defp exit_class(_other), do: :unknown
+
   defp read_model(session) do
     with_dispatcher(session, fn dispatcher_pid ->
-      GenServer.call(dispatcher_pid, :get_model)
+      with {:ok, reply} <- session_call(session, dispatcher_pid, :get_model),
+           do: reply
     end)
   end
 
   defp with_engine(session, fun) do
-    lifecycle_state = GenServer.call(session.lifecycle_pid, :get_full_state)
-    pid = lifecycle_state.rendering_engine_pid
+    with {:ok, lifecycle_state} <- session_processes(session) do
+      pid = lifecycle_state.rendering_engine_pid
 
-    if pid && Process.alive?(pid) do
-      fun.(pid)
-    else
-      {:error, :rendering_engine_not_available}
+      if pid && Process.alive?(pid) do
+        fun.(pid)
+      else
+        {:error, :rendering_engine_not_available}
+      end
     end
   end
 
   defp with_dispatcher(session, fun) do
-    lifecycle_state = GenServer.call(session.lifecycle_pid, :get_full_state)
-    pid = lifecycle_state.dispatcher_pid
+    with {:ok, lifecycle_state} <- session_processes(session) do
+      pid = lifecycle_state.dispatcher_pid
 
-    if pid && Process.alive?(pid) do
-      fun.(pid)
-    else
-      {:error, :dispatcher_not_available}
+      if pid && Process.alive?(pid) do
+        fun.(pid)
+      else
+        {:error, :dispatcher_not_available}
+      end
     end
+  end
+
+  # A session's `update/2` runs in its dispatcher, so a call made from there
+  # on the same session reaches a process that is busy running it: a model
+  # read calls itself, and a render waits on the engine, which asks that same
+  # dispatcher for the model and times out. Each is refused up front, and a
+  # queued key with it, so the rule is one line: `update/2` may not call this
+  # module on its own session.
+  defp session_processes(session) do
+    with {:ok, %{dispatcher_pid: dispatcher_pid} = lifecycle_state} <-
+           lifecycle_state(session) do
+      if dispatcher_pid == self(),
+        do: {:error, :called_from_own_update},
+        else: {:ok, lifecycle_state}
+    end
+  end
+
+  defp lifecycle_state(session),
+    do: session_call(session, session.lifecycle_pid, :get_full_state)
+
+  # A call to one of the session's processes, answered `{:ok, reply}`.
+  #
+  # The session can end between the server naming it and any of these calls:
+  # an app that quits does, and the server drops the session only once the
+  # Lifecycle's `:DOWN` arrives. `:not_found` is what the caller would get a
+  # moment later. A session whose Lifecycle is alive but whose process did not
+  # answer is a different answer, carrying only the exit's class.
+  defp session_call(session, pid, request) do
+    {:ok, GenServer.call(pid, request)}
+  catch
+    :exit, reason ->
+      if Process.alive?(session.lifecycle_pid),
+        do: {:error, {:session_unavailable, exit_class(reason)}},
+        else: {:error, :not_found}
   end
 
   defp stop_synchronizer(nil), do: :ok

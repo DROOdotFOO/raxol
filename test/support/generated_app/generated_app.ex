@@ -296,14 +296,8 @@ defmodule Raxol.Test.GeneratedApp do
       else: flunk("#{label} did not render #{inspect(marker)}; frame:\n#{text}")
   end
 
-  defp press(_id, []), do: :ok
-
-  # Keys reach update/2 asynchronously. A message sent after them waits for
-  # update/2 to take it, and the app's queue takes them in order, so by then
-  # every key has been handled.
   defp press(id, keys) do
     for key <- keys, do: assert(:ok = Headless.send_key(id, key))
-    assert :ok = Headless.send_message(id, :generated_app_keys_pressed)
   end
 
   defp screenshot!(id) do

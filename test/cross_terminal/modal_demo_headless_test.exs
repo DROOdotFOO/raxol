@@ -43,7 +43,6 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
     refute closed_text =~ "Confirm Action"
 
     :ok = Headless.send_key(id, "o")
-    Process.sleep(50)
 
     {:ok, open_text} = Headless.screenshot(id)
     # background is still present, unobstructed above/around the dialog
@@ -63,7 +62,6 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
     {:ok, closed_buffer} = Headless.get_buffer(id)
 
     :ok = Headless.send_key(id, "o")
-    Process.sleep(50)
     {:ok, open_buffer} = Headless.get_buffer(id)
 
     for y <- 0..3, x <- 0..35 do
@@ -89,7 +87,6 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
     closed_fg = closed_title_cell.style.foreground
 
     :ok = Headless.send_key(id, "o")
-    Process.sleep(50)
     {:ok, open_buffer} = Headless.get_buffer(id)
     open_title_cell = cell_at(open_buffer, 0, 0)
     assert open_title_cell.char == "M"
@@ -102,7 +99,6 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
     refute open_fg == closed_fg
 
     :ok = Headless.send_key(id, "n")
-    Process.sleep(50)
     {:ok, closed_again_buffer} = Headless.get_buffer(id)
     closed_again_title_cell = cell_at(closed_again_buffer, 0, 0)
     assert closed_again_title_cell.style.foreground == closed_fg
