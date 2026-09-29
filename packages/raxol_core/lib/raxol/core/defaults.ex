@@ -16,6 +16,28 @@ defmodule Raxol.Core.Defaults do
   def terminal_dimensions, do: {@default_terminal_width, @default_terminal_height}
   def scrollback_limit, do: @default_scrollback_limit
 
+  # -- Terminal size ceiling --
+  # The largest session any surface (local TTY, SSH, MCP/headless, LiveView,
+  # gateway) may allocate. A screen buffer is a full width*height grid, and a
+  # grid cell costs ~536 bytes flat (measured: `:erts_debug.flat_size/1` of a
+  # fresh `Raxol.Terminal.ScreenBuffer` at 80x24 and 200x50, i.e. every cell
+  # holding its own style -- the size of any copy sent between processes) and
+  # ~113 bytes in-process once rendered with shared styles. The cell ceiling
+  # therefore bounds one buffer at ~562 MB worst case (~118 MB typical), where
+  # an unchecked 100000x100000 request asked for ~5.4 TB.
+  #
+  # Sized for the pilot's own cockpit, not for remote clients: one 8K panel
+  # (7680x4320 px) at a 6x12 px cell is 1280x360 = 460,800 cells (640x640
+  # rotated to portrait), and two side by side are 2560x360 = 921,600 cells.
+  # 4096 per axis is a 24,576 px wall at 6 px cells.
+  @max_terminal_width 4096
+  @max_terminal_height 4096
+  @max_terminal_cells 1_048_576
+
+  def max_terminal_width, do: @max_terminal_width
+  def max_terminal_height, do: @max_terminal_height
+  def max_terminal_cells, do: @max_terminal_cells
+
   # -- Timeouts (milliseconds) --
   @default_timeout_ms 5_000
   @default_shutdown_timeout_ms 5_000

@@ -4,8 +4,13 @@ defmodule Raxol.Core.Utils.Validation do
   Provides standardized validation functions for dimensions, configs, and common patterns.
   """
 
+  alias Raxol.Core.Defaults
+
   @doc """
   Validates that a dimension is a positive integer, returning default if invalid.
+
+  It sets no upper bound; a terminal width or height goes through
+  `clamp_terminal_size/2` or `validate_terminal_size/2` as well.
   """
   @spec validate_dimension(integer(), non_neg_integer()) :: non_neg_integer()
   def validate_dimension(dimension, _default)
@@ -14,6 +19,54 @@ defmodule Raxol.Core.Utils.Validation do
   end
 
   def validate_dimension(_, default), do: default
+
+  @doc """
+  Clamps a terminal size to the ceiling in `Raxol.Core.Defaults`.
+
+  The width is capped at `max_terminal_width/0`, then the height at
+  `max_terminal_height/0` and at as many rows as `max_terminal_cells/0`
+  allows at that width, so `width * height` never exceeds the cell ceiling.
+  Only the upper bound is applied: a size already within the ceiling, and a
+  non-positive or non-integer value, comes back unchanged.
+
+      iex> Raxol.Core.Utils.Validation.clamp_terminal_size(120, 40)
+      {120, 40}
+
+      iex> Raxol.Core.Utils.Validation.clamp_terminal_size(100_000, 100_000)
+      {4096, 256}
+  """
+  @spec clamp_terminal_size(term(), term()) :: {term(), term()}
+  def clamp_terminal_size(width, height) do
+    width = clamp_upper(width, Defaults.max_terminal_width())
+
+    rows_allowed =
+      min(
+        Defaults.max_terminal_height(),
+        div(Defaults.max_terminal_cells(), positive_or_one(width))
+      )
+
+    {width, clamp_upper(height, rows_allowed)}
+  end
+
+  @doc """
+  Checks a terminal size against the ceiling `clamp_terminal_size/2` applies.
+
+  Returns `{:error, :invalid_dimensions}` unless both are positive integers,
+  and `{:error, :dimensions_too_large}` when either axis, or
+  `width * height`, is past the ceiling in `Raxol.Core.Defaults`.
+  """
+  @spec validate_terminal_size(term(), term()) ::
+          :ok | {:error, :invalid_dimensions | :dimensions_too_large}
+  def validate_terminal_size(width, height)
+      when is_integer(width) and width > 0 and is_integer(height) and
+             height > 0 do
+    if clamp_terminal_size(width, height) == {width, height},
+      do: :ok,
+      else: {:error, :dimensions_too_large}
+  end
+
+  def validate_terminal_size(_width, _height),
+    do: {:error, :invalid_dimensions}
 
   @doc """
   Validates that coordinates are valid non-negative integers.
@@ -115,4 +168,12 @@ defmodule Raxol.Core.Utils.Validation do
   end
 
   def validate_enum(_, _), do: {:error, :invalid_option}
+
+  defp clamp_upper(value, ceiling) when is_integer(value),
+    do: min(value, ceiling)
+
+  defp clamp_upper(value, _ceiling), do: value
+
+  defp positive_or_one(value) when is_integer(value) and value > 0, do: value
+  defp positive_or_one(_value), do: 1
 end
