@@ -106,29 +106,21 @@ defmodule Raxol.Terminal.Commands.OSCHandlerTest do
     end
   end
 
-  describe "OSC 52 clipboard (regression)" do
-    test "sets clipboard content from base64" do
-      {:ok, result} = OSCHandler.handle(emulator(), 52, "c;SGVsbG8=")
-      assert Clipboard.get_content(result.clipboard) == "Hello"
-    end
-
-    test "queries clipboard content" do
+  describe "OSC 52 clipboard" do
+    test "a query is never answered, so output cannot read the clipboard" do
       {:ok, seeded} = Clipboard.set_content(Clipboard.Manager.new(), "Hi")
 
-      {:ok, result} =
-        OSCHandler.handle(emulator(%{clipboard: seeded}), 52, "c;?")
+      for target <- ["c", "s"] do
+        {:ok, result} =
+          OSCHandler.handle(emulator(%{clipboard: seeded}), 52, "#{target};?")
 
-      assert result.output_buffer == "\e]52;c;#{Base.encode64("Hi")}\e\\"
+        assert result.output_buffer == nil
+      end
     end
 
-    test "sets selection content from base64" do
-      {:ok, result} = OSCHandler.handle(emulator(), 52, "s;U2VsZWN0ZWQ=")
-      assert {:ok, "Selected"} = Clipboard.get_selection(result.clipboard)
-    end
-
-    test "rejects a malformed command without crashing" do
-      assert {:error, :invalid_clipboard_command, _emulator} =
-               OSCHandler.handle(emulator(), 52, "bogus")
+    test "a set leaves the clipboard alone" do
+      {:ok, result} = OSCHandler.handle(emulator(), 52, "c;SGVsbG8=")
+      assert result == emulator()
     end
   end
 
@@ -139,7 +131,7 @@ defmodule Raxol.Terminal.Commands.OSCHandlerTest do
       log =
         capture_log([level: :debug], fn ->
           result = Executor.execute_osc_command(emulator(), "52;c;#{encoded_secret}")
-          assert Clipboard.get_content(result.clipboard) == "private clipboard value"
+          assert result == emulator()
         end)
 
       assert log =~ "Executing OSC command code=52, payload=[REDACTED]"

@@ -110,6 +110,9 @@ defmodule Raxol.Terminal.Emulator do
             session_id: "",
             client_options: %{},
             window_title: nil,
+            # From OSC 7 and OSC 1337 CurrentDir=/RemoteHost=.
+            current_directory: nil,
+            remote_host: nil,
             last_col_exceeded: false,
             icon_name: nil,
             tab_stops: [],
@@ -193,6 +196,8 @@ defmodule Raxol.Terminal.Emulator do
           session_id: String.t(),
           client_options: map(),
           window_title: String.t() | nil,
+          current_directory: String.t() | nil,
+          remote_host: String.t() | nil,
           last_col_exceeded: boolean(),
           icon_name: String.t() | nil,
           tab_stops: list(),
