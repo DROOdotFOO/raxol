@@ -47,6 +47,16 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
     end)
   end
 
+  defp reductions_to_feed(input) do
+    in_capped_process(fn ->
+      emulator = Emulator.new(80, 24)
+      {:reductions, before} = Process.info(self(), :reductions)
+      _emulator = feed(emulator, input)
+      {:reductions, later} = Process.info(self(), :reductions)
+      later - before
+    end)
+  end
+
   describe "ICH (CSI Ps @)" do
     test "a huge count inserts only up to the right margin" do
       line =
@@ -325,6 +335,16 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
     test "a character split between chunks is joined" do
       emulator = feed(Emulator.new(80, 24), ["a" <> <<0xC3>>, <<0xA9>> <> "b"])
       assert String.starts_with?(get_line_text(emulator, 0), "a\u00E9b ")
+    end
+
+    test "a long run of invalid bytes costs no more than as much text" do
+      # Each invalid byte used to hand the rest of the chunk to the UTF-8
+      # decoder to spot a character cut off at its end: quadratic in the run.
+      size = 200_000
+      invalid = reductions_to_feed(:binary.copy(<<0x80>>, size))
+      ascii = reductions_to_feed(String.duplicate("a", size))
+
+      assert invalid < 2 * ascii
     end
   end
 

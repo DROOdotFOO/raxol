@@ -214,8 +214,11 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
   # U+FFFD and parsing carries on; returning an error here threw away every
   # change the chunk had made, and the rest of it, so one bad byte could hide
   # output from the pilot. A character cut off by the end of the chunk is kept
-  # for the next one instead.
-  defp handle_invalid_utf8(emulator, parser_state, <<_bad, rest::binary>> = other) do
+  # for the next one instead. Such a prefix is at most 3 bytes, so only a
+  # short remainder is checked: decoding the whole rest for every bad byte
+  # made a run of them quadratic.
+  defp handle_invalid_utf8(emulator, parser_state, <<_bad, rest::binary>> = other)
+       when byte_size(other) < 4 do
     case :unicode.characters_to_binary(other) do
       {:incomplete, "", ^other} ->
         {:continue, emulator, %{parser_state | utf8_pending: other}, ""}
@@ -224,4 +227,7 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
         handle_printable_char(emulator, parser_state, 0xFFFD, rest)
     end
   end
+
+  defp handle_invalid_utf8(emulator, parser_state, <<_bad, rest::binary>>),
+    do: handle_printable_char(emulator, parser_state, 0xFFFD, rest)
 end
