@@ -403,7 +403,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     do: {:ok, new_model, []}
 
   defp resize_result({:ok, other}, state, event) do
-    log_unexpected_return(state, event, event, other)
+    _ = log_unexpected_return(state, event, event, other)
     :unhandled
   end
 
@@ -414,7 +414,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     do: :unhandled
 
   defp resize_result({:error, reason}, state, event) do
-    log_update_error(state, event, event, {:update_failed, reason})
+    _ = log_update_error(state, event, event, {:update_failed, reason})
     :unhandled
   end
 

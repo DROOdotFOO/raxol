@@ -96,13 +96,20 @@ done < <(git ls-files '*.md')
 # with raxol siblings cannot have its lockfile regenerated at all while the
 # family's new version is unpublished. The report makes drift reviewable
 # without making the release window unsatisfiable.
+#
+# A dependency no lockfile holds as a Hex package is simply absent: grep exits
+# 1 on no match, and under pipefail that used to abort the whole check (xargs'
+# 123). raxol_core is not listed: a Hex lock entry for a raxol_* sibling is a
+# path shadow, which scripts/check_lock_path_shadows.exs rejects outright.
 for dependency in \
   ex_doc mox credo dialyxir excoveralls sobelow mix_audit \
-  raxol_core nx complex mint finch joken pigeon; do
+  nx complex mint finch joken pigeon; do
   versions=$(
-    git ls-files 'mix.lock' '*/mix.lock' |
-      xargs grep -ohE "\"$dependency\": \{:hex, :$dependency, \"[0-9][^\"]*\"" 2>/dev/null |
-      sed -E 's/.*"([0-9][^"]*)".*/\1/' | sort -u
+    {
+      git ls-files 'mix.lock' '*/mix.lock' |
+        xargs grep -ohE "\"$dependency\": \{:hex, :$dependency, \"[0-9][^\"]*\"" 2>/dev/null ||
+        true
+    } | sed -E 's/.*"([0-9][^"]*)".*/\1/' | sort -u
   )
   count=$(printf '%s\n' "$versions" | grep -c . || true)
 
