@@ -286,51 +286,121 @@ defmodule Raxol.SSH.ServerTest do
     end
 
     # uint32 on the wire: a client can ask for a 4294967295-column window, and
-    # the session's grid is allocated up front. A larger window renders at the
-    # ceiling; the session is never dropped for it.
-    test "a window_change past the size ceiling reaches the session clamped" do
-      parent = self()
+    # every keystroke and resize draws a frame of that size. A larger window
+    # renders at the remote ceiling (512x256 unless the server says
+    # otherwise); the session is never dropped for it.
+    test "a window_change past the remote ceiling reaches the session clamped" do
+      assert resize_sent(
+               [],
+               {:window_change, 0, 4_294_967_295, 4_294_967_295, 0, 0}
+             ) == {:resize, 512, 256}
 
-      session =
-        spawn(fn ->
-          receive do
-            message -> send(parent, {:got, message})
-          end
-        end)
-
-      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
-      state = %{state | session_pid: session, channel_id: 0}
-
-      change =
-        {:ssh_cm, :conn,
-         {:window_change, 0, 4_294_967_295, 4_294_967_295, 0, 0}}
-
-      assert {:ok, %{session_pid: ^session}} =
-               Raxol.SSH.CLIHandler.handle_ssh_msg(change, state)
-
-      assert_receive {:got, {:resize, 4096, 256}}, 1_000
+      assert resize_sent([], {:window_change, 0, 4096, 256, 0, 0}) ==
+               {:resize, 512, 256}
     end
 
-    test "a repeated pty-req past the size ceiling resizes to the ceiling" do
-      parent = self()
+    test "a repeated pty-req past the remote ceiling resizes to the ceiling" do
+      assert resize_sent(
+               [],
+               {:pty, 0, false, {~c"xterm", 100_000, 100_000, 0, 0, []}}
+             ) == {:resize, 512, 256}
+    end
 
-      session =
-        spawn(fn ->
-          receive do
-            message -> send(parent, {:got, message})
-          end
-        end)
+    test "the server's own max_terminal_size is the ceiling it clamps to" do
+      {:ok, ceiling} =
+        Server.terminal_size_ceiling(max_terminal_size: {1024, 300})
 
-      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
-      state = %{state | session_pid: session, channel_id: 0}
+      assert resize_sent(
+               [size_ceiling: ceiling],
+               {:window_change, 0, 4_294_967_295, 4_294_967_295, 0, 0}
+             ) == {:resize, 1024, 300}
 
-      pty =
-        {:ssh_cm, :conn,
-         {:pty, 0, false, {~c"xterm", 100_000, 100_000, 0, 0, []}}}
+      assert resize_sent(
+               [size_ceiling: ceiling],
+               {:window_change, 0, 600, 200, 0, 0}
+             ) ==
+               {:resize, 600, 200}
+    end
 
-      {:ok, _state} = Raxol.SSH.CLIHandler.handle_ssh_msg(pty, state)
+    # RFC 4254 lets a client send 0 columns or rows. It must not reach the app
+    # as a width of 0 (a resize clause dividing by it would fail); it takes
+    # the default size, as a 0 given to the screen buffer does.
+    test "a 0 column or row count takes the default size" do
+      assert resize_sent([], {:window_change, 0, 0, 0, 0, 0}) ==
+               {:resize, 80, 24}
 
-      assert_receive {:got, {:resize, 4096, 256}}, 1_000
+      assert resize_sent([], {:window_change, 0, 0, 30, 0, 0}) ==
+               {:resize, 80, 30}
+
+      assert resize_sent([], {:pty, 0, false, {~c"xterm", 120, 0, 0, 0, []}}) ==
+               {:resize, 120, 24}
+    end
+  end
+
+  # What a live session is sent when `msg` reaches a CLIHandler started with
+  # `opts`.
+  defp resize_sent(opts, msg) do
+    parent = self()
+
+    session =
+      spawn(fn ->
+        receive do
+          message -> send(parent, {:got, message})
+        end
+      end)
+
+    {:ok, state} = Raxol.SSH.CLIHandler.init([app_module: FakeApp] ++ opts)
+    state = %{state | session_pid: session, channel_id: 0}
+
+    assert {:ok, %{session_pid: ^session}} =
+             Raxol.SSH.CLIHandler.handle_ssh_msg({:ssh_cm, :conn, msg}, state)
+
+    assert_receive {:got, message}, 1_000
+    message
+  end
+
+  describe "max_terminal_size" do
+    test "defaults to the remote ceiling" do
+      assert Server.terminal_size_ceiling([]) ==
+               {:ok, %{width: 512, height: 256, cells: 131_072}}
+    end
+
+    test "is {columns, rows}, within the local ceiling" do
+      assert Server.terminal_size_ceiling(max_terminal_size: {1024, 300}) ==
+               {:ok, %{width: 1024, height: 300, cells: 307_200}}
+
+      for bad <- [
+            {0, 24},
+            {80, -1},
+            {4097, 24},
+            {2048, 1024},
+            {80.0, 24},
+            512,
+            [512, 256],
+            nil
+          ] do
+        assert Server.terminal_size_ceiling(max_terminal_size: bad) ==
+                 {:error, {:invalid_max_terminal_size, bad}}
+      end
+    end
+
+    test "an invalid one refuses to start the server" do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {:invalid_max_terminal_size, {5000, 5000}, message}} =
+               Server.start_link(
+                 app_module: FakeApp,
+                 port: 0,
+                 allow_anonymous: true,
+                 max_connections: 1,
+                 max_per_ip: 1,
+                 idle_timeout: 1_000,
+                 max_session_duration: 1_000,
+                 max_terminal_size: {5000, 5000},
+                 name: :test_ssh_bad_size
+               )
+
+      assert message =~ "max_terminal_size must be {columns, rows}"
     end
   end
 
@@ -732,9 +802,10 @@ defmodule Raxol.SSH.ServerTest do
     end
 
     # A real client on a real channel: the pty-req and window_change sizes are
-    # uint32 on the wire, and the session's grid is allocated up front. A window
-    # past the ceiling renders at the ceiling, and the session keeps working.
-    test "a client window past the size ceiling renders at the ceiling" do
+    # uint32 on the wire, and every keystroke and resize draws a frame of that
+    # size. A window past the remote ceiling renders at the ceiling, a 0 takes
+    # the default size, and the session keeps working throughout.
+    test "a client window past the remote ceiling renders at the ceiling" do
       {:ok, _} = Application.ensure_all_started(:ssh)
 
       dir =
@@ -787,18 +858,23 @@ defmodule Raxol.SSH.ServerTest do
           )
         end)
 
-      assert {:init, lifecycle, {4096, 256}} = await_probe(conn, ch)
-      assert engine_size(lifecycle, conn, ch) == {{4096, 256}, {4096, 256}}
+      assert {:init, lifecycle, {512, 256}} = await_probe(conn, ch)
+      assert engine_size(lifecycle, conn, ch) == {{512, 256}, {512, 256}}
       assert repaint(lifecycle, conn, ch) =~ "cockpit"
 
       :ok = :ssh_connection.window_change(conn, ch, huge, huge)
-      assert {:resize, {4096, 256}} = await_probe(conn, ch)
-      assert engine_size(lifecycle, conn, ch) == {{4096, 256}, {4096, 256}}
+      assert {:resize, {512, 256}} = await_probe(conn, ch)
+      assert engine_size(lifecycle, conn, ch) == {{512, 256}, {512, 256}}
       assert repaint(lifecycle, conn, ch) =~ "cockpit"
 
       :ok = :ssh_connection.window_change(conn, ch, 100, 30)
       assert {:resize, {100, 30}} = await_probe(conn, ch)
       assert engine_size(lifecycle, conn, ch) == {{100, 30}, {100, 30}}
+      assert repaint(lifecycle, conn, ch) =~ "cockpit"
+
+      :ok = :ssh_connection.window_change(conn, ch, 0, 0)
+      assert {:resize, {80, 24}} = await_probe(conn, ch)
+      assert engine_size(lifecycle, conn, ch) == {{80, 24}, {80, 24}}
       assert repaint(lifecycle, conn, ch) =~ "cockpit"
     end
   end

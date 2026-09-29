@@ -2,6 +2,9 @@ defmodule Raxol.SSH.CLIHandler do
   @moduledoc false
   @behaviour :ssh_server_channel
 
+  alias Raxol.Core.Defaults
+  alias Raxol.Core.Utils.Validation
+
   defstruct [
     :app_module,
     :server,
@@ -15,6 +18,7 @@ defmodule Raxol.SSH.CLIHandler do
     :connected_at,
     :last_activity,
     :outcome,
+    :size_ceiling,
     app_opts: [],
     registered: false
   ]
@@ -33,7 +37,13 @@ defmodule Raxol.SSH.CLIHandler do
        app_opts: app_opts,
        tenant_opts: tenant_opts,
        idle_timeout: Keyword.get(opts, :idle_timeout),
-       max_session_duration: Keyword.get(opts, :max_session_duration)
+       max_session_duration: Keyword.get(opts, :max_session_duration),
+       size_ceiling:
+         Keyword.get_lazy(
+           opts,
+           :size_ceiling,
+           &Defaults.remote_terminal_size_ceiling/0
+         )
      }}
   end
 
@@ -120,9 +130,10 @@ defmodule Raxol.SSH.CLIHandler do
   # connection, straight through `max_connections` and `max_per_ip`.
   #
   # Every client size (pty-req and window_change, uint32 on the wire) is
-  # clamped to the terminal size ceiling before it reaches the session: the
-  # grid is allocated up front, so a larger window renders at the ceiling
-  # rather than dropping the session. See `clamp_size/2`.
+  # clamped to the server's remote size ceiling (`Raxol.SSH.Server`'s
+  # `:max_terminal_size`) before it reaches the session: every keystroke and
+  # resize draws a frame of that size, so a larger window renders at the
+  # ceiling rather than dropping the session. See `clamp_size/3`.
   @impl true
   def handle_ssh_msg(
         {:ssh_cm, _conn,
@@ -130,7 +141,7 @@ defmodule Raxol.SSH.CLIHandler do
         %__MODULE__{session_pid: pid} = state
       )
       when not is_nil(pid) do
-    {width, height} = clamp_size(width, height)
+    {width, height} = clamp_size(state, width, height)
     send(pid, {:resize, width, height})
     {:ok, state}
   end
@@ -141,7 +152,7 @@ defmodule Raxol.SSH.CLIHandler do
          {:pty, _ch, _want_reply, {_term, width, height, _pxw, _pxh, _modes}}},
         state
       ) do
-    {width, height} = clamp_size(width, height)
+    {width, height} = clamp_size(state, width, height)
 
     case resolve_tenant_opts(state) do
       {:ok, tenant_opts} ->
@@ -183,7 +194,7 @@ defmodule Raxol.SSH.CLIHandler do
         {:ssh_cm, _conn, {:window_change, _ch, width, height, _pxw, _pxh}},
         state
       ) do
-    {width, height} = clamp_size(width, height)
+    {width, height} = clamp_size(state, width, height)
     maybe_send(state.session_pid, {:resize, width, height})
     {:ok, touch_activity(state)}
   end
@@ -263,8 +274,16 @@ defmodule Raxol.SSH.CLIHandler do
   defp maybe_send(nil, _msg), do: :ok
   defp maybe_send(pid, msg), do: send(pid, msg)
 
-  defp clamp_size(width, height),
-    do: Raxol.Core.Utils.Validation.clamp_terminal_size(width, height)
+  # RFC 4254 lets a client send 0 columns or rows (it means "not given"); a 0
+  # takes the default size, as `ScreenBuffer.new/3` already treats it, so no
+  # app is ever told a width or height of 0.
+  defp clamp_size(%__MODULE__{size_ceiling: ceiling}, width, height) do
+    Validation.clamp_terminal_size(
+      Validation.validate_dimension(width, Defaults.terminal_width()),
+      Validation.validate_dimension(height, Defaults.terminal_height()),
+      ceiling
+    )
+  end
 
   # Without a :tenant_opts fun the server is single-tenant: no per-user
   # options, sessions run under the server-wide app_opts as before. With
