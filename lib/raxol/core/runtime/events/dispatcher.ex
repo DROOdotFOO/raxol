@@ -378,22 +378,36 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # Calls update/2 directly (not through process_app_update) so a resize
   # clause that doesn't exist can degrade silently: most apps don't reflow
   # on resize, and a FunctionClauseError there isn't a bug worth logging on
-  # every SIGWINCH. Genuinely malformed return values still get logged.
+  # every SIGWINCH. Anything else the resize clause raises, throws or exits
+  # with is caught as `Application.delegate_update/3` catches it for every
+  # other message: logged, the model kept, and the dispatcher (and so the
+  # session) left running. The size comes from outside the app -- for SSH,
+  # from the remote client -- so an app arithmetic error on it must not end
+  # the session. Genuinely malformed return values still get logged.
   defp resize_update(state, event) do
-    case state.app_module.update(event, state.model) do
-      {new_model, commands} when is_map(new_model) and is_list(commands) ->
+    case Raxol.Core.ErrorHandling.safe_call(fn ->
+           state.app_module.update(event, state.model)
+         end) do
+      {:ok, {new_model, commands}} when is_map(new_model) and is_list(commands) ->
         {:ok, new_model, commands}
 
-      new_model when is_map(new_model) ->
+      {:ok, new_model} when is_map(new_model) ->
         {:ok, new_model, []}
 
-      other ->
+      {:ok, other} ->
         log_unexpected_return(state, event, event, other)
         :unhandled
+
+      {:error, %FunctionClauseError{}} ->
+        :unhandled
+
+      {:error, %UndefinedFunctionError{}} ->
+        :unhandled
+
+      {:error, reason} ->
+        log_update_error(state, event, event, {:update_failed, reason})
+        :unhandled
     end
-  rescue
-    FunctionClauseError -> :unhandled
-    UndefinedFunctionError -> :unhandled
   end
 
   defp handle_focus_event(%{focused: focused}, state) do
