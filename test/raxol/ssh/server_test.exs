@@ -20,6 +20,27 @@ defmodule Raxol.SSH.ServerTest do
     def view(_), do: %{type: :text, content: "ok"}
   end
 
+  defmodule SizeProbeApp do
+    @moduledoc false
+    # Reports the size the app is told, from init/1 and from each resize.
+    def init(%{width: w, height: h, options: options}) do
+      probe = Keyword.fetch!(options, :size_probe)
+      send(probe, {:size_probe, :init, self(), {w, h}})
+      %{probe: probe}
+    end
+
+    def update(
+          %Raxol.Core.Events.Event{type: :resize, data: %{width: w, height: h}},
+          model
+        ) do
+      send(model.probe, {:size_probe, :resize, {w, h}})
+      {model, []}
+    end
+
+    def update(_msg, model), do: {model, []}
+    def view(_), do: Raxol.Core.Renderer.View.text("cockpit")
+  end
+
   describe "authentication (fail-closed)" do
     test "refuses to start with no auth configured" do
       # An SSH surface that can reach payment Actions must not be silently
@@ -262,6 +283,54 @@ defmodule Raxol.SSH.ServerTest do
       {:ok, _state} = Raxol.SSH.CLIHandler.handle_ssh_msg(pty, state)
 
       assert_receive {:got, {:resize, 120, 50}}, 1_000
+    end
+
+    # uint32 on the wire: a client can ask for a 4294967295-column window, and
+    # the session's grid is allocated up front. A larger window renders at the
+    # ceiling; the session is never dropped for it.
+    test "a window_change past the size ceiling reaches the session clamped" do
+      parent = self()
+
+      session =
+        spawn(fn ->
+          receive do
+            message -> send(parent, {:got, message})
+          end
+        end)
+
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      state = %{state | session_pid: session, channel_id: 0}
+
+      change =
+        {:ssh_cm, :conn,
+         {:window_change, 0, 4_294_967_295, 4_294_967_295, 0, 0}}
+
+      assert {:ok, %{session_pid: ^session}} =
+               Raxol.SSH.CLIHandler.handle_ssh_msg(change, state)
+
+      assert_receive {:got, {:resize, 4096, 256}}, 1_000
+    end
+
+    test "a repeated pty-req past the size ceiling resizes to the ceiling" do
+      parent = self()
+
+      session =
+        spawn(fn ->
+          receive do
+            message -> send(parent, {:got, message})
+          end
+        end)
+
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      state = %{state | session_pid: session, channel_id: 0}
+
+      pty =
+        {:ssh_cm, :conn,
+         {:pty, 0, false, {~c"xterm", 100_000, 100_000, 0, 0, []}}}
+
+      {:ok, _state} = Raxol.SSH.CLIHandler.handle_ssh_msg(pty, state)
+
+      assert_receive {:got, {:resize, 4096, 256}}, 1_000
     end
   end
 
@@ -660,6 +729,158 @@ defmodule Raxol.SSH.ServerTest do
       assert is_integer(port) and port > 0
       assert Server.banner_probe(~c"127.0.0.1", port) == :ok
       assert Server.host_key_algs(dir) == ["ed25519"]
+    end
+
+    # A real client on a real channel: the pty-req and window_change sizes are
+    # uint32 on the wire, and the session's grid is allocated up front. A window
+    # past the ceiling renders at the ceiling, and the session keeps working.
+    test "a client window past the size ceiling renders at the ceiling" do
+      {:ok, _} = Application.ensure_all_started(:ssh)
+
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol_ssh_size_#{System.unique_integer([:positive])}"
+        )
+
+      client_dir = Path.join(dir, "client")
+      File.mkdir_p!(client_dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      start_supervised!(
+        {Server,
+         app_module: SizeProbeApp,
+         app_opts: [size_probe: self()],
+         port: 0,
+         host_keys_dir: Path.join(dir, "host"),
+         allow_anonymous: true,
+         max_connections: 5,
+         max_per_ip: 2,
+         idle_timeout: 60_000,
+         max_session_duration: 60_000,
+         name: :test_ssh_size}
+      )
+
+      {:ok, conn} =
+        :ssh.connect(~c"127.0.0.1", Server.port(:test_ssh_size),
+          user: ~c"pilot",
+          silently_accept_hosts: true,
+          save_accepted_host: false,
+          user_interaction: false,
+          user_dir: String.to_charlist(client_dir)
+        )
+
+      on_exit(fn -> :ssh.close(conn) end)
+
+      {:ok, ch} = :ssh_connection.session_channel(conn, 5_000)
+      huge = 4_294_967_295
+
+      # The handler answers no want_reply, so the pty-req's own reply is not
+      # awaited; the session it starts is.
+      {:ok, _} =
+        Task.start(fn ->
+          :ssh_connection.ptty_alloc(
+            conn,
+            ch,
+            [term: ~c"xterm", width: huge, height: huge],
+            :infinity
+          )
+        end)
+
+      assert {:init, lifecycle, {4096, 256}} = await_probe(conn, ch)
+      assert engine_size(lifecycle, conn, ch) == {{4096, 256}, {4096, 256}}
+      assert repaint(lifecycle, conn, ch) =~ "cockpit"
+
+      :ok = :ssh_connection.window_change(conn, ch, huge, huge)
+      assert {:resize, {4096, 256}} = await_probe(conn, ch)
+      assert engine_size(lifecycle, conn, ch) == {{4096, 256}, {4096, 256}}
+      assert repaint(lifecycle, conn, ch) =~ "cockpit"
+
+      :ok = :ssh_connection.window_change(conn, ch, 100, 30)
+      assert {:resize, {100, 30}} = await_probe(conn, ch)
+      assert engine_size(lifecycle, conn, ch) == {{100, 30}, {100, 30}}
+      assert repaint(lifecycle, conn, ch) =~ "cockpit"
+    end
+  end
+
+  # Everything below reads the channel while it waits, as a real client does:
+  # a frame at the ceiling is more than one SSH window of output, and the
+  # engine's writes wait on this client's `adjust_window/3`. A test that
+  # stopped reading would stall the engine it is asking about.
+
+  defp await_probe(conn, ch) do
+    receive do
+      {:ssh_cm, ^conn, {:data, ^ch, _type, data}} ->
+        :ssh_connection.adjust_window(conn, ch, byte_size(data))
+        await_probe(conn, ch)
+
+      {:size_probe, :init, lifecycle, size} ->
+        {:init, lifecycle, size}
+
+      {:size_probe, :resize, size} ->
+        {:resize, size}
+    after
+      10_000 -> flunk("the app was never told a size")
+    end
+  end
+
+  # {engine size, engine buffer size}
+  defp engine_size(lifecycle, conn, ch) do
+    {state, _output} =
+      while_reading(conn, ch, fn ->
+        GenServer.call(engine(lifecycle), {:get_state})
+      end)
+
+    {{state.width, state.height}, {state.buffer.width, state.buffer.height}}
+  end
+
+  # Draws a full frame now, at whatever size the engine holds, and returns the
+  # channel output read until that frame's text arrives.
+  defp repaint(lifecycle, conn, ch) do
+    {result, output} =
+      while_reading(conn, ch, fn ->
+        engine = engine(lifecycle)
+        GenServer.cast(engine, :force_repaint)
+        GenServer.call(engine, :render_frame_sync, 60_000)
+      end)
+
+    assert result == :ok
+    read_until(conn, ch, output, "cockpit")
+  end
+
+  defp engine(lifecycle),
+    do: GenServer.call(lifecycle, :get_full_state).rendering_engine_pid
+
+  defp while_reading(conn, ch, fun) do
+    task = Task.async(fun)
+    read_until_reply(conn, ch, task.ref, "")
+  end
+
+  defp read_until_reply(conn, ch, ref, acc) do
+    receive do
+      {:ssh_cm, ^conn, {:data, ^ch, _type, data}} ->
+        :ssh_connection.adjust_window(conn, ch, byte_size(data))
+        read_until_reply(conn, ch, ref, acc <> data)
+
+      {^ref, reply} ->
+        Process.demonitor(ref, [:flush])
+        {reply, acc}
+    after
+      60_000 -> flunk("the engine never answered")
+    end
+  end
+
+  defp read_until(conn, ch, acc, text) do
+    if acc =~ text do
+      acc
+    else
+      receive do
+        {:ssh_cm, ^conn, {:data, ^ch, _type, data}} ->
+          :ssh_connection.adjust_window(conn, ch, byte_size(data))
+          read_until(conn, ch, acc <> data, text)
+      after
+        10_000 -> acc
+      end
     end
   end
 end

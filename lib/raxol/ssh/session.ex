@@ -85,9 +85,15 @@ defmodule Raxol.SSH.Session do
     {:noreply, state}
   end
 
+  # The `:resize` event the terminal driver and `Raxol.Headless` send: the
+  # dispatcher resizes the engine on it and passes it to the app's update/2.
+  # A `:window` event reached update/2 only, so the engine kept drawing at
+  # the pty-req size.
   @impl true
   def handle_info({:resize, width, height}, state) do
-    event = Raxol.Core.Events.Event.window(width, height, :resize)
+    event =
+      Raxol.Core.Events.Event.new(:resize, %{width: width, height: height})
+
     dispatch_events(state.lifecycle_pid, [event])
     {:noreply, %{state | width: width, height: height}}
   end
