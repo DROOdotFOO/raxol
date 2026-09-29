@@ -167,6 +167,11 @@ defmodule Raxol.Headless do
   every tool call in its one process, so over MCP a slow session holds every
   client's tool calls, not just the caller's.
 
+  From inside an app's `update/2`, `list/0`, `start/2` and calls on other
+  sessions work. Calls on the app's own session answer
+  `{:error, :called_from_own_update}`: its dispatcher is the process running
+  `update/2`, so they could only wait on themselves.
+
   `wait: false` skips the wait: the call returns once the key is queued at
   the dispatcher and says nothing about when `update/2` takes it. It is for
   callers that only enqueue, such as `Raxol.MCP.AgentBridge`'s `agent.send`.
@@ -770,7 +775,7 @@ defmodule Raxol.Headless do
   end
 
   defp with_engine(session, fun) do
-    with {:ok, lifecycle_state} <- lifecycle_state(session) do
+    with {:ok, lifecycle_state} <- session_processes(session) do
       pid = lifecycle_state.rendering_engine_pid
 
       if pid && Process.alive?(pid) do
@@ -782,7 +787,7 @@ defmodule Raxol.Headless do
   end
 
   defp with_dispatcher(session, fun) do
-    with {:ok, lifecycle_state} <- lifecycle_state(session) do
+    with {:ok, lifecycle_state} <- session_processes(session) do
       pid = lifecycle_state.dispatcher_pid
 
       if pid && Process.alive?(pid) do
@@ -790,6 +795,21 @@ defmodule Raxol.Headless do
       else
         {:error, :dispatcher_not_available}
       end
+    end
+  end
+
+  # A session's `update/2` runs in its dispatcher, so a call made from there
+  # on the same session reaches a process that is busy running it: a model
+  # read calls itself, and a render waits on the engine, which asks that same
+  # dispatcher for the model and times out. Each is refused up front, and a
+  # queued key with it, so the rule is one line: `update/2` may not call this
+  # module on its own session.
+  defp session_processes(session) do
+    with {:ok, %{dispatcher_pid: dispatcher_pid} = lifecycle_state} <-
+           lifecycle_state(session) do
+      if dispatcher_pid == self(),
+        do: {:error, :called_from_own_update},
+        else: {:ok, lifecycle_state}
     end
   end
 

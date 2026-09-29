@@ -69,15 +69,28 @@ defmodule Raxol.HeadlessTest do
 
   # On "b", update/2 tells the process the model names that it is running and
   # holds the dispatcher until that process sends `:release`. On "l" it asks
-  # `Raxol.Headless` for its sessions, from inside update/2.
+  # `Raxol.Headless` for its sessions and for the model of the session named
+  # by `{:peer, id}`, from inside update/2. On "o" it calls `Raxol.Headless` on
+  # its own session, the id `{:own, id}` names, and records each answer.
   defmodule BlockingApp do
     use Raxol.Core.Runtime.Application
 
     @impl true
-    def init(_context), do: %{notify: nil, handled: 0, sessions: nil}
+    def init(_context),
+      do: %{
+        notify: nil,
+        handled: 0,
+        sessions: nil,
+        peer: nil,
+        peer_model: nil,
+        own: nil,
+        own_answers: nil
+      }
 
     @impl true
     def update({:notify, pid}, model), do: {%{model | notify: pid}, []}
+    def update({:peer, id}, model), do: {%{model | peer: id}, []}
+    def update({:own, id}, model), do: {%{model | own: id}, []}
 
     def update(%Raxol.Core.Events.Event{type: :key, data: %{char: "b"}}, model) do
       send(model.notify, {:in_update, self()})
@@ -87,8 +100,41 @@ defmodule Raxol.HeadlessTest do
       end
     end
 
-    def update(%Raxol.Core.Events.Event{type: :key, data: %{char: "l"}}, model),
-      do: {%{model | sessions: Raxol.Headless.list()}, []}
+    def update(%Raxol.Core.Events.Event{type: :key, data: %{char: "l"}}, model) do
+      {%{
+         model
+         | sessions: Raxol.Headless.list(),
+           peer_model: Raxol.Headless.get_model(model.peer)
+       }, []}
+    end
+
+    def update(%Raxol.Core.Events.Event{type: :key, data: %{char: "o"}}, model) do
+      id = model.own
+
+      calls = [
+        screenshot: fn -> Raxol.Headless.screenshot(id) end,
+        get_buffer: fn -> Raxol.Headless.get_buffer(id) end,
+        get_model: fn -> Raxol.Headless.get_model(id) end,
+        send_key: fn -> Raxol.Headless.send_key(id, "x") end,
+        send_key_queued: fn -> Raxol.Headless.send_key(id, "x", wait: false) end,
+        send_message: fn -> Raxol.Headless.send_message(id, :noop) end,
+        send_resize: fn -> Raxol.Headless.send_resize(id, 30, 8) end
+      ]
+
+      answers =
+        Map.new(calls, fn {name, call} ->
+          answer =
+            try do
+              call.()
+            catch
+              :exit, reason -> {:exited, reason}
+            end
+
+          {name, answer}
+        end)
+
+      {%{model | own_answers: answers}, []}
+    end
 
     def update(_message, model), do: {model, []}
 
@@ -304,12 +350,44 @@ defmodule Raxol.HeadlessTest do
       assert :ok = Task.await(key)
     end
 
-    test "update/2 can call Raxol.Headless" do
+    test "update/2 can call Raxol.Headless for other sessions" do
       {:ok, id} = Headless.start(BlockingApp, id: :calls_back)
+      {:ok, peer} = Headless.start(TestApp, id: :calls_back_peer)
+      :ok = Headless.send_message(id, {:peer, peer})
 
       assert :ok = Headless.send_key(id, "l")
-      assert {:ok, %{sessions: sessions}} = Headless.get_model(id)
+
+      assert {:ok, %{sessions: sessions, peer_model: peer_model}} =
+               Headless.get_model(id)
+
       assert id in sessions
+      assert {:ok, %{count: 0}} = peer_model
+    end
+
+    # Its own session is the one thing update/2 cannot reach: its dispatcher is
+    # the process running update/2, so a read of the model calls itself and a
+    # render asks the busy dispatcher for the model. Each call answers that
+    # rather than exiting or stalling.
+    test "update/2 calling its own session is refused, not deadlocked" do
+      {:ok, id} = Headless.start(BlockingApp, id: :calls_itself)
+      :ok = Headless.send_message(id, {:own, id})
+
+      assert :ok = Headless.send_key(id, "o", timeout: :infinity)
+      assert {:ok, %{own_answers: answers}} = Headless.get_model(id)
+
+      assert answers ==
+               Map.new(
+                 [
+                   :screenshot,
+                   :get_buffer,
+                   :get_model,
+                   :send_key,
+                   :send_key_queued,
+                   :send_message,
+                   :send_resize
+                 ],
+                 &{&1, {:error, :called_from_own_update}}
+               )
     end
 
     # The key stays in the dispatcher's queue, so update/2 still takes it: the
