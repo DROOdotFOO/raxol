@@ -19,8 +19,8 @@ defmodule Raxol.Playground.DemoRenderTest do
   adding an entry to @expected_text. Substrings are case-sensitive.
   """
 
-  # `capture_log: true` swallows the Lifecycle/Engine/Buffer.Writer debug
-  # stream that would otherwise drown the failure messages.
+  # `capture_log: true` swallows the Lifecycle/Engine debug stream that
+  # would otherwise drown the failure messages.
   use ExUnit.Case, async: false
   @moduletag capture_log: true
 
