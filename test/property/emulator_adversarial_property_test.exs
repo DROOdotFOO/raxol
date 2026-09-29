@@ -49,8 +49,68 @@ defmodule Raxol.Terminal.EmulatorAdversarialPropertyTest do
     end
   end
 
+  # Whole sequences real programs send (ncurses, tmux, vim, shells), so the
+  # interactions between them get exercised, not only malformed input.
+  defp vocabulary do
+    member_of([
+      "\e[?1049h",
+      "\e[?1049l",
+      "\e[?1047h",
+      "\e[?1047l",
+      "\e[?1048h",
+      "\e[?1048l",
+      "\e[?47h",
+      "\e[?47l",
+      "\e7",
+      "\e8",
+      "\e[s",
+      "\e[u",
+      "\e(0",
+      "\e(B",
+      "\e)0",
+      "\e[5 q",
+      "\e[0 q",
+      "\e[2;5r",
+      "\e[r",
+      "\e[1;31;42m",
+      "\e[38;5;196;48;2;1;2;3m",
+      "\e[4:3m",
+      "\e[0m",
+      "\e[!p",
+      "\e[?25l",
+      "\e[?25h",
+      "\e[?7l",
+      "\e[?6h",
+      "\e[2J",
+      "\e[3J",
+      "\e[K",
+      "\e[3L",
+      "\e[2M",
+      "\e[4@",
+      "\e[2P",
+      "\e[3X",
+      "\e[H",
+      "\e[6;15H",
+      "\e[6n",
+      "\e[c",
+      "\e]0;title\a",
+      "\e]7;file://host/tmp\e\\",
+      "\e]11;?\a",
+      "\e]52;c;?\a",
+      "\eP$qm\e\\",
+      "\eP+q544e\e\\",
+      "\eM",
+      "\eD",
+      "\eE",
+      "\eH",
+      "\ec"
+    ])
+  end
+
   defp fragment do
     one_of([
+      vocabulary(),
+      vocabulary(),
       binary(max_length: 12),
       # Invalid UTF-8 after a pictograph, which OTP's grapheme breaking raises on.
       constant(<<0xC2, 0xAE, 0x9B, 0x9A>>),
