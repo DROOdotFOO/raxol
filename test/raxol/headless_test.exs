@@ -67,6 +67,39 @@ defmodule Raxol.HeadlessTest do
     def subscriptions(_model), do: []
   end
 
+  # On "b", update/2 tells the process the model names that it is running and
+  # holds the dispatcher until that process sends `:release`. On "l" it asks
+  # `Raxol.Headless` for its sessions, from inside update/2.
+  defmodule BlockingApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{notify: nil, handled: 0, sessions: nil}
+
+    @impl true
+    def update({:notify, pid}, model), do: {%{model | notify: pid}, []}
+
+    def update(%Raxol.Core.Events.Event{type: :key, data: %{char: "b"}}, model) do
+      send(model.notify, {:in_update, self()})
+
+      receive do
+        :release -> {%{model | handled: model.handled + 1}, []}
+      end
+    end
+
+    def update(%Raxol.Core.Events.Event{type: :key, data: %{char: "l"}}, model),
+      do: {%{model | sessions: Raxol.Headless.list()}, []}
+
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(model),
+      do: Raxol.Core.Renderer.View.text("Handled: #{model.handled}")
+
+    @impl true
+    def subscriptions(_model), do: []
+  end
+
   setup do
     # The app-level Headless may or may not be running depending on
     # test mode. Ensure one exists, clean slate for each test.
@@ -227,8 +260,8 @@ defmodule Raxol.HeadlessTest do
       assert {:ok, %{count: 1}} = Headless.get_model(id)
     end
 
-    # The call holds the session manager, which serves every other session,
-    # so losing the dispatcher mid-call must cost this caller alone.
+    # Losing the dispatcher mid-call costs this caller an error rather than an
+    # exit, and costs no other session anything.
     test "answers an error, and keeps serving, when the dispatcher dies on the key" do
       {:ok, id} = Headless.start(TestApp, id: :key_lost)
       {:ok, bystander} = Headless.start(TestApp, id: :key_bystander)
@@ -241,6 +274,57 @@ defmodule Raxol.HeadlessTest do
                )
 
       assert {:ok, %{count: 0}} = Headless.get_model(bystander)
+    end
+  end
+
+  # The wait for update/2 happens in the caller. Inside the session manager it
+  # held every other session's calls for as long as update/2 ran, an update/2
+  # that called back into `Raxol.Headless` waited on itself, and the caller's
+  # own 5 s call to the manager always gave up before the dispatcher call did.
+  describe "send_key/3 while update/2 is running" do
+    test "another session's get_model and screenshot answer" do
+      {:ok, slow} = Headless.start(BlockingApp, id: :slow_update)
+
+      {:ok, other} =
+        Headless.start(TestApp, id: :other_session, width: 40, height: 10)
+
+      :ok = Headless.send_message(slow, {:notify, self()})
+
+      key =
+        Task.async(fn -> Headless.send_key(slow, "b", timeout: :infinity) end)
+
+      assert_receive {:in_update, dispatcher}
+
+      assert {:ok, %{count: 0}} = Headless.get_model(other)
+      assert {:ok, text} = Headless.screenshot(other)
+      assert text =~ "Count: 0"
+      assert Task.yield(key, 0) == nil
+
+      send(dispatcher, :release)
+      assert :ok = Task.await(key)
+    end
+
+    test "update/2 can call Raxol.Headless" do
+      {:ok, id} = Headless.start(BlockingApp, id: :calls_back)
+
+      assert :ok = Headless.send_key(id, "l")
+      assert {:ok, %{sessions: sessions}} = Headless.get_model(id)
+      assert id in sessions
+    end
+
+    # The key stays in the dispatcher's queue, so update/2 still takes it: the
+    # caller only stops waiting.
+    @tag capture_log: true
+    test "a timeout answers {:dispatch_failed, :timeout} and the key still lands" do
+      {:ok, id} = Headless.start(BlockingApp, id: :key_timeout)
+      :ok = Headless.send_message(id, {:notify, self()})
+
+      assert {:error, {:dispatch_failed, :timeout}} =
+               Headless.send_key(id, "b", timeout: 100)
+
+      assert_receive {:in_update, dispatcher}
+      send(dispatcher, :release)
+      assert {:ok, %{handled: 1}} = Headless.get_model(id)
     end
   end
 

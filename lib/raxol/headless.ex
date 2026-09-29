@@ -37,6 +37,7 @@ defmodule Raxol.Headless do
 
   @default_width 120
   @default_height 40
+  @default_dispatch_timeout_ms 5_000
 
   # Deliberately SHORTER than the 5s the other calls in this module give
   # themselves: the compile happens inside `handle_call`, so this budget is also
@@ -131,7 +132,7 @@ defmodule Raxol.Headless do
   @doc "Takes a text screenshot of the session's current screen."
   @spec screenshot(atom()) :: {:ok, String.t()} | {:error, term()}
   def screenshot(id) do
-    GenServer.call(__MODULE__, {:screenshot, id}, 5_000)
+    with {:ok, session} <- lookup_session(id), do: take_screenshot(session)
   end
 
   @doc """
@@ -143,7 +144,7 @@ defmodule Raxol.Headless do
   """
   @spec get_buffer(atom()) :: {:ok, map()} | {:error, term()}
   def get_buffer(id) do
-    GenServer.call(__MODULE__, {:get_buffer, id}, 5_000)
+    with {:ok, session} <- lookup_session(id), do: take_buffer(session)
   end
 
   @doc """
@@ -159,19 +160,32 @@ defmodule Raxol.Headless do
   interval, or any other command that completes asynchronously can still
   land after this returns.
 
+  The wait happens in the calling process, not in the `Raxol.Headless`
+  server, so a slow `update/2` holds up only its own caller: other sessions
+  answer meanwhile, and `update/2` may itself call this module.
+
   Returns `{:error, {:dispatch_failed, class}}` when the dispatcher exits or
-  does not answer in time. `class` is the shape of the exit (`:timeout`,
-  `:noproc`, `:killed`, `:shutdown`, else `:unknown`), never its payload: an
-  exception that killed the dispatcher is logged, not returned.
+  does not answer within `:timeout`. `class` is the shape of the exit
+  (`:timeout`, `:noproc`, `:killed`, `:shutdown`, else `:unknown`), never its
+  payload: an exception that killed the dispatcher is logged, not returned.
+  A timeout only ends the wait. The key is still in the dispatcher's queue,
+  so `update/2` may yet handle it after this returns.
 
   ## Options
 
     * `:ctrl`, `:alt`, `:shift` - hold the modifier (default: `false`)
+    * `:timeout` - how long to wait for `update/2`, in milliseconds or
+      `:infinity` (default: #{@default_dispatch_timeout_ms})
   """
   @spec send_key(atom(), String.t() | atom(), keyword()) ::
           :ok | {:error, term()}
   def send_key(id, key, opts \\ []) do
-    GenServer.call(__MODULE__, {:send_key, id, key, opts}, 5_000)
+    {timeout, key_opts} =
+      Keyword.pop(opts, :timeout, @default_dispatch_timeout_ms)
+
+    with {:ok, session} <- lookup_session(id) do
+      dispatch_event(session, EventBuilder.key(key, key_opts), timeout)
+    end
   end
 
   @doc """
@@ -186,7 +200,8 @@ defmodule Raxol.Headless do
   """
   @spec send_message(atom(), term()) :: :ok | {:error, term()}
   def send_message(id, msg) do
-    GenServer.call(__MODULE__, {:send_message, id, msg}, 5_000)
+    with {:ok, session} <- lookup_session(id),
+         do: dispatch_message(session, msg)
   end
 
   @doc """
@@ -197,14 +212,19 @@ defmodule Raxol.Headless do
   (resizing its buffer) and to the application's `update/2` as a
   `%Event{type: :resize, data: %{width: w, height: h}}`, both before it
   answers, so a following `get_buffer/1` renders at the new size. Commands
-  `update/2` returns are not awaited, as with `send_key/3`.
+  `update/2` returns are not awaited. As with `send_key/3`, the wait runs in
+  the caller with the same errors; it gives up after
+  #{@default_dispatch_timeout_ms} ms, and the resize may still be applied
+  after that.
   """
   @spec send_resize(atom(), pos_integer(), pos_integer()) ::
           :ok | {:error, term()}
   def send_resize(id, width, height)
       when is_integer(width) and width > 0 and is_integer(height) and
              height > 0 do
-    GenServer.call(__MODULE__, {:send_resize, id, width, height}, 5_000)
+    with {:ok, session} <- lookup_session(id) do
+      dispatch_resize(session, width, height)
+    end
   end
 
   @doc """
@@ -216,17 +236,13 @@ defmodule Raxol.Headless do
   @spec send_key_and_screenshot(atom(), String.t() | atom(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_key_and_screenshot(id, key, opts \\ []) do
-    GenServer.call(
-      __MODULE__,
-      {:send_key_and_screenshot, id, key, opts},
-      10_000
-    )
+    with :ok <- send_key(id, key, opts), do: screenshot(id)
   end
 
   @doc "Returns the application model from the session's dispatcher."
   @spec get_model(atom()) :: {:ok, term()} | {:error, term()}
   def get_model(id) do
-    GenServer.call(__MODULE__, {:get_model, id}, 5_000)
+    with {:ok, session} <- lookup_session(id), do: read_model(session)
   end
 
   @doc "Stops a headless session."
@@ -258,90 +274,14 @@ defmodule Raxol.Headless do
     end
   end
 
+  # The one per-session request this server answers is which session an id
+  # names. Everything after that -- the Lifecycle lookup, the dispatch, the
+  # render -- runs in the caller: made here, each held every other session's
+  # calls for as long as the app took, and an app calling back into this
+  # module waited on itself.
   @impl true
-  def handle_call({:screenshot, id}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        result = take_screenshot(session)
-        {:reply, result, state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_buffer, id}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        {:reply, take_buffer(session), state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:send_key, id, key, opts}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        result = dispatch_key(session, key, opts)
-        {:reply, result, state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:send_message, id, msg}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        {:reply, dispatch_message(session, msg), state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:send_resize, id, width, height}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        {:reply, dispatch_resize(session, width, height), state}
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:send_key_and_screenshot, id, key, key_opts}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        case dispatch_key(session, key, key_opts) do
-          :ok ->
-            {:reply, take_screenshot(session), state}
-
-          error ->
-            {:reply, error, state}
-        end
-
-      error ->
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_model, id}, _from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        result = read_model(session)
-        {:reply, result, state}
-
-      error ->
-        {:reply, error, state}
-    end
+  def handle_call({:lookup_session, id}, _from, state) do
+    {:reply, get_session(state, id), state}
   end
 
   @impl true
@@ -675,6 +615,9 @@ defmodule Raxol.Headless do
     end
   end
 
+  defp lookup_session(id),
+    do: GenServer.call(__MODULE__, {:lookup_session, id}, 5_000)
+
   defp get_session(state, id) do
     case Map.get(state.sessions, id) do
       nil -> {:error, :not_found}
@@ -721,10 +664,6 @@ defmodule Raxol.Headless do
     end
   end
 
-  defp dispatch_key(session, key, opts) do
-    dispatch_event(session, EventBuilder.key(key, opts))
-  end
-
   # Send, then fence with a synchronous call: the dispatcher's mailbox is
   # FIFO, so by the time :get_model answers, the message before it has been
   # folded into the model. That round trip is the "waits for it to fold" in
@@ -738,10 +677,12 @@ defmodule Raxol.Headless do
   end
 
   defp dispatch_resize(session, width, height) do
-    dispatch_event(session, %Raxol.Core.Events.Event{
+    event = %Raxol.Core.Events.Event{
       type: :resize,
       data: %{width: width, height: height}
-    })
+    }
+
+    dispatch_event(session, event, @default_dispatch_timeout_ms)
   end
 
   # A call, not a cast: the dispatcher replies once the event has been through
@@ -749,18 +690,18 @@ defmodule Raxol.Headless do
   # their caller. A cast returned while the event was still queued, so the
   # caller learned nothing about when update/2 would take it.
   #
-  # The call blocks this process, which holds every other caller's session, so
-  # a dispatcher that dies on the event or does not answer is an error for this
-  # caller rather than an exit that takes the session manager down with it.
+  # It runs in the caller's process, so the wait costs no one else. A
+  # dispatcher that dies on the event or does not answer in time is an error
+  # for the caller rather than an exit: the documented return is a value.
   #
   # The error carries the exit's class and the log carries the reason. A
   # dispatcher killed by a linked process that raised exits with that exception,
   # message and stacktrace included, and `raxol_send_key` hands this error to a
   # model: whatever the message held (a URL, a token) went with it.
-  defp dispatch_event(session, event) do
+  defp dispatch_event(session, event, timeout) do
     with_dispatcher(session, fn dispatcher_pid ->
       try do
-        GenServer.call(dispatcher_pid, {:dispatch, event})
+        GenServer.call(dispatcher_pid, {:dispatch, event}, timeout)
       catch
         :exit, reason ->
           Logger.error(
