@@ -278,18 +278,8 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
   # past them the position still advances, at no cost.
   defp draw_sixel(state, pattern) do
     %ParserState{x: x, y: y, repeat_count: repeat} = state
-
-    rows =
-      for bit <- 0..5,
-          Bitwise.band(pattern, Bitwise.bsl(1, bit)) != 0,
-          y + bit < state.max_height,
-          do: y + bit
-
-    columns =
-      case rows do
-        [] -> 0
-        _ -> min(max(min(repeat, state.max_width - x), 0), div(state.pixels_left, length(rows)))
-      end
+    rows = sixel_rows(pattern, y, state.max_height)
+    columns = drawable_columns(state, length(rows))
 
     %{
       state
@@ -301,6 +291,18 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         max_y: max(state.max_y, y + 5)
     }
   end
+
+  defp sixel_rows(pattern, y, max_height) do
+    for bit <- 0..5,
+        Bitwise.band(pattern, Bitwise.bsl(1, bit)) != 0,
+        y + bit < max_height,
+        do: y + bit
+  end
+
+  defp drawable_columns(_state, 0), do: 0
+
+  defp drawable_columns(%ParserState{x: x, repeat_count: repeat} = state, row_count),
+    do: min(max(min(repeat, state.max_width - x), 0), div(state.pixels_left, row_count))
 
   defp draw_columns(buffer, _x, 0, _rows, _color), do: buffer
 
