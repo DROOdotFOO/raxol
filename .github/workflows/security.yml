@@ -115,7 +115,10 @@ jobs:
   # Every project is checked even after one fails, so a single run names all
   # of them. `mix hex.audit` refuses to run until the project's deps are
   # fetched, hence `mix deps.get` first; `--check-locked` makes the fetched
-  # set the committed lock rather than one `deps.get` would rewrite.
+  # set the committed lock rather than one `deps.get` would rewrite. The
+  # shadow guard in front of it covers web/, which no ci-unified job guards,
+  # and runs daily: a Hex entry for a path sibling unpins that entry's whole
+  # subtree (scripts/check_lock_path_shadows.exs).
   hex-advisories:
     name: Hex Advisories
     runs-on: ubuntu-latest
@@ -145,6 +148,7 @@ jobs:
 
       - name: Audit every lockfile
         run: |
+          guard="$PWD/scripts/check_lock_path_shadows.exs"
           failed=()
           checked=0
           for dir in . web packages/*/; do
@@ -153,6 +157,9 @@ jobs:
             checked=$((checked + 1))
             echo "::group::$dir"
             result=ok
+            if ! (cd "$dir" && mix run --no-start --no-compile --no-deps-check "$guard"); then
+              result="FAILED (Hex lock entry for a path dependency)"
+            fi
             if ! (cd "$dir" && mix deps.get --check-locked); then
               result=FAILED
             else
@@ -177,7 +184,7 @@ jobs:
             echo "Checked $checked projects."
             if [ "${#failed[@]}" -gt 0 ]; then
               echo ""
-              echo "Failing (\`mix deps.get --check-locked\`, \`mix hex.audit\`, or a stale \`ignore_advisories\` entry):"
+              echo "Failing (the lock path-shadow guard, \`mix deps.get --check-locked\`, \`mix hex.audit\`, or a stale \`ignore_advisories\` entry):"
               for dir in "${failed[@]}"; do echo "- \`$dir\`"; done
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
