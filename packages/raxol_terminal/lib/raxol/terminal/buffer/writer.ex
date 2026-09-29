@@ -28,7 +28,6 @@ defmodule Raxol.Terminal.Buffer.Writer do
         # Whole grapheme, not its first codepoint -- see `memoized_width/2`.
         width = Raxol.Terminal.CharacterHandling.get_char_width(char)
         cell_style = create_cell_style(style)
-        log_char_write(char, x, y, cell_style)
         cells = update_cells(buffer, x, y, char, cell_style, width)
         %{buffer | cells: cells}
 
@@ -75,38 +74,6 @@ defmodule Raxol.Terminal.Buffer.Writer do
   end
 
   def create_cell_style(_), do: TextFormatting.new()
-
-  @doc """
-  Logs character write operations for debugging purposes.
-
-  ## Parameters
-
-  * `char` - The character being written
-  * `x` - The x-coordinate where the character is being written
-  * `y` - The y-coordinate where the character is being written
-  * `cell_style` - The style being applied to the cell
-
-  ## Returns
-
-  :ok
-
-  ## Examples
-
-      iex> Writer.log_char_write("A", 0, 0, %{fg: :red})
-      :ok
-  """
-  @spec log_char_write(
-          String.t(),
-          non_neg_integer(),
-          non_neg_integer(),
-          TextFormatting.text_style()
-        ) :: :ok
-  def log_char_write(_char, _x, _y, _cell_style) do
-    Raxol.Core.Runtime.Log.debug(
-      # {char}" at {#{x}, #{y}} with style: #{inspect(cell_style)}"
-      "[Buffer.Writer] Writing char "
-    )
-  end
 
   @doc """
   Updates cells in the buffer at the specified position.
