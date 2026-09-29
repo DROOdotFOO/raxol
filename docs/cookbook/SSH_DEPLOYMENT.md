@@ -119,7 +119,9 @@ SSH Client  --->  :ssh.daemon (Erlang)
 
 Each connection is isolated. One user's crash doesn't affect others.
 
-A client's window size (its pty-req and every window change) is clamped to the terminal size ceiling in `Raxol.Core.Defaults`: at most 4096 columns, 4096 rows and 1,048,576 cells. A session's screen buffer is allocated up front, so the size is the memory; a larger window renders at the ceiling and the session carries on. At the ceiling one buffer is bounded at ~562 MB with every cell holding its own style (~118 MB as typically rendered), so size `max_connections` and `max_per_ip` with that in mind.
+A client's window size (its pty-req and every window change) is clamped to the server's `:max_terminal_size`, by default the remote ceiling in `Raxol.Core.Defaults`: 512 columns and 256 rows (131,072 cells). A larger window renders at that size and the session carries on; a 0 column or row count takes the default 80x24.
+
+The size is paid for per frame, not by the buffer a session keeps: every keystroke and every resize draws a full frame at the session's size. Measured on one full frame: the playground app took 9 ms and wrote 15 KB at 200x60, and 29 ms and 140 KB at 512x256; a styled full-screen app (every cell coloured) took 44 ms of CPU and a transient +33 MB of VM memory at 200x60, and 0.9 s and +247 MB at 512x256. The cost grows faster than the cell count, fastest in width: the same styled app at the 4096x256 the local ceiling allows took 220 s and +1.4 GB for one frame. Clients typing at once draw their frames concurrently, so size `max_connections` and `max_per_ip` against the VM's memory and the app you serve, and raise `max_terminal_size: {columns, rows}` only with that in mind. It may not exceed the local ceiling (4096 columns, 4096 rows, 1,048,576 cells).
 
 ## Configuration
 
