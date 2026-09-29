@@ -2,6 +2,7 @@ defmodule Raxol.HeadlessTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Headless
+  import ExUnit.CaptureLog, only: [capture_log: 1]
 
   # Minimal TEA app for testing
   defmodule TestApp do
@@ -39,6 +40,28 @@ defmodule Raxol.HeadlessTest do
         ]
       )
     end
+
+    @impl true
+    def subscriptions(_model), do: []
+  end
+
+  defmodule SizeApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(%{width: w, height: h}), do: %{init_size: {w, h}, resized: nil}
+
+    @impl true
+    def update(
+          %Raxol.Core.Events.Event{type: :resize, data: %{width: w, height: h}},
+          model
+        ),
+        do: {%{model | resized: {w, h}}, []}
+
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("sized")
 
     @impl true
     def subscriptions(_model), do: []
@@ -565,6 +588,63 @@ defmodule Raxol.HeadlessTest do
       {:ok, text} = Headless.screenshot(:dim_test)
       lines = String.split(text, "\n")
       assert length(lines) <= 15
+    end
+
+    # `Raxol.Headless.start/2` and `send_resize/3` take the pilot's own sizes,
+    # so they clamp (with a warning) instead of refusing; the MCP tool in
+    # front of them refuses. Either way the app is told the size it is drawn
+    # at, and the engine never allocates past the ceiling.
+    test "a size past the terminal size ceiling starts at the ceiling" do
+      log =
+        capture_log(fn ->
+          {:ok, _} =
+            Headless.start(SizeApp,
+              id: :oversize_start,
+              width: 100_000,
+              height: 100_000
+            )
+        end)
+
+      assert log =~ "100000x100000 is past the terminal size ceiling"
+
+      assert {:ok, %{init_size: {4096, 256}}} =
+               Headless.get_model(:oversize_start)
+
+      %{engine: engine} = session_pids(:oversize_start)
+      state = GenServer.call(engine, {:get_state})
+      assert {state.width, state.height} == {4096, 256}
+      assert {state.buffer.width, state.buffer.height} == {4096, 256}
+    end
+
+    test "a resize past the ceiling reaches the app and the engine at the ceiling, warning once" do
+      {:ok, _} =
+        Headless.start(SizeApp, id: :oversize_resize, width: 80, height: 24)
+
+      log =
+        capture_log(fn ->
+          :ok = Headless.send_resize(:oversize_resize, 100_000, 100_000)
+
+          assert {:ok, %{resized: {4096, 256}}} =
+                   Headless.get_model(:oversize_resize)
+
+          # Still oversized, still at the ceiling: no second warning.
+          :ok = Headless.send_resize(:oversize_resize, 50_000, 9_000)
+
+          assert {:ok, %{resized: {4096, 256}}} =
+                   Headless.get_model(:oversize_resize)
+        end)
+
+      assert length(String.split(log, "past the terminal size ceiling")) == 2
+
+      %{engine: engine} = session_pids(:oversize_resize)
+      state = GenServer.call(engine, {:get_state})
+      assert {state.width, state.height} == {4096, 256}
+      assert {state.buffer.width, state.buffer.height} == {4096, 256}
+
+      :ok = Headless.send_resize(:oversize_resize, 120, 40)
+      assert {:ok, %{resized: {120, 40}}} = Headless.get_model(:oversize_resize)
+      assert {:ok, frame} = Headless.get_buffer(:oversize_resize)
+      assert {frame.width, frame.height} == {120, 40}
     end
   end
 

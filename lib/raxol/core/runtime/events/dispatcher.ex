@@ -325,9 +325,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   defp handle_resize_event(
-         %Event{data: %{width: width, height: height}} = event,
+         %Event{data: %{width: requested_w, height: requested_h} = data} = event,
          state
        ) do
+    {width, height} = clamp_resize(requested_w, requested_h, state)
+    event = %{event | data: %{data | width: width, height: height}}
+
     # Forward size to the Rendering Engine so layout uses actual terminal dimensions
     if state.rendering_engine do
       GenServer.cast(
@@ -345,6 +348,30 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       :unhandled ->
         send(state.runtime_pid, :render_needed)
         {:ok, sized_state, []}
+    end
+  end
+
+  # Every resize, from every surface, reaches the app and the engine here, so
+  # the app is told the size the engine draws at (the engine clamps too; see
+  # `Rendering.Engine`). Remote surfaces clamp before sending, so what gets here
+  # oversized is the pilot's own terminal or a programmatic resize: that is
+  # worth one warning per crossing into the ceiling, not one per SIGWINCH while
+  # the window stays oversized, which is when the clamped size is unchanged.
+  defp clamp_resize(width, height, state) do
+    case Raxol.Core.Utils.Validation.clamp_terminal_size(width, height) do
+      {^width, ^height} = size ->
+        size
+
+      clamped ->
+        if clamped != {state.width, state.height} do
+          Raxol.Core.Runtime.Log.warning(
+            "[Dispatcher] Terminal size #{width}x#{height} is past the " <>
+              "terminal size ceiling (Raxol.Core.Defaults.max_terminal_*); " <>
+              "rendering at #{elem(clamped, 0)}x#{elem(clamped, 1)}"
+          )
+        end
+
+        clamped
     end
   end
 

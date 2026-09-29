@@ -158,6 +158,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
 
     options =
       options
+      |> clamp_size_options()
       |> maybe_start_time_travel()
       |> maybe_start_cycle_profiler()
 
@@ -676,6 +677,39 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   end
 
   defp trigger_initial_render(_state), do: :ok
+
+  # -- Terminal size ceiling --
+
+  # `:width`/`:height` size the app's `init/1`, the dispatcher and the
+  # rendering engine, so clamping them once here starts all three at the size
+  # the engine will draw (it clamps too). A remote surface has already clamped
+  # or refused; an oversized size here is the pilot's own, so it is logged.
+  defp clamp_size_options(options) do
+    width = Keyword.get(options, :width)
+    height = Keyword.get(options, :height)
+
+    case Raxol.Core.Utils.Validation.clamp_terminal_size(width, height) do
+      {^width, ^height} ->
+        options
+
+      {w, h} ->
+        Log.warning(
+          "[#{__MODULE__}] Terminal size #{inspect(width)}x#{inspect(height)} " <>
+            "is past the terminal size ceiling " <>
+            "(Raxol.Core.Defaults.max_terminal_*); starting at " <>
+            "#{inspect(w)}x#{inspect(h)}"
+        )
+
+        options
+        |> put_clamped(:width, width, w)
+        |> put_clamped(:height, height, h)
+    end
+  end
+
+  defp put_clamped(options, _key, same, same), do: options
+
+  defp put_clamped(options, key, _given, clamped),
+    do: Keyword.put(options, key, clamped)
 
   # -- Time-travel debugging --
 
