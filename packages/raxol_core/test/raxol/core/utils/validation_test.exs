@@ -93,6 +93,40 @@ defmodule Raxol.Core.Utils.ValidationTest do
     end
   end
 
+  describe "the remote ceiling" do
+    alias Raxol.Core.Defaults
+
+    setup do: %{remote: Defaults.remote_terminal_size_ceiling()}
+
+    test "clamps a network client's size to 512 columns, 256 rows and 131072 cells",
+         %{remote: remote} do
+      assert Validation.clamp_terminal_size(100_000, 100_000, remote) == {512, 256}
+      assert Validation.clamp_terminal_size(4096, 256, remote) == {512, 256}
+      assert Validation.clamp_terminal_size(600, 100, remote) == {512, 100}
+      assert Validation.clamp_terminal_size(300, 400, remote) == {300, 256}
+      assert Validation.clamp_terminal_size(480, 135, remote) == {480, 135}
+    end
+
+    test "validates against it", %{remote: remote} do
+      assert Validation.validate_terminal_size(512, 256, remote) == :ok
+
+      for {w, h} <- [{513, 40}, {120, 257}, {4096, 256}] do
+        assert Validation.validate_terminal_size(w, h, remote) ==
+                 {:error, :dimensions_too_large}
+      end
+    end
+
+    test "an operator's own ceiling applies its cell budget too" do
+      ceiling = %{width: 1000, height: 1000, cells: 20_000}
+
+      assert Validation.clamp_terminal_size(1000, 1000, ceiling) == {1000, 20}
+      assert Validation.validate_terminal_size(200, 100, ceiling) == :ok
+
+      assert Validation.validate_terminal_size(201, 100, ceiling) ==
+               {:error, :dimensions_too_large}
+    end
+  end
+
   describe "validate_coordinates/2" do
     test "accepts zero coordinates" do
       assert Validation.validate_coordinates(0, 0) == {:ok, {0, 0}}
