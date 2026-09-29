@@ -80,10 +80,14 @@ defmodule Raxol.Terminal.ControlCodes do
   @doc """
   Handles bell control code.
   """
-  def handle_bel(emulator) do
-    _ = System.cmd("tput", ["bel"])
-    emulator
-  end
+  # Counted, not rung: forking `tput bel` for every BEL cost about 2.7 ms a
+  # byte, so a stream of them stalled the session (and tput's output was
+  # captured, so nobody heard it). Whoever draws the emulator rings once per
+  # frame when `bell_count` has moved.
+  def handle_bel(%{bell_count: count} = emulator),
+    do: %{emulator | bell_count: count + 1}
+
+  def handle_bel(emulator), do: emulator
 
   @doc "Handle Backspace (BS)"
   def handle_bs(%Emulator{} = emulator) do
@@ -361,77 +365,88 @@ defmodule Raxol.Terminal.ControlCodes do
 
   @spec handle_decsc(Emulator.t()) :: Emulator.t()
   # ESC 7 - Save Cursor State (DEC specific)
+  #
+  # As in xterm, each screen (main and alternate) has ONE saved state: DECSC
+  # overwrites it and DECRC restores it, leaving it in place. `state_stack`
+  # holds at most one entry per screen, so a stream of ESC 7 cannot grow the
+  # emulator (it used to push a copy per ESC 7, never trimmed).
   def handle_decsc(emulator) do
-    # Get cursor state from the PID using CursorManager
-    cursor_position =
-      Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
+    screen = saved_state_screen(emulator)
+    saved_state = Map.put(cursor_save_state(emulator), :screen, screen)
+    others = Enum.reject(emulator.state_stack, &(saved_state_screen_of(&1) == screen))
+    %{emulator | state_stack: [saved_state | others]}
+  end
 
-    cursor_visible =
-      Raxol.Terminal.Cursor.Manager.get_visibility(emulator.cursor)
+  @doc """
+  The state DECSC saves: cursor position, visibility, style and blink, SGR
+  attributes, charset state and (via `mode_manager`) origin/autowrap modes.
 
-    cursor_style = Raxol.Terminal.Cursor.Manager.get_style(emulator.cursor)
-    cursor_blinking = Raxol.Terminal.Cursor.Manager.get_blink(emulator.cursor)
+  It does NOT include the DECSTBM scroll region: per VT100/VT510 and xterm,
+  margins are not part of the DECSC/DECRC saved state, so a `CSI t;b r`
+  emitted inside an `ESC 7`/`ESC 8` bracket survives the restore on real
+  hardware. This emulator used to round-trip `scroll_region` here, which
+  silently un-set a region established mid-bracket (the adaptive-pin
+  transition emits its DECSTBM inside the seal path's save/restore bracket)
+  -- diverging from every real terminal and invalidating the O2 replay
+  oracle. Pinned by test/harness/adaptive_pin_test.exs's transition replays
+  and the DECRC test in state_stack_test.exs.
+  """
+  @spec cursor_save_state(Emulator.t()) :: map()
+  def cursor_save_state(emulator) do
+    cursor = emulator.cursor
 
-    # DECSC saves cursor position, character attributes (SGR), charset
-    # state, and (via mode_manager) origin/autowrap modes. It does NOT
-    # save the DECSTBM scroll region: per VT100/VT510 and xterm, margins
-    # are not part of the DECSC/DECRC saved state, so a `CSI t;b r`
-    # emitted inside an `ESC 7`/`ESC 8` bracket survives the restore on
-    # real hardware. This emulator used to round-trip `scroll_region`
-    # here, which silently un-set a region established mid-bracket (the
-    # adaptive-pin transition emits its DECSTBM inside the seal path's
-    # save/restore bracket) -- diverging from every real terminal and
-    # invalidating the O2 replay oracle. Pinned by
-    # test/harness/adaptive_pin_test.exs's transition replays and the
-    # DECRC test in state_stack_test.exs.
-    saved_state = %{
+    %{
       cursor: %{
-        position: cursor_position,
-        visible: cursor_visible,
-        style: cursor_style,
-        blink_state: cursor_blinking
+        position: Raxol.Terminal.Cursor.Manager.get_position(cursor),
+        visible: Raxol.Terminal.Cursor.Manager.get_visibility(cursor),
+        style: Raxol.Terminal.Cursor.Manager.get_style(cursor),
+        blink_state: Raxol.Terminal.Cursor.Manager.get_blink(cursor)
       },
       style: emulator.style,
       charset_state: emulator.charset_state,
       mode_manager: emulator.mode_manager,
       cursor_style: emulator.cursor_style
     }
-
-    # Save the state to the stack
-    new_stack = [saved_state | emulator.state_stack]
-    %{emulator | state_stack: new_stack}
   end
 
   @spec handle_decrc(Emulator.t()) :: Emulator.t()
   # ESC 8 - Restore Cursor State (DEC specific)
   def handle_decrc(emulator) do
-    case emulator.state_stack do
-      [restored_state_data | new_stack] ->
-        # Apply the restored state components
-        # `scroll_region` is deliberately NOT restored -- DECRC does not
-        # touch DECSTBM margins on real terminals (see handle_decsc/1's
-        # comment). A stale `scroll_region` key from an older saved-state
-        # shape is ignored for the same reason.
-        emulator = %{
-          emulator
-          | state_stack: new_stack,
-            style: restored_state_data.style,
-            charset_state: restored_state_data.charset_state,
-            mode_manager: restored_state_data.mode_manager,
-            cursor_style: Map.get(restored_state_data, :cursor_style, emulator.cursor_style)
-        }
-
-        # Restore cursor position and attributes using CursorManager
-        updated_cursor =
-          restore_cursor_state(restored_state_data.cursor, emulator.cursor)
-
-        %{emulator | cursor: updated_cursor}
-
-      [] ->
-        # No saved state to restore
-        emulator
+    case saved_cursor_save_state(emulator) do
+      nil -> emulator
+      saved_state -> restore_cursor_save_state(emulator, saved_state)
     end
   end
+
+  @doc "The active screen's DECSC saved state, or `nil`."
+  @spec saved_cursor_save_state(Emulator.t()) :: map() | nil
+  def saved_cursor_save_state(emulator) do
+    screen = saved_state_screen(emulator)
+    Enum.find(emulator.state_stack, &(saved_state_screen_of(&1) == screen))
+  end
+
+  @doc """
+  Applies a state saved by `cursor_save_state/1`. `scroll_region` is
+  deliberately NOT restored -- DECRC does not touch DECSTBM margins on real
+  terminals (see `cursor_save_state/1`).
+  """
+  @spec restore_cursor_save_state(Emulator.t(), map()) :: Emulator.t()
+  def restore_cursor_save_state(emulator, saved_state) do
+    %{
+      emulator
+      | style: saved_state.style,
+        charset_state: saved_state.charset_state,
+        mode_manager: saved_state.mode_manager,
+        cursor_style: Map.get(saved_state, :cursor_style, emulator.cursor_style),
+        cursor: restore_cursor_state(saved_state.cursor, emulator.cursor)
+    }
+  end
+
+  defp saved_state_screen(emulator),
+    do: if(Map.get(emulator, :active_buffer_type) == :alternate, do: :alternate, else: :main)
+
+  defp saved_state_screen_of(%{screen: screen}), do: screen
+  defp saved_state_screen_of(_other), do: nil
 
   @escape_handlers %{
     ?7 => &Raxol.Terminal.ControlCodes.handle_decsc/1,
@@ -660,9 +675,10 @@ defmodule Raxol.Terminal.ControlCodes do
     %{emulator | cursor: cursor}
   end
 
-  defp restore_cursor_state(nil, emulator_cursor), do: emulator_cursor
+  @doc false
+  def restore_cursor_state(nil, emulator_cursor), do: emulator_cursor
 
-  defp restore_cursor_state(cursor_data, emulator_cursor) do
+  def restore_cursor_state(cursor_data, emulator_cursor) do
     # Restore cursor position
     cursor =
       Raxol.Terminal.Cursor.Manager.set_position(

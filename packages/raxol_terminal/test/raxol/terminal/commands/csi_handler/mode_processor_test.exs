@@ -323,7 +323,6 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
       out = feed(emulator, "\e[5;10H\e[?1048h\e[1;1H\e[?1048l")
 
       assert out.cursor.position == {4, 9}
-      assert out.state_stack == []
     end
   end
 

@@ -83,7 +83,10 @@ defmodule Raxol.Terminal.Emulator do
               saved_size: {@default_width, @default_height},
               icon_name: ""
             },
+            # DECSC saved states, at most one per screen (`ControlCodes.handle_decsc/1`).
             state_stack: [],
+            # BELs received; a renderer rings once per frame when it moves.
+            bell_count: 0,
             parser_state: %Raxol.Terminal.Parser.ParserState{state: :ground},
             command_history: [],
             max_command_history: 100,
@@ -171,6 +174,7 @@ defmodule Raxol.Terminal.Emulator do
           height: non_neg_integer(),
           window_state: map(),
           state_stack: list(),
+          bell_count: non_neg_integer(),
           parser_state: any(),
           command_history: list(),
           max_command_history: non_neg_integer(),
