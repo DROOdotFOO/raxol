@@ -7,16 +7,18 @@ defmodule Raxol.Terminal.Parser.ParserState do
   any number of `process_input/2` calls, so every append goes through a
   function below that bounds it:
 
-    * Control sequence parameters (`append_param/2`): at most 30, each clamped
-      to 65535, which are xterm's `NPARAM` and `MAX_I_PARAM`. As in xterm, a
-      separator past the last parameter is dropped and further digits keep
-      accumulating into that parameter, clamped.
+    * Control sequence parameters (`append_param/2`): at most `max_params/0`
+      (30), each clamped to `max_param_value/0` (65535), which are xterm's
+      `NPARAM` and `MAX_I_PARAM`. As in xterm, a separator past the last
+      parameter is dropped and further digits keep accumulating into that
+      parameter, clamped.
     * Intermediate bytes (`append_intermediate/2`): at most 15, further ones
       dropped, as libvterm does (`INTERMED_MAX` 16). No sequence the emulator
       recognises uses more than two.
     * OSC and DCS strings (`append_osc/2`, `append_dcs/2`): 20,000 bytes,
-      xterm's default `maxStringParse`, except OSC 52 (clipboard, 4 MiB of
-      base64) and sixel image data (`Raxol.Core.Defaults.max_image_payload_bytes/0`).
+      xterm's `DEF_STRINGS_MAX` for builds without sixel or ReGIS graphics
+      (with them xterm allows 600,000 for every string). Sixel image data has
+      its own cap, `Raxol.Core.Defaults.max_image_payload_bytes/0`.
       A string past its cap is discarded and the rest of it skipped up to its
       terminator, which returns the parser to ground without dispatching it;
       xterm ignores an oversized string the same way.
@@ -26,10 +28,9 @@ defmodule Raxol.Terminal.Parser.ParserState do
 
   @max_params 30
   @max_param_value 65_535
-  @max_param_digits 5
+  @max_param_digits byte_size(Integer.to_string(@max_param_value))
   @max_intermediates 15
   @max_string_bytes 20_000
-  @max_osc_52_bytes 4 * 1024 * 1024
   @max_sixel_bytes Defaults.max_image_payload_bytes()
 
   @type t :: %__MODULE__{
@@ -57,6 +58,18 @@ defmodule Raxol.Terminal.Parser.ParserState do
             final_byte: nil,
             designating_gset: nil,
             single_shift: nil
+
+  @doc "The most parameters a control sequence keeps (xterm's `NPARAM`)."
+  @spec max_params() :: pos_integer()
+  def max_params, do: @max_params
+
+  @doc "The largest value a parameter takes (xterm's `MAX_I_PARAM`)."
+  @spec max_param_value() :: pos_integer()
+  def max_param_value, do: @max_param_value
+
+  @doc "The digits in `max_param_value/0`: a longer parameter is clamped."
+  @spec max_param_digits() :: pos_integer()
+  def max_param_digits, do: @max_param_digits
 
   @doc """
   Appends a parameter byte (a digit, `;` or `:`) to a parameter buffer,
@@ -88,7 +101,7 @@ defmodule Raxol.Terminal.Parser.ParserState do
   """
   @spec append_osc(t(), byte()) :: t()
   def append_osc(%__MODULE__{} = state, byte),
-    do: append_payload(state, byte, osc_limit(state.payload_buffer))
+    do: append_payload(state, byte, @max_string_bytes)
 
   @doc """
   Appends a byte to a DCS data string, with the same overflow handling as
@@ -107,16 +120,6 @@ defmodule Raxol.Terminal.Parser.ParserState do
 
   defp append_payload(state, _byte, _limit),
     do: %{state | payload_buffer: "", payload_overflow: true}
-
-  # `binary_part/3`, not a `"52;" <> _` match: matching the buffer would stop
-  # the VM appending to it in place, and every byte would copy the whole of it.
-  defp osc_limit(payload) when byte_size(payload) >= 3 do
-    if binary_part(payload, 0, 3) == "52;",
-      do: @max_osc_52_bytes,
-      else: @max_string_bytes
-  end
-
-  defp osc_limit(_payload), do: @max_string_bytes
 
   # The emulator treats DCS q with no intermediate or with `"` as sixel
   # (`Raxol.Terminal.Commands.DCSHandler`); DCS $ q and DCS + q are not images.

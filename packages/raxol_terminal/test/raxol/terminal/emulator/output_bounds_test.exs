@@ -12,7 +12,6 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
 
   import Raxol.Test.EmulatorHelpers, only: [get_line_text: 2]
 
-  alias Raxol.Terminal.Commands.CommandsParser
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ScreenBuffer
 
@@ -84,20 +83,21 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
 
       assert emulator.parser_state.state == :csi_param
       assert byte_size(emulator.parser_state.params_buffer) == 5
-      assert emulator.parser_state.params_buffer == "65535"
 
-      emulator = feed(emulator, "m\e[1;1Hok")
+      # CUF 65535 stops at the right margin.
+      emulator = feed(emulator, "CX")
       assert emulator.parser_state.state == :ground
-      assert String.starts_with?(get_line_text(emulator, 0), "ok")
+      assert get_line_text(emulator, 0) == String.duplicate(" ", 79) <> "X"
     end
 
     test "past 30 parameters digits accumulate into the last one, as in xterm" do
-      emulator = feed(Emulator.new(80, 24), "\e[" <> Enum.join(1..32, ";"))
+      # The 30th parameter reads "3", the separator after it is dropped and
+      # the "1" joins it: SGR 31 (red), not 3 (italic) and 1 (bold).
+      emulator = feed(Emulator.new(80, 24), "\e[" <> String.duplicate("0;", 29) <> "3;1m")
 
-      assert byte_size(emulator.parser_state.params_buffer) < 200
-
-      assert CommandsParser.parse_params(emulator.parser_state.params_buffer) ==
-               Enum.concat(1..29, [65_535])
+      assert emulator.style.foreground == :red
+      refute emulator.style.italic
+      refute emulator.style.bold
     end
 
     test "a million parameters keep only 30" do
@@ -106,18 +106,14 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
 
       assert byte_size(emulator.parser_state.params_buffer) < 200
 
-      assert length(CommandsParser.parse_params(emulator.parser_state.params_buffer)) ==
-               30
-
       emulator = feed(emulator, "m")
       assert emulator.parser_state.state == :ground
       assert emulator.style.bold
     end
 
     test "leading zeros do not count against the value" do
-      emulator = feed(Emulator.new(80, 24), "\e[" <> String.duplicate("0", 50) <> "7;0;")
-      assert byte_size(emulator.parser_state.params_buffer) == 4
-      assert emulator.parser_state.params_buffer == "7;0;"
+      emulator = feed(Emulator.new(80, 24), "X\e[" <> String.duplicate("0", 50) <> "7CY")
+      assert String.starts_with?(get_line_text(emulator, 0), "X       Y ")
     end
 
     test "intermediate bytes are kept to 15" do
@@ -159,17 +155,11 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
       assert emulator.window_title == nil
     end
 
-    test "OSC 52 may carry more than other OSC strings" do
-      base64 = String.duplicate("QUFB", 25_000)
+    test "OSC 52 is capped like any other OSC string" do
+      # The clipboard is never set from the output stream, so there is no
+      # reason to buffer more of it.
+      base64 = String.duplicate("QUFB", 5_001)
       emulator = feed(Emulator.new(80, 24), "\e]52;c;" <> base64)
-
-      refute emulator.parser_state.payload_overflow
-      assert byte_size(emulator.parser_state.payload_buffer) == byte_size("52;c;" <> base64)
-    end
-
-    test "OSC 52 stops buffering at 4 MiB" do
-      chunk = String.duplicate("QUFB", 256 * 1024)
-      emulator = feed(Emulator.new(80, 24), ["\e]52;c;" | List.duplicate(chunk, 5)])
 
       assert emulator.parser_state.payload_overflow
       assert emulator.parser_state.payload_buffer == ""

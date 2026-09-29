@@ -6,23 +6,27 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
   asks for pixels in proportion to a number, not to the bytes sent. So the
   decoder keeps only pixels inside the parse's extent (`max_width` by
   `max_height`, at most `Raxol.Core.Defaults.image_size_ceiling/0`; the
-  emulator passes the screen area right and below the cursor, which is all
-  of an image it can draw), draws at most `pixels_left` pixels in one parse,
-  and never lets the kept pixel buffer grow past the ceiling's pixel count.
+  emulator passes the columns from the cursor to the right edge by the rows
+  from it to the bottom, which is all of an image it can draw), draws at most
+  `pixels_left` pixels in one parse, and never lets the kept pixel buffer grow
+  past the ceiling's pixel count.
   Numeric parameters are bounded as control sequence parameters are
-  (`Raxol.Terminal.Parser.ParserState`): at most 30, each clamped to 65535.
+  (`Raxol.Terminal.Parser.ParserState`): at most
+  `Raxol.Terminal.Parser.ParserState.max_params/0`, each clamped to
+  `Raxol.Terminal.Parser.ParserState.max_param_value/0`.
   """
   require Logger
 
   alias Raxol.Core.Defaults
   alias Raxol.Terminal.ANSI.SixelPalette
   alias Raxol.Terminal.ANSI.Utils.SixelPatternMap
+  alias Raxol.Terminal.Parser.ParserState, as: SequenceLimits
 
   @image_ceiling Defaults.image_size_ceiling()
   @max_pixels @image_ceiling.pixels
-  @max_params 30
-  @max_param_value 65_535
-  @max_param_digits 5
+  @max_params SequenceLimits.max_params()
+  @max_param_value SequenceLimits.max_param_value()
+  @max_param_digits SequenceLimits.max_param_digits()
 
   defmodule ParserState do
     @moduledoc """
@@ -312,8 +316,10 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
     end
   end
 
-  # The pixel buffer outlives a parse (the emulator keeps it between images),
-  # so it is capped as a whole: once full, only pixels it already holds change.
+  # The emulator starts each image with an empty buffer, but a caller of
+  # `SixelGraphics.process_sequence/3` may pass one that already holds pixels,
+  # so the buffer is capped as a whole: once full, only pixels it already
+  # holds change.
   defp put_pixel(buffer, key, color) when map_size(buffer) < @max_pixels,
     do: Map.put(buffer, key, color)
 
