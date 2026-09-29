@@ -119,6 +119,8 @@ SSH Client  --->  :ssh.daemon (Erlang)
 
 Each connection is isolated. One user's crash doesn't affect others.
 
+A client's window size (its pty-req and every window change) is clamped to the terminal size ceiling in `Raxol.Core.Defaults`: at most 4096 columns, 4096 rows and 1,048,576 cells. A session's screen buffer is allocated up front, so the size is the memory; a larger window renders at the ceiling and the session carries on. At the ceiling one buffer is bounded at ~562 MB with every cell holding its own style (~118 MB as typically rendered), so size `max_connections` and `max_per_ip` with that in mind.
+
 ## Configuration
 
 ### Authentication
