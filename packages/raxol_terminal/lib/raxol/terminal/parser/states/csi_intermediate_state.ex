@@ -149,7 +149,7 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
   end
 
   defp handle_unhandled_byte(emulator, parser_state, unhandled_byte, rest) do
-    Logger.warning(
+    Logger.debug(
       "Unhandled byte #{unhandled_byte} in CSI Intermediate state, returning to ground."
     )
 

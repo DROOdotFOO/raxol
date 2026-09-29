@@ -124,10 +124,7 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   end
 
   defp handle_unhandled_byte(emulator, parser_state, byte, rest) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "Unhandled byte #{byte} in DCS Entry state, returning to ground.",
-      %{}
-    )
+    Logger.debug("Unhandled byte #{byte} in DCS Entry state, returning to ground.")
 
     next_state = %{parser_state | state: :ground}
     {:continue, emulator, next_state, rest}

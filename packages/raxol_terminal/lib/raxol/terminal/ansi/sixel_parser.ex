@@ -176,7 +176,7 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
             })
 
           {:error, reason} ->
-            Logger.warning(
+            Logger.debug(
               "Sixel Parser: Invalid color definition ##{inspect(pc)}: #{inspect(reason)}. Skipping."
             )
 
@@ -184,7 +184,7 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         end
 
       false ->
-        Logger.warning("Sixel Parser: Invalid color index ##{inspect(pc)}. Skipping.")
+        Logger.debug("Sixel Parser: Invalid color index ##{inspect(pc)}. Skipping.")
 
         parse(remaining_data, state)
     end
@@ -201,7 +201,7 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, %{state | color_index: 0})
 
       _ ->
-        Logger.warning(
+        Logger.debug(
           "Sixel Parser: Unexpected params for Color Definition: #{inspect(params)}. Skipping."
         )
 
@@ -217,7 +217,7 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         parse(remaining_data, %{state | repeat_count: pn})
 
       {:ok, [pn | _], remaining_data} ->
-        Logger.warning(
+        Logger.debug(
           "Sixel Parser: Invalid repeat count found (!#{inspect(pn)}). Skipping repeat command."
         )
 

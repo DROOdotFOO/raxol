@@ -178,7 +178,7 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
     msg =
       "Unhandled byte #{unhandled_byte} in CSI Param state, returning to ground."
 
-    Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+    Logger.debug(msg)
     next_parser_state = %{parser_state | state: :ground}
     {:continue, emulator, next_parser_state, rest}
   end

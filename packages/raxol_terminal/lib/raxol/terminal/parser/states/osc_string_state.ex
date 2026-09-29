@@ -4,6 +4,8 @@ defmodule Raxol.Terminal.Parser.States.OSCStringState do
   This state is entered when an OSC sequence is initiated.
   """
 
+  require Logger
+
   alias Raxol.Terminal.Commands.Executor
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State
@@ -50,10 +52,7 @@ defmodule Raxol.Terminal.Parser.States.OSCStringState do
 
       # Unhandled byte
       <<unhandled_byte, rest_after_unhandled::binary>> ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Unhandled byte in OSC String state: #{inspect(unhandled_byte)}",
-          %{}
-        )
+        Logger.debug("Unhandled byte in OSC String state: #{inspect(unhandled_byte)}")
 
         # Go to ground state
         next_parser_state = %{parser_state | state: :ground}

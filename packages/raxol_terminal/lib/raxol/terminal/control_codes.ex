@@ -299,7 +299,7 @@ defmodule Raxol.Terminal.ControlCodes do
   @spec handle_ris(Emulator.t()) :: Emulator.t()
   # ESC c - Reset to Initial State
   def handle_ris(emulator) do
-    Logger.info("RIS (Reset to Initial State) received")
+    Logger.debug("RIS (Reset to Initial State) received")
     # Re-initialize most state components, keeping buffer dimensions
     active_buffer = Emulator.get_screen_buffer(emulator)
     width = ScreenBuffer.get_width(active_buffer)

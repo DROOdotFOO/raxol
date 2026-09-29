@@ -326,11 +326,30 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
     end
 
     test "OSC 7 and OSC 1337 set the current directory and host" do
-      emulator = feed(Emulator.new(80, 24), "\e]7;file://host/tmp\a")
-      assert emulator.current_directory == "file://host/tmp"
+      emulator = feed(Emulator.new(80, 24), "\e]7;file://box/home/me/My%20Files\a")
+      assert {emulator.current_directory, emulator.remote_host} == {"/home/me/My Files", "box"}
+
+      # Not a file URI: ignored.
+      emulator = feed(emulator, "\e]7;http://x/y\a")
+      assert emulator.current_directory == "/home/me/My Files"
 
       emulator = feed(emulator, "\e]1337;CurrentDir=/srv\a\e]1337;RemoteHost=me@box\a")
       assert {emulator.current_directory, emulator.remote_host} == {"/srv", "me@box"}
+    end
+  end
+
+  describe "log volume" do
+    test "malformed or unknown sequences log nothing at :info" do
+      input =
+        "\e[5y\e[1$y\e]999;x\a\e]x\a\eP$qzz\e\\\ePq#9999;9;1;1;1~\e\\" <>
+          <<0x8E, 0x8F>> <> "\e[1\x80\e]0;a\eZ\ec"
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          feed(Emulator.new(80, 24), input)
+        end)
+
+      assert log == ""
     end
   end
 

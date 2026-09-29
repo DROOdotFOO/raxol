@@ -40,7 +40,7 @@ defmodule Raxol.Terminal.Parser.States.DCSPassthroughMaybeSTState do
         msg =
           "Malformed DCS termination: ESC not followed by ST. Returning to ground."
 
-        Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+        Logger.debug(msg)
 
         # Discard sequence, go to ground
         next_parser_state = %{parser_state | state: :ground}
@@ -52,7 +52,7 @@ defmodule Raxol.Terminal.Parser.States.DCSPassthroughMaybeSTState do
         msg =
           "Malformed DCS termination: Input ended after ESC. Returning to ground."
 
-        Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+        Logger.debug(msg)
 
         # Go to ground
         next_parser_state = %{parser_state | state: :ground}

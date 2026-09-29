@@ -183,12 +183,12 @@ defmodule Raxol.Terminal.Commands.Executor do
   end
 
   defp log_and_return_result({:error, reason}) do
-    Logger.error("Executor error: #{inspect(reason)}")
+    Logger.debug("Executor error: #{inspect(reason)}")
     {:error, reason}
   end
 
   defp log_and_return_result({:error, reason, emulator}) do
-    Logger.error("Executor error: #{inspect(reason)}")
+    Logger.debug("Executor error: #{inspect(reason)}")
     emulator
   end
 
@@ -201,7 +201,7 @@ defmodule Raxol.Terminal.Commands.Executor do
   end
 
   defp log_unknown_csi(final_byte) do
-    Logger.warning("Unknown CSI command: #{inspect(final_byte)}")
+    Logger.debug("Unknown CSI command: #{inspect(final_byte)}")
   end
 
   @spec execute_osc_command(Emulator.t(), String.t()) :: Emulator.t()
@@ -231,7 +231,7 @@ defmodule Raxol.Terminal.Commands.Executor do
         # Only the Ps field failed to parse, and it is bounded: log a short
         # prefix of it so the line names what was rejected without echoing
         # the Pt payload (which may carry an OSC 52 clipboard blob).
-        Logger.warning(
+        Logger.debug(
           "OSC: Unexpected command format; ps=#{inspect(osc_ps_prefix(command_string))}, #{byte_size(command_string)} bytes (payload redacted)"
         )
 
@@ -354,7 +354,7 @@ defmodule Raxol.Terminal.Commands.Executor do
         # DCS command with intermediates - need to pass final byte
         case final_byte do
           nil ->
-            Logger.warning("DCS: No final byte found; params=#{inspect(params_buffer)}")
+            Logger.debug("DCS: No final byte found; params=#{inspect(params_buffer)}")
 
             {:error, :malformed_dcs, emulator}
 

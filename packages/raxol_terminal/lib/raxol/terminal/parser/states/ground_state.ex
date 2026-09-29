@@ -2,6 +2,8 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
   @moduledoc """
   Handles parsing in the ground state, the default state of the terminal.
   """
+
+  require Logger
   alias Raxol.Terminal.Commands.History
   alias Raxol.Terminal.Input.InputHandler
   alias Raxol.Terminal.TerminalParser, as: Parser
@@ -68,10 +70,7 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
 
   @impl Raxol.Terminal.Parser.StateBehaviour
   def handle_unknown(emulator, state) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "GroundState received unknown command",
-      %{emulator: emulator, state: state}
-    )
+    Logger.debug("GroundState received unknown command")
 
     {:ok, emulator, state}
   end
@@ -158,17 +157,13 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
   end
 
   defp handle_ss2(emulator, parser_state, rest) do
-    Raxol.Core.Runtime.Log.info(
-      "[Parser] SS2 (C1, 0x8E) received - will use G2 for next char only"
-    )
+    Logger.debug("[Parser] SS2 (C1, 0x8E) received - will use G2 for next char only")
 
     {:continue, emulator, %{parser_state | single_shift: :ss2}, rest}
   end
 
   defp handle_ss3(emulator, parser_state, rest) do
-    Raxol.Core.Runtime.Log.info(
-      "[Parser] SS3 (C1, 0x8F) received - will use G3 for next char only"
-    )
+    Logger.debug("[Parser] SS3 (C1, 0x8F) received - will use G3 for next char only")
 
     {:continue, emulator, %{parser_state | single_shift: :ss3}, rest}
   end

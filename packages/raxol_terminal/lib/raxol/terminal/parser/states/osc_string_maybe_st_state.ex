@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.Parser.States.OSCStringMaybeSTState do
   Handles the :osc_string_maybe_st state of the terminal parser.
   """
 
+  require Logger
+
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State
   alias Raxol.Terminal.Parser.States.OSCStringState
@@ -48,7 +50,7 @@ defmodule Raxol.Terminal.Parser.States.OSCStringMaybeSTState do
         msg =
           "Malformed OSC termination: ESC not followed by ST. Returning to ground."
 
-        Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+        Logger.debug(msg)
 
         # Discard sequence, go to ground
         next_parser_state = %{parser_state | state: :ground}
@@ -60,7 +62,7 @@ defmodule Raxol.Terminal.Parser.States.OSCStringMaybeSTState do
         msg =
           "Malformed OSC termination: Input ended after ESC. Returning to ground."
 
-        Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+        Logger.debug(msg)
 
         # Go to ground
         next_parser_state = %{parser_state | state: :ground}

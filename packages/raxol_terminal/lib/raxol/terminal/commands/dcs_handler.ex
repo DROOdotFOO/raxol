@@ -63,14 +63,14 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
       # bounded prefix: the line stays diagnostic and an oversized DCS
       # payload still cannot be echoed into the log.
       unknown ->
-        Logger.warning("Unhandled DECRQSS request type: #{inspect(selector_prefix(unknown))}")
+        Logger.debug("Unhandled DECRQSS request type: #{inspect(selector_prefix(unknown))}")
 
         {:ok, emulator}
     end
   end
 
   defp handle_decdld(emulator, _data_string) do
-    Logger.warning("DECDLD (Downloadable Character Set) not yet implemented")
+    Logger.debug("DECDLD (Downloadable Character Set) not yet implemented")
 
     {:error, :decdld_not_implemented, emulator}
   end
@@ -142,7 +142,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         Logger.debug("DCSHandlers: sixel processing failed: #{inspect(reason)}")
 
         # Processing failed, log the error but still update the sixel_state
-        Logger.warning("Sixel processing failed: #{inspect(reason)}")
+        Logger.debug("Sixel processing failed: #{inspect(reason)}")
         # Return the original sixel_state (or new one if it was nil)
         {:ok, %{emulator | sixel_state: sixel_state}}
     end
