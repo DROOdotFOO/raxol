@@ -650,7 +650,7 @@ defmodule Raxol.Headless do
 
   defp take_screenshot(session) do
     with_engine(session, fn engine_pid ->
-      case render_frame(engine_pid) do
+      case render_frame(session, engine_pid) do
         {:ok, buffer} when not is_nil(buffer) ->
           {:ok, TextCapture.capture(buffer)}
 
@@ -665,7 +665,7 @@ defmodule Raxol.Headless do
 
   defp take_buffer(session) do
     with_engine(session, fn engine_pid ->
-      case render_frame(engine_pid) do
+      case render_frame(session, engine_pid) do
         {:ok, buffer} when not is_nil(buffer) -> {:ok, buffer}
         {:ok, nil} -> {:error, :no_buffer}
         error -> error
@@ -680,10 +680,17 @@ defmodule Raxol.Headless do
   # unhandled when `start/2` returns, and the dispatcher answers it with an
   # `{:update_size, _}` that swaps a blank buffer in over the rendered frame.
   # A render that fails reads the buffer as it stands, as it always has.
-  defp render_frame(engine_pid) do
-    case GenServer.call(engine_pid, :render_frame_sync_buffer) do
-      {:ok, buffer} -> {:ok, buffer}
-      {:error, _reason} -> GenServer.call(engine_pid, :get_buffer)
+  defp render_frame(session, engine_pid) do
+    case session_call(session, engine_pid, :render_frame_sync_buffer) do
+      {:ok, {:ok, buffer}} ->
+        {:ok, buffer}
+
+      {:ok, {:error, _reason}} ->
+        with {:ok, reply} <- session_call(session, engine_pid, :get_buffer),
+             do: reply
+
+      error ->
+        error
     end
   end
 
@@ -694,8 +701,9 @@ defmodule Raxol.Headless do
   defp dispatch_message(session, msg) do
     with_dispatcher(session, fn dispatcher_pid ->
       send(dispatcher_pid, {:subscription, msg})
-      _ = GenServer.call(dispatcher_pid, :get_model)
-      :ok
+
+      with {:ok, _model} <- session_call(session, dispatcher_pid, :get_model),
+           do: :ok
     end)
   end
 
@@ -770,7 +778,8 @@ defmodule Raxol.Headless do
 
   defp read_model(session) do
     with_dispatcher(session, fn dispatcher_pid ->
-      GenServer.call(dispatcher_pid, :get_model)
+      with {:ok, reply} <- session_call(session, dispatcher_pid, :get_model),
+           do: reply
     end)
   end
 
@@ -813,13 +822,18 @@ defmodule Raxol.Headless do
     end
   end
 
-  # The Lifecycle can end between the server naming the session and this call:
+  defp lifecycle_state(session),
+    do: session_call(session, session.lifecycle_pid, :get_full_state)
+
+  # A call to one of the session's processes, answered `{:ok, reply}`.
+  #
+  # The session can end between the server naming it and any of these calls:
   # an app that quits does, and the server drops the session only once the
   # Lifecycle's `:DOWN` arrives. `:not_found` is what the caller would get a
-  # moment later. A Lifecycle that is alive but does not answer is a different
-  # answer, carrying only the exit's class.
-  defp lifecycle_state(session) do
-    {:ok, GenServer.call(session.lifecycle_pid, :get_full_state)}
+  # moment later. A session whose Lifecycle is alive but whose process did not
+  # answer is a different answer, carrying only the exit's class.
+  defp session_call(session, pid, request) do
+    {:ok, GenServer.call(pid, request)}
   catch
     :exit, reason ->
       if Process.alive?(session.lifecycle_pid),

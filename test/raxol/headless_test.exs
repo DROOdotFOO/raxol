@@ -302,7 +302,9 @@ defmodule Raxol.HeadlessTest do
     test "returns only once update/2 has handled the key" do
       {:ok, id} = Headless.start(TestApp, id: :key_handled)
 
-      assert :ok = answer_with_dispatcher_held(id, &Headless.send_key(&1, "="))
+      assert :ok =
+               answer_with_held(id, :dispatcher, &Headless.send_key(&1, "="))
+
       assert {:ok, %{count: 1}} = Headless.get_model(id)
     end
 
@@ -313,8 +315,9 @@ defmodule Raxol.HeadlessTest do
       {:ok, bystander} = Headless.start(TestApp, id: :key_bystander)
 
       assert {:error, {:dispatch_failed, :killed}} =
-               answer_with_dispatcher_held(
+               answer_with_held(
                  id,
+                 :dispatcher,
                  &Headless.send_key(&1, "="),
                  &Process.exit(&1, :kill)
                )
@@ -411,7 +414,11 @@ defmodule Raxol.HeadlessTest do
       {:ok, id} = Headless.start(TestApp, id: :resize_handled)
 
       assert :ok =
-               answer_with_dispatcher_held(id, &Headless.send_resize(&1, 30, 8))
+               answer_with_held(
+                 id,
+                 :dispatcher,
+                 &Headless.send_resize(&1, 30, 8)
+               )
 
       assert {:ok, %{width: 30, height: 8}} = Headless.get_buffer(id)
     end
@@ -535,6 +542,30 @@ defmodule Raxol.HeadlessTest do
 
         assert Process.whereis(Headless) == headless
         refute id in Headless.list()
+      end
+    end
+
+    # Later still: the Lifecycle has answered, and the session ends while the
+    # caller's call to the engine or the dispatcher waits to be taken. That
+    # call exited the caller, where the spec promises an error.
+    for {name, role, input} <- [
+          {:screenshot, :engine, quote(do: &Headless.screenshot/1)},
+          {:get_buffer, :engine, quote(do: &Headless.get_buffer/1)},
+          {:get_model, :dispatcher, quote(do: &Headless.get_model/1)},
+          {:send_message, :dispatcher,
+           quote(do: &Headless.send_message(&1, :noop))}
+        ] do
+      test "#{name} answers :not_found when the session ends mid-call" do
+        {:ok, id} = Headless.start(TestApp, id: :"ends_mid_#{unquote(name)}")
+        %{lifecycle: lifecycle} = session_pids(id)
+
+        assert {:error, :not_found} =
+                 answer_with_held(
+                   id,
+                   unquote(role),
+                   unquote(input),
+                   &end_session(lifecycle, &1)
+                 )
       end
     end
   end
@@ -940,38 +971,49 @@ defmodule Raxol.HeadlessTest do
     end
   end
 
-  # Runs `input` against session `id` with its dispatcher suspended, and
-  # answers what `input` returned. While the dispatcher is suspended nothing
-  # can run update/2, so an `input` that returns then has not waited for its
-  # event to be handled: that fails the test. One that waits is holding a call
-  # the dispatcher has yet to take, and once that call arrives `release` is
-  # applied to the dispatcher.
-  defp answer_with_dispatcher_held(id, input, release \\ &:sys.resume/1) do
+  # Runs `input` against session `id` with its `role` process (`:dispatcher`
+  # or `:engine`) suspended, and answers what `input` returned. While the
+  # dispatcher is suspended nothing can run update/2, so an `input` that
+  # returns then has not waited for its event to be handled: that fails the
+  # test. One that waits is holding a call the process has yet to take, and
+  # once that call arrives `release` is applied to the process.
+  defp answer_with_held(id, role, input, release \\ &:sys.resume/1) do
     %{lifecycle: lifecycle, dispatcher: dispatcher, engine: engine} =
-      session_pids(id)
+      pids = session_pids(id)
+
+    held = Map.fetch!(pids, role)
 
     # Let the startup messages land, so no call but the one `input` makes
-    # reaches the dispatcher.
+    # reaches the held process.
     for pid <- [lifecycle, dispatcher, engine], do: :sys.get_state(pid)
 
-    :ok = :sys.suspend(dispatcher)
-    :erlang.trace(dispatcher, true, [:receive])
+    :ok = :sys.suspend(held)
+    :erlang.trace(held, true, [:receive])
     %Task{ref: ref} = task = Task.async(fn -> input.(id) end)
 
     receive do
       {^ref, result} ->
-        :ok = :sys.resume(dispatcher)
+        :ok = :sys.resume(held)
 
         flunk(
-          "returned #{inspect(result)} while the dispatcher was suspended, " <>
-            "before update/2 could run"
+          "returned #{inspect(result)} while the #{role} was suspended, " <>
+            "before it could answer"
         )
 
-      {:trace, ^dispatcher, :receive, {:"$gen_call", _from, _request}} ->
-        release.(dispatcher)
+      {:trace, ^held, :receive, {:"$gen_call", _from, _request}} ->
+        release.(held)
     end
 
     Task.await(task)
+  end
+
+  # Stops the session the way an app quitting does, Lifecycle first, and then
+  # `held`, which being suspended would otherwise outlive it.
+  defp end_session(lifecycle, held) do
+    ref = Process.monitor(lifecycle)
+    Process.exit(lifecycle, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^lifecycle, :killed}
+    Process.exit(held, :kill)
   end
 
   # Runs `input` against session `id` so that `Raxol.Headless` names the
