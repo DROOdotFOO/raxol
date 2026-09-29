@@ -56,18 +56,13 @@ defmodule Raxol.Terminal.Emulator.Coordinator do
   end
 
   @doc """
-  Validates terminal dimensions.
+  Validates terminal dimensions against the terminal size ceiling
+  (`Raxol.Core.Utils.Validation.validate_terminal_size/2`).
   """
   def validate_dimensions(width, height) do
-    case {width, height} do
-      {w, h} when w < 1 or h < 1 ->
-        {:error, :invalid_dimensions}
-
-      {w, h} when w > 1000 or h > 1000 ->
-        {:error, :dimensions_too_large}
-
-      {w, h} ->
-        {:ok, {w, h}}
+    case Raxol.Core.Utils.Validation.validate_terminal_size(width, height) do
+      :ok -> {:ok, {width, height}}
+      {:error, reason} -> {:error, reason}
     end
   end
 

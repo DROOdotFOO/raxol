@@ -33,6 +33,7 @@ defmodule Raxol.Recording.Index do
       {1, [], 0}
   """
 
+  alias Raxol.Core.Utils.Validation
   alias Raxol.Recording.Session
   alias Raxol.Terminal.Emulator
 
@@ -66,12 +67,9 @@ defmodule Raxol.Recording.Index do
   @default_width 80
   @default_height 24
 
-  # Ceilings, not defaults: these bound what an untrusted `.cast` header can
-  # make this module allocate. 1000x1000 is far past any real terminal and
-  # still only a megapixel of cells; 2048 keyframes is ~8.5 hours at the 15s
-  # default.
-  @max_width 1000
-  @max_height 1000
+  # A ceiling, not a default: 2048 keyframes is ~8.5 hours at the 15s default.
+  # The width and height ceiling is the terminal size ceiling
+  # (`Raxol.Core.Utils.Validation.clamp_terminal_size/2`).
   @max_keyframes 2048
 
   @type keyframe :: %{
@@ -100,7 +98,9 @@ defmodule Raxol.Recording.Index do
       (default: #{@default_interval_us}). See the module docs for the trade-off.
     * `:width` / `:height` - terminal size (default: the session header's).
 
-  Dimensions are clamped. `session.width`/`session.height` come verbatim from
+  Dimensions are clamped to the terminal size ceiling
+  (`Raxol.Core.Utils.Validation.clamp_terminal_size/2`).
+  `session.width`/`session.height` come verbatim from
   the `.cast` header, which is `Jason.decode!`d without validation, and they
   are multiplied straight into an `Emulator.new/2` allocation -- so
   `mix raxol.replay evil.cast --index` on a header claiming 100000x100000
@@ -110,18 +110,16 @@ defmodule Raxol.Recording.Index do
   """
   @spec build(Session.t(), keyword()) :: t()
   def build(%Session{} = session, opts \\ []) do
-    width =
-      clamp_dimension(
-        Keyword.get(opts, :width) || session.width,
-        @default_width,
-        @max_width
-      )
-
-    height =
-      clamp_dimension(
-        Keyword.get(opts, :height) || session.height,
-        @default_height,
-        @max_height
+    {width, height} =
+      Validation.clamp_terminal_size(
+        Validation.validate_dimension(
+          Keyword.get(opts, :width) || session.width,
+          @default_width
+        ),
+        Validation.validate_dimension(
+          Keyword.get(opts, :height) || session.height,
+          @default_height
+        )
       )
 
     interval_us = Keyword.get(opts, :interval_us, @default_interval_us)
@@ -150,12 +148,6 @@ defmodule Raxol.Recording.Index do
       height: height
     }
   end
-
-  defp clamp_dimension(value, _default, ceiling)
-       when is_integer(value) and value > 0,
-       do: min(value, ceiling)
-
-  defp clamp_dimension(_value, default, _ceiling), do: default
 
   # Keeps the FIRST @max_keyframes. Dropping the tail costs seek speed late in
   # a very long recording (`keyframe_before/2` falls back to an earlier frame

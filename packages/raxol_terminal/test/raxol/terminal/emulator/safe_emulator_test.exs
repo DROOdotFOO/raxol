@@ -93,6 +93,11 @@ defmodule Raxol.Terminal.Emulator.SafeEmulatorTest do
                SafeEmulator.resize(pid, 15_000, 15_000)
     end
 
+    test "refuses a size past the terminal size ceiling", %{pid: pid} do
+      assert {:error, :dimensions_too_large} = SafeEmulator.resize(pid, 4097, 24)
+      assert {:error, :dimensions_too_large} = SafeEmulator.resize(pid, 1025, 1024)
+    end
+
     test "creates checkpoint after resize", %{pid: pid} do
       assert {:ok, :ok} = SafeEmulator.resize(pid, 120, 40)
 

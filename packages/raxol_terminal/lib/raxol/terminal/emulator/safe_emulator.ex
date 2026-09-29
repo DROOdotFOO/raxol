@@ -377,15 +377,12 @@ defmodule Raxol.Terminal.Emulator.SafeEmulator do
     end
   end
 
-  defp validate_resize_dimensions(width, height)
-       when width <= 0 or height <= 0,
-       do: {:error, :invalid_dimensions}
-
-  defp validate_resize_dimensions(width, height)
-       when width > 10_000 or height > 10_000,
-       do: {:error, :dimensions_too_large}
-
-  defp validate_resize_dimensions(_width, _height), do: {:ok, :valid}
+  defp validate_resize_dimensions(width, height) do
+    case Raxol.Core.Utils.Validation.validate_terminal_size(width, height) do
+      :ok -> {:ok, :valid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp safe_genserver_call(pid, message) do
     case Process.alive?(pid) do
