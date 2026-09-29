@@ -34,6 +34,14 @@ defmodule Raxol.SSH.Server do
       interfaces. Without it (or `RAXOL_SSH_ANONYMOUS_PUBLIC=1`), anonymous
       servers bind loopback only, so one flag cannot carry a surface from
       laptop demo to public internet.
+    * `:max_terminal_size` - `{columns, rows}`, the largest window a client
+      may open (default: `{512, 256}`, the remote ceiling in
+      `Raxol.Core.Defaults`). A client's pty-req and window-change sizes are
+      clamped to it, and to `columns * rows` cells, so a larger window renders
+      at this size. Every keystroke and resize draws a frame of that size, so
+      raising it raises the cost each client can put on the server. It may
+      not exceed the local ceiling (4096 columns, 4096 rows, 1,048,576 cells);
+      anything else refuses to start.
 
   On boot the server logs one posture line naming the resulting exposure
   (bind address, port, auth mode, caps, host key algorithms), so what was
@@ -390,27 +398,64 @@ defmodule Raxol.SSH.Server do
     # surface would be silently anonymous, and refuse an anonymous surface
     # that has not stated its resource caps.
     with {:ok, auth_opts} <- auth_daemon_opts(opts),
-         [] <- missing_anonymous_caps(opts) do
-      start_daemon(opts, auth_opts)
+         [] <- missing_anonymous_caps(opts),
+         {:ok, size_ceiling} <- terminal_size_ceiling(opts) do
+      start_daemon(opts, auth_opts, size_ceiling)
     else
-      {:error, :ssh_auth_required} ->
-        {:stop,
-         {:ssh_auth_required,
-          "SSH server refused to start: no authentication configured. Pass " <>
-            "allow_anonymous: true for anonymous access (e.g. a playground), or " <>
-            "authorized_keys_dir: <dir> to require public-key auth."}}
-
-      missing when is_list(missing) ->
-        {:stop,
-         {:anonymous_caps_required, missing,
-          "SSH server refused to start: anonymous access without resource " <>
-            "caps. An unauthenticated surface must state its limits; pass " <>
-            Enum.map_join(missing, ", ", &"#{&1}:") <>
-            " (positive integers, timeouts in milliseconds)."}}
+      refusal -> {:stop, init_refusal(refusal)}
     end
   end
 
-  defp start_daemon(opts, auth_opts) do
+  defp init_refusal({:error, :ssh_auth_required}) do
+    {:ssh_auth_required,
+     "SSH server refused to start: no authentication configured. Pass " <>
+       "allow_anonymous: true for anonymous access (e.g. a playground), or " <>
+       "authorized_keys_dir: <dir> to require public-key auth."}
+  end
+
+  defp init_refusal({:error, {:invalid_max_terminal_size, value}}) do
+    {:invalid_max_terminal_size, value,
+     "SSH server refused to start: max_terminal_size must be " <>
+       "{columns, rows}, positive integers within the local terminal " <>
+       "size ceiling (Raxol.Core.Defaults.max_terminal_*); got " <>
+       inspect(value)}
+  end
+
+  defp init_refusal(missing) when is_list(missing) do
+    {:anonymous_caps_required, missing,
+     "SSH server refused to start: anonymous access without resource " <>
+       "caps. An unauthenticated surface must state its limits; pass " <>
+       Enum.map_join(missing, ", ", &"#{&1}:") <>
+       " (positive integers, timeouts in milliseconds)."}
+  end
+
+  @doc """
+  The size ceiling this server clamps client windows to, from
+  `:max_terminal_size`: `{:ok, %{width:, height:, cells:}}`, the remote
+  ceiling in `Raxol.Core.Defaults` when the option is absent, or
+  `{:error, {:invalid_max_terminal_size, value}}` for anything that is not
+  `{columns, rows}` within the local ceiling.
+  """
+  @spec terminal_size_ceiling(keyword()) ::
+          {:ok, Raxol.Core.Utils.Validation.terminal_size_ceiling()}
+          | {:error, {:invalid_max_terminal_size, term()}}
+  def terminal_size_ceiling(opts) do
+    case Keyword.fetch(opts, :max_terminal_size) do
+      :error ->
+        {:ok, Raxol.Core.Defaults.remote_terminal_size_ceiling()}
+
+      {:ok, {w, h} = value} ->
+        case Raxol.Core.Utils.Validation.validate_terminal_size(w, h) do
+          :ok -> {:ok, %{width: w, height: h, cells: w * h}}
+          {:error, _} -> {:error, {:invalid_max_terminal_size, value}}
+        end
+
+      {:ok, value} ->
+        {:error, {:invalid_max_terminal_size, value}}
+    end
+  end
+
+  defp start_daemon(opts, auth_opts, size_ceiling) do
     app_module = Keyword.fetch!(opts, :app_module)
     port = Keyword.get(opts, :port, @default_port)
     host_keys_dir = Keyword.get(opts, :host_keys_dir, default_host_keys_dir())
@@ -445,7 +490,8 @@ defmodule Raxol.SSH.Server do
                  app_opts: Keyword.get(opts, :app_opts, []),
                  tenant_opts: Keyword.get(opts, :tenant_opts),
                  idle_timeout: idle_timeout,
-                 max_session_duration: max_session_duration
+                 max_session_duration: max_session_duration,
+                 size_ceiling: size_ceiling
                ]},
             negotiation_timeout: negotiation_timeout
           ] ++

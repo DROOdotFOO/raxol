@@ -8,6 +8,7 @@ defmodule Raxol.Terminal.ScreenBuffer.Core do
   @default_height Raxol.Core.Defaults.terminal_height()
   @default_scrollback Raxol.Core.Defaults.scrollback_limit()
 
+  alias Raxol.Core.Utils.Validation
   alias Raxol.Terminal.ANSI.TextFormatting
   alias Raxol.Terminal.Cell
 
@@ -51,11 +52,16 @@ defmodule Raxol.Terminal.ScreenBuffer.Core do
         }
 
   @doc """
-  Creates a new screen buffer with the specified dimensions.
+  Creates a new screen buffer with the specified dimensions, clamped to the
+  terminal size ceiling (`Raxol.Core.Utils.Validation.clamp_terminal_size/2`).
   """
   def new(width, height, scrollback_limit \\ @default_scrollback) do
-    width = validate_dimension(width, @default_width)
-    height = validate_dimension(height, @default_height)
+    {width, height} =
+      Validation.clamp_terminal_size(
+        validate_dimension(width, @default_width),
+        validate_dimension(height, @default_height)
+      )
+
     scrollback_limit = validate_dimension(scrollback_limit, @default_scrollback)
 
     %__MODULE__{
@@ -78,11 +84,14 @@ defmodule Raxol.Terminal.ScreenBuffer.Core do
   end
 
   @doc """
-  Resizes the buffer to new dimensions.
+  Resizes the buffer to new dimensions, clamped to the terminal size ceiling.
   """
   def resize(buffer, new_width, new_height) do
-    new_width = validate_dimension(new_width, buffer.width)
-    new_height = validate_dimension(new_height, buffer.height)
+    {new_width, new_height} =
+      Validation.clamp_terminal_size(
+        validate_dimension(new_width, buffer.width),
+        validate_dimension(new_height, buffer.height)
+      )
 
     new_cells =
       resize_grid(

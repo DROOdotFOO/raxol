@@ -101,4 +101,15 @@ defmodule Raxol.Terminal.Emulator.GettersSettersTest do
     assert style.conceal == false
     assert style.strikethrough == false
   end
+
+  test "set_dimensions/3 takes sizes up to the terminal size ceiling and no further" do
+    emulator = Emulator.new(80, 24)
+
+    assert {:ok, %{width: 4096, height: 256}} = Emulator.set_dimensions(emulator, 4096, 256)
+    assert {:ok, %{width: 256, height: 4096}} = Emulator.set_dimensions(emulator, 256, 4096)
+
+    assert {:error, :dimensions_too_large} = Emulator.set_dimensions(emulator, 4097, 24)
+    assert {:error, :dimensions_too_large} = Emulator.set_dimensions(emulator, 1025, 1024)
+    assert {:error, :invalid_dimensions} = Emulator.set_dimensions(emulator, 0, 24)
+  end
 end

@@ -325,9 +325,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   defp handle_resize_event(
-         %Event{data: %{width: width, height: height}} = event,
+         %Event{data: %{width: requested_w, height: requested_h} = data} = event,
          state
        ) do
+    {width, height} = clamp_resize(requested_w, requested_h, state)
+    event = %{event | data: %{data | width: width, height: height}}
+
     # Forward size to the Rendering Engine so layout uses actual terminal dimensions
     if state.rendering_engine do
       GenServer.cast(
@@ -348,25 +351,71 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
   end
 
+  # Every resize, from every surface, reaches the app and the engine here, so
+  # the app is told the size the engine draws at (the engine clamps too; see
+  # `Rendering.Engine`). This is the local ceiling: network surfaces clamp or
+  # refuse at the tighter remote one before sending, so what gets here
+  # oversized is the pilot's own terminal or an in-process resize
+  # (`Raxol.Headless.send_resize/3`). The warning goes to the Logger once per
+  # crossing into the ceiling, not once per SIGWINCH while the window stays
+  # oversized (when the clamped size is unchanged). On a TTY the Terminal
+  # Driver sets the Logger level to `:none` for the session, so that nothing
+  # is written over the pilot's screen; there the warning is dropped and an
+  # oversized terminal renders at the ceiling without one.
+  defp clamp_resize(width, height, state) do
+    case Raxol.Core.Utils.Validation.clamp_terminal_size(width, height) do
+      {^width, ^height} = size ->
+        size
+
+      clamped ->
+        if clamped != {state.width, state.height} do
+          Raxol.Core.Runtime.Log.warning(
+            "[Dispatcher] Terminal size #{width}x#{height} is past the " <>
+              "terminal size ceiling (Raxol.Core.Defaults.max_terminal_*); " <>
+              "rendering at #{elem(clamped, 0)}x#{elem(clamped, 1)}"
+          )
+        end
+
+        clamped
+    end
+  end
+
   # Calls update/2 directly (not through process_app_update) so a resize
   # clause that doesn't exist can degrade silently: most apps don't reflow
   # on resize, and a FunctionClauseError there isn't a bug worth logging on
-  # every SIGWINCH. Genuinely malformed return values still get logged.
+  # every SIGWINCH. Anything else the resize clause raises, throws or exits
+  # with is caught as `Application.delegate_update/3` catches it for every
+  # other message: logged, the model kept, and the dispatcher (and so the
+  # session) left running. The size comes from outside the app -- for SSH,
+  # from the remote client -- so an app arithmetic error on it must not end
+  # the session. Genuinely malformed return values still get logged.
   defp resize_update(state, event) do
-    case state.app_module.update(event, state.model) do
-      {new_model, commands} when is_map(new_model) and is_list(commands) ->
-        {:ok, new_model, commands}
+    fn -> state.app_module.update(event, state.model) end
+    |> Raxol.Core.ErrorHandling.safe_call()
+    |> resize_result(state, event)
+  end
 
-      new_model when is_map(new_model) ->
-        {:ok, new_model, []}
+  defp resize_result({:ok, {new_model, commands}}, _state, _event)
+       when is_map(new_model) and is_list(commands),
+       do: {:ok, new_model, commands}
 
-      other ->
-        log_unexpected_return(state, event, event, other)
-        :unhandled
-    end
-  rescue
-    FunctionClauseError -> :unhandled
-    UndefinedFunctionError -> :unhandled
+  defp resize_result({:ok, new_model}, _state, _event) when is_map(new_model),
+    do: {:ok, new_model, []}
+
+  defp resize_result({:ok, other}, state, event) do
+    log_unexpected_return(state, event, event, other)
+    :unhandled
+  end
+
+  defp resize_result({:error, %FunctionClauseError{}}, _state, _event),
+    do: :unhandled
+
+  defp resize_result({:error, %UndefinedFunctionError{}}, _state, _event),
+    do: :unhandled
+
+  defp resize_result({:error, reason}, state, event) do
+    log_update_error(state, event, event, {:update_failed, reason})
+    :unhandled
   end
 
   defp handle_focus_event(%{focused: focused}, state) do

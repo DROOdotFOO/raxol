@@ -31,6 +31,102 @@ defmodule Raxol.Core.Utils.ValidationTest do
     end
   end
 
+  describe "clamp_terminal_size/2" do
+    alias Raxol.Core.Defaults
+
+    test "a size within the ceiling is unchanged, up to each axis and the cell budget" do
+      assert Validation.clamp_terminal_size(80, 24) == {80, 24}
+      assert Validation.clamp_terminal_size(1024, 1024) == {1024, 1024}
+      assert Validation.clamp_terminal_size(Defaults.max_terminal_width(), 256) == {4096, 256}
+      assert Validation.clamp_terminal_size(256, Defaults.max_terminal_height()) == {256, 4096}
+    end
+
+    test "an axis past its ceiling is capped" do
+      assert Validation.clamp_terminal_size(4097, 24) == {4096, 24}
+      assert Validation.clamp_terminal_size(80, 4097) == {80, 4096}
+    end
+
+    test "the height gives way so width * height stays within the cell ceiling" do
+      assert Validation.clamp_terminal_size(1025, 1024) == {1025, 1023}
+      assert Validation.clamp_terminal_size(4096, 257) == {4096, 256}
+
+      for {w, h} <- [{100_000, 100_000}, {4_294_967_295, 4_294_967_295}, {3000, 3000}] do
+        {cw, ch} = Validation.clamp_terminal_size(w, h)
+        assert cw <= Defaults.max_terminal_width()
+        assert ch <= Defaults.max_terminal_height()
+        assert cw * ch <= Defaults.max_terminal_cells()
+      end
+
+      assert Validation.clamp_terminal_size(100_000, 100_000) == {4096, 256}
+    end
+
+    test "only the upper bound is applied" do
+      assert Validation.clamp_terminal_size(0, 0) == {0, 0}
+      assert Validation.clamp_terminal_size(-5, 30) == {-5, 30}
+      assert Validation.clamp_terminal_size(nil, 30) == {nil, 30}
+    end
+  end
+
+  describe "validate_terminal_size/2" do
+    test "accepts a size up to the ceiling" do
+      assert Validation.validate_terminal_size(1, 1) == :ok
+      assert Validation.validate_terminal_size(4096, 256) == :ok
+      assert Validation.validate_terminal_size(1024, 1024) == :ok
+    end
+
+    test "refuses a size past an axis or the cell ceiling" do
+      assert Validation.validate_terminal_size(100_000, 40) ==
+               {:error, :dimensions_too_large}
+
+      assert Validation.validate_terminal_size(120, 4097) ==
+               {:error, :dimensions_too_large}
+
+      assert Validation.validate_terminal_size(1025, 1024) ==
+               {:error, :dimensions_too_large}
+    end
+
+    test "refuses a non-positive or non-integer size" do
+      for {w, h} <- [{0, 24}, {80, -1}, {80.0, 24}, {"80", 24}, {nil, nil}] do
+        assert Validation.validate_terminal_size(w, h) ==
+                 {:error, :invalid_dimensions}
+      end
+    end
+  end
+
+  describe "the remote ceiling" do
+    alias Raxol.Core.Defaults
+
+    setup do: %{remote: Defaults.remote_terminal_size_ceiling()}
+
+    test "clamps a network client's size to 512 columns, 256 rows and 131072 cells",
+         %{remote: remote} do
+      assert Validation.clamp_terminal_size(100_000, 100_000, remote) == {512, 256}
+      assert Validation.clamp_terminal_size(4096, 256, remote) == {512, 256}
+      assert Validation.clamp_terminal_size(600, 100, remote) == {512, 100}
+      assert Validation.clamp_terminal_size(300, 400, remote) == {300, 256}
+      assert Validation.clamp_terminal_size(480, 135, remote) == {480, 135}
+    end
+
+    test "validates against it", %{remote: remote} do
+      assert Validation.validate_terminal_size(512, 256, remote) == :ok
+
+      for {w, h} <- [{513, 40}, {120, 257}, {4096, 256}] do
+        assert Validation.validate_terminal_size(w, h, remote) ==
+                 {:error, :dimensions_too_large}
+      end
+    end
+
+    test "an operator's own ceiling applies its cell budget too" do
+      ceiling = %{width: 1000, height: 1000, cells: 20_000}
+
+      assert Validation.clamp_terminal_size(1000, 1000, ceiling) == {1000, 20}
+      assert Validation.validate_terminal_size(200, 100, ceiling) == :ok
+
+      assert Validation.validate_terminal_size(201, 100, ceiling) ==
+               {:error, :dimensions_too_large}
+    end
+  end
+
   describe "validate_coordinates/2" do
     test "accepts zero coordinates" do
       assert Validation.validate_coordinates(0, 0) == {:ok, {0, 0}}

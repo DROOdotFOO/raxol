@@ -103,12 +103,19 @@ defmodule Raxol.Terminal.ScreenBuffer do
 
   @doc """
   Creates a new screen buffer with the specified dimensions.
-  Validates and normalizes the input dimensions to ensure they are valid.
+  Validates and normalizes the input dimensions to ensure they are valid,
+  and clamps them to the terminal size ceiling
+  (`Raxol.Core.Utils.Validation.clamp_terminal_size/2`): the grid is
+  allocated up front, so the size is the memory.
   """
   @impl Raxol.Terminal.ScreenBufferBehaviour
   def new(width, height, scrollback_limit \\ @default_scrollback) do
-    width = Validation.validate_dimension(width, @default_width)
-    height = Validation.validate_dimension(height, @default_height)
+    {width, height} =
+      Validation.clamp_terminal_size(
+        Validation.validate_dimension(width, @default_width),
+        Validation.validate_dimension(height, @default_height)
+      )
+
     scrollback_limit = Validation.validate_dimension(scrollback_limit, @default_scrollback)
 
     %__MODULE__{
@@ -139,6 +146,7 @@ defmodule Raxol.Terminal.ScreenBuffer do
 
   def resize(buffer, new_width, new_height) do
     validate_positive_dimensions!(new_width, new_height)
+    {new_width, new_height} = Validation.clamp_terminal_size(new_width, new_height)
     WriteOps.resize(buffer, new_width, new_height)
   end
 

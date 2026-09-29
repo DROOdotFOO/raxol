@@ -81,7 +81,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       "Rendering Engine init state map: #{inspect(initial_state_map)}"
     )
 
-    state = struct!(State, initial_state_map)
+    state = clamp_size(struct!(State, initial_state_map))
     # Initialize buffer with initial dimensions
     initial_buffer = ScreenBuffer.new(state.width, state.height)
 
@@ -148,13 +148,15 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       "RenderingEngine received size update: #{w}x#{h}"
     )
 
-    new_state = %{state | width: w, height: h}
+    # The size is also the layout and render area, not just the buffer, so the
+    # state holds the clamped size too (see `clamp_size/1`).
+    new_state = clamp_size(%{state | width: w, height: h})
 
     # Resize owns the keyframe. This handler swaps in a fresh blank buffer of the
     # new size, so by render time dims already match and a render-time dims check
     # can't fire -- and diffing against the blank would leave stale pre-resize
     # rows unpainted. Force a full repaint instead.
-    resized_buffer = ScreenBuffer.new(w, h)
+    resized_buffer = ScreenBuffer.new(new_state.width, new_state.height)
     {:noreply, %{new_state | buffer: resized_buffer, force_repaint: true}}
   end
 
@@ -211,6 +213,19 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   end
 
   # --- Private Helpers ---
+
+  # The local terminal size ceiling, applied where the size becomes an
+  # allocation: every buffer, layout and frame this engine draws is
+  # `width * height`. Every size reaches here, from any surface; the surfaces
+  # clamp or refuse first (network ones to the tighter remote ceiling) so the
+  # app sees the size it is drawn at. The one size nothing checks first is the
+  # local terminal's own at start (`Lifecycle.Initializer.engine_size/2`); it
+  # is clamped here without a log line, as the Driver's first resize event
+  # follows and goes through the dispatcher's clamp.
+  defp clamp_size(%State{width: w, height: h} = state) do
+    {w, h} = Raxol.Core.Utils.Validation.clamp_terminal_size(w, h)
+    %{state | width: w, height: h}
+  end
 
   defp render_sync(state) do
     case GenServer.call(state.dispatcher_pid, :get_render_context) do

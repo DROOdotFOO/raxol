@@ -25,6 +25,16 @@ defmodule Raxol.Core.Runtime.Events.DispatcherResizeTest do
     def update(:noop, model), do: {model, []}
   end
 
+  defmodule RaisingResizeApp do
+    @moduledoc false
+    # A resize clause that fails on the size it is given, e.g. one that divides
+    # by a remote client's width.
+    def update(%Event{type: :resize, data: %{width: w}}, _model),
+      do: raise(ArithmeticError, "cannot lay out 1000 columns at width #{w}")
+
+    def update(_message, model), do: {model, []}
+  end
+
   defp base_state(app_module) do
     %State{
       runtime_pid: self(),
@@ -107,6 +117,28 @@ defmodule Raxol.Core.Runtime.Events.DispatcherResizeTest do
     # bytes). Assert on the absence of *this* app's update error rather than on
     # a globally empty log, which is not ours to guarantee.
     refute log =~ "NoResizeClauseApp"
+  end
+
+  # The size comes from outside the app (for SSH, the remote client), so a
+  # resize clause that raises on it must be caught as every other update is,
+  # not take the dispatcher -- and the client's session -- down with it.
+  test "a resize clause that raises is logged, keeps the model, and still resizes" do
+    event = %Event{type: :resize, data: %{width: 100, height: 30}}
+    state = base_state(RaisingResizeApp)
+
+    log =
+      capture_log(fn ->
+        assert {:ok, new_state, []} =
+                 Dispatcher.process_system_event(event, state)
+
+        assert new_state.model == state.model
+        assert {new_state.width, new_state.height} == {100, 30}
+        assert_receive {:"$gen_cast", {:update_size, %{width: 100, height: 30}}}
+        assert_receive :render_needed
+      end)
+
+    assert log =~ "Application update failed"
+    assert log =~ "ArithmeticError"
   end
 
   test "resize with nil rendering engine does not crash" do

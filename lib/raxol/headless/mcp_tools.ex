@@ -72,10 +72,16 @@ defmodule Raxol.Headless.McpTools do
             },
             width: %{
               type: "integer",
-              description: "Screen width in columns (default: 120)"
+              minimum: 1,
+              maximum: Raxol.Core.Defaults.max_remote_terminal_width(),
+              description:
+                "Screen width in columns (default: 120). width * height " <>
+                  "may not exceed #{Raxol.Core.Defaults.max_remote_terminal_cells()} cells."
             },
             height: %{
               type: "integer",
+              minimum: 1,
+              maximum: Raxol.Core.Defaults.max_remote_terminal_height(),
               description: "Screen height in rows (default: 40)"
             }
           }
@@ -472,18 +478,40 @@ defmodule Raxol.Headless.McpTools do
   # --- Tool Callbacks ---
 
   defp start_session(args) do
-    case resolve_module_or_path(args) do
-      {:ok, module_or_path} ->
-        id = parse_session_id(args["id"])
-        width = Map.get(args, "width", 120)
-        height = Map.get(args, "height", 40)
-        opts = build_start_opts(id, width, height)
-        do_start(module_or_path, opts)
+    # Both refusals are already human-readable sentences, unlike the
+    # `inspect`ed terms the other callbacks report.
+    with {:ok, module_or_path} <- resolve_module_or_path(args),
+         {:ok, {width, height}} <- start_size(args) do
+      id = parse_session_id(args["id"])
+      opts = build_start_opts(id, width, height)
+      do_start(module_or_path, opts)
+    end
+  end
 
-      # Already a human-readable sentence, unlike the `inspect`ed terms the other
-      # callbacks report.
-      {:error, reason} ->
-        {:error, reason}
+  # Refused, not clamped: the caller named this size, so it is told the range
+  # rather than handed a smaller screen than it asked for. The ceiling is the
+  # remote one, as for SSH: an MCP client is on the other end of a network
+  # surface, and each call it makes draws a frame of this size. SSH clamps to
+  # the same ceiling instead (a window is not a request it can re-issue).
+  defp start_size(args) do
+    width = Map.get(args, "width", 120)
+    height = Map.get(args, "height", 40)
+
+    case Raxol.Core.Utils.Validation.validate_terminal_size(
+           width,
+           height,
+           Raxol.Core.Defaults.remote_terminal_size_ceiling()
+         ) do
+      :ok ->
+        {:ok, {width, height}}
+
+      {:error, _reason} ->
+        {:error,
+         "width and height must be positive integers, width at most " <>
+           "#{Raxol.Core.Defaults.max_remote_terminal_width()}, height at most " <>
+           "#{Raxol.Core.Defaults.max_remote_terminal_height()}, and width * height " <>
+           "at most #{Raxol.Core.Defaults.max_remote_terminal_cells()} cells; " <>
+           "got #{inspect(width)}x#{inspect(height)}"}
     end
   end
 

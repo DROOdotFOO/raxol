@@ -72,6 +72,23 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
       assert state.height == 24
       GenServer.stop(pid)
     end
+
+    test "clamps an initial size past the terminal size ceiling" do
+      {:ok, pid} =
+        Engine.start_link(
+          name: :"engine_init_cap_#{System.unique_integer([:positive])}",
+          app_module: __MODULE__,
+          dispatcher_pid: self(),
+          width: 100_000,
+          height: 100_000,
+          environment: :agent
+        )
+
+      state = GenServer.call(pid, {:get_state})
+      assert {state.width, state.height} == {4096, 256}
+      assert {state.buffer.width, state.buffer.height} == {4096, 256}
+      GenServer.stop(pid)
+    end
   end
 
   describe "handle_cast {:update_size, ...}" do
@@ -95,6 +112,31 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
       state = GenServer.call(pid, {:get_state})
       assert state.width == 200
       assert state.height == 50
+      GenServer.stop(pid)
+    end
+
+    # The resize a remote client (SSH window_change) or any other surface
+    # sends: the engine lays out, allocates and draws at this size.
+    test "clamps a size past the terminal size ceiling" do
+      {:ok, pid} =
+        Engine.start_link(
+          name: :"engine_resize_cap_#{System.unique_integer([:positive])}",
+          app_module: __MODULE__,
+          dispatcher_pid: self(),
+          width: 80,
+          height: 24,
+          environment: :agent
+        )
+
+      GenServer.cast(
+        pid,
+        {:update_size, %{width: 4_294_967_295, height: 4_294_967_295}}
+      )
+
+      state = GenServer.call(pid, {:get_state})
+      assert {state.width, state.height} == {4096, 256}
+      assert {state.buffer.width, state.buffer.height} == {4096, 256}
+      assert length(state.buffer.cells) == 256
       GenServer.stop(pid)
     end
   end

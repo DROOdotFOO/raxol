@@ -125,6 +125,13 @@ defmodule Raxol.Recording.IndexTest do
       assert Index.keyframe_before(index, 0).us == 0
       assert Index.keyframe_before(index, 99_000_000).us == 0
     end
+
+    # The header is untrusted and sizes an `Emulator.new/2` allocation.
+    test "a header past the terminal size ceiling is clamped to it" do
+      index = Index.build(%{session([]) | width: 100_000, height: 100_000})
+
+      assert {index.width, index.height} == {4096, 256}
+    end
   end
 
   describe "marks" do

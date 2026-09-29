@@ -27,6 +27,23 @@ defmodule Raxol.Terminal.ScreenBufferTest do
                Enum.all?(row, fn cell -> Cell.get_char(cell) == " " end)
              end)
     end
+
+    # The grid is allocated up front, so an unchecked size is the memory: a
+    # remote client's 100000x100000 pty-req asked for ~5.4 TB.
+    test "clamps the grid to the terminal size ceiling" do
+      buffer = ScreenBuffer.new(100_000, 100_000)
+
+      assert {buffer.width, buffer.height} == {4096, 256}
+      assert length(buffer.cells) == 256
+      assert Enum.all?(buffer.cells, &(length(&1) == 4096))
+    end
+
+    test "keeps a size at the ceiling" do
+      buffer = ScreenBuffer.new(1024, 1024)
+
+      assert {buffer.width, buffer.height} == {1024, 1024}
+      assert length(buffer.cells) == 1024
+    end
   end
 
   describe "character writing" do
@@ -327,6 +344,16 @@ defmodule Raxol.Terminal.ScreenBufferTest do
       # Both selection and scroll_region should be cleared
       assert buffer.selection == nil
       assert buffer.scroll_region == nil
+    end
+
+    test ~c"clamps the new grid to the terminal size ceiling" do
+      buffer = ScreenBuffer.write_string(ScreenBuffer.new(10, 5), 0, 0, "hi")
+      buffer = ScreenBuffer.resize(buffer, 100_000, 100_000)
+
+      assert {buffer.width, buffer.height} == {4096, 256}
+      assert length(buffer.cells) == 256
+      assert Enum.all?(buffer.cells, &(length(&1) == 4096))
+      assert ScreenBuffer.get_char(buffer, 1, 0) == "i"
     end
   end
 end
