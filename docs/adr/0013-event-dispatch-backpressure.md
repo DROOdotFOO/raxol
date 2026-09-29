@@ -86,6 +86,8 @@ Return values:
 
 `:fail_when_full` returns an error rather than dropping silently. Reserved for future callers that want explicit failure (e.g., admin commands).
 
+**Amended 2026-09-29.** The `Headless.dispatch_key/3` row, and the Headless site in Context and PR-C, no longer describe the code. `Raxol.Headless.send_key/3` and `send_resize/3` dispatch with a plain `GenServer.call/3`, made from the caller's process, which the dispatcher answers once the event has been through `update/2`. A call always applies backpressure, so `:call_when_full` has nothing left to add there, and the reply is what `send_key/3` now promises its caller: when it returns, `update/2` has handled the key. The flake risk the row cites was the cast returning before the event was handled; the call removes it at every queue depth rather than only past the watermark. The live input sites (Terminal Driver, SSH, Lifecycle) are unchanged and keep `:call_when_full`.
+
 ### Ordering invariant
 
 Under `:call_when_full`, the call goes to the same GenServer mailbox as the prior casts. From the same caller, Erlang guarantees per-process FIFO message ordering. So a `cast(A), cast(B), call(C)` sequence from one caller arrives in the dispatcher's mailbox as `A, B, C`. The policy switch does not reorder.

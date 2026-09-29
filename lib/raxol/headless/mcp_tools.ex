@@ -120,6 +120,8 @@ defmodule Raxol.Headless.McpTools do
         once the app has handled the key. Supports character keys ("q", "j",
         " "), special keys ("tab", "enter", "escape", "backspace", "up",
         "down", "left", "right"), and modifiers (ctrl, alt, shift).
+        Results of asynchronous work the key starts (a background task, a
+        timer) may only show on a later raxol_screenshot.
 
         Examples:
           {"id": "demo", "key": "tab"}
