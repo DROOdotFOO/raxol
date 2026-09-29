@@ -113,7 +113,9 @@ defmodule Raxol.Terminal.Emulator do
             session_id: "",
             client_options: %{},
             window_title: nil,
-            # From OSC 7 and OSC 1337 CurrentDir=/RemoteHost=.
+            # The working directory as a decoded local path, and the host it
+            # is on, from OSC 7 (`file://host/path`) and OSC 1337
+            # CurrentDir=/RemoteHost=.
             current_directory: nil,
             remote_host: nil,
             last_col_exceeded: false,

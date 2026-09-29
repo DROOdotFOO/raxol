@@ -159,7 +159,7 @@ defmodule Raxol.Terminal.Commands.OSCHandlerTest do
       command = "\e]unsupported"
 
       log =
-        capture_log([level: :warning], fn ->
+        capture_log([level: :debug], fn ->
           assert {:error, :unsupported_command, _emulator} =
                    OSCHandler.handle(emulator(), command, "ignored")
         end)
@@ -174,29 +174,6 @@ defmodule Raxol.Terminal.Commands.OSCHandlerTest do
       {:ok, result} = OSCHandler.handle(emulator(), 9, "c;SGVsbG8=")
       assert result.clipboard == Clipboard.Manager.new()
       assert result.notification == "c;SGVsbG8="
-    end
-  end
-
-  describe "ColorParser.parse/1 hex" do
-    test "parses a 6-digit hex" do
-      assert OSCHandler.ColorParser.parse("#ff8800") == {:ok, {255, 136, 0}}
-    end
-
-    test "parses a 3-digit hex with nibble expansion" do
-      assert OSCHandler.ColorParser.parse("#f80") == {:ok, {255, 136, 0}}
-    end
-
-    test "invalid hex digits at valid length" do
-      assert OSCHandler.ColorParser.parse("#gg0000") ==
-               {:error, :invalid_hex_format}
-    end
-
-    test "invalid length" do
-      assert OSCHandler.ColorParser.parse("#12345") ==
-               {:error, :invalid_hex_length}
-
-      assert OSCHandler.ColorParser.parse("#1234567") ==
-               {:error, :invalid_hex_length}
     end
   end
 end

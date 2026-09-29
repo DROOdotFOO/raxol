@@ -1,7 +1,14 @@
 defmodule Raxol.Terminal.Commands.OSCHandler do
   @moduledoc """
-  Consolidated OSC (Operating System Command) handler for terminal control sequences.
-  Combines all OSC handler functionality including window, clipboard, color, and selection operations.
+  Dispatches OSC (Operating System Command) sequences from the output stream.
+
+  Handled: titles and icon names (OSC 0, 1, 2), the working directory (OSC 7
+  and OSC 1337 `CurrentDir=`/`RemoteHost=`), hyperlinks (OSC 8),
+  notifications and progress (OSC 9), and the pointer shape (OSC 22).
+  Accepted and ignored: colours (OSC 4, 10, 11, 17, 19; no reply to a
+  query), the clipboard and selection (OSC 52, 51; a query is never
+  answered), and cursor colour and shape (OSC 12, 50, 112). Anything else is
+  unsupported.
   """
 
   require Logger
@@ -32,7 +39,7 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
         handle_standalone_ops(emulator, cmd, data)
 
       :unsupported ->
-        Logger.warning("Unsupported OSC command: #{inspect(command)}")
+        Logger.debug("Unsupported OSC command: #{inspect(command)}")
         {:error, :unsupported_command, emulator}
     end
   end
@@ -218,86 +225,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     def handle_19(emulator, _data), do: {:ok, emulator}
   end
 
-  # ColorParser sub-module
-  defmodule ColorParser do
-    @moduledoc """
-    Parses color specifications from OSC commands.
-    """
-
-    def parse(color_spec) do
-      cond do
-        String.starts_with?(color_spec, "rgb:") ->
-          parse_rgb(String.trim_leading(color_spec, "rgb:"))
-
-        String.starts_with?(color_spec, "#") ->
-          parse_hex(String.trim_leading(color_spec, "#"))
-
-        true ->
-          parse_name(color_spec)
-      end
-    end
-
-    defp parse_rgb(rgb_string) do
-      case String.split(rgb_string, "/") do
-        [r, g, b] ->
-          with {:ok, red} <- parse_component(r),
-               {:ok, green} <- parse_component(g),
-               {:ok, blue} <- parse_component(b) do
-            {:ok, {red, green, blue}}
-          else
-            _ -> {:error, :invalid_rgb_format}
-          end
-
-        _ ->
-          {:error, :invalid_rgb_format}
-      end
-    end
-
-    defp parse_component(hex) do
-      case Integer.parse(hex, 16) do
-        {value, ""} when value >= 0 and value <= 255 -> {:ok, value}
-        _ -> {:error, :invalid_component}
-      end
-    end
-
-    defp parse_hex(hex_string) do
-      case String.length(hex_string) do
-        6 ->
-          case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_6(hex_string) do
-            {:ok, r, g, b, _a} -> {:ok, {r, g, b}}
-            {:error, _} -> {:error, :invalid_hex_format}
-          end
-
-        3 ->
-          case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_3(hex_string) do
-            {:ok, r, g, b, _a} -> {:ok, {r, g, b}}
-            {:error, _} -> {:error, :invalid_hex_format}
-          end
-
-        _ ->
-          {:error, :invalid_hex_length}
-      end
-    end
-
-    defp parse_name(name) do
-      color_names = %{
-        "black" => {0, 0, 0},
-        "red" => {255, 0, 0},
-        "green" => {0, 255, 0},
-        "yellow" => {255, 255, 0},
-        "blue" => {0, 0, 255},
-        "magenta" => {255, 0, 255},
-        "cyan" => {0, 255, 255},
-        "white" => {255, 255, 255}
-      }
-
-      case Map.get(color_names, String.downcase(name)) do
-        nil -> {:error, :unknown_color_name}
-        color -> {:ok, color}
-      end
-    end
-  end
-
   # ColorPalette sub-module
   defmodule ColorPalette do
     @moduledoc """
@@ -333,10 +260,21 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
       {:ok, %{emulator | window_title: data}}
     end
 
+    # OSC 7 carries a `file://host/path` URI (percent-encoded). The decoded
+    # path becomes `current_directory` and the host `remote_host`; anything
+    # that is not a file URI with a path is ignored. Bounded by the OSC string
+    # cap (`Raxol.Terminal.Parser.ParserState`).
     def handle_7(emulator, data) do
-      # Set current directory (for terminal tabs); bounded by the OSC string
-      # cap (`Raxol.Terminal.Parser.ParserState`).
-      {:ok, put_known(emulator, :current_directory, data)}
+      case URI.parse(data) do
+        %URI{scheme: "file", path: path, host: host} when is_binary(path) ->
+          emulator
+          |> put_known(:current_directory, URI.decode(path))
+          |> put_known(:remote_host, host)
+          |> then(&{:ok, &1})
+
+        _other ->
+          {:ok, emulator}
+      end
     end
 
     def handle_8(emulator, data) do
@@ -394,126 +332,5 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     """
 
     def handle_51(emulator, _data), do: {:ok, emulator}
-  end
-
-  # FontParser sub-module
-  defmodule FontParser do
-    @moduledoc """
-    Parses font specifications from OSC commands.
-    """
-
-    def parse(font_spec) do
-      case parse_font_components(font_spec) do
-        {:ok, components} -> build_font_map(components)
-        error -> error
-      end
-    end
-
-    defp parse_font_components(spec) do
-      parts = String.split(spec, ":")
-
-      case parts do
-        [family] ->
-          {:ok, %{family: family}}
-
-        [family, size] ->
-          case Integer.parse(size) do
-            {size_val, ""} -> {:ok, %{family: family, size: size_val}}
-            _ -> {:error, :invalid_size}
-          end
-
-        [family, size, style] ->
-          case Integer.parse(size) do
-            {size_val, ""} ->
-              {:ok, %{family: family, size: size_val, style: parse_style(style)}}
-
-            _ ->
-              {:error, :invalid_size}
-          end
-
-        _ ->
-          {:error, :invalid_format}
-      end
-    end
-
-    defp parse_style(style) do
-      style
-      |> String.downcase()
-      |> case do
-        "bold" -> :bold
-        "italic" -> :italic
-        "bolditalic" -> :bold_italic
-        _ -> :regular
-      end
-    end
-
-    defp build_font_map(components) do
-      font =
-        %{
-          family: "monospace",
-          size: 12,
-          style: :regular
-        }
-        |> Map.merge(components)
-
-      {:ok, font}
-    end
-  end
-
-  # HyperlinkParser sub-module
-  defmodule HyperlinkParser do
-    @moduledoc """
-    Parses hyperlink specifications from OSC 8 commands.
-    """
-
-    def parse(data) do
-      case String.split(data, ";", parts: 2) do
-        [params, url] ->
-          parsed_params = parse_params(params)
-          {:ok, url, parsed_params}
-
-        _ ->
-          {:error, :invalid_format}
-      end
-    end
-
-    defp parse_params(params_string) do
-      params_string
-      |> String.split(":")
-      |> Enum.map(&parse_param/1)
-      |> Enum.filter(fn {k, _} -> k != nil end)
-      |> Map.new()
-    end
-
-    defp parse_param(param) do
-      case String.split(param, "=", parts: 2) do
-        [key, value] -> {String.to_atom(key), value}
-        _ -> {nil, nil}
-      end
-    end
-  end
-
-  # SelectionParser sub-module
-  defmodule SelectionParser do
-    @moduledoc """
-    Parses selection specifications from OSC commands.
-    """
-
-    def parse(data) do
-      case String.split(data, ";") do
-        ["start", x1, y1, "end", x2, y2] ->
-          with {x1_val, ""} <- Integer.parse(x1),
-               {y1_val, ""} <- Integer.parse(y1),
-               {x2_val, ""} <- Integer.parse(x2),
-               {y2_val, ""} <- Integer.parse(y2) do
-            {:ok, %{start: {x1_val, y1_val}, end: {x2_val, y2_val}}}
-          else
-            _ -> {:error, :invalid_coordinates}
-          end
-
-        _ ->
-          {:error, :invalid_format}
-      end
-    end
   end
 end
