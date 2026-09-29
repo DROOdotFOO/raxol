@@ -34,15 +34,8 @@ defmodule Raxol.Terminal.Parser.States.OSCStringState do
 
       # BEL (7) is another valid terminator for OSC
       <<7, rest_after_bel::binary>> ->
-        # Call the dispatcher function (now imported)
-        new_emulator =
-          Executor.execute_osc_command(
-            emulator,
-            parser_state.payload_buffer
-          )
-
         next_parser_state = %{parser_state | state: :ground}
-        {:continue, new_emulator, next_parser_state, rest_after_bel}
+        {:continue, dispatch(emulator, parser_state), next_parser_state, rest_after_bel}
 
       # CAN/SUB abort OSC string
       <<abort_byte, rest_after_abort::binary>>
@@ -53,13 +46,7 @@ defmodule Raxol.Terminal.Parser.States.OSCStringState do
 
       # Standard printable ASCII
       <<char, rest::binary>> when char >= 32 and char <= 126 ->
-        # Append to payload buffer
-        next_parser_state = %{
-          parser_state
-          | payload_buffer: parser_state.payload_buffer <> <<char>>
-        }
-
-        {:continue, emulator, next_parser_state, rest}
+        {:continue, emulator, State.append_osc(parser_state, char), rest}
 
       # Unhandled byte
       <<unhandled_byte, rest_after_unhandled::binary>> ->
@@ -73,4 +60,14 @@ defmodule Raxol.Terminal.Parser.States.OSCStringState do
         {:continue, emulator, next_parser_state, rest_after_unhandled}
     end
   end
+
+  @doc """
+  Dispatches a terminated OSC string, unless it overflowed its cap
+  (`Raxol.Terminal.Parser.ParserState.append_osc/2`) and was discarded.
+  """
+  @spec dispatch(Emulator.t(), State.t()) :: Emulator.t()
+  def dispatch(emulator, %State{payload_overflow: true}), do: emulator
+
+  def dispatch(emulator, %State{payload_buffer: payload}),
+    do: Executor.execute_osc_command(emulator, payload)
 end

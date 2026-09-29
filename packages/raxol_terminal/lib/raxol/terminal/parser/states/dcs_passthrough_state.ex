@@ -87,10 +87,7 @@ defmodule Raxol.Terminal.Parser.States.DCSPassthroughState do
 
   defp process_input(emulator, parser_state, <<byte, rest_after_byte::binary>>)
        when byte >= 0x20 and byte != 0x7F do
-    next_parser_state = %{
-      parser_state
-      | payload_buffer: parser_state.payload_buffer <> <<byte>>
-    }
+    next_parser_state = State.append_dcs(parser_state, byte)
 
     {:continue, emulator, next_parser_state, rest_after_byte}
   end
