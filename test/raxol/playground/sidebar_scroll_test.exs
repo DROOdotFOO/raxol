@@ -118,7 +118,6 @@ defmodule Raxol.Playground.SidebarScrollTest do
       # Walk far enough down to guarantee the window has scrolled (visible
       # height is well under 30 components + 8 category headers at h=20).
       for _ <- 1..20, do: Headless.send_key(id, "j")
-      Process.sleep(100)
 
       {:ok, text} = Headless.screenshot(id)
       sidebar = sidebar_text(text)
@@ -162,7 +161,6 @@ defmodule Raxol.Playground.SidebarScrollTest do
       Process.sleep(150)
 
       for _ <- 1..10, do: Headless.send_key(id, "j")
-      Process.sleep(100)
 
       {:ok, buffer} = Headless.get_buffer(id)
       backgrounds = thumb_column_backgrounds(buffer, @scrollbar_col)
@@ -184,7 +182,6 @@ defmodule Raxol.Playground.SidebarScrollTest do
 
       # Filter down to a category small enough to fit without scrolling.
       Headless.send_key(id, "f")
-      Process.sleep(50)
 
       {:ok, buffer} = Headless.get_buffer(id)
       backgrounds = thumb_column_backgrounds(buffer, @scrollbar_col)

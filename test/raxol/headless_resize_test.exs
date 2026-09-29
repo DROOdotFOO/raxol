@@ -58,21 +58,6 @@ defmodule Raxol.HeadlessResizeTest do
     {:ok, headless: pid}
   end
 
-  defp wait_for_model(id, fun, retries \\ 40)
-
-  defp wait_for_model(_id, _fun, 0), do: flunk("model never matched")
-
-  defp wait_for_model(id, fun, retries) do
-    {:ok, model} = Headless.get_model(id)
-
-    if fun.(model) do
-      model
-    else
-      Process.sleep(25)
-      wait_for_model(id, fun, retries - 1)
-    end
-  end
-
   test "send_resize reaches app update/2 and resizes the engine buffer" do
     {:ok, id} =
       Headless.start(ResizeApp, id: :resize_e2e, width: 80, height: 24)
@@ -88,7 +73,8 @@ defmodule Raxol.HeadlessResizeTest do
 
     :ok = Headless.send_resize(id, 100, 30)
 
-    model = wait_for_model(id, fn m -> m.resizes == 1 end)
+    {:ok, model} = Headless.get_model(id)
+    assert model.resizes == 1
     assert model.width == 100
     assert model.height == 30
 
@@ -97,7 +83,8 @@ defmodule Raxol.HeadlessResizeTest do
     assert Map.get(buffer, :height) == 30
 
     :ok = Headless.send_resize(id, 66, 20)
-    model = wait_for_model(id, fn m -> m.resizes == 2 end)
+    {:ok, model} = Headless.get_model(id)
+    assert model.resizes == 2
     assert model.width == 66
 
     {:ok, buffer} = Headless.get_buffer(id)
