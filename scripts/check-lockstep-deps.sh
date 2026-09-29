@@ -117,6 +117,8 @@ if [[ "$status" -eq 0 ]]; then
 else
   echo "" >&2
   echo "Fix: bump the lagging \"~> X.Y\" constraints to match. For mix.exs, also" >&2
-  echo "refresh each affected mix.lock (HEX_BUILD=1 mix deps.get)." >&2
+  echo "refresh each affected mix.lock with a plain \`mix deps.get\` in its project." >&2
+  echo "Not with HEX_BUILD=1: that locks the path siblings as Hex packages, which" >&2
+  echo "unpins their subtrees (scripts/check_lock_path_shadows.exs rejects it)." >&2
 fi
 exit "$status"

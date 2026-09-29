@@ -199,9 +199,15 @@ jobs:
           # touched: on 2026-08-12 a sobelow-only dependabot bump red-ed master
           # via nx and phoenix.
           #
-          # Pure upstream drift -- a transitive dep publishing a newer patch
-          # after the lock was committed -- now fails here, loudly, naming the
-          # dependency. That is a lockfile commit, not a mystery.
+          # A locked dependency does not move when upstream publishes. When
+          # one did here (phoenix #1048/#1089, phoenix_template #1060, hpax
+          # #1071, mint #1146, finch #1163, always in the root, raxol_symphony
+          # and raxol_telegram locks), the lock held a Hex entry for a sibling
+          # this project takes by path, and Hex unlocks such an entry's whole
+          # recorded subtree on every resolve. The guard names those entries
+          # before `--check-locked` fails on their consequences; see
+          # scripts/check_lock_path_shadows.exs.
+          mix run --no-start --no-compile --no-deps-check scripts/check_lock_path_shadows.exs
           mix deps.get --check-locked
           mix deps.compile
 
@@ -554,10 +560,14 @@ jobs:
       # its committed lock on a clean checkout). `Lockstep Deps` does not cover
       # this -- it checks sibling "~> X.Y" constraints, not lock contents.
       # Fix a failure here by running `mix deps.get` in that package and
-      # committing the lock.
+      # committing the lock. The shadow guard runs first because the one
+      # failure that fix does not cure is a Hex entry for a path sibling: it
+      # unpins that entry's whole subtree, so the next upstream release breaks
+      # the committed lock again (scripts/check_lock_path_shadows.exs).
       - name: Compile package
         working-directory: packages/${{ matrix.package }}
         run: |
+          mix run --no-start --no-compile --no-deps-check ../../scripts/check_lock_path_shadows.exs
           mix deps.get --check-locked
           mix compile --warnings-as-errors
 
