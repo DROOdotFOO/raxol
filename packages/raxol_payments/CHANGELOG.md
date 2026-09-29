@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Circle USDC on Ethereum, OP, Base and Arbitrum Sepolia is registered for
   decimals and symbol (not as a solver corridor), so testnet Xochi runs keep
   working under the strict lookup.
+- An explicit `min_to_amount` on a same-asset Xochi corridor can only raise
+  the automatic 80%-of-par delivery floor. It previously replaced it, so
+  `min_to_amount: "1"` switched the theft backstop off.
 
 ### Security
 

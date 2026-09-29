@@ -1308,6 +1308,20 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert_received :wallet_signed
     end
 
+    test "a min_to_amount below the auto floor cannot lower it on a same-asset corridor" do
+      # min_to_amount "1" must not replace the 800_000 floor: a 0.10 USDC
+      # delivery on a 1.00 send is still a skim.
+      stub_floor_quote("100000")
+
+      assert {:error,
+              %Failure{
+                reason: :delivery_below_floor,
+                detail: {:delivery_below_floor, %{min_to_amount: 800_000}}
+              }} = ExecuteXochiIntent.run(floor_params(%{min_to_amount: "1"}), floor_ctx())
+
+      refute_received :wallet_signed
+    end
+
     test "a cross-asset corridor with no min_to_amount skips the auto floor" do
       # USDC -> WETH is not a same-asset corridor and has no on-client price, so
       # the auto floor does not apply; a tiny toAmount is trusted unless

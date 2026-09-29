@@ -89,7 +89,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before signing. Authoritative for any corridor; same-asset corridors also get an automatic floor."
+            "Optional minimum acceptable delivery, in destination-chain positive atomic units. A quote delivering less is rejected before signing. Required to bound a cross-asset corridor; on a same-asset corridor it can only raise the automatic 80%-of-par floor, never lower it."
         ]
       ],
       output: [
@@ -300,14 +300,16 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # serve a punitive `to_amount` (deliver ~0 while pulling the full origin amount)
   # and the gate would not catch it.
   #
-  # An explicit `min_to_amount` (destination atomic units, must be positive) is
-  # authoritative for any corridor. Without one, a same-asset corridor (same
-  # token symbol both sides) gets an automatic floor: delivery must be at least
-  # `:min_delivery_bps` of par (default 8000 = 80%). This is a theft backstop,
-  # not a pricing check -- Xochi enforces pricing; legitimate fees and slippage
-  # stay well inside 80%. A cross-asset corridor has no on-client price, so it
-  # is bound only by an explicit `min_to_amount`. Both tokens have registered
-  # decimals by this point (`build_request/2` refuses anything else).
+  # A same-asset corridor (same token symbol both sides) always gets an
+  # automatic floor: delivery must be at least `:min_delivery_bps` of par
+  # (default 8000 = 80%). This is a theft backstop, not a pricing check -- Xochi
+  # enforces pricing; legitimate fees and slippage stay well inside 80%. An
+  # explicit `min_to_amount` (destination atomic units, must be positive) can
+  # only raise that floor, never lower it: the caller setting it is the agent the
+  # backstop exists to bound, so `min_to_amount: "1"` must not switch it off. A
+  # cross-asset corridor has no on-client price, so it is bound only by an
+  # explicit `min_to_amount`. Both tokens have registered decimals by this point
+  # (`build_request/2` refuses anything else).
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
     case delivery_floor(request, params) do
       :none ->
@@ -326,9 +328,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   end
 
   defp delivery_floor(%QuoteRequest{} = request, params) do
-    case parse_uint(Map.get(params, :min_to_amount)) do
-      n when is_integer(n) -> {:floor, n}
-      nil -> same_asset_floor(request)
+    case {parse_uint(Map.get(params, :min_to_amount)), same_asset_floor(request)} do
+      {nil, auto} -> auto
+      {explicit, :none} -> {:floor, explicit}
+      {explicit, {:floor, auto}} -> {:floor, max(explicit, auto)}
     end
   end
 
