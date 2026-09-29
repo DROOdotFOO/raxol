@@ -26,6 +26,39 @@ defmodule Raxol.Headless do
 
       # Stop
       :ok = Raxol.Headless.stop(:demo)
+
+  ## Processes
+
+  The `Raxol.Headless` server holds the session registry and serializes what
+  reads or changes it: `start/2` (compiling a script path included, bounded
+  by the compile budget), `stop/1`, `list/0`, and resolving an id to its
+  session. Every other function makes that one lookup (5 s) and then runs in
+  the calling process: it asks the session's Lifecycle for its processes and
+  calls its dispatcher (the model, and the event for `send_key/3`,
+  `send_resize/3` and `send_message/2`) or its rendering engine
+  (`screenshot/1`, `get_buffer/1`), each call with a 5 s timeout, or
+  `send_key/3`'s `:timeout` for the key. A slow app therefore holds up only
+  the process calling it. `Raxol.MCP.Server` runs every tool call in its one
+  process, so over MCP that process is shared by every client.
+
+  Those functions answer rather than exit when the session or its processes
+  fail:
+
+    * `{:error, :not_found}` - no session has that id, or it ended during
+      the call
+    * `{:error, {:session_unavailable, class}}` - the session is alive but
+      one of its processes did not answer
+    * `{:error, {:dispatch_failed, class}}` - `send_key/3` or
+      `send_resize/3`: the dispatcher exited or did not answer in time
+    * `{:error, :called_from_own_update}` - called from the session's own
+      `update/2`, whose dispatcher could only wait on itself
+    * `{:error, :dispatcher_not_available}` and
+      `{:error, :rendering_engine_not_available}` - the Lifecycle reports no
+      live process for that role
+
+  `class` is the exit reason's atom (for example `:timeout`, `:noproc`,
+  `:killed`), else `:unknown`; the full reason is logged, never returned. The
+  lookup itself exits if the server is not running; `list/0` answers `[]`.
   """
 
   use GenServer
@@ -179,9 +212,10 @@ defmodule Raxol.Headless do
   call waits for it to take the key, as the live input path does.
 
   Returns `{:error, {:dispatch_failed, class}}` when the dispatcher exits or
-  does not answer within `:timeout`. `class` is the shape of the exit
-  (`:timeout`, `:noproc`, `:killed`, `:shutdown`, else `:unknown`), never its
-  payload: an exception that killed the dispatcher is logged, not returned.
+  does not answer within `:timeout`. `class` is the exit reason's atom (for
+  example `:timeout`, `:noproc`, `:killed`, `:shutdown`), else `:unknown`,
+  never its payload: an exception that killed the dispatcher is logged, not
+  returned.
   A timeout only ends the wait. The key is still in the dispatcher's queue,
   so `update/2` may yet handle it after this returns.
 
@@ -768,7 +802,8 @@ defmodule Raxol.Headless do
   end
 
   # The shape of an exit, never its payload, as `Raxol.MCP.Registry` reduces a
-  # callback's exit: `:timeout`, `:noproc`, `:killed`, `:shutdown`, else
+  # callback's exit: the reason's atom, or the atom heading a `{atom, detail}`
+  # reason (`:timeout`, `:noproc`, `:killed`, `:calling_self`, ...), else
   # `:unknown`. `GenServer.call/3` wraps the reason with the call, request
   # included, so that wrapper comes off first.
   defp exit_class({reason, {GenServer, :call, _args}}), do: exit_class(reason)
