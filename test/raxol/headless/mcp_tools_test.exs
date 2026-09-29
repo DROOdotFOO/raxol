@@ -371,6 +371,69 @@ defmodule Raxol.Headless.McpToolsTest do
     end
   end
 
+  defmodule SizedApp do
+    @moduledoc false
+    def init(_), do: %{}
+    def update(_msg, model), do: model
+    def view(_), do: nil
+  end
+
+  # `width`/`height` come from the MCP client and size a grid allocated up
+  # front, so an unchecked 100000x100000 asked the VM for ~5.4 TB. The tool
+  # refuses out-of-range sizes (the caller named them) rather than clamping.
+  describe "raxol_start size" do
+    setup do
+      case Process.whereis(Raxol.Headless) do
+        nil -> start_supervised!({Raxol.Headless, [name: Raxol.Headless]})
+        pid -> pid
+      end
+
+      on_exit(fn ->
+        if Process.whereis(Raxol.Headless),
+          do: Raxol.Headless.stop(:sized_ok)
+      end)
+
+      :ok
+    end
+
+    test "a size past the terminal size ceiling is refused and starts nothing" do
+      for {w, h} <- [
+            {100_000, 40},
+            {120, 100_000},
+            {2048, 1024},
+            {0, 40},
+            {"80", 24}
+          ] do
+        assert {:error, message} =
+                 start_tool_result(%{
+                   "module" => inspect(SizedApp),
+                   "id" => "sized_refused",
+                   "width" => w,
+                   "height" => h
+                 })
+
+        assert message =~ "width at most 4096"
+        assert message =~ "height at most 4096"
+        assert message =~ "1048576 cells"
+        refute :sized_refused in Raxol.Headless.list()
+      end
+    end
+
+    test "a size within the ceiling starts at that size" do
+      assert {:ok, message} =
+               start_tool_result(%{
+                 "module" => inspect(SizedApp),
+                 "id" => "sized_ok",
+                 "width" => 200,
+                 "height" => 60
+               })
+
+      assert message =~ "sized_ok"
+      assert {:ok, buffer} = Raxol.Headless.get_buffer(:sized_ok)
+      assert {buffer.width, buffer.height} == {200, 60}
+    end
+  end
+
   describe "tools/0" do
     test "returns 6 tool definitions" do
       tools = McpTools.tools()
