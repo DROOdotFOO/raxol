@@ -82,13 +82,12 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
       "u" -> restore_cursor_position(emulator)
       # DECSTBM. Without this clause every scroll-region set arriving
       # through the real parser path was silently dropped (the correct
-      # handle_r/2 below existed but was unreachable from here) -- only
-      # InputProcessing.preprocess_scroll_region/2's head-of-chunk regex
-      # ever applied one, so a stream's FIRST region set worked and every
-      # later re-set (resize, footer grow/shrink) was ignored, leaving
-      # LF-at-boundary scrolling at a stale bottom row. Regression tests:
-      # csi_handlers_test.exs, "DECSTBM (CSI r) through the real parser
-      # path".
+      # handle_r/2 below existed but was unreachable from here), so only a
+      # head-of-chunk regex prescan (since removed) ever applied one: a
+      # stream's FIRST region set worked and every later re-set (resize,
+      # footer grow/shrink) was ignored, leaving LF-at-boundary scrolling at
+      # a stale bottom row. Regression tests: csi_handlers_test.exs, "DECSTBM
+      # (CSI r) through the real parser path".
       "r" -> handle_r(emulator, params)
       _ -> emulator
     end

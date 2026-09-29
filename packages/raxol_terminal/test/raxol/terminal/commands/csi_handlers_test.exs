@@ -1015,7 +1015,7 @@ defmodule Raxol.Terminal.Commands.CSIHandlerTest do
     # every DECSTBM arriving mid-stream through the real parser was
     # silently dropped -- the correct handle_r/2 existed but was never
     # reached. Only a region-set REGEXED off the head of a processed
-    # input chunk (InputProcessing.preprocess_scroll_region/2) ever
+    # input chunk (a prescan in InputProcessing, since removed) ever
     # applied, which masked the bug for any stream whose first bytes
     # are the initial region set. A terminal that ignores a DECSTBM
     # re-set scrolls at a stale boundary, which corrupts every
