@@ -478,7 +478,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       when is_map(metadata) do
     apply_causation(metadata)
 
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[Dispatcher] handle_cast :dispatch agent_message: #{inspect(msg)}"
     )
 
@@ -490,7 +490,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
         {:dispatch, {:agent_message, _from, _payload} = msg},
         state
       ) do
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[Dispatcher] handle_cast :dispatch agent_message: #{inspect(msg)}"
     )
 
@@ -781,7 +781,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
         _from_caller,
         state
       ) do
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[Dispatcher] handle_call :dispatch agent_message: #{inspect(msg)}"
     )
 
@@ -847,10 +847,6 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       focused_element: focused_element,
       reduced_motion: reduced_motion
     }
-
-    Raxol.Core.Runtime.Log.debug(
-      "Dispatcher returning render context: #{inspect(render_context)}"
-    )
 
     {:reply, {:ok, render_context}, state}
   end
@@ -919,9 +915,10 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # standard GenServer cast reply tuple; to_call_reply/1 reshapes it
   # for the call clause.
   defp dispatch_full_event(event, state) do
-    Raxol.Core.Runtime.Log.debug(
-      "[Dispatcher] dispatching event: #{inspect(event)}"
-    )
+    # The macro, not `Raxol.Core.Runtime.Log.debug/1`: this runs once per
+    # input event (every key of an SSH paste), and only the macro skips
+    # building the message when :debug is off.
+    Logger.debug("[Dispatcher] dispatching event: #{inspect(event)}")
 
     # Record input events for session recording (zero-coupling)
     DispatcherHooks.maybe_record_input(event)
@@ -1042,7 +1039,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   defp log_debug_if_enabled(true, event) do
-    Raxol.Core.Runtime.Log.debug("Dispatching event: #{inspect(event)}")
+    Logger.debug("Dispatching event: #{inspect(event)}")
   end
 
   defp log_debug_if_enabled(false, _event), do: :ok
@@ -1122,7 +1119,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     # before they run. nil for non-agent surfaces, so this is a no-op there.
     commands = apply_command_interceptor(context, commands)
 
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "[Dispatcher.process_commands] Processing commands: #{inspect(commands)} with context: #{inspect(context)}"
     )
 

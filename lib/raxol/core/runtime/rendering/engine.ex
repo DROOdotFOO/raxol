@@ -107,8 +107,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     # Fetch the latest model AND theme context from the Dispatcher
     case GenServer.call(state.dispatcher_pid, :get_render_context) do
       {:ok, %{model: current_model, theme_id: current_theme_id}} ->
+        # No model dump: it is the app's whole state, once per frame.
         Raxol.Core.Runtime.Log.debug(
-          "Rendering Engine got render context: Model=#{inspect(current_model)}, Theme=#{inspect(current_theme_id)}"
+          "Rendering Engine got render context, theme=#{inspect(current_theme_id)}"
         )
 
         # Apply active animations to the model before rendering.
@@ -486,7 +487,10 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   defp resolve_view_result(nil), do: {:ok, nil}
 
   defp resolve_view_result(view) when is_map(view) do
-    Raxol.Core.Runtime.Log.debug("Rendering Engine: Got view: #{inspect(view)}")
+    # The type only: the whole tree is rebuilt and would be dumped every frame.
+    Raxol.Core.Runtime.Log.debug(
+      "Rendering Engine: Got view of type #{inspect(Map.get(view, :type))}"
+    )
 
     {:ok, view}
   end
@@ -504,10 +508,6 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     Raxol.Core.ErrorHandling.safe_call(fn ->
       positioned_elements =
         LayoutEngine.apply_layout(view, dimensions, prepared_tree)
-
-      Raxol.Core.Runtime.Log.debug(
-        "Rendering Engine: Got positioned elements: #{inspect(positioned_elements)}"
-      )
 
       {:ok, positioned_elements}
     end)
