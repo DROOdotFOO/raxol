@@ -135,10 +135,13 @@ defmodule Raxol.MCP.AgentBridge do
       case existing_session_atom(id) do
         {:ok, session} ->
           # Send the message as individual keystrokes, and report honestly:
-          # a failed keystroke must not be summarized as success.
+          # a failed keystroke must not be summarized as success. Queued, not
+          # awaited: this runs in the MCP server's one process, so waiting for
+          # update/2 per keystroke held every client for the length of the
+          # message times the app's update time.
           results =
             for char <- String.graphemes(message) do
-              Raxol.Headless.send_key(session, char, [])
+              Raxol.Headless.send_key(session, char, wait: false)
             end
 
           case Enum.reject(results, &(&1 == :ok)) do

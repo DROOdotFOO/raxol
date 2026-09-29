@@ -32,6 +32,7 @@ defmodule Raxol.Headless do
 
   require Logger
 
+  alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Headless.EventBuilder
   alias Raxol.Headless.TextCapture
 
@@ -162,7 +163,15 @@ defmodule Raxol.Headless do
 
   The wait happens in the calling process, not in the `Raxol.Headless`
   server, so a slow `update/2` holds up only its own caller: other sessions
-  answer meanwhile, and `update/2` may itself call this module.
+  answer meanwhile. That isolation is per process. `Raxol.MCP.Server` runs
+  every tool call in its one process, so over MCP a slow session holds every
+  client's tool calls, not just the caller's.
+
+  `wait: false` skips the wait: the call returns once the key is queued at
+  the dispatcher and says nothing about when `update/2` takes it. It is for
+  callers that only enqueue, such as `Raxol.MCP.AgentBridge`'s `agent.send`.
+  Past 1000 queued messages the dispatcher applies backpressure and the
+  call waits for it to take the key, as the live input path does.
 
   Returns `{:error, {:dispatch_failed, class}}` when the dispatcher exits or
   does not answer within `:timeout`. `class` is the shape of the exit
@@ -176,15 +185,22 @@ defmodule Raxol.Headless do
     * `:ctrl`, `:alt`, `:shift` - hold the modifier (default: `false`)
     * `:timeout` - how long to wait for `update/2`, in milliseconds or
       `:infinity` (default: #{@default_dispatch_timeout_ms})
+    * `:wait` - `false` returns once the key is queued (default: `true`)
   """
   @spec send_key(atom(), String.t() | atom(), keyword()) ::
           :ok | {:error, term()}
   def send_key(id, key, opts \\ []) do
+    {wait, opts} = Keyword.pop(opts, :wait, true)
+
     {timeout, key_opts} =
       Keyword.pop(opts, :timeout, @default_dispatch_timeout_ms)
 
     with {:ok, session} <- lookup_session(id) do
-      dispatch_event(session, EventBuilder.key(key, key_opts), timeout)
+      event = EventBuilder.key(key, key_opts)
+
+      if wait,
+        do: dispatch_event(session, event, timeout),
+        else: enqueue_event(session, event)
     end
   end
 
@@ -231,12 +247,14 @@ defmodule Raxol.Headless do
   Sends a key and returns a screenshot of the frame it produced.
 
   `send_key/3` followed by `screenshot/1`: the screenshot is rendered after
-  `update/2` has handled the key. Takes the same options as `send_key/3`.
+  `update/2` has handled the key. Takes the same options as `send_key/3`,
+  except `:wait`: the screenshot is of the handled key, so it always waits.
   """
   @spec send_key_and_screenshot(atom(), String.t() | atom(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_key_and_screenshot(id, key, opts \\ []) do
-    with :ok <- send_key(id, key, opts), do: screenshot(id)
+    with :ok <- send_key(id, key, Keyword.delete(opts, :wait)),
+         do: screenshot(id)
   end
 
   @doc "Returns the application model from the session's dispatcher."
@@ -703,15 +721,37 @@ defmodule Raxol.Headless do
       try do
         GenServer.call(dispatcher_pid, {:dispatch, event}, timeout)
       catch
-        :exit, reason ->
-          Logger.error(
-            "[#{inspect(__MODULE__)}] dispatch to session #{inspect(session.id)} failed: " <>
-              Exception.format_exit(reason)
-          )
-
-          {:error, {:dispatch_failed, exit_class(reason)}}
+        :exit, reason -> dispatch_failed(session, reason)
       end
     end)
+  end
+
+  # `send_key(id, key, wait: false)`: queue the event and return. Backpressure
+  # turns the cast into a call past its watermark, as on the live input path,
+  # and that call can exit like any other.
+  defp enqueue_event(session, event) do
+    with_dispatcher(session, fn dispatcher_pid ->
+      try do
+        case Backpressure.cast(dispatcher_pid, {:dispatch, event},
+               label: :headless_dispatch,
+               policy: :call_when_full
+             ) do
+          :ok -> :ok
+          {:dropped, reason} -> {:error, {:dispatch_failed, reason}}
+        end
+      catch
+        :exit, reason -> dispatch_failed(session, reason)
+      end
+    end)
+  end
+
+  defp dispatch_failed(session, reason) do
+    Logger.error(
+      "[#{inspect(__MODULE__)}] dispatch to session #{inspect(session.id)} failed: " <>
+        Exception.format_exit(reason)
+    )
+
+    {:error, {:dispatch_failed, exit_class(reason)}}
   end
 
   # The shape of an exit, never its payload, as `Raxol.MCP.Registry` reduces a
