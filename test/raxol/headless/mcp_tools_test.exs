@@ -378,9 +378,10 @@ defmodule Raxol.Headless.McpToolsTest do
     def view(_), do: nil
   end
 
-  # `width`/`height` come from the MCP client and size a grid allocated up
-  # front, so an unchecked 100000x100000 asked the VM for ~5.4 TB. The tool
-  # refuses out-of-range sizes (the caller named them) rather than clamping.
+  # `width`/`height` come from the MCP client and size every frame the session
+  # draws, so they are held to the remote ceiling (512 columns, 256 rows,
+  # 131072 cells), as SSH windows are. The tool refuses out-of-range sizes
+  # (the caller named them) rather than clamping.
   describe "raxol_start size" do
     setup do
       case Process.whereis(Raxol.Headless) do
@@ -396,11 +397,13 @@ defmodule Raxol.Headless.McpToolsTest do
       :ok
     end
 
-    test "a size past the terminal size ceiling is refused and starts nothing" do
+    test "a size past the remote ceiling is refused and starts nothing" do
       for {w, h} <- [
             {100_000, 40},
             {120, 100_000},
-            {2048, 1024},
+            {4096, 256},
+            {513, 40},
+            {120, 257},
             {0, 40},
             {"80", 24}
           ] do
@@ -412,25 +415,33 @@ defmodule Raxol.Headless.McpToolsTest do
                    "height" => h
                  })
 
-        assert message =~ "width at most 4096"
-        assert message =~ "height at most 4096"
-        assert message =~ "1048576 cells"
+        assert message =~ "width at most 512"
+        assert message =~ "height at most 256"
+        assert message =~ "131072 cells"
         refute :sized_refused in Raxol.Headless.list()
       end
     end
 
-    test "a size within the ceiling starts at that size" do
+    test "a size at the ceiling starts at that size" do
       assert {:ok, message} =
                start_tool_result(%{
                  "module" => inspect(SizedApp),
                  "id" => "sized_ok",
-                 "width" => 200,
-                 "height" => 60
+                 "width" => 512,
+                 "height" => 256
                })
 
       assert message =~ "sized_ok"
       assert {:ok, buffer} = Raxol.Headless.get_buffer(:sized_ok)
-      assert {buffer.width, buffer.height} == {200, 60}
+      assert {buffer.width, buffer.height} == {512, 256}
+    end
+
+    test "the input schema states the bounds" do
+      %{inputSchema: %{properties: props}} =
+        Enum.find(McpTools.tools(), &(&1.name == "raxol_start"))
+
+      assert {props.width.minimum, props.width.maximum} == {1, 512}
+      assert {props.height.minimum, props.height.maximum} == {1, 256}
     end
   end
 

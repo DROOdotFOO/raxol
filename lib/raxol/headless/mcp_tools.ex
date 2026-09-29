@@ -73,15 +73,15 @@ defmodule Raxol.Headless.McpTools do
             width: %{
               type: "integer",
               minimum: 1,
-              maximum: Raxol.Core.Defaults.max_terminal_width(),
+              maximum: Raxol.Core.Defaults.max_remote_terminal_width(),
               description:
                 "Screen width in columns (default: 120). width * height " <>
-                  "may not exceed #{Raxol.Core.Defaults.max_terminal_cells()} cells."
+                  "may not exceed #{Raxol.Core.Defaults.max_remote_terminal_cells()} cells."
             },
             height: %{
               type: "integer",
               minimum: 1,
-              maximum: Raxol.Core.Defaults.max_terminal_height(),
+              maximum: Raxol.Core.Defaults.max_remote_terminal_height(),
               description: "Screen height in rows (default: 40)"
             }
           }
@@ -489,22 +489,28 @@ defmodule Raxol.Headless.McpTools do
   end
 
   # Refused, not clamped: the caller named this size, so it is told the range
-  # rather than handed a smaller screen than it asked for. Every other surface
-  # clamps (see `Raxol.Core.Utils.Validation.clamp_terminal_size/2`).
+  # rather than handed a smaller screen than it asked for. The ceiling is the
+  # remote one, as for SSH: an MCP client is on the other end of a network
+  # surface, and each call it makes draws a frame of this size. SSH clamps to
+  # the same ceiling instead (a window is not a request it can re-issue).
   defp start_size(args) do
     width = Map.get(args, "width", 120)
     height = Map.get(args, "height", 40)
 
-    case Raxol.Core.Utils.Validation.validate_terminal_size(width, height) do
+    case Raxol.Core.Utils.Validation.validate_terminal_size(
+           width,
+           height,
+           Raxol.Core.Defaults.remote_terminal_size_ceiling()
+         ) do
       :ok ->
         {:ok, {width, height}}
 
       {:error, _reason} ->
         {:error,
          "width and height must be positive integers, width at most " <>
-           "#{Raxol.Core.Defaults.max_terminal_width()}, height at most " <>
-           "#{Raxol.Core.Defaults.max_terminal_height()}, and width * height " <>
-           "at most #{Raxol.Core.Defaults.max_terminal_cells()} cells; " <>
+           "#{Raxol.Core.Defaults.max_remote_terminal_width()}, height at most " <>
+           "#{Raxol.Core.Defaults.max_remote_terminal_height()}, and width * height " <>
+           "at most #{Raxol.Core.Defaults.max_remote_terminal_cells()} cells; " <>
            "got #{inspect(width)}x#{inspect(height)}"}
     end
   end
