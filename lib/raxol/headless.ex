@@ -30,6 +30,8 @@ defmodule Raxol.Headless do
 
   use GenServer
 
+  require Logger
+
   alias Raxol.Headless.EventBuilder
   alias Raxol.Headless.TextCapture
 
@@ -157,8 +159,10 @@ defmodule Raxol.Headless do
   interval, or any other command that completes asynchronously can still
   land after this returns.
 
-  Returns `{:error, {:dispatch_failed, reason}}` when the dispatcher exits
-  or does not answer in time.
+  Returns `{:error, {:dispatch_failed, class}}` when the dispatcher exits or
+  does not answer in time. `class` is the shape of the exit (`:timeout`,
+  `:noproc`, `:killed`, `:shutdown`, else `:unknown`), never its payload: an
+  exception that killed the dispatcher is logged, not returned.
 
   ## Options
 
@@ -748,16 +752,35 @@ defmodule Raxol.Headless do
   # The call blocks this process, which holds every other caller's session, so
   # a dispatcher that dies on the event or does not answer is an error for this
   # caller rather than an exit that takes the session manager down with it.
+  #
+  # The error carries the exit's class and the log carries the reason. A
+  # dispatcher killed by a linked process that raised exits with that exception,
+  # message and stacktrace included, and `raxol_send_key` hands this error to a
+  # model: whatever the message held (a URL, a token) went with it.
   defp dispatch_event(session, event) do
     with_dispatcher(session, fn dispatcher_pid ->
       try do
         GenServer.call(dispatcher_pid, {:dispatch, event})
       catch
-        :exit, {reason, {GenServer, :call, _args}} ->
-          {:error, {:dispatch_failed, reason}}
+        :exit, reason ->
+          Logger.error(
+            "[#{inspect(__MODULE__)}] dispatch to session #{inspect(session.id)} failed: " <>
+              Exception.format_exit(reason)
+          )
+
+          {:error, {:dispatch_failed, exit_class(reason)}}
       end
     end)
   end
+
+  # The shape of an exit, never its payload, as `Raxol.MCP.Registry` reduces a
+  # callback's exit: `:timeout`, `:noproc`, `:killed`, `:shutdown`, else
+  # `:unknown`. `GenServer.call/3` wraps the reason with the call, request
+  # included, so that wrapper comes off first.
+  defp exit_class({reason, {GenServer, :call, _args}}), do: exit_class(reason)
+  defp exit_class(reason) when is_atom(reason), do: reason
+  defp exit_class({reason, _detail}) when is_atom(reason), do: reason
+  defp exit_class(_other), do: :unknown
 
   defp read_model(session) do
     with_dispatcher(session, fn dispatcher_pid ->
