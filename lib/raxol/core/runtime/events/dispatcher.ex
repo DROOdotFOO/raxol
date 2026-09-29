@@ -390,30 +390,32 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # from the remote client -- so an app arithmetic error on it must not end
   # the session. Genuinely malformed return values still get logged.
   defp resize_update(state, event) do
-    case Raxol.Core.ErrorHandling.safe_call(fn ->
-           state.app_module.update(event, state.model)
-         end) do
-      {:ok, {new_model, commands}}
-      when is_map(new_model) and is_list(commands) ->
-        {:ok, new_model, commands}
+    fn -> state.app_module.update(event, state.model) end
+    |> Raxol.Core.ErrorHandling.safe_call()
+    |> resize_result(state, event)
+  end
 
-      {:ok, new_model} when is_map(new_model) ->
-        {:ok, new_model, []}
+  defp resize_result({:ok, {new_model, commands}}, _state, _event)
+       when is_map(new_model) and is_list(commands),
+       do: {:ok, new_model, commands}
 
-      {:ok, other} ->
-        log_unexpected_return(state, event, event, other)
-        :unhandled
+  defp resize_result({:ok, new_model}, _state, _event) when is_map(new_model),
+    do: {:ok, new_model, []}
 
-      {:error, %FunctionClauseError{}} ->
-        :unhandled
+  defp resize_result({:ok, other}, state, event) do
+    log_unexpected_return(state, event, event, other)
+    :unhandled
+  end
 
-      {:error, %UndefinedFunctionError{}} ->
-        :unhandled
+  defp resize_result({:error, %FunctionClauseError{}}, _state, _event),
+    do: :unhandled
 
-      {:error, reason} ->
-        log_update_error(state, event, event, {:update_failed, reason})
-        :unhandled
-    end
+  defp resize_result({:error, %UndefinedFunctionError{}}, _state, _event),
+    do: :unhandled
+
+  defp resize_result({:error, reason}, state, event) do
+    log_update_error(state, event, event, {:update_failed, reason})
+    :unhandled
   end
 
   defp handle_focus_event(%{focused: focused}, state) do

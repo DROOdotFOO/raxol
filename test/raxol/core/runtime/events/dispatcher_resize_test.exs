@@ -29,8 +29,8 @@ defmodule Raxol.Core.Runtime.Events.DispatcherResizeTest do
     @moduledoc false
     # A resize clause that fails on the size it is given, e.g. one that divides
     # by a remote client's width.
-    def update(%Event{type: :resize, data: %{width: w}}, model),
-      do: {%{model | width: div(1000, w - w)}, []}
+    def update(%Event{type: :resize, data: %{width: w}}, _model),
+      do: raise(ArithmeticError, "cannot lay out 1000 columns at width #{w}")
 
     def update(_message, model), do: {model, []}
   end

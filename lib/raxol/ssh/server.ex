@@ -402,29 +402,31 @@ defmodule Raxol.SSH.Server do
          {:ok, size_ceiling} <- terminal_size_ceiling(opts) do
       start_daemon(opts, auth_opts, size_ceiling)
     else
-      {:error, :ssh_auth_required} ->
-        {:stop,
-         {:ssh_auth_required,
-          "SSH server refused to start: no authentication configured. Pass " <>
-            "allow_anonymous: true for anonymous access (e.g. a playground), or " <>
-            "authorized_keys_dir: <dir> to require public-key auth."}}
-
-      {:error, {:invalid_max_terminal_size, value}} ->
-        {:stop,
-         {:invalid_max_terminal_size, value,
-          "SSH server refused to start: max_terminal_size must be " <>
-            "{columns, rows}, positive integers within the local terminal " <>
-            "size ceiling (Raxol.Core.Defaults.max_terminal_*); got " <>
-            inspect(value)}}
-
-      missing when is_list(missing) ->
-        {:stop,
-         {:anonymous_caps_required, missing,
-          "SSH server refused to start: anonymous access without resource " <>
-            "caps. An unauthenticated surface must state its limits; pass " <>
-            Enum.map_join(missing, ", ", &"#{&1}:") <>
-            " (positive integers, timeouts in milliseconds)."}}
+      refusal -> {:stop, init_refusal(refusal)}
     end
+  end
+
+  defp init_refusal({:error, :ssh_auth_required}) do
+    {:ssh_auth_required,
+     "SSH server refused to start: no authentication configured. Pass " <>
+       "allow_anonymous: true for anonymous access (e.g. a playground), or " <>
+       "authorized_keys_dir: <dir> to require public-key auth."}
+  end
+
+  defp init_refusal({:error, {:invalid_max_terminal_size, value}}) do
+    {:invalid_max_terminal_size, value,
+     "SSH server refused to start: max_terminal_size must be " <>
+       "{columns, rows}, positive integers within the local terminal " <>
+       "size ceiling (Raxol.Core.Defaults.max_terminal_*); got " <>
+       inspect(value)}
+  end
+
+  defp init_refusal(missing) when is_list(missing) do
+    {:anonymous_caps_required, missing,
+     "SSH server refused to start: anonymous access without resource " <>
+       "caps. An unauthenticated surface must state its limits; pass " <>
+       Enum.map_join(missing, ", ", &"#{&1}:") <>
+       " (positive integers, timeouts in milliseconds)."}
   end
 
   @doc """
