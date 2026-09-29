@@ -20,6 +20,15 @@ defmodule Raxol.Core.Runtime.Log do
   building the message when the level is disabled), and every other module
   uses this one.
 
+  The functions here are FUNCTIONS: their arguments, `inspect/1` included,
+  are evaluated before any level check, at every level. So never pass them
+  `inspect` of an unbounded term (an app model, a view, an event, the
+  emulator, a GenServer state) or build a message in a per-byte or per-event
+  loop. Log a bounded summary (a module, an event type, a size), or use the
+  `Logger` macros where the full term is only wanted at `:debug`. Input a
+  remote peer sends reaches these paths, so an eager dump there is both a CPU
+  amplifier (#1031) and a way for that input to land in the logs.
+
       # Basic logging
       Log.info("User authenticated successfully")
       Log.error("Database connection failed")
