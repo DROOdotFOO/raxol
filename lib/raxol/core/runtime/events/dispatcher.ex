@@ -353,10 +353,15 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
   # Every resize, from every surface, reaches the app and the engine here, so
   # the app is told the size the engine draws at (the engine clamps too; see
-  # `Rendering.Engine`). Remote surfaces clamp before sending, so what gets here
-  # oversized is the pilot's own terminal or a programmatic resize: that is
-  # worth one warning per crossing into the ceiling, not one per SIGWINCH while
-  # the window stays oversized, which is when the clamped size is unchanged.
+  # `Rendering.Engine`). This is the local ceiling: network surfaces clamp or
+  # refuse at the tighter remote one before sending, so what gets here
+  # oversized is the pilot's own terminal or an in-process resize
+  # (`Raxol.Headless.send_resize/3`). The warning goes to the Logger once per
+  # crossing into the ceiling, not once per SIGWINCH while the window stays
+  # oversized (when the clamped size is unchanged). On a TTY the Terminal
+  # Driver sets the Logger level to `:none` for the session, so that nothing
+  # is written over the pilot's screen; there the warning is dropped and an
+  # oversized terminal renders at the ceiling without one.
   defp clamp_resize(width, height, state) do
     case Raxol.Core.Utils.Validation.clamp_terminal_size(width, height) do
       {^width, ^height} = size ->
@@ -388,7 +393,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     case Raxol.Core.ErrorHandling.safe_call(fn ->
            state.app_module.update(event, state.model)
          end) do
-      {:ok, {new_model, commands}} when is_map(new_model) and is_list(commands) ->
+      {:ok, {new_model, commands}}
+      when is_map(new_model) and is_list(commands) ->
         {:ok, new_model, commands}
 
       {:ok, new_model} when is_map(new_model) ->

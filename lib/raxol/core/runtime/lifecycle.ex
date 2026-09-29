@@ -682,8 +682,11 @@ defmodule Raxol.Core.Runtime.Lifecycle do
 
   # `:width`/`:height` size the app's `init/1`, the dispatcher and the
   # rendering engine, so clamping them once here starts all three at the size
-  # the engine will draw (it clamps too). A remote surface has already clamped
-  # or refused; an oversized size here is the pilot's own, so it is logged.
+  # the engine will draw (it clamps too). This is the local ceiling; network
+  # surfaces have already clamped or refused at the tighter remote one, so an
+  # oversized size here was passed in by the pilot's own code (`Raxol.start_link`,
+  # `Raxol.Headless.start/2`) and is logged. The size of a local terminal
+  # measured at start is not an option; the engine clamps that one.
   defp clamp_size_options(options) do
     width = Keyword.get(options, :width)
     height = Keyword.get(options, :height)

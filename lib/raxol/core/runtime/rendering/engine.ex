@@ -214,10 +214,14 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
   # --- Private Helpers ---
 
-  # The terminal size ceiling, applied where the size becomes an allocation:
-  # every buffer, layout and frame this engine draws is `width * height`. Every
-  # size reaches here, from any surface; the surfaces clamp or refuse first so
-  # the app sees the size it is drawn at.
+  # The local terminal size ceiling, applied where the size becomes an
+  # allocation: every buffer, layout and frame this engine draws is
+  # `width * height`. Every size reaches here, from any surface; the surfaces
+  # clamp or refuse first (network ones to the tighter remote ceiling) so the
+  # app sees the size it is drawn at. The one size nothing checks first is the
+  # local terminal's own at start (`Lifecycle.Initializer.engine_size/2`); it
+  # is clamped here without a log line, as the Driver's first resize event
+  # follows and goes through the dispatcher's clamp.
   defp clamp_size(%State{width: w, height: h} = state) do
     {w, h} = Raxol.Core.Utils.Validation.clamp_terminal_size(w, h)
     %{state | width: w, height: h}

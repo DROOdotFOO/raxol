@@ -128,7 +128,8 @@ defmodule Raxol.Core.Runtime.Events.DispatcherResizeTest do
 
     log =
       capture_log(fn ->
-        assert {:ok, new_state, []} = Dispatcher.process_system_event(event, state)
+        assert {:ok, new_state, []} =
+                 Dispatcher.process_system_event(event, state)
 
         assert new_state.model == state.model
         assert {new_state.width, new_state.height} == {100, 30}
