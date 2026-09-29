@@ -60,6 +60,13 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
     end
   end
 
+  describe "counts of 0 and colon subparameters" do
+    test "mean 1 for ICH and IL, as in ECMA-48, instead of crashing" do
+      emulator = feed(Emulator.new(10, 3), "abc\e[1;2H\e[0@\e[2:5@\e[0L\e[1:2M")
+      assert get_line_text(emulator, 0) == "a  bc     "
+    end
+  end
+
   describe "CSI parameters" do
     test "a huge value is clamped to 65535 while it is still arriving" do
       digits = String.duplicate("9", 100_000)
@@ -80,7 +87,7 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
       assert byte_size(emulator.parser_state.params_buffer) < 200
 
       assert CommandsParser.parse_params(emulator.parser_state.params_buffer) ==
-               Enum.to_list(1..29) ++ [65_535]
+               Enum.concat(1..29, [65_535])
     end
 
     test "a million parameters keep only 30" do
@@ -267,6 +274,57 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
     test "an unknown mode is ignored, as in xterm" do
       emulator = feed(Emulator.new(80, 24), "kept\e[4J\e[50000000J\e[2:1J")
       assert String.starts_with?(get_line_text(emulator, 0), "kept")
+    end
+  end
+
+  describe "OSC sequences real programs send" do
+    test "clipboard and selection queries are never answered" do
+      {emulator, output} =
+        Emulator.process_input(Emulator.new(80, 24), "\e]52;c;?\a\e]52;s;?\e\\\e]51;?\a")
+
+      assert output == ""
+
+      {_emulator, output} =
+        Emulator.process_input(emulator, "\e]52;c;aGVsbG8=\a\e]51;picked\a\e]52;c;?\a")
+
+      assert output == ""
+    end
+
+    test "colour queries and sets get no reply and change nothing" do
+      {emulator, output} =
+        Emulator.process_input(
+          Emulator.new(80, 24),
+          "\e]11;?\a\e]10;?\e\\\e]4;1;?\a\e]11;rgb:12/34/56\a\e]4;1;#abc\a\e]4;1;\aok"
+        )
+
+      assert output == ""
+      assert String.starts_with?(get_line_text(emulator, 0), "ok")
+    end
+
+    test "OSC 7 and OSC 1337 set the current directory and host" do
+      emulator = feed(Emulator.new(80, 24), "\e]7;file://host/tmp\a")
+      assert emulator.current_directory == "file://host/tmp"
+
+      emulator = feed(emulator, "\e]1337;CurrentDir=/srv\a\e]1337;RemoteHost=me@box\a")
+      assert {emulator.current_directory, emulator.remote_host} == {"/srv", "me@box"}
+    end
+  end
+
+  describe "invalid UTF-8" do
+    test "shows U+FFFD and keeps the text around it, as in xterm" do
+      emulator = feed(Emulator.new(80, 24), "ab" <> <<0xFF>> <> "cd" <> <<0x80>> <> "e")
+      assert String.starts_with?(get_line_text(emulator, 0), "ab\uFFFDcd\uFFFDe")
+    end
+
+    test "a pictograph followed by stray continuation bytes is shown, not raised on" do
+      # OTP's grapheme breaking raises on this input.
+      emulator = feed(Emulator.new(80, 24), <<?e, 0xC2, 0xAE, 0x9B, 0x9A>>)
+      assert String.starts_with?(get_line_text(emulator, 0), "e\u00AE\uFFFD\uFFFD")
+    end
+
+    test "a character split between chunks is joined" do
+      emulator = feed(Emulator.new(80, 24), ["a" <> <<0xC3>>, <<0xA9>> <> "b"])
+      assert String.starts_with?(get_line_text(emulator, 0), "a\u00E9b ")
     end
   end
 
