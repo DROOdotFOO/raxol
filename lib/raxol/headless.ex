@@ -730,25 +730,41 @@ defmodule Raxol.Headless do
   end
 
   defp with_engine(session, fun) do
-    lifecycle_state = GenServer.call(session.lifecycle_pid, :get_full_state)
-    pid = lifecycle_state.rendering_engine_pid
+    with {:ok, lifecycle_state} <- lifecycle_state(session) do
+      pid = lifecycle_state.rendering_engine_pid
 
-    if pid && Process.alive?(pid) do
-      fun.(pid)
-    else
-      {:error, :rendering_engine_not_available}
+      if pid && Process.alive?(pid) do
+        fun.(pid)
+      else
+        {:error, :rendering_engine_not_available}
+      end
     end
   end
 
   defp with_dispatcher(session, fun) do
-    lifecycle_state = GenServer.call(session.lifecycle_pid, :get_full_state)
-    pid = lifecycle_state.dispatcher_pid
+    with {:ok, lifecycle_state} <- lifecycle_state(session) do
+      pid = lifecycle_state.dispatcher_pid
 
-    if pid && Process.alive?(pid) do
-      fun.(pid)
-    else
-      {:error, :dispatcher_not_available}
+      if pid && Process.alive?(pid) do
+        fun.(pid)
+      else
+        {:error, :dispatcher_not_available}
+      end
     end
+  end
+
+  # The Lifecycle can end between the server naming the session and this call:
+  # an app that quits does, and the server drops the session only once the
+  # Lifecycle's `:DOWN` arrives. `:not_found` is what the caller would get a
+  # moment later. A Lifecycle that is alive but does not answer is a different
+  # answer, carrying only the exit's class.
+  defp lifecycle_state(session) do
+    {:ok, GenServer.call(session.lifecycle_pid, :get_full_state)}
+  catch
+    :exit, reason ->
+      if Process.alive?(session.lifecycle_pid),
+        do: {:error, {:session_unavailable, exit_class(reason)}},
+        else: {:error, :not_found}
   end
 
   defp stop_synchronizer(nil), do: :ok

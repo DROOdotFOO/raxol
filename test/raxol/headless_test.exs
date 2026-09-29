@@ -438,6 +438,27 @@ defmodule Raxol.HeadlessTest do
                &String.starts_with?(&1.id, "tool_sync_#{id}_")
              )
     end
+
+    # The Lifecycle can end between `Raxol.Headless` naming the session and the
+    # caller asking the Lifecycle for its processes: an app that quits does
+    # exactly that, and the manager drops the session only when its `:DOWN`
+    # arrives. The caller gets the answer it would a moment later, and the
+    # manager, which holds every other session, lives on.
+    for {name, input} <- [
+          screenshot: quote(do: &Headless.screenshot/1),
+          send_key: quote(do: &Headless.send_key(&1, "="))
+        ] do
+      test "#{name} answers :not_found when the lifecycle has just ended" do
+        {:ok, id} = Headless.start(TestApp, id: :"ended_#{unquote(name)}")
+        headless = Process.whereis(Headless)
+
+        assert {:error, :not_found} =
+                 answer_after_lifecycle_ends(id, unquote(input))
+
+        assert Process.whereis(Headless) == headless
+        refute id in Headless.list()
+      end
+    end
   end
 
   defp resource_uris(registry) do
@@ -871,6 +892,31 @@ defmodule Raxol.HeadlessTest do
       {:trace, ^dispatcher, :receive, {:"$gen_call", _from, _request}} ->
         release.(dispatcher)
     end
+
+    Task.await(task)
+  end
+
+  # Runs `input` against session `id` so that `Raxol.Headless` names the
+  # session before its Lifecycle ends and learns of the end only afterwards:
+  # the manager is held until `input`'s lookup is in its queue, the Lifecycle
+  # is killed, so its `:DOWN` queues behind that lookup, and then the manager
+  # is let go.
+  defp answer_after_lifecycle_ends(id, input) do
+    %{lifecycle: lifecycle} = session_pids(id)
+    headless = Process.whereis(Headless)
+
+    :ok = :sys.suspend(headless)
+    :erlang.trace(headless, true, [:receive])
+    task = Task.async(fn -> input.(id) end)
+
+    assert_receive {:trace, ^headless, :receive,
+                    {:"$gen_call", _from, {:lookup_session, ^id}}}
+
+    :erlang.trace(headless, false, [:receive])
+    ref = Process.monitor(lifecycle)
+    Process.exit(lifecycle, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^lifecycle, :killed}
+    :ok = :sys.resume(headless)
 
     Task.await(task)
   end
