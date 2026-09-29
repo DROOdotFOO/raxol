@@ -43,44 +43,27 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Deletion do
 
   @doc """
   Delete lines within a scroll region.
+
+  DL on the list of rows: `count` rows from `start_y` go (clamped to the rows
+  left in the region, as in xterm), the rest of the region moves up, and blank
+  rows fill its bottom. Only the region's rows are touched, and every blank
+  row is the same term, so the cost is one row plus the screen's height. A
+  cursor outside the region deletes nothing.
   """
-  def delete_lines_in_region(buffer, start_y, count, top, bottom) do
-    alias Raxol.Terminal.ScreenBuffer.DataAdapter
+  def delete_lines_in_region(%{cells: cells, width: width} = buffer, start_y, count, top, bottom)
+      when start_y >= top and start_y <= bottom do
+    region_rows = bottom - start_y + 1
+    count = min(count, region_rows)
+    {above, from_cursor} = Enum.split(cells, start_y)
+    {region, below} = Enum.split(from_cursor, region_rows)
+    blank = List.duplicate(Raxol.Terminal.Cell.new(), width)
 
-    DataAdapter.with_lines_format(buffer, fn buffer_with_lines ->
-      lines = Map.get(buffer_with_lines, :lines, %{})
+    shifted = Enum.drop(region, count) ++ List.duplicate(blank, count)
 
-      # Build new line mapping
-      new_lines =
-        Enum.reduce(0..(Map.get(buffer_with_lines, :height, 24) - 1), %{}, fn y, acc ->
-          cond do
-            # Before scroll region
-            y < top or y > bottom ->
-              Map.put(acc, y, Map.get(lines, y))
-
-            # Lines before deletion point
-            y < start_y ->
-              Map.put(acc, y, Map.get(lines, y))
-
-            # Shift lines up after deletion
-            y + count <= bottom ->
-              Map.put(acc, y, Map.get(lines, y + count))
-
-            # Fill with empty lines at bottom
-            true ->
-              Map.put(acc, y, create_empty_line(buffer_with_lines))
-          end
-        end)
-
-      %{buffer_with_lines | lines: new_lines}
-    end)
+    %{buffer | cells: above ++ shifted ++ below}
   end
 
-  # Helper functions
-  defp create_empty_line(buffer) do
-    width = Map.get(buffer, :width, 80)
-    Enum.map(0..(width - 1), fn _ -> %{char: " ", style: %{}} end)
-  end
+  def delete_lines_in_region(buffer, _start_y, _count, _top, _bottom), do: buffer
 
   # Pattern match for new line positions after deletion
   # Lines before deletion stay in same position

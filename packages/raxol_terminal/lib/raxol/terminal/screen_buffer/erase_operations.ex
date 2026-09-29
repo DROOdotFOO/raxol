@@ -271,13 +271,11 @@ defmodule Raxol.Terminal.ScreenBuffer.EraseOperations do
     CharEditor.delete_characters(buffer, row, col, count, default_style)
   end
 
-  defp create_empty_grid(width, height) when width > 0 and height > 0 do
-    for _y <- 0..(height - 1) do
-      for _x <- 0..(width - 1) do
-        Cell.new()
-      end
-    end
-  end
+  # Every row is the same blank row: cells are immutable, so a blank screen
+  # costs one row plus the list of rows, not a cell per cell (clearing the
+  # alternate screen on every 1049 switch built all of them).
+  defp create_empty_grid(width, height) when width > 0 and height > 0,
+    do: List.duplicate(List.duplicate(Cell.new(), width), height)
 
   defp create_empty_grid(_width, _height), do: []
 

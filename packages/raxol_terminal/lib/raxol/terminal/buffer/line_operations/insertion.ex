@@ -61,48 +61,29 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Insertion do
   end
 
   # Helper functions
-  defp do_insert_lines_in_region(buffer, y, count, top, bottom) do
-    alias Raxol.Terminal.ScreenBuffer.DataAdapter
 
-    DataAdapter.with_lines_format(buffer, fn buffer_with_lines ->
-      lines = Map.get(buffer_with_lines, :lines, %{})
-      height = Map.get(buffer_with_lines, :height, 24)
-      width = Map.get(buffer_with_lines, :width, 80)
+  # IL within the scroll region, on the list of rows: the rows from `y` down
+  # move down by `count` (clamped to the rows left in the region, as in
+  # xterm), those pushed past the region's bottom are dropped, and `count`
+  # blank rows fill the gap. Only the region's rows are touched, and every
+  # inserted row is the same blank row, so the cost is one row plus the
+  # screen's height, not a cell per inserted cell. A cursor outside the
+  # region inserts nothing.
+  defp do_insert_lines_in_region(%{cells: cells, width: width} = buffer, y, count, top, bottom)
+       when y >= top and y <= bottom do
+    region_rows = bottom - y + 1
+    count = min(count, region_rows)
+    {above, from_cursor} = Enum.split(cells, y)
+    {region, below} = Enum.split(from_cursor, region_rows)
+    blank = List.duplicate(Raxol.Terminal.Cell.new(), width)
 
-      new_lines =
-        Enum.reduce(0..(height - 1), %{}, fn line_y, acc ->
-          cond do
-            # Outside scroll region - keep unchanged
-            line_y < top or line_y > bottom ->
-              original_line = Map.get(lines, line_y)
-              Map.put(acc, line_y, original_line)
+    shifted =
+      List.duplicate(blank, count) ++ Enum.take(region, length(region) - count)
 
-            # Before insertion point - keep unchanged
-            line_y < y ->
-              Map.put(acc, line_y, Map.get(lines, line_y))
-
-            # New inserted lines
-            line_y < y + count ->
-              Map.put(acc, line_y, create_empty_line(width, %{}))
-
-            # Shifted lines within region
-            line_y <= bottom ->
-              source_y = line_y - count
-
-              if source_y <= bottom - count do
-                Map.put(acc, line_y, Map.get(lines, source_y))
-              else
-                acc
-              end
-
-            true ->
-              acc
-          end
-        end)
-
-      %{buffer_with_lines | lines: new_lines}
-    end)
+    %{buffer | cells: above ++ shifted ++ below}
   end
+
+  defp do_insert_lines_in_region(buffer, _y, _count, _top, _bottom), do: buffer
 
   defp create_empty_line(width, style) do
     Enum.map(0..(width - 1), fn _ -> %{char: " ", style: style} end)
