@@ -9,6 +9,11 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
   @behaviour Raxol.Terminal.Parser.StateBehaviour
 
   @impl Raxol.Terminal.Parser.StateBehaviour
+  def handle(emulator, %{utf8_pending: pending} = parser_state, input)
+      when pending != "" do
+    handle_input(pending <> input, emulator, %{parser_state | utf8_pending: ""})
+  end
+
   def handle(emulator, parser_state, input) do
     handle_input(input, emulator, parser_state)
   end
@@ -110,7 +115,7 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
        do: handle_printable_char(emulator, parser_state, char_codepoint, rest)
 
   defp dispatch_input(other, emulator, parser_state),
-    do: handle_unknown_input(emulator, parser_state, other)
+    do: handle_invalid_utf8(emulator, parser_state, other)
 
   defp handle_empty_input(emulator, _parser_state) do
     {new_emulator, new_parser_state, new_rest_input} =
@@ -205,12 +210,18 @@ defmodule Raxol.Terminal.Parser.States.GroundState do
     {:continue, emulator, parser_state, rest}
   end
 
-  defp handle_unknown_input(emulator, parser_state, other) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "GroundState unhandled input: #{inspect(other)}",
-      %{}
-    )
+  # Bytes that do not start a UTF-8 character. As in xterm, each shows as
+  # U+FFFD and parsing carries on; returning an error here threw away every
+  # change the chunk had made, and the rest of it, so one bad byte could hide
+  # output from the pilot. A character cut off by the end of the chunk is kept
+  # for the next one instead.
+  defp handle_invalid_utf8(emulator, parser_state, <<_bad, rest::binary>> = other) do
+    case :unicode.characters_to_binary(other) do
+      {:incomplete, "", ^other} ->
+        {:continue, emulator, %{parser_state | utf8_pending: other}, ""}
 
-    {:error, :unhandled_input, emulator, parser_state}
+      _invalid ->
+        handle_printable_char(emulator, parser_state, 0xFFFD, rest)
+    end
   end
 end

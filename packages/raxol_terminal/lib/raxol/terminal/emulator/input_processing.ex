@@ -86,12 +86,15 @@ defmodule Raxol.Terminal.Emulator.InputProcessing do
     end
   end
 
-  # One grapheme at a time rather than `String.graphemes/1`: a list of every
+  # One codepoint at a time rather than `String.graphemes/1`: a list of every
   # grapheme of a large chunk cost ~64 bytes of heap per input byte before
   # any of it was dropped, and the line itself is capped
-  # (`History.append_command_text/2`).
+  # (`History.append_command_text/2`). Codepoints, not graphemes: OTP's
+  # grapheme breaking raises on some invalid UTF-8 (a pictograph followed by
+  # stray continuation bytes, e.g. <<0xC2, 0xAE, 0x9B>>), which output may
+  # hold, and CR LF is two line ends here rather than one printable grapheme.
   defp scan_command_text(input, buffer, add_history) do
-    case String.next_grapheme(input) do
+    case String.next_codepoint(input) do
       nil ->
         {buffer, add_history}
 

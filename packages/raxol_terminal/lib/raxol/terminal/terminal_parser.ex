@@ -112,13 +112,10 @@ defmodule Raxol.Terminal.TerminalParser do
        ) do
     # Ground state processing
 
-    case GroundState.handle(emulator, parser_state, input) do
-      {:continue, next_emulator, next_parser_state, next_input} ->
-        parse_loop(next_emulator, next_parser_state, next_input)
+    {:continue, next_emulator, next_parser_state, next_input} =
+      GroundState.handle(emulator, parser_state, input)
 
-      other ->
-        other
-    end
+    parse_loop(next_emulator, next_parser_state, next_input)
   end
 
   # --- Escape State ---

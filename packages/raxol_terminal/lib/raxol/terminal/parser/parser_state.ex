@@ -39,6 +39,7 @@ defmodule Raxol.Terminal.Parser.ParserState do
           intermediates_buffer: binary(),
           payload_buffer: binary(),
           payload_overflow: boolean(),
+          utf8_pending: binary(),
           final_byte: byte() | nil,
           designating_gset: term() | nil,
           single_shift: term() | nil
@@ -50,6 +51,9 @@ defmodule Raxol.Terminal.Parser.ParserState do
             intermediates_buffer: "",
             payload_buffer: "",
             payload_overflow: false,
+            # The start of a UTF-8 character cut off by the end of a chunk,
+            # kept for the next one (`Parser.States.GroundState`).
+            utf8_pending: "",
             final_byte: nil,
             designating_gset: nil,
             single_shift: nil
