@@ -266,6 +266,30 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
       assert byte_size(Integer.to_string(width)) == 5
       assert {width, height} == {65_535, 65_535}
     end
+
+    test "an image is drawn at the cursor's row and column" do
+      emulator = feed(Emulator.new(80, 24), "\e[3;11H\ePq#1;2;100;0;0#1~\e\\")
+      buffer = Emulator.get_screen_buffer(emulator)
+
+      for row <- 2..7 do
+        cell = ScreenBuffer.get_cell(buffer, 10, row)
+        assert cell.sixel
+        assert cell.style.background == {:rgb, 255, 0, 0}
+      end
+
+      refute ScreenBuffer.get_cell(buffer, 2, 10).sixel
+    end
+
+    test "an image near the bottom right corner is clipped there" do
+      emulator = feed(Emulator.new(80, 24), "\e[21;76H\ePq#1;2;100;0;0#1!20~\e\\")
+      buffer = Emulator.get_screen_buffer(emulator)
+
+      # 5 columns (75-79) by 4 rows (20-23) of the 20x6 image fit.
+      assert map_size(emulator.sixel_state.pixel_buffer) == 20
+      assert ScreenBuffer.get_cell(buffer, 75, 20).sixel
+      assert ScreenBuffer.get_cell(buffer, 79, 23).sixel
+      refute ScreenBuffer.get_cell(buffer, 74, 20).sixel
+    end
   end
 
   describe "HTS (ESC H)" do

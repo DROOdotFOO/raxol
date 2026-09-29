@@ -150,27 +150,24 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
 
   # A sixel pixel (x, y) is drawn at the cell `sixel_origin/1` + (x, y), and
   # one past the screen edge is dropped, so the decoder need not keep any
-  # pixel outside this extent.
+  # pixel outside this extent: the columns right of the cursor by the rows
+  # from it down, in cells.
   defp drawable_extent(emulator) do
     {origin_x, origin_y} = sixel_origin(emulator)
     buffer = Raxol.Terminal.Emulator.get_screen_buffer(emulator)
     %{width: max(buffer.width - origin_x, 0), height: max(buffer.height - origin_y, 0)}
   end
 
+  # The cursor position is {row, col}; the image's origin is {x, y}.
   defp sixel_origin(emulator) do
-    case emulator.cursor do
-      cursor when is_pid(cursor) ->
-        # If cursor is a PID, get position via GenServer call
-        GenServer.call(cursor, :get_position)
+    {row, col} =
+      case emulator.cursor do
+        cursor when is_pid(cursor) -> GenServer.call(cursor, :get_position)
+        cursor when is_map(cursor) -> cursor.position
+        _ -> {0, 0}
+      end
 
-      cursor when is_map(cursor) ->
-        # If cursor is a struct, get position directly
-        cursor.position
-
-      _ ->
-        # Fallback
-        {0, 0}
-    end
+    {col, row}
   end
 
   # Blit Sixel graphics to the screen buffer

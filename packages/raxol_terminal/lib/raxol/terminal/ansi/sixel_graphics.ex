@@ -402,9 +402,10 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
 
   @doc """
   Processes a sequence of Sixel data, keeping only the pixels that fall inside
-  `extent` (`%{width: w, height: h}` from the image's origin, each clamped to
-  `Raxol.Core.Defaults.image_size_ceiling/0`). The emulator passes the part of
-  the screen an image drawn at the cursor can reach.
+  `extent` (`%{width: columns, height: rows}` from the image's origin, each
+  clamped to `Raxol.Core.Defaults.image_size_ceiling/0`). The emulator draws a
+  pixel per cell with the image's top left at the cursor, so it passes the
+  columns from the cursor to the right edge by the rows from it to the bottom.
   """
   @spec process_sequence(t(), binary(), %{
           required(:width) => non_neg_integer(),
