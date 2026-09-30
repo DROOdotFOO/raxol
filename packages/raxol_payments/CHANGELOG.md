@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convert through `Assets.to_decimal/1`, MPP through the integer. The amount
   then reaches the policy and budget gates, which refuse it when a
   `SpendingPolicy` and ledger are configured.
+- Unknown chains and tokens now fail closed on the Xochi path instead of
+  being treated as EVM or 6-decimal (#1149). `ExecuteXochiIntent` refuses,
+  before quoting, a source or destination token without registered decimals
+  (`:route_unsupported`, `{:unknown_asset, _}`; `min_to_amount` does not waive
+  it) and a non-positive `min_to_amount`, and routes with chain ids so a Tron
+  leg is sent to Relay. `Xochi.Schemas.QuoteRequest.validate/1` refuses stealth
+  settlement to any chain outside `Assets.evm_chain_ids/0`, on every quote
+  path. `Xochi.Capabilities.vm_type/2` returns `nil` for an unlisted chain, and
+  a chain with an unrecognised `vm_type` is dropped (matching is
+  case-insensitive). New `Assets.fetch_decimals/2` is the strict lookup.
+- Circle USDC on Ethereum, OP, Base and Arbitrum Sepolia is registered for
+  decimals and symbol (not as a solver corridor), so testnet Xochi runs keep
+  working under the strict lookup.
+- An explicit `min_to_amount` on a same-asset Xochi corridor can only raise
+  the automatic 80%-of-par delivery floor. It previously replaced it, so
+  `min_to_amount: "1"` switched the theft backstop off.
 
 ### Security
 

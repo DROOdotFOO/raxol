@@ -82,14 +82,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         recipient_address: [
           type: :string,
           description:
-            "Destination recipient for a plaintext (public) transfer. Required for a cross-VM route (e.g. an EVM wallet paying a Tron base58 address); omit for same-VM, where Xochi defaults it to the sending wallet."
+            "Destination recipient for a plaintext (public) transfer. Required for a cross-VM route; omit for same-VM, where Xochi defaults it to the sending wallet."
         ],
         slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
         trust_score: [type: :integer, description: "Trust score for tier/fee"],
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before signing. Authoritative for any corridor; same-asset corridors also get an automatic floor."
+            "Optional minimum acceptable delivery, in destination-chain positive atomic units. A quote delivering less is rejected before signing. Required to bound a cross-asset corridor; on a same-asset corridor it can only raise the automatic 80%-of-par floor, never lower it."
         ]
       ],
       output: [
@@ -300,13 +300,16 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # serve a punitive `to_amount` (deliver ~0 while pulling the full origin amount)
   # and the gate would not catch it.
   #
-  # An explicit `min_to_amount` (destination atomic units) is authoritative for
-  # any corridor. Without one, a same-asset corridor (same token symbol both
-  # sides) gets an automatic floor: delivery must be at least `:min_delivery_bps`
-  # of par (default 8000 = 80%). This is a theft backstop, not a pricing check --
-  # Xochi enforces pricing; legitimate fees and slippage stay well inside 80%. A
-  # cross-asset corridor has no on-client price, so it is bound only by an explicit
-  # `min_to_amount`.
+  # A same-asset corridor (same token symbol both sides) always gets an
+  # automatic floor: delivery must be at least `:min_delivery_bps` of par
+  # (default 8000 = 80%). This is a theft backstop, not a pricing check -- Xochi
+  # enforces pricing; legitimate fees and slippage stay well inside 80%. An
+  # explicit `min_to_amount` (destination atomic units, must be positive) can
+  # only raise that floor, never lower it: the caller setting it is the agent the
+  # backstop exists to bound, so `min_to_amount: "1"` must not switch it off. A
+  # cross-asset corridor has no on-client price, so it is bound only by an
+  # explicit `min_to_amount`. Both tokens have registered decimals by this point
+  # (`build_request/2` refuses anything else).
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
     case delivery_floor(request, params) do
       :none ->
@@ -325,9 +328,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   end
 
   defp delivery_floor(%QuoteRequest{} = request, params) do
-    case parse_uint(Map.get(params, :min_to_amount)) do
-      n when is_integer(n) -> {:floor, n}
-      nil -> same_asset_floor(request)
+    case {parse_uint(Map.get(params, :min_to_amount)), same_asset_floor(request)} do
+      {nil, auto} -> auto
+      {explicit, :none} -> {:floor, explicit}
+      {explicit, {:floor, auto}} -> {:floor, max(explicit, auto)}
     end
   end
 
@@ -335,27 +339,36 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     from_symbol = Assets.symbol_for(request.from_chain_id, request.from_token)
     to_symbol = Assets.symbol_for(request.to_chain_id, request.to_token)
 
-    if not is_nil(from_symbol) and from_symbol == to_symbol do
-      from_decimals = Assets.decimals(request.from_chain_id, request.from_token)
-      to_decimals = Assets.decimals(request.to_chain_id, request.to_token)
+    with true <- not is_nil(from_symbol) and from_symbol == to_symbol,
+         {:ok, from_decimals} <- Assets.fetch_decimals(request.from_chain_id, request.from_token),
+         {:ok, to_decimals} <- Assets.fetch_decimals(request.to_chain_id, request.to_token) do
       par_out = Assets.to_atomic(Assets.to_human(request.from_amount, from_decimals), to_decimals)
       bps = Application.get_env(:raxol_payments, :min_delivery_bps, 8000)
       {:floor, div(par_out * bps, 10_000)}
     else
-      :none
+      _ -> :none
     end
   end
 
-  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
+  # Strictly positive: a zero floor bounds nothing, so it is rejected rather
+  # than accepted as "any delivery is fine".
+  defp parse_uint(v) when is_integer(v) and v > 0, do: v
 
   defp parse_uint(v) when is_binary(v) do
     case Integer.parse(String.trim(v)) do
-      {n, ""} when n >= 0 -> n
+      {n, ""} when n > 0 -> n
       _ -> nil
     end
   end
 
   defp parse_uint(_), do: nil
+
+  defp validate_min_to_amount(params) do
+    case Map.get(params, :min_to_amount) do
+      nil -> :ok
+      value -> if parse_uint(value), do: :ok, else: {:error, {:invalid_min_to_amount, value}}
+    end
+  end
 
   defp fetch(context, key) do
     case Map.fetch(context, key) do
@@ -368,11 +381,13 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     amount = Decimal.new(Map.fetch!(params, :amount))
     from_token = Map.fetch!(params, :from_token)
     from_chain = Map.fetch!(params, :from_chain_id)
-    decimals = Assets.decimals(from_chain, from_token)
-    from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
     settlement = settlement(params)
 
-    with {:ok, spending_key, viewing_key} <- stealth_keys(settlement, params) do
+    with {:ok, decimals} <- registered_legs(params),
+         :ok <- validate_min_to_amount(params),
+         {:ok, spending_key, viewing_key} <- stealth_keys(settlement, params) do
+      from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
+
       request = %QuoteRequest{
         wallet: wallet.address(),
         from_chain_id: from_chain,
@@ -389,6 +404,35 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       }
 
       {:ok, request, amount}
+    end
+  end
+
+  # Both legs must have registered decimals; returns the source leg's. The
+  # source amount is scaled by them -- a guess would move 10^n the intended
+  # amount -- and a destination amount (a `min_to_amount`, the same-asset floor)
+  # means nothing without them. `min_to_amount` does not waive this: the caller
+  # setting it cannot know an unregistered token's decimals either.
+  defp registered_legs(params) do
+    with {:ok, decimals} <-
+           registered_asset(
+             Map.fetch!(params, :from_chain_id),
+             Map.fetch!(params, :from_token),
+             :source
+           ),
+         {:ok, _} <-
+           registered_asset(
+             Map.fetch!(params, :to_chain_id),
+             Map.fetch!(params, :to_token),
+             :destination
+           ) do
+      {:ok, decimals}
+    end
+  end
+
+  defp registered_asset(chain, token, side) do
+    case Assets.fetch_decimals(chain, token) do
+      {:ok, decimals} -> {:ok, decimals}
+      :error -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: side}}}
     end
   end
 
@@ -414,15 +458,23 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   defp encode_pub_key(pub_key), do: "0x" <> Base.encode16(pub_key, case: :lower)
 
+  # Chain ids ride along so chain-aware routing (a Tron leg belongs on Relay)
+  # runs here too, not only the privacy/cross-chain split.
   defp assert_xochi_route(params) do
-    cross_chain = Map.fetch!(params, :from_chain_id) != Map.fetch!(params, :to_chain_id)
+    from_chain = Map.fetch!(params, :from_chain_id)
+    to_chain = Map.fetch!(params, :to_chain_id)
 
     case settlement_atom(settlement(params)) do
       :invalid ->
         {:error, {:invalid_settlement, settlement(params)}}
 
       privacy ->
-        case Router.select(cross_chain: cross_chain, privacy: privacy) do
+        case Router.select(
+               cross_chain: from_chain != to_chain,
+               privacy: privacy,
+               from_chain_id: from_chain,
+               to_chain_id: to_chain
+             ) do
           :xochi -> :ok
           other -> {:error, {:not_xochi_route, other}}
         end

@@ -21,6 +21,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   end
 
   @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+  @usdt_tron "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
   defp config do
     %{
@@ -62,7 +64,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
         from_chain_id: 8453,
         to_chain_id: 42_161,
         from_token: @usdc_base,
-        to_token: @usdc_base,
+        to_token: @usdc_arb,
         settlement: "stealth",
         recipient_meta_address: recipient_meta()
       },
@@ -464,11 +466,61 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
                ExecuteXochiIntent.run(params, ctx)
     end
 
+    test "refuses a Tron leg: chain-aware routing sends it to Relay, not Xochi" do
+      ctx = %{wallet: SpyWallet, xochi_config: config()}
+
+      params =
+        base_params(%{
+          to_chain_id: 728_126_428,
+          to_token: @usdt_tron,
+          settlement: "public"
+        })
+
+      assert {:error, %Failure{reason: :route_unsupported, detail: {:not_xochi_route, :relay}}} =
+               ExecuteXochiIntent.run(params, ctx)
+
+      refute_received :wallet_signed
+    end
+
     test "errors when wallet is missing" do
       assert {:error, %Failure{reason: :config_error}} =
                ExecuteXochiIntent.run(base_params(%{}), %{
                  xochi_config: config()
                })
+    end
+  end
+
+  # A chain/token this build does not know must be refused, never assumed EVM
+  # or 6-decimal. 999_999 is a synthetic chain id nothing registers.
+  describe "ExecuteXochiIntent unknown chains" do
+    @unknown_chain 999_999
+
+    test "an unregistered source token is refused before quoting or signing" do
+      params = base_params(%{from_chain_id: @unknown_chain, settlement: "public"})
+
+      assert {:error,
+              %Failure{
+                reason: :route_unsupported,
+                detail: {:unknown_asset, %{side: :source, chain_id: @unknown_chain}}
+              }} = ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
+
+      refute_received :wallet_signed
+    end
+
+    # No quote stub: the refusal must land before any network call.
+    test "an unregistered destination is refused even with min_to_amount" do
+      for extra <- [%{}, %{min_to_amount: "950000"}] do
+        params =
+          base_params(Map.merge(%{to_chain_id: @unknown_chain, settlement: "public"}, extra))
+
+        assert {:error,
+                %Failure{
+                  reason: :route_unsupported,
+                  detail: {:unknown_asset, %{side: :destination, chain_id: @unknown_chain}}
+                }} = ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
+      end
+
+      refute_received :wallet_signed
     end
   end
 
@@ -1152,7 +1204,6 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   # delivery before signing: an explicit min_to_amount for any corridor, plus an
   # automatic 80%-of-par floor for same-asset corridors.
   describe "ExecuteXochiIntent delivery floor" do
-    @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
     @weth_arb "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
 
     defp floor_ctx do
@@ -1257,6 +1308,20 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert_received :wallet_signed
     end
 
+    test "a min_to_amount below the auto floor cannot lower it on a same-asset corridor" do
+      # min_to_amount "1" must not replace the 800_000 floor: a 0.10 USDC
+      # delivery on a 1.00 send is still a skim.
+      stub_floor_quote("100000")
+
+      assert {:error,
+              %Failure{
+                reason: :delivery_below_floor,
+                detail: {:delivery_below_floor, %{min_to_amount: 800_000}}
+              }} = ExecuteXochiIntent.run(floor_params(%{min_to_amount: "1"}), floor_ctx())
+
+      refute_received :wallet_signed
+    end
+
     test "a cross-asset corridor with no min_to_amount skips the auto floor" do
       # USDC -> WETH is not a same-asset corridor and has no on-client price, so
       # the auto floor does not apply; a tiny toAmount is trusted unless
@@ -1267,6 +1332,19 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
                ExecuteXochiIntent.run(floor_params(%{to_token: @weth_arb}), floor_ctx())
 
       assert_received :wallet_signed
+    end
+
+    test "a zero or unparseable min_to_amount is refused, not treated as no floor" do
+      stub_floor_quote("1")
+      ctx = floor_ctx()
+
+      for bad <- ["0", 0, "-5", "abc"] do
+        assert {:error,
+                %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, ^bad}}} =
+                 ExecuteXochiIntent.run(floor_params(%{min_to_amount: bad}), ctx)
+      end
+
+      refute_received :wallet_signed
     end
   end
 end

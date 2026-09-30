@@ -17,7 +17,9 @@ defmodule Raxol.Payments.Xochi.Capabilities do
 
   - The current matrix emits chains as `chain_id` + `chain_name` only;
     `vm_type` and `address_format` arrive with Riddler's WP-E. Absent
-    `vm_type` defaults to `:evm`.
+    `vm_type` defaults to `:evm` (the pre-WP-E wire). A *present* but
+    unrecognised `vm_type` drops the chain: its address rules are unknown, so
+    it is not treated as EVM.
   - Unknown keys are dropped; individually malformed chain/token entries are
     skipped; a structurally unusable body parses to `:error` and callers fall
     back to `fallback/0`.
@@ -261,11 +263,14 @@ defmodule Raxol.Payments.Xochi.Capabilities do
   def deposit_attestation_signer(%{deposit_attestation_signer: signer}), do: signer
   def deposit_attestation_signer(_), do: nil
 
-  @doc "VM family for a chain id; `:evm` when the chain is unknown."
-  @spec vm_type(t(), pos_integer() | String.t() | nil) :: vm_type()
+  @doc """
+  VM family for a chain id; `nil` when the matrix does not list the chain.
+  An unknown chain has no known address rules, so it is never assumed EVM.
+  """
+  @spec vm_type(t(), pos_integer() | String.t() | nil) :: vm_type() | nil
   def vm_type(%{chains: chains}, chain_id) do
     id = normalize_chain_id(chain_id)
-    Enum.find_value(chains, :evm, fn c -> if c.chain_id == id, do: c.vm_type end)
+    Enum.find_value(chains, fn c -> if c.chain_id == id, do: c.vm_type end)
   end
 
   @doc """
@@ -295,7 +300,8 @@ defmodule Raxol.Payments.Xochi.Capabilities do
   @doc """
   Structural address validity for a chain, dispatched on the chain's VM
   family: EVM -> `0x` + 40 hex; TVM -> full Base58Check verification via
-  `Raxol.Payments.Tron.Address.valid?/1`; SVM -> base58, 32-44 chars.
+  `Raxol.Payments.Tron.Address.valid?/1`; SVM -> base58, 32-44 chars. A chain
+  the matrix does not list validates nothing (fails closed).
   """
   @spec valid_address?(t(), pos_integer() | String.t() | nil, String.t() | nil) :: boolean()
   def valid_address?(caps, chain_id, address) when is_binary(address) do
@@ -303,6 +309,7 @@ defmodule Raxol.Payments.Xochi.Capabilities do
       :evm -> Regex.match?(@evm_hex_re, address)
       :tvm -> Raxol.Payments.Tron.Address.valid?(address)
       :svm -> Regex.match?(@solana_base58_re, address)
+      nil -> false
     end
   end
 
@@ -323,16 +330,32 @@ defmodule Raxol.Payments.Xochi.Capabilities do
   defp parse_signer(_), do: nil
 
   defp parse_chain(%{"chain_id" => id} = chain) when is_integer(id) and id > 0 do
-    [
-      %{
-        chain_id: id,
-        chain_name: string_or(chain["chain_name"], "Chain #{id}"),
-        vm_type: Map.get(@vm_types, chain["vm_type"], :evm)
-      }
-    ]
+    case parse_vm_type(chain["vm_type"]) do
+      {:ok, vm_type} ->
+        [
+          %{
+            chain_id: id,
+            chain_name: string_or(chain["chain_name"], "Chain #{id}"),
+            vm_type: vm_type
+          }
+        ]
+
+      :error ->
+        []
+    end
   end
 
   defp parse_chain(_), do: []
+
+  # Absent is the pre-WP-E wire, which only ever listed EVM chains. Matching is
+  # case/whitespace-insensitive so "EVM" does not silently drop a live chain; a
+  # genuinely unknown family still drops it.
+  defp parse_vm_type(nil), do: {:ok, :evm}
+
+  defp parse_vm_type(vm_type) when is_binary(vm_type),
+    do: Map.fetch(@vm_types, vm_type |> String.trim() |> String.downcase())
+
+  defp parse_vm_type(_), do: :error
 
   defp parse_token(%{"symbol" => symbol} = token) when is_binary(symbol) and symbol != "" do
     [

@@ -179,14 +179,15 @@ defmodule Raxol.Earn.Xochi.TransferCore do
         {:error, :stealth_meta_address_required}
 
       # Per-VM address format is only enforced against a live matrix, which knows
-      # each chain's VM family. Under the EVM-only static fallback a non-EVM chain
-      # would misclassify as :evm, so we defer to corridor gating (preserving
-      # pre-capabilities behavior: a Tron leg rejects as an unsupported token).
-      caps.source == :live and
+      # each chain's VM family, and only for chains it lists. Under the EVM-only
+      # static fallback, or for a chain the matrix does not list, there is no VM
+      # to check against, so we defer to corridor gating (an unlisted chain
+      # rejects as an unsupported token, never as a misclassified address).
+      live_listed?(caps, req["src_chain_id"]) and
           not Capabilities.valid_address?(caps, req["src_chain_id"], req["src_token"]) ->
         {:error, {:invalid_address, :src_token, req["src_chain_id"], req["src_token"]}}
 
-      caps.source == :live and
+      live_listed?(caps, req["dst_chain_id"]) and
           not Capabilities.valid_address?(caps, req["dst_chain_id"], req["dst_token"]) ->
         {:error, {:invalid_address, :dst_token, req["dst_chain_id"], req["dst_token"]}}
 
@@ -209,6 +210,9 @@ defmodule Raxol.Earn.Xochi.TransferCore do
         :ok
     end
   end
+
+  defp live_listed?(caps, chain_id),
+    do: caps.source == :live and Capabilities.vm_type(caps, chain_id) != nil
 
   # ERC-5564 meta-address: both spending and viewing public keys, 0x-hex.
   defp valid_stealth_meta?(%{"spending_pub_key" => s, "viewing_pub_key" => v})

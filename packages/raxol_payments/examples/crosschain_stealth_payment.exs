@@ -31,6 +31,7 @@ defmodule CrosschainStealthPayment do
   alias Raxol.Payments.Xochi.Stealth
 
   @usdc "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
   @base 8453
   @arbitrum 42_161
   @tron 728_126_428
@@ -85,7 +86,7 @@ defmodule CrosschainStealthPayment do
               from_chain_id: @base,
               to_chain_id: @arbitrum,
               from_token: @usdc,
-              to_token: @usdc,
+              to_token: @usdc_arb,
               settlement: "stealth",
               recipient_meta_address: meta
             },
@@ -110,7 +111,7 @@ defmodule CrosschainStealthPayment do
              from_chain_id: @base,
              to_chain_id: @arbitrum,
              from_token: @usdc,
-             to_token: @usdc,
+             to_token: @usdc_arb,
              settlement: "stealth",
              recipient_meta_address: meta
            },
@@ -245,17 +246,22 @@ defmodule CrosschainStealthPayment do
     DemoWallet
   end
 
-  # In-process Xochi sim: canned quote / execute / status responses.
+  # In-process Xochi sim: canned quote / execute / status responses. The quote
+  # delivers what was sent minus the fee, so it clears the same-asset delivery
+  # floor at any amount and step 4 is refused by the spend gate, not the floor.
   defp sim do
     fn conn ->
       body =
         case conn.request_path do
           "/api/intent/quote" ->
+            {:ok, raw, _conn} = Plug.Conn.read_body(conn)
+            sent = raw |> Jason.decode!() |> Map.fetch!("from_amount") |> String.to_integer()
+
             %{
               "intentId" => "demo_intent",
               "quoteId" => "demo_quote",
               "canSolve" => true,
-              "toAmount" => "499000",
+              "toAmount" => Integer.to_string(sent - 1000),
               "xochiFee" => "1000",
               "eip712Data" => %{
                 "domain" => %{

@@ -29,6 +29,7 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
   alias Raxol.Payments.Xochi.Stealth
 
   @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
   @usdt_trc20 "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8"
   @tron 728_126_428
   @tron_addr "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
@@ -231,7 +232,7 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
       from_chain_id: 8453,
       to_chain_id: 42_161,
       from_token: @usdc_base,
-      to_token: @usdc_base,
+      to_token: @usdc_arb,
       settlement: "stealth",
       recipient_meta_address: recipient_meta()
     }
