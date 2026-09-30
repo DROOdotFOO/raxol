@@ -1366,6 +1366,22 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       refute_received :wallet_signed
     end
 
+    test "a zero min_to_amount bounds nothing, so a non-USD destination is still refused" do
+      stub_floor_quote("1")
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :destination, peg: "EUR"}}
+              }} =
+               ExecuteXochiIntent.run(
+                 floor_params(%{to_token: @eure_arb, min_to_amount: " 0 "}),
+                 floor_ctx()
+               )
+
+      refute_received :wallet_signed
+    end
+
     test "a non-USD destination is allowed once min_to_amount bounds it" do
       stub_floor_quote("960000000000000000")
 

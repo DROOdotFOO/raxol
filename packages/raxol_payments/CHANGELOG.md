@@ -21,10 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `evm_tokens/0`, `supported_chain_ids/0` and the capabilities fallback are
   unchanged.
 - Registering them opens no fund-moving path. `ExecuteXochiIntent` and
-  `ExecuteRelayTransfer` refuse a non-USD source, and `ExecuteXochiIntent`
-  refuses a non-USD destination without `min_to_amount`, as
-  `{:unpriced_asset, detail}`, until an FX rate gates the conversion (ADR-0040
-  decision 7). Dollar spend caps would otherwise count them at par.
+  `ExecuteRelayTransfer` refuse a non-USD source, and both refuse a non-USD
+  destination without a positive `min_to_amount`, as `{:unpriced_asset, detail}`,
+  until an FX rate gates the conversion (ADR-0040 decision 7). Dollar spend caps
+  would otherwise count them at par. A `min_to_amount` of `0` bounds nothing and
+  counts as absent. x402 refuses a challenge whose asset is a non-USD
+  stablecoin, which the spend gate would otherwise reserve and charge at par.
+- `ExecuteRelayTransfer` accepts `min_to_amount` and refuses a quote delivering
+  less before the spend is authorized. It previously had no delivery floor, so
+  a quote could deliver any amount.
 
 - Euro and franc stablecoins can be priced in accounting (ADR-0040 decision 6).
   `RAXOL_FX_ENABLED=true` with `RAXOL_SLEUTH_API_KEY` and `RPC_BASE` or `RPC_ETH`

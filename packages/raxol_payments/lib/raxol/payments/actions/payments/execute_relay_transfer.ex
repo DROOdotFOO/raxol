@@ -81,7 +81,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
           type: :string,
           description: "public | stealth | shielded (Tron is public-only)"
         ],
-        slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"]
+        slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
+        min_to_amount: [
+          type: :string,
+          description:
+            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before the spend is authorized. A positive value is authoritative; 0 counts as absent. Required for a non-USD stablecoin destination."
+        ]
       ],
       output: [
         transfer_id: [type: :string],
@@ -119,17 +124,19 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   end
 
   defp fresh(config, params, from_address, context, store, key) do
-    with {:ok, request, amount, warnings} <- build_request(params, from_address) do
-      settle(config, request, amount, warnings, context, store, key)
+    with {:ok, request, amount, warnings} <- build_request(params, from_address),
+         {:ok, floor} <- delivery_floor(request, params) do
+      settle(config, request, amount, floor, warnings, context, store, key)
     end
   end
 
   defp normalize_error({:ok, _result} = ok), do: ok
   defp normalize_error({:error, reason}), do: {:error, Failure.from(reason)}
 
-  defp settle(config, request, amount, warnings, context, store, key) do
+  defp settle(config, request, amount, floor, warnings, context, store, key) do
     with :ok <- assert_relay_route(request),
          {:ok, quote} <- fillable_quote(config, request),
+         :ok <- assert_delivery_floor(quote, floor),
          :ok <- authorize(context, config, amount) do
       # Checkpoint the dispatched transfer before any funds move so a crash in the
       # funding step leaves a record a resume can poll instead of re-funding.
@@ -274,6 +281,50 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
         {:error, {:unpriced_asset, %{chain_id: chain, token: token, side: :source, peg: peg}}}
     end
   end
+
+  # Relay quotes carry a solver-chosen `to_amount`; `can_fill` says nothing about
+  # how much arrives. An explicit positive `min_to_amount` is authoritative for
+  # any corridor. Without one, a non-USD (`Assets.fx_peg/2`) destination is
+  # refused: with no FX rate there is no par to floor against (ADR-0040
+  # decision 7). Every Relay route has a Tron leg and `Assets` gives Tron tokens
+  # no symbol, so `ExecuteXochiIntent`'s same-asset floor never applies here, and
+  # refusing unregistered destinations as it does would close the rail itself.
+  defp delivery_floor(%QuoteRequest{to_chain_id: chain, to_token: token}, params) do
+    case {parse_uint(Map.get(params, :min_to_amount)), Assets.fx_peg(chain, token)} do
+      {n, _peg} when is_integer(n) and n > 0 ->
+        {:ok, {:floor, n}}
+
+      {_zero_or_nil, nil} ->
+        {:ok, :none}
+
+      {_zero_or_nil, peg} ->
+        {:error,
+         {:unpriced_asset, %{chain_id: chain, token: token, side: :destination, peg: peg}}}
+    end
+  end
+
+  defp assert_delivery_floor(_quote, :none), do: :ok
+
+  defp assert_delivery_floor(%QuoteResponse{to_amount: to_amount}, {:floor, min_out}) do
+    case parse_uint(to_amount) do
+      delivered when is_integer(delivered) and delivered >= min_out ->
+        :ok
+
+      _ ->
+        {:error, {:delivery_below_floor, %{to_amount: to_amount, min_to_amount: min_out}}}
+    end
+  end
+
+  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
+
+  defp parse_uint(v) when is_binary(v) do
+    case Integer.parse(String.trim(v)) do
+      {n, ""} when n >= 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp parse_uint(_), do: nil
 
   defp generate_transfer_id do
     "relay_" <> (:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower))

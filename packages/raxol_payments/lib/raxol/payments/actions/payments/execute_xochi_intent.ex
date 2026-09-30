@@ -89,7 +89,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before signing. Authoritative for any corridor; same-asset corridors also get an automatic floor."
+            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before signing. A positive value is authoritative for any corridor; 0 counts as absent. Same-asset corridors also get an automatic floor."
         ]
       ],
       output: [
@@ -300,8 +300,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # serve a punitive `to_amount` (deliver ~0 while pulling the full origin amount)
   # and the gate would not catch it.
   #
-  # An explicit `min_to_amount` (destination atomic units) is authoritative for
-  # any corridor. Without one, a same-asset corridor (same token symbol both
+  # An explicit positive `min_to_amount` (destination atomic units) is
+  # authoritative for any corridor; `0` bounds nothing and counts as absent.
+  # Without one, a same-asset corridor (same token symbol both
   # sides) gets an automatic floor: delivery must be at least `:min_delivery_bps`
   # of par (default 8000 = 80%). This is a theft backstop, not a pricing check --
   # Xochi enforces pricing; legitimate fees and slippage stay well inside 80%. A
@@ -333,8 +334,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   defp delivery_floor(%QuoteRequest{} = request, params) do
     case parse_uint(Map.get(params, :min_to_amount)) do
-      n when is_integer(n) -> {:floor, n}
-      nil -> same_asset_floor(request)
+      n when is_integer(n) and n > 0 -> {:floor, n}
+      _zero_or_nil -> same_asset_floor(request)
     end
   end
 

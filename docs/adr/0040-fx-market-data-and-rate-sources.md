@@ -267,12 +267,16 @@ marked every EUR asset unpriceable for about twenty hours a day.
 
   Registration must not open a fund-moving path, because until now "unregistered" was the
   only thing refusing these tokens on three of them. Each keeps its refusal, now with the
-  reason stated as `{:unpriced_asset, detail}`: `ExecuteXochiIntent` refuses a non-USD
-  source, and a non-USD destination without `min_to_amount` (with one, it is allowed, as
-  an unregistered destination already was); `ExecuteRelayTransfer` refuses a non-USD
-  source; and the TransferCore static-fallback gate, which counted any `known?/2` token as
-  fillable, excludes them. x402 needs no guard, because it signs under the USDC EIP-712
-  domain (`UsdcDomains.lookup/1`), so no other token can move through it.
+  reason stated as `{:unpriced_asset, detail}`: `ExecuteXochiIntent` and
+  `ExecuteRelayTransfer` refuse a non-USD source, and a non-USD destination without a
+  positive `min_to_amount` (with one, it is allowed, as an unregistered destination
+  already was on the Xochi path; `0` bounds nothing and counts as absent). The TransferCore
+  corridor gate never counts them fillable, whether the static fallback or Xochi's live
+  capability matrix (which lists EURe) is deciding, so the refusal holds with the
+  stablecoin corridor allowlist off. x402 cannot move them, because it signs under the USDC
+  EIP-712 domain (`UsdcDomains.lookup/1`), but its spend gate scales by registered decimals
+  and would reserve and charge them at par, so it refuses a challenge whose asset has an
+  FX peg.
 
   This lands first and does not wait on the rest. It removes the 10^12 misscale in context
   item 4 whether or not any FX pricing is enabled, and moves no new funds.
