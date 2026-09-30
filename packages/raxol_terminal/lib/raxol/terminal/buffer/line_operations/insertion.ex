@@ -4,6 +4,8 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Insertion do
   Handles insertion of single and multiple lines with style support.
   """
 
+  alias Raxol.Terminal.Buffer.LineOperations.Management
+
   @doc """
   Insert empty lines at the current cursor position.
   """
@@ -73,11 +75,7 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Insertion do
   # ceiling) would otherwise grow the row list.
   defp do_insert_lines_in_region(%{cells: cells, width: width} = buffer, y, count, top, bottom)
        when y >= top and y <= bottom do
-    bottom = min(bottom, length(cells) - 1)
-    region_rows = max(bottom - y + 1, 0)
-    count = min(count, region_rows)
-    {above, from_cursor} = Enum.split(cells, y)
-    {region, below} = Enum.split(from_cursor, region_rows)
+    {above, region, below, count} = Management.split_region(cells, y, count, bottom)
     blank = List.duplicate(Raxol.Terminal.Cell.new(), width)
 
     shifted =

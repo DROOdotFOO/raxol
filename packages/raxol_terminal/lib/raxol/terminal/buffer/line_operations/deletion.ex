@@ -4,6 +4,8 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Deletion do
   Handles deletion of single and multiple lines, with support for scroll regions.
   """
 
+  alias Raxol.Terminal.Buffer.LineOperations.Management
+
   @doc """
   Delete lines from a buffer.
   """
@@ -53,11 +55,7 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Deletion do
   """
   def delete_lines_in_region(%{cells: cells, width: width} = buffer, start_y, count, top, bottom)
       when start_y >= top and start_y <= bottom do
-    bottom = min(bottom, length(cells) - 1)
-    region_rows = max(bottom - start_y + 1, 0)
-    count = min(count, region_rows)
-    {above, from_cursor} = Enum.split(cells, start_y)
-    {region, below} = Enum.split(from_cursor, region_rows)
+    {above, region, below, count} = Management.split_region(cells, start_y, count, bottom)
     blank = List.duplicate(Raxol.Terminal.Cell.new(), width)
 
     shifted = Enum.drop(region, count) ++ List.duplicate(blank, count)
