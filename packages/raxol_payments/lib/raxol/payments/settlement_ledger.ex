@@ -85,6 +85,7 @@ defmodule Raxol.Payments.SettlementLedger do
   @type aggregate :: %{
           count: non_neg_integer(),
           gas_unknown_count: non_neg_integer(),
+          unpriced_count: non_neg_integer(),
           fee_by_currency: %{String.t() => Decimal.t()},
           gas_by_chain: %{pos_integer() => Decimal.t()},
           usd_revenue: Decimal.t() | nil,
@@ -466,6 +467,7 @@ defmodule Raxol.Payments.SettlementLedger do
       %{
         count: acc.count + 1,
         gas_unknown_count: acc.gas_unknown_count + unknown_gas(e),
+        unpriced_count: acc.unpriced_count + unpriced(e, usdc_price, price_fn),
         fee_by_currency:
           Map.update(
             acc.fee_by_currency,
@@ -486,6 +488,7 @@ defmodule Raxol.Payments.SettlementLedger do
     %{
       count: 0,
       gas_unknown_count: 0,
+      unpriced_count: 0,
       fee_by_currency: %{},
       gas_by_chain: %{},
       usd_revenue: nil,
@@ -513,6 +516,26 @@ defmodule Raxol.Payments.SettlementLedger do
   defp leg_usd(amount, symbol, decimals, usdc_price, price_fn) do
     price = if symbol in @stablecoins, do: usdc_price, else: price_fn.(symbol)
     mult_or_nil(Assets.to_human(amount, decimals), price)
+  end
+
+  # An entry whose revenue could not be priced: a leg whose symbol neither
+  # `usdc_price` nor `price_fn` answers. `add_or_keep/2` drops such a revenue
+  # from `usd_revenue` without a trace, so this is the trace: a report with EUR
+  # legs and no FX source reads as partial rather than as smaller (ADR-0040
+  # decision 6). A leg missing its amount or decimals is not counted here; that
+  # is a recording gap, not a pricing one.
+  defp unpriced(e, usdc_price, price_fn) do
+    legs = [
+      {e.from_amount, e.from_symbol, e.from_decimals},
+      {e.to_amount, e.to_symbol, e.to_decimals}
+    ]
+
+    if Enum.any?(legs, fn {amount, symbol, decimals} ->
+         amount != nil and decimals != nil and
+           is_nil(leg_usd(amount, symbol, decimals, usdc_price, price_fn))
+       end),
+       do: 1,
+       else: 0
   end
 
   defp unknown_gas(%{gas_native: nil}), do: 1

@@ -21,6 +21,16 @@ defmodule Raxol.Payments.Accounting do
   | `RAXOL_REBALANCE_DEMAND_MULTIPLIER` | Demand-aware floors: `peak * this` | (unset/off) |
   | `RAXOL_REBALANCE_DEMAND_FLOOR_CAP`  | Ceiling on a demand-widened floor  | (unset)     |
   | `RAXOL_REBALANCE_DEMAND_WINDOW_MS`  | How far back demand is read        | `86400000`  |
+  | `RAXOL_FX_ENABLED`          | Price EURC/EURe/ZCHF (ADR-0040)           | `false`     |
+  | `RAXOL_SLEUTH_API_KEY`      | Sleuth key, required when FX is enabled   | (unset)     |
+
+  FX pricing reads the Chainlink EUR/USD and CHF/USD feeds through `RPC_BASE`
+  and `RPC_ETH`, so enabling it needs at least one of them; it prices in front
+  of `RAXOL_PRICE_SOURCE` rather than replacing it. `RAXOL_FX_ENABLED` is
+  `"true"`, `"false"` or empty, and anything else is refused like the other
+  parsed vars. Enabling it in a build without `raxol_web3`, without the key,
+  or without either RPC URL refuses too, naming what is missing. Pricing
+  only: no spend cap or delivery floor reads an FX rate (ADR-0040 decision 7).
 
   Demand-aware inventory floors are off unless `RAXOL_REBALANCE_DEMAND_MULTIPLIER`
   is set: floors then track the largest recent fill per corridor rather than a
@@ -123,6 +133,7 @@ defmodule Raxol.Payments.Accounting do
   defp accounting_opts(true) do
     [
       rpc_urls: rpc_urls(),
+      fx: fx(),
       solver_address: solver_address(),
       rebalance_interval_ms: rebalance_interval_ms(),
       price_source: price_source(),
@@ -224,6 +235,46 @@ defmodule Raxol.Payments.Accounting do
                 "or empty for the #{@default_price_source} default. An unrecognized source " <>
                 "prices nothing, so the sweep would report every corridor without USD " <>
                 "notionals. Got: #{inspect(value)}"
+    end
+  end
+
+  # FX pricing: nil when off, else the `Raxol.Payments.Prices.FX` opts. The key
+  # is wrapped in a `Secret` so it does not render if the opts are inspected.
+  @spec fx() :: keyword() | nil
+  defp fx do
+    case "RAXOL_FX_ENABLED" |> System.get_env("") |> String.trim() do
+      value when value in ["", "false"] ->
+        nil
+
+      "true" ->
+        fx_opts()
+
+      other ->
+        raise ArgumentError,
+              "RAXOL_FX_ENABLED must be \"true\", \"false\" or empty. Got: #{inspect(other)}"
+    end
+  end
+
+  defp fx_opts do
+    rpc_urls = Map.take(rpc_urls(), [1, 8453])
+
+    cond do
+      not Raxol.Payments.Prices.FX.available?() ->
+        raise ArgumentError, "RAXOL_FX_ENABLED=true needs raxol_web3, which is not in this build"
+
+      "RAXOL_SLEUTH_API_KEY" |> System.get_env("") |> String.trim() == "" ->
+        raise ArgumentError, "RAXOL_FX_ENABLED=true needs RAXOL_SLEUTH_API_KEY"
+
+      rpc_urls == %{} ->
+        raise ArgumentError,
+              "RAXOL_FX_ENABLED=true needs RPC_BASE or RPC_ETH for the Chainlink FX feeds"
+
+      true ->
+        [
+          sleuth_api_key:
+            Raxol.Payments.Secret.new(String.trim(System.get_env("RAXOL_SLEUTH_API_KEY"))),
+          rpc_urls: rpc_urls
+        ]
     end
   end
 
