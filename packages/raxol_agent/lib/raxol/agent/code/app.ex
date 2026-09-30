@@ -1070,6 +1070,7 @@ defmodule Raxol.Agent.Code.App do
       }
     }
     |> maybe_add_skills()
+    |> Raxol.Agent.Web3.put_context()
     |> maybe_add_hooks(model)
     |> add_spend_hook()
     |> maybe_add_lsp(model)
@@ -2039,7 +2040,8 @@ defmodule Raxol.Agent.Code.App do
       Raxol.Agent.Actions.Lsp.all() ++
       Raxol.Agent.Actions.Fetch.all() ++
       Raxol.Agent.Actions.WebSearch.all() ++
-      Raxol.Agent.Skills.enabled_actions()
+      Raxol.Agent.Skills.enabled_actions() ++
+      Raxol.Agent.Web3.enabled_actions()
   end
 
   defp default_system do

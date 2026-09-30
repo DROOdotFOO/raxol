@@ -362,8 +362,12 @@ defmodule Raxol.Console.Boot do
   defp gateway_opts(rc, adapters, actions, base, skills) do
     agent_opts =
       rc.agent_opts
-      |> Keyword.put(:actions, skill_actions(skills) ++ actions)
+      |> Keyword.put(
+        :actions,
+        skill_actions(skills) ++ Raxol.Agent.Web3.enabled_actions() ++ actions
+      )
       |> put_skills_context(skills)
+      |> put_web3_context()
 
     pairing_server = name(base, "pairing")
 
@@ -414,6 +418,13 @@ defmodule Raxol.Console.Boot do
     skills = {Raxol.Agent.Skills.Store, [server: store]}
     context = agent_opts |> Keyword.get(:context, %{}) |> Map.put(:skills, skills)
     Keyword.put(agent_opts, :context, context)
+  end
+
+  # The web3 and fx tools read `context[:web3_router]` and `context[:fx_source]`;
+  # both keys are absent when `:raxol_agent, :web3` is unconfigured.
+  defp put_web3_context(agent_opts) do
+    context = agent_opts |> Keyword.get(:context, %{}) |> Raxol.Agent.Web3.put_context()
+    if context == %{}, do: agent_opts, else: Keyword.put(agent_opts, :context, context)
   end
 
   defp name(base, suffix), do: :"#{base}.#{suffix}"

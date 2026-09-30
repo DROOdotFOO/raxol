@@ -199,6 +199,7 @@ defmodule Raxol.Agent.Harness.SessionInbox do
       max_iterations: state.max_iterations,
       await_decision: await_fun,
       shell_tool_ref_sink: sink,
+      context: Raxol.Agent.Web3.put_context(%{}),
       # Drive the loop off the backend stream: reasoning + answer stream to
       # the tail LIVE (the ShadowStream thinking preview + streaming answer),
       # tool_calls come off the stream's :done.
