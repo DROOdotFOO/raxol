@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Raxol.Payments.Assets` registers the non-USD stablecoins of ADR-0040:
+  EURC on 1 and 8453, EURe on 1, 100, 137, 8453 and 42161, and ZCHF on 1 plus
+  the CCIP-bridged contract on 10, 100, 137, 8453 and 42161, each at its
+  on-chain decimals. EURe was previously unregistered, so the lenient
+  `decimals/2` scaled it at 6 instead of 18, off by 10^12. EURe's legacy v1
+  contracts resolve to `"EURe"` through `symbol_for/2` and are never returned
+  by `address/2`, since they front the same balance as v2. Chain 100 (Gnosis)
+  gains a name and its xDAI gas token. New `Assets.fx_peg/2` names a token's
+  non-USD peg. None of these tokens is solver-fillable, so `symbols/0`,
+  `evm_tokens/0`, `supported_chain_ids/0` and the capabilities fallback are
+  unchanged.
+- Registering them opens no fund-moving path. `ExecuteXochiIntent` and
+  `ExecuteRelayTransfer` refuse a non-USD source, and `ExecuteXochiIntent`
+  refuses a non-USD destination without `min_to_amount`, as
+  `{:unpriced_asset, detail}`, until an FX rate gates the conversion (ADR-0040
+  decision 7). Dollar spend caps would otherwise count them at par.
+
 ### Fixed
 
 - Unknown chains and tokens now fail closed on the Xochi path instead of

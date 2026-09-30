@@ -308,7 +308,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # cross-asset corridor between registered tokens has no on-client price, so it
   # is bound only by an explicit `min_to_amount`. An unregistered destination
   # token cannot be classified or scaled at all, so without `min_to_amount` it is
-  # refused rather than let through unfloored.
+  # refused rather than let through unfloored. A non-USD stablecoin destination
+  # (`Assets.fx_peg/2`) is refused the same way: it scales, but with no FX rate
+  # there is no par to floor against (ADR-0040 decision 7).
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
     case delivery_floor(request, params) do
       :none ->
@@ -357,7 +359,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   defp destination_asset(%QuoteRequest{to_chain_id: chain, to_token: token}) do
     with symbol when is_binary(symbol) <- Assets.symbol_for(chain, token),
          {:ok, decimals} <- Assets.fetch_decimals(chain, token) do
-      {:ok, symbol, decimals}
+      case Assets.fx_peg(chain, token) do
+        nil -> {:ok, symbol, decimals}
+        peg -> {:error, {:unpriced_asset, fx_detail(chain, token, :destination, peg)}}
+      end
     else
       _ -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: :destination}}}
     end
@@ -411,13 +416,24 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   end
 
   # The atomic amount signed and sent is scaled by these decimals; a guessed
-  # value would move 10^n times the intended amount.
+  # value would move 10^n times the intended amount. A non-USD stablecoin scales
+  # correctly but is still refused: the spend gate caps in dollars and would
+  # count it at par (ADR-0040 decision 7).
   defp source_decimals(chain, token) do
-    case Assets.fetch_decimals(chain, token) do
-      {:ok, decimals} -> {:ok, decimals}
-      :error -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: :source}}}
+    case {Assets.fetch_decimals(chain, token), Assets.fx_peg(chain, token)} do
+      {{:ok, decimals}, nil} ->
+        {:ok, decimals}
+
+      {{:ok, _decimals}, peg} ->
+        {:error, {:unpriced_asset, fx_detail(chain, token, :source, peg)}}
+
+      {:error, _no_peg} ->
+        {:error, {:unknown_asset, %{chain_id: chain, token: token, side: :source}}}
     end
   end
+
+  defp fx_detail(chain, token, side, peg),
+    do: %{chain_id: chain, token: token, side: side, peg: peg}
 
   defp settlement(params), do: Map.get(params, :settlement, "stealth")
 

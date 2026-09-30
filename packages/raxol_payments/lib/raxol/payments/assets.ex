@@ -23,8 +23,10 @@ defmodule Raxol.Payments.Assets do
   ## Adding new assets
 
   Add to `@addresses` (chain+contract) or `@tickers` (symbol). Keep
-  addresses lowercase. Tests in `test/raxol/payments/assets_test.exs`
-  pin the known set.
+  addresses lowercase. A stablecoin pegged to a currency other than the
+  dollar goes in `@fx_stables` instead, which feeds both lookups and
+  `fx_peg/2`. Tests in `test/raxol/payments/assets_test.exs` pin the known
+  set.
   """
 
   @default_decimals 6
@@ -96,6 +98,93 @@ defmodule Raxol.Payments.Assets do
     }
   }
 
+  # Stablecoins pegged to a currency other than the dollar (ADR-0040 decision 6):
+  # symbol -> peg currency, decimals, canonical contract per chain, and legacy
+  # contracts per chain. Every address was read on-chain (`symbol()`,
+  # `decimals()`) on 2026-09-30.
+  #
+  # Registered for scaling and recognition only. They are not solver-fillable
+  # (that is `@evm_tokens`), and no fund-moving path spends or delivers one
+  # until an FX rate gates the conversion: a dollar spend cap would otherwise
+  # count 1 EURe as $1. `fx_peg/2` is how those paths refuse them.
+  #
+  # EURe's v1 contracts front the same balance as v2 (equal `totalSupply()` on
+  # each chain), so they resolve back to "EURe" but `address/2` never returns
+  # one: summing both would count every euro twice. EURC has no native issuance
+  # on 10, 137, 100 or 42161, and the EURC-named token on Optimism is bridged,
+  # so it is deliberately absent. ZCHF on the L2s is the CCIP-bridged token,
+  # which has one address on all of them.
+  @zchf_ccip "0xd4dd9e2f021bb459d5a5f6c24c12fe09c5d45553"
+
+  @fx_stables %{
+    "EURC" => %{
+      peg: "EUR",
+      decimals: 6,
+      addresses: %{
+        1 => "0x1abaea1f7c830bd89acc67ec4af516284b1bc33c",
+        8453 => "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42"
+      },
+      legacy: %{}
+    },
+    "EURe" => %{
+      peg: "EUR",
+      decimals: 18,
+      addresses: %{
+        1 => "0x39b8b6385416f4ca36a20319f70d28621895279d",
+        100 => "0x420ca0f9b9b604ce0fd9c18ef134c705e5fa3430",
+        137 => "0xe0aea583266584dafbb3f9c3211d5588c73fea8d",
+        8453 => "0xbf6e2966a9c3d99c9e4d069e04f7bdb9c8aa762c",
+        42_161 => "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8"
+      },
+      legacy: %{
+        1 => "0x3231cb76718cdef2155fc47b5286d82e6eda273f",
+        100 => "0xcb444e90d8198415266c6a2724b7900fb12fc56e",
+        137 => "0x18ec0a6e18e5bc3784fdd3a3634b31245ab704f6"
+      }
+    },
+    "ZCHF" => %{
+      peg: "CHF",
+      decimals: 18,
+      addresses: %{
+        1 => "0xb58e61c3098d85632df34eecfb899a1ed80921cb",
+        10 => @zchf_ccip,
+        100 => @zchf_ccip,
+        137 => @zchf_ccip,
+        8453 => @zchf_ccip,
+        42_161 => @zchf_ccip
+      },
+      legacy: %{}
+    }
+  }
+
+  # chain id -> lowercase address -> {symbol, peg, decimals}, canonical and
+  # legacy contracts alike.
+  @fx_by_address (for {symbol, spec} <- @fx_stables,
+                      {chain, address} <-
+                        Map.to_list(spec.addresses) ++ Map.to_list(spec.legacy),
+                      reduce: %{} do
+                    acc ->
+                      entry = {symbol, spec.peg, spec.decimals}
+                      Map.update(acc, chain, %{address => entry}, &Map.put(&1, address, entry))
+                  end)
+
+  # Upcased symbol -> chain id -> canonical address, for `address/2`.
+  @fx_addresses Map.new(@fx_stables, fn {symbol, spec} ->
+                  {String.upcase(symbol), spec.addresses}
+                end)
+
+  # What the decimals lookups read: `@addresses` plus every FX stablecoin.
+  @registered_decimals Map.merge(
+                         @addresses,
+                         Map.new(@fx_by_address, fn {chain, by_address} ->
+                           {chain,
+                            Map.new(by_address, fn {address, {_symbol, _peg, decimals}} ->
+                              {address, decimals}
+                            end)}
+                         end),
+                         fn _chain, usd, fx -> Map.merge(usd, fx) end
+                       )
+
   # EVM USDC contracts per chain (lowercase). Used to enforce the ERC-3009
   # USDC-only rule: ERC-3009 signs against the USDC contract as the EIP-712
   # verifying contract, so using it for any other token is silently invalid.
@@ -121,6 +210,13 @@ defmodule Raxol.Payments.Assets do
     "ETH" => 18,
     "WETH" => 18
   }
+
+  @ticker_decimals Map.merge(
+                     @tickers,
+                     Map.new(@fx_stables, fn {symbol, spec} ->
+                       {String.upcase(symbol), spec.decimals}
+                     end)
+                   )
 
   # Solver-fillable EVM tokens: symbol -> chain id -> lowercase address. Mirrors
   # Riddler's config/token_registry.ex for the six supported EVM chains
@@ -184,7 +280,7 @@ defmodule Raxol.Payments.Assets do
     chain = normalize_chain_id(chain_id)
     address = String.downcase(contract_address)
 
-    @addresses
+    @registered_decimals
     |> Map.get(chain, %{})
     |> Map.get(address, @default_decimals)
   end
@@ -223,7 +319,7 @@ defmodule Raxol.Payments.Assets do
   @spec known?(integer() | String.t() | nil, String.t() | nil) :: boolean()
   def known?(chain_id, address) when is_binary(address) and address != "" do
     chain = normalize_chain_id(chain_id)
-    Map.has_key?(Map.get(@addresses, chain, %{}), String.downcase(address))
+    Map.has_key?(Map.get(@registered_decimals, chain, %{}), String.downcase(address))
   end
 
   def known?(_chain, _address), do: false
@@ -236,7 +332,7 @@ defmodule Raxol.Payments.Assets do
   @spec fetch_decimals(integer() | String.t() | nil, String.t() | nil) ::
           {:ok, pos_integer()} | :error
   def fetch_decimals(chain_id, address) when is_binary(address) and address != "" do
-    @addresses
+    @registered_decimals
     |> Map.get(normalize_chain_id(chain_id), %{})
     |> Map.fetch(String.downcase(address))
   end
@@ -247,16 +343,20 @@ defmodule Raxol.Payments.Assets do
   Resolve a token symbol to its contract address on `chain_id`.
 
   Covers the solver-fillable set (USDC, USDT, WETH, plus USDG on Robinhood
-  Chain) across the six supported EVM chains (1, 10, 137, 8453, 42161, 4663).
-  The symbol is case-insensitive; the chain id accepts an integer or a CAIP-2
-  string. Returns `:error` for an unknown `(chain, symbol)` pair.
+  Chain) across the six supported EVM chains (1, 10, 137, 8453, 42161, 4663),
+  and the non-USD stablecoins (EURC, EURe, ZCHF), for which it returns the
+  canonical contract and never a legacy one. The symbol is case-insensitive;
+  the chain id accepts an integer or a CAIP-2 string. Returns `:error` for an
+  unknown `(chain, symbol)` pair.
   """
   @spec address(integer() | String.t() | nil, String.t() | nil) ::
           {:ok, String.t()} | :error
   def address(chain_id, symbol) when is_binary(symbol) do
     chain = normalize_chain_id(chain_id)
+    key = String.upcase(symbol)
+    by_chain = Map.get(@evm_tokens, key) || Map.get(@fx_addresses, key, %{})
 
-    case @evm_tokens |> Map.get(String.upcase(symbol), %{}) |> Map.get(chain) do
+    case Map.get(by_chain, chain) do
       nil -> :error
       address -> {:ok, address}
     end
@@ -265,7 +365,9 @@ defmodule Raxol.Payments.Assets do
   def address(_chain, _symbol), do: :error
 
   @doc """
-  The token symbols with a resolvable `address/2` (USDC, USDT, WETH).
+  The solver-fillable token symbols (USDC, USDG, USDT, WETH). The non-USD
+  stablecoins resolve through `address/2` too, but are not solver-fillable, so
+  they are not listed here.
   """
   @spec symbols() :: [String.t()]
   def symbols, do: Map.keys(@evm_tokens)
@@ -275,6 +377,7 @@ defmodule Raxol.Payments.Assets do
   @chain_names %{
     1 => "Ethereum",
     10 => "Optimism",
+    100 => "Gnosis",
     137 => "Polygon",
     8453 => "Base",
     42_161 => "Arbitrum One",
@@ -312,20 +415,52 @@ defmodule Raxol.Payments.Assets do
   @doc """
   Resolve a `(chain_id, contract_address)` back to its token symbol: the reverse
   of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH, plus USDG on
-  Robinhood Chain) on the six EVM chains. Case-insensitive; accepts an integer
-  chain id or a CAIP-2 string. Returns `nil` for an unregistered pair, so a
-  caller can tell "same asset" from "unknown" without guessing.
+  Robinhood Chain) on the six EVM chains, and the non-USD stablecoins, where a
+  legacy EURe contract also resolves to `"EURe"`. Case-insensitive; accepts an
+  integer chain id or a CAIP-2 string. Returns `nil` for an unregistered pair,
+  so a caller can tell "same asset" from "unknown" without guessing.
   """
   @spec symbol_for(integer() | String.t() | nil, String.t() | nil) :: String.t() | nil
   def symbol_for(chain_id, address) when is_binary(address) and address != "" do
     chain = normalize_chain_id(chain_id)
+    address = String.downcase(address)
 
-    @symbol_by_address
-    |> Map.get(chain, %{})
-    |> Map.get(String.downcase(address))
+    case @symbol_by_address |> Map.get(chain, %{}) |> Map.get(address) do
+      nil -> fx_symbol(chain, address)
+      symbol -> symbol
+    end
   end
 
   def symbol_for(_chain, _address), do: nil
+
+  @doc """
+  The peg currency of a registered non-USD stablecoin at `(chain_id, address)`:
+  `"EUR"` for EURC and either EURe contract, `"CHF"` for ZCHF. `nil` for
+  anything else, dollar stablecoins, WETH and unregistered tokens included.
+  Case-insensitive; accepts an integer chain id or a CAIP-2 string.
+
+  Fund-moving paths refuse a token with a peg until an FX rate gates the
+  conversion (ADR-0040 decision 7). Its decimals are known, so its amount
+  scales correctly, but a dollar-denominated spend cap would count it at par.
+  """
+  @spec fx_peg(integer() | String.t() | nil, String.t() | nil) :: String.t() | nil
+  def fx_peg(chain_id, address) when is_binary(address) and address != "" do
+    case fx_entry(normalize_chain_id(chain_id), String.downcase(address)) do
+      {_symbol, peg, _decimals} -> peg
+      nil -> nil
+    end
+  end
+
+  def fx_peg(_chain, _address), do: nil
+
+  defp fx_symbol(chain, address) do
+    case fx_entry(chain, address) do
+      {symbol, _peg, _decimals} -> symbol
+      nil -> nil
+    end
+  end
+
+  defp fx_entry(chain, address), do: @fx_by_address |> Map.get(chain, %{}) |> Map.get(address)
 
   # Native gas token per chain: the asset the solver spends on fills and which the
   # rebalance policy/advisor track and refuel. The symbol distinguishes ETH from
@@ -334,6 +469,8 @@ defmodule Raxol.Payments.Assets do
   @native_tokens %{
     1 => {"ETH", 18},
     10 => {"ETH", 18},
+    # Gnosis settles gas in xDAI.
+    100 => {"XDAI", 18},
     137 => {"POL", 18},
     8453 => {"ETH", 18},
     42_161 => {"ETH", 18},
@@ -371,7 +508,7 @@ defmodule Raxol.Payments.Assets do
   """
   @spec decimals(String.t() | nil) :: pos_integer()
   def decimals(ticker) when is_binary(ticker) do
-    Map.get(@tickers, String.upcase(ticker), @default_decimals)
+    Map.get(@ticker_decimals, String.upcase(ticker), @default_decimals)
   end
 
   def decimals(_), do: @default_decimals
