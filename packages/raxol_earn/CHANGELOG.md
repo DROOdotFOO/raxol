@@ -84,11 +84,12 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
   `:acp_version` switch are gone; the v2 hook/event model
   (`JobSession` + `HookClient` -> `AgenticCommerceV3`) is the only runtime.
   See `MIGRATION_V2.md`.
-- **The static-fallback corridor gate skips non-USD stablecoins.** Under
-  `Capabilities.fallback/0`, a token counted as fillable when
-  `Assets.known?/2` held. EURC, EURe and ZCHF are now registered for scaling
-  (ADR-0040), and they stay unfillable there: they reject as
-  `{:unsupported_src_token, _, _}` / `{:unsupported_dst_token, _, _}`.
+- **The corridor gate never fills a non-USD stablecoin.** EURC, EURe and ZCHF
+  are now registered for scaling (ADR-0040), and they stay unfillable on both
+  paths: under `Capabilities.fallback/0`, and when Xochi's live capability
+  matrix lists them (it lists EURe), including with the stablecoin corridor
+  allowlist off. They reject as `{:unsupported_src_token, _, _}` /
+  `{:unsupported_dst_token, _, _}`.
 
 ### Notes
 
