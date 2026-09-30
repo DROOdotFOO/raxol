@@ -48,11 +48,13 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Deletion do
   left in the region, as in xterm), the rest of the region moves up, and blank
   rows fill its bottom. Only the region's rows are touched, and every blank
   row is the same term, so the cost is one row plus the screen's height. A
-  cursor outside the region deletes nothing.
+  cursor outside the region deletes nothing. `bottom` is clamped to the rows
+  the buffer has, so a region set for a taller screen cannot grow the row list.
   """
   def delete_lines_in_region(%{cells: cells, width: width} = buffer, start_y, count, top, bottom)
       when start_y >= top and start_y <= bottom do
-    region_rows = bottom - start_y + 1
+    bottom = min(bottom, length(cells) - 1)
+    region_rows = max(bottom - start_y + 1, 0)
     count = min(count, region_rows)
     {above, from_cursor} = Enum.split(cells, start_y)
     {region, below} = Enum.split(from_cursor, region_rows)

@@ -27,6 +27,9 @@ defmodule Raxol.Terminal.ScreenBuffer.EraseOperations do
     # Log.info("[DEBUG] erase_from_cursor_to_end called with x=#{x}, y=#{y}, bottom=#{bottom}")
 
     empty_cell = Cell.new()
+    # The cursor can sit past the buffer's last column (Emulator.resize/3
+    # widens the emulator only); the row still keeps the buffer's width.
+    x = min(max(x, 0), buffer.width)
 
     # Process each line
     new_cells =
@@ -68,6 +71,9 @@ defmodule Raxol.Terminal.ScreenBuffer.EraseOperations do
         ) :: map()
   def erase_from_start_to_cursor(buffer, x, y, top, _bottom) do
     empty_cell = Cell.new()
+    # Clamped as in `erase_from_cursor_to_end/5`: never a row wider than the
+    # buffer.
+    x = min(max(x, -1), buffer.width - 1)
 
     # Process each line
     new_cells =

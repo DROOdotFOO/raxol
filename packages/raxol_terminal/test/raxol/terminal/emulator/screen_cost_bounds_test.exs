@@ -60,6 +60,36 @@ defmodule Raxol.Terminal.Emulator.ScreenCostBoundsTest do
       assert reductions < 200_000
     end
 
+    test "keep the row count when the scroll region is taller than the buffer" do
+      rows = fn emulator -> length(Emulator.get_screen_buffer(emulator).cells) end
+
+      scenarios = [
+        # Emulator.resize/3 grows the emulator's height but not the buffer's.
+        {Emulator.resize(Emulator.new(20, 10), 20, 40), "\e[1;40r\e[30;1H"},
+        # A region left over from before a shrink.
+        {%{Emulator.new(20, 10) | scroll_region: {0, 39}}, "\e[5;1H"},
+        # A size past the cell ceiling: the buffer is clamped, the emulator's
+        # height is not.
+        {Emulator.new(4096, 300), "\e[1;300r\e[200;1H"}
+      ]
+
+      for {emulator, setup} <- scenarios, edit <- ["\e[L", "\e[20L", "\e[M", "\e[20M"] do
+        before = rows.(emulator)
+        assert rows.(feed(emulator, setup <> edit)) == before, inspect({setup, edit})
+      end
+    end
+
+    test "ED and EL with the cursor past the buffer's last column keep the shape" do
+      # Emulator.resize/3 widens the emulator, not the buffer, so the cursor
+      # can sit past the buffer's last column.
+      emulator = Emulator.resize(Emulator.new(20, 6), 22, 6)
+
+      for erase <- ["\e[J", "\e[1J", "\e[K", "\e[1K"] do
+        buffer = Emulator.get_screen_buffer(feed(emulator, "\e[3;22H" <> erase))
+        assert Enum.all?(buffer.cells, &(length(&1) == buffer.width)), inspect(erase)
+      end
+    end
+
     test "IL and DL shift only the scroll region and keep its size" do
       emulator =
         Emulator.new(5, 5)

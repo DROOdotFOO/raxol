@@ -68,10 +68,13 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Insertion do
   # blank rows fill the gap. Only the region's rows are touched, and every
   # inserted row is the same blank row, so the cost is one row plus the
   # screen's height, not a cell per inserted cell. A cursor outside the
-  # region inserts nothing.
+  # region inserts nothing. `bottom` is clamped to the rows the buffer has:
+  # a region set for a taller screen (before a resize, or past the cell
+  # ceiling) would otherwise grow the row list.
   defp do_insert_lines_in_region(%{cells: cells, width: width} = buffer, y, count, top, bottom)
        when y >= top and y <= bottom do
-    region_rows = bottom - y + 1
+    bottom = min(bottom, length(cells) - 1)
+    region_rows = max(bottom - y + 1, 0)
     count = min(count, region_rows)
     {above, from_cursor} = Enum.split(cells, y)
     {region, below} = Enum.split(from_cursor, region_rows)
