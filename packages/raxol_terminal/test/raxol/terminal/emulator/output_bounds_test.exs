@@ -351,6 +351,8 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
             "file://h/a%0Ab",
             "file://h/a%1B[2Jb",
             "file://h/%FF%FE",
+            "file://h/a%C2%9B2Jb",
+            "file://evil%C2%9B2J/tmp",
             "file://h%0A/tmp"
           ] do
         emulator = feed(emulator, "\e]7;#{bad}\a")

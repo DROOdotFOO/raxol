@@ -262,8 +262,9 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
 
     # OSC 7 carries a `file://host/path` URI (percent-encoded). The decoded
     # path becomes `current_directory` and the host `remote_host`, but only
-    # when the path is absolute and both are valid UTF-8 without control
-    # bytes; anything else is ignored. Bounded by the OSC string cap
+    # when the path is absolute and both are valid UTF-8 without C0 or C1
+    # control characters (a UTF-8 U+009B is a CSI to some terminals);
+    # anything else is ignored. Bounded by the OSC string cap
     # (`Raxol.Terminal.Parser.ParserState`).
     def handle_7(emulator, data) do
       with %URI{scheme: "file", path: "/" <> _ = path, host: host} <- URI.parse(data),
@@ -279,8 +280,9 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     defp clean_host(""), do: {:ok, nil}
     defp clean_host(host), do: clean_text(URI.decode(host))
 
+    # String.valid?/1 runs first, so the `u` regex never sees invalid UTF-8.
     defp clean_text(text) do
-      if String.valid?(text) and not String.match?(text, ~r/[\x00-\x1F\x7F]/),
+      if String.valid?(text) and not String.match?(text, ~r/[\x00-\x1F\x7F-\x9F]/u),
         do: {:ok, text},
         else: :error
     end

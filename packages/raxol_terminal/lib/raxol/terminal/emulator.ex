@@ -34,9 +34,10 @@ defmodule Raxol.Terminal.Emulator do
     BELs arrived in between.
   * `current_directory` and `remote_host` - from OSC 7 (`file://host/path`)
     and OSC 1337 `CurrentDir=`/`RemoteHost=`: a decoded absolute path and a
-    host name, each valid UTF-8 without control bytes, else not set. They are
-    still the writer's claim, not a checked fact: the path may contain `..`
-    or name somewhere that does not exist, so treat both as untrusted input.
+    host name, each valid UTF-8 without C0 or C1 control characters, else
+    not set. They are still the writer's claim, not a checked fact: the path
+    may contain `..` or name somewhere that does not exist, so treat both as
+    untrusted input.
   """
 
   alias Raxol.Terminal.Emulator.BufferOperations

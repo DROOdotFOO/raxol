@@ -436,7 +436,10 @@ defmodule Raxol.Terminal.ControlCodes do
         g3: :us_ascii,
         gl: :g0,
         gr: :g0,
-        single_shift: nil
+        single_shift: nil,
+        # The translator reads `active`, not `gl`: without this a locking
+        # shift (SO) into line drawing would survive the reset.
+        active: :us_ascii
       })
 
     %{

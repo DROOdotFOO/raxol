@@ -41,9 +41,13 @@ defmodule Raxol.Terminal.Commands.CursorUtils do
   end
 
   @doc """
-  Saves the current cursor position into the emulator state.
+  Saves the current cursor position into the emulator state (`CSI s`).
+
+  As in xterm, the save also fills the screen's DECSC slot, so an `ESC 8`
+  after `CSI s` restores it rather than falling back to the power-up state.
   """
   def save_cursor_position(emulator) do
+    emulator = Raxol.Terminal.ControlCodes.handle_decsc(emulator)
     cursor = emulator.cursor
 
     updated_cursor = %{

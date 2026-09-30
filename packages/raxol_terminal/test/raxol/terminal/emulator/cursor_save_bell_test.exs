@@ -16,6 +16,10 @@ defmodule Raxol.Terminal.Emulator.CursorSaveBellTest do
 
   defp position(emulator), do: Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
 
+  defp char_at(emulator, x, y) do
+    Raxol.Terminal.ScreenBuffer.get_cell_at(Emulator.get_screen_buffer(emulator), x, y).char
+  end
+
   describe "alternate screen mixed with DECSC/DECRC" do
     for input <- [
           "\e[?1049h\e7\e[?1049l",
@@ -64,16 +68,43 @@ defmodule Raxol.Terminal.Emulator.CursorSaveBellTest do
     end
   end
 
+  describe "leaving the alternate screen (1047)" do
+    test "with nothing saved, leaves the cursor and attributes alone, as in xterm" do
+      emulator = feed(Emulator.new(20, 6), "$ cmd\r\n\e[1m\e[4;4H\e[?1047l")
+
+      assert position(emulator) == {3, 3}
+      assert emulator.style.bold
+    end
+  end
+
+  describe "CSI s" do
+    test "fills the DECSC slot, so ESC 8 restores it as in xterm" do
+      emulator = feed(Emulator.new(20, 6), "\e[1m\e[3;7H\e[s\e[0m\e[5;1Hhello\e8")
+
+      assert position(emulator) == {2, 6}
+      assert emulator.style.bold
+    end
+  end
+
   describe "DECRC with nothing saved on the screen" do
-    test "homes the cursor and resets attributes, charsets and origin mode" do
-      emulator =
-        feed(Emulator.new(20, 6), "\e[3;4H\e[1;31m\e(0\e[2;5r\e[?6h\e[?1049h\e[4;6H\e8")
+    test "homes the cursor and turns off SGR and origin mode" do
+      # Main screen only: `CSI ? 1049 h` would reset origin mode on its own.
+      emulator = feed(Emulator.new(20, 6), "\e[1;31m\e[2;5r\e[?6h\e[3;4H")
+      assert emulator.mode_manager.origin_mode
+
+      emulator = feed(emulator, "\e8")
 
       assert position(emulator) == {0, 0}
       refute emulator.style.bold
       assert emulator.style.foreground == nil
-      assert emulator.charset_state.g0 == :us_ascii
       refute emulator.mode_manager.origin_mode
+    end
+
+    test "drops a locking shift into line drawing" do
+      for input <- ["\e)0\x0e\e8q", "\e)0\x0e\e[?1049h\e8q"] do
+        emulator = feed(Emulator.new(20, 6), input)
+        assert char_at(emulator, 0, 0) == "q", inspect(input)
+      end
     end
   end
 
