@@ -226,10 +226,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   defp build_request(params, from_address) do
     to_chain = Map.fetch!(params, :to_chain_id)
 
-    with :ok <- reject_stealth_on_tron(Map.get(params, :settlement, "public"), to_chain) do
+    with :ok <- reject_stealth_on_tron(Map.get(params, :settlement, "public"), to_chain),
+         from_chain = Map.fetch!(params, :from_chain_id),
+         from_token = Map.fetch!(params, :from_token),
+         :ok <- reject_fx_source(from_chain, from_token) do
       amount = Decimal.new(Map.fetch!(params, :amount))
-      from_chain = Map.fetch!(params, :from_chain_id)
-      from_token = Map.fetch!(params, :from_token)
       decimals = Assets.decimals(from_chain, from_token)
       from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
 
@@ -258,6 +259,19 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
       {:error, :stealth_unsupported_on_chain}
     else
       :ok
+    end
+  end
+
+  # A non-USD stablecoin scales correctly but the spend gate caps in dollars and
+  # would count it at par, so it moves no funds until an FX rate gates the
+  # conversion (ADR-0040 decision 7).
+  defp reject_fx_source(chain, token) do
+    case Assets.fx_peg(chain, token) do
+      nil ->
+        :ok
+
+      peg ->
+        {:error, {:unpriced_asset, %{chain_id: chain, token: token, side: :source, peg: peg}}}
     end
   end
 

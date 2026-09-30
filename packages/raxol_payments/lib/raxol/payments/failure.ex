@@ -237,6 +237,27 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
+  # A registered stablecoin pegged to a currency other than the dollar. Its
+  # amount scales, but no FX rate converts it for a dollar spend cap or a
+  # delivery floor yet (ADR-0040 decision 7), so it moves no funds.
+  def from({:unpriced_asset, %{side: :destination}} = detail),
+    do:
+      build(
+        :invalid_request,
+        "The destination token is pegged to a non-USD currency; pass min_to_amount to bound delivery.",
+        false,
+        detail
+      )
+
+  def from({:unpriced_asset, _} = detail),
+    do:
+      build(
+        :invalid_request,
+        "The source token is pegged to a non-USD currency; spending it is not enabled.",
+        false,
+        detail
+      )
+
   # Relay (Tron) route and address validation.
   def from({:invalid_route, _} = detail),
     do: build(:route_unsupported, "This Tron route is not valid.", false, detail)

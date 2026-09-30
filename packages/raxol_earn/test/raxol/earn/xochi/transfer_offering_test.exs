@@ -133,6 +133,15 @@ defmodule Raxol.Earn.Xochi.TransferOfferingTest do
       assert {:reject, {:unsupported_dst_token, 999, @usdc_base}} =
                TransferOffering.handle_request(r, @ctx)
     end
+
+    test "a non-USD stablecoin is not fallback-fillable (ADR-0040)" do
+      # EURC is a registered Assets entry, so it is known?/2, but it is not in
+      # the solver-fillable table the static fallback stands for.
+      eurc_base = "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42"
+
+      assert {:reject, {:unsupported_src_token, 8453, ^eurc_base}} =
+               TransferOffering.handle_request(req(%{"src_token" => eurc_base}), @ctx)
+    end
   end
 
   describe "handle_deliver/2" do

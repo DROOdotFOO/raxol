@@ -308,12 +308,17 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # only raise that floor, never lower it: the caller setting it is the agent the
   # backstop exists to bound, so `min_to_amount: "1"` must not switch it off. A
   # cross-asset corridor has no on-client price, so it is bound only by an
-  # explicit `min_to_amount`. Both tokens have registered decimals by this point
-  # (`build_request/2` refuses anything else).
+  # explicit `min_to_amount`. A non-USD stablecoin destination
+  # (`Assets.fx_peg/2`) without one is refused: it scales, but with no FX rate
+  # there is no par to floor against (ADR-0040 decision 7). Both tokens have
+  # registered decimals by this point (`build_request/2` refuses anything else).
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
     case delivery_floor(request, params) do
       :none ->
         :ok
+
+      {:error, _} = error ->
+        error
 
       {:floor, min_out} ->
         case parse_uint(quote.to_amount) do
@@ -329,6 +334,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   defp delivery_floor(%QuoteRequest{} = request, params) do
     case {parse_uint(Map.get(params, :min_to_amount)), same_asset_floor(request)} do
+      {nil, :none} -> unpriced_destination(request)
       {nil, auto} -> auto
       {explicit, :none} -> {:floor, explicit}
       {explicit, {:floor, auto}} -> {:floor, max(explicit, auto)}
@@ -347,6 +353,13 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       {:floor, div(par_out * bps, 10_000)}
     else
       _ -> :none
+    end
+  end
+
+  defp unpriced_destination(%QuoteRequest{to_chain_id: chain, to_token: token}) do
+    case Assets.fx_peg(chain, token) do
+      nil -> :none
+      peg -> {:error, {:unpriced_asset, fx_detail(chain, token, :destination, peg)}}
     end
   end
 
@@ -411,14 +424,15 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # source amount is scaled by them -- a guess would move 10^n the intended
   # amount -- and a destination amount (a `min_to_amount`, the same-asset floor)
   # means nothing without them. `min_to_amount` does not waive this: the caller
-  # setting it cannot know an unregistered token's decimals either.
+  # setting it cannot know an unregistered token's decimals either. A non-USD
+  # stablecoin source scales correctly but is still refused: the spend gate caps
+  # in dollars and would count it at par (ADR-0040 decision 7).
   defp registered_legs(params) do
-    with {:ok, decimals} <-
-           registered_asset(
-             Map.fetch!(params, :from_chain_id),
-             Map.fetch!(params, :from_token),
-             :source
-           ),
+    from_chain = Map.fetch!(params, :from_chain_id)
+    from_token = Map.fetch!(params, :from_token)
+
+    with {:ok, decimals} <- registered_asset(from_chain, from_token, :source),
+         :ok <- dollar_source(from_chain, from_token),
          {:ok, _} <-
            registered_asset(
              Map.fetch!(params, :to_chain_id),
@@ -429,12 +443,22 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     end
   end
 
+  defp dollar_source(chain, token) do
+    case Assets.fx_peg(chain, token) do
+      nil -> :ok
+      peg -> {:error, {:unpriced_asset, fx_detail(chain, token, :source, peg)}}
+    end
+  end
+
   defp registered_asset(chain, token, side) do
     case Assets.fetch_decimals(chain, token) do
       {:ok, decimals} -> {:ok, decimals}
       :error -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: side}}}
     end
   end
+
+  defp fx_detail(chain, token, side, peg),
+    do: %{chain_id: chain, token: token, side: side, peg: peg}
 
   defp settlement(params), do: Map.get(params, :settlement, "stealth")
 

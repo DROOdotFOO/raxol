@@ -245,6 +245,25 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
       assert {:error, %Failure{reason: :route_unsupported}} =
                ExecuteRelayTransfer.run(params, ctx())
     end
+
+    test "refuses a non-USD stablecoin source before any relay call (ADR-0040)" do
+      parent = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(parent, {:relay_called, conn.request_path})
+        Req.Test.json(conn, %{})
+      end)
+
+      params = base_params(%{from_token: "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42"})
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :source, chain_id: 8453, peg: "EUR"}}
+              }} = ExecuteRelayTransfer.run(params, ctx())
+
+      refute_received {:relay_called, _}
+    end
   end
 
   describe "spend gate" do

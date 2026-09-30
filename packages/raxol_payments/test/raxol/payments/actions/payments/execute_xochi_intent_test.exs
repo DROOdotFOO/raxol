@@ -507,6 +507,21 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       refute_received :wallet_signed
     end
 
+    # ADR-0040 decision 7: a registered non-USD stablecoin scales correctly but
+    # has no FX rate for the dollar spend cap, so it is refused as a source.
+    test "a non-USD stablecoin source is refused before quoting or signing" do
+      eurc_base = "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42"
+      params = base_params(%{from_token: eurc_base, settlement: "public"})
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :source, chain_id: 8453, peg: "EUR"}}
+              }} = ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
+
+      refute_received :wallet_signed
+    end
+
     # No quote stub: the refusal must land before any network call.
     test "an unregistered destination is refused even with min_to_amount" do
       for extra <- [%{}, %{min_to_amount: "950000"}] do
@@ -1205,6 +1220,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   # automatic 80%-of-par floor for same-asset corridors.
   describe "ExecuteXochiIntent delivery floor" do
     @weth_arb "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+    @eure_arb "0x0c06cCF38114ddfc35e07427B9424adcca9F44F8"
 
     defp floor_ctx do
       %{
@@ -1345,6 +1361,32 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       end
 
       refute_received :wallet_signed
+    end
+
+    test "a non-USD destination with no min_to_amount is refused before signing" do
+      # USDC -> EURe is cross-asset AND cross-currency: without an FX rate there
+      # is no floor to derive, so a punitive toAmount must not be trusted.
+      stub_floor_quote("1")
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :destination, chain_id: 42_161, peg: "EUR"}}
+              }} = ExecuteXochiIntent.run(floor_params(%{to_token: @eure_arb}), floor_ctx())
+
+      refute_received :wallet_signed
+    end
+
+    test "a non-USD destination is allowed once min_to_amount bounds it" do
+      stub_floor_quote("960000000000000000")
+
+      assert {:ok, _} =
+               ExecuteXochiIntent.run(
+                 floor_params(%{to_token: @eure_arb, min_to_amount: "950000000000000000"}),
+                 floor_ctx()
+               )
+
+      assert_received :wallet_signed
     end
   end
 end

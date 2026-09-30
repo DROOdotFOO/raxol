@@ -9,11 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Registered Monerium EURe on Arbitrum (`0x0c06...44f8`, 18 decimals) and
-  RAXOL on Robinhood Chain (`0xf447...53af`, 18 decimals) in
+- Registered RAXOL on Robinhood Chain (`0xf447...53af`, 18 decimals) in
   `Raxol.Payments.Assets`, so the Xochi client sizes, resolves and classifies
-  USDC->EURe, EURe->RAXOL and USDC/USDT/USDG->RAXOL legs. `address/2` matches
-  the mixed-case wire symbol `"EURe"` case-insensitively.
+  USDC/USDT/USDG->RAXOL legs.
 - `Raxol.Payments.Prices.CoinGecko` prices EURe (USD quote, not dollar par)
   and RAXOL. Neither is a settlement-ledger stablecoin, so an unpriced leg
   reports `nil`, never $1.
@@ -21,6 +19,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uint256, and `Assets.to_decimal/1` converts an amount to a `Decimal`, taking
   an integer string of up to 78 digits through the integer (decimal 3's
   string parse stops at 34 digits).
+- `Raxol.Payments.Assets` registers the non-USD stablecoins of ADR-0040:
+  EURC on 1 and 8453, EURe on 1, 100, 137, 8453 and 42161, and ZCHF on 1 plus
+  the CCIP-bridged contract on 10, 100, 137, 8453 and 42161, each at its
+  on-chain decimals. EURe was previously registered on 1 and 42161 only, so
+  elsewhere the lenient `decimals/2` scaled it at 6 instead of 18, off by
+  10^12. `address/2` matches the mixed-case wire symbol `"EURe"`
+  case-insensitively. EURe's legacy v1
+  contracts resolve to `"EURe"` through `symbol_for/2` and are never returned
+  by `address/2`, since they front the same balance as v2. Chain 100 (Gnosis)
+  gains a name and its xDAI gas token. New `Assets.fx_peg/2` names a token's
+  non-USD peg. None of these tokens is solver-fillable: EURe leaves
+  `symbols/0`, `evm_tokens/0` and the Xochi settlement grid, where it was
+  listed on Arbitrum, and `supported_chain_ids/0` and the capabilities
+  fallback are unchanged.
+- Registering them opens no fund-moving path. `ExecuteXochiIntent` and
+  `ExecuteRelayTransfer` refuse a non-USD source, and `ExecuteXochiIntent`
+  refuses a non-USD destination without `min_to_amount`, as
+  `{:unpriced_asset, detail}`, until an FX rate gates the conversion (ADR-0040
+  decision 7). Dollar spend caps would otherwise count them at par.
 
 ### Fixed
 
