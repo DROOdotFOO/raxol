@@ -157,12 +157,11 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
   end
 
   defp handle_alt_screen_with_clear(false, emulator) do
-    # Switch back to the main screen, restore its saved cursor (DECRC, and
-    # the `CSI u` slot), and clear the alt buffer.
-    emulator =
-      %{emulator | active_buffer_type: :main}
-      |> ControlCodes.handle_decrc()
-      |> CursorUtils.restore_cursor_position()
+    # Switch back to the main screen, restore its DECSC slot (DECRC) and
+    # clear the alt buffer. As in xterm, only that slot: the `CSI s` slot is
+    # shared by both screens, so a program's `CSI s` on the alternate screen
+    # would otherwise move the main screen's cursor on exit.
+    emulator = ControlCodes.handle_decrc(%{emulator | active_buffer_type: :main})
 
     case emulator.alternate_screen_buffer do
       nil ->

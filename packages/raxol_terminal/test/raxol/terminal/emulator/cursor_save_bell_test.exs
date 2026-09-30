@@ -55,6 +55,28 @@ defmodule Raxol.Terminal.Emulator.CursorSaveBellTest do
     end
   end
 
+  describe "leaving the alternate screen (1049)" do
+    test "restores the main screen's DECSC slot, not the CSI s slot" do
+      emulator =
+        feed(Emulator.new(80, 24), "$ vim\r\n\e[?1049h\e[20;30H\e[s\e[1;1Hx\e[u\e[?1049l")
+
+      assert position(emulator) == {1, 0}
+    end
+  end
+
+  describe "DECRC with nothing saved on the screen" do
+    test "homes the cursor and resets attributes, charsets and origin mode" do
+      emulator =
+        feed(Emulator.new(20, 6), "\e[3;4H\e[1;31m\e(0\e[2;5r\e[?6h\e[?1049h\e[4;6H\e8")
+
+      assert position(emulator) == {0, 0}
+      refute emulator.style.bold
+      assert emulator.style.foreground == nil
+      assert emulator.charset_state.g0 == :us_ascii
+      refute emulator.mode_manager.origin_mode
+    end
+  end
+
   describe "DECSC flood" do
     test "100,000 ESC 7 keep one saved state per screen" do
       emulator = feed(Emulator.new(20, 6), String.duplicate("\e7", 100_000))
@@ -75,6 +97,10 @@ defmodule Raxol.Terminal.Emulator.CursorSaveBellTest do
       {:reductions, later} = Process.info(self(), :reductions)
 
       assert emulator.bell_count == 2_000
+
+      # RIS resets the emulator but not the count, so a consumer comparing it
+      # with the last value it saw never misses a bell.
+      assert feed(emulator, "\ec\a").bell_count == 2_001
       # Each BEL forked `tput bel` (about 2.7 ms and a port per byte).
       assert later - before < 2_000_000
     end

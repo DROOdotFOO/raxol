@@ -9,9 +9,10 @@ defmodule Raxol.Terminal.Emulator.StateStackTest do
   # Note: CharacterSets alias might be needed if asserting charset_state fields directly
   # remove charactersets terminal ansi
 
-  describe "Emulator State Stack (push/pop)" do
-    # These tests check the side effects of ANSI sequences handled by Emulator/Parser
-    # that utilize the internal state stack (managed by TerminalState).
+  describe "Saved cursor state (DECSC/DECRC and the alternate-screen modes)" do
+    # Each screen, main and alternate, has one DECSC slot, as in xterm:
+    # ESC 7 overwrites it and ESC 8 restores it without consuming it
+    # (`Raxol.Terminal.ControlCodes.handle_decsc/1`).
 
     test ~c"DECSC/DECRC saves and restores state (ESC 7/8)" do
       emulator = Emulator.new(80, 24)
@@ -62,24 +63,21 @@ defmodule Raxol.Terminal.Emulator.StateStackTest do
       # Check mode state restored
       assert emulator_restored1.mode_manager == mode_manager_state1
 
-      # Restore again (should do nothing if stack empty)
-      initial_state_before_second_restore = emulator_restored1
+      # The slot is not consumed: move away, change attributes, and a second
+      # ESC 8 brings state 1 back again.
+      moved = %{
+        emulator_restored1
+        | cursor: Manager.move_to(emulator_restored1.cursor, 7, 9),
+          style: %{emulator_restored1.style | bold: false, italic: true}
+      }
 
-      {emulator_restored_again, ""} =
-        Emulator.process_input(emulator_restored1, "\e8")
+      {emulator_restored_again, ""} = Emulator.process_input(moved, "\e8")
 
-      # Assert no change if stack was empty
-      assert emulator_restored_again.cursor ==
-               initial_state_before_second_restore.cursor
-
-      assert emulator_restored_again.style ==
-               initial_state_before_second_restore.style
-
-      assert emulator_restored_again.charset_state ==
-               initial_state_before_second_restore.charset_state
-
-      assert emulator_restored_again.mode_manager ==
-               initial_state_before_second_restore.mode_manager
+      assert Manager.get_position(emulator_restored_again.cursor) == {1, 1}
+      assert emulator_restored_again.style.bold == true
+      assert emulator_restored_again.style.italic == false
+      assert emulator_restored_again.charset_state == charset_state1
+      assert emulator_restored_again.mode_manager == mode_manager_state1
     end
 
     test ~c"DEC mode 1048 saves/restores cursor state only (no buffer switch)" do

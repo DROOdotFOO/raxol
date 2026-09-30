@@ -82,8 +82,8 @@ defmodule Raxol.Terminal.ControlCodes do
   """
   # Counted, not rung: forking `tput bel` for every BEL cost about 2.7 ms a
   # byte, so a stream of them stalled the session (and tput's output was
-  # captured, so nobody heard it). Whoever draws the emulator rings once per
-  # frame when `bell_count` has moved.
+  # captured, so nobody heard it). The count is for a renderer to act on;
+  # see `Raxol.Terminal.Emulator`'s moduledoc.
   def handle_bel(%{bell_count: count} = emulator),
     do: %{emulator | bell_count: count + 1}
 
@@ -307,10 +307,14 @@ defmodule Raxol.Terminal.ControlCodes do
     scrollback_limit = active_buffer.scrollback_limit
 
     # Create a completely new default state, preserving only dimensions/limits
-    Emulator.new(width, height,
-      scrollback: scrollback_limit,
-      memorylimit: emulator.memory_limit
-    )
+    # and the bell count, which only ever grows (see `Emulator`).
+    fresh =
+      Emulator.new(width, height,
+        scrollback: scrollback_limit,
+        memorylimit: emulator.memory_limit
+      )
+
+    %{fresh | bell_count: Map.get(emulator, :bell_count, 0)}
   end
 
   @spec handle_ind(Emulator.t()) :: Emulator.t()
@@ -411,11 +415,37 @@ defmodule Raxol.Terminal.ControlCodes do
 
   @spec handle_decrc(Emulator.t()) :: Emulator.t()
   # ESC 8 - Restore Cursor State (DEC specific)
+  #
+  # With nothing saved on this screen, DECRC restores the power-up state, as
+  # in VT510 and xterm: cursor home, origin mode off, all SGR attributes off
+  # and the default character sets. That is the normal case just after
+  # `CSI ? 1049 h`, whose alternate screen has no saved cursor of its own.
   def handle_decrc(emulator) do
     case saved_cursor_save_state(emulator) do
-      nil -> emulator
+      nil -> restore_default_cursor_state(emulator)
       saved_state -> restore_cursor_save_state(emulator, saved_state)
     end
+  end
+
+  defp restore_default_cursor_state(emulator) do
+    charset_state =
+      Map.merge(emulator.charset_state, %{
+        g0: :us_ascii,
+        g1: :us_ascii,
+        g2: :us_ascii,
+        g3: :us_ascii,
+        gl: :g0,
+        gr: :g0,
+        single_shift: nil
+      })
+
+    %{
+      emulator
+      | cursor: Raxol.Terminal.Cursor.Manager.set_position(emulator.cursor, {0, 0}),
+        style: Raxol.Terminal.ANSI.TextFormatting.new(),
+        charset_state: charset_state,
+        mode_manager: Map.put(emulator.mode_manager, :origin_mode, false)
+    }
   end
 
   @doc "The active screen's DECSC saved state, or `nil`."
