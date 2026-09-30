@@ -78,10 +78,13 @@ defmodule Raxol.Agent.Actions.FXTest do
         if key,
           do: System.put_env("RAXOL_SLEUTH_API_KEY", key),
           else: System.delete_env("RAXOL_SLEUTH_API_KEY")
+
+        Raxol.Agent.Web3.load!()
       end)
 
       Application.delete_env(:raxol_agent, :web3)
       System.delete_env("RAXOL_SLEUTH_API_KEY")
+      Raxol.Agent.Web3.load!()
       :ok
     end
 
@@ -92,7 +95,9 @@ defmodule Raxol.Agent.Actions.FXTest do
 
     test "fx configured with the key in the environment adds the tool and the handle" do
       Application.put_env(:raxol_agent, :web3, fx: [rpc_urls: %{1 => "https://rpc.test"}])
-      System.put_env("RAXOL_SLEUTH_API_KEY", "from-env")
+      # Pasted with its newline, which would otherwise reach the header.
+      System.put_env("RAXOL_SLEUTH_API_KEY", " from-env\r\n")
+      Raxol.Agent.Web3.load!()
 
       assert Raxol.Agent.Web3.enabled_actions() == [FXAction]
       assert %{fx_source: %FX{} = source} = Raxol.Agent.Web3.put_context(%{})
@@ -101,13 +106,28 @@ defmodule Raxol.Agent.Actions.FXTest do
       refute Map.has_key?(Raxol.Agent.Web3.put_context(%{}), :web3_router)
     end
 
-    test "fx configured without a key fails at context build and names the variable" do
+    test "fx configured without a key refuses the load and names the variable" do
       Application.put_env(:raxol_agent, :web3, fx: [])
-      System.put_env("RAXOL_SLEUTH_API_KEY", "")
+      System.put_env("RAXOL_SLEUTH_API_KEY", "  \n")
 
       assert_raise ArgumentError, ~r/RAXOL_SLEUTH_API_KEY/, fn ->
-        Raxol.Agent.Web3.put_context(%{})
+        Raxol.Agent.Web3.load!()
       end
+    end
+
+    test "a context build reads what was loaded, so it never raises per turn" do
+      # Loaded unconfigured in setup; a later bad config or a key change is
+      # not re-read by every session context, only by the next load.
+      Application.put_env(:raxol_agent, :web3, fx: [])
+
+      assert Raxol.Agent.Web3.put_context(%{}) == %{}
+      assert Raxol.Agent.Web3.enabled_actions() == []
+
+      Application.put_env(:raxol_agent, :web3, fx: [sleuth_api_key: "k"])
+      Raxol.Agent.Web3.load!()
+      System.put_env("RAXOL_SLEUTH_API_KEY", "changed")
+
+      assert %{fx_source: %FX{sleuth: %{api_key: "k"}}} = Raxol.Agent.Web3.put_context(%{})
     end
   end
 end
