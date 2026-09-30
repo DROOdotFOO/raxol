@@ -93,7 +93,7 @@ defmodule Raxol.Payments.Xochi.CapabilitiesTest do
         Map.update!(
           @wire_evm,
           "chains",
-          &(&1 ++ [%{"chain_id" => 999_999, "chain_name" => "Future", "vm_type" => "movevm"}])
+          &[%{"chain_id" => 999_999, "chain_name" => "Future", "vm_type" => "movevm"} | &1]
         )
 
       assert {:ok, caps} = Capabilities.parse(wire)

@@ -383,13 +383,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     from_chain = Map.fetch!(params, :from_chain_id)
     settlement = settlement(params)
 
-    with {:ok, decimals} <- registered_asset(from_chain, from_token, :source),
-         {:ok, _} <-
-           registered_asset(
-             Map.fetch!(params, :to_chain_id),
-             Map.fetch!(params, :to_token),
-             :destination
-           ),
+    with {:ok, decimals} <- registered_legs(params),
          :ok <- validate_min_to_amount(params),
          {:ok, spending_key, viewing_key} <- stealth_keys(settlement, params) do
       from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
@@ -413,11 +407,28 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     end
   end
 
-  # Both legs must have registered decimals. The source amount is scaled by
-  # them -- a guess would move 10^n the intended amount -- and a destination
-  # amount (a `min_to_amount`, the same-asset floor) means nothing without them.
-  # `min_to_amount` does not waive this: the caller setting it cannot know an
-  # unregistered token's decimals either.
+  # Both legs must have registered decimals; returns the source leg's. The
+  # source amount is scaled by them -- a guess would move 10^n the intended
+  # amount -- and a destination amount (a `min_to_amount`, the same-asset floor)
+  # means nothing without them. `min_to_amount` does not waive this: the caller
+  # setting it cannot know an unregistered token's decimals either.
+  defp registered_legs(params) do
+    with {:ok, decimals} <-
+           registered_asset(
+             Map.fetch!(params, :from_chain_id),
+             Map.fetch!(params, :from_token),
+             :source
+           ),
+         {:ok, _} <-
+           registered_asset(
+             Map.fetch!(params, :to_chain_id),
+             Map.fetch!(params, :to_token),
+             :destination
+           ) do
+      {:ok, decimals}
+    end
+  end
+
   defp registered_asset(chain, token, side) do
     case Assets.fetch_decimals(chain, token) do
       {:ok, decimals} -> {:ok, decimals}
