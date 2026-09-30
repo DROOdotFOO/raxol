@@ -271,6 +271,10 @@ defmodule Raxol.Terminal.Buffer.CharEditor do
           Raxol.Terminal.ANSI.TextFormatting.text_style()
         ) :: list(Cell.t())
   def insert_into_line(line, col, count, default_style) do
+    line_length = length(line)
+    # As in xterm, ICH inserts at most up to the right margin: anything past it
+    # would be shifted off the line anyway, so never build more blanks than fit.
+    count = min(count, max(line_length - col, 0))
     {left_part, right_part} = Enum.split(line, col)
     # Inserted blanks are not dirty (for consistency with delete_from_line)
     blank_cell = %Cell{
@@ -281,9 +285,9 @@ defmodule Raxol.Terminal.Buffer.CharEditor do
     }
 
     blank_cells = List.duplicate(blank_cell, count)
-    shifted_right = Enum.take(right_part, length(line) - col - count)
+    shifted_right = Enum.take(right_part, line_length - col - count)
     result = left_part ++ blank_cells ++ shifted_right
-    pad_or_truncate_line(result, length(line))
+    pad_or_truncate_line(result, line_length)
   end
 
   @doc """

@@ -74,7 +74,8 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
 
     next_parser_state = %{
       parser_state
-      | intermediates_buffer: parser_state.intermediates_buffer <> <<intermediate_byte>>
+      | intermediates_buffer:
+          State.append_intermediate(parser_state.intermediates_buffer, intermediate_byte)
     }
 
     Logger.debug(
@@ -91,7 +92,7 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
 
     next_parser_state = %{
       parser_state
-      | params_buffer: parser_state.params_buffer <> <<param_byte>>
+      | params_buffer: State.append_param(parser_state.params_buffer, param_byte)
     }
 
     Logger.debug(
@@ -148,7 +149,7 @@ defmodule Raxol.Terminal.Parser.States.CSIIntermediateState do
   end
 
   defp handle_unhandled_byte(emulator, parser_state, unhandled_byte, rest) do
-    Logger.warning(
+    Logger.debug(
       "Unhandled byte #{unhandled_byte} in CSI Intermediate state, returning to ground."
     )
 

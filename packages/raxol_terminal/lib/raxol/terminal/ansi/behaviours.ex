@@ -28,32 +28,6 @@ defmodule Raxol.Terminal.ANSI.Behaviours do
                 t() | {t(), :ok | {:error, term()}}
   end
 
-  defmodule TerminalState do
-    @moduledoc """
-    Behaviour for managing terminal state saving and restoring.
-    """
-
-    alias Raxol.Terminal.ANSI.TerminalState
-    alias Raxol.Terminal.Emulator
-
-    # Represents the map of state data from restore_state
-    @type state_data_map :: map()
-
-    @callback save_state(
-                stack :: TerminalState.state_stack(),
-                current_emulator_state :: map()
-              ) :: TerminalState.state_stack()
-
-    @callback restore_state(stack :: TerminalState.state_stack()) ::
-                {new_stack :: TerminalState.state_stack(), state_data :: state_data_map() | nil}
-
-    @callback apply_restored_data(
-                emulator_state :: Emulator.t(),
-                state_data :: state_data_map() | nil,
-                fields_to_restore :: list(atom())
-              ) :: Emulator.t()
-  end
-
   defmodule KittyGraphics do
     @moduledoc """
     Behaviour for Kitty graphics protocol support.

@@ -164,7 +164,7 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
       data_string = "unknown_request"
 
       log =
-        capture_log([level: :warning], fn ->
+        capture_log([level: :debug], fn ->
           updated_emulator =
             case DCSHandler.handle_dcs(
                    emulator,
@@ -184,7 +184,7 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
         end)
 
       # The rejected request must never reach the log: pinning the level above
-      # keeps the warning captured, so this cannot pass on an empty log.
+      # keeps the (debug) line captured, so this cannot pass on an empty log.
       assert log =~ "DECRQSS"
       refute log =~ "unknown_request"
     end

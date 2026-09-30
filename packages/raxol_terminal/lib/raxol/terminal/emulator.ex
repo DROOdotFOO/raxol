@@ -22,6 +22,22 @@ defmodule Raxol.Terminal.Emulator do
   * `new/2` - Full features (2.8MB, ~95ms startup)
   * `new_lite/3` - Most features (1.2MB, ~30ms startup)
   * `new_minimal/2` - Basic only (8.8KB, <10ms startup)
+
+  ## Fields set from the output stream
+
+  The byte stream `process_input/2` parses is untrusted: a program or remote
+  peer writes it. Fields it sets:
+
+  * `bell_count` - how many BELs (0x07) have arrived. It only grows (RIS keeps
+    it), and nothing rings on its own: a consumer (a renderer, say) compares it
+    with the last value it saw and acts once when it has moved, however many
+    BELs arrived in between.
+  * `current_directory` and `remote_host` - from OSC 7 (`file://host/path`)
+    and OSC 1337 `CurrentDir=`/`RemoteHost=`: a decoded absolute path and a
+    host name, each valid UTF-8 without C0 or C1 control characters, else
+    not set. They are still the writer's claim, not a checked fact: the path
+    may contain `..` or name somewhere that does not exist, so treat both as
+    untrusted input.
   """
 
   alias Raxol.Terminal.Emulator.BufferOperations
@@ -83,7 +99,10 @@ defmodule Raxol.Terminal.Emulator do
               saved_size: {@default_width, @default_height},
               icon_name: ""
             },
+            # DECSC saved states, at most one per screen (`ControlCodes.handle_decsc/1`).
             state_stack: [],
+            # BELs received; see "Fields set from the output stream" above.
+            bell_count: 0,
             parser_state: %Raxol.Terminal.Parser.ParserState{state: :ground},
             command_history: [],
             max_command_history: 100,
@@ -110,6 +129,11 @@ defmodule Raxol.Terminal.Emulator do
             session_id: "",
             client_options: %{},
             window_title: nil,
+            # The working directory as a decoded local path, and the host it
+            # is on, from OSC 7 (`file://host/path`) and OSC 1337
+            # CurrentDir=/RemoteHost=.
+            current_directory: nil,
+            remote_host: nil,
             last_col_exceeded: false,
             icon_name: nil,
             tab_stops: [],
@@ -168,6 +192,7 @@ defmodule Raxol.Terminal.Emulator do
           height: non_neg_integer(),
           window_state: map(),
           state_stack: list(),
+          bell_count: non_neg_integer(),
           parser_state: any(),
           command_history: list(),
           max_command_history: non_neg_integer(),
@@ -193,6 +218,8 @@ defmodule Raxol.Terminal.Emulator do
           session_id: String.t(),
           client_options: map(),
           window_title: String.t() | nil,
+          current_directory: String.t() | nil,
+          remote_host: String.t() | nil,
           last_col_exceeded: boolean(),
           icon_name: String.t() | nil,
           tab_stops: list(),

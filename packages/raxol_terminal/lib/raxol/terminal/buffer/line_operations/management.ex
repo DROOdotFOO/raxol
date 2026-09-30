@@ -42,6 +42,21 @@ defmodule Raxol.Terminal.Buffer.LineOperations.Management do
   end
 
   @doc """
+  Splits a list of rows for IL/DL at `y`: the rows above it, the region from
+  `y` to `bottom` (clamped to the rows there are, so a region set for a
+  taller screen cannot grow the list) and the rows below, with `count`
+  clamped to the region's height.
+  """
+  @spec split_region(list(), non_neg_integer(), non_neg_integer(), integer()) ::
+          {list(), list(), list(), non_neg_integer()}
+  def split_region(cells, y, count, bottom) do
+    region_rows = max(min(bottom, length(cells) - 1) - y + 1, 0)
+    {above, from_cursor} = Enum.split(cells, y)
+    {region, below} = Enum.split(from_cursor, region_rows)
+    {above, region, below, min(count, region_rows)}
+  end
+
+  @doc """
   Create an empty line with the given width.
   """
   def create_empty_line(width, style) do

@@ -117,10 +117,13 @@ defmodule Raxol.Terminal.Commands.CSIHandler.Screen do
     {:ok, updated_emulator}
   end
 
+  # Every parameter here is a count, and a count of 0 means 1 (ECMA-48), as
+  # does a missing one or one with colon subparameters (a list, which none of
+  # these commands take). A 0 or a list used to crash the edit it reached.
   defp get_param(params, index, default) do
     case Enum.at(params, index) do
-      nil -> default
-      val -> val
+      val when is_integer(val) and val > 0 -> val
+      _ -> default
     end
   end
 end

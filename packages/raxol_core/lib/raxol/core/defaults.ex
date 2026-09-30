@@ -81,6 +81,32 @@ defmodule Raxol.Core.Defaults do
       cells: @max_remote_terminal_cells
     }
 
+  # -- Inline image ceiling --
+  # The emulator draws sixel pixel (x, y) onto the cell at the cursor plus
+  # (x, y) (`Raxol.Terminal.Commands.DCSHandler`), so a decoded image can
+  # never show more than a screen holds: the decoder keeps at most the local
+  # terminal ceiling's width and height, and its cell count in pixels. That
+  # many kept pixels measured 53 MB flat (`:erts_debug.flat_size/1` of a
+  # 1024x1024 pixel map). The encoded payload is capped at 4 bytes a pixel,
+  # the raw RGBA size of the largest image: sixel packs 6 pixels into a byte,
+  # so a single-colour image at the ceiling needs a sixth of that, and the
+  # rest is room for colour passes.
+  @max_image_payload_bytes 4 * @max_terminal_cells
+
+  @doc """
+  The largest decoded inline image as `%{width:, height:, pixels:}`: the
+  local terminal size ceiling.
+  """
+  def image_size_ceiling,
+    do: %{
+      width: @max_terminal_width,
+      height: @max_terminal_height,
+      pixels: @max_terminal_cells
+    }
+
+  @doc "The largest encoded inline image payload, in bytes (4 MiB)."
+  def max_image_payload_bytes, do: @max_image_payload_bytes
+
   # -- Timeouts (milliseconds) --
   @default_timeout_ms 5_000
   @default_shutdown_timeout_ms 5_000

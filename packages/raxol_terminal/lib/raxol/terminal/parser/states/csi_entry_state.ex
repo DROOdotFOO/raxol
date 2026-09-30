@@ -4,6 +4,10 @@ defmodule Raxol.Terminal.Parser.States.CSIEntryState do
   This state is entered after receiving an ESC [ sequence.
   """
 
+  require Logger
+
+  alias Raxol.Terminal.Parser.ParserState
+
   @doc """
   Handles input in CSI Entry state.
   Returns the next state and any accumulated data.
@@ -14,12 +18,16 @@ defmodule Raxol.Terminal.Parser.States.CSIEntryState do
   end
 
   defp dispatch_byte(byte, data) when byte in 0x30..0x39//1 or byte == 0x3B do
-    {:csi_param, Map.update(data, :params_buffer, <<byte>>, &(&1 <> <<byte>>))}
+    params = ParserState.append_param(Map.get(data, :params_buffer, ""), byte)
+    {:csi_param, Map.put(data, :params_buffer, params)}
   end
 
   defp dispatch_byte(byte, data)
        when byte in 0x20..0x2F//1 or byte == 0x3F or byte == 0x3E do
-    {:csi_intermediate, Map.update(data, :intermediates_buffer, <<byte>>, &(&1 <> <<byte>>))}
+    intermediates =
+      ParserState.append_intermediate(Map.get(data, :intermediates_buffer, ""), byte)
+
+    {:csi_intermediate, Map.put(data, :intermediates_buffer, intermediates)}
   end
 
   defp dispatch_byte(byte, data) when byte in 0x40..0x7E//1 do
@@ -27,7 +35,7 @@ defmodule Raxol.Terminal.Parser.States.CSIEntryState do
   end
 
   defp dispatch_byte(byte, data) do
-    Raxol.Core.Runtime.Log.warning("Invalid byte in CSI Entry state: #{inspect(byte)}")
+    Logger.debug("Invalid byte in CSI Entry state: #{inspect(byte)}")
 
     {:ground, data}
   end

@@ -27,15 +27,7 @@ defmodule Raxol.Terminal.Commands.Screen do
         {t, b} -> {t, b}
       end
 
-    new_buffer =
-      case mode do
-        0 -> ScreenBuffer.erase_from_cursor_to_end(buffer, x, y, top, bottom)
-        1 -> ScreenBuffer.erase_from_start_to_cursor(buffer, x, y, top, bottom)
-        2 -> ScreenBuffer.erase_all(buffer)
-        # Clear entire screen and scrollback
-        3 -> ScreenBuffer.erase_all(buffer)
-      end
-
+    new_buffer = erase_display(buffer, mode, x, y, top, bottom)
     emulator = Emulator.update_active_buffer(emulator, new_buffer)
 
     # For mode 3, also clear the scrollback buffer
@@ -44,6 +36,20 @@ defmodule Raxol.Terminal.Commands.Screen do
       _ -> emulator
     end
   end
+
+  defp erase_display(buffer, 0, x, y, top, bottom),
+    do: ScreenBuffer.erase_from_cursor_to_end(buffer, x, y, top, bottom)
+
+  defp erase_display(buffer, 1, x, y, top, bottom),
+    do: ScreenBuffer.erase_from_start_to_cursor(buffer, x, y, top, bottom)
+
+  # 3 also clears the scrollback (in `clear_screen/2`).
+  defp erase_display(buffer, mode, _x, _y, _top, _bottom) when mode in [2, 3],
+    do: ScreenBuffer.erase_all(buffer)
+
+  # Any other mode is ignored, as in xterm; it used to match no clause and
+  # crash the emulator.
+  defp erase_display(buffer, _mode, _x, _y, _top, _bottom), do: buffer
 
   def clear_line(emulator, mode) do
     buffer = Emulator.get_screen_buffer(emulator)
@@ -87,7 +93,7 @@ defmodule Raxol.Terminal.Commands.Screen do
 
         # Unknown mode, do nothing
         _ ->
-          Logger.warning("Unknown clear line mode: #{mode}")
+          Logger.debug("Unknown clear line mode: #{mode}")
 
           buffer
       end

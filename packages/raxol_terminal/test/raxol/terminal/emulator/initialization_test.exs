@@ -31,7 +31,7 @@ defmodule Raxol.Terminal.Emulator.InitializationTest do
       # Direct access ok
       assert is_list(emulator.state_stack)
       # Direct access ok
-      assert Raxol.Terminal.ANSI.TerminalState.count(emulator.state_stack) == 0
+      assert emulator.state_stack == []
     end
 
     test ~c"move_cursor moves cursor and clamps within bounds" do

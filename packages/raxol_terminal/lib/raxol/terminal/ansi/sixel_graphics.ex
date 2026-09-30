@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
 
   import Bitwise
 
+  alias Raxol.Core.Defaults
+
   @behaviour Raxol.Terminal.ANSI.Behaviours.SixelGraphics
 
   @moduledoc """
@@ -395,39 +397,30 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
   """
   @spec process_sequence(t(), binary()) :: {t(), :ok | {:error, term()}}
   @impl true
-  def process_sequence(state, data) when is_binary(data) do
+  def process_sequence(state, data) when is_binary(data),
+    do: process_sequence(state, data, Defaults.image_size_ceiling())
+
+  @doc """
+  Processes a sequence of Sixel data, keeping only the pixels that fall inside
+  `extent` (`%{width: columns, height: rows}` from the image's origin, each
+  clamped to `Raxol.Core.Defaults.image_size_ceiling/0`). The emulator draws a
+  pixel per cell with the image's top left at the cursor, so it passes the
+  columns from the cursor to the right edge by the rows from it to the bottom.
+  """
+  @spec process_sequence(t(), binary(), %{
+          required(:width) => non_neg_integer(),
+          required(:height) => non_neg_integer(),
+          optional(atom()) => term()
+        }) :: {t(), :ok | {:error, term()}}
+  def process_sequence(state, data, %{width: max_width, height: max_height})
+      when is_binary(data) do
     Logger.debug("SixelGraphics: processing #{byte_size(data)} bytes")
 
-    # Ensure palette is initialized
-    state_with_palette =
-      if map_size(state.palette) == 0 do
-        %{
-          state
-          | palette: Raxol.Terminal.ANSI.SixelPalette.initialize_palette()
-        }
-      else
-        state
-      end
-
-    Logger.debug(
-      "SixelGraphics: Initial palette has #{map_size(state_with_palette.palette)} colors"
-    )
-
-    Logger.debug("SixelGraphics: calling parser")
+    state_with_palette = ensure_palette(state)
 
     case Raxol.Terminal.ANSI.SixelParser.parse(
            data,
-           %Raxol.Terminal.ANSI.SixelParser.ParserState{
-             x: 0,
-             y: 0,
-             color_index: state_with_palette.current_color,
-             repeat_count: 1,
-             palette: state_with_palette.palette,
-             raster_attrs: state_with_palette.attributes,
-             pixel_buffer: state_with_palette.pixel_buffer,
-             max_x: 0,
-             max_y: 0
-           }
+           parser_state(state_with_palette, max_width, max_height)
          ) do
       {:ok, parser_state} ->
         Logger.debug(
@@ -462,6 +455,29 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
   end
 
   # Private helper functions
+
+  defp ensure_palette(%{palette: palette} = state) when map_size(palette) == 0,
+    do: %{state | palette: Raxol.Terminal.ANSI.SixelPalette.initialize_palette()}
+
+  defp ensure_palette(state), do: state
+
+  defp parser_state(state, max_width, max_height) do
+    ceiling = Defaults.image_size_ceiling()
+
+    %Raxol.Terminal.ANSI.SixelParser.ParserState{
+      x: 0,
+      y: 0,
+      color_index: state.current_color,
+      repeat_count: 1,
+      palette: state.palette,
+      raster_attrs: state.attributes,
+      pixel_buffer: state.pixel_buffer,
+      max_x: 0,
+      max_y: 0,
+      max_width: min(max_width, ceiling.width),
+      max_height: min(max_height, ceiling.height)
+    }
+  end
 
   defp encode_pixel_buffer_to_sixel(image) do
     if map_size(image.pixel_buffer) == 0 do

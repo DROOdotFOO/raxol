@@ -1,12 +1,17 @@
 defmodule Raxol.Terminal.Commands.OSCHandler do
   @moduledoc """
-  Consolidated OSC (Operating System Command) handler for terminal control sequences.
-  Combines all OSC handler functionality including window, clipboard, color, and selection operations.
+  Dispatches OSC (Operating System Command) sequences from the output stream.
+
+  Handled: titles and icon names (OSC 0, 1, 2), the working directory (OSC 7
+  and OSC 1337 `CurrentDir=`/`RemoteHost=`), hyperlinks (OSC 8),
+  notifications and progress (OSC 9), and the pointer shape (OSC 22).
+  Accepted and ignored: colours (OSC 4, 10, 11, 17, 19; no reply to a
+  query), the clipboard and selection (OSC 52, 51; a query is never
+  answered), and cursor colour and shape (OSC 12, 50, 112). Anything else is
+  unsupported.
   """
 
   require Logger
-
-  alias Raxol.Terminal.{Clipboard, Colors}
 
   # Alias for backward compatibility
   def handle_osc_sequence(emulator, command, data) do
@@ -34,7 +39,7 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
         handle_standalone_ops(emulator, cmd, data)
 
       :unsupported ->
-        Logger.warning("Unsupported OSC command: #{inspect(command)}")
+        Logger.debug("Unsupported OSC command: #{inspect(command)}")
         {:error, :unsupported_command, emulator}
     end
   end
@@ -124,61 +129,16 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
   # Clipboard sub-module
   defmodule Clipboard do
     @moduledoc """
-    Handles clipboard-related OSC commands.
+    Handles OSC 52 (clipboard).
+
+    Ignored. A query would hand the clipboard's contents to whatever program,
+    or remote peer, writes the output stream, so it is never answered. A set
+    has nowhere to go: the emulator keeps no clipboard of its own and has no
+    opt-in to write the host's. Both used to raise, as the emulator has no
+    `:clipboard` field.
     """
 
-    alias Raxol.Terminal.Clipboard
-
-    def handle_52(emulator, data) do
-      case parse_52_command(data) do
-        {:query, :clipboard} ->
-          content = Clipboard.get_content(emulator.clipboard)
-          response = format_clipboard_response(52, content)
-          {:ok, %{emulator | output_buffer: response}}
-
-        {:query, :selection} ->
-          {:ok, content} = Clipboard.get_selection(emulator.clipboard)
-          response = format_clipboard_response(52, content)
-          {:ok, %{emulator | output_buffer: response}}
-
-        {:set, :clipboard, content} ->
-          {:ok, new_clipboard} =
-            Clipboard.set_content(emulator.clipboard, content)
-
-          {:ok, %{emulator | clipboard: new_clipboard}}
-
-        {:set, :selection, content} ->
-          {:ok, new_clipboard} =
-            Clipboard.set_selection(emulator.clipboard, content)
-
-          {:ok, %{emulator | clipboard: new_clipboard}}
-
-        {:error, _reason} ->
-          {:error, :invalid_clipboard_command, emulator}
-      end
-    end
-
-    defp parse_52_command(data) do
-      case String.split(data, ";", parts: 2) do
-        ["c", "?"] -> {:query, :clipboard}
-        ["s", "?"] -> {:query, :selection}
-        ["c", content] -> {:set, :clipboard, decode_base64(content)}
-        ["s", content] -> {:set, :selection, decode_base64(content)}
-        _ -> {:error, :invalid_format}
-      end
-    end
-
-    defp decode_base64(content) do
-      case Base.decode64(content) do
-        {:ok, decoded} -> decoded
-        _ -> content
-      end
-    end
-
-    defp format_clipboard_response(command, content) do
-      encoded = Base.encode64(content)
-      "\e]#{command};c;#{encoded}\e\\"
-    end
+    def handle_52(emulator, _data), do: {:ok, emulator}
   end
 
   # Notification sub-module
@@ -250,267 +210,32 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
   # Color sub-module
   defmodule Color do
     @moduledoc """
-    Handles color-related OSC commands.
+    Handles OSC 10, 11, 17 and 19 (default foreground, background, selection
+    background and foreground).
+
+    Ignored: the emulator keeps no such colours to set or report, so a query
+    gets no reply, and programs that ask (neovim asks for the background at
+    startup) fall back to their defaults. Both used to raise, as the emulator
+    has no `:colors` field.
     """
 
-    alias Raxol.Terminal.Colors
-
-    def handle_10(emulator, data) do
-      case data do
-        "?" -> handle_color_query(emulator, 10, &Colors.get_foreground/1)
-        color_spec -> set_color(emulator, color_spec, &Colors.set_foreground/2)
-      end
-    end
-
-    def handle_11(emulator, data) do
-      case data do
-        "?" -> handle_color_query(emulator, 11, &Colors.get_background/1)
-        color_spec -> set_color(emulator, color_spec, &Colors.set_background/2)
-      end
-    end
-
-    def handle_17(emulator, data) do
-      case data do
-        "?" ->
-          handle_color_query(emulator, 17, &Colors.get_selection_background/1)
-
-        color_spec ->
-          set_color(emulator, color_spec, &Colors.set_selection_background/2)
-      end
-    end
-
-    def handle_19(emulator, data) do
-      case data do
-        "?" ->
-          handle_color_query(emulator, 19, &Colors.get_selection_foreground/1)
-
-        color_spec ->
-          set_color(emulator, color_spec, &Colors.set_selection_foreground/2)
-      end
-    end
-
-    defp handle_color_query(emulator, command, getter) do
-      color = getter.(emulator.colors)
-      response = format_color_response(command, color)
-      {:ok, %{emulator | output_buffer: response}}
-    end
-
-    defp set_color(emulator, color_spec, setter) do
-      case Raxol.Terminal.Commands.OSCHandler.ColorParser.parse(color_spec) do
-        {:ok, color} ->
-          {:ok, new_colors} = setter.(emulator.colors, color)
-          {:ok, %{emulator | colors: new_colors}}
-
-        {:error, _reason} ->
-          {:error, :invalid_color_spec, emulator}
-      end
-    end
-
-    defp format_color_response(command, {r, g, b}) do
-      "\e]#{command};rgb:#{format_hex(r)}/#{format_hex(g)}/#{format_hex(b)}\e\\"
-    end
-
-    defp format_hex(value) do
-      Integer.to_string(value, 16) |> String.pad_leading(2, "0")
-    end
-  end
-
-  # ColorParser sub-module
-  defmodule ColorParser do
-    @moduledoc """
-    Parses color specifications from OSC commands.
-    """
-
-    def parse(color_spec) do
-      cond do
-        String.starts_with?(color_spec, "rgb:") ->
-          parse_rgb(String.trim_leading(color_spec, "rgb:"))
-
-        String.starts_with?(color_spec, "#") ->
-          parse_hex(String.trim_leading(color_spec, "#"))
-
-        true ->
-          parse_name(color_spec)
-      end
-    end
-
-    defp parse_rgb(rgb_string) do
-      case String.split(rgb_string, "/") do
-        [r, g, b] ->
-          with {:ok, red} <- parse_component(r),
-               {:ok, green} <- parse_component(g),
-               {:ok, blue} <- parse_component(b) do
-            {:ok, {red, green, blue}}
-          else
-            _ -> {:error, :invalid_rgb_format}
-          end
-
-        _ ->
-          {:error, :invalid_rgb_format}
-      end
-    end
-
-    defp parse_component(hex) do
-      case Integer.parse(hex, 16) do
-        {value, ""} when value >= 0 and value <= 255 -> {:ok, value}
-        _ -> {:error, :invalid_component}
-      end
-    end
-
-    defp parse_hex(hex_string) do
-      case String.length(hex_string) do
-        6 ->
-          case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_6(hex_string) do
-            {:ok, r, g, b, _a} -> {:ok, {r, g, b}}
-            {:error, _} -> {:error, :invalid_hex_format}
-          end
-
-        3 ->
-          case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_3(hex_string) do
-            {:ok, r, g, b, _a} -> {:ok, {r, g, b}}
-            {:error, _} -> {:error, :invalid_hex_format}
-          end
-
-        _ ->
-          {:error, :invalid_hex_length}
-      end
-    end
-
-    defp parse_name(name) do
-      color_names = %{
-        "black" => {0, 0, 0},
-        "red" => {255, 0, 0},
-        "green" => {0, 255, 0},
-        "yellow" => {255, 255, 0},
-        "blue" => {0, 0, 255},
-        "magenta" => {255, 0, 255},
-        "cyan" => {0, 255, 255},
-        "white" => {255, 255, 255}
-      }
-
-      case Map.get(color_names, String.downcase(name)) do
-        nil -> {:error, :unknown_color_name}
-        color -> {:ok, color}
-      end
-    end
+    def handle_10(emulator, _data), do: {:ok, emulator}
+    def handle_11(emulator, _data), do: {:ok, emulator}
+    def handle_17(emulator, _data), do: {:ok, emulator}
+    def handle_19(emulator, _data), do: {:ok, emulator}
   end
 
   # ColorPalette sub-module
   defmodule ColorPalette do
     @moduledoc """
-    Handles color palette OSC commands.
+    Handles OSC 4 (palette colours).
+
+    Ignored: the emulator has no palette model to set, reset or report from,
+    so a query gets no reply. It used to raise, as the emulator has no
+    `:palette` field.
     """
 
-    def handle_4(emulator, data) do
-      case parse_palette_command(data) do
-        {:set, index, color} ->
-          set_palette_color(emulator, index, color)
-
-        {:query, index} ->
-          query_palette_color(emulator, index)
-
-        {:reset, index} ->
-          reset_palette_color(emulator, index)
-
-        {:error, _reason} ->
-          {:error, :invalid_palette_command, emulator}
-      end
-    end
-
-    defp parse_palette_command(data) do
-      case String.split(data, ";", parts: 2) do
-        [index_str, "?"] ->
-          case Integer.parse(index_str) do
-            {index, ""} ->
-              {:query, index}
-
-            _ ->
-              {:error, :invalid_index}
-          end
-
-        [index_str, color_spec] ->
-          case Integer.parse(index_str) do
-            {index, ""} ->
-              if color_spec == "" do
-                {:reset, index}
-              else
-                case Raxol.Terminal.Commands.OSCHandler.ColorParser.parse(color_spec) do
-                  {:ok, color} -> {:set, index, color}
-                  error -> error
-                end
-              end
-
-            _ ->
-              {:error, :invalid_index}
-          end
-
-        _ ->
-          {:error, :invalid_format}
-      end
-    end
-
-    defp set_palette_color(emulator, index, color)
-         when index >= 0 and index < 256 do
-      palette = Map.put(emulator.palette, index, color)
-      {:ok, %{emulator | palette: palette}}
-    end
-
-    defp set_palette_color(emulator, _index, _color) do
-      {:error, :index_out_of_range, emulator}
-    end
-
-    defp query_palette_color(emulator, index) when index >= 0 and index < 256 do
-      color = Map.get(emulator.palette, index, {0, 0, 0})
-      response = format_palette_response(index, color)
-      {:ok, %{emulator | output_buffer: response}}
-    end
-
-    defp query_palette_color(emulator, _index) do
-      {:error, :index_out_of_range, emulator}
-    end
-
-    defp reset_palette_color(emulator, index) when index >= 0 and index < 256 do
-      default_color = get_default_palette_color(index)
-      palette = Map.put(emulator.palette, index, default_color)
-      {:ok, %{emulator | palette: palette}}
-    end
-
-    defp reset_palette_color(emulator, _index) do
-      {:error, :index_out_of_range, emulator}
-    end
-
-    defp get_default_palette_color(index) do
-      # Return default ANSI color for the given index
-      # This is a simplified version - actual defaults depend on terminal
-      case index do
-        # Black
-        0 -> {0, 0, 0}
-        # Red
-        1 -> {205, 0, 0}
-        # Green
-        2 -> {0, 205, 0}
-        # Yellow
-        3 -> {205, 205, 0}
-        # Blue
-        4 -> {0, 0, 238}
-        # Magenta
-        5 -> {205, 0, 205}
-        # Cyan
-        6 -> {0, 205, 205}
-        # White
-        7 -> {229, 229, 229}
-        # Default to black
-        _ -> {0, 0, 0}
-      end
-    end
-
-    defp format_palette_response(index, {r, g, b}) do
-      "\e]4;#{index};rgb:#{format_hex(r)}/#{format_hex(g)}/#{format_hex(b)}\e\\"
-    end
-
-    defp format_hex(value) do
-      Integer.to_string(value, 16) |> String.pad_leading(4, "0")
-    end
+    def handle_4(emulator, _data), do: {:ok, emulator}
   end
 
   # Window sub-module
@@ -535,9 +260,31 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
       {:ok, %{emulator | window_title: data}}
     end
 
+    # OSC 7 carries a `file://host/path` URI (percent-encoded). The decoded
+    # path becomes `current_directory` and the host `remote_host`, but only
+    # when the path is absolute and both are valid UTF-8 without C0 or C1
+    # control characters (a UTF-8 U+009B is a CSI to some terminals);
+    # anything else is ignored. Bounded by the OSC string cap
+    # (`Raxol.Terminal.Parser.ParserState`).
     def handle_7(emulator, data) do
-      # Set current directory (for terminal tabs)
-      {:ok, %{emulator | current_directory: data}}
+      with %URI{scheme: "file", path: "/" <> _ = path, host: host} <- URI.parse(data),
+           {:ok, path} <- clean_text(URI.decode(path)),
+           {:ok, host} <- clean_host(host) do
+        {:ok, emulator |> put_known(:current_directory, path) |> put_known(:remote_host, host)}
+      else
+        _ -> {:ok, emulator}
+      end
+    end
+
+    defp clean_host(nil), do: {:ok, nil}
+    defp clean_host(""), do: {:ok, nil}
+    defp clean_host(host), do: clean_text(URI.decode(host))
+
+    # String.valid?/1 runs first, so the `u` regex never sees invalid UTF-8.
+    defp clean_text(text) do
+      if String.valid?(text) and not String.match?(text, ~r/[\x00-\x1F\x7F-\x9F]/u),
+        do: {:ok, text},
+        else: :error
     end
 
     def handle_8(emulator, data) do
@@ -567,162 +314,40 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     defp handle_iterm2_command(emulator, data) do
       case data do
         "RemoteHost=" <> host ->
-          {:ok, %{emulator | remote_host: host}}
+          {:ok, put_clean(emulator, :remote_host, host)}
 
-        "CurrentDir=" <> dir ->
-          {:ok, %{emulator | current_directory: dir}}
+        "CurrentDir=" <> "/" <> rest ->
+          {:ok, put_clean(emulator, :current_directory, "/" <> rest)}
 
         _ ->
           # Unsupported iTerm2 command
           {:ok, emulator}
       end
     end
+
+    defp put_clean(emulator, key, value) do
+      case clean_text(value) do
+        {:ok, value} -> put_known(emulator, key, value)
+        :error -> emulator
+      end
+    end
+
+    # Only an emulator that has the field keeps the value.
+    defp put_known(emulator, key, value) do
+      if Map.has_key?(emulator, key), do: Map.put(emulator, key, value), else: emulator
+    end
   end
 
   # Selection sub-module
   defmodule Selection do
     @moduledoc """
-    Handles selection-related OSC commands.
+    Handles OSC 51 (selection).
+
+    Ignored, like OSC 52: a query would hand the selection to the output
+    stream's writer, and the emulator keeps no selection to set. Both used to
+    raise, as the emulator has no `:selection_content` field.
     """
 
-    def handle_51(emulator, data) do
-      case data do
-        "?" ->
-          # Query selection content
-          content = Map.get(emulator, :selection_content, "")
-          response = format_selection_response(content)
-          {:ok, %{emulator | output_buffer: response}}
-
-        content ->
-          # Set selection content
-          {:ok, %{emulator | selection_content: content}}
-      end
-    end
-
-    defp format_selection_response(content) do
-      encoded = Base.encode64(content)
-      "\e]51;s;#{encoded}\e\\"
-    end
-  end
-
-  # FontParser sub-module
-  defmodule FontParser do
-    @moduledoc """
-    Parses font specifications from OSC commands.
-    """
-
-    def parse(font_spec) do
-      case parse_font_components(font_spec) do
-        {:ok, components} -> build_font_map(components)
-        error -> error
-      end
-    end
-
-    defp parse_font_components(spec) do
-      parts = String.split(spec, ":")
-
-      case parts do
-        [family] ->
-          {:ok, %{family: family}}
-
-        [family, size] ->
-          case Integer.parse(size) do
-            {size_val, ""} -> {:ok, %{family: family, size: size_val}}
-            _ -> {:error, :invalid_size}
-          end
-
-        [family, size, style] ->
-          case Integer.parse(size) do
-            {size_val, ""} ->
-              {:ok, %{family: family, size: size_val, style: parse_style(style)}}
-
-            _ ->
-              {:error, :invalid_size}
-          end
-
-        _ ->
-          {:error, :invalid_format}
-      end
-    end
-
-    defp parse_style(style) do
-      style
-      |> String.downcase()
-      |> case do
-        "bold" -> :bold
-        "italic" -> :italic
-        "bolditalic" -> :bold_italic
-        _ -> :regular
-      end
-    end
-
-    defp build_font_map(components) do
-      font =
-        %{
-          family: "monospace",
-          size: 12,
-          style: :regular
-        }
-        |> Map.merge(components)
-
-      {:ok, font}
-    end
-  end
-
-  # HyperlinkParser sub-module
-  defmodule HyperlinkParser do
-    @moduledoc """
-    Parses hyperlink specifications from OSC 8 commands.
-    """
-
-    def parse(data) do
-      case String.split(data, ";", parts: 2) do
-        [params, url] ->
-          parsed_params = parse_params(params)
-          {:ok, url, parsed_params}
-
-        _ ->
-          {:error, :invalid_format}
-      end
-    end
-
-    defp parse_params(params_string) do
-      params_string
-      |> String.split(":")
-      |> Enum.map(&parse_param/1)
-      |> Enum.filter(fn {k, _} -> k != nil end)
-      |> Map.new()
-    end
-
-    defp parse_param(param) do
-      case String.split(param, "=", parts: 2) do
-        [key, value] -> {String.to_atom(key), value}
-        _ -> {nil, nil}
-      end
-    end
-  end
-
-  # SelectionParser sub-module
-  defmodule SelectionParser do
-    @moduledoc """
-    Parses selection specifications from OSC commands.
-    """
-
-    def parse(data) do
-      case String.split(data, ";") do
-        ["start", x1, y1, "end", x2, y2] ->
-          with {x1_val, ""} <- Integer.parse(x1),
-               {y1_val, ""} <- Integer.parse(y1),
-               {x2_val, ""} <- Integer.parse(x2),
-               {y2_val, ""} <- Integer.parse(y2) do
-            {:ok, %{start: {x1_val, y1_val}, end: {x2_val, y2_val}}}
-          else
-            _ -> {:error, :invalid_coordinates}
-          end
-
-        _ ->
-          {:error, :invalid_format}
-      end
-    end
+    def handle_51(emulator, _data), do: {:ok, emulator}
   end
 end

@@ -6,6 +6,7 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
 
   alias Raxol.Terminal.ANSI.TextFormatting
   alias Raxol.Terminal.Commands.CursorUtils
+  alias Raxol.Terminal.ControlCodes
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ModeManager
   alias Raxol.Terminal.Modes.Types.ModeTypes
@@ -77,8 +78,9 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
 
   defp handle_alt_screen_with_save(true, emulator) do
     # Mode 1047: Alt screen with save/restore
-    with {:ok, alt_buffer} <- create_or_get_alt_buffer(emulator),
-         {:ok, emulator_with_saved_state} <- save_terminal_state(emulator) do
+    with {:ok, alt_buffer} <- create_or_get_alt_buffer(emulator) do
+      emulator_with_saved_state = ControlCodes.handle_decsc(emulator)
+
       # Set alternate_buffer_active to true in mode_manager
       new_mode_manager =
         Map.put(
@@ -106,23 +108,22 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
   end
 
   defp handle_alt_screen_with_save(false, emulator) do
-    # Switch back to main buffer and restore state
-    with {:ok, emulator_with_restored_state} <- restore_terminal_state(emulator) do
-      # Set alternate_buffer_active to false in mode_manager
-      new_mode_manager =
-        Map.put(
-          emulator_with_restored_state.mode_manager,
-          :alternate_buffer_active,
-          false
-        )
+    # Switch back to the main screen, then restore its saved cursor, which is
+    # the state saved on entry unless the program saved another. A 1047l with
+    # nothing saved leaves the cursor alone: xterm's 1047 exit never restores,
+    # so it must not fall into DECRC's power-up reset.
+    main = %{emulator | active_buffer_type: :main}
 
-      {:ok,
-       %{
-         emulator_with_restored_state
-         | active_buffer_type: :main,
-           mode_manager: new_mode_manager
-       }}
-    end
+    emulator_with_restored_state =
+      case ControlCodes.saved_cursor_save_state(main) do
+        nil -> main
+        saved_state -> ControlCodes.restore_cursor_save_state(main, saved_state)
+      end
+
+    new_mode_manager =
+      Map.put(emulator_with_restored_state.mode_manager, :alternate_buffer_active, false)
+
+    {:ok, %{emulator_with_restored_state | mode_manager: new_mode_manager}}
   end
 
   defp handle_alt_screen_with_clear(true, emulator) do
@@ -131,8 +132,9 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
     # slot (`emulator.saved_cursor`), not only the state stack.
     emulator = CursorUtils.save_cursor_position(emulator)
 
-    with {:ok, alt_buffer} <- create_or_get_alt_buffer(emulator),
-         {:ok, emulator_with_saved_state} <- save_terminal_state(emulator) do
+    with {:ok, alt_buffer} <- create_or_get_alt_buffer(emulator) do
+      emulator_with_saved_state = ControlCodes.handle_decsc(emulator)
+
       # Clear the alternate buffer
       cleared_alt_buffer =
         @screen_buffer_module.clear(
@@ -162,31 +164,19 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
   end
 
   defp handle_alt_screen_with_clear(false, emulator) do
-    # Switch back to main buffer, restore state (DECRC included), and clear
-    # the alt buffer
-    with {:ok, emulator_with_restored_state} <- restore_terminal_state(emulator) do
-      emulator_with_restored_state =
-        CursorUtils.restore_cursor_position(emulator_with_restored_state)
+    # Switch back to the main screen, restore its DECSC slot (DECRC) and
+    # clear the alt buffer. As in xterm, only that slot: the `CSI s` position
+    # slot is shared by both screens, so a program's `CSI s` on the alternate
+    # screen would otherwise move the main screen's cursor on exit.
+    emulator = ControlCodes.handle_decrc(%{emulator | active_buffer_type: :main})
 
-      # Clear the alternate buffer before switching away
-      case emulator_with_restored_state.alternate_screen_buffer do
-        nil ->
-          {:ok, %{emulator_with_restored_state | active_buffer_type: :main}}
+    case emulator.alternate_screen_buffer do
+      nil ->
+        {:ok, emulator}
 
-        alt_buf ->
-          cleared_alt_buf =
-            @screen_buffer_module.clear(
-              alt_buf,
-              TextFormatting.new()
-            )
-
-          {:ok,
-           %{
-             emulator_with_restored_state
-             | alternate_screen_buffer: cleared_alt_buf,
-               active_buffer_type: :main
-           }}
-      end
+      alt_buf ->
+        cleared_alt_buf = @screen_buffer_module.clear(alt_buf, TextFormatting.new())
+        {:ok, %{emulator | alternate_screen_buffer: cleared_alt_buf}}
     end
   end
 
@@ -203,86 +193,20 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
     end
   end
 
-  defp save_terminal_state(emulator) do
-    # Get the terminal state implementation
-    terminal_state_module =
-      Application.get_env(
-        :raxol,
-        :terminal_state_impl,
-        Raxol.Terminal.ANSI.TerminalState
-      )
-
-    # Save the current state
-    new_stack = terminal_state_module.save_state(emulator.state_stack, emulator)
-    {:ok, %{emulator | state_stack: new_stack}}
-  end
-
-  defp restore_terminal_state(emulator) do
-    # Get the terminal state implementation
-    terminal_state_module =
-      Application.get_env(
-        :raxol,
-        :terminal_state_impl,
-        Raxol.Terminal.ANSI.TerminalState
-      )
-
-    # Restore the previous state
-    {restored_state, new_stack} =
-      terminal_state_module.restore_state(emulator.state_stack)
-
-    case restored_state do
-      nil ->
-        {:ok, emulator}
-
-      state ->
-        # Apply the restored state
-        emulator_with_restored_state =
-          terminal_state_module.apply_restored_data(
-            emulator,
-            state,
-            [
-              :cursor,
-              :style,
-              :charset_state,
-              :mode_manager,
-              :scroll_region,
-              :cursor_style
-            ]
-          )
-
-        {:ok, %{emulator_with_restored_state | state_stack: new_stack}}
-    end
-  end
-
   defp handle_cursor_save_restore(true, emulator) do
-    # Mode 1048: Save cursor position and attributes
-    save_terminal_state(emulator)
+    # Mode 1048: save the cursor as DECSC does
+    {:ok, ControlCodes.handle_decsc(emulator)}
   end
 
   defp handle_cursor_save_restore(false, emulator) do
-    # Mode 1048: Restore cursor position and attributes only
-    restore_cursor_only(emulator)
-  end
+    # Mode 1048: restore only the cursor from the screen's DECSC slot
+    case ControlCodes.saved_cursor_save_state(emulator) do
+      nil ->
+        {:ok, emulator}
 
-  defp restore_cursor_only(emulator) do
-    # Get the terminal state implementation
-    terminal_state_module =
-      Application.get_env(
-        :raxol,
-        :terminal_state_impl,
-        Raxol.Terminal.ANSI.TerminalState
-      )
-
-    # Restore the previous state
-    {restored_state, new_stack} =
-      terminal_state_module.restore_state(emulator.state_stack)
-
-    # Only restore the cursor position
-    emulator =
-      terminal_state_module.apply_restored_data(emulator, restored_state, [
-        :cursor
-      ])
-
-    {:ok, %{emulator | state_stack: new_stack}}
+      saved_state ->
+        cursor = ControlCodes.restore_cursor_state(saved_state.cursor, emulator.cursor)
+        {:ok, %{emulator | cursor: cursor}}
+    end
   end
 end

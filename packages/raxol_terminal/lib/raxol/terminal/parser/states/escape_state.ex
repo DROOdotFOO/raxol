@@ -138,10 +138,7 @@ defmodule Raxol.Terminal.Parser.States.EscapeState do
   end
 
   defp dispatch_escape_input(<<>>, emulator, parser_state) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "Incomplete escape sequence",
-      %{}
-    )
+    Logger.debug("Incomplete escape sequence")
 
     {:incomplete, emulator, parser_state}
   end
@@ -238,10 +235,7 @@ defmodule Raxol.Terminal.Parser.States.EscapeState do
 
   @impl Raxol.Terminal.Parser.StateBehaviour
   def handle_unknown(emulator, state) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "EscapeState received unknown command",
-      %{emulator: emulator, state: state}
-    )
+    Logger.debug("EscapeState received unknown command")
 
     {:ok, emulator, %{state | state: :ground}}
   end

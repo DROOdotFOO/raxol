@@ -78,7 +78,7 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
 
     next_parser_state = %{
       parser_state
-      | params_buffer: parser_state.params_buffer <> <<digit>>
+      | params_buffer: State.append_param(parser_state.params_buffer, digit)
     }
 
     # Log.debug(
@@ -95,7 +95,7 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
 
     next_parser_state = %{
       parser_state
-      | params_buffer: parser_state.params_buffer <> <<?;>>
+      | params_buffer: State.append_param(parser_state.params_buffer, ?;)
     }
 
     # Log.debug(
@@ -108,7 +108,7 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
   defp handle_colon(emulator, parser_state, rest) do
     next_parser_state = %{
       parser_state
-      | params_buffer: parser_state.params_buffer <> <<?:>>
+      | params_buffer: State.append_param(parser_state.params_buffer, ?:)
     }
 
     {:continue, emulator, next_parser_state, rest}
@@ -121,7 +121,8 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
 
     next_parser_state = %{
       parser_state
-      | intermediates_buffer: parser_state.intermediates_buffer <> <<intermediate_byte>>,
+      | intermediates_buffer:
+          State.append_intermediate(parser_state.intermediates_buffer, intermediate_byte),
         params_buffer: "",
         state: :csi_intermediate
     }
@@ -177,7 +178,7 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
     msg =
       "Unhandled byte #{unhandled_byte} in CSI Param state, returning to ground."
 
-    Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+    Logger.debug(msg)
     next_parser_state = %{parser_state | state: :ground}
     {:continue, emulator, next_parser_state, rest}
   end

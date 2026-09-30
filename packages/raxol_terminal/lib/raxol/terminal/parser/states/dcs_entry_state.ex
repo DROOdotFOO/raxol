@@ -73,7 +73,7 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   defp handle_param_byte(emulator, parser_state, byte, rest) do
     next_state = %{
       parser_state
-      | params_buffer: parser_state.params_buffer <> <<byte>>
+      | params_buffer: State.append_param(parser_state.params_buffer, byte)
     }
 
     {:continue, emulator, next_state, rest}
@@ -82,7 +82,7 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   defp handle_separator(emulator, parser_state, rest) do
     next_state = %{
       parser_state
-      | params_buffer: parser_state.params_buffer <> <<?;>>
+      | params_buffer: State.append_param(parser_state.params_buffer, ?;)
     }
 
     {:continue, emulator, next_state, rest}
@@ -91,7 +91,7 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   defp handle_intermediate_byte(emulator, parser_state, byte, rest) do
     next_state = %{
       parser_state
-      | intermediates_buffer: parser_state.intermediates_buffer <> <<byte>>
+      | intermediates_buffer: State.append_intermediate(parser_state.intermediates_buffer, byte)
     }
 
     {:continue, emulator, next_state, rest}
@@ -124,10 +124,7 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   end
 
   defp handle_unhandled_byte(emulator, parser_state, byte, rest) do
-    Raxol.Core.Runtime.Log.warning_with_context(
-      "Unhandled byte #{byte} in DCS Entry state, returning to ground.",
-      %{}
-    )
+    Logger.debug("Unhandled byte #{byte} in DCS Entry state, returning to ground.")
 
     next_state = %{parser_state | state: :ground}
     {:continue, emulator, next_state, rest}

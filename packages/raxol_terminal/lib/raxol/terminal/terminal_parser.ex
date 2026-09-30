@@ -67,9 +67,8 @@ defmodule Raxol.Terminal.TerminalParser do
         {emulator, parser_state, rest}
 
       unexpected_result ->
-        # Never the result itself: GroundState's `{:error, reason, emulator,
-        # parser_state}` lands here once per chunk holding invalid UTF-8, and
-        # inspecting it dumped the whole emulator (~100 us) at every level.
+        # Never the result itself: it can hold the whole emulator, and
+        # inspecting that costs ~100 us at every log level (#1031).
         Raxol.Core.Runtime.Log.error(
           "[Parser.parse_chunk] Unexpected result from parse_loop: #{describe_result(unexpected_result)}"
         )
@@ -78,9 +77,6 @@ defmodule Raxol.Terminal.TerminalParser do
         {emulator, state, data}
     end
   end
-
-  defp describe_result({:error, reason, _emulator, _parser_state}),
-    do: "{:error, #{inspect(reason)}, emulator, parser_state}"
 
   defp describe_result(result) when is_tuple(result),
     do: "a #{tuple_size(result)}-tuple"
@@ -112,13 +108,10 @@ defmodule Raxol.Terminal.TerminalParser do
        ) do
     # Ground state processing
 
-    case GroundState.handle(emulator, parser_state, input) do
-      {:continue, next_emulator, next_parser_state, next_input} ->
-        parse_loop(next_emulator, next_parser_state, next_input)
+    {:continue, next_emulator, next_parser_state, next_input} =
+      GroundState.handle(emulator, parser_state, input)
 
-      other ->
-        other
-    end
+    parse_loop(next_emulator, next_parser_state, next_input)
   end
 
   # --- Escape State ---

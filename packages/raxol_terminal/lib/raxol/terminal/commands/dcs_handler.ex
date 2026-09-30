@@ -63,14 +63,14 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
       # bounded prefix: the line stays diagnostic and an oversized DCS
       # payload still cannot be echoed into the log.
       unknown ->
-        Logger.warning("Unhandled DECRQSS request type: #{inspect(selector_prefix(unknown))}")
+        Logger.debug("Unhandled DECRQSS request type: #{inspect(selector_prefix(unknown))}")
 
         {:ok, emulator}
     end
   end
 
   defp handle_decdld(emulator, _data_string) do
-    Logger.warning("DECDLD (Downloadable Character Set) not yet implemented")
+    Logger.debug("DECDLD (Downloadable Character Set) not yet implemented")
 
     {:error, :decdld_not_implemented, emulator}
   end
@@ -111,9 +111,11 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
   defp handle_sixel(emulator, data) do
     Logger.debug("DCSHandlers: handling sixel payload (redacted)")
 
-    # Initialize sixel state if not present
+    # Each sixel sequence is an image of its own, and the last one is already
+    # on the screen as cells. Carrying its pixels into the next parse drew all
+    # of them again, at the new cursor, for every later image however small.
     sixel_state =
-      emulator.sixel_state || Raxol.Terminal.ANSI.SixelGraphics.new()
+      %{(emulator.sixel_state || Raxol.Terminal.ANSI.SixelGraphics.new()) | pixel_buffer: %{}}
 
     Logger.debug("DCSHandlers: existing sixel state loaded")
 
@@ -122,15 +124,20 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
 
     case Raxol.Terminal.ANSI.SixelGraphics.process_sequence(
            sixel_state,
-           full_dcs_sequence
+           full_dcs_sequence,
+           drawable_extent(emulator)
          ) do
       {updated_sixel_state, :ok} ->
         # Successfully processed, update emulator with new sixel state
         # and blit the graphics to the screen buffer
-        emulator_with_sixel = %{emulator | sixel_state: updated_sixel_state}
+        emulator_with_blit = blit_sixel_to_buffer(emulator, updated_sixel_state)
 
-        emulator_with_blit =
-          blit_sixel_to_buffer(emulator_with_sixel, updated_sixel_state)
+        # The pixels are on the screen now as cells; keeping the decoded map
+        # (up to a million entries) would only hold memory.
+        emulator_with_blit = %{
+          emulator_with_blit
+          | sixel_state: %{updated_sixel_state | pixel_buffer: %{}}
+        }
 
         Logger.debug("DCSHandlers: blit completed, returning emulator")
         {:ok, emulator_with_blit}
@@ -139,33 +146,39 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         Logger.debug("DCSHandlers: sixel processing failed: #{inspect(reason)}")
 
         # Processing failed, log the error but still update the sixel_state
-        Logger.warning("Sixel processing failed: #{inspect(reason)}")
+        Logger.debug("Sixel processing failed: #{inspect(reason)}")
         # Return the original sixel_state (or new one if it was nil)
         {:ok, %{emulator | sixel_state: sixel_state}}
     end
+  end
+
+  # A sixel pixel (x, y) is drawn at the cell `sixel_origin/1` + (x, y), and
+  # one past the screen edge is dropped, so the decoder need not keep any
+  # pixel outside this extent: the columns right of the cursor by the rows
+  # from it down, in cells.
+  defp drawable_extent(emulator) do
+    {origin_x, origin_y} = sixel_origin(emulator)
+    buffer = Raxol.Terminal.Emulator.get_screen_buffer(emulator)
+    %{width: max(buffer.width - origin_x, 0), height: max(buffer.height - origin_y, 0)}
+  end
+
+  # The cursor position is {row, col}; the image's origin is {x, y}.
+  defp sixel_origin(emulator) do
+    {row, col} =
+      case emulator.cursor do
+        cursor when is_pid(cursor) -> GenServer.call(cursor, :get_position)
+        cursor when is_map(cursor) -> cursor.position
+        _ -> {0, 0}
+      end
+
+    {col, row}
   end
 
   # Blit Sixel graphics to the screen buffer
   defp blit_sixel_to_buffer(emulator, sixel_state) do
     %{pixel_buffer: pixel_buffer, palette: palette} = sixel_state
 
-    # Get cursor position from the emulator's cursor field
-    cursor_position =
-      case emulator.cursor do
-        cursor when is_pid(cursor) ->
-          # If cursor is a PID, get position via GenServer call
-          GenServer.call(cursor, :get_position)
-
-        cursor when is_map(cursor) ->
-          # If cursor is a struct, get position directly
-          cursor.position
-
-        _ ->
-          # Fallback
-          {0, 0}
-      end
-
-    {cursor_x, cursor_y} = cursor_position
+    {cursor_x, cursor_y} = sixel_origin(emulator)
 
     Logger.debug("Cursor position: {#{cursor_x}, #{cursor_y}}")
 
@@ -177,60 +190,67 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
     update_emulator_buffer(emulator, updated_buffer)
   end
 
+  # Pixels are grouped by screen row so each row an image touches is rebuilt
+  # once, and each colour's cell is built once. Writing pixels one at a time
+  # rebuilt the row list and a whole row per pixel and gave every pixel its
+  # own style: one full-screen image at 400x100 needed over 64 MB of heap.
   defp blit_pixels_to_buffer(buffer, pixel_buffer, palette, cursor_x, cursor_y) do
-    Enum.reduce(pixel_buffer, buffer, fn {{sixel_x, sixel_y}, color_index}, buffer ->
-      blit_single_pixel(
-        buffer,
-        sixel_x,
-        sixel_y,
-        color_index,
-        palette,
-        cursor_x,
-        cursor_y
-      )
+    {rows, _cells} =
+      Enum.reduce(pixel_buffer, {%{}, %{}}, fn {{sixel_x, sixel_y}, color_index}, acc ->
+        place_pixel(acc, buffer, cursor_x + sixel_x, cursor_y + sixel_y, color_index, palette)
+      end)
+
+    Enum.reduce(rows, buffer, fn {y, cells_by_x}, buffer ->
+      row =
+        buffer.cells
+        |> Enum.at(y)
+        |> Enum.with_index(fn cell, x -> Map.get(cells_by_x, x, cell) end)
+
+      Raxol.Terminal.ScreenBuffer.Operations.put_line(buffer, y, row)
     end)
   end
 
-  defp blit_single_pixel(
-         buffer,
-         sixel_x,
-         sixel_y,
-         color_index,
-         palette,
-         cursor_x,
-         cursor_y
-       ) do
-    screen_x = cursor_x + sixel_x
-    screen_y = cursor_y + sixel_y
+  defp place_pixel({rows, cells} = acc, buffer, x, y, color_index, palette) do
+    case Raxol.Terminal.ScreenBuffer.Core.within_bounds?(buffer, x, y) do
+      true ->
+        case sixel_cell(cells, color_index, palette) do
+          {nil, cells} ->
+            {rows, cells}
 
-    case Map.get(palette, color_index) do
-      {r, g, b} ->
-        # Create a proper TextFormatting struct with the background color
-        style =
-          Raxol.Terminal.ANSI.TextFormatting.new(%{
-            background: {:rgb, r, g, b}
-          })
+          {cell, cells} ->
+            {Map.update(rows, y, %{x => cell}, &Map.put(&1, x, cell)), cells}
+        end
 
-        # Create a cell with the background color and sixel flag set to true
-        # Use write_sixel_char to update the buffer with the sixel pixel
-        # We write a space character with the sixel style
-        Raxol.Terminal.ScreenBuffer.Operations.write_sixel_char(
-          buffer,
-          screen_x,
-          screen_y,
-          " ",
-          style
-        )
-
-      nil ->
-        # The sixel stream referenced a palette entry it never defined; the
-        # pixel is dropped, so leave a trace rather than a silent skip.
-        Logger.debug(
-          "DCSHandlers: skipped sixel pixel, no palette entry for color index #{inspect(color_index)}"
-        )
-
-        buffer
+      false ->
+        acc
     end
+  end
+
+  defp sixel_cell(cells, color_index, palette) do
+    case cells do
+      %{^color_index => cell} ->
+        {cell, cells}
+
+      _ ->
+        cell = new_sixel_cell(Map.get(palette, color_index), color_index)
+        {cell, Map.put(cells, color_index, cell)}
+    end
+  end
+
+  defp new_sixel_cell({r, g, b}, _color_index) do
+    # A space whose background is the pixel's colour, flagged as sixel.
+    style = Raxol.Terminal.ANSI.TextFormatting.new(%{background: {:rgb, r, g, b}})
+    Raxol.Terminal.Cell.new_sixel(" ", style)
+  end
+
+  defp new_sixel_cell(nil, color_index) do
+    # The sixel stream referenced a palette entry it never defined; its
+    # pixels are dropped, so leave a trace rather than a silent skip.
+    Logger.debug(
+      "DCSHandlers: skipped sixel pixels, no palette entry for color index #{inspect(color_index)}"
+    )
+
+    nil
   end
 
   defp update_emulator_buffer(emulator, updated_buffer) do

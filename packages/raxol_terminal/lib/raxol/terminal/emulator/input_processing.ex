@@ -3,11 +3,10 @@ defmodule Raxol.Terminal.Emulator.InputProcessing do
 
   require Logger
 
+  alias Raxol.Terminal.Commands.History
   alias Raxol.Terminal.Emulator.ModeOperations
 
   def process_input(emulator, input) do
-    emulator = preprocess_scroll_region(emulator, input)
-
     result =
       Raxol.Terminal.Input.CoreHandler.process_terminal_input(emulator, input)
 
@@ -62,27 +61,6 @@ defmodule Raxol.Terminal.Emulator.InputProcessing do
     end
   end
 
-  defp preprocess_scroll_region(emulator, input) do
-    case input do
-      <<"\e[", rest::binary>> when byte_size(rest) > 0 ->
-        case Regex.run(~r/^(\d+);(\d+)r/, rest) do
-          [_, top, bottom] ->
-            top_i = String.to_integer(top) - 1
-            bottom_i = String.to_integer(bottom) - 1
-            %{emulator | scroll_region: {top_i, bottom_i}}
-
-          _ ->
-            case rest do
-              "r" <> _ -> %{emulator | scroll_region: nil}
-              _ -> emulator
-            end
-        end
-
-      _ ->
-        emulator
-    end
-  end
-
   defp maybe_track_history(emulator, input) do
     case emulator.history_buffer do
       nil -> emulator
@@ -94,15 +72,7 @@ defmodule Raxol.Terminal.Emulator.InputProcessing do
     current_buffer = emulator.current_command_buffer || ""
 
     {new_buffer, should_add_to_history} =
-      String.graphemes(input)
-      |> Enum.reduce({current_buffer, false}, fn char, {buffer, add_history} ->
-        case char do
-          "\n" -> {buffer, true}
-          "\r" -> {buffer, true}
-          <<c>> when c < 32 and c != ?\t -> {buffer, add_history}
-          printable -> {buffer <> printable, add_history}
-        end
-      end)
+      scan_command_text(input, current_buffer, false)
 
     case should_add_to_history do
       true when byte_size(new_buffer) > 0 ->
@@ -113,6 +83,29 @@ defmodule Raxol.Terminal.Emulator.InputProcessing do
 
       _ ->
         %{emulator | current_command_buffer: new_buffer}
+    end
+  end
+
+  # One codepoint at a time rather than `String.graphemes/1`: a list of every
+  # grapheme of a large chunk cost ~64 bytes of heap per input byte before
+  # any of it was dropped, and the line itself is capped
+  # (`History.append_command_text/2`). Codepoints, not graphemes: OTP's
+  # grapheme breaking raises on some invalid UTF-8 (a pictograph followed by
+  # stray continuation bytes, e.g. <<0xC2, 0xAE, 0x9B>>), which output may
+  # hold, and CR LF is two line ends here rather than one printable grapheme.
+  defp scan_command_text(input, buffer, add_history) do
+    case String.next_codepoint(input) do
+      nil ->
+        {buffer, add_history}
+
+      {newline, rest} when newline in ["\n", "\r"] ->
+        scan_command_text(rest, buffer, true)
+
+      {<<c>>, rest} when c < 32 and c != ?\t ->
+        scan_command_text(rest, buffer, add_history)
+
+      {printable, rest} ->
+        scan_command_text(rest, History.append_command_text(buffer, printable), add_history)
     end
   end
 end

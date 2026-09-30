@@ -27,6 +27,9 @@ defmodule Raxol.Terminal.ScreenBuffer.EraseOperations do
     # Log.info("[DEBUG] erase_from_cursor_to_end called with x=#{x}, y=#{y}, bottom=#{bottom}")
 
     empty_cell = Cell.new()
+    # The cursor can sit past the buffer's last column (Emulator.resize/3
+    # widens the emulator only); the row still keeps the buffer's width.
+    x = min(max(x, 0), buffer.width)
 
     # Process each line
     new_cells =
@@ -68,6 +71,9 @@ defmodule Raxol.Terminal.ScreenBuffer.EraseOperations do
         ) :: map()
   def erase_from_start_to_cursor(buffer, x, y, top, _bottom) do
     empty_cell = Cell.new()
+    # Clamped as in `erase_from_cursor_to_end/5`: never a row wider than the
+    # buffer.
+    x = min(max(x, -1), buffer.width - 1)
 
     # Process each line
     new_cells =
@@ -271,13 +277,11 @@ defmodule Raxol.Terminal.ScreenBuffer.EraseOperations do
     CharEditor.delete_characters(buffer, row, col, count, default_style)
   end
 
-  defp create_empty_grid(width, height) when width > 0 and height > 0 do
-    for _y <- 0..(height - 1) do
-      for _x <- 0..(width - 1) do
-        Cell.new()
-      end
-    end
-  end
+  # Every row is the same blank row: cells are immutable, so a blank screen
+  # costs one row plus the list of rows, not a cell per cell (clearing the
+  # alternate screen on every 1049 switch built all of them).
+  defp create_empty_grid(width, height) when width > 0 and height > 0,
+    do: List.duplicate(List.duplicate(Cell.new(), width), height)
 
   defp create_empty_grid(_width, _height), do: []
 

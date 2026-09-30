@@ -23,23 +23,8 @@ defmodule Raxol.Terminal.Parser.States.DCSPassthroughMaybeSTState do
     case input do
       # Found ST (ESC \), use literal 92 for '\'
       <<92, rest_after_st::binary>> ->
-        # Completed DCS Sequence
-        Logger.debug(
-          "DCSPassthroughMaybeSTState: Found ST terminator, executing DCS command with params_buffer=#{inspect(parser_state.params_buffer)}, intermediates_buffer=#{inspect(parser_state.intermediates_buffer)}, final_byte=#{inspect(parser_state.final_byte)}, payload=[REDACTED]"
-        )
-
-        # Call the dispatcher function (now imported)
-        new_emulator =
-          Executor.execute_dcs_command(
-            emulator,
-            parser_state.params_buffer,
-            parser_state.intermediates_buffer,
-            parser_state.final_byte,
-            parser_state.payload_buffer
-          )
-
         next_parser_state = %{parser_state | state: :ground}
-        {:continue, new_emulator, next_parser_state, rest_after_st}
+        {:continue, dispatch(emulator, parser_state), next_parser_state, rest_after_st}
 
       # Handle CAN, SUB (abort sequence)
       <<ignored_byte, rest_after_ignored::binary>>
@@ -55,7 +40,7 @@ defmodule Raxol.Terminal.Parser.States.DCSPassthroughMaybeSTState do
         msg =
           "Malformed DCS termination: ESC not followed by ST. Returning to ground."
 
-        Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+        Logger.debug(msg)
 
         # Discard sequence, go to ground
         next_parser_state = %{parser_state | state: :ground}
@@ -67,11 +52,28 @@ defmodule Raxol.Terminal.Parser.States.DCSPassthroughMaybeSTState do
         msg =
           "Malformed DCS termination: Input ended after ESC. Returning to ground."
 
-        Raxol.Core.Runtime.Log.warning_with_context(msg, %{})
+        Logger.debug(msg)
 
         # Go to ground
         next_parser_state = %{parser_state | state: :ground}
         {:continue, emulator, next_parser_state, ""}
     end
+  end
+
+  # A string that overflowed its cap (`State.append_dcs/2`) was discarded.
+  defp dispatch(emulator, %State{payload_overflow: true}), do: emulator
+
+  defp dispatch(emulator, parser_state) do
+    Logger.debug(
+      "DCSPassthroughMaybeSTState: Found ST terminator, executing DCS command with params_buffer=#{inspect(parser_state.params_buffer)}, intermediates_buffer=#{inspect(parser_state.intermediates_buffer)}, final_byte=#{inspect(parser_state.final_byte)}, payload=[REDACTED]"
+    )
+
+    Executor.execute_dcs_command(
+      emulator,
+      parser_state.params_buffer,
+      parser_state.intermediates_buffer,
+      parser_state.final_byte,
+      parser_state.payload_buffer
+    )
   end
 end

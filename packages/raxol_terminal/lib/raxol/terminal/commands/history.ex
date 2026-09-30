@@ -157,12 +157,29 @@ defmodule Raxol.Terminal.Commands.History do
         emulator
 
       buffer ->
-        new_buffer = buffer <> <<char::utf8>>
+        new_buffer = append_command_text(buffer, <<char::utf8>>)
         %{emulator | current_command_buffer: new_buffer}
     end
   end
 
   def maybe_add_to_history(emulator, _), do: emulator
+
+  # A tracked command line is text from the output byte stream, so a line
+  # that never ends grew for as long as the stream did. It is kept to the size
+  # of a canonical-mode tty line (Linux's N_TTY_BUF_SIZE, 4096 bytes); the
+  # rest of a longer line is dropped.
+  @max_command_bytes 4096
+
+  @doc """
+  Appends `text` to a tracked command line, unless the line would then pass
+  #{@max_command_bytes} bytes, in which case `text` is dropped.
+  """
+  @spec append_command_text(String.t(), String.t()) :: String.t()
+  def append_command_text(line, text)
+      when byte_size(line) + byte_size(text) <= @max_command_bytes,
+      do: line <> text
+
+  def append_command_text(line, _text), do: line
 
   @doc """
   Updates the maximum size of the command history. Truncates the history if needed.
