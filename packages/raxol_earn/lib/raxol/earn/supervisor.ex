@@ -111,6 +111,7 @@ defmodule Raxol.Earn.Supervisor do
                solver_address: solver,
                interval_ms: Keyword.get(acc, :rebalance_interval_ms, 300_000),
                price_source: Keyword.get(acc, :price_source, :none),
+               fx: Keyword.get(acc, :fx),
                # Demand-aware floors are a deployment knob, so the policy is built
                # here rather than left to the monitor's `default/0` fallback.
                policy: Raxol.Payments.RebalancePolicy.with_demand(policy, acc),

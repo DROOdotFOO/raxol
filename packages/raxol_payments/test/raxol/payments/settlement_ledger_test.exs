@@ -136,6 +136,36 @@ defmodule Raxol.Payments.SettlementLedgerTest do
     assert Decimal.compare(agg.usd_margin, 0) == :lt
   end
 
+  # ADR-0040 decision 6: an unpriced leg used to vanish from usd_revenue with no
+  # trace, so a report with EUR legs read as smaller rather than as partial.
+  test "an entry with an unpriced leg is counted, not silently dropped", %{ledger: ledger} do
+    usdc_leg = %{from_amount: "1100000", from_symbol: "USDC", from_decimals: 6}
+    eure_to = %{to_amount: "950000000000000000", to_symbol: "EURe", to_decimals: 18}
+    usdc_to = %{to_amount: "1002487", to_symbol: "USDC", to_decimals: 6}
+
+    SettlementLedger.record_settlement(ledger, l1_fill(Map.merge(usdc_leg, eure_to)))
+
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(Map.merge(%{intent_id: "xi_2"}, Map.merge(usdc_leg, usdc_to)))
+    )
+
+    unpriced = SettlementLedger.margin_by_destination(ledger)[1]
+    assert unpriced.count == 2
+    assert unpriced.unpriced_count == 1
+    assert Decimal.equal?(unpriced.usd_revenue, Decimal.new("0.097513"))
+
+    eur = fn
+      "EURe" -> Decimal.new("1.1336")
+      _ -> nil
+    end
+
+    priced = SettlementLedger.margin_by_destination(ledger, price_fn: eur)[1]
+    assert priced.unpriced_count == 0
+    # 1.10 - 0.95 * 1.1336 = 0.02308, plus the USDC fill's 0.097513.
+    assert Decimal.equal?(priced.usd_revenue, Decimal.new("0.120593"))
+  end
+
   test "native_drain_by_chain sums wei per destination chain", %{ledger: ledger} do
     SettlementLedger.record_settlement(ledger, l1_fill())
     SettlementLedger.record_settlement(ledger, l1_fill(%{intent_id: "xi_2"}))

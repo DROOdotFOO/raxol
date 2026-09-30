@@ -128,7 +128,8 @@ defmodule Mix.Tasks.RaxolEarn.Rebalance do
       solver_address: solver,
       policy: policy,
       chains: Map.keys(rpc_urls),
-      price_source: Keyword.get(acc, :price_source, :coingecko)
+      price_source: Keyword.get(acc, :price_source, :coingecko),
+      fx: Keyword.get(acc, :fx)
     )
     |> print()
   end

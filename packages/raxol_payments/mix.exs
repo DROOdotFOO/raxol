@@ -56,7 +56,21 @@ defmodule RaxolPayments.MixProject do
       # Optional: only needed when running EchoServer (`mix raxol_payments.echo`).
       {:plug, "~> 1.16", optional: true},
       {:plug_cowboy, "~> 2.7", optional: true}
-    ]
+    ] ++ web3_dep()
+  end
+
+  # Optional, and absent from a Hex build: raxol_web3 is unpublished, so naming
+  # it would make this package unpublishable (the raxol_agent `web3_dep/0`
+  # precedent). It backs `Raxol.Payments.Prices.FX`; `Accounting` refuses
+  # `RAXOL_FX_ENABLED=true` in a build without it (ADR-0040 decision 6).
+  defp web3_dep do
+    path = "../raxol_web3"
+
+    if System.get_env("HEX_BUILD") || !File.dir?(path) do
+      []
+    else
+      [{:raxol_web3, path: path, override: true, optional: true}]
+    end
   end
 
   defp raxol_dep(name, version, path, opts) do

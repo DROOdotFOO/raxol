@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{:unpriced_asset, detail}`, until an FX rate gates the conversion (ADR-0040
   decision 7). Dollar spend caps would otherwise count them at par.
 
+- Euro and franc stablecoins can be priced in accounting (ADR-0040 decision 6).
+  `RAXOL_FX_ENABLED=true` with `RAXOL_SLEUTH_API_KEY` and `RPC_BASE` or `RPC_ETH`
+  puts `Raxol.Payments.Prices.FX` in front of `RAXOL_PRICE_SOURCE` in the
+  `RebalanceMonitor` sweep and `mix raxol_earn.rebalance`: EURC, EURe and ZCHF
+  are priced at the Chainlink rate for their peg when Sleuth's market price is
+  within 100 bps of it, and `nil` otherwise. Enabling it without the key, without
+  either RPC URL, or in a build without `raxol_web3` (an optional dependency,
+  dropped under `HEX_BUILD`) refuses and names what is missing. Pricing only: no
+  spend cap or delivery floor reads an FX rate.
+- `SettlementLedger` aggregates carry `unpriced_count`: entries with a leg that
+  neither `usdc_price` nor `price_fn` could price. Such a revenue used to drop out
+  of `usd_revenue` without a trace, so a report with EUR legs read as smaller
+  rather than as partial.
+
 ### Fixed
 
 - Unknown chains and tokens now fail closed on the Xochi path instead of

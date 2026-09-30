@@ -23,6 +23,10 @@ defmodule Raxol.Payments.RebalanceMonitor do
     * `:interval_ms` -- sweep period (default 5 min).
     * `:initial_delay_ms` -- delay before the first sweep (default `:interval_ms`).
     * `:price_fn` -- `native_symbol -> Decimal | nil` for sizing conversions.
+    * `:price_source` -- `:coingecko | :none`, resolved fresh each sweep when no
+      `:price_fn` is given.
+    * `:fx` -- `Raxol.Payments.Prices.FX` opts. When set, euro and franc
+      stablecoins are priced in front of `:price_source` (ADR-0040).
     * `:demand_window_ms` -- how far back to read fill demand when the policy is
       demand-aware (default 24h). Ignored otherwise.
   """
@@ -31,7 +35,7 @@ defmodule Raxol.Payments.RebalanceMonitor do
 
   require Logger
 
-  alias Raxol.Payments.{RebalanceAdvisor, RebalancePolicy, SettlementLedger}
+  alias Raxol.Payments.{Prices, RebalanceAdvisor, RebalancePolicy, SettlementLedger}
 
   @default_interval_ms 300_000
   @default_chains [1, 10, 137, 8453, 42_161, 4663]
@@ -67,7 +71,11 @@ defmodule Raxol.Payments.RebalanceMonitor do
     # An explicit :price_fn (tests) wins; otherwise resolve prices fresh each sweep
     # from :price_source so a long-running monitor never uses stale prices.
     price_fn =
-      Keyword.get(opts, :price_fn) || build_price_fn(Keyword.get(opts, :price_source, :none))
+      Keyword.get(opts, :price_fn) ||
+        Prices.FX.price_fn(
+          Keyword.get(opts, :fx),
+          build_price_fn(Keyword.get(opts, :price_source, :none))
+        )
 
     # Gather stables (for inventory rebalance) + WETH (the gas-refuel source).
     symbols = RebalancePolicy.stables(policy) ++ ["WETH"]
@@ -147,6 +155,7 @@ defmodule Raxol.Payments.RebalanceMonitor do
           :chains,
           :price_fn,
           :price_source,
+          :fx,
           :demand_window_ms
         ]),
       interval_ms: Keyword.get(opts, :interval_ms, @default_interval_ms)
