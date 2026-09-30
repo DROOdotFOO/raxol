@@ -195,7 +195,8 @@ paid by every turn, including the turns that never touch a chain.
 Sleuth (`FX.Sleuth`) supplies the market: stablecoins with price, supply,
 volume and corridor totals, keyed by a Bearer credential that never reaches a
 URL, a log line or `inspect/1`. Chainlink (`FX.Chainlink`) is the rate of
-record, read by `eth_call` after checking the feed's identity, its freshness
+record, read by `eth_call` over RPC URLs that `inspect/1` never renders
+either, after checking the feed's identity, its freshness
 (`heartbeat * 1.1`) and, on Base, the L2 sequencer. EUR prefers Base and falls
 back to Ethereum, CHF reads Ethereum, and USD is exactly 1. `FX.Quality`
 judges each asset against that rate, never against Sleuth's own deviation or

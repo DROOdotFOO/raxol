@@ -38,7 +38,11 @@ defmodule Raxol.Web3.FX.Chainlink do
 
   alias Raxol.Web3.RPC
 
-  @derive {Inspect, except: [:http_opts]}
+  # An RPC URL often embeds a provider key (`/v2/<key>`, `?apikey=`), and the
+  # handle sits in every agent tool context, so a crash report or a debug log
+  # would print it whole. `:http_opts` may carry an authorization header.
+  # Error terms name an origin by `Raxol.Web3.Origin` id instead.
+  @derive {Inspect, except: [:rpc_urls, :http_opts]}
   defstruct rpc_urls: %{}, http_opts: [], now: nil, cache?: true
 
   @type t :: %__MODULE__{

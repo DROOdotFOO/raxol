@@ -321,10 +321,11 @@ defmodule Raxol.Web3.Backend.Solana do
   alias Raxol.Web3.TTL
 
   # `:http_opts` is an operator's own keyword list and may carry an
-  # authorization header, so it is not something `inspect/1` may render: a
-  # handle reaches an operator through `Raxol.Web3.Router.candidates/3`, and a
-  # crash anywhere below formats the struct whole into a log line.
-  @derive {Inspect, except: [:http_opts]}
+  # authorization header, and an operator's `:url` override often embeds a
+  # provider key, so neither is something `inspect/1` may render: a handle
+  # reaches an operator through `Raxol.Web3.Router.candidates/3`, and a crash
+  # anywhere below formats the struct whole into a log line.
+  @derive {Inspect, except: [:url, :http_opts]}
   @enforce_keys [:chain_ref, :source, :url, :network]
   defstruct [:chain_ref, :source, :url, :network, http_opts: [], cache?: true]
 

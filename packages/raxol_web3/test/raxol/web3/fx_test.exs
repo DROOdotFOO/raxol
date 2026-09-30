@@ -61,6 +61,34 @@ defmodule Raxol.Web3.FXTest do
       refute inspect(s) =~ @key
     end
 
+    test "neither the key nor a keyed RPC URL renders from a crashed holder's state" do
+      # The FX handle sits in every agent tool context, and a GenServer that
+      # crashes holding one has its state formatted into the crash report.
+      rpc_key = "rpc-provider-key-not-real"
+      chainlink = Chainlink.new(rpc_urls: %{8453 => "https://base.example/v2/#{rpc_key}"})
+      fx = FX.new(sleuth(%{}), chainlink)
+
+      refute inspect(fx, limit: :infinity) =~ @key
+      refute inspect(fx, limit: :infinity) =~ rpc_key
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, pid} = Agent.start(fn -> %{fx: fx} end)
+          ref = Process.monitor(pid)
+          Agent.cast(pid, fn _state -> raise "boom" end)
+          assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+          Logger.flush()
+        end)
+
+      # Without this the refutations below would pass on an empty log.
+      assert log =~ "Raxol.Web3.FX.Chainlink"
+      refute log =~ rpc_key
+      refute log =~ @key
+
+      # And the handle still holds what it needs to read the feed.
+      assert chainlink.rpc_urls[8453] =~ rpc_key
+    end
+
     test "figures are Decimals and symbols are canonical Assets symbols" do
       s = sleuth(%{"/api/mcp/fx/stables" => sleuth_fixture("stables_partner")})
       assert {:ok, snapshot} = Sleuth.stables(s)
