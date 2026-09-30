@@ -231,7 +231,7 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
       from_chain_id: 8453,
       to_chain_id: 42_161,
       from_token: @usdc_base,
-      to_token: @usdc_base,
+      to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
       settlement: "stealth",
       recipient_meta_address: recipient_meta()
     }
