@@ -264,11 +264,11 @@ defmodule Raxol.Earn.Xochi.TransferOfferingTest do
       }
     end
 
-    defp put_live_capabilities do
+    defp put_live_capabilities(matrix \\ tron_matrix()) do
       plug = fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(tron_matrix()))
+        |> Plug.Conn.send_resp(200, Jason.encode!(matrix))
       end
 
       Application.put_env(:raxol_earn, :xochi_transfer_settler,
@@ -310,6 +310,51 @@ defmodule Raxol.Earn.Xochi.TransferOfferingTest do
 
       assert {:reject, {:unsupported_src_token, 42_161, @usdc_arb}} =
                TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "a non-USD stablecoin the live matrix lists is still refused both ways (ADR-0040)" do
+      # Xochi's live matrix does advertise EURe; with the corridor allowlist off
+      # (every non-production deployment) only the fx_peg check stands between
+      # it and a fill.
+      eure_arb = "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8"
+
+      put_live_capabilities(%{
+        "source" => "live",
+        "capabilities" => %{
+          "chains" => [
+            %{"chain_id" => 8453, "chain_name" => "Base"},
+            %{"chain_id" => 42_161, "chain_name" => "Arbitrum"}
+          ],
+          "tokens" => [
+            %{
+              "symbol" => "USDC",
+              "roles" => ["origin", "destination"],
+              "addresses" => %{"8453" => @usdc_base}
+            },
+            %{
+              "symbol" => "EURe",
+              "roles" => ["origin", "destination"],
+              "addresses" => %{"42161" => eure_arb}
+            }
+          ]
+        }
+      })
+
+      refute Raxol.Earn.Xochi.CorridorAllowlist.enabled?()
+
+      assert {:reject, {:unsupported_dst_token, 42_161, ^eure_arb}} =
+               TransferOffering.handle_request(req(%{"dst_token" => eure_arb}), @ctx)
+
+      assert {:reject, {:unsupported_src_token, 42_161, ^eure_arb}} =
+               TransferOffering.handle_request(
+                 req(%{
+                   "src_chain_id" => 42_161,
+                   "src_token" => eure_arb,
+                   "dst_chain_id" => 8453,
+                   "dst_token" => @usdc_base
+                 }),
+                 @ctx
+               )
     end
 
     test "without capabilities config the static fallback preserves EVM behavior" do
