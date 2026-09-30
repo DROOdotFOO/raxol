@@ -230,6 +230,12 @@ marked every EUR asset unpriceable for about twenty hours a day.
   4. The ACP `serve.ex` `turn_opts/1`.
   5. `SessionInbox.start_turn/2`, through the executor's `:context`.
 
+  The reader resolves the configuration once, when the `raxol_agent` application boots, and
+  caches it; every builder above reads that cache. A mistake (`fx:` without the key, or
+  `:web3` in a build without `raxol_web3`) refuses the boot and names what is missing, rather
+  than raising in every turn or inbox prompt that builds a context. The key is trimmed and
+  read then, so changing it takes a restart.
+
   A native vendor-loop backend runs its own tool loop and executes tools out-of-process over
   MCP, where the context never arrives (`scheduler/fire.ex:73-79`). On that path the `fx`
   Action answers `:fx_not_configured`. That is an existing limit, and this decision does not
