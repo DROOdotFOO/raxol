@@ -130,10 +130,14 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
       {updated_sixel_state, :ok} ->
         # Successfully processed, update emulator with new sixel state
         # and blit the graphics to the screen buffer
-        emulator_with_sixel = %{emulator | sixel_state: updated_sixel_state}
+        emulator_with_blit = blit_sixel_to_buffer(emulator, updated_sixel_state)
 
-        emulator_with_blit =
-          blit_sixel_to_buffer(emulator_with_sixel, updated_sixel_state)
+        # The pixels are on the screen now as cells; keeping the decoded map
+        # (up to a million entries) would only hold memory.
+        emulator_with_blit = %{
+          emulator_with_blit
+          | sixel_state: %{updated_sixel_state | pixel_buffer: %{}}
+        }
 
         Logger.debug("DCSHandlers: blit completed, returning emulator")
         {:ok, emulator_with_blit}

@@ -261,20 +261,28 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     end
 
     # OSC 7 carries a `file://host/path` URI (percent-encoded). The decoded
-    # path becomes `current_directory` and the host `remote_host`; anything
-    # that is not a file URI with a path is ignored. Bounded by the OSC string
-    # cap (`Raxol.Terminal.Parser.ParserState`).
+    # path becomes `current_directory` and the host `remote_host`, but only
+    # when the path is absolute and both are valid UTF-8 without control
+    # bytes; anything else is ignored. Bounded by the OSC string cap
+    # (`Raxol.Terminal.Parser.ParserState`).
     def handle_7(emulator, data) do
-      case URI.parse(data) do
-        %URI{scheme: "file", path: path, host: host} when is_binary(path) ->
-          emulator
-          |> put_known(:current_directory, URI.decode(path))
-          |> put_known(:remote_host, host)
-          |> then(&{:ok, &1})
-
-        _other ->
-          {:ok, emulator}
+      with %URI{scheme: "file", path: "/" <> _ = path, host: host} <- URI.parse(data),
+           {:ok, path} <- clean_text(URI.decode(path)),
+           {:ok, host} <- clean_host(host) do
+        {:ok, emulator |> put_known(:current_directory, path) |> put_known(:remote_host, host)}
+      else
+        _ -> {:ok, emulator}
       end
+    end
+
+    defp clean_host(nil), do: {:ok, nil}
+    defp clean_host(""), do: {:ok, nil}
+    defp clean_host(host), do: clean_text(URI.decode(host))
+
+    defp clean_text(text) do
+      if String.valid?(text) and not String.match?(text, ~r/[\x00-\x1F\x7F]/),
+        do: {:ok, text},
+        else: :error
     end
 
     def handle_8(emulator, data) do
@@ -304,14 +312,21 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     defp handle_iterm2_command(emulator, data) do
       case data do
         "RemoteHost=" <> host ->
-          {:ok, put_known(emulator, :remote_host, host)}
+          {:ok, put_clean(emulator, :remote_host, host)}
 
-        "CurrentDir=" <> dir ->
-          {:ok, put_known(emulator, :current_directory, dir)}
+        "CurrentDir=" <> "/" <> rest ->
+          {:ok, put_clean(emulator, :current_directory, "/" <> rest)}
 
         _ ->
           # Unsupported iTerm2 command
           {:ok, emulator}
+      end
+    end
+
+    defp put_clean(emulator, key, value) do
+      case clean_text(value) do
+        {:ok, value} -> put_known(emulator, key, value)
+        :error -> emulator
       end
     end
 

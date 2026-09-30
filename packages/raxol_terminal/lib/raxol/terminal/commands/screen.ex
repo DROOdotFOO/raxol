@@ -93,7 +93,7 @@ defmodule Raxol.Terminal.Commands.Screen do
 
         # Unknown mode, do nothing
         _ ->
-          Logger.warning("Unknown clear line mode: #{mode}")
+          Logger.debug("Unknown clear line mode: #{mode}")
 
           buffer
       end

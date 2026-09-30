@@ -39,6 +39,15 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
     end
   end
 
+  defp sixel_cells(emulator) do
+    buffer = Emulator.get_screen_buffer(emulator)
+
+    for {row, y} <- Enum.with_index(buffer.cells),
+        {cell, x} <- Enum.with_index(row),
+        cell.sixel,
+        do: {x, y}
+  end
+
   defp feed(emulator, chunks) do
     Enum.reduce(List.wrap(chunks), emulator, fn chunk, emu ->
       {emu, _output} = Emulator.process_input(emu, chunk)
@@ -197,9 +206,9 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
       emulator =
         in_capped_process(fn -> feed(Emulator.new(80, 24), "\ePq!3000000~\e\\") end)
 
-      pixels = emulator.sixel_state.pixel_buffer
-      assert map_size(pixels) == 80 * 6
-      assert Enum.all?(Map.keys(pixels), fn {x, y} -> x < 80 and y < 6 end)
+      cells = sixel_cells(emulator)
+      assert length(cells) == 80 * 6
+      assert Enum.all?(cells, fn {x, y} -> x < 80 and y < 6 end)
 
       emulator = feed(emulator, "\e[10;1Hok")
       assert String.starts_with?(get_line_text(emulator, 9), "ok")
@@ -211,7 +220,7 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
           feed(Emulator.new(80, 24), "\ePq" <> String.duplicate("~-", 100_000) <> "\e\\")
         end)
 
-      assert map_size(emulator.sixel_state.pixel_buffer) == 24
+      assert sixel_cells(emulator) == for(y <- 0..23, do: {0, y})
     end
 
     test "a cleared image does not come back with the next one" do
@@ -222,9 +231,7 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
           "\ePq#1@\e\\"
         ])
 
-      assert map_size(emulator.sixel_state.pixel_buffer) == 1
-      buffer = Emulator.get_screen_buffer(emulator)
-      refute ScreenBuffer.get_cell(buffer, 5, 3).sixel
+      assert sixel_cells(emulator) == [{0, 0}]
     end
 
     test "drawing an image costs work in proportion to its pixels" do
@@ -238,11 +245,17 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
           {:reductions, before} = Process.info(self(), :reductions)
           emulator = feed(emulator, image)
           {:reductions, later} = Process.info(self(), :reductions)
-          {map_size(emulator.sixel_state.pixel_buffer), later - before}
+          {length(sixel_cells(emulator)), later - before}
         end)
 
       assert pixels == 40_000
       assert reductions < 3_000_000
+    end
+
+    test "the decoded pixels are not kept once they are on the screen" do
+      emulator = feed(Emulator.new(80, 24), "\ePq#1;2;100;0;0#1!80~\e\\")
+      assert length(sixel_cells(emulator)) == 480
+      assert emulator.sixel_state.pixel_buffer == %{}
     end
 
     test "huge raster attributes are clamped like any other parameter" do
@@ -275,7 +288,7 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
       buffer = Emulator.get_screen_buffer(emulator)
 
       # 5 columns (75-79) by 4 rows (20-23) of the 20x6 image fit.
-      assert map_size(emulator.sixel_state.pixel_buffer) == 20
+      assert length(sixel_cells(emulator)) == 20
       assert ScreenBuffer.get_cell(buffer, 75, 20).sixel
       assert ScreenBuffer.get_cell(buffer, 79, 23).sixel
       refute ScreenBuffer.get_cell(buffer, 74, 20).sixel
@@ -329,9 +342,20 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
       emulator = feed(Emulator.new(80, 24), "\e]7;file://box/home/me/My%20Files\a")
       assert {emulator.current_directory, emulator.remote_host} == {"/home/me/My Files", "box"}
 
-      # Not a file URI: ignored.
-      emulator = feed(emulator, "\e]7;http://x/y\a")
-      assert emulator.current_directory == "/home/me/My Files"
+      # Not a file URI with an absolute path, or one that decodes to control
+      # bytes or invalid UTF-8: ignored.
+      for bad <- [
+            "http://x/y",
+            "file:relative/x",
+            "file://h/a%00b",
+            "file://h/a%0Ab",
+            "file://h/a%1B[2Jb",
+            "file://h/%FF%FE",
+            "file://h%0A/tmp"
+          ] do
+        emulator = feed(emulator, "\e]7;#{bad}\a")
+        assert {emulator.current_directory, emulator.remote_host} == {"/home/me/My Files", "box"}
+      end
 
       emulator = feed(emulator, "\e]1337;CurrentDir=/srv\a\e]1337;RemoteHost=me@box\a")
       assert {emulator.current_directory, emulator.remote_host} == {"/srv", "me@box"}
@@ -341,12 +365,24 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
   describe "log volume" do
     test "malformed or unknown sequences log nothing at :info" do
       input =
-        "\e[5y\e[1$y\e]999;x\a\e]x\a\eP$qzz\e\\\ePq#9999;9;1;1;1~\e\\" <>
+        "\e[5y\e[1$y\e]999;x\a\e]x\a\eP$qzz\e\\\ePq#9999;9;1;1;1~\e\\\e[9K\e[?9K" <>
           <<0x8E, 0x8F>> <> "\e[1\x80\e]0;a\eZ\ec"
 
       log =
         ExUnit.CaptureLog.capture_log([level: :info], fn ->
           feed(Emulator.new(80, 24), input)
+        end)
+
+      assert log == ""
+    end
+  end
+
+  describe "EL (CSI Ps K) with an unknown mode" do
+    test "is ignored and logs nothing at :info" do
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          emulator = feed(Emulator.new(80, 24), "kept\e[9K\e[?9K")
+          assert String.starts_with?(get_line_text(emulator, 0), "kept")
         end)
 
       assert log == ""
