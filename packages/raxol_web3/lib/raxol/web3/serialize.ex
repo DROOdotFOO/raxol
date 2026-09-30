@@ -63,6 +63,10 @@ defmodule Raxol.Web3.Serialize do
   @spec result(term()) :: term()
   def result(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
 
+  # A string rather than a JSON number: a float would give back exactly the
+  # precision `floats: :decimals` exists to keep (ADR-0040 decision 3).
+  def result(%Decimal{} = decimal), do: Decimal.to_string(decimal, :normal)
+
   def result(%_struct{} = struct), do: inspect(struct)
 
   def result(value) when is_map(value) do

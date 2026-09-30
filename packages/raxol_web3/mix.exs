@@ -70,6 +70,10 @@ defmodule RaxolWeb3.MixProject do
       {:raxol_mcp, path: "../raxol_mcp", override: true},
       {:mint, "~> 1.8"},
       {:castore, "~> 1.0"},
+      # ADR-0040 decision 3: FX figures are parsed with `floats: :decimals`, so
+      # a float never reaches a money path. Declared rather than inherited
+      # through jason, where it is optional.
+      {:decimal, "~> 2.0"},
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
