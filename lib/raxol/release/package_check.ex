@@ -61,7 +61,8 @@ defmodule Raxol.Release.PackageCheck do
     # standalone and outside the root `modular_packages` list. Pre-alpha is
     # what that means to this catalog: the package exists on disk and is not
     # on the public Hex train.
-    %{app: :raxol_web3, path: "packages/raxol_web3", class: :pre_alpha}
+    %{app: :raxol_web3, path: "packages/raxol_web3", class: :pre_alpha},
+    %{app: :raxol_broker, path: "packages/raxol_broker", class: :pre_alpha}
   ]
 
   @all_packages @public_packages ++ @pre_alpha_packages
