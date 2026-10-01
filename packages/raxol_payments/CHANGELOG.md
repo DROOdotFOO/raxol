@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ExecuteDepositRoute` returned a verified Tron deposit address for an EURC,
+  EURe or ZCHF destination with no delivery floor, so the payer could fund a
+  quote delivering any amount. It now takes `min_to_amount`, as
+  `ExecuteRelayTransfer` does: a non-USD destination without a positive one is
+  refused as `{:unpriced_asset, detail}` before any quote is fetched, and a
+  quote delivering less than a positive floor, on any destination, returns
+  `{:delivery_below_floor, detail}` instead of a deposit address.
 - `SettlementLedger`'s `unpriced_count` missed two kinds of entry that dropped
   out of the totals. A nonzero fee no price answered (an EURe fee) left
   `usd_fee` silently and now counts as unpriced; an entry still counts once.

@@ -7,7 +7,7 @@ commands are in "Validation". **Implemented 2026-10-01**: decisions 1 to 6 lande
 registration, `Raxol.Web3.FX.Sleuth`, `.Chainlink`, `.Quality` and `FX.price_fn/3`, the MCP
 and agent surfaces with their wiring, and `Raxol.Payments.Prices.FX` in the `RebalanceMonitor`
 sweep), followed by an adversarial review whose fixes are recorded in the decisions they
-changed: the live corridor path refuses FX tokens, Relay, Xochi and x402 bound FX deliveries,
+changed: the live corridor path refuses FX tokens, Relay, Xochi, x402 and the deposit route bound FX deliveries,
 the identity check is lazy and caches only a match (decision 2), the Sleuth decoder is
 bounded, a 403 is a status (decision 3), the verdict compares the exact deviation (decision 4),
 and the price closure answers only the registered symbols at their registered peg (decision
@@ -310,7 +310,9 @@ marked every EUR asset unpriceable for about twenty hours a day.
   stablecoin corridor allowlist off. x402 cannot move them, because it signs under the USDC
   EIP-712 domain (`UsdcDomains.lookup/1`), but its spend gate scales by registered decimals
   and would reserve and charge them at par, so it refuses a challenge whose asset has an
-  FX peg.
+  FX peg. `ExecuteDepositRoute` moves nothing itself, but the deposit address it returns is
+  what the payer funds, so it applies the Relay rule: a non-USD destination needs a positive
+  `min_to_amount`, and a quote delivering less returns no address.
 
   This lands first and does not wait on the rest. It removes the 10^12 misscale in context
   item 4 whether or not any FX pricing is enabled, and moves no new funds.
