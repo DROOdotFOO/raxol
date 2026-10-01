@@ -86,6 +86,7 @@ defmodule Raxol.Payments.SettlementLedger do
           count: non_neg_integer(),
           gas_unknown_count: non_neg_integer(),
           unpriced_count: non_neg_integer(),
+          recording_gap_count: non_neg_integer(),
           fee_by_currency: %{String.t() => Decimal.t()},
           gas_by_chain: %{pos_integer() => Decimal.t()},
           usd_revenue: Decimal.t() | nil,
@@ -475,6 +476,7 @@ defmodule Raxol.Payments.SettlementLedger do
         count: acc.count + 1,
         gas_unknown_count: acc.gas_unknown_count + unknown_gas(e),
         unpriced_count: acc.unpriced_count + unpriced(e, usdc_price, price_fn),
+        recording_gap_count: acc.recording_gap_count + recording_gap(e),
         fee_by_currency:
           Map.update(
             acc.fee_by_currency,
@@ -496,6 +498,7 @@ defmodule Raxol.Payments.SettlementLedger do
       count: 0,
       gas_unknown_count: 0,
       unpriced_count: 0,
+      recording_gap_count: 0,
       fee_by_currency: %{},
       gas_by_chain: %{},
       usd_revenue: nil,
@@ -525,24 +528,38 @@ defmodule Raxol.Payments.SettlementLedger do
     mult_or_nil(Assets.to_human(amount, decimals), price)
   end
 
-  # An entry whose revenue could not be priced: a leg whose symbol neither
-  # `usdc_price` nor `price_fn` answers. `add_or_keep/2` drops such a revenue
-  # from `usd_revenue` without a trace, so this is the trace: a report with EUR
-  # legs and no FX source reads as partial rather than as smaller (ADR-0040
-  # decision 6). A leg missing its amount or decimals is not counted here; that
-  # is a recording gap, not a pricing one.
+  # An entry with anything recorded that could not be priced: a leg, or the fee,
+  # whose symbol neither `usdc_price` nor `price_fn` answers. `add_or_keep/2`
+  # drops such an amount from `usd_revenue` or `usd_fee` without a trace, so
+  # this is the trace: a report with EUR legs and no FX source reads as partial
+  # rather than as smaller (ADR-0040 decision 6). A zero fee is zero in any
+  # currency and is not counted. Each entry counts at most once.
   defp unpriced(e, usdc_price, price_fn) do
     legs = [
       {e.from_amount, e.from_symbol, e.from_decimals},
       {e.to_amount, e.to_symbol, e.to_decimals}
     ]
 
-    if Enum.any?(legs, fn {amount, symbol, decimals} ->
-         amount != nil and decimals != nil and
-           is_nil(leg_usd(amount, symbol, decimals, usdc_price, price_fn))
-       end),
-       do: 1,
-       else: 0
+    unpriced_leg? =
+      Enum.any?(legs, fn {amount, symbol, decimals} ->
+        amount != nil and decimals != nil and
+          is_nil(leg_usd(amount, symbol, decimals, usdc_price, price_fn))
+      end)
+
+    unpriced_fee? =
+      not Decimal.eq?(e.fee_collected, 0) and is_nil(fee_usd(e, usdc_price, price_fn))
+
+    if unpriced_leg? or unpriced_fee?, do: 1, else: 0
+  end
+
+  # An entry whose revenue cannot be computed because a leg's amount or
+  # decimals were never recorded, such as one booked before both legs were
+  # captured. Not a pricing failure, and counted apart from `unpriced/3`, so a
+  # report says why `usd_revenue` left it out. Each entry counts at most once.
+  defp recording_gap(e) do
+    if Enum.any?([e.from_amount, e.from_decimals, e.to_amount, e.to_decimals], &is_nil/1),
+      do: 1,
+      else: 0
   end
 
   defp unknown_gas(%{gas_native: nil}), do: 1

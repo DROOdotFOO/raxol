@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `SettlementLedger`'s `unpriced_count` missed two kinds of entry that dropped
+  out of the totals. A nonzero fee no price answered (an EURe fee) left
+  `usd_fee` silently and now counts as unpriced; an entry still counts once.
+  An entry missing a leg's amount or decimals left `usd_revenue` silently and
+  is now counted in the new `recording_gap_count`, which is a recording
+  problem, not a pricing one. `[:raxol, :payments, :margin]` carries it.
 - `Prices.FX` no longer raises `MatchError` when `Raxol.Web3.FX.Sleuth.new/1`
   refuses the configured key (one with a CR, LF or space inside it). It logs
   the refusal, which names the argument and never the key, and leaves EURC,
