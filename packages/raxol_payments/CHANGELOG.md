@@ -65,7 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RebalanceMonitor.margin_report/1`. Until now nothing in production read the
   report, so FX pricing reached only the native gas symbols a refuel asks for.
   The advice and the report fail independently, and an FX snapshot that raises
-  falls back to `RAXOL_PRICE_SOURCE` instead of aborting the sweep.
+  leaves EURC, EURe and ZCHF unpriced, and the rest to `RAXOL_PRICE_SOURCE`,
+  instead of aborting the sweep.
   `SettlementLedger.report/2` reads the ledger once instead of four times.
 
 ### Fixed
@@ -76,6 +77,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convert through `Assets.to_decimal/1`, MPP through the integer. The amount
   then reaches the policy and budget gates, which refuse it when a
   `SpendingPolicy` and ledger are configured.
+- The FX `price_fn` no longer lets Sleuth choose what it reprices. It answers
+  exactly the symbols in the new `Assets.fx_pegs/0`, at the Chainlink rate for
+  the peg registered there, and hands every other symbol to the fallback. A
+  snapshot listing `ETH` with `pegCurrency: "EUR"` used to price ETH at the EUR
+  rate (1.13 instead of 2500), and ZCHF relabelled `EUR` was priced at the EUR
+  rate. A listing whose peg disagrees with the registered one, a symbol listed
+  twice with any listing not `:ok`, a symbol missing from the snapshot, and a
+  failed snapshot all leave the symbol `nil`, never the fallback.
+
 - Unknown chains and tokens now fail closed on the Xochi path instead of
   being treated as EVM or 6-decimal (#1149). `ExecuteXochiIntent` refuses,
   before quoting, a source or destination token without registered decimals

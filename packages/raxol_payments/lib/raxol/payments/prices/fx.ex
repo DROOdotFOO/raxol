@@ -6,9 +6,10 @@ defmodule Raxol.Payments.Prices.FX do
   Takes the `:fx` opts `Raxol.Payments.Accounting.env_config/0` produces when
   `RAXOL_FX_ENABLED=true` (`sleuth_api_key:` as a `Raxol.Payments.Secret`,
   `rpc_urls:` for chains 1 and 8453) and returns a `price_fn` that answers
-  EURC, EURe and ZCHF at the Chainlink rate for their peg when Sleuth's market
-  price is within 100 bps of it, `nil` when it is not, and hands every other
-  symbol to `fallback`. See `Raxol.Web3.FX.price_fn/2`.
+  every symbol in `Raxol.Payments.Assets.fx_pegs/0` (EURC, EURe, ZCHF) at the
+  Chainlink rate for its registered peg when Sleuth's market price is within
+  100 bps of it, `nil` when it is not or the snapshot failed, and hands every
+  other symbol to `fallback`. See `Raxol.Web3.FX.price_fn/3`.
 
   `raxol_web3` is an optional dependency. Without it, `price_fn(nil, fallback)`
   is still `fallback`, and any `:fx` opts raise: `Accounting` refuses
@@ -18,7 +19,7 @@ defmodule Raxol.Payments.Prices.FX do
   floor reads; that is ADR-0040 decision 7, and it is not built.
   """
 
-  alias Raxol.Payments.Secret
+  alias Raxol.Payments.{Assets, Secret}
 
   @type price_fn :: (String.t() -> Decimal.t() | nil)
 
@@ -44,20 +45,27 @@ defmodule Raxol.Payments.Prices.FX do
       snapshot(Raxol.Web3.FX.new(sleuth, chainlink), fallback)
     end
 
-    # The snapshot is upstream data, and a malformed one can raise in the
-    # decoder. Degrade the way a failed snapshot already does -- `fallback`
-    # prices everything it can and the ledger counts the rest as unpriced --
-    # rather than cost the caller its whole sweep. Only the exception's module
-    # is logged; its message can carry the upstream term.
+    # The snapshot is upstream data, and the decoder is bounded against a
+    # malformed one; this is the backstop if it still raises. Degrade the way a
+    # failed snapshot already does -- the registered symbols unpriced, for the
+    # ledger to count, and `fallback` for the rest -- rather than cost the
+    # caller its whole sweep. Only the exception's module is logged; its
+    # message can carry the upstream term.
     defp snapshot(fx, fallback) do
-      Raxol.Web3.FX.price_fn(fx, fallback)
+      Raxol.Web3.FX.price_fn(fx, Assets.fx_pegs(), fallback)
     rescue
       error ->
         Logger.warning(
           "FX price snapshot raised #{inspect(error.__struct__)}; non-USD legs unpriced"
         )
 
-        fallback
+        unpriced(fallback)
+    end
+
+    # Never `fallback` for a registered symbol: it may price a euro at par.
+    defp unpriced(fallback) do
+      pegs = Assets.fx_pegs()
+      fn symbol -> if Map.has_key?(pegs, symbol), do: nil, else: fallback.(symbol) end
     end
   else
     defp build(_opts, _fallback) do

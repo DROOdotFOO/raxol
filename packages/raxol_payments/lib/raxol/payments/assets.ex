@@ -494,6 +494,17 @@ defmodule Raxol.Payments.Assets do
 
   def fx_peg(_chain, _address), do: nil
 
+  @fx_pegs Map.new(@fx_stables, fn {symbol, spec} -> {symbol, spec.peg} end)
+
+  @doc """
+  Every registered non-USD stablecoin's symbol and peg currency:
+  `%{"EURC" => "EUR", "EURe" => "EUR", "ZCHF" => "CHF"}`. The set an FX
+  `price_fn` answers for, at the rate for this peg and no other (ADR-0040
+  decision 6).
+  """
+  @spec fx_pegs() :: %{String.t() => String.t()}
+  def fx_pegs, do: @fx_pegs
+
   defp fx_symbol(chain, address) do
     case fx_entry(chain, address) do
       {symbol, _peg, _decimals} -> symbol

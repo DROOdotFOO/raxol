@@ -473,18 +473,31 @@ defmodule Raxol.Web3.FXTest do
     end
   end
 
-  describe "price_fn/2" do
+  describe "price_fn/3" do
+    # What `Raxol.Payments.Prices.FX` passes: `Raxol.Payments.Assets.fx_pegs/0`.
+    @pegs %{"EURC" => "EUR", "EURe" => "EUR", "ZCHF" => "CHF"}
+
+    defp fallback do
+      fn
+        "ETH" -> Decimal.new("2500")
+        _ -> nil
+      end
+    end
+
+    # `priceUsd` as a JSON number, as Sleuth sends it; a string decodes to nil.
+    defp snapshot(assets),
+      do:
+        Jason.encode!(%{
+          assets: Enum.map(assets, &Map.update!(&1, :priceUsd, fn p -> Jason.Fragment.new(p) end))
+        })
+
     test "EUR and CHF stables price at the Chainlink rate; everything else falls back" do
       s = sleuth(%{"/api/mcp/fx/stables" => sleuth_fixture("stables_partner")})
       fx = FX.new(s, chainlink())
       {:ok, eur} = Chainlink.rate(fx.chainlink, "EUR")
       {:ok, chf} = Chainlink.rate(fx.chainlink, "CHF")
 
-      price =
-        FX.price_fn(fx, fn
-          "ETH" -> Decimal.new("2500")
-          _ -> nil
-        end)
+      price = FX.price_fn(fx, @pegs, fallback())
 
       assert price.("EURe") == eur.rate
       assert price.("EURC") == eur.rate
@@ -498,24 +511,67 @@ defmodule Raxol.Web3.FXTest do
       refute_received {:request, _}
     end
 
+    test "Sleuth's labels choose neither the symbols repriced nor the peg" do
+      {:ok, eur} = Chainlink.rate(chainlink(), "EUR")
+      {:ok, chf} = Chainlink.rate(chainlink(), "CHF")
+      at_eur = Decimal.to_string(eur.rate)
+
+      body =
+        snapshot([
+          # A symbol nobody registered, labelled as a euro stable at the EUR rate.
+          %{symbol: "ETH", pegCurrency: "EUR", priceUsd: at_eur, partner: true},
+          # ZCHF relabelled EUR and priced at the EUR rate.
+          %{symbol: "FRANKENCOIN", pegCurrency: "EUR", priceUsd: at_eur, partner: true},
+          # EURC relabelled CHF, at a price that is right for EUR.
+          %{symbol: "EURC", pegCurrency: "CHF", priceUsd: at_eur, partner: true}
+        ])
+
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+      price = FX.price_fn(FX.new(s, chainlink()), @pegs, fallback())
+
+      assert price.("ETH") == Decimal.new("2500")
+      # Judged against CHF, its registered peg: the EUR rate is far off it.
+      assert price.("ZCHF") == nil
+      refute price.("ZCHF") == chf.rate
+      # A peg Sleuth disagrees with is a veto, never a different rate.
+      assert price.("EURC") == nil
+      # Registered but absent from the snapshot: nil, not the fallback.
+      assert price.("EURe") == nil
+    end
+
+    test "a symbol listed twice is priced only if every listing is ok" do
+      {:ok, eur} = Chainlink.rate(chainlink(), "EUR")
+
+      body =
+        snapshot([
+          %{symbol: "EURC", pegCurrency: "EUR", priceUsd: "4.13"},
+          %{symbol: "EURC", pegCurrency: "EUR", priceUsd: Decimal.to_string(eur.rate)}
+        ])
+
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+      assert FX.price_fn(FX.new(s, chainlink()), @pegs, fallback()).("EURC") == nil
+    end
+
     test "a non-ok EUR asset is nil and never falls through to the fallback" do
       s = sleuth(%{"/api/mcp/fx/stables" => sleuth_fixture("stables_partner")})
-      price = FX.price_fn(FX.new(s, chainlink(rpc_urls: %{})), fn _ -> Decimal.new(1) end)
+      price = FX.price_fn(FX.new(s, chainlink(rpc_urls: %{})), @pegs, fn _ -> Decimal.new(1) end)
 
       assert price.("EURe") == nil
       assert price.("WETH") == Decimal.new(1)
     end
 
-    test "a failed snapshot prices only through the fallback" do
+    test "a failed snapshot leaves the registered symbols unpriced and the rest to the fallback" do
       s = sleuth(%{"/api/mcp/fx/stables" => {401, "{}"}})
 
       price =
         ExUnit.CaptureLog.with_log(fn ->
-          FX.price_fn(FX.new(s, chainlink()), fn _ -> :fallback end)
+          FX.price_fn(FX.new(s, chainlink()), @pegs, fn _ -> :fallback end)
         end)
         |> elem(0)
 
-      assert price.("EURe") == :fallback
+      assert price.("EURe") == nil
+      assert price.("ZCHF") == nil
+      assert price.("ETH") == :fallback
     end
   end
 end
