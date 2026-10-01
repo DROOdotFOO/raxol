@@ -44,6 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neither `usdc_price` nor `price_fn` could price. Such a revenue used to drop out
   of `usd_revenue` without a trace, so a report with EUR legs read as smaller
   rather than as partial.
+- Each `RebalanceMonitor` sweep reports margin. It prices
+  `SettlementLedger.report/2` with the same `price_fn` that sizes refuels (FX
+  in front of `RAXOL_PRICE_SOURCE` when enabled), emits the totals as
+  `[:raxol, :payments, :margin]`, which the accounting sidecar logs as
+  `payments.margin`, and keeps the per-corridor report for
+  `RebalanceMonitor.margin_report/1`. Until now nothing in production read the
+  report, so FX pricing reached only the native gas symbols a refuel asks for.
+  The advice and the report fail independently, and an FX snapshot that raises
+  falls back to `RAXOL_PRICE_SOURCE` instead of aborting the sweep.
+  `SettlementLedger.report/2` reads the ledger once instead of four times.
 
 ### Fixed
 

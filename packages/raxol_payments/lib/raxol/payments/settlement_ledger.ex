@@ -299,7 +299,12 @@ defmodule Raxol.Payments.SettlementLedger do
     |> aggregate(opts)
   end
 
-  @doc "A structured margin report: corridors, destinations, native drain, and totals."
+  @doc """
+  A structured margin report: corridors, destinations, native drain, and totals.
+
+  One read of the ledger feeds all four, so a periodic report costs the write
+  path one table scan rather than four.
+  """
   @spec report(GenServer.server(), keyword()) :: %{
           corridors: map(),
           destinations: map(),
@@ -307,11 +312,13 @@ defmodule Raxol.Payments.SettlementLedger do
           totals: aggregate()
         }
   def report(server, opts \\ []) do
+    entries = list_settlements(server, filter_opts(opts))
+
     %{
-      corridors: margin_by_corridor(server, opts),
-      destinations: margin_by_destination(server, opts),
-      drain: native_drain_by_chain(server, opts),
-      totals: cumulative_subsidy(server, opts)
+      corridors: group_by(entries, &{&1.from_chain_id, &1.to_chain_id}, opts),
+      destinations: group_by(entries, & &1.to_chain_id, opts),
+      drain: fold_drain(entries),
+      totals: aggregate(entries, opts)
     }
   end
 

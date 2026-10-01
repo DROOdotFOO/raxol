@@ -288,6 +288,13 @@ marked every EUR asset unpriceable for about twenty hours a day.
   item 4 whether or not any FX pricing is enabled, and moves no new funds.
 
 - **Price closure.** `Raxol.Web3.FX.price_fn/2` returns a `symbol -> Decimal | nil` closure, built from one partner snapshot and one rate read per peg, in front of a fallback `price_fn`. `Raxol.Payments.Prices.FX` builds it from the accounting opts, and `RebalanceMonitor` composes it in front of `RAXOL_PRICE_SOURCE` on each sweep. `RPC_BASE` and `RPC_ETH` are reused for the feeds.
+  The same closure prices both halves of the sweep: refuel sizing, which asks only for native
+  gas symbols, and `SettlementLedger.report/2`, which is where euro and franc legs are read.
+  Each sweep emits the report's totals as `[:raxol, :payments, :margin]`, which the accounting
+  sidecar's `LoggerHandler` logs, and keeps the full per-corridor report for
+  `RebalanceMonitor.margin_report/1`. The monitor runs only with `XOCHI_SOLVER_ADDRESS` set;
+  ledger-only mode has no margin report. A snapshot that raises degrades to the fallback, as a
+  failed one already did, so it cannot cost the sweep its refuel advice.
   A symbol with a EUR or CHF peg is priced at the Chainlink rate for its peg when its Quality is
   `:ok`, and is nil otherwise. Accounting is priced at the rate of record, and Sleuth's role is
   to veto, not to price. Every other symbol is delegated to whatever `RAXOL_PRICE_SOURCE`

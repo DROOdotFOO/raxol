@@ -5,6 +5,14 @@ defmodule Raxol.Payments.RebalanceMonitor do
   advisor's telemetry + logs). Recommend-only: raxol cannot move the solver wallet;
   the Riddler auto-rebalancer executes.
 
+  Each sweep also prices `SettlementLedger.report/2` with the same `price_fn` that
+  sizes refuels -- FX in front of `:price_source` when `:fx` is set, so euro and
+  franc legs are priced rather than counted in `unpriced_count` (ADR-0040
+  decision 6) -- emits its totals as `[:raxol, :payments, :margin]`, and keeps the
+  whole report for `margin_report/1`. The advice and the report fail
+  independently: a ledger read that raises leaves the refuel advice standing, and
+  the reverse.
+
   A GenServer scheduled with `Process.send_after/3` (the codebase's periodic-task
   idiom). The gather+advise step is exposed as `advise_once/1` so the on-demand mix
   task shares the exact code path.
@@ -55,27 +63,29 @@ defmodule Raxol.Payments.RebalanceMonitor do
   def sweep_now(server \\ __MODULE__), do: GenServer.call(server, :sweep_now)
 
   @doc """
+  The `SettlementLedger.report/2` from the latest sweep, priced with that sweep's
+  `price_fn`, or `nil` before the first sweep (or while every report so far has
+  failed). An operator reads it from a remote console on the running node; the
+  ledger is ETS in this VM, so a separate one cannot.
+  """
+  @spec margin_report(GenServer.server()) :: map() | nil
+  def margin_report(server \\ __MODULE__), do: GenServer.call(server, :margin_report)
+
+  @doc """
   Run one gather+advise cycle without a running process -- the shared core used by
   the periodic sweep and the on-demand mix task. Takes the same keys as
   `start_link/1` (`:ledger`, `:reader`, `:solver_address`, `:policy`, `:chains`,
   `:price_fn`).
   """
   @spec advise_once(keyword()) :: [RebalanceAdvisor.recommendation()]
-  def advise_once(opts) do
+  def advise_once(opts), do: advise(opts, resolve_price_fn(opts))
+
+  defp advise(opts, price_fn) do
     reader = Keyword.fetch!(opts, :reader)
     ledger = Keyword.fetch!(opts, :ledger)
     policy = Keyword.get(opts, :policy, RebalancePolicy.default())
     solver = Keyword.fetch!(opts, :solver_address)
     chains = Keyword.get(opts, :chains, @default_chains)
-
-    # An explicit :price_fn (tests) wins; otherwise resolve prices fresh each sweep
-    # from :price_source so a long-running monitor never uses stale prices.
-    price_fn =
-      Keyword.get(opts, :price_fn) ||
-        Prices.FX.price_fn(
-          Keyword.get(opts, :fx),
-          build_price_fn(Keyword.get(opts, :price_source, :none))
-        )
 
     # Gather stables (for inventory rebalance) + WETH (the gas-refuel source).
     symbols = RebalancePolicy.stables(policy) ++ ["WETH"]
@@ -88,6 +98,37 @@ defmodule Raxol.Payments.RebalanceMonitor do
       price_fn: price_fn,
       demand: demand
     )
+  end
+
+  # An explicit :price_fn (tests) wins; otherwise resolve prices fresh each sweep
+  # from :price_source so a long-running monitor never uses stale prices.
+  defp resolve_price_fn(opts) do
+    Keyword.get(opts, :price_fn) ||
+      Prices.FX.price_fn(
+        Keyword.get(opts, :fx),
+        build_price_fn(Keyword.get(opts, :price_source, :none))
+      )
+  end
+
+  defp report_margin(ledger, price_fn) do
+    report = SettlementLedger.report(ledger, price_fn: price_fn)
+    totals = report.totals
+
+    :telemetry.execute(
+      [:raxol, :payments, :margin],
+      Map.take(totals, [
+        :count,
+        :unpriced_count,
+        :gas_unknown_count,
+        :usd_revenue,
+        :usd_fee,
+        :usd_gas,
+        :usd_margin
+      ]),
+      %{corridor_count: map_size(report.corridors)}
+    )
+
+    report
   end
 
   # Every ledger read walks the whole table inside the process that also serves
@@ -158,7 +199,8 @@ defmodule Raxol.Payments.RebalanceMonitor do
           :fx,
           :demand_window_ms
         ]),
-      interval_ms: Keyword.get(opts, :interval_ms, @default_interval_ms)
+      interval_ms: Keyword.get(opts, :interval_ms, @default_interval_ms),
+      margin_report: nil
     }
 
     initial_delay = Keyword.get(opts, :initial_delay_ms, state.interval_ms)
@@ -168,22 +210,43 @@ defmodule Raxol.Payments.RebalanceMonitor do
 
   @impl true
   def handle_info(:sweep, state) do
-    run(state)
+    {_recs, state} = run(state)
     schedule(state.interval_ms)
     {:noreply, state}
   end
 
   @impl true
   def handle_call(:sweep_now, _from, state) do
-    {:reply, run(state), state}
+    {recs, state} = run(state)
+    {:reply, recs, state}
   end
 
+  def handle_call(:margin_report, _from, state), do: {:reply, state.margin_report, state}
+
+  # One price_fn per sweep serves both halves, so FX and :price_source are
+  # fetched once. Each half is rescued on its own: a raise in one must not cost
+  # the operator the other. Only the exception's module is logged; its message
+  # can carry the upstream term that raised it.
   defp run(state) do
-    advise_once(state.opts)
+    price_fn = attempt(:prices, fn -> resolve_price_fn(state.opts) end, fn _sym -> nil end)
+    recs = attempt(:advice, fn -> advise(state.opts, price_fn) end, [])
+
+    report =
+      attempt(
+        :margin,
+        fn -> report_margin(Keyword.fetch!(state.opts, :ledger), price_fn) end,
+        state.margin_report
+      )
+
+    {recs, %{state | margin_report: report}}
+  end
+
+  defp attempt(step, fun, fallback) do
+    fun.()
   rescue
     error ->
-      Logger.warning("rebalance sweep failed: #{inspect(error)}")
-      []
+      Logger.warning("rebalance sweep #{step} step failed: #{inspect(error.__struct__)}")
+      fallback
   end
 
   defp schedule(delay), do: Process.send_after(self(), :sweep, delay)

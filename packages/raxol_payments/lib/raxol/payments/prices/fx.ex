@@ -34,14 +34,30 @@ defmodule Raxol.Payments.Prices.FX do
   def available?, do: Code.ensure_loaded?(Raxol.Web3.FX)
 
   if Code.ensure_loaded?(Raxol.Web3.FX) do
+    require Logger
+
     defp build(opts, fallback) do
       key = opts |> Keyword.fetch!(:sleuth_api_key) |> Secret.new() |> Secret.reveal()
       {:ok, sleuth} = Raxol.Web3.FX.Sleuth.new(api_key: key)
       chainlink = Raxol.Web3.FX.Chainlink.new(rpc_urls: Keyword.get(opts, :rpc_urls, %{}))
 
-      sleuth
-      |> Raxol.Web3.FX.new(chainlink)
-      |> Raxol.Web3.FX.price_fn(fallback)
+      snapshot(Raxol.Web3.FX.new(sleuth, chainlink), fallback)
+    end
+
+    # The snapshot is upstream data, and a malformed one can raise in the
+    # decoder. Degrade the way a failed snapshot already does -- `fallback`
+    # prices everything it can and the ledger counts the rest as unpriced --
+    # rather than cost the caller its whole sweep. Only the exception's module
+    # is logged; its message can carry the upstream term.
+    defp snapshot(fx, fallback) do
+      Raxol.Web3.FX.price_fn(fx, fallback)
+    rescue
+      error ->
+        Logger.warning(
+          "FX price snapshot raised #{inspect(error.__struct__)}; non-USD legs unpriced"
+        )
+
+        fallback
     end
   else
     defp build(_opts, _fallback) do

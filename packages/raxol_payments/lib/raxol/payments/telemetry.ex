@@ -96,6 +96,25 @@ defmodule Raxol.Payments.Telemetry do
   Metadata: `:intent_id`, `:from_chain_id`, `:to_chain_id`, `:token_symbol`,
   `:gas_chain_id`, `:gas_symbol`, `:gas_status`, `:settlement_type`.
 
+  ### `[:raxol, :payments, :margin]`
+
+  Fires once per `Raxol.Payments.RebalanceMonitor` sweep with the totals of
+  `SettlementLedger.report/2`, priced with the sweep's `price_fn` (FX in front
+  of the configured price source when `:fx` is set). The full report, per
+  corridor and destination, is `RebalanceMonitor.margin_report/1`.
+
+  | Measurement          | Type                 | Notes                                    |
+  | -------------------- | -------------------- | ---------------------------------------- |
+  | `:count`             | `integer()`          | settlements in the ledger                |
+  | `:unpriced_count`    | `integer()`          | entries with a leg no price answered     |
+  | `:gas_unknown_count` | `integer()`          | entries with no gas figure yet           |
+  | `:usd_revenue`       | `Decimal.t/0` \\| nil | delivered spread over priced entries     |
+  | `:usd_fee`           | `Decimal.t/0` \\| nil | venue fee over priced entries            |
+  | `:usd_gas`           | `Decimal.t/0` \\| nil | gas over priced entries                  |
+  | `:usd_margin`        | `Decimal.t/0` \\| nil | revenue (else fee) net of gas; negative is subsidy |
+
+  Metadata: `:corridor_count`.
+
   ### `[:raxol, :payments, :rebalance, :recommendation]`
 
   Fires once per `Raxol.Payments.RebalanceAdvisor.advise/4` recommendation.
@@ -159,6 +178,11 @@ defmodule Raxol.Payments.Telemetry do
       # OPERATIONAL. `SettlementLedger` booked a completed fill, once per
       # intent. The success path of accounting.
       [:raxol, :payments, :settlement] => :operational,
+
+      # OPERATIONAL. `RebalanceMonitor`'s per-sweep margin totals. Pure output
+      # of a function over the ledger; a negative margin is a fact about the
+      # corridors, not a defect here.
+      [:raxol, :payments, :margin] => :operational,
 
       # OPERATIONAL x2. `RebalanceAdvisor`'s per-recommendation rows and the
       # per-call summary. Pure output of a function over observed balances --
