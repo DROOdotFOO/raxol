@@ -163,6 +163,58 @@ defmodule Raxol.Web3.FXTest do
       assert Sleuth.stables(s) == {:error, {:decode_failed, :sleuth}}
     end
 
+    test "a list entry that is not an object is skipped, not raised on" do
+      eurc = ~s({"symbol":"EURC","pegCurrency":"EUR","priceUsd":1.1350})
+
+      s =
+        sleuth(%{
+          "/api/mcp/fx/stables" => ~s({"assets":[1,"x",null,[],#{eurc}]}),
+          "/api/mcp/fx/stables/EURC" => ~s({"asset":{"symbol":"EURC","topPools":[1,"x",{}]}}),
+          "/api/mcp/fx/corridors" =>
+            ~s({"corridors":[1,{"corridor":"EUR","assets":[2,{"symbol":7}]}]})
+        })
+
+      assert {:ok, %{assets: [%{symbol: "EURC"}]}} = Sleuth.stables(s)
+      assert {:ok, %{asset: %{top_pools: [%{chain: nil}]}}} = Sleuth.stable(s, "EURC")
+
+      assert {:ok, %{corridors: [%{corridor: "EUR", assets: [%{symbol: ""}]}]}} =
+               Sleuth.corridors(s, include_assets: true)
+    end
+
+    # Each figure below is a few bytes of JSON. Arithmetic on any of them --
+    # rounding `deviationBps`, dividing `priceUsd` by a rate, rendering one with
+    # `:normal` -- expands the exponent into digits, which ran past a minute.
+    @tag timeout: 10_000
+    test "a figure past the decoder's bounds is nil before any arithmetic" do
+      body =
+        ~s({"assets":[{"symbol":"EURC","pegCurrency":"EUR","priceUsd":1e1000000,) <>
+          ~s("deviationBps":1e1000000,"supplyUsd":1e-1000000,) <>
+          ~s("volume24hUsd":123456789012345678901234567890123456789.5,) <>
+          ~s("partnerLiquidityUsd":1234567890123456789012345678901234567890}],) <>
+          ~s("fxRatesUsd":{"EUR":1e400,"CHF":1.25}})
+
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+      assert {:ok, snapshot} = Sleuth.stables(s)
+      assert [asset] = snapshot.assets
+
+      assert %{price_usd: nil, sleuth_deviation_bps: nil, supply_usd: nil} = asset
+      assert %{volume_24h_usd: nil, partner_liquidity_usd: nil} = asset
+      assert snapshot.sleuth_fx_rates_usd == %{"CHF" => Decimal.new("1.25")}
+
+      # And the verdict over it is the no-price one, not a hang.
+      fx = FX.new(s, chainlink())
+      assert {:ok, %{assets: [%{quality: %{status: :suspect}}]}} = FX.stables(fx)
+    end
+
+    @tag timeout: 10_000
+    test "a Decimal with a huge exponent renders in bounded space" do
+      rendered = Raxol.Web3.Serialize.result(%{price: Decimal.new("1e1000000")})
+      assert byte_size(rendered.price) < 32
+      assert Decimal.equal?(Decimal.new(rendered.price), Decimal.new("1e1000000"))
+
+      assert Raxol.Web3.Serialize.result(Decimal.new("1.1350")) == "1.1350"
+    end
+
     test "new/1 requires a key and an https base" do
       assert {:error, {:missing_argument, "api_key"}} = Sleuth.new([])
 
