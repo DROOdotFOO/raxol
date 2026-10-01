@@ -178,6 +178,50 @@ defmodule Raxol.Payments.SettlementLedgerTest do
     assert Decimal.equal?(priced.usd_revenue, Decimal.new("0.120593"))
   end
 
+  test "an unpriced fee counts as unpriced, and a missing leg as a recording gap",
+       %{ledger: ledger} do
+    usdc_legs = %{
+      from_amount: "1100000",
+      from_symbol: "USDC",
+      from_decimals: 6,
+      to_amount: "1002487",
+      to_symbol: "USDC",
+      to_decimals: 6
+    }
+
+    eure_fee = %{fee_collected: "50000000000000000", fee_currency: "EURe", fee_decimals: 18}
+    eure_to = %{to_amount: "950000000000000000", to_symbol: "EURe", to_decimals: 18}
+
+    for fill <- [
+          # Priced throughout.
+          Map.put(usdc_legs, :intent_id, "xi_1"),
+          # No delivered amount recorded: a gap, not a pricing failure.
+          usdc_legs |> Map.put(:intent_id, "xi_2") |> Map.put(:to_amount, nil),
+          # Dollar legs, euro fee.
+          usdc_legs |> Map.put(:intent_id, "xi_3") |> Map.merge(eure_fee),
+          # Euro leg and euro fee: one entry, counted once.
+          usdc_legs |> Map.put(:intent_id, "xi_4") |> Map.merge(eure_to) |> Map.merge(eure_fee),
+          # A zero fee is zero in any currency.
+          usdc_legs |> Map.put(:intent_id, "xi_5") |> Map.merge(%{eure_fee | fee_collected: "0"})
+        ] do
+      SettlementLedger.record_settlement(ledger, l1_fill(fill))
+    end
+
+    agg = SettlementLedger.margin_by_destination(ledger)[1]
+    assert agg.count == 5
+    assert agg.unpriced_count == 2
+    assert agg.recording_gap_count == 1
+
+    eur = fn
+      "EURe" -> Decimal.new("1.1336")
+      _ -> nil
+    end
+
+    priced = SettlementLedger.margin_by_destination(ledger, price_fn: eur)[1]
+    assert priced.unpriced_count == 0
+    assert priced.recording_gap_count == 1
+  end
+
   test "native_drain_by_chain sums wei per destination chain", %{ledger: ledger} do
     SettlementLedger.record_settlement(ledger, l1_fill())
     SettlementLedger.record_settlement(ledger, l1_fill(%{intent_id: "xi_2"}))

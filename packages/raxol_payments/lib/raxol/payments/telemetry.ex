@@ -103,15 +103,16 @@ defmodule Raxol.Payments.Telemetry do
   of the configured price source when `:fx` is set). The full report, per
   corridor and destination, is `RebalanceMonitor.margin_report/1`.
 
-  | Measurement          | Type                 | Notes                                    |
-  | -------------------- | -------------------- | ---------------------------------------- |
-  | `:count`             | `integer()`          | settlements in the ledger                |
-  | `:unpriced_count`    | `integer()`          | entries with a leg no price answered     |
-  | `:gas_unknown_count` | `integer()`          | entries with no gas figure yet           |
-  | `:usd_revenue`       | `Decimal.t/0` \\| nil | delivered spread over priced entries     |
-  | `:usd_fee`           | `Decimal.t/0` \\| nil | venue fee over priced entries            |
-  | `:usd_gas`           | `Decimal.t/0` \\| nil | gas over priced entries                  |
-  | `:usd_margin`        | `Decimal.t/0` \\| nil | revenue (else fee) net of gas; negative is subsidy |
+  | Measurement            | Type                 | Notes                                    |
+  | ---------------------- | -------------------- | ---------------------------------------- |
+  | `:count`               | `integer()`          | settlements in the ledger                |
+  | `:unpriced_count`      | `integer()`          | entries with a leg or fee no price answered |
+  | `:recording_gap_count` | `integer()`          | entries missing a leg's amount or decimals; not in `:usd_revenue` |
+  | `:gas_unknown_count`   | `integer()`          | entries with no gas figure yet           |
+  | `:usd_revenue`         | `Decimal.t/0` \\| nil | delivered spread over priced entries     |
+  | `:usd_fee`             | `Decimal.t/0` \\| nil | venue fee over priced entries            |
+  | `:usd_gas`             | `Decimal.t/0` \\| nil | gas over priced entries                  |
+  | `:usd_margin`          | `Decimal.t/0` \\| nil | revenue (else fee) net of gas; negative is subsidy |
 
   Metadata: `:corridor_count`.
 

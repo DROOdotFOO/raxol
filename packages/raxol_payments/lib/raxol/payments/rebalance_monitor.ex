@@ -119,6 +119,7 @@ defmodule Raxol.Payments.RebalanceMonitor do
       Map.take(totals, [
         :count,
         :unpriced_count,
+        :recording_gap_count,
         :gas_unknown_count,
         :usd_revenue,
         :usd_fee,
