@@ -45,7 +45,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0037](0037-remote-mcp-client-transport.md) | Remote transport for the MCP client | Implemented | 2026-09-14 |
 | [0038](0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |
 | [0039](0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
-| [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Proposed | 2026-09-30 |
+| [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
 
 ## Template
 
