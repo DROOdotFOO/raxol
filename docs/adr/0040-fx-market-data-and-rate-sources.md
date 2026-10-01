@@ -2,8 +2,16 @@
 
 ## Status
 
-Proposed, 2026-09-30. No implementation has landed. Every upstream claim below was probed on
-that date, and the re-probe commands are in "Validation".
+Accepted, 2026-09-30. Every upstream claim below was probed on that date, and the re-probe
+commands are in "Validation". **Implemented 2026-10-01**: decisions 1 to 6 landed (the Assets
+registration, `Raxol.Web3.FX.Sleuth`, `.Chainlink`, `.Quality` and `FX.price_fn/3`, the MCP
+and agent surfaces with their wiring, and `Raxol.Payments.Prices.FX` in the `RebalanceMonitor`
+sweep), followed by an adversarial review whose fixes are recorded in the decisions they
+changed: the live corridor path refuses FX tokens, Relay, Xochi and x402 bound FX deliveries,
+the identity check is lazy and caches only a match (decision 2), the Sleuth decoder is
+bounded, a 403 is a status (decision 3), the verdict compares the exact deviation (decision 4),
+and the price closure answers only the registered symbols at their registered peg (decision
+6). Decision 7 is not built.
 
 Builds on [ADR-0033](0033-web3-data-surface.md) (the `raxol_web3` read layer and its
 dependency direction), [ADR-0038](0038-guarded-outbound-client-evm-rest-backend.md) (the
@@ -111,8 +119,9 @@ would mean stubs attached to a behaviour, which the repository rules forbid.
 There is no `FX.Source` behaviour either. There is one market-data source. The second source
 in this decision, Chainlink, answers a different question (the rate for one pair) with a
 different shape, so a shared behaviour would have one implementation and one misfit. Tests
-point the concrete `FX.Sleuth` handle at `test/support/tls_endpoint.ex` serving recorded
-fixtures, the same way the chain backends are tested, so no stub module is needed.
+drive the concrete handles over recorded fixtures through `Raxol.Web3.HTTP`'s `:exchange`
+option, so every request still passes the vet, cache, breaker and bucket stages, and no stub
+module is needed.
 
 ### 2. Chainlink is the rate of record
 
@@ -135,10 +144,19 @@ fallback, and a failure on both means no rate:
 - On Base, the sequencer-uptime feed answers 0 and has been up for at least 3,600 s since
   `startedAt`. A stopped sequencer freezes the price feed while its `updatedAt` still looks
   recent. Chainlink's L2 sequencer-feed documentation describes this failure mode.
-- The handle's identity check passed. At construction, `description()` must equal the expected
-  pair and `decimals()` must equal 8, which mirrors `Backend.JSONRPC`'s chain-id check. A
-  mismatch is `{:blocked, :feed_mismatch}` and is terminal, because a misconfigured address
-  would otherwise answer, correctly, about a pair nobody asked about.
+- The feed's identity matched. `description()` must equal the expected pair and `decimals()`
+  must equal 8. `Chainlink.new/1` does no I/O, so the check runs on the first `rate/2` that
+  reads the feed; a match is cached for a day (ADR-0038's cache stage, keyed by origin,
+  chain id, proxy and selector) and every other answer is re-read on the next call. A
+  decodable answer that names another pair or another scale is `{:blocked, :feed_mismatch}`
+  and is terminal, because a misconfigured address would otherwise answer, correctly, about
+  a pair nobody asked about. An answer that does not decode, such as the `"0x"` a node
+  returns for an address with no code when an RPC URL reaches the wrong chain, is
+  `{:decode_failed, :identity}`: an ordinary failed read that moves to the fallback. The
+  cache key cannot carry the URL path, because the cache takes no request URI as input (a
+  path often holds the provider key), so two handles on one host share an entry. Caching
+  only the expected answer is what makes that safe: the entry says nothing a correct feed
+  would not.
 
 A usable rate carries its `precision_bps`: the feed's deviation threshold, 10 for Base and 15
 for Ethereum. This is honest about what a fresh answer means. Between updates, a Chainlink
@@ -165,19 +183,29 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   cache has no conditional-request stage and a 60 s memo gets the same effect on one node.
 - **Bounds** are `max_bytes: 262_144`. Measured bodies with identity encoding: partner snapshot
   3.3 KB, default list 50.7 KB, `limit=300` 147.9 KB, detail 4.0 KB, corridors 70.4 KB.
-  `includeChains=1` with a large limit is refused by Sleuth (400) and never requested.
+  `includeChains=1` with a large limit is refused by Sleuth (400) and never requested. The
+  body bound does not bound what one number costs, so the decoder does: see Parsing.
 - **Parsing** uses `Jason.decode(body, floats: :decimals)`, so a float never reaches a money
   path. `raxol_web3` gains `{:decimal, "~> 2.0"}` for this; today it has `decimal` only as an
-  optional dependency of `jason`.
+  optional dependency of `jason`. A figure is `nil` unless it has at most 38 significant
+  digits and an exponent within ±30, checked on the decoded struct before any arithmetic:
+  `1e1000000` is nine bytes of JSON and a million digits after the first rounding. A list
+  entry that is not an object is skipped, and `Raxol.Web3.Serialize` renders a `Decimal`
+  whose exponent is past ±30 in scientific form.
 - **Arguments** are validated before any request is built: `sort` against an allowlist,
-  `limit` within 1..300, and `corridor` as three or four uppercase letters (`REAL` and `VAR`
-  are published corridors). Sleuth now returns 400 for bad arguments, but a local refusal
-  costs no token from the bucket.
-- **Errors**: 401 maps to `{:upstream_refused, :auth}`, 404 to `{:error, :not_found}`, and
-  anything else through the existing taxonomy. No upstream body leaves the module (ADR-0038
-  decision 6).
-- **Symbols** are canonicalized through `aliases`: `MONERIUM -> EURe` and `FRANKENCOIN ->
-  ZCHF`. The canonical form is the symbol `Raxol.Payments.Assets` uses (EURe's on-chain
+  `limit` within 1..300, `corridor` as three or four uppercase letters (`REAL` and `VAR`
+  are published corridors), and a `stable/2` symbol as up to 24 letters, digits, `.` and
+  `-` starting with a letter or digit, so it cannot be a `..` segment. The key is trimmed and
+  must be visible ASCII. Sleuth now returns 400 for bad arguments, but a local refusal costs
+  no token from the bucket.
+- **Errors**: 401 maps to `{:upstream_refused, :auth}`, 404 to
+  `{:upstream_refused, :not_found}`, 429 to `{:upstream_refused, :rate_limit}` and 400 to
+  `{:invalid_argument, "query"}`. A 403 is `{:http, 403}`, as `Raxol.Web3.Backend` documents
+  it, because in front of a CDN it is as likely a challenge page as a refused key. Any other
+  status is `{:http, status}`. No upstream body leaves the module (ADR-0038 decision 6).
+- **Symbols** are canonicalized through a fixed map in `FX.Sleuth`: `EURE` and `MONERIUM` to
+  `EURe`, and `FRANKENCOIN` to `ZCHF`. Sleuth's `aliases` field is carried through and not
+  read. The canonical form is the symbol `Raxol.Payments.Assets` uses (EURe's on-chain
   `symbol()`, as Xochi publishes it; lookups are case-insensitive), so a result can be
   echoed back as a lookup key.
 
@@ -195,7 +223,7 @@ Each asset gets exactly one status. The first matching rule wins:
 | ------ | ---- |
 | `:yield_bearing` | `yieldBearing` is true. A yield token drifts above its peg by design, so no deviation is reported |
 | `:no_rate` | No usable Chainlink rate exists for `pegCurrency` (decision 2), including every peg outside USD, EUR and CHF |
-| `:suspect` | \|deviation_bps\| > 100 (the rounded integer), whatever the `pegMechanism`, or no `priceUsd` to compare. A broken feed and a real depeg look the same here, and neither may be priced at its peg. REUR lands here at any sane threshold |
+| `:suspect` | \|deviation_bps\| > 100, judged on the exact deviation (the verdict's `deviation_bps` is rounded half-even for display only, so 100.4 bps is suspect and shows as 100), whatever the `pegMechanism`, or no `priceUsd` to compare. A broken feed and a real depeg look the same here, and neither may be priced at its peg. REUR lands here at any sane threshold |
 | `:ok` | Otherwise |
 
 `:no_rate` replaces the plan's earlier `:stale_rate`, which was keyed to Sleuth's
@@ -287,24 +315,29 @@ marked every EUR asset unpriceable for about twenty hours a day.
   This lands first and does not wait on the rest. It removes the 10^12 misscale in context
   item 4 whether or not any FX pricing is enabled, and moves no new funds.
 
-- **Price closure.** `Raxol.Web3.FX.price_fn/2` returns a `symbol -> Decimal | nil` closure, built from one partner snapshot and one rate read per peg, in front of a fallback `price_fn`. `Raxol.Payments.Prices.FX` builds it from the accounting opts, and `RebalanceMonitor` composes it in front of `RAXOL_PRICE_SOURCE` on each sweep. `RPC_BASE` and `RPC_ETH` are reused for the feeds.
+- **Price closure.** `Raxol.Web3.FX.price_fn/3` returns a `symbol -> Decimal | nil` closure, built from one partner snapshot and one rate read per registered peg, in front of a fallback `price_fn`. Its second argument is the registered `%{symbol => peg}` table, `Assets.fx_pegs/0`, which `Raxol.Payments.Prices.FX` passes in because `raxol_web3` does not depend on `raxol_payments`. `Prices.FX` builds the closure from the accounting opts, and `RebalanceMonitor` composes it in front of `RAXOL_PRICE_SOURCE` on each sweep. `RPC_BASE` and `RPC_ETH` are reused for the feeds.
   The same closure prices both halves of the sweep: refuel sizing, which asks only for native
   gas symbols, and `SettlementLedger.report/2`, which is where euro and franc legs are read.
   Each sweep emits the report's totals as `[:raxol, :payments, :margin]`, which the accounting
   sidecar's `LoggerHandler` logs, and keeps the full per-corridor report for
   `RebalanceMonitor.margin_report/1`. The monitor runs only with `XOCHI_SOLVER_ADDRESS` set;
-  ledger-only mode has no margin report. A snapshot that raises degrades to the fallback, as a
-  failed one already did, so it cannot cost the sweep its refuel advice.
-  A symbol with a EUR or CHF peg is priced at the Chainlink rate for its peg when its Quality is
-  `:ok`, and is nil otherwise. Accounting is priced at the rate of record, and Sleuth's role is
-  to veto, not to price. Every other symbol is delegated to whatever `RAXOL_PRICE_SOURCE`
-  selects, so ETH and POL pricing is unchanged. It is enabled by `RAXOL_FX_ENABLED=true` and
+  ledger-only mode has no margin report.
+  Each registered symbol is priced at the Chainlink rate for its REGISTERED peg when every
+  listing of it in the snapshot names that peg and is judged `:ok` against it, and is nil
+  otherwise: absent, relabelled, vetoed, unrated, or because the snapshot failed or raised.
+  Accounting is priced at the rate of record, and Sleuth's role is to veto, not to price: its
+  payload chooses neither which symbols are repriced nor at which rate. A registered symbol is
+  never handed to the fallback, which might price a euro at par. Every other symbol is
+  delegated to whatever `RAXOL_PRICE_SOURCE` selects, so ETH and POL pricing is unchanged
+  whatever the snapshot says. It is enabled by `RAXOL_FX_ENABLED=true` and
   follows the accounting env contract: set-but-empty is unset, an unknown value raises, and
   nothing is parsed while `RAXOL_ACCOUNTING_ENABLED` is not `"true"`. Setting it in a build
   without `raxol_web3` raises and names the variable.
 - **Unpriced is counted.** `SettlementLedger` gains `unpriced_count`, beside
-  `gas_unknown_count`, incremented wherever `add_or_keep/2` would drop a nil. EUR and CHF
-  tokens never join `@stablecoins`, because that set means "valued at `usdc_price`".
+  `gas_unknown_count`: entries with a leg, or a nonzero fee, that no price answered, each
+  counted once. Entries whose revenue cannot be computed because a leg's amount or decimals
+  were never recorded are a different problem and are counted in `recording_gap_count`. EUR
+  and CHF tokens never join `@stablecoins`, because that set means "valued at `usdc_price`".
 - **Dependency.** `raxol_payments` takes `raxol_web3` as an optional dependency, dropped under
   `HEX_BUILD` exactly as `raxol_agent`'s `web3_dep/0` does (`raxol_agent/mix.exs:87-93`).
   There is no cycle: `raxol_web3` depends on `raxol_core` and `raxol_mcp` only, and ADR-0033
@@ -361,10 +394,13 @@ gates, because nothing in its payload dates a `priceUsd`.
 
 ### Mitigation
 
-- The Assets registration ships as its own change, with on-chain `symbol()` and `decimals()`
-  checks recorded in its tests' fixtures, so the misscale fix does not wait on the rest.
-- The feed identity check makes a wrong address a boot-time refusal rather than a silent wrong
-  rate.
+- The Assets registration ships as its own change, so the misscale fix does not wait on the
+  rest. Its addresses and decimals were read on-chain on 2026-09-30 and re-read by the review
+  (16 of 16 addresses and decimals, the three feeds and the sequencer); "Validation" gives
+  the calls. `assets_test.exs` pins the table, which makes a change to it deliberate, but it
+  is a copy of the table and does not re-read the chain.
+- The feed identity check makes a wrong address a refusal on the first read, `{:blocked,
+  :feed_mismatch}`, rather than a silent wrong rate.
 - `:no_rate` is a status an operator can see, not a nil hidden inside a total, and
   `unpriced_count` makes its accounting cost visible.
 - A pair gains a rate by adding a row to decision 2's table with its measured heartbeat and
