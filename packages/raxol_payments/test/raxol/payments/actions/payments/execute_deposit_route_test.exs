@@ -72,7 +72,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
       "deposit_deadline" => 1_900_000_000
     }
 
+    test = self()
+
     plug = fn conn ->
+      send(test, :quote_requested)
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, Jason.encode!(body))
@@ -117,6 +121,45 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
     test "errors when :xochi_config is absent from the context" do
       assert {:error, {:missing_context, :xochi_config}} =
                ExecuteDepositRoute.run(params(), %{})
+    end
+
+    # ADR-0040 decision 7: no FX rate gates a conversion yet, so a non-USD
+    # destination has no par to floor against and must carry its own.
+    @eure_base "0xbf6e2966A9C3D99C9E4D069E04f7Bdb9C8aa762C"
+
+    test "a non-USD destination without a positive min_to_amount is refused before any quote" do
+      ctx = %{xochi_config: config(), deposit_attestation_signer: signer_address()}
+
+      for floor <- [nil, "0", " 0 "] do
+        assert {:error, {:unpriced_asset, %{side: :destination, chain_id: 8453, peg: "EUR"}}} =
+                 ExecuteDepositRoute.run(
+                   params(%{to_token: @eure_base, min_to_amount: floor}),
+                   ctx
+                 )
+      end
+
+      refute_received :quote_requested
+    end
+
+    test "a quote delivering less than min_to_amount returns no deposit address" do
+      ctx = %{xochi_config: config(), deposit_attestation_signer: signer_address()}
+
+      # The quote delivers 995000.
+      assert {:error, {:delivery_below_floor, %{to_amount: "995000", min_to_amount: 995_001}}} =
+               ExecuteDepositRoute.run(
+                 params(%{to_token: @eure_base, min_to_amount: "995001"}),
+                 ctx
+               )
+
+      assert {:ok, %{deposit_address: @deposit_addr}} =
+               ExecuteDepositRoute.run(
+                 params(%{to_token: @eure_base, min_to_amount: "995000"}),
+                 ctx
+               )
+
+      # Authoritative for a dollar destination too.
+      assert {:error, {:delivery_below_floor, _}} =
+               ExecuteDepositRoute.run(params(%{min_to_amount: "995001"}), ctx)
     end
   end
 

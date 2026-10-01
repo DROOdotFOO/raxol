@@ -21,9 +21,20 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
       signer; otherwise `config :raxol_payments, :xochi_deposit_attestation_signer`,
       otherwise the live capability matrix's `deposit_attestation_signer`.
 
+  ## Delivery floor
+
+  The quote's `to_amount` is solver-chosen, and the attestation does not bind
+  it. A positive `min_to_amount` (destination atomic units) is authoritative for
+  any destination: a quote delivering less returns no deposit address. A
+  destination with a non-USD peg (`Assets.fx_peg/2`: EURC, EURe, ZCHF) needs
+  one, and is refused before any quote is fetched without it, because no FX
+  rate gives a par to floor against (ADR-0040 decision 7). `0` bounds nothing
+  and counts as absent. This is the rule `ExecuteRelayTransfer` applies.
+
   Errors are machine-readable: `:attestation_mismatch`, `:missing_attestation`,
   `:deposit_signer_unavailable`, `:not_a_deposit_route`, `{:not_solvable, reason}`,
-  or a request-validation tuple (e.g. `{:invalid_wallet, _}`).
+  `{:unpriced_asset, detail}`, `{:delivery_below_floor, detail}`, or a
+  request-validation tuple (e.g. `{:invalid_wallet, _}`).
   """
 
   use Raxol.Agent.Action,
@@ -61,6 +72,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
           description: "EVM destination recipient (0x...); the Tron wallet cannot receive on EVM"
         ],
         slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
+        min_to_amount: [
+          type: :string,
+          description:
+            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less returns no deposit address. A positive value is authoritative; 0 counts as absent. Required for a non-USD stablecoin destination."
+        ],
         trust_score: [type: :integer, description: "Trust score for tier/fee"]
       ],
       output: [
@@ -79,6 +95,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
       ]
     ]
 
+  alias Raxol.Payments.Assets
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.DepositRouteRequest
 
@@ -86,11 +103,50 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
   @impl true
   def run(params, context) do
     with {:ok, config} <- fetch_config(context),
-         {:ok, instructions} <-
-           Xochi.deposit_route_quote(config, build_request(params), signer_opts(context)) do
+         request = build_request(params),
+         {:ok, floor} <- delivery_floor(request, params),
+         {:ok, instructions} <- Xochi.deposit_route_quote(config, request, signer_opts(context)),
+         :ok <- assert_delivery_floor(instructions, floor) do
       {:ok, summary(instructions)}
     end
   end
+
+  defp delivery_floor(%DepositRouteRequest{to_chain_id: chain, to_token: token}, params) do
+    case {parse_uint(Map.get(params, :min_to_amount)), Assets.fx_peg(chain, token)} do
+      {n, _peg} when is_integer(n) and n > 0 ->
+        {:ok, {:floor, n}}
+
+      {_zero_or_nil, nil} ->
+        {:ok, :none}
+
+      {_zero_or_nil, peg} ->
+        {:error,
+         {:unpriced_asset, %{chain_id: chain, token: token, side: :destination, peg: peg}}}
+    end
+  end
+
+  defp assert_delivery_floor(_instructions, :none), do: :ok
+
+  defp assert_delivery_floor(%{to_amount: to_amount}, {:floor, min_out}) do
+    case parse_uint(to_amount) do
+      delivered when is_integer(delivered) and delivered >= min_out ->
+        :ok
+
+      _ ->
+        {:error, {:delivery_below_floor, %{to_amount: to_amount, min_to_amount: min_out}}}
+    end
+  end
+
+  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
+
+  defp parse_uint(v) when is_binary(v) do
+    case Integer.parse(String.trim(v)) do
+      {n, ""} when n >= 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp parse_uint(_), do: nil
 
   defp fetch_config(context) do
     case Map.fetch(context, :xochi_config) do
