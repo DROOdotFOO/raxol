@@ -26,6 +26,13 @@ defmodule Raxol.Web3.FX.Sleuth do
   Every figure is decoded with `floats: :decimals`, so an amount is a
   `Decimal` and never a float. `deviation_bps` and counts stay integers.
 
+  A figure is `nil` unless it has at most 38 significant digits and an
+  exponent within ±30, and that check reads only the decoded struct's
+  fields. `1e1000000` is nine bytes of JSON, and the first arithmetic on it --
+  rounding, a division by a rate, a `:normal` rendering -- expands the
+  exponent into a million digits. The body bound caps a body's size, not what
+  one number in it costs. A list entry that is not a JSON object is skipped.
+
   ## Symbols
 
   Canonicalized to the symbol `Raxol.Payments.Assets` uses, so a result can be
@@ -255,7 +262,7 @@ defmodule Raxol.Web3.FX.Sleuth do
          sleuth_fx_rates_usd: decimals(map["fxRatesUsd"]),
          sleuth_fx_rates_as_of: map["fxRatesAsOf"],
          total: map["total"],
-         assets: Enum.map(assets, &asset/1)
+         assets: objects(assets, &asset/1)
        }}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
@@ -265,7 +272,7 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp decode_detail(body) do
     with {:ok, %{"asset" => %{} = raw} = map} <- decode(body) do
-      pools = Enum.map(List.wrap(raw["topPools"]), &pool/1)
+      pools = objects(raw["topPools"], &pool/1)
       {:ok, %{as_of: map["asOf"], asset: Map.put(asset(raw), :top_pools, pools)}}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
@@ -275,7 +282,7 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp decode_corridors(body, include_assets?) do
     with {:ok, %{"corridors" => corridors} = map} when is_list(corridors) <- decode(body) do
-      {:ok, %{as_of: map["asOf"], corridors: Enum.map(corridors, &corridor(&1, include_assets?))}}
+      {:ok, %{as_of: map["asOf"], corridors: objects(corridors, &corridor(&1, include_assets?))}}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
       error -> error
@@ -284,7 +291,7 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp asset(raw) do
     %{
-      symbol: canonical_symbol(raw["symbol"] || ""),
+      symbol: symbol(raw["symbol"]),
       name: raw["name"],
       aliases: List.wrap(raw["aliases"]),
       corridor: raw["corridor"],
@@ -327,29 +334,49 @@ defmodule Raxol.Web3.FX.Sleuth do
     }
 
     if include_assets?,
-      do: Map.put(base, :assets, Enum.map(List.wrap(raw["assets"]), &corridor_asset/1)),
+      do: Map.put(base, :assets, objects(raw["assets"], &corridor_asset/1)),
       else: base
   end
 
   defp corridor_asset(raw) do
     %{
-      symbol: canonical_symbol(raw["symbol"] || ""),
+      symbol: symbol(raw["symbol"]),
       supply_usd: decimal(raw["supplyUsd"]),
       volume_24h_usd: decimal(raw["volume24hUsd"]),
       sleuth_deviation_bps: integer(raw["deviationBps"])
     }
   end
 
+  # Upstream data: an entry that is not an object has no fields to read.
+  defp objects(list, fun), do: for(%{} = raw <- List.wrap(list), do: fun.(raw))
+
+  defp symbol(symbol) when is_binary(symbol), do: canonical_symbol(symbol)
+  defp symbol(_symbol), do: ""
+
   defp decimals(%{} = map),
     do: for({k, v} <- map, d = decimal(v), d != nil, into: %{}, do: {k, d})
 
   defp decimals(_), do: %{}
 
-  defp decimal(%Decimal{} = d), do: d
-  defp decimal(n) when is_integer(n), do: Decimal.new(n)
+  # Checked on the struct's fields, before any `Decimal` function sees it.
+  @max_exponent 30
+  @max_coefficient Integer.pow(10, 38)
+
+  defp decimal(%Decimal{coef: coef, exp: exp} = d)
+       when is_integer(coef) and coef < @max_coefficient and exp in -@max_exponent..@max_exponent,
+       do: d
+
+  defp decimal(n) when is_integer(n) and abs(n) < @max_coefficient, do: Decimal.new(n)
   defp decimal(_), do: nil
 
-  defp integer(n) when is_integer(n), do: n
-  defp integer(%Decimal{} = d), do: d |> Decimal.round(0) |> Decimal.to_integer()
+  defp integer(n) when is_integer(n) and abs(n) < @max_coefficient, do: n
+
+  defp integer(%Decimal{} = d) do
+    case decimal(d) do
+      nil -> nil
+      bounded -> bounded |> Decimal.round(0) |> Decimal.to_integer()
+    end
+  end
+
   defp integer(_), do: nil
 end
