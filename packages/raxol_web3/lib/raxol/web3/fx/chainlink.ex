@@ -23,9 +23,12 @@ defmodule Raxol.Web3.FX.Chainlink do
   All of:
 
     * the proxy's `description()` names the expected pair and `decimals()` is
-      8. A mismatch is `{:blocked, :feed_mismatch}` and is terminal: failing
-      over would leave a misconfigured address answering about a pair nobody
-      asked about;
+      8. A decodable answer that is wrong is `{:blocked, :feed_mismatch}` and
+      is terminal: failing over would leave a misconfigured address answering
+      about a pair nobody asked about. An answer that does not decode, such as
+      the `"0x"` a node returns for an address with no code (an RPC URL that
+      reaches the wrong chain), is `{:decode_failed, :identity}`, an ordinary
+      failed read that fails over;
     * `answer > 0`;
     * `now - updatedAt <= heartbeat * 1.1`;
     * on Base, the L2 sequencer-uptime feed answers 0 and has been up for at
@@ -110,15 +113,23 @@ defmodule Raxol.Web3.FX.Chainlink do
   @decimals "0x313ce567"
   @latest_round_data "0xfeaf968c"
 
-  # A feed's identity cannot change under a proxy address we chose, so it is
-  # cached for a day. A round is never cached: its age is the whole question.
+  # A feed's identity cannot change under a proxy address we chose, so a
+  # MATCHING identity is cached for a day; any other answer is never cached,
+  # so it is re-read and cannot outlive the misconfiguration that produced it.
+  # The key is the origin (`scheme://host:port`, from `Raxol.Web3.HTTP`) plus
+  # chain id, proxy and selector. The URL path cannot be part of it: the cache
+  # takes no request URI as input, because a path often carries the provider
+  # key. Without the path, two handles on one host share an entry, which is
+  # harmless only because the entry is the expected answer and nothing else.
+  # A round is never cached: its age is the whole question.
   @identity_ttl_ms 86_400_000
 
   @doc """
   Build a handle. `:rpc_urls` maps chain id to an https JSON-RPC URL;
   `:http_opts` is forwarded to `Raxol.Web3.RPC`; `:now` is a zero-arity
   function returning unix seconds, for tests; `:cache` (default `true`) keeps
-  a feed's identity for a day.
+  a feed's identity for a day once it has matched. No I/O happens here: the
+  identity is checked on the first `rate/2` that reads the feed.
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
@@ -198,14 +209,25 @@ defmodule Raxol.Web3.FX.Chainlink do
   end
 
   defp identity(chainlink, url, feed) do
-    with {:ok, description} <- call(chainlink, url, feed.proxy, @description, :identity),
-         {:ok, decimals} <- call(chainlink, url, feed.proxy, @decimals, :identity) do
-      if decode_string(description) == feed.description and
-           decode_uint(decimals) == @feed_decimals,
-         do: :ok,
-         else: {:error, {:blocked, :feed_mismatch}}
+    with {:ok, description} <- call(chainlink, url, feed, @description, :identity),
+         {:ok, decimals} <- call(chainlink, url, feed, @decimals, :identity) do
+      case {decode_string(description), decode_uint(decimals)} do
+        {nil, _} -> {:error, {:decode_failed, :identity}}
+        {_, nil} -> {:error, {:decode_failed, :identity}}
+        {description, decimals} -> match_identity(description, decimals, feed)
+      end
     end
   end
+
+  defp match_identity(description, decimals, feed) do
+    if description == feed.description and decimals == @feed_decimals,
+      do: :ok,
+      else: {:error, {:blocked, :feed_mismatch}}
+  end
+
+  # Whether an `eth_call` result is the answer this feed must give.
+  defp expected?(@description, result, feed), do: decode_string(result) == feed.description
+  defp expected?(@decimals, result, _feed), do: decode_uint(result) == @feed_decimals
 
   defp sequencer(chainlink, url, chain_id, now) do
     case Map.fetch(@sequencers, chain_id) do
@@ -223,7 +245,7 @@ defmodule Raxol.Web3.FX.Chainlink do
   end
 
   defp latest_round(chainlink, url, proxy) do
-    with {:ok, hex} <- call(chainlink, url, proxy, @latest_round_data, :round) do
+    with {:ok, hex} <- call(chainlink, url, %{proxy: proxy}, @latest_round_data, :round) do
       decode_round(hex)
     end
   end
@@ -236,26 +258,34 @@ defmodule Raxol.Web3.FX.Chainlink do
     if now - updated_at <= div(heartbeat_s * 11, 10), do: :ok, else: {:error, :stale}
   end
 
-  defp call(chainlink, url, proxy, selector, kind) do
+  defp call(chainlink, url, feed, selector, kind) do
     RPC.eth_call(
       url,
-      %{to: proxy, data: selector},
+      %{to: feed.proxy, data: selector},
       "latest",
-      call_opts(chainlink, kind, proxy, selector)
+      call_opts(chainlink, kind, feed, selector)
     )
   end
 
-  defp call_opts(%__MODULE__{cache?: false} = chainlink, :identity, _proxy, _selector),
+  defp call_opts(%__MODULE__{cache?: false} = chainlink, :identity, _feed, _selector),
     do: chainlink.http_opts
 
-  defp call_opts(chainlink, :identity, proxy, selector),
+  defp call_opts(chainlink, :identity, feed, selector),
     do:
       Keyword.put(chainlink.http_opts, :cache,
-        key: {:chainlink, proxy, selector},
-        ttl_ms: @identity_ttl_ms
+        key: {:chainlink, feed.chain_id, feed.proxy, selector},
+        ttl_ms: @identity_ttl_ms,
+        cacheable: &expected_response?(&1, selector, feed)
       )
 
-  defp call_opts(chainlink, :round, _proxy, _selector), do: chainlink.http_opts
+  defp call_opts(chainlink, :round, _feed, _selector), do: chainlink.http_opts
+
+  defp expected_response?(%{body: body}, selector, feed) do
+    case Jason.decode(body) do
+      {:ok, %{"result" => result}} -> expected?(selector, result, feed)
+      _ -> false
+    end
+  end
 
   defp now(%__MODULE__{now: nil}), do: System.os_time(:second)
   defp now(%__MODULE__{now: now}), do: now.()
