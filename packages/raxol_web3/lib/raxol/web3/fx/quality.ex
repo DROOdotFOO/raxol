@@ -14,8 +14,10 @@ defmodule Raxol.Web3.FX.Quality do
     * `:no_rate` - no usable rate for the peg currency, including every peg
       outside USD, EUR and CHF;
     * `:suspect` - no price, or |deviation_bps| > #{100}, whatever the peg
-      mechanism. A broken feed and a real depeg look the same here, and
-      neither may be priced at its peg;
+      mechanism, judged on the exact deviation and not on the rounded figure
+      the verdict carries for display (100.4 bps is suspect and shows as 100).
+      A broken feed and a real depeg look the same here, and neither may be
+      priced at its peg;
     * `:ok` - otherwise.
   """
 
@@ -49,23 +51,25 @@ defmodule Raxol.Web3.FX.Quality do
   end
 
   defp against(%{price_usd: %Decimal{} = price}, rate, precision) do
-    deviation = deviation_bps(price, rate)
-    status = if abs(deviation) > @suspect_bps, do: :suspect, else: :ok
-    verdict(status, deviation, {rate, precision})
+    deviation = exact_deviation_bps(price, rate)
+    status = if Decimal.gt?(Decimal.abs(deviation), @suspect_bps), do: :suspect, else: :ok
+    verdict(status, display(deviation), {rate, precision})
   end
 
   defp against(_asset, rate, precision), do: verdict(:suspect, nil, {rate, precision})
 
-  @doc "`(price / rate - 1) * 10_000`, rounded half-even to an integer."
+  @doc "`(price / rate - 1) * 10_000`, rounded half-even to an integer, for display."
   @spec deviation_bps(Decimal.t(), Decimal.t()) :: integer()
-  def deviation_bps(price, rate) do
+  def deviation_bps(price, rate), do: price |> exact_deviation_bps(rate) |> display()
+
+  defp exact_deviation_bps(price, rate) do
     price
     |> Decimal.div(rate)
     |> Decimal.sub(1)
     |> Decimal.mult(10_000)
-    |> Decimal.round(0, :half_even)
-    |> Decimal.to_integer()
   end
+
+  defp display(deviation), do: deviation |> Decimal.round(0, :half_even) |> Decimal.to_integer()
 
   defp verdict(status, deviation, nil),
     do: %{status: status, deviation_bps: deviation, rate: nil, rate_precision_bps: nil}
