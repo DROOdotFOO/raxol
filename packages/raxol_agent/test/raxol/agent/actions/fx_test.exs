@@ -115,6 +115,21 @@ defmodule Raxol.Agent.Actions.FXTest do
       end
     end
 
+    test "a key no header can carry refuses the load, names its source and not the key" do
+      Application.put_env(:raxol_agent, :web3, fx: [])
+      System.put_env("RAXOL_SLEUTH_API_KEY", "secret-half\r\nx-injected: 1")
+
+      error = assert_raise ArgumentError, fn -> Raxol.Agent.Web3.load!() end
+      assert error.message =~ "RAXOL_SLEUTH_API_KEY"
+      refute error.message =~ "secret-half"
+
+      Application.put_env(:raxol_agent, :web3, fx: [sleuth_api_key: "secret-half two"])
+
+      error = assert_raise ArgumentError, fn -> Raxol.Agent.Web3.load!() end
+      assert error.message =~ "sleuth_api_key"
+      refute error.message =~ "secret-half"
+    end
+
     test "a context build reads what was loaded, so it never raises per turn" do
       # Loaded unconfigured in setup; a later bad config or a key change is
       # not re-read by every session context, only by the next load.

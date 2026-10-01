@@ -60,7 +60,9 @@ defmodule Raxol.Agent.Web3 do
 
   Raises `ArgumentError` naming the problem when `:fx` is configured without
   the Sleuth key (an `fx` tool that answers every call with an auth refusal is
-  worse than a boot that names the missing variable), or when `:web3` is
+  worse than a boot that names the missing variable), when the key is one
+  `Raxol.Web3.FX.Sleuth.new/1` refuses (a space or line break inside it; the
+  message names where the key came from, never the key), or when `:web3` is
   configured in a build without `raxol_web3`. On a raise the previous cache is
   kept.
   """
@@ -92,7 +94,11 @@ defmodule Raxol.Agent.Web3 do
 
   if Code.ensure_loaded?(Raxol.Web3.FX) do
     defp build_fx(opts) do
-      key = present(Keyword.get(opts, :sleuth_api_key)) || present(System.get_env(@key_env))
+      {key, source} =
+        case present(Keyword.get(opts, :sleuth_api_key)) do
+          nil -> {present(System.get_env(@key_env)), @key_env}
+          configured -> {configured, "config :raxol_agent, :web3, fx: [sleuth_api_key: ...]"}
+        end
 
       if is_nil(key) do
         raise ArgumentError,
@@ -100,7 +106,18 @@ defmodule Raxol.Agent.Web3 do
                 "set it or remove :fx"
       end
 
-      {:ok, sleuth} = Raxol.Web3.FX.Sleuth.new(api_key: key)
+      # The reason names the refused argument, never the key.
+      sleuth =
+        case Raxol.Web3.FX.Sleuth.new(api_key: key) do
+          {:ok, sleuth} ->
+            sleuth
+
+          {:error, reason} ->
+            raise ArgumentError,
+                  "the Sleuth key from #{source} was refused (#{inspect(reason)}): " <>
+                    "it must be visible ASCII with no spaces or line breaks inside it"
+        end
+
       chainlink = Raxol.Web3.FX.Chainlink.new(rpc_urls: Keyword.get(opts, :rpc_urls, %{}))
       Raxol.Web3.FX.new(sleuth, chainlink)
     end
