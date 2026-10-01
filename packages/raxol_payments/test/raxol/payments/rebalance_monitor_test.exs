@@ -182,6 +182,116 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
     end
   end
 
+  describe "the sweep prices the margin report" do
+    defmodule RaisingReader do
+      @moduledoc false
+      def get_receipt(_state, _chain, _tx), do: raise("reader down")
+      def get_balance(_state, _chain, _address), do: raise("reader down")
+      def get_erc20_balance(_state, _chain, _token, _owner), do: raise("reader down")
+    end
+
+    # 1.10 USDC pulled on Base, 0.95 EURe delivered on Arbitrum, 0.0001 ETH of gas.
+    defp record_eure_fill(ledger) do
+      SettlementLedger.record_settlement(ledger, %{
+        intent_id: "xi_eur",
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        token_symbol: "USDC",
+        fee_collected: "0",
+        fee_currency: "USDC",
+        fee_decimals: 6,
+        from_amount: "1100000",
+        from_symbol: "USDC",
+        from_decimals: 6,
+        to_amount: "950000000000000000",
+        to_symbol: "EURe",
+        to_decimals: 18,
+        gas_native: 100_000_000_000_000,
+        gas_chain_id: 42_161,
+        gas_symbol: "ETH",
+        gas_status: :confirmed
+      })
+    end
+
+    defp monitor(ledger, reader, price_fn) do
+      start_supervised!({
+        RebalanceMonitor,
+        name: :"mon_#{System.unique_integer([:positive])}",
+        ledger: ledger,
+        reader: reader,
+        solver_address: "0xsolver",
+        policy: policy(),
+        chains: [8453],
+        price_fn: price_fn,
+        initial_delay_ms: 3_600_000
+      })
+    end
+
+    defp attach_margin do
+      test_pid = self()
+      handler = "margin-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:raxol, :payments, :margin],
+        fn _event, meas, meta, _cfg -> send(test_pid, {:margin, meas, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    test "with the sweep's price_fn, a euro leg is priced instead of counted unpriced",
+         %{ledger: ledger} do
+      record_eure_fill(ledger)
+      attach_margin()
+
+      prices = fn
+        "ETH" -> Decimal.new("2000")
+        "EURe" -> Decimal.new("1.1336")
+        _ -> nil
+      end
+
+      mon = monitor(ledger, Stub.new(balances: %{{8453, "0xsolver"} => 0}), prices)
+      assert RebalanceMonitor.margin_report(mon) == nil
+
+      assert [{:refuel_gas, _}] = RebalanceMonitor.sweep_now(mon)
+
+      # 1.10 - 0.95 * 1.1336 = 0.02308 revenue; 0.0001 ETH * 2000 = 0.2 gas.
+      assert_receive {:margin, meas, %{corridor_count: 1}}
+      assert meas.count == 1
+      assert meas.unpriced_count == 0
+      assert Decimal.equal?(meas.usd_revenue, Decimal.new("0.02308"))
+      assert Decimal.equal?(meas.usd_margin, Decimal.new("-0.17692"))
+
+      report = RebalanceMonitor.margin_report(mon)
+      assert Decimal.equal?(report.corridors[{8453, 42_161}].usd_margin, meas.usd_margin)
+      assert report.totals.unpriced_count == 0
+    end
+
+    test "without a euro price the same leg is reported as unpriced, not as smaller",
+         %{ledger: ledger} do
+      record_eure_fill(ledger)
+      attach_margin()
+
+      mon = monitor(ledger, Stub.new(balances: %{{8453, "0xsolver"} => 0}), eth_price())
+      RebalanceMonitor.sweep_now(mon)
+
+      assert_receive {:margin, %{unpriced_count: 1, usd_revenue: nil}, _meta}
+    end
+
+    test "a reader that raises costs the advice, not the report", %{ledger: ledger} do
+      record_eure_fill(ledger)
+      mon = monitor(ledger, {RaisingReader, nil}, eth_price())
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert RebalanceMonitor.sweep_now(mon) == []
+      end)
+
+      assert %{totals: %{count: 1}} = RebalanceMonitor.margin_report(mon)
+    end
+  end
+
   # `cap_at/2` raises on a multiplier with no cap, and it lives at the widening
   # site on purpose -- `demand_floor_cap` is a public struct field, so a policy
   # built by hand reaches the advisor without ever passing through
