@@ -39,10 +39,17 @@ defmodule Raxol.Payments.Prices.FX do
 
     defp build(opts, fallback) do
       key = opts |> Keyword.fetch!(:sleuth_api_key) |> Secret.new() |> Secret.reveal()
-      {:ok, sleuth} = Raxol.Web3.FX.Sleuth.new(api_key: key)
       chainlink = Raxol.Web3.FX.Chainlink.new(rpc_urls: Keyword.get(opts, :rpc_urls, %{}))
 
-      snapshot(Raxol.Web3.FX.new(sleuth, chainlink), fallback)
+      # `Sleuth.new/1` names the argument it refused and never the key.
+      case Raxol.Web3.FX.Sleuth.new(api_key: key) do
+        {:ok, sleuth} ->
+          snapshot(Raxol.Web3.FX.new(sleuth, chainlink), fallback)
+
+        {:error, reason} ->
+          Logger.warning("FX Sleuth handle refused (#{inspect(reason)}); non-USD legs unpriced")
+          unpriced(fallback)
+      end
     end
 
     # The snapshot is upstream data, and the decoder is bounded against a
