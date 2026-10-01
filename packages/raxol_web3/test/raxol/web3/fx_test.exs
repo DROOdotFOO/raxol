@@ -462,8 +462,23 @@ defmodule Raxol.Web3.FXTest do
       past = asset(price_usd: Decimal.new("1.146464"))
 
       assert %{status: :ok, deviation_bps: 100} = Quality.judge(at, rates())
+
+      assert %{status: :ok, deviation_bps: -100} =
+               Quality.judge(asset(price_usd: Decimal.new("1.12365")), rates())
+
       assert %{status: :suspect, deviation_bps: 101} = Quality.judge(past, rates())
       assert %{status: :suspect} = Quality.judge(asset(price_usd: Decimal.new("1.1235")), rates())
+    end
+
+    test "the line is drawn on the true deviation, not on the rounded one shown" do
+      # 100.4, 100.5 and -100.5 bps off a rate of 1.1350. Each rounds to ±100
+      # for display, and each is past the line.
+      for price <- ~w(1.14639540 1.14640675 1.12359325) do
+        assert %{status: :suspect, deviation_bps: shown} =
+                 Quality.judge(asset(price_usd: Decimal.new(price)), rates())
+
+        assert abs(shown) == 100
+      end
     end
 
     test "yield-bearing wins over everything, and gets no deviation" do
