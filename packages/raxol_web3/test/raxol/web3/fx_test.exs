@@ -228,7 +228,10 @@ defmodule Raxol.Web3.FXTest do
   @feeds ~w(eur_usd_base eur_usd_ethereum chf_usd_ethereum sequencer_base)
 
   # Answers `eth_call` from the recorded feeds, keyed by (chain, proxy,
-  # selector). `overrides` replaces a recorded result, by the same key.
+  # selector). `overrides` replaces a recorded result, by the same key. The
+  # chain is read off the URL path: `/base` is Base, `/eth` Ethereum, and any
+  # other path a chain where none of the proxies is deployed, which answers
+  # `"0x"` as a node does for a call to an address with no code.
   defp chainlink(opts \\ []) do
     overrides = Keyword.get(opts, :overrides, %{})
 
@@ -239,12 +242,18 @@ defmodule Raxol.Web3.FXTest do
       |> Map.merge(overrides)
 
     exchange = fn _vetted, request, _opts ->
-      chain = if request.path =~ "base", do: 8453, else: 1
+      chain =
+        cond do
+          request.path =~ "base" -> 8453
+          request.path =~ "eth" -> 1
+          true -> :elsewhere
+        end
 
       %{"id" => id, "params" => [%{"to" => to, "data" => data}, _tag]} =
         Jason.decode!(request.body)
 
-      result = Map.fetch!(table, {chain, String.downcase(to), data})
+      send(self(), {:eth_call, request.path, String.downcase(to), data})
+      result = Map.get(table, {chain, String.downcase(to), data}, "0x")
 
       {:ok,
        %{status: 200, headers: [], body: Jason.encode!(%{jsonrpc: "2.0", id: id, result: result})}}
@@ -258,7 +267,7 @@ defmodule Raxol.Web3.FXTest do
         }),
       http_opts: [{:exchange, exchange} | limits()],
       now: fn -> Keyword.get(opts, :now, recorded_at()) end,
-      cache: false
+      cache: Keyword.get(opts, :cache, false)
     )
   end
 
@@ -282,7 +291,7 @@ defmodule Raxol.Web3.FXTest do
     |> DateTime.to_unix()
   end
 
-  defp word(n), do: n |> :binary.encode_unsigned() |> String.pad_leading(32, <<0>>)
+  defp word(n), do: <<n::signed-256>>
 
   defp round_hex(answer, started_at, updated_at) do
     "0x" <>
@@ -337,6 +346,27 @@ defmodule Raxol.Web3.FXTest do
       assert {:ok, %{source: {1, _}}} = Chainlink.rate(chainlink(overrides: restarted), "EUR")
     end
 
+    test "the sequencer grace period is exactly an hour" do
+      now = recorded_at()
+
+      up_an_hour = %{{8453, @base_seq, "0xfeaf968c"} => round_hex(0, now - 3_600, now)}
+      assert {:ok, %{source: {8453, _}}} = Chainlink.rate(chainlink(overrides: up_an_hour), "EUR")
+
+      a_second_short = %{{8453, @base_seq, "0xfeaf968c"} => round_hex(0, now - 3_599, now)}
+
+      assert {:ok, %{source: {1, _}}} =
+               Chainlink.rate(chainlink(overrides: a_second_short), "EUR")
+    end
+
+    test "a lagging node's latest round is judged by its own updatedAt" do
+      # The node answers `latest` from a head an hour and a bit behind: the
+      # clock is fresh, the round is not.
+      now = recorded_at()
+      lagging = %{{8453, @base_eur, "0xfeaf968c"} => round_hex(113_000_000, now, now - 3_961)}
+
+      assert {:ok, %{source: {1, _}}} = Chainlink.rate(chainlink(overrides: lagging), "EUR")
+    end
+
     test "a proxy that is not the expected pair is blocked, not failed over" do
       wrong = %{{8453, @base_eur, "0x7284e416"} => feed("chf_usd_ethereum")["description"]}
 
@@ -344,15 +374,28 @@ defmodule Raxol.Web3.FXTest do
                Chainlink.rate(chainlink(overrides: wrong), "EUR")
     end
 
-    test "a non-positive answer is not a rate" do
-      now = recorded_at()
-      zero = %{{1, @eth_eur, "0xfeaf968c"} => round_hex(0, now, now)}
+    test "an empty answer is a failed read that fails over, not a mismatch" do
+      # The Base URL reaches a chain where the proxy has no code.
+      misrouted = %{8453 => "https://rpc.test/elsewhere", 1 => "https://rpc.test/eth"}
+      assert {:ok, %{source: {1, _}}} = Chainlink.rate(chainlink(rpc_urls: misrouted), "EUR")
 
-      assert {:error, :bad_answer} =
-               Chainlink.rate(
-                 chainlink(overrides: zero, rpc_urls: %{1 => "https://rpc.test/eth"}),
-                 "EUR"
-               )
+      only = %{8453 => "https://rpc.test/elsewhere"}
+      assert {:error, {:decode_failed, _}} = Chainlink.rate(chainlink(rpc_urls: only), "EUR")
+    end
+
+    test "a zero or negative answer is not a rate, and the primary's fails over" do
+      now = recorded_at()
+      eth_only = %{1 => "https://rpc.test/eth"}
+
+      for answer <- [0, -1, -113_000_000] do
+        bad = %{{1, @eth_eur, "0xfeaf968c"} => round_hex(answer, now, now)}
+
+        assert {:error, :bad_answer} =
+                 Chainlink.rate(chainlink(overrides: bad, rpc_urls: eth_only), "EUR")
+
+        bad_primary = %{{8453, @base_eur, "0xfeaf968c"} => round_hex(answer, now, now)}
+        assert {:ok, %{source: {1, _}}} = Chainlink.rate(chainlink(overrides: bad_primary), "EUR")
+      end
     end
 
     test "a chain with no configured RPC URL is skipped" do
@@ -360,6 +403,45 @@ defmodule Raxol.Web3.FXTest do
                Chainlink.rate(chainlink(rpc_urls: %{1 => "https://rpc.test/eth"}), "EUR")
 
       assert {:error, :no_rpc} = Chainlink.rate(chainlink(rpc_urls: %{}), "EUR")
+    end
+  end
+
+  describe "Chainlink, with the identity cache on" do
+    # The cache is node-wide, so each test gets a host nobody else uses.
+    defp urls(base_path) do
+      host = "rpc-#{System.unique_integer([:positive])}.test"
+      {%{8453 => "https://#{host}#{base_path}", 1 => "https://#{host}/eth"}, host}
+    end
+
+    test "a wrong answer on one handle neither blocks nor pins another on the same host" do
+      {misrouted, host} = urls("/elsewhere")
+      healthy = %{8453 => "https://#{host}/base", 1 => "https://#{host}/eth"}
+
+      assert {:ok, %{source: {1, _}}} =
+               Chainlink.rate(chainlink(cache: true, rpc_urls: misrouted), "EUR")
+
+      assert {:ok, %{source: {8453, _}}} =
+               Chainlink.rate(chainlink(cache: true, rpc_urls: healthy), "EUR")
+
+      # And the healthy handle's cached identity does not vouch for the
+      # misrouted one: its rounds still come from the wrong chain.
+      assert {:ok, %{source: {1, _}}} =
+               Chainlink.rate(chainlink(cache: true, rpc_urls: misrouted), "EUR")
+    end
+
+    test "a matching identity is read once; the round is read every time" do
+      {rpc_urls, _host} = urls("/base")
+      fx = chainlink(cache: true, rpc_urls: rpc_urls)
+
+      assert {:ok, %{source: {8453, _}}} = Chainlink.rate(fx, "EUR")
+      assert_received {:eth_call, "/base", @base_eur, "0x7284e416"}
+      assert_received {:eth_call, "/base", @base_eur, "0x313ce567"}
+      assert_received {:eth_call, "/base", @base_eur, "0xfeaf968c"}
+
+      assert {:ok, %{source: {8453, _}}} = Chainlink.rate(fx, "EUR")
+      refute_received {:eth_call, "/base", @base_eur, "0x7284e416"}
+      refute_received {:eth_call, "/base", @base_eur, "0x313ce567"}
+      assert_received {:eth_call, "/base", @base_eur, "0xfeaf968c"}
     end
   end
 
