@@ -140,7 +140,18 @@ defmodule Raxol.Web3.FXTest do
       assert {:error, {:invalid_argument, "api_key"}} = Sleuth.stables(s, api_key: "x")
       assert {:error, {:invalid_argument, "symbol"}} = Sleuth.stable(s, "../manifest")
 
+      # A dot segment would climb out of `/fx/stables/` with the key attached.
+      for dots <- ["..", ".", ".env"] do
+        assert {:error, {:invalid_argument, "symbol"}} = Sleuth.stable(s, dots)
+      end
+
       refute_received {:request, _}
+    end
+
+    test "a symbol with an inner dot is still looked up" do
+      s = sleuth(%{"/api/mcp/fx/stables/USDC.E" => sleuth_fixture("stable_eurc")})
+      assert {:ok, _} = Sleuth.stable(s, "USDC.e")
+      assert_received {:request, %{path: "/api/mcp/fx/stables/USDC.E"}}
     end
 
     test "refusals map to the closed taxonomy and carry no upstream text" do
@@ -148,6 +159,8 @@ defmodule Raxol.Web3.FXTest do
 
       for {status, reason} <- [
             {401, {:upstream_refused, :auth}},
+            # A challenge page or an edge block, not a verdict on the key.
+            {403, {:http, 403}},
             {404, {:upstream_refused, :not_found}},
             {429, {:upstream_refused, :rate_limit}},
             {400, {:invalid_argument, "query"}},
@@ -217,9 +230,32 @@ defmodule Raxol.Web3.FXTest do
 
     test "new/1 requires a key and an https base" do
       assert {:error, {:missing_argument, "api_key"}} = Sleuth.new([])
+      assert {:error, {:missing_argument, "api_key"}} = Sleuth.new(api_key: " \n")
 
       assert {:error, {:invalid_argument, "base_url"}} =
                Sleuth.new(api_key: "k", base_url: "http://www.sleuthintel.io/api/mcp")
+    end
+
+    test "new/1 trims the key, and refuses one no header can carry" do
+      for bad <- ["key\r\nx-injected: 1", "key\nmore", "two words", "k\0"] do
+        assert {:error, {:invalid_argument, "api_key"}} = Sleuth.new(api_key: bad)
+      end
+
+      exchange = fn _vetted, request, _opts ->
+        send(self(), {:request, request})
+        {:ok, %{status: 200, headers: [], body: sleuth_fixture("stables_partner")}}
+      end
+
+      {:ok, s} =
+        Sleuth.new(
+          api_key: "  #{@key}\n",
+          cache: false,
+          http_opts: [{:exchange, exchange} | limits()]
+        )
+
+      assert {:ok, _} = Sleuth.stables(s)
+      assert_received {:request, request}
+      assert {"authorization", "Bearer " <> @key} in request.headers
     end
   end
 
@@ -567,6 +603,14 @@ defmodule Raxol.Web3.FXTest do
       assert {:error, error} = stable.callback.(%{"symbol" => "NOPE"})
       refute stable.fault?.(error)
       assert stable.fault?.(%{code: "upstream_refused", detail: :auth})
+    end
+
+    test "a 403 is a status, not a bad key, and counts as a fault of the source" do
+      s = sleuth(%{"/api/mcp/fx/stables" => {403, "<html>challenge</html>"}})
+      stables = tool(FX.new(s, chainlink()), "web3_fx_stables")
+
+      assert {:error, %{code: "http", detail: 403} = error} = stables.callback.(%{})
+      assert stables.fault?.(error)
     end
   end
 

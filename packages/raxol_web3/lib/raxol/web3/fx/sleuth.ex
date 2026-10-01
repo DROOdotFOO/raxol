@@ -105,14 +105,23 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   Options: `:api_key` (required), `:base_url` (https only, default Sleuth's),
   `:http_opts` (forwarded to `Raxol.Web3.HTTP`), `:cache` (default `true`).
+
+  The key is trimmed, then refused as `{:invalid_argument, "api_key"}` unless
+  every byte is visible ASCII: a CR, LF or space inside it cannot travel in a
+  header, and the transport would otherwise refuse it later as an error that
+  names nothing.
   """
   @spec new(keyword()) :: {:ok, t()} | {:error, Backend.error()}
   def new(opts) do
     base_url = Keyword.get(opts, :base_url, %__MODULE__{api_key: ""}.base_url)
+    api_key = if is_binary(opts[:api_key]), do: String.trim(opts[:api_key]), else: ""
 
     cond do
-      not is_binary(opts[:api_key]) or opts[:api_key] == "" ->
+      api_key == "" ->
         {:error, {:missing_argument, "api_key"}}
+
+      not (api_key =~ ~r/\A[\x21-\x7E]+\z/) ->
+        {:error, {:invalid_argument, "api_key"}}
 
       not String.starts_with?(base_url, "https://") ->
         {:error, {:invalid_argument, "base_url"}}
@@ -120,7 +129,7 @@ defmodule Raxol.Web3.FX.Sleuth do
       true ->
         {:ok,
          %__MODULE__{
-           api_key: opts[:api_key],
+           api_key: api_key,
            base_url: String.trim_trailing(base_url, "/"),
            http_opts: Keyword.get(opts, :http_opts, []),
            cache?: Keyword.get(opts, :cache, true)
@@ -144,11 +153,15 @@ defmodule Raxol.Web3.FX.Sleuth do
     end
   end
 
-  @doc "One asset, with `top_pools`. `symbol` is looked up case-insensitively by Sleuth."
+  @doc """
+  One asset, with `top_pools`. `symbol` is looked up case-insensitively by
+  Sleuth. It must start with a letter or digit, so it cannot be a `.` or `..`
+  path segment that climbs out of `/fx/stables/` with the key attached.
+  """
   @spec stable(t(), String.t()) ::
           {:ok, %{as_of: String.t() | nil, asset: map()}} | {:error, Backend.error()}
   def stable(%__MODULE__{} = sleuth, symbol) when is_binary(symbol) do
-    if symbol =~ ~r/\A[A-Za-z0-9.\-]{1,24}\z/ do
+    if symbol =~ ~r/\A[A-Za-z0-9][A-Za-z0-9.\-]{0,23}\z/ do
       with {:ok, body} <- get(sleuth, "/fx/stables/" <> sleuth_symbol(symbol), []) do
         decode_detail(body)
       end
@@ -238,8 +251,10 @@ defmodule Raxol.Web3.FX.Sleuth do
   defp encode_query([]), do: ""
   defp encode_query(query), do: "?" <> URI.encode_query(query)
 
+  # A 403 is `{:http, 403}`, as `Raxol.Web3.Backend` documents it: in front of
+  # a CDN it is as likely a challenge page or an edge block as a refused key,
+  # and reading it as `:auth` sends an operator to rotate a key that works.
   defp status_error(401), do: {:upstream_refused, :auth}
-  defp status_error(403), do: {:upstream_refused, :auth}
   defp status_error(404), do: {:upstream_refused, :not_found}
   defp status_error(429), do: {:upstream_refused, :rate_limit}
   defp status_error(400), do: {:invalid_argument, "query"}

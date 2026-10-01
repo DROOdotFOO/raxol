@@ -77,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convert through `Assets.to_decimal/1`, MPP through the integer. The amount
   then reaches the policy and budget gates, which refuse it when a
   `SpendingPolicy` and ledger are configured.
+- `Prices.FX` no longer raises `MatchError` when `Raxol.Web3.FX.Sleuth.new/1`
+  refuses the configured key (one with a CR, LF or space inside it). It logs
+  the refusal, which names the argument and never the key, and leaves EURC,
+  EURe and ZCHF unpriced for the sweep to count.
 - The FX `price_fn` no longer lets Sleuth choose what it reprices. It answers
   exactly the symbols in the new `Assets.fx_pegs/0`, at the Chainlink rate for
   the peg registered there, and hands every other symbol to the fallback. A
