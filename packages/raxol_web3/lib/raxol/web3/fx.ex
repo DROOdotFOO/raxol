@@ -61,22 +61,29 @@ defmodule Raxol.Web3.FX do
   @doc """
   A `(symbol -> Decimal.t() | nil)` for accounting (ADR-0040 decision 6).
 
-  One snapshot of the partner set and one rate read per peg, taken when the
-  function is built, then closed over, so a report does not touch the network
-  per lookup. A symbol pegged to a currency other than the dollar is priced at
-  the Chainlink rate for its peg when its verdict is `:ok`, and at `nil`
-  otherwise: accounting is priced at the rate of record, and Sleuth's price can
-  only veto. Every other symbol, dollar stablecoins included, goes to
-  `fallback`, so ETH and POL pricing is whatever it was.
+  `pegs` maps each symbol this function may price to its registered peg
+  currency (`Raxol.Payments.Assets.fx_pegs/0`, passed in because this package
+  does not depend on `raxol_payments`). Every symbol in it answers from here,
+  and every other symbol goes to `fallback`, dollar stablecoins included, so
+  no snapshot can change how ETH or POL is priced.
 
-  A failed snapshot logs its reason and prices only through `fallback`: a
-  report with EUR legs unpriced is counted as such by the ledger, which is
-  better than a report that fails outright.
+  A registered symbol is priced at the Chainlink rate for its REGISTERED peg
+  when every listing of it in the snapshot agrees on that peg and is judged
+  `:ok` against it, and at `nil` otherwise: absent, vetoed, unrated or a failed
+  snapshot. Sleuth's data can only veto. It chooses neither which symbols are
+  repriced nor at which rate, and a `nil` is never handed to `fallback`, which
+  might price a euro at a dollar.
+
+  One snapshot of the partner set and one rate read per registered peg, taken
+  when the function is built and then closed over, so a report does not touch
+  the network per lookup. A failed snapshot is logged, and leaves the
+  registered symbols unpriced for the ledger to count.
   """
-  @spec price_fn(t(), (String.t() -> Decimal.t() | nil)) :: (String.t() -> Decimal.t() | nil)
-  def price_fn(%__MODULE__{} = fx, fallback \\ fn _symbol -> nil end)
-      when is_function(fallback, 1) do
-    prices = fx_prices(fx)
+  @spec price_fn(t(), %{String.t() => String.t()}, (String.t() -> Decimal.t() | nil)) ::
+          (String.t() -> Decimal.t() | nil)
+  def price_fn(%__MODULE__{} = fx, pegs, fallback \\ fn _symbol -> nil end)
+      when is_map(pegs) and is_function(fallback, 1) do
+    prices = fx_prices(fx, pegs)
 
     fn symbol ->
       case Map.fetch(prices, symbol) do
@@ -86,25 +93,39 @@ defmodule Raxol.Web3.FX do
     end
   end
 
-  # symbol -> Decimal | nil, for every non-USD asset in the snapshot. An entry
-  # with `nil` is deliberate: a judged EUR asset must not fall through to a
-  # fallback that might price it at par.
-  defp fx_prices(fx) do
-    case stables(fx, partner_only: true) do
+  # symbol -> Decimal | nil, with a key for every registered symbol.
+  defp fx_prices(fx, pegs) do
+    case Sleuth.stables(fx.sleuth, partner_only: true) do
       {:ok, %{assets: assets}} ->
-        for %{peg_currency: peg} = asset <- assets, peg != "USD", into: %{} do
-          {asset.symbol, ok_rate(asset.quality)}
-        end
+        listings = Enum.group_by(assets, & &1.symbol)
+        rates = Map.new(Enum.uniq(Map.values(pegs)), &{&1, Chainlink.rate(fx.chainlink, &1)})
+
+        Map.new(pegs, fn {symbol, peg} ->
+          {symbol, registered_price(Map.get(listings, symbol, []), peg, rates)}
+        end)
 
       {:error, reason} ->
         require Logger
         Logger.warning("FX price snapshot failed (#{inspect(reason)}); non-USD legs unpriced")
-        %{}
+        Map.new(pegs, fn {symbol, _peg} -> {symbol, nil} end)
     end
   end
 
-  defp ok_rate(%{status: :ok, rate: rate}), do: rate
-  defp ok_rate(_verdict), do: nil
+  # Judged against the registered peg. A listing that names another peg is a
+  # veto, not a request for that peg's rate.
+  defp registered_price([], _peg, _rates), do: nil
+
+  defp registered_price(listings, peg, rates) do
+    verdicts =
+      Enum.map(listings, fn
+        %{peg_currency: ^peg} = asset -> Quality.judge(asset, rates)
+        _relabelled -> nil
+      end)
+
+    if Enum.all?(verdicts, &match?(%{status: :ok}, &1)),
+      do: hd(verdicts).rate,
+      else: nil
+  end
 
   defp judged(asset, rates), do: Map.put(asset, :quality, Quality.judge(asset, rates))
 end
