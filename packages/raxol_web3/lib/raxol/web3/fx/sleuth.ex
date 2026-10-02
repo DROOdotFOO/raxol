@@ -39,10 +39,16 @@ defmodule Raxol.Web3.FX.Sleuth do
   a model or `Raxol.Web3.Serialize`. Text fields (`as_of`, `name`, `corridor`,
   `peg_currency`, the pool fields...) are a string of at most 256 bytes or
   `nil`; `total` and `asset_count` a non-negative integer below 10^9 or `nil`;
-  `aliases` at most 32 such strings. A list entry that is not a JSON object is
-  skipped, a number included: `1.5` decodes to a `%Decimal{}` struct, which
-  `%{}` would match. A 200 body that is not the documented envelope is
-  `{:decode_failed, :sleuth}` and is never cached.
+  `aliases` at most 32 such strings. No list is decoded past its cap: `assets`
+  past the page's `limit` (300 when none is given), `topPools` past 32,
+  `corridors` past 64, their asset lists past 400 in total, and
+  `sleuth_fx_rates_usd` past 64 rates keyed by a three- or four-letter code.
+  A body is bounded in bytes, not in entries: 262 KB of `{}` was 87,000 assets.
+  A list entry that is not a JSON object is skipped, a number included: `1.5`
+  decodes to a `%Decimal{}` struct, which `%{}` would match. A 200 body that
+  is not the documented envelope is `{:decode_failed, :sleuth}` and is never
+  cached. Rounding `deviationBps` runs in a pinned `Decimal` context, so no
+  caller's context rounds it or raises.
 
   ## Symbols
 
@@ -107,6 +113,14 @@ defmodule Raxol.Web3.FX.Sleuth do
   # The largest measured body is 147.9 KB (`limit=300`).
   @max_bytes 262_144
 
+  # Entry caps, decoded no further whatever the body holds: a page is at most
+  # 300 assets (`limit`), Sleuth publishes 28 corridors, 335 assets across them
+  # and 27 FX rates, and a detail's `topPools` is about ten.
+  @max_pools 32
+  @max_corridors 64
+  @max_corridor_assets 400
+  @max_rates 64
+
   @sorts ~w(supplyUsd volume24hUsd deviationBps partnerLiquidityUsd marketCapUsd)
 
   @canonical %{"EURE" => "EURe", "MONERIUM" => "EURe", "FRANKENCOIN" => "ZCHF"}
@@ -160,7 +174,7 @@ defmodule Raxol.Web3.FX.Sleuth do
   @spec stables(t(), keyword()) :: {:ok, snapshot()} | {:error, Backend.error()}
   def stables(%__MODULE__{} = sleuth, opts \\ []) do
     with {:ok, query} <- stables_query(opts) do
-      get(sleuth, "/fx/stables", query, &decode_snapshot/1, "query")
+      get(sleuth, "/fx/stables", query, &decode_snapshot(&1, page_size(query)), "query")
     end
   end
 
@@ -295,7 +309,9 @@ defmodule Raxol.Web3.FX.Sleuth do
     end
   end
 
-  defp decode_snapshot(body) do
+  # No more assets than the page asked for: a body is bounded in bytes, and
+  # 262 KB of `{}` is 87,000 empty listings, each decoded to a full asset.
+  defp decode_snapshot(body, page_size) do
     with {:ok, %{"assets" => assets} = map} when is_list(assets) <- decode(body) do
       {:ok,
        %{
@@ -303,7 +319,7 @@ defmodule Raxol.Web3.FX.Sleuth do
          sleuth_fx_rates_usd: decimals(map["fxRatesUsd"]),
          sleuth_fx_rates_as_of: string(map["fxRatesAsOf"]),
          total: count(map["total"]),
-         assets: objects(assets, &asset/1)
+         assets: objects(assets, &asset/1, page_size)
        }}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
@@ -313,7 +329,7 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp decode_detail(body) do
     with {:ok, %{"asset" => raw} = map} when is_object(raw) <- decode(body) do
-      pools = objects(raw["topPools"], &pool/1)
+      pools = objects(raw["topPools"], &pool/1, @max_pools)
       {:ok, %{as_of: string(map["asOf"]), asset: Map.put(asset(raw), :top_pools, pools)}}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
@@ -326,7 +342,7 @@ defmodule Raxol.Web3.FX.Sleuth do
       {:ok,
        %{
          as_of: string(map["asOf"]),
-         corridors: objects(corridors, &corridor(&1, include_assets?))
+         corridors: decode_corridor_list(corridors, include_assets?)
        }}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
@@ -379,8 +395,25 @@ defmodule Raxol.Web3.FX.Sleuth do
     }
 
     if include_assets?,
-      do: Map.put(base, :assets, objects(raw["assets"], &corridor_asset/1)),
+      do: Map.put(base, :assets, objects(raw["assets"], &corridor_asset/1, @max_corridor_assets)),
       else: base
+  end
+
+  # The per-corridor asset lists share one budget: Sleuth lists 335 assets
+  # across all corridors, so no honest body needs more than @max_corridor_assets
+  # in total, whatever their split.
+  defp decode_corridor_list(corridors, include_assets?) do
+    corridors
+    |> objects(&corridor(&1, include_assets?), @max_corridors)
+    |> Enum.map_reduce(@max_corridor_assets, fn
+      %{assets: assets} = corridor, budget ->
+        kept = Enum.take(assets, budget)
+        {%{corridor | assets: kept}, budget - length(kept)}
+
+      corridor, budget ->
+        {corridor, budget}
+    end)
+    |> elem(0)
   end
 
   defp corridor_asset(raw) do
@@ -392,8 +425,25 @@ defmodule Raxol.Web3.FX.Sleuth do
     }
   end
 
-  # Upstream data: an entry that is not an object has no fields to read.
-  defp objects(list, fun), do: for(raw <- List.wrap(list), is_object(raw), do: fun.(raw))
+  # Upstream data: an entry that is not an object has no fields to read, and no
+  # list is decoded past `max` entries.
+  defp objects(list, fun, max) do
+    list
+    |> List.wrap()
+    |> Stream.filter(&is_object/1)
+    |> Enum.take(max)
+    |> Enum.map(fun)
+  end
+
+  # Sleuth's own ceiling on `limit`, and the page size when none was asked for.
+  @max_page 300
+
+  defp page_size(query) do
+    case List.keyfind(query, "limit", 0) do
+      {"limit", limit} -> String.to_integer(limit)
+      nil -> @max_page
+    end
+  end
 
   # Every field outside the figures is text or a count, and is bounded here so
   # no upstream shape or size reaches a caller, a model or `Serialize`.
@@ -419,9 +469,14 @@ defmodule Raxol.Web3.FX.Sleuth do
     end
   end
 
-  # Keys are peg-currency codes; anything longer is not one.
+  # Keys are ISO-style currency codes (Sleuth lists 27); anything else is not one.
   defp decimals(map) when is_object(map) do
-    for {k, v} <- map, byte_size(k) <= 8, d = decimal(v), d != nil, into: %{}, do: {k, d}
+    map
+    |> Stream.filter(fn {k, _v} -> k =~ ~r/\A[A-Z]{3,4}\z/ end)
+    |> Stream.map(fn {k, v} -> {k, decimal(v)} end)
+    |> Stream.reject(fn {_k, d} -> is_nil(d) end)
+    |> Enum.take(@max_rates)
+    |> Map.new()
   end
 
   defp decimals(_), do: %{}
@@ -439,10 +494,20 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp integer(n) when is_integer(n) and abs(n) < @max_coefficient, do: n
 
+  # `Decimal.round/2` applies the caller's context, which can round a bounded
+  # figure to its precision or raise on an inexact result; 100 digits holds any
+  # figure `decimal/1` admits exactly.
+  @integer_context %Decimal.Context{precision: 100, rounding: :half_up, traps: []}
+
   defp integer(%Decimal{} = d) do
     case decimal(d) do
-      nil -> nil
-      bounded -> bounded |> Decimal.round(0) |> Decimal.to_integer()
+      nil ->
+        nil
+
+      bounded ->
+        Decimal.Context.with(@integer_context, fn ->
+          bounded |> Decimal.round(0) |> Decimal.to_integer()
+        end)
     end
   end
 

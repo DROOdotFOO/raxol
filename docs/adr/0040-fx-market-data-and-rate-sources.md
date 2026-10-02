@@ -195,7 +195,12 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   entry that is not a JSON object is skipped, a number included (`1.5` decodes to a
   `%Decimal{}` struct, which a `%{}` pattern matches). Every other field is typed and bounded:
   text at most 256 bytes, counts non-negative integers below 10^9, at most 32 string
-  `aliases`, else `nil`. A 200 that is not the documented envelope is never cached.
+  `aliases`, else `nil`. No list is decoded past a cap: `assets` past the requested `limit`
+  (300 by default), `topPools` past 32, `corridors` past 64 with 400 corridor assets in
+  total, and `fxRatesUsd` past 64 three- or four-letter codes, since a byte-bounded body of
+  `{}` was 87,000 assets. A 200 that is not the documented envelope is never cached.
+  Neither the decoder's rounding nor Chainlink's rate (built as `answer * 10^-8` without
+  division) depends on a caller's `Decimal` context, and Quality refuses a non-finite rate.
   `Raxol.Web3.Serialize` renders a `Decimal` whose exponent is past ±30 in scientific form.
 - **Arguments** are validated before any request is built: `sort` against an allowlist,
   `limit` within 1..300, `corridor` as three or four uppercase letters (`REAL` and `VAR`
