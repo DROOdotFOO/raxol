@@ -189,10 +189,13 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   `includeChains=1` with a large limit is refused by Sleuth (400) and never requested. The
   body bound does not bound what one number costs, so the decoder does: see Parsing.
 - **Parsing** uses `Jason.decode(body, floats: :decimals)`, so a float never reaches a money
-  path. `raxol_web3` gains `{:decimal, "~> 3.0"}` for this, matching `raxol_payments`; today it has `decimal` only as an
-  optional dependency of `jason`. A figure is `nil` unless it has at most 38 significant
-  digits and an exponent within ±30, checked on the decoded struct before any arithmetic:
-  `1e1000000` is nine bytes of JSON and a million digits after the first rounding. A list
+  path. `raxol_web3` gains `{:decimal, "~> 3.0"}` for this, matching `raxol_payments`;
+  today it has `decimal` only as an optional dependency of `jason`. decimal 3 refuses a
+  number with more than 34 digits or an exponent past ±6_144, so such a figure fails the
+  whole body as `{:decode_failed, :sleuth}`. Inside that range a figure is `nil` unless it
+  has at most 38 significant digits and an exponent within ±30, checked on the decoded
+  struct before any arithmetic: `1e6000` is six bytes of JSON and 6,000 digits after the
+  first rounding. A list
   entry that is not a JSON object is skipped, a number included (`1.5` decodes to a
   `%Decimal{}` struct, which a `%{}` pattern matches). Every other field is typed and bounded:
   text at most 256 bytes with everything invisible stripped (control and format characters,

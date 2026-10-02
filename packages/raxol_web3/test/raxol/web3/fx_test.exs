@@ -343,7 +343,7 @@ defmodule Raxol.Web3.FXTest do
       aliases = Enum.map_join(1..40, ",", &~s("a#{&1}"))
 
       body =
-        ~s({"asOf":{"t":1e1000000},"fxRatesAsOf":"#{long}","total":-5,) <>
+        ~s({"asOf":{"t":1e6000},"fxRatesAsOf":"#{long}","total":-5,) <>
           ~s("fxRatesUsd":{"#{long}":1.1,"EUR":1.13},) <>
           ~s("assets":[{"symbol":"EURC","name":"#{long}","aliases":[1e30,{},"ok",#{aliases}],) <>
           ~s("corridor":["EUR"],"pegCurrency":{"x":1},"pegMechanism":7}]})
@@ -361,7 +361,7 @@ defmodule Raxol.Web3.FXTest do
       assert length(asset.aliases) == 32
       assert Enum.all?(asset.aliases, &is_binary/1)
 
-      corridors = ~s({"corridors":[{"corridor":"EUR","assetCount":1e1000000}]})
+      corridors = ~s({"corridors":[{"corridor":"EUR","assetCount":1e6000}]})
       s = sleuth(%{"/api/mcp/fx/corridors" => corridors})
       assert {:ok, %{corridors: [%{asset_count: nil}]}} = Sleuth.corridors(s)
     end
@@ -403,13 +403,20 @@ defmodule Raxol.Web3.FXTest do
 
     # Each figure below is a few bytes of JSON. Arithmetic on any of them --
     # rounding `deviationBps`, dividing `priceUsd` by a rate, rendering one with
-    # `:normal` -- expands the exponent into digits, which ran past a minute.
+    # `:normal` -- expands the exponent into thousands of digits. decimal 3
+    # refuses a number with an exponent past 6_144 or more than 34 digits
+    # outright, so either fails the whole body rather than one figure.
     @tag timeout: 10_000
     test "a figure past the decoder's bounds is nil before any arithmetic" do
+      for figure <- ["1e1000000", "123456789012345678901234567890123456789.5"] do
+        refused = ~s({"assets":[{"symbol":"EURC","pegCurrency":"EUR","priceUsd":#{figure}}]})
+        s = sleuth(%{"/api/mcp/fx/stables" => refused})
+        assert Sleuth.stables(s) == {:error, {:decode_failed, :sleuth}}
+      end
+
       body =
-        ~s({"assets":[{"symbol":"EURC","pegCurrency":"EUR","priceUsd":1e1000000,) <>
-          ~s("deviationBps":1e1000000,"supplyUsd":1e-1000000,) <>
-          ~s("volume24hUsd":123456789012345678901234567890123456789.5,) <>
+        ~s({"assets":[{"symbol":"EURC","pegCurrency":"EUR","priceUsd":1e6000,) <>
+          ~s("deviationBps":1e6000,"supplyUsd":1e-6000,) <>
           ~s("partnerLiquidityUsd":1234567890123456789012345678901234567890}],) <>
           ~s("fxRatesUsd":{"EUR":1e400,"CHF":1.25}})
 
@@ -428,9 +435,9 @@ defmodule Raxol.Web3.FXTest do
 
     @tag timeout: 10_000
     test "a Decimal with a huge exponent renders in bounded space" do
-      rendered = Raxol.Web3.Serialize.result(%{price: Decimal.new("1e1000000")})
+      rendered = Raxol.Web3.Serialize.result(%{price: Decimal.new("1e6000")})
       assert byte_size(rendered.price) < 32
-      assert Decimal.equal?(Decimal.new(rendered.price), Decimal.new("1e1000000"))
+      assert Decimal.equal?(Decimal.new(rendered.price), Decimal.new("1e6000"))
 
       assert Raxol.Web3.Serialize.result(Decimal.new("1.1350")) == "1.1350"
     end
