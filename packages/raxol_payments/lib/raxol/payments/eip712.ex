@@ -44,6 +44,8 @@ defmodule Raxol.Payments.EIP712 do
       {:ok, digest} = Raxol.Payments.EIP712.hash(domain, types, message)
   """
 
+  @max_uint256 Integer.pow(2, 256) - 1
+
   @doc """
   Hash an EIP-712 typed message into a 32-byte digest.
 
@@ -187,7 +189,11 @@ defmodule Raxol.Payments.EIP712 do
   # structs (e.g. Permit2 PermitWitnessTransferFrom referencing
   # TokenPermissions and OriginPullWitness), this picks the outer type
   # deterministically regardless of Elixir map iteration order.
-  defp primary_type(types) do
+  @doc false
+  # Public for `Raxol.Payments.DeliveryFloor`, which must read a signed field
+  # from the same struct the encoder hashes.
+  @spec primary_type(map()) :: String.t() | nil
+  def primary_type(types) do
     all_names = MapSet.new(Map.keys(types))
 
     referenced =
@@ -374,13 +380,17 @@ defmodule Raxol.Payments.EIP712 do
     end
   end
 
+  # A value outside 0..2^256-1 is refused: `<<v::unsigned-big-256>>` would keep
+  # the low 256 bits, so 2^256 + 1 signed as 1 and -1 as 2^256 - 1.
   defp encode_value("uint256", value) when is_integer(value) do
-    {:ok, <<value::unsigned-big-256>>}
+    if value in 0..@max_uint256,
+      do: {:ok, <<value::unsigned-big-256>>},
+      else: {:error, {:invalid_uint256, value}}
   end
 
   defp encode_value("uint256", value) when is_binary(value) do
     case Integer.parse(value) do
-      {int, ""} -> {:ok, <<int::unsigned-big-256>>}
+      {int, ""} when int in 0..@max_uint256 -> {:ok, <<int::unsigned-big-256>>}
       _ -> {:error, {:invalid_uint256, value}}
     end
   end

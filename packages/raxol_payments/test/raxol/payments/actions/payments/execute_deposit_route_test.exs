@@ -184,6 +184,23 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
                )
     end
 
+    test "amounts served as JSON numbers come back as the strings the output declares" do
+      quote = %{
+        "to_amount" => 870_000_000_000_000_000,
+        "min_to_amount" => 865_000_000_000_000_000
+      }
+
+      ctx = %{xochi_config: config(quote), deposit_attestation_signer: signer_address()}
+
+      # Through `call/2`, which validates the output schema: an integer
+      # `min_to_amount` passed the floor and then failed `:string`.
+      assert {:ok, %{to_amount: "870000000000000000", min_to_amount: "865000000000000000"}} =
+               ExecuteDepositRoute.call(
+                 params(%{to_token: @eure_base, min_to_amount: "865000000000000000"}),
+                 ctx
+               )
+    end
+
     test "a floor in the source's units on a non-USD destination is refused before any quote" do
       ctx = %{xochi_config: config(@eure_quote), deposit_attestation_signer: signer_address()}
 

@@ -39,6 +39,17 @@ defmodule Raxol.Payments.EIP712Test do
       assert h1 != h2
     end
 
+    test "a uint256 outside 0..2^256-1 is refused, not truncated to its low bits" do
+      # 2^256 + 1 used to sign as 1, and -1 as 2^256 - 1.
+      for amount <- [Integer.pow(2, 256) + 1, -1, Integer.to_string(Integer.pow(2, 256))] do
+        assert {:error, {:invalid_uint256, ^amount}} =
+                 EIP712.hash(@domain, @types, %{@valid_message | amount: amount})
+      end
+
+      max = Integer.pow(2, 256) - 1
+      assert {:ok, _} = EIP712.hash(@domain, @types, %{@valid_message | amount: max})
+    end
+
     test "differs when type field name changes (typeHash captures field names)" do
       other_types = %{
         "Transfer" => [{"recipient", "address"}, {"amount", "uint256"}]

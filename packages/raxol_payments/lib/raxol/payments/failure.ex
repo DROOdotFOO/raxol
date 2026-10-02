@@ -204,7 +204,7 @@ defmodule Raxol.Payments.Failure do
     do:
       build(
         :delivery_below_floor,
-        "The quote delivers less than the minimum acceptable amount; refusing to sign.",
+        "The quote states less than the minimum acceptable amount, or an amount that does not read; refused.",
         false,
         detail
       )

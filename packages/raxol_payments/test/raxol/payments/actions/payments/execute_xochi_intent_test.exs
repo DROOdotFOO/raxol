@@ -430,6 +430,55 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       totals = Ledger.get_totals(ledger, "a1", policy())
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
+
+    test "the re-quote is held to the floor before it is signed" do
+      # The first quote clears the automatic same-asset floor; after a 409 the
+      # endpoint's re-quote delivers 1.
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            n = Process.get(:quote_calls, 0)
+            Process.put(:quote_calls, n + 1)
+
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_#{n}",
+              "canSolve" => true,
+              "toAmount" => if(n == 0, do: "499000", else: "1"),
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1"
+      }
+
+      assert {:error, %Failure{reason: :delivery_below_floor, detail: {_, %{lowest: 1}}}} =
+               ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+      # Only the first quote was signed; the reservation is released.
+      assert_received :wallet_signed
+      refute_received :wallet_signed
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
   end
 
   describe "ExecuteXochiIntent spend gate" do
@@ -1234,7 +1283,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
     # Base USDC -> Arbitrum USDC: a same-asset corridor, so the automatic floor
     # applies. toAmount is configurable to model a punitive quote.
-    defp stub_floor_quote(to_amount, extra \\ %{}, message \\ %{"amount" => 1_000_000}) do
+    @amount_only [%{"name" => "amount", "type" => "uint256"}]
+
+    defp stub_floor_quote(
+           to_amount,
+           extra \\ %{},
+           message \\ %{"amount" => 1_000_000},
+           fields \\ @amount_only
+         ) do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
           "/api/intent/quote" ->
@@ -1249,7 +1305,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
                   "xochiFee" => "1000",
                   "eip712Data" => %{
                     "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                    "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                    "types" => %{"XochiIntent" => fields},
                     "message" => message
                   }
                 },
@@ -1344,15 +1400,35 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       refute_received :wallet_signed
     end
 
-    test "a quote that signs for less than it advertises is judged on the signed amount" do
-      # The served toAmount clears the floor; the message the wallet would sign
-      # says 1.
+    @with_to_amount [
+      %{"name" => "amount", "type" => "uint256"},
+      %{"name" => "toAmount", "type" => "uint256"}
+    ]
+
+    test "a quote is judged on the toAmount the wallet would sign, read as the encoder reads it" do
+      # Each served toAmount clears the floor; the signed field does not. Null
+      # and missing are encoded as 0, and 2^256 + 1 would sign as its low
+      # 256 bits, i.e. 1.
+      context = floor_ctx()
+
+      for message <- [
+            %{"amount" => 1_000_000, "toAmount" => "1"},
+            %{"amount" => 1_000_000, "toAmount" => nil},
+            %{"amount" => 1_000_000},
+            %{"amount" => 1_000_000, "toAmount" => Integer.to_string(Integer.pow(2, 256) + 1)}
+          ] do
+        stub_floor_quote("960000", %{}, message, @with_to_amount)
+
+        assert {:error, %Failure{reason: :delivery_below_floor}} =
+                 ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), context)
+
+        refute_received :wallet_signed
+      end
+
+      # A toAmount the signed struct does not declare is never signed, so it
+      # is not judged.
       stub_floor_quote("960000", %{}, %{"amount" => 1_000_000, "toAmount" => "1"})
-
-      assert {:error, %Failure{reason: :delivery_below_floor, detail: {_, %{lowest: 1}}}} =
-               ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), floor_ctx())
-
-      refute_received :wallet_signed
+      assert {:ok, _} = ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), context)
     end
 
     test "a high stated minimum does not hide a low toAmount" do
