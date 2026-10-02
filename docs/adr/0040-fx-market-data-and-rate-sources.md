@@ -190,8 +190,11 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   optional dependency of `jason`. A figure is `nil` unless it has at most 38 significant
   digits and an exponent within ±30, checked on the decoded struct before any arithmetic:
   `1e1000000` is nine bytes of JSON and a million digits after the first rounding. A list
-  entry that is not an object is skipped, and `Raxol.Web3.Serialize` renders a `Decimal`
-  whose exponent is past ±30 in scientific form.
+  entry that is not a JSON object is skipped, a number included (`1.5` decodes to a
+  `%Decimal{}` struct, which a `%{}` pattern matches). Every other field is typed and bounded:
+  text at most 256 bytes, counts non-negative integers below 10^9, at most 32 string
+  `aliases`, else `nil`. A 200 that is not the documented envelope is never cached.
+  `Raxol.Web3.Serialize` renders a `Decimal` whose exponent is past ±30 in scientific form.
 - **Arguments** are validated before any request is built: `sort` against an allowlist,
   `limit` within 1..300, `corridor` as three or four uppercase letters (`REAL` and `VAR`
   are published corridors), and a `stable/2` symbol as up to 24 letters, digits, `.` and

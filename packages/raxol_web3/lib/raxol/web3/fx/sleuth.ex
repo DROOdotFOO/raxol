@@ -31,7 +31,18 @@ defmodule Raxol.Web3.FX.Sleuth do
   fields. `1e1000000` is nine bytes of JSON, and the first arithmetic on it --
   rounding, a division by a rate, a `:normal` rendering -- expands the
   exponent into a million digits. The body bound caps a body's size, not what
-  one number in it costs. A list entry that is not a JSON object is skipped.
+  one number in it costs.
+
+  ## Every other field
+
+  Typed and bounded at decode, so no upstream shape or size reaches a caller,
+  a model or `Raxol.Web3.Serialize`. Text fields (`as_of`, `name`, `corridor`,
+  `peg_currency`, the pool fields...) are a string of at most 256 bytes or
+  `nil`; `total` and `asset_count` a non-negative integer below 10^9 or `nil`;
+  `aliases` at most 32 such strings. A list entry that is not a JSON object is
+  skipped, a number included: `1.5` decodes to a `%Decimal{}` struct, which
+  `%{}` would match. A 200 body that is not the documented envelope is
+  `{:decode_failed, :sleuth}` and is never cached.
 
   ## Symbols
 
@@ -114,6 +125,7 @@ defmodule Raxol.Web3.FX.Sleuth do
   @spec new(keyword()) :: {:ok, t()} | {:error, Backend.error()}
   def new(opts) do
     base_url = Keyword.get(opts, :base_url, %__MODULE__{api_key: ""}.base_url)
+    base_url = if is_binary(base_url), do: base_url, else: ""
     api_key = if is_binary(opts[:api_key]), do: String.trim(opts[:api_key]), else: ""
 
     cond do
@@ -147,9 +159,8 @@ defmodule Raxol.Web3.FX.Sleuth do
   """
   @spec stables(t(), keyword()) :: {:ok, snapshot()} | {:error, Backend.error()}
   def stables(%__MODULE__{} = sleuth, opts \\ []) do
-    with {:ok, query} <- stables_query(opts),
-         {:ok, body} <- get(sleuth, "/fx/stables", query) do
-      decode_snapshot(body)
+    with {:ok, query} <- stables_query(opts) do
+      get(sleuth, "/fx/stables", query, &decode_snapshot/1)
     end
   end
 
@@ -162,9 +173,7 @@ defmodule Raxol.Web3.FX.Sleuth do
           {:ok, %{as_of: String.t() | nil, asset: map()}} | {:error, Backend.error()}
   def stable(%__MODULE__{} = sleuth, symbol) when is_binary(symbol) do
     if symbol =~ ~r/\A[A-Za-z0-9][A-Za-z0-9.\-]{0,23}\z/ do
-      with {:ok, body} <- get(sleuth, "/fx/stables/" <> sleuth_symbol(symbol), []) do
-        decode_detail(body)
-      end
+      get(sleuth, "/fx/stables/" <> sleuth_symbol(symbol), [], &decode_detail/1)
     else
       {:error, {:invalid_argument, "symbol"}}
     end
@@ -178,14 +187,16 @@ defmodule Raxol.Web3.FX.Sleuth do
   """
   @spec corridors(t(), keyword()) :: {:ok, map()} | {:error, Backend.error()}
   def corridors(%__MODULE__{} = sleuth, opts \\ []) do
-    with {:ok, body} <- get(sleuth, "/fx/corridors", []) do
-      decode_corridors(body, Keyword.get(opts, :include_assets, false))
-    end
+    include_assets? = Keyword.get(opts, :include_assets, false)
+    get(sleuth, "/fx/corridors", [], &decode_corridors(&1, include_assets?))
   end
 
-  @doc "The symbol `Raxol.Payments.Assets` uses for a Sleuth symbol."
+  @doc """
+  The symbol `Raxol.Payments.Assets` uses for a Sleuth symbol. Case is folded
+  in ASCII only, so a lookalike such as `MONERıUM` (dotless i) stays itself.
+  """
   @spec canonical_symbol(String.t()) :: String.t()
-  def canonical_symbol(symbol), do: Map.get(@canonical, String.upcase(symbol), symbol)
+  def canonical_symbol(symbol), do: Map.get(@canonical, String.upcase(symbol, :ascii), symbol)
 
   # -- arguments -----------------------------------------------------------------
 
@@ -224,7 +235,10 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   # -- transport -----------------------------------------------------------------
 
-  defp get(sleuth, path, query) do
+  # The body is decoded here so the cache stage can be told which 200s are worth
+  # keeping: one that is not the documented envelope is a failure, and replaying
+  # it for the TTL would answer every caller with it.
+  defp get(sleuth, path, query, decoder) do
     query = Enum.sort(query)
     url = sleuth.base_url <> path <> encode_query(query)
 
@@ -234,19 +248,24 @@ defmodule Raxol.Web3.FX.Sleuth do
       |> Keyword.put_new(:max_bytes, @max_bytes)
       |> Backend.put_header({"authorization", "Bearer " <> sleuth.api_key})
       |> Backend.put_header({"accept", "application/json"})
-      |> put_cache(sleuth.cache?, {path, query})
+      |> put_cache(sleuth.cache?, {path, query}, decoder)
 
     case HTTP.get(url, opts) do
-      {:ok, %{status: status, body: body}} when status in 200..299 -> {:ok, body}
+      {:ok, %{status: status, body: body}} when status in 200..299 -> decoder.(body)
       {:ok, %{status: status}} -> {:error, status_error(status)}
       {:error, _} = error -> error
     end
   end
 
-  defp put_cache(opts, false, _fragment), do: opts
+  defp put_cache(opts, false, _fragment, _decoder), do: opts
 
-  defp put_cache(opts, true, fragment),
-    do: Keyword.put(opts, :cache, key: {:sleuth, fragment}, ttl_ms: @ttl_ms)
+  defp put_cache(opts, true, fragment, decoder) do
+    Keyword.put(opts, :cache,
+      key: {:sleuth, fragment},
+      ttl_ms: @ttl_ms,
+      cacheable: fn %{body: body} -> match?({:ok, _}, decoder.(body)) end
+    )
+  end
 
   defp encode_query([]), do: ""
   defp encode_query(query), do: "?" <> URI.encode_query(query)
@@ -262,9 +281,13 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   # -- decoding ------------------------------------------------------------------
 
+  # A JSON object. Not `%{}`: under `floats: :decimals` a number such as `1.5`
+  # decodes to a `%Decimal{}`, and a struct matches `%{}`.
+  defguardp is_object(term) when is_map(term) and not is_struct(term)
+
   defp decode(body) do
     case Jason.decode(body, floats: :decimals) do
-      {:ok, %{} = map} -> {:ok, map}
+      {:ok, map} when is_object(map) -> {:ok, map}
       _ -> {:error, {:decode_failed, :sleuth}}
     end
   end
@@ -273,10 +296,10 @@ defmodule Raxol.Web3.FX.Sleuth do
     with {:ok, %{"assets" => assets} = map} when is_list(assets) <- decode(body) do
       {:ok,
        %{
-         as_of: map["asOf"],
+         as_of: string(map["asOf"]),
          sleuth_fx_rates_usd: decimals(map["fxRatesUsd"]),
-         sleuth_fx_rates_as_of: map["fxRatesAsOf"],
-         total: map["total"],
+         sleuth_fx_rates_as_of: string(map["fxRatesAsOf"]),
+         total: count(map["total"]),
          assets: objects(assets, &asset/1)
        }}
     else
@@ -286,9 +309,9 @@ defmodule Raxol.Web3.FX.Sleuth do
   end
 
   defp decode_detail(body) do
-    with {:ok, %{"asset" => %{} = raw} = map} <- decode(body) do
+    with {:ok, %{"asset" => raw} = map} when is_object(raw) <- decode(body) do
       pools = objects(raw["topPools"], &pool/1)
-      {:ok, %{as_of: map["asOf"], asset: Map.put(asset(raw), :top_pools, pools)}}
+      {:ok, %{as_of: string(map["asOf"]), asset: Map.put(asset(raw), :top_pools, pools)}}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
       error -> error
@@ -297,7 +320,11 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp decode_corridors(body, include_assets?) do
     with {:ok, %{"corridors" => corridors} = map} when is_list(corridors) <- decode(body) do
-      {:ok, %{as_of: map["asOf"], corridors: objects(corridors, &corridor(&1, include_assets?))}}
+      {:ok,
+       %{
+         as_of: string(map["asOf"]),
+         corridors: objects(corridors, &corridor(&1, include_assets?))
+       }}
     else
       {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
       error -> error
@@ -307,11 +334,11 @@ defmodule Raxol.Web3.FX.Sleuth do
   defp asset(raw) do
     %{
       symbol: symbol(raw["symbol"]),
-      name: raw["name"],
-      aliases: List.wrap(raw["aliases"]),
-      corridor: raw["corridor"],
-      peg_currency: raw["pegCurrency"],
-      peg_mechanism: raw["pegMechanism"],
+      name: string(raw["name"]),
+      aliases: aliases(raw["aliases"]),
+      corridor: string(raw["corridor"]),
+      peg_currency: string(raw["pegCurrency"]),
+      peg_mechanism: string(raw["pegMechanism"]),
       partner?: raw["partner"] == true,
       yield_bearing?: raw["yieldBearing"] == true,
       price_usd: decimal(raw["priceUsd"]),
@@ -327,11 +354,11 @@ defmodule Raxol.Web3.FX.Sleuth do
   # basis-point input (ADR-0040, "A pool-implied rate as the second source").
   defp pool(raw) do
     %{
-      chain: raw["chain"],
-      dex: raw["dex"],
-      pair: raw["pair"],
-      base: raw["base"],
-      quote: raw["quote"],
+      chain: string(raw["chain"]),
+      dex: string(raw["dex"]),
+      pair: string(raw["pair"]),
+      base: string(raw["base"]),
+      quote: string(raw["quote"]),
       price_usd: decimal(raw["priceUsd"]),
       liquidity_usd: decimal(raw["liquidityUsd"]),
       volume_24h_usd: decimal(raw["volume24hUsd"])
@@ -340,9 +367,9 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp corridor(raw, include_assets?) do
     base = %{
-      corridor: raw["corridor"],
-      peg_currency: raw["pegCurrency"],
-      asset_count: raw["assetCount"],
+      corridor: string(raw["corridor"]),
+      peg_currency: string(raw["pegCurrency"]),
+      asset_count: count(raw["assetCount"]),
       total_supply_usd: decimal(raw["totalSupplyUsd"]),
       total_volume_24h_usd: decimal(raw["totalVolume24hUsd"]),
       total_partner_liquidity_usd: decimal(raw["totalPartnerLiquidityUsd"])
@@ -363,13 +390,36 @@ defmodule Raxol.Web3.FX.Sleuth do
   end
 
   # Upstream data: an entry that is not an object has no fields to read.
-  defp objects(list, fun), do: for(%{} = raw <- List.wrap(list), do: fun.(raw))
+  defp objects(list, fun), do: for(raw <- List.wrap(list), is_object(raw), do: fun.(raw))
 
-  defp symbol(symbol) when is_binary(symbol), do: canonical_symbol(symbol)
-  defp symbol(_symbol), do: ""
+  # Every field outside the figures is text or a count, and is bounded here so
+  # no upstream shape or size reaches a caller, a model or `Serialize`.
+  @max_string_bytes 256
+  @max_aliases 32
+  @max_count 1_000_000_000
 
-  defp decimals(%{} = map),
-    do: for({k, v} <- map, d = decimal(v), d != nil, into: %{}, do: {k, d})
+  defp string(s) when is_binary(s) and byte_size(s) <= @max_string_bytes, do: s
+  defp string(_), do: nil
+
+  defp count(n) when is_integer(n) and n >= 0 and n < @max_count, do: n
+  defp count(_), do: nil
+
+  defp aliases(list) when is_list(list),
+    do: list |> Enum.map(&string/1) |> Enum.reject(&is_nil/1) |> Enum.take(@max_aliases)
+
+  defp aliases(_), do: []
+
+  defp symbol(symbol) do
+    case string(symbol) do
+      nil -> ""
+      symbol -> canonical_symbol(symbol)
+    end
+  end
+
+  # Keys are peg-currency codes; anything longer is not one.
+  defp decimals(map) when is_object(map) do
+    for {k, v} <- map, byte_size(k) <= 8, d = decimal(v), d != nil, into: %{}, do: {k, d}
+  end
 
   defp decimals(_), do: %{}
 

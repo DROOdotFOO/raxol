@@ -178,20 +178,93 @@ defmodule Raxol.Web3.FXTest do
 
     test "a list entry that is not an object is skipped, not raised on" do
       eurc = ~s({"symbol":"EURC","pegCurrency":"EUR","priceUsd":1.1350})
+      # `1.5` and `1e30` decode to `%Decimal{}` structs, which match `%{}`.
+      junk = ~s(1,1.5,1e30,"x",null,[])
 
       s =
         sleuth(%{
-          "/api/mcp/fx/stables" => ~s({"assets":[1,"x",null,[],#{eurc}]}),
-          "/api/mcp/fx/stables/EURC" => ~s({"asset":{"symbol":"EURC","topPools":[1,"x",{}]}}),
+          "/api/mcp/fx/stables" => ~s({"assets":[#{junk},#{eurc}],"fxRatesUsd":1.0}),
+          "/api/mcp/fx/stables/EURC" => ~s({"asset":{"symbol":"EURC","topPools":[#{junk},{}]}}),
           "/api/mcp/fx/corridors" =>
-            ~s({"corridors":[1,{"corridor":"EUR","assets":[2,{"symbol":7}]}]})
+            ~s({"corridors":[#{junk},{"corridor":"EUR","assets":[#{junk},{"symbol":7}]}]})
         })
 
-      assert {:ok, %{assets: [%{symbol: "EURC"}]}} = Sleuth.stables(s)
+      assert {:ok, %{assets: [%{symbol: "EURC"}]} = snapshot} = Sleuth.stables(s)
+      assert snapshot.sleuth_fx_rates_usd == %{}
       assert {:ok, %{asset: %{top_pools: [%{chain: nil}]}}} = Sleuth.stable(s, "EURC")
 
       assert {:ok, %{corridors: [%{corridor: "EUR", assets: [%{symbol: ""}]}]}} =
                Sleuth.corridors(s, include_assets: true)
+    end
+
+    test "an asset that is a number, not an object, is a decode failure" do
+      for asset <- ~w(1.5 1e30 7) do
+        s = sleuth(%{"/api/mcp/fx/stables/EURC" => ~s({"asset":#{asset}})})
+        assert Sleuth.stable(s, "EURC") == {:error, {:decode_failed, :sleuth}}
+      end
+    end
+
+    test "every field outside the figures is typed and bounded at decode" do
+      long = String.duplicate("a", 300)
+      aliases = Enum.map_join(1..40, ",", &~s("a#{&1}"))
+
+      body =
+        ~s({"asOf":{"t":1e1000000},"fxRatesAsOf":"#{long}","total":-5,) <>
+          ~s("fxRatesUsd":{"#{long}":1.1,"EUR":1.13},) <>
+          ~s("assets":[{"symbol":"EURC","name":"#{long}","aliases":[1e30,{},"ok",#{aliases}],) <>
+          ~s("corridor":["EUR"],"pegCurrency":{"x":1},"pegMechanism":7}]})
+
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+      assert {:ok, snapshot} = Sleuth.stables(s)
+
+      assert %{as_of: nil, sleuth_fx_rates_as_of: nil, total: nil} = snapshot
+      assert snapshot.sleuth_fx_rates_usd == %{"EUR" => Decimal.new("1.13")}
+
+      assert [%{name: nil, corridor: nil, peg_currency: nil, peg_mechanism: nil} = asset] =
+               snapshot.assets
+
+      assert ["ok" | _] = asset.aliases
+      assert length(asset.aliases) == 32
+      assert Enum.all?(asset.aliases, &is_binary/1)
+
+      corridors = ~s({"corridors":[{"corridor":"EUR","assetCount":1e1000000}]})
+      s = sleuth(%{"/api/mcp/fx/corridors" => corridors})
+      assert {:ok, %{corridors: [%{asset_count: nil}]}} = Sleuth.corridors(s)
+    end
+
+    test "only an ASCII spelling is canonicalized to a registered symbol" do
+      assert Sleuth.canonical_symbol("monerium") == "EURe"
+      # U+0131, dotless i: upcases to "I" under Unicode rules.
+      assert Sleuth.canonical_symbol("MONERıUM") == "MONERıUM"
+      assert Sleuth.canonical_symbol("FRANKENCOıN") == "FRANKENCOıN"
+    end
+
+    test "a 200 that is not the documented shape is not cached" do
+      test = self()
+      bodies = [~s({"nope":1}), sleuth_fixture("stables_partner")]
+      {:ok, agent} = Agent.start_link(fn -> bodies end)
+
+      exchange = fn _vetted, _request, _opts ->
+        send(test, :sleuth_request)
+        body = Agent.get_and_update(agent, fn [b | rest] -> {b, rest ++ [b]} end)
+        {:ok, %{status: 200, headers: [], body: body}}
+      end
+
+      {:ok, s} =
+        Sleuth.new(
+          api_key: @key,
+          base_url: "https://sleuth-#{System.unique_integer([:positive])}.test/api/mcp",
+          http_opts: [{:exchange, exchange} | limits()]
+        )
+
+      assert Sleuth.stables(s) == {:error, {:decode_failed, :sleuth}}
+      assert {:ok, %{assets: [_ | _]}} = Sleuth.stables(s)
+      assert {:ok, %{assets: [_ | _]}} = Sleuth.stables(s)
+
+      assert_received :sleuth_request
+      assert_received :sleuth_request
+      # The good body was cached; the bad one was not.
+      refute_received :sleuth_request
     end
 
     # Each figure below is a few bytes of JSON. Arithmetic on any of them --
@@ -234,6 +307,8 @@ defmodule Raxol.Web3.FXTest do
 
       assert {:error, {:invalid_argument, "base_url"}} =
                Sleuth.new(api_key: "k", base_url: "http://www.sleuthintel.io/api/mcp")
+
+      assert {:error, {:invalid_argument, "base_url"}} = Sleuth.new(api_key: "k", base_url: nil)
     end
 
     test "new/1 trims the key, and refuses one no header can carry" do
