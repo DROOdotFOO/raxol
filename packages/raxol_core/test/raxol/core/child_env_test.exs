@@ -45,4 +45,30 @@ defmodule Raxol.Core.ChildEnvTest do
   test "a secret the caller passes explicitly is kept" do
     assert child([{"RAXOL_SLEUTH_API_KEY", "given"}, {~c"FOO", ~c"bar"}]) == "given|bar|home"
   end
+
+  describe "configuration" do
+    setup do
+      previous = Application.get_env(:raxol_core, ChildEnv)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:raxol_core, ChildEnv, previous),
+          else: Application.delete_env(:raxol_core, ChildEnv)
+      end)
+    end
+
+    test "a passed name reaches the child, as a nested raxol node needs its key" do
+      Application.put_env(:raxol_core, ChildEnv, pass: ["RAXOL_SLEUTH_API_KEY"])
+      assert child([{"FOO", "bar"}]) == "sk-probe-not-real|bar|home"
+    end
+
+    test "extra secrets are unset too, and a caller's false unsets rather than sets" do
+      System.put_env("RAXOL_TEST_EXTRA_SECRET", "x")
+      on_exit(fn -> System.delete_env("RAXOL_TEST_EXTRA_SECRET") end)
+      Application.put_env(:raxol_core, ChildEnv, extra_secrets: ["RAXOL_TEST_EXTRA_SECRET"])
+
+      assert {~c"RAXOL_TEST_EXTRA_SECRET", false} in ChildEnv.port_env()
+      assert {~c"FOO", false} in ChildEnv.port_env([{"FOO", false}])
+    end
+  end
 end

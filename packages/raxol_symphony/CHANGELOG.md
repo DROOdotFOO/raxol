@@ -13,6 +13,9 @@ code surface below is stable and test-covered.
 
 ### Added
 
+- The Codex runner and workspace hooks run without raxol's own secrets in
+  their environment (`Raxol.Core.ChildEnv`): they execute tracker-issue and
+  repository content, and used to inherit the node's whole environment.
 - **Orchestrator** (`Raxol.Symphony.Orchestrator`): a `BaseManager` GenServer
   that polls a tracker, claims eligible issues, isolates each in a per-issue
   workspace, and runs a coding agent to a workflow-defined terminal state.
