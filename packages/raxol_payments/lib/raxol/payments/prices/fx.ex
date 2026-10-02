@@ -72,11 +72,11 @@ defmodule Raxol.Payments.Prices.FX do
     # Never `fallback` for a registered symbol, in any casing: it may price a
     # euro at par. Folded as `Raxol.Web3.FX.price_fn/3` folds it.
     defp unpriced(fallback) do
-      registered = MapSet.new(Map.keys(Assets.fx_pegs()), &String.upcase(&1, :ascii))
+      registered = MapSet.new(Map.keys(Assets.fx_pegs()), &String.upcase(&1))
 
       fn
         symbol when is_binary(symbol) ->
-          if MapSet.member?(registered, String.upcase(symbol, :ascii)),
+          if MapSet.member?(registered, String.upcase(symbol)),
             do: nil,
             else: fallback.(symbol)
 

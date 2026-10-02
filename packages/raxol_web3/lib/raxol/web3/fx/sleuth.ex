@@ -174,7 +174,8 @@ defmodule Raxol.Web3.FX.Sleuth do
   @spec stables(t(), keyword()) :: {:ok, snapshot()} | {:error, Backend.error()}
   def stables(%__MODULE__{} = sleuth, opts \\ []) do
     with {:ok, query} <- stables_query(opts) do
-      get(sleuth, "/fx/stables", query, &decode_snapshot(&1, page_size(query)), "query")
+      argument = if query == [], do: nil, else: "query"
+      get(sleuth, "/fx/stables", query, &decode_snapshot(&1, page_size(query)), argument)
     end
   end
 
@@ -289,7 +290,10 @@ defmodule Raxol.Web3.FX.Sleuth do
   # a CDN it is as likely a challenge page or an edge block as a refused key,
   # and reading it as `:auth` sends an operator to rotate a key that works. A
   # 400 names the argument the request carried; on one that carries none
-  # (`corridors`) no argument can be wrong, so it is the status.
+  # (`corridors`, or `stables` with no options) no argument can be wrong, so it
+  # is the status. Either way a 400 is an answer, not a fault of the source:
+  # `Raxol.Web3.HTTP.unhealthy_status?/1` does not count it, so neither the
+  # origin breaker nor `Raxol.Web3.MCP.Tools.fault?/1` does.
   defp status_error(401, _argument), do: {:upstream_refused, :auth}
   defp status_error(404, _argument), do: {:upstream_refused, :not_found}
   defp status_error(429, _argument), do: {:upstream_refused, :rate_limit}
@@ -356,7 +360,7 @@ defmodule Raxol.Web3.FX.Sleuth do
       name: string(raw["name"]),
       aliases: aliases(raw["aliases"]),
       corridor: string(raw["corridor"]),
-      peg_currency: string(raw["pegCurrency"]),
+      peg_currency: peg(raw["pegCurrency"]),
       peg_mechanism: string(raw["pegMechanism"]),
       partner?: raw["partner"] == true,
       yield_bearing?: raw["yieldBearing"] == true,
@@ -387,7 +391,7 @@ defmodule Raxol.Web3.FX.Sleuth do
   defp corridor(raw, include_assets?) do
     base = %{
       corridor: string(raw["corridor"]),
-      peg_currency: string(raw["pegCurrency"]),
+      peg_currency: peg(raw["pegCurrency"]),
       asset_count: count(raw["assetCount"]),
       total_supply_usd: decimal(raw["totalSupplyUsd"]),
       total_volume_24h_usd: decimal(raw["totalVolume24hUsd"]),
@@ -451,8 +455,21 @@ defmodule Raxol.Web3.FX.Sleuth do
   @max_aliases 32
   @max_count 1_000_000_000
 
-  defp string(s) when is_binary(s) and byte_size(s) <= @max_string_bytes, do: s
+  # Text a model may read: no control or format characters (C0/C1 controls,
+  # bidi overrides, zero-width joiners), which no field Sleuth documents uses.
+  defp string(s) when is_binary(s) and byte_size(s) <= @max_string_bytes do
+    if String.match?(s, ~r/[\p{Cc}\p{Cf}]/u), do: nil, else: s
+  end
+
   defp string(_), do: nil
+
+  # Peg codes compare in upper case, as `Raxol.Web3.FX.Chainlink.pegs/0` lists them.
+  defp peg(code) do
+    case string(code) do
+      nil -> nil
+      code -> String.upcase(code, :ascii)
+    end
+  end
 
   defp count(n) when is_integer(n) and n >= 0 and n < @max_count, do: n
   defp count(_), do: nil
@@ -508,6 +525,7 @@ defmodule Raxol.Web3.FX.Sleuth do
         Decimal.Context.with(@integer_context, fn ->
           bounded |> Decimal.round(0) |> Decimal.to_integer()
         end)
+        |> integer()
     end
   end
 

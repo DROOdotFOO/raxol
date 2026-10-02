@@ -163,7 +163,7 @@ defmodule Raxol.Web3.FXTest do
             {403, {:http, 403}},
             {404, {:upstream_refused, :not_found}},
             {429, {:upstream_refused, :rate_limit}},
-            {400, {:invalid_argument, "query"}},
+            {400, {:http, 400}},
             {502, {:http, 502}}
           ] do
         s = sleuth(%{"/api/mcp/fx/stables" => {status, body}})
@@ -174,13 +174,46 @@ defmodule Raxol.Web3.FXTest do
     test "a 400 names the argument each endpoint actually sent" do
       s =
         sleuth(%{
+          "/api/mcp/fx/stables" => {400, "{}"},
           "/api/mcp/fx/stables/EURC" => {400, "{}"},
           "/api/mcp/fx/corridors" => {400, "{}"}
         })
 
+      assert Sleuth.stables(s, limit: 5) == {:error, {:invalid_argument, "query"}}
       assert Sleuth.stable(s, "EURC") == {:error, {:invalid_argument, "symbol"}}
-      # `corridors` sends no argument, so none can be the one refused.
+      # No argument was sent, so none can be the one refused.
+      assert Sleuth.stables(s) == {:error, {:http, 400}}
       assert Sleuth.corridors(s) == {:error, {:http, 400}}
+    end
+
+    test "text carries no control or format characters, and pegs compare in upper case" do
+      body =
+        Jason.encode!(%{
+          assets: [
+            %{
+              symbol: "EURC",
+              name: "Euro Coin\u202Eevil",
+              corridor: "EUR\u0001",
+              pegCurrency: "eur",
+              aliases: ["ok", "zero\u200Bwidth"]
+            }
+          ]
+        })
+
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+
+      assert {:ok, %{assets: [%{name: nil, corridor: nil, peg_currency: "EUR", aliases: ["ok"]}]}} =
+               Sleuth.stables(s)
+    end
+
+    test "a decimal deviationBps is held to the same bound as an integer one" do
+      # Ten digits at exponent 29 is admitted as a figure; as an integer it is
+      # 1.2 * 10^38, past the 10^38 an integer literal is held to.
+      body =
+        ~s({"assets":[{"symbol":"EURC","deviationBps":123456789e30}]})
+
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+      assert {:ok, %{assets: [%{sleuth_deviation_bps: nil}]}} = Sleuth.stables(s)
     end
 
     test "a body that is not the documented shape is a decode failure" do
@@ -427,6 +460,8 @@ defmodule Raxol.Web3.FXTest do
     exchange = fn _vetted, request, _opts ->
       chain =
         cond do
+          # A gateway that picks the network by header, ahead of the path.
+          {"x-net", "impostor"} in request.headers -> :impostor
           request.path =~ "base" -> 8453
           request.path =~ "eth" -> 1
           # A chain answering only what `overrides` puts under `:impostor`.
@@ -450,7 +485,7 @@ defmodule Raxol.Web3.FXTest do
           1 => "https://rpc.test/eth",
           8453 => "https://rpc.test/base"
         }),
-      http_opts: [{:exchange, exchange} | limits()],
+      http_opts: [{:exchange, exchange}, {:headers, Keyword.get(opts, :headers, [])} | limits()],
       now: fn -> Keyword.get(opts, :now, recorded_at()) end,
       cache: Keyword.get(opts, :cache, false)
     )
@@ -637,6 +672,33 @@ defmodule Raxol.Web3.FXTest do
       assert read.(misrouted) == blocked
       assert {:ok, %{source: {8453, _}}} = read.(healthy)
       assert read.(misrouted) == blocked
+    end
+
+    test "nor for a handle on the same URL routed elsewhere by a header" do
+      now = recorded_at()
+      base = feed("eur_usd_base")
+
+      impostor = %{
+        {:impostor, @base_eur, "0x7284e416"} => feed("chf_usd_ethereum")["description"],
+        {:impostor, @base_eur, "0x313ce567"} => base["decimals"],
+        {:impostor, @base_eur, "0xfeaf968c"} => round_hex(200_000_000, now, now),
+        {:impostor, @base_seq, "0xfeaf968c"} => round_hex(0, now - 7_200, now)
+      }
+
+      {rpc_urls, _host} = urls("/base")
+      rpc_urls = Map.delete(rpc_urls, 1)
+
+      read = fn headers ->
+        Chainlink.rate(
+          chainlink(cache: true, overrides: impostor, rpc_urls: rpc_urls, headers: headers),
+          "EUR"
+        )
+      end
+
+      routed = [{"x-net", "impostor"}]
+      assert read.(routed) == {:error, {:blocked, :feed_mismatch}}
+      assert {:ok, %{source: {8453, _}}} = read.([])
+      assert read.(routed) == {:error, {:blocked, :feed_mismatch}}
     end
 
     test "a matching identity is read once; the round is read every time" do
@@ -914,18 +976,53 @@ defmodule Raxol.Web3.FXTest do
       assert price.("WETH") == Decimal.new(1)
     end
 
-    test "a peg with no usable rate says why in the log" do
+    # Each test here uses its own RPC URLs: the last logged state is kept per
+    # set of URLs, across price functions, as an accounting sweep rebuilds one.
+    defp own_urls do
+      host = "https://rpc-#{System.unique_integer([:positive])}.test"
+      %{1 => "#{host}/eth", 8453 => "#{host}/base"}
+    end
+
+    defp build_logged(s, chainlink) do
+      ExUnit.CaptureLog.with_log([level: :info], fn ->
+        FX.price_fn(FX.new(s, chainlink), @pegs, fallback())
+      end)
+    end
+
+    test "a peg with no usable rate says why, at warning when refused, once per change" do
       wrong = %{{8453, @base_eur, "0x7284e416"} => feed("chf_usd_ethereum")["description"]}
       s = sleuth(%{"/api/mcp/fx/stables" => sleuth_fixture("stables_partner")})
+      urls = own_urls()
 
-      {price, log} =
-        ExUnit.CaptureLog.with_log(fn ->
-          FX.price_fn(FX.new(s, chainlink(overrides: wrong)), @pegs, fallback())
-        end)
-
+      {price, log} = build_logged(s, chainlink(overrides: wrong, rpc_urls: urls))
       assert price.("EURe") == nil
-      assert log =~ "EUR"
-      assert log =~ "feed_mismatch"
+      assert log =~ ~r/\[warning\].*FX rate for EUR refused.*feed_mismatch/
+
+      # The next sweep, same state: nothing new to say.
+      {_price, again} = build_logged(s, chainlink(overrides: wrong, rpc_urls: urls))
+      refute again =~ "FX rate for EUR"
+
+      # Recovered.
+      {_price, back} = build_logged(s, chainlink(rpc_urls: urls))
+      assert back =~ ~r/\[info\].*FX rate for EUR read from its primary feed again/
+    end
+
+    test "a rate served by the fallback feed says why the primary was passed over" do
+      s = sleuth(%{"/api/mcp/fx/stables" => sleuth_fixture("stables_partner")})
+
+      urls = %{
+        own_urls()
+        | 8453 => "https://rpc-#{System.unique_integer([:positive])}.test/elsewhere"
+      }
+
+      {price, log} = build_logged(s, chainlink(rpc_urls: urls))
+      {:ok, eur} = Chainlink.rate(chainlink(rpc_urls: urls), "EUR")
+
+      assert %{source: {1, _}, fallback_from: {:decode_failed, :identity}} = eur
+      assert price.("EURe") == eur.rate
+
+      assert log =~
+               ~r/\[info\].*FX rate for EUR from a fallback feed; primary failed.*decode_failed/
     end
 
     test "a non-ok EUR asset is nil and never falls through to the fallback" do
