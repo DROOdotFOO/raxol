@@ -49,7 +49,9 @@ defmodule Raxol.Web3.FX.Quality do
 
   def judge(%{peg_currency: peg} = asset, rates) do
     case Map.get(rates, peg) do
-      {:ok, %{rate: %Decimal{} = rate} = usable} ->
+      # A finite positive rate: `coef` is `:inf` or `:NaN` otherwise, and
+      # `Infinity > 0` would pass.
+      {:ok, %{rate: %Decimal{coef: coef} = rate} = usable} when is_integer(coef) ->
         if Decimal.gt?(rate, 0),
           do: against(asset, rate, usable.precision_bps),
           else: verdict(:no_rate, nil, nil)
@@ -60,8 +62,9 @@ defmodule Raxol.Web3.FX.Quality do
   end
 
   # 200 digits holds `|price - rate| * 100` exactly: a decoded price has at most
-  # 38 digits and an exponent within ±30, and a Chainlink rate is an int256
-  # answer over 10^8, at most 77 digits.
+  # 38 digits and an exponent within ±30, and a Chainlink rate is its int256
+  # answer at exponent -8, at most 77 digits (`Raxol.Web3.FX.Chainlink` builds
+  # it without division).
   @exact %Decimal.Context{precision: 200, rounding: :half_even, traps: []}
   @display %Decimal.Context{precision: 50, rounding: :half_even, traps: []}
 

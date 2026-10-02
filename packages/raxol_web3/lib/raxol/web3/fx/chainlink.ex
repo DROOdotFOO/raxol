@@ -196,7 +196,9 @@ defmodule Raxol.Web3.FX.Chainlink do
       {:ok,
        %{
          peg: peg,
-         rate: Decimal.div(Decimal.new(answer), Decimal.new(Integer.pow(10, @feed_decimals))),
+         # `answer * 10^-8` built directly: a division would round to the
+         # caller's `Decimal` context, or overflow its exponent to Infinity.
+         rate: Decimal.new(1, answer, -@feed_decimals),
          updated_at: updated_at,
          precision_bps: feed.precision_bps,
          source: {feed.chain_id, feed.proxy}

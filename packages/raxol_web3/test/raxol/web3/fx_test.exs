@@ -216,6 +216,66 @@ defmodule Raxol.Web3.FXTest do
       end
     end
 
+    test "no list is decoded past its cap, whatever the body holds" do
+      empties = fn n -> Enum.map_join(1..n, ",", fn _ -> "{}" end) end
+
+      # 100 well-formed three-letter codes: AAX, ABX, ... DVX.
+      rates =
+        Enum.map_join(0..99, ",", fn i ->
+          ~s("#{<<?A + div(i, 26), ?A + rem(i, 26), ?X>>}":1.1)
+        end)
+
+      s =
+        sleuth(%{
+          "/api/mcp/fx/stables" =>
+            ~s({"assets":[#{empties.(5_000)}],"fxRatesUsd":{#{rates},"eur":1.1,"EURO1":1.1,"EUR":1.13}}),
+          "/api/mcp/fx/stables/EURC" =>
+            ~s({"asset":{"symbol":"EURC","topPools":[#{empties.(500)}]}}),
+          "/api/mcp/fx/corridors" =>
+            ~s({"corridors":[) <>
+              Enum.map_join(1..100, ",", fn _ -> ~s({"assets":[#{empties.(300)}]}) end) <> "]}"
+        })
+
+      # 262 KB of `{}` used to decode to 87,000 assets and a 32 MB tool result.
+      assert {:ok, %{assets: assets, sleuth_fx_rates_usd: fx}} = Sleuth.stables(s)
+      assert length(assets) == 300
+      assert {:ok, %{assets: five}} = Sleuth.stables(s, limit: 5)
+      assert length(five) == 5
+
+      # Only currency-code keys, and at most 64 of them.
+      assert map_size(fx) == 64
+      assert Enum.all?(Map.keys(fx), &(&1 =~ ~r/\A[A-Z]{3,4}\z/))
+
+      assert {:ok, %{asset: %{top_pools: pools}}} = Sleuth.stable(s, "EURC")
+      assert length(pools) == 32
+
+      assert {:ok, %{corridors: corridors}} = Sleuth.corridors(s, include_assets: true)
+      assert length(corridors) == 64
+      assert corridors |> Enum.map(&length(&1.assets)) |> Enum.sum() == 400
+    end
+
+    test "the decoder and the rate do not depend on the caller's Decimal context" do
+      trapping = %Decimal.Context{precision: 6, rounding: :half_up, traps: [:inexact]}
+      body = ~s({"assets":[{"symbol":"EURC","pegCurrency":"EUR","deviationBps":1234567.0}]})
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+
+      # Rounding `deviationBps` raised `Decimal.Error` under this context, from
+      # inside the HTTP cache stage when the cache was on.
+      assert {:ok, %{assets: [%{sleuth_deviation_bps: 1_234_567}]}} =
+               Decimal.Context.with(trapping, fn -> Sleuth.stables(s) end)
+
+      # The rate was a division under the caller's context: rounded to its
+      # precision, or Infinity past a small `emax`, which Quality judged `:ok`.
+      {:ok, %{rate: exact}} = Chainlink.rate(chainlink(), "EUR")
+      tiny = %Decimal.Context{precision: 3, emax: 1, traps: []}
+
+      assert {:ok, %{rate: ^exact}} =
+               Decimal.Context.with(tiny, fn -> Chainlink.rate(chainlink(), "EUR") end)
+
+      infinite = %{"EUR" => {:ok, %{rate: Decimal.new("Infinity"), precision_bps: 10}}}
+      assert %{status: :no_rate} = Quality.judge(asset([]), infinite)
+    end
+
     test "every field outside the figures is typed and bounded at decode" do
       long = String.duplicate("a", 300)
       aliases = Enum.map_join(1..40, ",", &~s("a#{&1}"))
