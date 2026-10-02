@@ -160,7 +160,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
     }
   end
 
-  # `min_to_amount` only when the quote stated one.
+  # `min_to_amount` only when the quote stated one. Amounts are reported as the
+  # strings the output schema declares: a quote may serve them as JSON numbers,
+  # which pass the floor and would otherwise fail output validation.
   defp summary(instructions) do
     instructions
     |> Map.take([
@@ -173,5 +175,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
       :recipient_address
     ])
     |> Map.reject(&match?({:min_to_amount, nil}, &1))
+    |> Map.new(fn
+      {field, n} when field in [:to_amount, :min_to_amount] and is_integer(n) ->
+        {field, Integer.to_string(n)}
+
+      pair ->
+        pair
+    end)
   end
 end

@@ -58,6 +58,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ExecuteXochiIntent` signed a re-quote without checking it. When the first
+  execute came back as an expired quote (a 409 the endpoint chooses), the
+  retry fetched a new quote and signed it with neither the delivery floor nor
+  the method check, so a re-quote delivering 1 was signed and executed. The
+  re-quote is now held to both before anything is signed; a refusal releases
+  the reservation and reports the refusal itself.
+- The delivery floor reads the signed `toAmount` the way `EIP712` encodes it:
+  only when the message's primary type declares the field, and a null or
+  missing value as 0, which is what the wallet signs. It used to read only a
+  literal `"toAmount"` key and treat null or missing as absent, so a quote
+  whose signed amount was 0 passed. Every amount, the caller's floor
+  included, must be at most 2^256 - 1, and `EIP712` itself now refuses a
+  `uint256` outside 0..2^256 - 1 instead of signing its low 256 bits (2^256 + 1
+  signed as 1).
+- In `{:delivery_below_floor, detail}`, `min_to_amount` is the quote's own
+  stated minimum; the caller's floor is `:floor`, and `:lowest` is what was
+  compared. In v0.2.1 `min_to_amount` was the caller's floor. The refusal's
+  message no longer says "refusing to sign", which was wrong on the deposit
+  route.
+- `ExecuteDepositRoute` returns `to_amount` and `min_to_amount` as strings
+  even when the quote served them as JSON numbers; a numeric `min_to_amount`
+  passed the floor and then failed the tool's output schema, so the payer got
+  no address.
 - `ExecuteXochiIntent`'s 80%-of-par same-asset floor is judged, like any floor,
   on the lowest amount the quote states, so a `slippage_bps` past about 2000
   lets an honest quote's own minimum fall under it and is refused. That is the

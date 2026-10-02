@@ -6,9 +6,9 @@ defmodule Raxol.Payments.DeliveryFloor do
   ## Reading it
 
   `nil`, `""` and `0` are absent. Anything else must be a non-negative integer
-  in destination-chain atomic units, as a string of at most 78 digits (a
-  uint256) -- the type every action's tool schema declares -- or an integer
-  from a direct `run/2` caller; `"1e6"`, `"995000.0"`, `"1,000,000"` and `"-1"` are
+  no larger than 2^256 - 1, in destination-chain atomic units, as a string of
+  digits -- the type every action's tool schema declares -- or an integer from
+  a direct `run/2` caller; `"1e6"`, `"995000.0"`, `"1,000,000"` and `"-1"` are
   refused as `{:invalid_min_to_amount, value}` rather than read as absent,
   because a floor the caller wrote and we ignored bounds nothing while looking
   as if it did.
@@ -29,16 +29,21 @@ defmodule Raxol.Payments.DeliveryFloor do
 
   The floor is compared with the LOWEST amount the quote states anywhere: its
   `to_amount`, which must be present, its own `min_to_amount` when it carries
-  one, and the `toAmount` of the EIP-712 message the wallet is asked to sign
-  when there is one. A quote that states a high minimum beside a low estimate,
-  or signs for less than it advertises, is judged on the low figure, and an
-  amount that does not read as a non-negative integer fails the floor. None of
-  these figures is attested by Xochi's deposit attestation, so on the deposit
-  route this is a pre-funding filter on what the quote says, not a bound on
-  what is delivered.
+  one, and, when the EIP-712 message the wallet is asked to sign declares a
+  `toAmount` field on its primary type, that field read exactly as
+  `Raxol.Payments.EIP712` encodes it: a null or missing value is signed as 0
+  and so judged as 0. A quote that states a high minimum beside a low
+  estimate, or signs for less than it advertises, is judged on the low figure.
+  Every amount must read as an integer in 0..2^256 - 1, or the floor fails: a
+  larger one would sign as its low 256 bits. None of these figures is attested
+  by Xochi's deposit attestation, so on the deposit route this is a
+  pre-funding filter on what the quote says, not a bound on what is delivered.
   """
 
-  alias Raxol.Payments.Assets
+  alias Raxol.Payments.{Assets, EIP712}
+  alias Raxol.Payments.Protocols.Xochi
+
+  @max_uint256 Integer.pow(2, 256) - 1
 
   @type floor :: {:floor, pos_integer()} | :none
 
@@ -46,7 +51,7 @@ defmodule Raxol.Payments.DeliveryFloor do
   @spec parse(term()) :: {:ok, pos_integer() | nil} | {:error, {:invalid_min_to_amount, term()}}
   def parse(nil), do: {:ok, nil}
   def parse(0), do: {:ok, nil}
-  def parse(n) when is_integer(n) and n > 0, do: {:ok, n}
+  def parse(n) when is_integer(n) and n > 0 and n <= @max_uint256, do: {:ok, n}
 
   def parse(value) when is_binary(value) do
     case String.trim(value) do
@@ -54,7 +59,7 @@ defmodule Raxol.Payments.DeliveryFloor do
         {:ok, nil}
 
       trimmed ->
-        if trimmed =~ ~r/\A[0-9]{1,78}\z/,
+        if trimmed =~ ~r/\A[0-9]{1,78}\z/ and String.to_integer(trimmed) <= @max_uint256,
           do: parse(String.to_integer(trimmed)),
           else: {:error, {:invalid_min_to_amount, value}}
     end
@@ -146,14 +151,40 @@ defmodule Raxol.Payments.DeliveryFloor do
     ])
   end
 
-  defp signed_to_amount(%{eip712_data: %{"message" => %{"toAmount" => value}}}), do: value
+  # The signed `toAmount`, or nil when the signed struct has no such field. A
+  # declared field the message leaves null or out is signed as 0, so it reads
+  # as 0. A types map or message the encoder cannot read signs nothing usable;
+  # it reads as an unreadable amount, so the floor fails closed.
+  defp signed_to_amount(%{eip712_data: %{} = eip712}) do
+    types = Xochi.eip712_types(eip712)
+    fields = Map.get(types, EIP712.primary_type(types), [])
+
+    message =
+      case eip712["message"] do
+        %{} = message -> message
+        _ -> %{}
+      end
+
+    if Enum.any?(fields, &match?({"toAmount", _type}, &1)),
+      do: Map.get(message, "toAmount") || 0,
+      else: nil
+  rescue
+    _malformed -> :unreadable
+  end
+
   defp signed_to_amount(_quote), do: nil
 
-  defp amount(n) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp amount(n) when is_integer(n) and n >= 0 and n <= @max_uint256, do: {:ok, n}
 
   defp amount(value) when is_binary(value) do
     trimmed = String.trim(value)
-    if trimmed =~ ~r/\A[0-9]{1,78}\z/, do: {:ok, String.to_integer(trimmed)}, else: :error
+
+    with true <- trimmed =~ ~r/\A[0-9]{1,78}\z/,
+         n when n <= @max_uint256 <- String.to_integer(trimmed) do
+      {:ok, n}
+    else
+      _ -> :error
+    end
   end
 
   defp amount(_value), do: :error

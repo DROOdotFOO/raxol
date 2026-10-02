@@ -138,12 +138,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   defp settle(config, wallet, request, amount, params, context, store, key) do
     with :ok <- assert_xochi_route(params),
+         {:ok, floor} <- delivery_floor(request, params),
          {:ok, quote} <- solvable_quote(config, request),
-         :ok <- assert_method(quote, request),
-         :ok <- assert_delivery_floor(request, quote, params),
+         :ok <- assert_quote(quote, request, floor),
          :ok <- authorize(context, config, amount),
          {:ok, exec, filled_quote} <-
-           execute(config, request, quote, wallet, context, amount, store, key),
+           execute(config, request, quote, floor, wallet, context, amount, store, key),
          :ok <- assert_settlement_privacy(request, exec) do
       summary = summary(request, filled_quote, exec)
       # Best-effort, non-blocking: emit a signed activity row to the user's live
@@ -318,10 +318,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # there is no par to floor against (ADR-0040 decision 7). The quote is judged
   # on the lowest amount it states: `toAmount`, its own `minToAmount`, and the
   # `toAmount` in the EIP-712 message the wallet would sign.
-  defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
-    with {:ok, floor} <- delivery_floor(request, params) do
-      DeliveryFloor.check(quote, floor)
-    end
+  # Every quote that may be signed passes both checks: the first, and the
+  # re-quote an expired execute leads to.
+  defp assert_quote(%QuoteResponse{} = quote, %QuoteRequest{} = request, floor) do
+    with :ok <- assert_method(quote, request), do: DeliveryFloor.check(quote, floor)
   end
 
   defp delivery_floor(%QuoteRequest{} = request, params) do
@@ -497,7 +497,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   #
   # The dispatched intent is checkpointed before submit so that a crash during
   # submit leaves a record a resumed run can poll instead of re-signing.
-  defp execute(config, request, quote, wallet, context, amount, store, key) do
+  defp execute(config, request, quote, floor, wallet, context, amount, store, key) do
     Checkpoint.put(store, key, dispatched_record(quote))
 
     case Xochi.execute(config, quote, wallet, request) do
@@ -507,28 +507,40 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
       {:error, reason} ->
         if quote_expired?(reason),
-          do: retry_execute(config, request, wallet, context, amount, store, key),
+          do: retry_execute(config, request, floor, wallet, context, amount, store, key),
           else: release_and_clear(context, amount, reason, store, key)
     end
   end
 
-  defp retry_execute(config, request, wallet, context, amount, store, key) do
-    case solvable_quote(config, request) do
-      {:ok, quote} ->
-        Checkpoint.put(store, key, dispatched_record(quote))
+  # The re-quote is a new quote from the same endpoint whose first answer
+  # expired, so it is held to the same method and floor checks before anything
+  # is signed. A refusal releases the reservation and reports itself, not as an
+  # execute failure.
+  defp retry_execute(config, request, floor, wallet, context, amount, store, key) do
+    with {:ok, quote} <- solvable_quote(config, request),
+         :ok <- assert_quote(quote, request, floor) |> refuse_retry(context, amount, store, key) do
+      Checkpoint.put(store, key, dispatched_record(quote))
 
-        case Xochi.execute(config, quote, wallet, request) do
-          {:ok, exec} ->
-            tag_dispatch(context, exec, amount)
-            {:ok, exec, quote}
+      case Xochi.execute(config, quote, wallet, request) do
+        {:ok, exec} ->
+          tag_dispatch(context, exec, amount)
+          {:ok, exec, quote}
 
-          {:error, reason} ->
-            release_and_clear(context, amount, reason, store, key)
-        end
-
-      {:error, reason} ->
-        release_and_clear(context, amount, reason, store, key)
+        {:error, reason} ->
+          release_and_clear(context, amount, reason, store, key)
+      end
+    else
+      {:refused, reason} -> {:error, reason}
+      {:error, reason} -> release_and_clear(context, amount, reason, store, key)
     end
+  end
+
+  defp refuse_retry(:ok, _context, _amount, _store, _key), do: :ok
+
+  defp refuse_retry({:error, reason}, context, amount, store, key) do
+    SpendGate.release(context, amount, %{protocol: :xochi, reason: :execute_failed})
+    Checkpoint.delete(store, key)
+    {:refused, reason}
   end
 
   # A definite execute failure means nothing dispatched: refund the reservation
