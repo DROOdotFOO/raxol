@@ -138,7 +138,9 @@ defmodule Raxol.Agent.Backend.Native do
           :stderr_to_stdout,
           :hide,
           {:line, @line_bytes},
-          {:args, args}
+          {:args, args},
+          # The vendor CLI runs its own tool loop, shell included.
+          {:env, Raxol.Core.ChildEnv.port_env()}
         ] ++ cd_opt(cwd)
       )
 

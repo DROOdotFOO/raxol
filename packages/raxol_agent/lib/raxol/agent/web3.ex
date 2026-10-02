@@ -21,9 +21,12 @@ defmodule Raxol.Agent.Web3 do
   is wrong, rather than raising in every turn, inbox prompt or ACP session
   that builds a context. The key is read from the environment then, trimmed,
   and kept in the handle, which never renders it; changing it takes a restart.
-  The variable stays in the node's environment, and the `bash` tool's
-  `Raxol.Agent.Actions.Code.run_shell` unsets it in every shell child, so a
-  command cannot print it.
+  The variable stays in the node's environment. Every child raxol spawns for a
+  model or a third party (shell commands and jobs, directives, LSP and MCP
+  stdio servers, vendor agent CLIs) gets that environment without it
+  (`Raxol.Core.ChildEnv`), so inheriting it is closed. A same-user process can
+  still read the node's launch environment (`ps -E`, `/proc/<pid>/environ`);
+  keeping the key from those means not launching the node with it.
 
   Outside a booted application (a library embedding, or `mix test`, where the
   application does not start), the first call resolves and caches it.
