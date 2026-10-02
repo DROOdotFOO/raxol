@@ -77,6 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convert through `Assets.to_decimal/1`, MPP through the integer. The amount
   then reaches the policy and budget gates, which refuse it when a
   `SpendingPolicy` and ledger are configured.
+- `SettlementLedger`'s `usd_margin` is the sum of per-entry margins: each
+  entry's basis net of its own gas, over entries that have both. It was the
+  total spread (else the total fee) minus the total gas, which mixed
+  populations: an entry whose euro leg was unpriced added its gas but not its
+  revenue, and with no priced spread at all the whole basis switched to fees,
+  so one EURe entry with a $5 fee read +$4 and adding a $0.000001 USDC spread
+  flipped the total to about -$2. A recorded-but-unpriced entry now has no
+  basis; only an entry whose legs were never recorded falls back to its fee.
 - `min_to_amount` is read the same way by `ExecuteXochiIntent`,
   `ExecuteRelayTransfer` and `ExecuteDepositRoute`, through the new
   `Raxol.Payments.DeliveryFloor`. A value that is not a non-negative integer of
