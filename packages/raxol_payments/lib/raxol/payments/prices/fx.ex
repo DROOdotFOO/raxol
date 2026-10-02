@@ -69,10 +69,20 @@ defmodule Raxol.Payments.Prices.FX do
         unpriced(fallback)
     end
 
-    # Never `fallback` for a registered symbol: it may price a euro at par.
+    # Never `fallback` for a registered symbol, in any casing: it may price a
+    # euro at par. Folded as `Raxol.Web3.FX.price_fn/3` folds it.
     defp unpriced(fallback) do
-      pegs = Assets.fx_pegs()
-      fn symbol -> if Map.has_key?(pegs, symbol), do: nil, else: fallback.(symbol) end
+      registered = MapSet.new(Map.keys(Assets.fx_pegs()), &String.upcase(&1, :ascii))
+
+      fn
+        symbol when is_binary(symbol) ->
+          if MapSet.member?(registered, String.upcase(symbol, :ascii)),
+            do: nil,
+            else: fallback.(symbol)
+
+        symbol ->
+          fallback.(symbol)
+      end
     end
   else
     defp build(_opts, _fallback) do

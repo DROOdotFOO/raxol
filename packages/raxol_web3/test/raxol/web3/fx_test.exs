@@ -795,6 +795,43 @@ defmodule Raxol.Web3.FXTest do
       assert FX.price_fn(FX.new(s, chainlink()), @pegs, fallback()).("EURC") == nil
     end
 
+    test "symbol case decides neither which listings veto nor what reaches the fallback" do
+      {:ok, eur} = Chainlink.rate(chainlink(), "EUR")
+
+      body =
+        snapshot([
+          %{symbol: "EURC", pegCurrency: "EUR", priceUsd: Decimal.to_string(eur.rate)},
+          %{symbol: "eurc", pegCurrency: "EUR", priceUsd: "0.50"},
+          %{symbol: "EURe", pegCurrency: "EUR", priceUsd: Decimal.to_string(eur.rate)}
+        ])
+
+      s = sleuth(%{"/api/mcp/fx/stables" => body})
+      price = FX.price_fn(FX.new(s, chainlink()), @pegs, fn _ -> Decimal.new(1) end)
+
+      # The lowercase listing at $0.50 vetoes EURC however it is asked for.
+      assert price.("EURC") == nil
+      assert price.("eurc") == nil
+      # Any casing of a registered symbol is answered here, never at par.
+      assert price.("EURE") == eur.rate
+      assert price.("eure") == eur.rate
+      assert price.("zchf") == nil
+      assert price.("WETH") == Decimal.new(1)
+    end
+
+    test "a peg with no usable rate says why in the log" do
+      wrong = %{{8453, @base_eur, "0x7284e416"} => feed("chf_usd_ethereum")["description"]}
+      s = sleuth(%{"/api/mcp/fx/stables" => sleuth_fixture("stables_partner")})
+
+      {price, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          FX.price_fn(FX.new(s, chainlink(overrides: wrong)), @pegs, fallback())
+        end)
+
+      assert price.("EURe") == nil
+      assert log =~ "EUR"
+      assert log =~ "feed_mismatch"
+    end
+
     test "a non-ok EUR asset is nil and never falls through to the fallback" do
       s = sleuth(%{"/api/mcp/fx/stables" => sleuth_fixture("stables_partner")})
       price = FX.price_fn(FX.new(s, chainlink(rpc_urls: %{})), @pegs, fn _ -> Decimal.new(1) end)

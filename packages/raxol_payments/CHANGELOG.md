@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The FX `price_fn` answers EURC, EURe and ZCHF in any casing, as `Assets`
+  does: `"EURE"` or `"eurc"` used to reach the fallback, which could price a
+  euro at par, and a lowercase Sleuth listing could not veto. The degraded
+  `price_fn` `Prices.FX` returns when the snapshot raises or the key is refused
+  folds case the same way.
 - `SettlementLedger`'s `usd_margin` is the sum of per-entry margins: each
   entry's basis net of its own gas, over entries that have both. It was the
   total spread (else the total fee) minus the total gas, which mixed

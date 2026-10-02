@@ -19,6 +19,9 @@ defmodule Raxol.Payments.Prices.FXTest do
 
     for symbol <- Map.keys(Raxol.Payments.Assets.fx_pegs()) do
       assert price.(symbol) == nil
+      # Any casing: `Assets` compares symbols case-insensitively.
+      assert price.(String.downcase(symbol)) == nil
+      assert price.(String.upcase(symbol)) == nil
     end
 
     assert price.("ETH") == @fallback_price

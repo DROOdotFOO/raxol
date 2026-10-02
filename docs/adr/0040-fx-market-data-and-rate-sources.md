@@ -342,7 +342,10 @@ marked every EUR asset unpriceable for about twenty hours a day.
   otherwise: absent, relabelled, vetoed, unrated, or because the snapshot failed or raised.
   Accounting is priced at the rate of record, and Sleuth's role is to veto, not to price: its
   payload chooses neither which symbols are repriced nor at which rate. A registered symbol is
-  never handed to the fallback, which might price a euro at par. Every other symbol is
+  never handed to the fallback, which might price a euro at par. Symbols are compared in
+  ASCII upper case, as `Assets` compares them, so any casing of a registered symbol is
+  answered by the closure and any casing of a listing can veto. A peg with no usable rate is
+  logged with Chainlink's reason, a blocked feed at warning level. Every other symbol is
   delegated to whatever `RAXOL_PRICE_SOURCE` selects, so ETH and POL pricing is unchanged
   whatever the snapshot says. It is enabled by `RAXOL_FX_ENABLED=true` and
   follows the accounting env contract: set-but-empty is unset, an unknown value raises, and

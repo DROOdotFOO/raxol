@@ -151,9 +151,11 @@ defmodule Raxol.Web3.FX.Chainlink do
 
   `{:error, :no_feed}` for a peg with no feed. When every feed fails, the
   first feed's reason is returned, since it is the primary and the one an
-  operator should look at, unless a feed was blocked, which always wins. A
-  feed skipped for want of an RPC URL was never read, so `:no_rpc` is reported
-  only when no feed was.
+  operator should look at, unless a feed's identity mismatched: that is
+  terminal, so `{:blocked, :feed_mismatch}` is returned at once. Any other
+  refusal, a vetted URL included, is an ordinary failure and loses to the
+  primary's reason. A feed skipped for want of an RPC URL was never read, so
+  `:no_rpc` is reported only when no feed was.
   """
   @spec rate(t(), String.t()) :: {:ok, rate()} | {:error, reason()}
   def rate(_chainlink, "USD"),
