@@ -170,6 +170,27 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPluginTest do
       end)
     end
 
+    if match?({:unix, _}, :os.type()) do
+      test "does not parse successful Git warnings as status entries", %{
+        repo_path: repo_path
+      } do
+        blocked_path = Path.join(repo_path, "blocked")
+        File.mkdir_p!(blocked_path)
+        File.chmod!(blocked_path, 0)
+        on_exit(fn -> File.chmod(blocked_path, 0o700) end)
+
+        File.cd!(repo_path, fn ->
+          GitIntegrationPlugin.refresh()
+
+          assert %{
+                   staged_changes: 0,
+                   unstaged_changes: 0,
+                   untracked_files: 0
+                 } = GitIntegrationPlugin.get_status()
+        end)
+      end
+    end
+
     test "stages files correctly", %{plugin: _plugin, repo_path: repo_path} do
       File.cd!(repo_path, fn ->
         # Create new file

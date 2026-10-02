@@ -23,10 +23,7 @@ defmodule RaxolBroker.MixProject do
   end
 
   def application do
-    [
-      extra_applications: [:logger],
-      mod: {Raxol.Broker.Application, []}
-    ]
+    [extra_applications: [:logger]]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -35,7 +32,6 @@ defmodule RaxolBroker.MixProject do
   defp deps do
     [
       raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent", []),
-      raxol_dep(:raxol_mcp, "~> 2.7", "../raxol_mcp", []),
       {:decimal, "~> 3.0"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
@@ -52,7 +48,7 @@ defmodule RaxolBroker.MixProject do
   end
 
   defp description do
-    "Guarded brokerage agents with explicit policy, review, execution, and journaling."
+    "Fail-closed brokerage policy parsing and initialization."
   end
 
   defp package do

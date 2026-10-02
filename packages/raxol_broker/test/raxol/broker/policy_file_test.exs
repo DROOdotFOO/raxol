@@ -269,6 +269,29 @@ defmodule Raxol.Broker.PolicyFileTest do
     end
   end
 
+  test "rejects a symlink whose target is in an untrusted directory", %{
+    directory: directory
+  } do
+    if match?({:unix, _}, :os.type()) do
+      unsafe_directory =
+        Path.join(
+          System.tmp_dir!(),
+          "broker-policy-unsafe-#{System.unique_integer([:positive, :monotonic])}"
+        )
+
+      File.mkdir_p!(unsafe_directory)
+      File.chmod!(unsafe_directory, 0o777)
+      on_exit(fn -> File.rm_rf!(unsafe_directory) end)
+
+      target = write_policy(unsafe_directory, valid_policy_source())
+      path = Path.join(directory, "linked-policy.exs")
+      File.ln_s!(target, path)
+
+      assert {:error, {:untrusted_file, ^path, {:not_a_regular_file, :symlink}}} =
+               PolicyFile.load(path)
+    end
+  end
+
   test "rejects malformed source as a parse error", %{directory: directory} do
     path = write_policy(directory, "[max_notional_per_order:")
 

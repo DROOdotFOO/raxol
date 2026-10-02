@@ -1,10 +1,8 @@
 # Raxol Broker
 
-Guarded brokerage agents for Raxol. The package is pre-alpha.
-
-Every order follows one fail-closed path: intent, policy, review, policy recheck,
-placement, and journal. The runtime starts dry and requires an explicit arm before
-any live order can be placed.
+Fail-closed brokerage policy parsing and initialization for Raxol. The package
+is pre-alpha. This release does not include order execution, arming, review, or
+journaling.
 
 ## Policy
 
@@ -67,7 +65,7 @@ shown by this schema. Decimal values must use the exact
 malformed, or oversized policies fail closed, and a file that is not valid
 UTF-8 returns `{:error, {:parse_error, path, :invalid_utf8}}`.
 
-Before parsing, the loader applies the trust rules of
+Before parsing, the loader rejects symlinks and applies the trust rules of
 `Raxol.Agent.OperatorFile.trusted?/1`: the file must be a regular file owned by
 the account the VM runs as, with no group- or other-write bit, in a parent
 directory that meets the same owner and mode rule or is sticky. Otherwise

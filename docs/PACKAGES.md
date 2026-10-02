@@ -32,7 +32,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command (`code`, `p`, `acp`, `agent`, `playground`, `new`), packaged as a self-contained Burrito binary |
 | `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
 | `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
-| `raxol_broker` (pre-alpha)                                 | `path: "packages/raxol_broker"`   | Guarded brokerage agents with explicit policy and journaling |
+| `raxol_broker` (pre-alpha)                                 | `path: "packages/raxol_broker"`   | Fail-closed brokerage policy parsing and initialization |
 
 The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (the event/command contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`) -> the product surfaces `mix raxol.code` (interactive TUI, also over SSH), `mix raxol.p` (headless one-shot), and `mix raxol.acp` (ACP on stdio, for editors), all three in `raxol_agent` -> `raxol_symphony`, which orchestrates many agent runs above them. The Harness is the engine; the `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
@@ -63,7 +63,7 @@ raxol_symphony --> raxol_core, raxol_agent, raxol_mcp (all optional)
 raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp`)
 raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
 raxol_web3     --> raxol_core, raxol_mcp (+ mint, castore)
-raxol_broker   --> raxol_agent, raxol_mcp (+ decimal)
+raxol_broker   --> raxol_agent (+ decimal)
 
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core (+ raxol/telegex/raxol_gateway optional)

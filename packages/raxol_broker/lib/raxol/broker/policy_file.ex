@@ -40,12 +40,15 @@ defmodule Raxol.Broker.PolicyFile do
 
   @spec load(Path.t()) :: {:ok, keyword()} | {:error, reason()}
   def load(path \\ @filename) do
-    case File.stat(path) do
+    case File.lstat(path) do
       {:ok, %File.Stat{type: :regular, size: size}} ->
         with :ok <- ensure_file_size(size, path),
              :ok <- ensure_trusted(path) do
           read_and_load(path)
         end
+
+      {:ok, %File.Stat{type: :symlink}} ->
+        {:error, {:untrusted_file, path, {:not_a_regular_file, :symlink}}}
 
       {:ok, %File.Stat{type: :directory}} ->
         {:error, {:read_failed, path, :eisdir}}
