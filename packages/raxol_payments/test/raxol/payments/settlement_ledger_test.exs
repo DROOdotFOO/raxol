@@ -86,6 +86,28 @@ defmodule Raxol.Payments.SettlementLedgerTest do
     )
 
     assert Decimal.equal?(margin.(), Decimal.new("48.000001"))
+
+    # A priced spread whose gas is in POL, which this price_fn does not answer:
+    # out of the margin, and the coverage count says so.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(
+        gas
+        |> Map.merge(usdc)
+        |> Map.merge(%{
+          intent_id: "xi_pol",
+          gas_symbol: "POL",
+          from_amount: "1100000",
+          to_amount: "1000000"
+        })
+      )
+    )
+
+    agg = SettlementLedger.cumulative_subsidy(ledger, price_fn: eth)
+    assert Decimal.equal?(agg.usd_margin, Decimal.new("48.000001"))
+    assert agg.count == 4
+    assert agg.margin_count == 2
+    assert agg.gas_unknown_count == 0 and agg.unpriced_count == 1
   end
 
   test "records a settlement and is idempotent by intent_id", %{ledger: ledger} do

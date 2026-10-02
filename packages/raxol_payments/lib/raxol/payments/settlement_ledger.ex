@@ -93,6 +93,8 @@ defmodule Raxol.Payments.SettlementLedger do
       spread, or its fee when its legs were never recorded) net of its own
       gas, over entries that have both. An entry with recorded legs that could
       not be priced has no basis, and is counted in `unpriced_count` instead.
+      `margin_count` is how many entries it covers, so `count - margin_count`
+      entries are left out for any reason, an unpriced gas symbol included.
   """
   @type aggregate :: %{
           count: non_neg_integer(),
@@ -104,7 +106,8 @@ defmodule Raxol.Payments.SettlementLedger do
           usd_revenue: Decimal.t() | nil,
           usd_fee: Decimal.t() | nil,
           usd_gas: Decimal.t() | nil,
-          usd_margin: Decimal.t() | nil
+          usd_margin: Decimal.t() | nil,
+          margin_count: non_neg_integer()
         }
 
   @typedoc """
@@ -487,6 +490,7 @@ defmodule Raxol.Payments.SettlementLedger do
       fee_usd = fee_usd(e, usdc_price, price_fn)
       gas_usd = gas_usd(e, price_fn)
       gap = recording_gap(e)
+      margin = margin(gap, revenue_usd, fee_usd, gas_usd)
 
       %{
         count: acc.count + 1,
@@ -504,7 +508,8 @@ defmodule Raxol.Payments.SettlementLedger do
         usd_revenue: add_or_keep(acc.usd_revenue, revenue_usd),
         usd_fee: add_or_keep(acc.usd_fee, fee_usd),
         usd_gas: add_or_keep(acc.usd_gas, gas_usd),
-        usd_margin: add_or_keep(acc.usd_margin, margin(gap, revenue_usd, fee_usd, gas_usd))
+        usd_margin: add_or_keep(acc.usd_margin, margin),
+        margin_count: acc.margin_count + if(margin, do: 1, else: 0)
       }
     end)
   end
@@ -531,7 +536,8 @@ defmodule Raxol.Payments.SettlementLedger do
       usd_revenue: nil,
       usd_fee: nil,
       usd_gas: nil,
-      usd_margin: nil
+      usd_margin: nil,
+      margin_count: 0
     }
   end
 
