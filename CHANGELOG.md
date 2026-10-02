@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- **Git integration tests isolate repository policy and Git commands run once.** Plugin test repositories now create a deterministic `main` branch, disable commit signing locally, and fail immediately when setup fails instead of cascading from an unborn `HEAD`. `GitIntegrationPlugin` captures stdout and stderr from one command execution rather than rerunning failed mutating commands.
+
 - **Security: the terminal emulator bounds what its output byte stream can make it allocate, loop over or buffer.** That stream is written by programs, remote peers and replayed `.cast` files, and a few bytes carrying a large number were enough: `CSI 50000000 @` (11 bytes) and a sixel `!3000000~` (14 bytes) each ran a process past a 64 MB heap, and an unterminated escape sequence or string grew for as long as the stream did. Where a standard terminal bounds a value `raxol_terminal` now follows it; elsewhere the cap is documented where it is applied:
   - Control sequence parameters (CSI and DCS) keep xterm's limits while they arrive: 30 parameters (`NPARAM`), each clamped to 65535 (`MAX_I_PARAM`); past the last one digits accumulate into it, as in xterm. A million-digit parameter no longer builds a bignum, nor a million parameters a list. Intermediate bytes stop at 15, as in libvterm.
   - ICH (`CSI Ps @`) inserts at most up to the right margin.

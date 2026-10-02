@@ -113,21 +113,11 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPluginTest do
 
     test "initializes correctly in git repository" do
       with_temp_directory(fn temp_dir ->
-        # Initialize git repo
-        File.cd!(temp_dir, fn ->
-          System.cmd("git", ["init"])
-          System.cmd("git", ["config", "user.email", "test@example.com"])
-          System.cmd("git", ["config", "user.name", "Test User"])
-          # Ensure we have a default branch and initial commit
-          File.write!("README.md", "# Test repo")
-          System.cmd("git", ["add", "README.md"])
-          System.cmd("git", ["commit", "-m", "Initial commit"])
+        initialize_git_repository!(temp_dir)
 
+        File.cd!(temp_dir, fn ->
           config = create_git_test_config(%{name: GitIntegrationPlugin})
           {:ok, pid} = GitIntegrationPlugin.start_link(config)
-
-          # Wait for initialization
-          Process.sleep(100)
 
           status = GitIntegrationPlugin.get_status()
           # Normalize paths to handle /private/tmp vs /tmp symlinks on macOS
@@ -154,20 +144,10 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPluginTest do
 
   describe "git operations" do
     setup do
-      # Create temp directory that will persist for the test
       temp_dir = create_temp_directory()
+      initialize_git_repository!(temp_dir)
 
-      # Set up git repo with initial commit
       File.cd!(temp_dir, fn ->
-        System.cmd("git", ["init"])
-        System.cmd("git", ["config", "user.email", "test@example.com"])
-        System.cmd("git", ["config", "user.name", "Test User"])
-
-        # Create initial file and commit
-        File.write!("README.md", "# Test Repository")
-        System.cmd("git", ["add", "README.md"])
-        System.cmd("git", ["commit", "-m", "Initial commit"])
-
         # Initialize plugin from within the git repository
         config = create_git_test_config(%{auto_refresh: false})
 
@@ -195,9 +175,7 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPluginTest do
         # Create new file
         File.write!("new_file.txt", "Hello, World!")
 
-        # Refresh to detect changes
         GitIntegrationPlugin.refresh()
-        Process.sleep(100)
 
         # Stage the file
         assert :ok = GitIntegrationPlugin.stage_file("new_file.txt")
@@ -215,7 +193,6 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPluginTest do
         System.cmd("git", ["add", "README.md"])
 
         GitIntegrationPlugin.refresh()
-        Process.sleep(100)
 
         # Unstage the file
         assert :ok = GitIntegrationPlugin.unstage_file("README.md")
