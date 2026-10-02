@@ -117,7 +117,9 @@ defmodule Raxol.Payments.SettlementLedger do
   """
   @type demand :: %{total: Decimal.t(), peak: Decimal.t(), count: pos_integer()}
 
-  @stablecoins ["USDC", "USDT", "USDBC", "PYUSD", "DAI"]
+  # Dollar stablecoins, valued at `usdc_price`. USDG (Paxos' Global Dollar) is
+  # the Robinhood Chain stable `RebalancePolicy` already treats as one.
+  @stablecoins ["USDC", "USDT", "USDBC", "PYUSD", "DAI", "USDG"]
 
   # -- Public API --
 
@@ -489,7 +491,7 @@ defmodule Raxol.Payments.SettlementLedger do
       %{
         count: acc.count + 1,
         gas_unknown_count: acc.gas_unknown_count + unknown_gas(e),
-        unpriced_count: acc.unpriced_count + unpriced(e, usdc_price, price_fn),
+        unpriced_count: acc.unpriced_count + unpriced(e, gap, usdc_price, price_fn),
         recording_gap_count: acc.recording_gap_count + gap,
         fee_by_currency:
           Map.update(
@@ -554,13 +556,17 @@ defmodule Raxol.Payments.SettlementLedger do
     mult_or_nil(Assets.to_human(amount, decimals), price)
   end
 
-  # An entry with anything recorded that could not be priced: a leg, or the fee,
-  # whose symbol neither `usdc_price` nor `price_fn` answers. `add_or_keep/2`
-  # drops such an amount from `usd_revenue` or `usd_fee` without a trace, so
-  # this is the trace: a report with EUR legs and no FX source reads as partial
-  # rather than as smaller (ADR-0040 decision 6). A zero fee is zero in any
-  # currency and is not counted. Each entry counts at most once.
-  defp unpriced(e, usdc_price, price_fn) do
+  # An entry with something its totals use that could not be priced: a leg or
+  # the fee whose symbol neither `usdc_price` nor `price_fn` answers.
+  # `add_or_keep/2` drops such an amount from `usd_revenue` or `usd_fee` without
+  # a trace, so this is the trace: a report with EUR legs and no FX source reads
+  # as partial rather than as smaller (ADR-0040 decision 6). A zero fee is zero
+  # in any currency and is not counted. Each entry counts at most once.
+  #
+  # A recording-gap entry's legs are not used (its revenue is unknowable and its
+  # basis is the fee), so only its fee is judged here. An entry is therefore in
+  # both counts only when its legs were not recorded AND its fee is unpriced.
+  defp unpriced(e, 0 = _gap, usdc_price, price_fn) do
     legs = [
       {e.from_amount, e.from_symbol, e.from_decimals},
       {e.to_amount, e.to_symbol, e.to_decimals}
@@ -568,15 +574,17 @@ defmodule Raxol.Payments.SettlementLedger do
 
     unpriced_leg? =
       Enum.any?(legs, fn {amount, symbol, decimals} ->
-        amount != nil and decimals != nil and
-          is_nil(leg_usd(amount, symbol, decimals, usdc_price, price_fn))
+        is_nil(leg_usd(amount, symbol, decimals, usdc_price, price_fn))
       end)
 
-    unpriced_fee? =
-      not Decimal.eq?(e.fee_collected, 0) and is_nil(fee_usd(e, usdc_price, price_fn))
-
-    if unpriced_leg? or unpriced_fee?, do: 1, else: 0
+    if unpriced_leg? or unpriced_fee?(e, usdc_price, price_fn), do: 1, else: 0
   end
+
+  defp unpriced(e, _gap, usdc_price, price_fn),
+    do: if(unpriced_fee?(e, usdc_price, price_fn), do: 1, else: 0)
+
+  defp unpriced_fee?(e, usdc_price, price_fn),
+    do: not Decimal.eq?(e.fee_collected, 0) and is_nil(fee_usd(e, usdc_price, price_fn))
 
   # An entry whose revenue cannot be computed because a leg's amount or
   # decimals were never recorded, such as one booked before both legs were
