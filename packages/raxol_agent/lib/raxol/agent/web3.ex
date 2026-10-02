@@ -72,9 +72,10 @@ defmodule Raxol.Agent.Web3 do
   worse than a boot that names the missing variable), when the key is one
   `Raxol.Web3.FX.Sleuth.new/1` refuses (a space or line break inside it; the
   message names where the key came from, never the key), when `:web3` or its
-  `fx:` is not a keyword list (the message names the setting and its shape,
-  never its value), or when `:web3` is configured in a build without
-  `raxol_web3`. On a raise the previous cache is kept.
+  `fx:` is not a keyword list, or `router:` is not a `Raxol.Web3.Router` (the
+  message names the setting and its shape, never its value), or when `:web3`
+  is configured in a build without `raxol_web3`. On a raise the previous cache
+  is kept.
   """
   @spec load!() :: resolved()
   def load! do
@@ -173,10 +174,18 @@ defmodule Raxol.Agent.Web3 do
 
     defp router!(value) do
       raise ArgumentError,
-            "config :raxol_agent, :web3, router: must be a Raxol.Web3.Router, got #{shape(value)}"
+            "config :raxol_agent, :web3, router: must be a Raxol.Web3.Router, got " <>
+              router_shape(value)
     end
+
+    # A struct is named by its module; anything else by its shape. Never the value.
+    defp router_shape(%module{}), do: "a #{inspect(module)} struct"
+    defp router_shape([]), do: "an empty list"
+    defp router_shape(value) when is_list(value), do: "a list"
+    defp router_shape(value), do: shape(value)
   else
     defp build_fx(_opts), do: nil
+    # Never reached: `require_web3!/1` raises first in a build without raxol_web3.
     defp router!(router), do: router
 
     defp require_web3!(_value) do
