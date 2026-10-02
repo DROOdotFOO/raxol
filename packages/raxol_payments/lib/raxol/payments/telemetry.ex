@@ -113,6 +113,7 @@ defmodule Raxol.Payments.Telemetry do
   | `:usd_fee`             | `Decimal.t/0` \\| nil | venue fee of entries whose fee is priced |
   | `:usd_gas`             | `Decimal.t/0` \\| nil | gas of entries whose gas is known and priced |
   | `:usd_margin`          | `Decimal.t/0` \\| nil | sum of per-entry basis (spread, else fee if legs unrecorded) net of that entry's gas, over entries with both; negative is subsidy |
+  | `:margin_count`        | `integer()`          | entries `:usd_margin` covers; `:count` minus this were left out (no basis, or unknown or unpriced gas) |
 
   Each `usd_*` total is over its own population, so `usd_revenue - usd_gas` is
   not the margin; see `Raxol.Payments.SettlementLedger`'s `aggregate` type.

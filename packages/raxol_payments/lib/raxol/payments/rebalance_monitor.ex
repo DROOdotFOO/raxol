@@ -124,7 +124,8 @@ defmodule Raxol.Payments.RebalanceMonitor do
         :usd_revenue,
         :usd_fee,
         :usd_gas,
-        :usd_margin
+        :usd_margin,
+        :margin_count
       ]),
       %{corridor_count: map_size(report.corridors)}
     )

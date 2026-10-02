@@ -77,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convert through `Assets.to_decimal/1`, MPP through the integer. The amount
   then reaches the policy and budget gates, which refuse it when a
   `SpendingPolicy` and ledger are configured.
+- `SettlementLedger` aggregates and `[:raxol, :payments, :margin]` carry
+  `margin_count`, the number of entries `usd_margin` covers. An entry whose gas
+  symbol no price answers (POL with a price source that only knows ETH) left
+  the margin silently, with no counter to say so; `count - margin_count` now
+  reports every entry left out, for any reason.
 - `SettlementLedger` values USDG at `usdc_price`, as it does the other dollar
   stablecoins. It was missing from the set, so every USDG leg or fee was
   unpriced whatever the price source, and `unpriced_count` overstated the
