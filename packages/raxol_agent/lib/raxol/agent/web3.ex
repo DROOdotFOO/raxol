@@ -62,13 +62,14 @@ defmodule Raxol.Agent.Web3 do
   the Sleuth key (an `fx` tool that answers every call with an auth refusal is
   worse than a boot that names the missing variable), when the key is one
   `Raxol.Web3.FX.Sleuth.new/1` refuses (a space or line break inside it; the
-  message names where the key came from, never the key), or when `:web3` is
-  configured in a build without `raxol_web3`. On a raise the previous cache is
-  kept.
+  message names where the key came from, never the key), when `:web3` or its
+  `fx:` is not a keyword list (the message names the setting and its shape,
+  never its value), or when `:web3` is configured in a build without
+  `raxol_web3`. On a raise the previous cache is kept.
   """
   @spec load!() :: resolved()
   def load! do
-    config = Application.get_env(:raxol_agent, :web3, [])
+    config = keyword!(Application.get_env(:raxol_agent, :web3, []), "config :raxol_agent, :web3")
 
     resolved = %{
       router: config |> Keyword.get(:router) |> resolve_router(),
@@ -78,6 +79,25 @@ defmodule Raxol.Agent.Web3 do
     :persistent_term.put(@cache, resolved)
     resolved
   end
+
+  # Names the setting and the shape it has, never the value: an `fx:` value
+  # can hold the Sleuth key.
+  defp keyword!(value, setting) do
+    if Keyword.keyword?(value) do
+      value
+    else
+      raise ArgumentError,
+            "#{setting} must be a keyword list, got #{shape(value)}"
+    end
+  end
+
+  defp shape(value) when is_map(value), do: "a map"
+  defp shape(value) when is_list(value), do: "a list that is not a keyword list"
+  defp shape(value) when is_binary(value), do: "a string"
+  defp shape(value) when is_boolean(value), do: "a boolean"
+  defp shape(value) when is_atom(value), do: "an atom"
+  defp shape(value) when is_number(value), do: "a number"
+  defp shape(_value), do: "another term"
 
   defp resolved do
     case :persistent_term.get(@cache, nil) do
@@ -90,7 +110,9 @@ defmodule Raxol.Agent.Web3 do
   defp resolve_router(router), do: require_web3!(router)
 
   defp resolve_fx(nil), do: nil
-  defp resolve_fx(opts), do: opts |> require_web3!() |> build_fx()
+
+  defp resolve_fx(opts),
+    do: opts |> keyword!("config :raxol_agent, :web3, fx:") |> require_web3!() |> build_fx()
 
   if Code.ensure_loaded?(Raxol.Web3.FX) do
     defp build_fx(opts) do

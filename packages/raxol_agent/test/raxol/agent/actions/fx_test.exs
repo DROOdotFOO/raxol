@@ -130,6 +130,20 @@ defmodule Raxol.Agent.Actions.FXTest do
       refute error.message =~ "secret-half"
     end
 
+    test "a :web3 or fx: setting that is not a keyword list refuses the load by name" do
+      for {config, setting} <- [
+            {[fx: true], "fx:"},
+            {[fx: %{sleuth_api_key: "secret-half"}], "fx:"},
+            {%{fx: []}, ":web3"}
+          ] do
+        Application.put_env(:raxol_agent, :web3, config)
+
+        error = assert_raise ArgumentError, fn -> Raxol.Agent.Web3.load!() end
+        assert error.message =~ setting
+        refute error.message =~ "secret-half"
+      end
+    end
+
     test "a context build reads what was loaded, so it never raises per turn" do
       # Loaded unconfigured in setup; a later bad config or a key change is
       # not re-read by every session context, only by the next load.
