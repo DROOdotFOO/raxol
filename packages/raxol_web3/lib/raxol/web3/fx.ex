@@ -13,6 +13,8 @@ defmodule Raxol.Web3.FX do
 
   alias Raxol.Web3.FX.{Chainlink, Quality, Sleuth}
 
+  require Logger
+
   @enforce_keys [:sleuth, :chainlink]
   defstruct [:sleuth, :chainlink]
 
@@ -74,42 +76,62 @@ defmodule Raxol.Web3.FX do
   repriced nor at which rate, and a `nil` is never handed to `fallback`, which
   might price a euro at a dollar.
 
+  Symbols are compared in ASCII upper case, as `Raxol.Payments.Assets` and
+  Sleuth's own lookup compare them: `"eurc"` is EURC both as a lookup, which is
+  answered here and never by `fallback`, and as a listing, which can veto.
+
   One snapshot of the partner set and one rate read per registered peg, taken
   when the function is built and then closed over, so a report does not touch
   the network per lookup. A failed snapshot is logged, and leaves the
-  registered symbols unpriced for the ledger to count.
+  registered symbols unpriced for the ledger to count; so is each peg with no
+  usable rate, with Chainlink's reason, a blocked feed at warning level.
   """
   @spec price_fn(t(), %{String.t() => String.t()}, (String.t() -> Decimal.t() | nil)) ::
           (String.t() -> Decimal.t() | nil)
   def price_fn(%__MODULE__{} = fx, pegs, fallback \\ fn _symbol -> nil end)
       when is_map(pegs) and is_function(fallback, 1) do
+    pegs = Map.new(pegs, fn {symbol, peg} -> {fold(symbol), peg} end)
     prices = fx_prices(fx, pegs)
 
     fn symbol ->
-      case Map.fetch(prices, symbol) do
+      case Map.fetch(prices, fold(symbol)) do
         {:ok, price} -> price
         :error -> fallback.(symbol)
       end
     end
   end
 
-  # symbol -> Decimal | nil, with a key for every registered symbol.
+  defp fold(symbol) when is_binary(symbol), do: String.upcase(symbol, :ascii)
+  defp fold(symbol), do: symbol
+
+  # Folded symbol -> Decimal | nil, with a key for every registered symbol.
   defp fx_prices(fx, pegs) do
     case Sleuth.stables(fx.sleuth, partner_only: true) do
       {:ok, %{assets: assets}} ->
-        listings = Enum.group_by(assets, & &1.symbol)
+        listings = Enum.group_by(assets, &fold(&1.symbol))
         rates = Map.new(Enum.uniq(Map.values(pegs)), &{&1, Chainlink.rate(fx.chainlink, &1)})
+        Enum.each(rates, &log_unrated/1)
 
         Map.new(pegs, fn {symbol, peg} ->
           {symbol, registered_price(Map.get(listings, symbol, []), peg, rates)}
         end)
 
       {:error, reason} ->
-        require Logger
         Logger.warning("FX price snapshot failed (#{inspect(reason)}); non-USD legs unpriced")
         Map.new(pegs, fn {symbol, _peg} -> {symbol, nil} end)
     end
   end
+
+  # Every reason `Chainlink.rate/2` returns names an origin by id, never a URL.
+  defp log_unrated({peg, {:error, {:blocked, _} = reason}}) do
+    Logger.warning("FX rate for #{peg} refused (#{inspect(reason)}); #{peg} legs unpriced")
+  end
+
+  defp log_unrated({peg, {:error, reason}}) do
+    Logger.info("FX rate for #{peg} unavailable (#{inspect(reason)}); #{peg} legs unpriced")
+  end
+
+  defp log_unrated({_peg, {:ok, _rate}}), do: :ok
 
   # Judged against the registered peg. A listing that names another peg is a
   # veto, not a request for that peg's rate.
