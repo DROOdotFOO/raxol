@@ -727,7 +727,9 @@ defmodule Raxol.Symphony.Workspace do
               :hide,
               :in,
               {:cd, cwd},
-              {:args, ["-lc", script]}
+              {:args, ["-lc", script]},
+              # A hook is repository code: no raxol secrets (`Raxol.Core.ChildEnv`).
+              {:env, Raxol.Core.ChildEnv.port_env()}
             ]
           )
 

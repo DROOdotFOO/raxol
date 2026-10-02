@@ -23,10 +23,13 @@ defmodule Raxol.Agent.Web3 do
   and kept in the handle, which never renders it; changing it takes a restart.
   The variable stays in the node's environment. Every child raxol spawns for a
   model or a third party (shell commands and jobs, directives, LSP and MCP
-  stdio servers, vendor agent CLIs) gets that environment without it
-  (`Raxol.Core.ChildEnv`), so inheriting it is closed. A same-user process can
-  still read the node's launch environment (`ps -E`, `/proc/<pid>/environ`);
-  keeping the key from those means not launching the node with it.
+  stdio servers, vendor agent CLIs, Symphony runners and hooks, benchmarked
+  agent packages) gets that environment without it (`Raxol.Core.ChildEnv`),
+  so inheriting it is closed; a nested raxol node that needs it is allowed
+  through `config :raxol_core, Raxol.Core.ChildEnv, pass: [...]`. A same-user
+  process can still read the node's launch environment (`ps -E`,
+  `/proc/<pid>/environ`); keeping the key from those means not launching the
+  node with it.
 
   Outside a booted application (a library embedding, or `mix test`, where the
   application does not start), the first call resolves and caches it.
@@ -131,7 +134,9 @@ defmodule Raxol.Agent.Web3 do
       if is_nil(key) do
         raise ArgumentError,
               "config :raxol_agent, :web3, fx: is set but #{@key_env} is not; " <>
-                "set it or remove :fx"
+                "set it or remove :fx. A node started by another raxol node's shell, " <>
+                "job or MCP server has it unset by Raxol.Core.ChildEnv; allow it there " <>
+                "with config :raxol_core, Raxol.Core.ChildEnv, pass: [\"#{@key_env}\"]"
       end
 
       # The reason names the refused argument, never the key.
