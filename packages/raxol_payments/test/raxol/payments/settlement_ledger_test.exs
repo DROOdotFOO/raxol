@@ -32,6 +32,62 @@ defmodule Raxol.Payments.SettlementLedgerTest do
     )
   end
 
+  # Margin is summed per entry, each on its own basis, net of its own gas: an
+  # entry that cannot be priced takes neither its fee nor its gas into the total.
+  test "usd_margin sums only entries with a basis, each net of its own gas",
+       %{ledger: ledger} do
+    eth = fn
+      "ETH" -> Decimal.new("1000")
+      _ -> nil
+    end
+
+    # 0.001 ETH of gas at $1000: $1 per entry.
+    gas = %{gas_native: 1_000_000_000_000_000}
+    usdc = %{from_symbol: "USDC", from_decimals: 6, to_symbol: "USDC", to_decimals: 6}
+    margin = fn -> SettlementLedger.cumulative_subsidy(ledger, price_fn: eth).usd_margin end
+
+    # Legs recorded, euro leg unpriced, $5 fee: no basis, so out of the margin
+    # entirely. It used to fall back to the fee and read +$4.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(
+        Map.merge(gas, %{
+          intent_id: "xi_eur",
+          fee_collected: "5000000",
+          from_amount: "1100000",
+          from_symbol: "USDC",
+          from_decimals: 6,
+          to_amount: "950000000000000000",
+          to_symbol: "EURe",
+          to_decimals: 18
+        })
+      )
+    )
+
+    assert margin.() == nil
+
+    # $0.000001 of spread, $1 of gas. With the entry above it used to read
+    # -$1.999999: both entries' gas against one entry's revenue.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(
+        gas
+        |> Map.merge(usdc)
+        |> Map.merge(%{intent_id: "xi_tiny", from_amount: "1000001", to_amount: "1000000"})
+      )
+    )
+
+    assert Decimal.equal?(margin.(), Decimal.new("-0.999999"))
+
+    # Legs never recorded: the $50 venue fee is its basis.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(Map.merge(gas, %{intent_id: "xi_gap", fee_collected: "50000000"}))
+    )
+
+    assert Decimal.equal?(margin.(), Decimal.new("48.000001"))
+  end
+
   test "records a settlement and is idempotent by intent_id", %{ledger: ledger} do
     assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, l1_fill())
     assert {:ok, :duplicate} = SettlementLedger.record_settlement(ledger, l1_fill())

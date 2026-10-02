@@ -109,10 +109,13 @@ defmodule Raxol.Payments.Telemetry do
   | `:unpriced_count`      | `integer()`          | entries with a leg or fee no price answered |
   | `:recording_gap_count` | `integer()`          | entries missing a leg's amount or decimals; not in `:usd_revenue` |
   | `:gas_unknown_count`   | `integer()`          | entries with no gas figure yet           |
-  | `:usd_revenue`         | `Decimal.t/0` \\| nil | delivered spread over priced entries     |
-  | `:usd_fee`             | `Decimal.t/0` \\| nil | venue fee over priced entries            |
-  | `:usd_gas`             | `Decimal.t/0` \\| nil | gas over priced entries                  |
-  | `:usd_margin`          | `Decimal.t/0` \\| nil | revenue (else fee) net of gas; negative is subsidy |
+  | `:usd_revenue`         | `Decimal.t/0` \\| nil | spread of entries with both legs recorded and priced |
+  | `:usd_fee`             | `Decimal.t/0` \\| nil | venue fee of entries whose fee is priced |
+  | `:usd_gas`             | `Decimal.t/0` \\| nil | gas of entries whose gas is known and priced |
+  | `:usd_margin`          | `Decimal.t/0` \\| nil | sum of per-entry basis (spread, else fee if legs unrecorded) net of that entry's gas, over entries with both; negative is subsidy |
+
+  Each `usd_*` total is over its own population, so `usd_revenue - usd_gas` is
+  not the margin; see `Raxol.Payments.SettlementLedger`'s `aggregate` type.
 
   Metadata: `:corridor_count`.
 
