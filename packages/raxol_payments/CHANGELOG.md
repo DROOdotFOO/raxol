@@ -58,13 +58,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `min_to_amount` is read the same way by `ExecuteXochiIntent`,
+  `ExecuteRelayTransfer` and `ExecuteDepositRoute`, through the new
+  `Raxol.Payments.DeliveryFloor`. A value that is not a non-negative integer of
+  atomic units (`"1e6"`, `"995000.0"`, `"-1"`, `"abc"`) is refused as
+  `{:invalid_min_to_amount, value}`; it used to be read as absent, so a dollar
+  destination got no floor at all. On an EURC, EURe or ZCHF destination a floor
+  below a tenth of the source amount rescaled to the destination's decimals is
+  refused as `{:implausible_min_to_amount, detail}`, which catches a floor
+  written in the source's 6 decimals for 18-decimal EURe. A quote is checked on
+  its own `min_to_amount` when it states one, the amount guaranteed after
+  slippage, rather than on its `to_amount` estimate.
 - `ExecuteDepositRoute` returned a verified Tron deposit address for an EURC,
   EURe or ZCHF destination with no delivery floor, so the payer could fund a
-  quote delivering any amount. It now takes `min_to_amount`, as
+  quote stating any amount. It now takes `min_to_amount`, as
   `ExecuteRelayTransfer` does: a non-USD destination without a positive one is
   refused as `{:unpriced_asset, detail}` before any quote is fetched, and a
-  quote delivering less than a positive floor, on any destination, returns
-  `{:delivery_below_floor, detail}` instead of a deposit address.
+  quote stating less than a positive floor, on any destination, returns
+  `{:delivery_below_floor, detail}` instead of a deposit address. This filters
+  the quote before funding; it does not bound delivery, because the deposit
+  attestation does not cover the amount and the floor is not sent to Xochi.
+  The deposit instructions from `Protocols.Xochi.deposit_route_quote/3` now
+  carry the quote's `min_to_amount`.
 - `SettlementLedger`'s `unpriced_count` missed two kinds of entry that dropped
   out of the totals. A nonzero fee no price answered (an EURe fee) left
   `usd_fee` silently and now counts as unpriced; an entry still counts once.

@@ -89,7 +89,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before signing. A positive value is authoritative for any corridor; 0 counts as absent. Same-asset corridors also get an automatic floor."
+            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; 0 counts as absent). A quote delivering less is rejected before signing. Authoritative for any corridor; on a non-USD stablecoin destination it must be in that token's units. Same-asset corridors also get an automatic floor."
         ]
       ],
       output: [
@@ -108,7 +108,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     ]
 
   alias Raxol.Payments.Actions.SpendGate
-  alias Raxol.Payments.{Assets, Checkpoint, Failure, Router}
+  alias Raxol.Payments.{Assets, Checkpoint, DeliveryFloor, Failure, Router}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse}
   alias Raxol.Payments.Xochi.{Stealth, SwapAnnouncer}
@@ -300,9 +300,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # serve a punitive `to_amount` (deliver ~0 while pulling the full origin amount)
   # and the gate would not catch it.
   #
-  # An explicit positive `min_to_amount` (destination atomic units) is
-  # authoritative for any corridor; `0` bounds nothing and counts as absent.
-  # Without one, a same-asset corridor (same token symbol both
+  # `min_to_amount` is read by `Raxol.Payments.DeliveryFloor`: absent, a positive
+  # integer in destination atomic units, or refused; a positive one is
+  # authoritative for any corridor, and on a non-USD stablecoin destination it
+  # must be in that token's units. Without one, a same-asset corridor (same
+  # token symbol both
   # sides) gets an automatic floor: delivery must be at least `:min_delivery_bps`
   # of par (default 8000 = 80%). This is a theft backstop, not a pricing check --
   # Xochi enforces pricing; legitimate fees and slippage stay well inside 80%. A
@@ -311,31 +313,26 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # token cannot be classified or scaled at all, so without `min_to_amount` it is
   # refused rather than let through unfloored. A non-USD stablecoin destination
   # (`Assets.fx_peg/2`) is refused the same way: it scales, but with no FX rate
-  # there is no par to floor against (ADR-0040 decision 7).
+  # there is no par to floor against (ADR-0040 decision 7). The quote is checked
+  # on its own `min_to_amount` when it carries one, else its `to_amount`.
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
-    case delivery_floor(request, params) do
-      :none ->
-        :ok
-
-      {:error, _} = error ->
-        error
-
-      {:floor, min_out} ->
-        case parse_uint(quote.to_amount) do
-          delivered when is_integer(delivered) and delivered >= min_out ->
-            :ok
-
-          _ ->
-            {:error,
-             {:delivery_below_floor, %{to_amount: quote.to_amount, min_to_amount: min_out}}}
-        end
+    with {:ok, floor} <- delivery_floor(request, params) do
+      DeliveryFloor.check(quote, floor)
     end
   end
 
   defp delivery_floor(%QuoteRequest{} = request, params) do
-    case parse_uint(Map.get(params, :min_to_amount)) do
-      n when is_integer(n) and n > 0 -> {:floor, n}
-      _zero_or_nil -> same_asset_floor(request)
+    case DeliveryFloor.parse(Map.get(params, :min_to_amount)) do
+      {:ok, nil} -> same_asset_floor(request)
+      {:ok, min_out} -> explicit_floor(min_out, request)
+      {:error, _} = error -> error
+    end
+  end
+
+  defp explicit_floor(min_out, %QuoteRequest{to_chain_id: chain, to_token: token} = request) do
+    case Assets.fx_peg(chain, token) do
+      nil -> {:ok, {:floor, min_out}}
+      _peg -> DeliveryFloor.for_route(min_out, Map.from_struct(request))
     end
   end
 
@@ -350,9 +347,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           Assets.to_atomic(Assets.to_human(request.from_amount, from_decimals), to_decimals)
 
         bps = Application.get_env(:raxol_payments, :min_delivery_bps, 8000)
-        {:floor, div(par_out * bps, 10_000)}
+        {:ok, {:floor, div(par_out * bps, 10_000)}}
       else
-        :none
+        {:ok, :none}
       end
     end
   end
@@ -368,17 +365,6 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       _ -> {:error, {:unknown_asset, %{chain_id: chain, token: token, side: :destination}}}
     end
   end
-
-  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
-
-  defp parse_uint(v) when is_binary(v) do
-    case Integer.parse(String.trim(v)) do
-      {n, ""} when n >= 0 -> n
-      _ -> nil
-    end
-  end
-
-  defp parse_uint(_), do: nil
 
   defp fetch(context, key) do
     case Map.fetch(context, key) do

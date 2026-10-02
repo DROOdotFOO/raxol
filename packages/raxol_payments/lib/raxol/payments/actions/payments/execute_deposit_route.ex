@@ -21,20 +21,28 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
       signer; otherwise `config :raxol_payments, :xochi_deposit_attestation_signer`,
       otherwise the live capability matrix's `deposit_attestation_signer`.
 
-  ## Delivery floor
+  ## Delivery floor: a pre-funding filter, not a bound
 
-  The quote's `to_amount` is solver-chosen, and the attestation does not bind
-  it. A positive `min_to_amount` (destination atomic units) is authoritative for
-  any destination: a quote delivering less returns no deposit address. A
-  destination with a non-USD peg (`Assets.fx_peg/2`: EURC, EURe, ZCHF) needs
-  one, and is refused before any quote is fetched without it, because no FX
-  rate gives a par to floor against (ADR-0040 decision 7). `0` bounds nothing
-  and counts as absent. This is the rule `ExecuteRelayTransfer` applies.
+  `min_to_amount` is read by `Raxol.Payments.DeliveryFloor`: absent, or a
+  positive integer in destination atomic units, else
+  `{:invalid_min_to_amount, value}`. A destination with a non-USD peg
+  (`Assets.fx_peg/2`: EURC, EURe, ZCHF) needs one, in that token's units, and
+  is refused before any quote is fetched without it, because no FX rate gives
+  a par to floor against (ADR-0040 decision 7). The quote is checked on its own
+  `min_to_amount` when it carries one, else its `to_amount`, and a quote below
+  the floor returns no deposit address.
+
+  That is all it does. The deposit attestation binds the deposit address and
+  the origin leg, not `to_amount`, `min_to_amount`, the destination or the
+  recipient, and the floor is not sent to Xochi, so a compromised quote
+  endpoint can state any amount and nothing here bounds what is delivered
+  after the deposit lands.
 
   Errors are machine-readable: `:attestation_mismatch`, `:missing_attestation`,
   `:deposit_signer_unavailable`, `:not_a_deposit_route`, `{:not_solvable, reason}`,
-  `{:unpriced_asset, detail}`, `{:delivery_below_floor, detail}`, or a
-  request-validation tuple (e.g. `{:invalid_wallet, _}`).
+  `{:unpriced_asset, detail}`, `{:invalid_min_to_amount, value}`,
+  `{:implausible_min_to_amount, detail}`, `{:delivery_below_floor, detail}`, or
+  a request-validation tuple (e.g. `{:invalid_wallet, _}`).
   """
 
   use Raxol.Agent.Action,
@@ -75,7 +83,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less returns no deposit address. A positive value is authoritative; 0 counts as absent. Required for a non-USD stablecoin destination."
+            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; 0 counts as absent). A quote stating less returns no deposit address. This filters the unattested quote before you fund it; it does not bound what is delivered. Required for a non-USD stablecoin destination, in that token's units."
         ],
         trust_score: [type: :integer, description: "Trust score for tier/fee"]
       ],
@@ -95,7 +103,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
       ]
     ]
 
-  alias Raxol.Payments.Assets
+  alias Raxol.Payments.DeliveryFloor
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.DepositRouteRequest
 
@@ -111,42 +119,13 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
     end
   end
 
-  defp delivery_floor(%DepositRouteRequest{to_chain_id: chain, to_token: token}, params) do
-    case {parse_uint(Map.get(params, :min_to_amount)), Assets.fx_peg(chain, token)} do
-      {n, _peg} when is_integer(n) and n > 0 ->
-        {:ok, {:floor, n}}
-
-      {_zero_or_nil, nil} ->
-        {:ok, :none}
-
-      {_zero_or_nil, peg} ->
-        {:error,
-         {:unpriced_asset, %{chain_id: chain, token: token, side: :destination, peg: peg}}}
+  defp delivery_floor(%DepositRouteRequest{} = request, params) do
+    with {:ok, min_out} <- DeliveryFloor.parse(Map.get(params, :min_to_amount)) do
+      DeliveryFloor.for_route(min_out, Map.from_struct(request))
     end
   end
 
-  defp assert_delivery_floor(_instructions, :none), do: :ok
-
-  defp assert_delivery_floor(%{to_amount: to_amount}, {:floor, min_out}) do
-    case parse_uint(to_amount) do
-      delivered when is_integer(delivered) and delivered >= min_out ->
-        :ok
-
-      _ ->
-        {:error, {:delivery_below_floor, %{to_amount: to_amount, min_to_amount: min_out}}}
-    end
-  end
-
-  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
-
-  defp parse_uint(v) when is_binary(v) do
-    case Integer.parse(String.trim(v)) do
-      {n, ""} when n >= 0 -> n
-      _ -> nil
-    end
-  end
-
-  defp parse_uint(_), do: nil
+  defp assert_delivery_floor(instructions, floor), do: DeliveryFloor.check(instructions, floor)
 
   defp fetch_config(context) do
     case Map.fetch(context, :xochi_config) do
