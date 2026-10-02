@@ -76,15 +76,18 @@ defmodule Raxol.Web3.FX do
   repriced nor at which rate, and a `nil` is never handed to `fallback`, which
   might price a euro at a dollar.
 
-  Symbols are compared in ASCII upper case, as `Raxol.Payments.Assets` and
-  Sleuth's own lookup compare them: `"eurc"` is EURC both as a lookup, which is
-  answered here and never by `fallback`, and as a listing, which can veto.
+  Symbols are compared upper-cased with `String.upcase/1`, as
+  `Raxol.Payments.Assets` compares them: `"eurc"` is EURC both as a lookup,
+  which is answered here and never by `fallback`, and as a listing, which can
+  veto.
 
   One snapshot of the partner set and one rate read per registered peg, taken
   when the function is built and then closed over, so a report does not touch
   the network per lookup. A failed snapshot is logged, and leaves the
-  registered symbols unpriced for the ledger to count; so is each peg with no
-  usable rate, with Chainlink's reason, a blocked feed at warning level.
+  registered symbols unpriced for the ledger to count. A peg with no usable
+  rate, or served by a fallback feed, is logged with Chainlink's reason when
+  that state changes, not on every build: a `{:blocked, _}` refusal at warning
+  level, anything else at info, and the return to the primary feed at info.
   """
   @spec price_fn(t(), %{String.t() => String.t()}, (String.t() -> Decimal.t() | nil)) ::
           (String.t() -> Decimal.t() | nil)
@@ -101,7 +104,7 @@ defmodule Raxol.Web3.FX do
     end
   end
 
-  defp fold(symbol) when is_binary(symbol), do: String.upcase(symbol, :ascii)
+  defp fold(symbol) when is_binary(symbol), do: String.upcase(symbol)
   defp fold(symbol), do: symbol
 
   # Folded symbol -> Decimal | nil, with a key for every registered symbol.
@@ -110,7 +113,7 @@ defmodule Raxol.Web3.FX do
       {:ok, %{assets: assets}} ->
         listings = Enum.group_by(assets, &fold(&1.symbol))
         rates = Map.new(Enum.uniq(Map.values(pegs)), &{&1, Chainlink.rate(fx.chainlink, &1)})
-        Enum.each(rates, &log_unrated/1)
+        Enum.each(rates, &log_rate(fx.chainlink, &1))
 
         Map.new(pegs, fn {symbol, peg} ->
           {symbol, registered_price(Map.get(listings, symbol, []), peg, rates)}
@@ -122,16 +125,44 @@ defmodule Raxol.Web3.FX do
     end
   end
 
-  # Every reason `Chainlink.rate/2` returns names an origin by id, never a URL.
-  defp log_unrated({peg, {:error, {:blocked, _} = reason}}) do
-    Logger.warning("FX rate for #{peg} refused (#{inspect(reason)}); #{peg} legs unpriced")
+  # A price function is rebuilt every accounting sweep, so a rate's state is
+  # logged when it changes rather than every five minutes. The last state is
+  # kept per peg and per set of RPC URLs, in `:persistent_term`, which is
+  # written only on a change. Every reason `Chainlink.rate/2` returns names an
+  # origin by id, never a URL.
+  defp log_rate(chainlink, {peg, result}) do
+    key = {__MODULE__, :rate_state, :erlang.phash2(chainlink.rpc_urls), peg}
+    state = rate_state(result)
+    previous = :persistent_term.get(key, :ok)
+
+    if state != previous do
+      :persistent_term.put(key, state)
+      log_change(peg, state)
+    end
   end
 
-  defp log_unrated({peg, {:error, reason}}) do
-    Logger.info("FX rate for #{peg} unavailable (#{inspect(reason)}); #{peg} legs unpriced")
-  end
+  defp rate_state({:ok, %{fallback_from: reason}}), do: {:fallback, reason}
+  defp rate_state({:ok, _rate}), do: :ok
+  defp rate_state({:error, reason}), do: {:unrated, reason}
 
-  defp log_unrated({_peg, {:ok, _rate}}), do: :ok
+  defp log_change(peg, :ok),
+    do: Logger.info("FX rate for #{peg} read from its primary feed again")
+
+  defp log_change(peg, {:unrated, {:blocked, _} = reason}),
+    do: Logger.warning("FX rate for #{peg} refused (#{inspect(reason)}); #{peg} legs unpriced")
+
+  defp log_change(peg, {:unrated, reason}),
+    do: Logger.info("FX rate for #{peg} unavailable (#{inspect(reason)}); #{peg} legs unpriced")
+
+  defp log_change(peg, {:fallback, {:blocked, _} = reason}),
+    do:
+      Logger.warning(
+        "FX rate for #{peg} from a fallback feed; primary refused (#{inspect(reason)})"
+      )
+
+  defp log_change(peg, {:fallback, reason}),
+    do:
+      Logger.info("FX rate for #{peg} from a fallback feed; primary failed (#{inspect(reason)})")
 
   # Judged against the registered peg. A listing that names another peg is a
   # veto, not a request for that peg's rate.

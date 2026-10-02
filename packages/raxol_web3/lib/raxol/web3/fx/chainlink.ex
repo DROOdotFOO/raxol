@@ -56,6 +56,7 @@ defmodule Raxol.Web3.FX.Chainlink do
         }
 
   @type rate :: %{
+          optional(:fallback_from) => reason(),
           peg: String.t(),
           rate: Decimal.t(),
           updated_at: integer() | nil,
@@ -117,11 +118,12 @@ defmodule Raxol.Web3.FX.Chainlink do
   # MATCHING identity is cached for a day; any other answer is never cached,
   # so it is re-read and cannot outlive the misconfiguration that produced it.
   # The key is the origin (`scheme://host:port`, from `Raxol.Web3.HTTP`) plus a
-  # digest of the whole RPC URL, chain id, proxy and selector. The digest is
-  # what keeps one handle's verified identity from vouching for another handle
-  # on the same host whose path or query reaches a different chain; it is a
-  # truncated SHA-256, so a provider key in the path never enters the cache
-  # key (`Raxol.Web3.Backend.Aztec` keys its prefix the same way).
+  # digest of the route -- the whole RPC URL and the request headers from
+  # `:http_opts` -- chain id, proxy and selector. The digest is what keeps one
+  # handle's verified identity from vouching for another handle on the same
+  # host whose path, query or routing header reaches a different chain; it is
+  # a truncated SHA-256, so a provider key in the path or a header never enters
+  # the cache key (`Raxol.Web3.Backend.Aztec` keys its prefix the same way).
   # A round is never cached: its age is the whole question.
   @identity_ttl_ms 86_400_000
 
@@ -155,7 +157,8 @@ defmodule Raxol.Web3.FX.Chainlink do
   terminal, so `{:blocked, :feed_mismatch}` is returned at once. Any other
   refusal, a vetted URL included, is an ordinary failure and loses to the
   primary's reason. A feed skipped for want of an RPC URL was never read, so
-  `:no_rpc` is reported only when no feed was.
+  `:no_rpc` is reported only when no feed was. A rate served by a fallback
+  carries `:fallback_from`, the reason the feeds before it were passed over.
   """
   @spec rate(t(), String.t()) :: {:ok, rate()} | {:error, reason()}
   def rate(_chainlink, "USD"),
@@ -173,9 +176,12 @@ defmodule Raxol.Web3.FX.Chainlink do
   defp first_usable(_chainlink, _peg, [], reasons),
     do: {:error, pick_reason(Enum.reverse(reasons))}
 
+  # A rate served by a fallback says why the feeds before it were passed over,
+  # so a primary that quietly stopped answering is still visible.
   defp first_usable(chainlink, peg, [feed | rest], reasons) do
     case read_feed(chainlink, peg, feed) do
-      {:ok, _rate} = ok -> ok
+      {:ok, rate} when reasons == [] -> {:ok, rate}
+      {:ok, rate} -> {:ok, Map.put(rate, :fallback_from, pick_reason(Enum.reverse(reasons)))}
       {:error, {:blocked, :feed_mismatch}} = blocked -> blocked
       {:error, reason} -> first_usable(chainlink, peg, rest, [reason | reasons])
     end
@@ -278,16 +284,21 @@ defmodule Raxol.Web3.FX.Chainlink do
   defp call_opts(chainlink, :identity, url, feed, selector),
     do:
       Keyword.put(chainlink.http_opts, :cache,
-        key: {:chainlink, url_digest(url), feed.chain_id, feed.proxy, selector},
+        key:
+          {:chainlink, route_digest(url, chainlink.http_opts), feed.chain_id, feed.proxy,
+           selector},
         ttl_ms: @identity_ttl_ms,
         cacheable: &expected_response?(&1, selector, feed)
       )
 
   defp call_opts(chainlink, :round, _url, _feed, _selector), do: chainlink.http_opts
 
-  # Distinguishes two URLs and carries nothing back.
-  defp url_digest(url) do
-    :crypto.hash(:sha256, url)
+  # Distinguishes two routes and carries nothing back. Headers are sorted, so
+  # their order in `:http_opts` does not split one route into two.
+  defp route_digest(url, http_opts) do
+    headers = http_opts |> Keyword.get(:headers, []) |> Enum.sort()
+
+    :crypto.hash(:sha256, :erlang.term_to_binary({url, headers}))
     |> Base.url_encode64(padding: false)
     |> binary_part(0, 16)
   end
