@@ -209,6 +209,29 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
+  # The caller's floor, refused before any quote is fetched or signed: one that
+  # does not read as atomic units (on Xochi, `0` too), or one on a non-USD
+  # stablecoin destination
+  # far below the amount sent at the destination's decimals (a wrong-units
+  # floor bounds nothing). See `Raxol.Payments.DeliveryFloor`.
+  def from({:invalid_min_to_amount, _} = detail),
+    do:
+      build(
+        :invalid_request,
+        "min_to_amount must be a positive integer in destination-chain atomic units.",
+        false,
+        detail
+      )
+
+  def from({:implausible_min_to_amount, _} = detail),
+    do:
+      build(
+        :invalid_request,
+        "min_to_amount is far below the amount sent at the destination token's decimals; it is probably in the source token's units.",
+        false,
+        detail
+      )
+
   # Request validation.
   def from({:invalid_wallet, _} = detail), do: invalid_request(detail)
   def from({:invalid_from_token, _} = detail), do: invalid_request(detail)
@@ -223,16 +246,6 @@ defmodule Raxol.Payments.Failure do
       build(
         :route_unsupported,
         "The #{side} token is not supported on this chain.",
-        false,
-        detail
-      )
-
-  # A zero, negative, or unparseable floor bounds nothing; refused, not ignored.
-  def from({:invalid_min_to_amount, _} = detail),
-    do:
-      build(
-        :invalid_request,
-        "min_to_amount must be a positive integer in destination atomic units.",
         false,
         detail
       )

@@ -85,7 +85,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before the spend is authorized. A positive value is authoritative; 0 counts as absent. Required for a non-USD stablecoin destination."
+            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; 0 counts as absent). A quote delivering less is rejected before the spend is authorized. Required for a non-USD stablecoin destination, in that token's units."
         ]
       ],
       output: [
@@ -101,7 +101,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
     ]
 
   alias Raxol.Payments.Actions.SpendGate
-  alias Raxol.Payments.{Assets, Checkpoint, Failure, Relay, Router}
+  alias Raxol.Payments.{Assets, Checkpoint, DeliveryFloor, Failure, Relay, Router}
   alias Raxol.Payments.Relay.Schemas.{QuoteRequest, QuoteResponse}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
@@ -283,48 +283,19 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   end
 
   # Relay quotes carry a solver-chosen `to_amount`; `can_fill` says nothing about
-  # how much arrives. An explicit positive `min_to_amount` is authoritative for
-  # any corridor. Without one, a non-USD (`Assets.fx_peg/2`) destination is
-  # refused: with no FX rate there is no par to floor against (ADR-0040
-  # decision 7). Every Relay route has a Tron leg and `Assets` gives Tron tokens
-  # no symbol, so `ExecuteXochiIntent`'s same-asset floor never applies here, and
-  # refusing unregistered destinations as it does would close the rail itself.
-  defp delivery_floor(%QuoteRequest{to_chain_id: chain, to_token: token}, params) do
-    case {parse_uint(Map.get(params, :min_to_amount)), Assets.fx_peg(chain, token)} do
-      {n, _peg} when is_integer(n) and n > 0 ->
-        {:ok, {:floor, n}}
-
-      {_zero_or_nil, nil} ->
-        {:ok, :none}
-
-      {_zero_or_nil, peg} ->
-        {:error,
-         {:unpriced_asset, %{chain_id: chain, token: token, side: :destination, peg: peg}}}
+  # how much arrives. `Raxol.Payments.DeliveryFloor` reads `min_to_amount` and
+  # refuses a non-USD destination without a plausible one. Every Relay route
+  # has a Tron leg and `Assets` gives Tron tokens no symbol, so
+  # `ExecuteXochiIntent`'s same-asset floor never applies here, and refusing
+  # unregistered destinations as it does would close the rail itself.
+  defp delivery_floor(%QuoteRequest{} = request, params) do
+    with {:ok, min_out} <- DeliveryFloor.parse(Map.get(params, :min_to_amount)) do
+      DeliveryFloor.for_route(min_out, Map.from_struct(request))
     end
   end
 
-  defp assert_delivery_floor(_quote, :none), do: :ok
-
-  defp assert_delivery_floor(%QuoteResponse{to_amount: to_amount}, {:floor, min_out}) do
-    case parse_uint(to_amount) do
-      delivered when is_integer(delivered) and delivered >= min_out ->
-        :ok
-
-      _ ->
-        {:error, {:delivery_below_floor, %{to_amount: to_amount, min_to_amount: min_out}}}
-    end
-  end
-
-  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
-
-  defp parse_uint(v) when is_binary(v) do
-    case Integer.parse(String.trim(v)) do
-      {n, ""} when n >= 0 -> n
-      _ -> nil
-    end
-  end
-
-  defp parse_uint(_), do: nil
+  defp assert_delivery_floor(%QuoteResponse{} = quote, floor),
+    do: DeliveryFloor.check(quote, floor)
 
   defp generate_transfer_id do
     "relay_" <> (:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower))

@@ -1400,5 +1400,32 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       assert_received :wallet_signed
     end
+
+    test "a min_to_amount that is not an integer of atomic units is refused, not ignored" do
+      # A garbled floor used to read as absent: the 80% auto floor here, and no
+      # floor at all on a cross-asset corridor. It is the caller's bound.
+      stub_floor_quote("960000")
+      context = floor_ctx()
+
+      for floor <- ["1e6", "950000.0", "-1", "abc"] do
+        assert {:error,
+                %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, ^floor}}} =
+                 ExecuteXochiIntent.run(floor_params(%{min_to_amount: floor}), context)
+      end
+
+      refute_received :wallet_signed
+    end
+
+    test "a floor in the source's units on a non-USD destination is refused before signing" do
+      stub_floor_quote("960000000000000000")
+
+      assert {:error, %Failure{detail: {:implausible_min_to_amount, _}}} =
+               ExecuteXochiIntent.run(
+                 floor_params(%{to_token: @eure_arb, min_to_amount: "950000"}),
+                 floor_ctx()
+               )
+
+      refute_received :wallet_signed
+    end
   end
 end

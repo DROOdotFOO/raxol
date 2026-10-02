@@ -465,6 +465,28 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
 
       refute_received :relay_executed
     end
+
+    test "a min_to_amount that is not an integer of atomic units is refused, not ignored" do
+      stub_delivering("1")
+      context = ctx()
+
+      for floor <- ["1e6", "499000.0", "-1", "abc"] do
+        assert {:error,
+                %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, ^floor}}} =
+                 ExecuteRelayTransfer.run(base_params(%{min_to_amount: floor}), context)
+      end
+
+      refute_received :relay_executed
+    end
+
+    test "a floor in the source's units on a non-USD destination is refused" do
+      stub_delivering("1000000")
+
+      assert {:error, %Failure{detail: {:implausible_min_to_amount, _}}} =
+               ExecuteRelayTransfer.run(tron_to_eure(%{min_to_amount: "990000"}), ctx())
+
+      refute_received :relay_executed
+    end
   end
 
   describe "PollRelayStatus" do
