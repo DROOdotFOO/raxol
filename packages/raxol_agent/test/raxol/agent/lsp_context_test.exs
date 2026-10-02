@@ -164,6 +164,41 @@ defmodule Raxol.Agent.LSPContextTest do
 
       GenServer.stop(pid)
     end
+
+    # The server is a sh script that writes what it inherited into a FIFO and
+    # then idles on stdin; reading the FIFO blocks until it has written, so
+    # nothing waits on a clock. XOCHI_AUTH_TOKEN is set by no other test here
+    # and read by nothing in this package, so the async run is safe.
+    @tag :unix_only
+    @tag :tmp_dir
+    test "the server does not inherit raxol's secrets, but does the rest", %{tmp_dir: dir} do
+      previous = System.get_env("XOCHI_AUTH_TOKEN")
+      System.put_env("XOCHI_AUTH_TOKEN", "probe-not-a-token")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("XOCHI_AUTH_TOKEN", previous),
+          else: System.delete_env("XOCHI_AUTH_TOKEN")
+      end)
+
+      fifo = Path.join(dir, "env")
+      {_, 0} = System.cmd("mkfifo", [fifo])
+      server = Path.join(dir, "server.sh")
+
+      File.write!(server, """
+      #!/bin/sh
+      printf '%s|%s' "${XOCHI_AUTH_TOKEN-unset}" "${HOME:+home}" > "$1"
+      exec cat >/dev/null
+      """)
+
+      File.chmod!(server, 0o755)
+
+      {:ok, pid} = LSPContext.start_link(command: server, args: [fifo], root_uri: "file:///tmp")
+      seen = Task.async(fn -> File.read!(fifo) end)
+
+      assert Task.await(seen, 5_000) == "unset|home"
+      GenServer.stop(pid)
+    end
   end
 
   describe "diagnostics/2 when not ready" do
