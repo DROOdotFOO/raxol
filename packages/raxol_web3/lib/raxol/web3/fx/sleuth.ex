@@ -316,41 +316,53 @@ defmodule Raxol.Web3.FX.Sleuth do
   # No more assets than the page asked for: a body is bounded in bytes, and
   # 262 KB of `{}` is 87,000 empty listings, each decoded to a full asset.
   defp decode_snapshot(body, page_size) do
-    with {:ok, %{"assets" => assets} = map} when is_list(assets) <- decode(body) do
-      {:ok,
-       %{
-         as_of: string(map["asOf"]),
-         sleuth_fx_rates_usd: decimals(map["fxRatesUsd"]),
-         sleuth_fx_rates_as_of: string(map["fxRatesAsOf"]),
-         total: count(map["total"]),
-         assets: objects(assets, &asset/1, page_size)
-       }}
-    else
-      {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
-      error -> error
+    case decode(body) do
+      {:ok, %{"assets" => assets} = map} when is_list(assets) ->
+        {:ok,
+         %{
+           as_of: string(map["asOf"]),
+           sleuth_fx_rates_usd: decimals(map["fxRatesUsd"]),
+           sleuth_fx_rates_as_of: string(map["fxRatesAsOf"]),
+           total: count(map["total"]),
+           assets: objects(assets, &asset/1, page_size)
+         }}
+
+      {:ok, _other} ->
+        {:error, {:decode_failed, :sleuth}}
+
+      error ->
+        error
     end
   end
 
   defp decode_detail(body) do
-    with {:ok, %{"asset" => raw} = map} when is_object(raw) <- decode(body) do
-      pools = objects(raw["topPools"], &pool/1, @max_pools)
-      {:ok, %{as_of: string(map["asOf"]), asset: Map.put(asset(raw), :top_pools, pools)}}
-    else
-      {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
-      error -> error
+    case decode(body) do
+      {:ok, %{"asset" => raw} = map} when is_object(raw) ->
+        pools = objects(raw["topPools"], &pool/1, @max_pools)
+        {:ok, %{as_of: string(map["asOf"]), asset: Map.put(asset(raw), :top_pools, pools)}}
+
+      {:ok, _other} ->
+        {:error, {:decode_failed, :sleuth}}
+
+      error ->
+        error
     end
   end
 
   defp decode_corridors(body, include_assets?) do
-    with {:ok, %{"corridors" => corridors} = map} when is_list(corridors) <- decode(body) do
-      {:ok,
-       %{
-         as_of: string(map["asOf"]),
-         corridors: decode_corridor_list(corridors, include_assets?)
-       }}
-    else
-      {:ok, _other} -> {:error, {:decode_failed, :sleuth}}
-      error -> error
+    case decode(body) do
+      {:ok, %{"corridors" => corridors} = map} when is_list(corridors) ->
+        {:ok,
+         %{
+           as_of: string(map["asOf"]),
+           corridors: decode_corridor_list(corridors, include_assets?)
+         }}
+
+      {:ok, _other} ->
+        {:error, {:decode_failed, :sleuth}}
+
+      error ->
+        error
     end
   end
 
