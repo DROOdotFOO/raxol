@@ -445,10 +445,19 @@ defmodule Raxol.Agent.Shell.Jobs do
     end
   end
 
+  # The pty spec carries its own `:env`; either way the child gets the node's
+  # environment minus raxol's secrets (`Raxol.Core.ChildEnv`).
   defp spawn_port(executable, args, cwd, extra) do
+    {env, extra} =
+      case List.keytake(extra, :env, 0) do
+        {{:env, env}, rest} -> {env, rest}
+        nil -> {[], extra}
+      end
+
     Port.open(
       {:spawn_executable, executable},
-      [:binary, :exit_status, :stderr_to_stdout, {:args, args}, {:cd, cwd}] ++ extra
+      [:binary, :exit_status, :stderr_to_stdout, {:args, args}, {:cd, cwd}] ++
+        extra ++ [{:env, Raxol.Core.ChildEnv.port_env(env)}]
     )
   end
 

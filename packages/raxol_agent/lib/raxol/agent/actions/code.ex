@@ -704,20 +704,11 @@ defmodule Raxol.Agent.Actions.Code do
 
   def truncate_output(output), do: {false, output}
 
-  # Secrets the BEAM itself consumes and no shell command needs. The child
-  # inherits the node's whole environment otherwise, so a prompt-injected
-  # command could `printenv` the Sleuth key the `fx` tool spends.
-  @scrubbed_env Enum.map(
-                  ~w(RAXOL_SLEUTH_API_KEY RAXOL_SHARE_SECRET RAXOL_SESSION_STREAM_TOKEN),
-                  &String.to_charlist/1
-                )
-
   @doc """
   Run `command` via `/bin/sh -c` in `cd`, returning `{combined_output,
   exit_status}`. `env` adds environment variables (`{name, value}`
-  strings). `RAXOL_SLEUTH_API_KEY`, `RAXOL_SHARE_SECRET` and
-  `RAXOL_SESSION_STREAM_TOKEN` are unset in the child unless `env` passes
-  one explicitly. On timeout the spawned OS process group is SIGKILLed (so no
+  strings). The child gets the node's environment minus raxol's own secrets
+  (`Raxol.Core.ChildEnv`), unless `env` passes one explicitly. On timeout the spawned OS process group is SIGKILLed (so no
   child is orphaned), the port is closed, and `exit_status` is `:timeout`.
   """
   @spec run_shell(String.t(), String.t(), pos_integer(), [
@@ -730,9 +721,6 @@ defmodule Raxol.Agent.Actions.Code do
         {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
       end)
 
-    scrubbed =
-      for name <- @scrubbed_env, not List.keymember?(charlist_env, name, 0), do: {name, false}
-
     # `:in` closes the command's stdin; see `Raxol.Agent.SpawnedPort` for why.
     base = [
       :binary,
@@ -744,7 +732,7 @@ defmodule Raxol.Agent.Actions.Code do
       {:cd, cd}
     ]
 
-    port_opts = [{:env, scrubbed ++ charlist_env} | base]
+    port_opts = [{:env, Raxol.Core.ChildEnv.port_env(charlist_env)} | base]
 
     port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
     collect_port(port, port_os_pid(port), [], timeout)

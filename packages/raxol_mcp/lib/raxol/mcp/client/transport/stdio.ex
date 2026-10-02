@@ -303,7 +303,9 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
       args: args
     ]
 
-    if charlist_env == [], do: opts, else: [{:env, charlist_env} | opts]
+    # A `.mcp.json` server is third-party code: it gets the node's environment
+    # minus raxol's own secrets (`Raxol.Core.ChildEnv`).
+    [{:env, Raxol.Core.ChildEnv.port_env(charlist_env)} | opts]
   end
 
   defp find_executable(command) do
