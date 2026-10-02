@@ -4,7 +4,11 @@ defmodule Raxol.Web3.FX.Quality do
 
   Pure: it takes an asset from `Raxol.Web3.FX.Sleuth` and the rates from
   `Raxol.Web3.FX.Chainlink`, and never reads Sleuth's own `deviationBps`,
-  `pegTargetUsd` or FX rates.
+  `pegTargetUsd` or FX rates. It does not depend on the caller's `Decimal`
+  context either: the line is drawn without division, as
+  `|price - rate| * 100 > rate`, inside a pinned context wide enough to make
+  that exact for every figure the decoder lets through, and the displayed
+  deviation is computed in a pinned context too.
 
       deviation_bps = (price_usd / rate(peg_currency) - 1) * 10_000
 
@@ -45,31 +49,51 @@ defmodule Raxol.Web3.FX.Quality do
 
   def judge(%{peg_currency: peg} = asset, rates) do
     case Map.get(rates, peg) do
-      {:ok, %{rate: rate} = usable} -> against(asset, rate, usable.precision_bps)
-      _ -> verdict(:no_rate, nil, nil)
+      {:ok, %{rate: %Decimal{} = rate} = usable} ->
+        if Decimal.gt?(rate, 0),
+          do: against(asset, rate, usable.precision_bps),
+          else: verdict(:no_rate, nil, nil)
+
+      _ ->
+        verdict(:no_rate, nil, nil)
     end
   end
 
+  # 200 digits holds `|price - rate| * 100` exactly: a decoded price has at most
+  # 38 digits and an exponent within ±30, and a Chainlink rate is an int256
+  # answer over 10^8, at most 77 digits.
+  @exact %Decimal.Context{precision: 200, rounding: :half_even, traps: []}
+  @display %Decimal.Context{precision: 50, rounding: :half_even, traps: []}
+
   defp against(%{price_usd: %Decimal{} = price}, rate, precision) do
-    deviation = exact_deviation_bps(price, rate)
-    status = if Decimal.gt?(Decimal.abs(deviation), @suspect_bps), do: :suspect, else: :ok
-    verdict(status, display(deviation), {rate, precision})
+    status = if suspect?(price, rate), do: :suspect, else: :ok
+    verdict(status, deviation_bps(price, rate), {rate, precision})
   end
 
   defp against(_asset, rate, precision), do: verdict(:suspect, nil, {rate, precision})
 
-  @doc "`(price / rate - 1) * 10_000`, rounded half-even to an integer, for display."
-  @spec deviation_bps(Decimal.t(), Decimal.t()) :: integer()
-  def deviation_bps(price, rate), do: price |> exact_deviation_bps(rate) |> display()
-
-  defp exact_deviation_bps(price, rate) do
-    price
-    |> Decimal.div(rate)
-    |> Decimal.sub(1)
-    |> Decimal.mult(10_000)
+  defp suspect?(price, rate) do
+    Decimal.Context.with(@exact, fn ->
+      price
+      |> Decimal.sub(rate)
+      |> Decimal.abs()
+      |> Decimal.mult(10_000)
+      |> Decimal.gt?(Decimal.mult(rate, @suspect_bps))
+    end)
   end
 
-  defp display(deviation), do: deviation |> Decimal.round(0, :half_even) |> Decimal.to_integer()
+  @doc "`(price / rate - 1) * 10_000`, rounded half-even to an integer, for display."
+  @spec deviation_bps(Decimal.t(), Decimal.t()) :: integer()
+  def deviation_bps(price, rate) do
+    Decimal.Context.with(@display, fn ->
+      price
+      |> Decimal.div(rate)
+      |> Decimal.sub(1)
+      |> Decimal.mult(10_000)
+      |> Decimal.round(0, :half_even)
+      |> Decimal.to_integer()
+    end)
+  end
 
   defp verdict(status, deviation, nil),
     do: %{status: status, deviation_bps: deviation, rate: nil, rate_precision_bps: nil}

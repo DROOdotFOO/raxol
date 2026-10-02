@@ -619,6 +619,30 @@ defmodule Raxol.Web3.FXTest do
       end
     end
 
+    test "the line is exact past 28 digits and independent of the caller's context" do
+      # 1.1350 * 1.01 plus 10^-33: a 34-digit price strictly past 100 bps, which
+      # the default 28-digit division rounded back onto the line.
+      for price <- ~w(1.146350000000000000000000000000001 1.123649999999999999999999999999999) do
+        assert %{status: :suspect} = Quality.judge(asset(price_usd: Decimal.new(price)), rates())
+      end
+
+      # 100.0088 bps, under a caller's 6-digit context that trapped inexact
+      # results: the verdict neither changes nor raises.
+      narrow = %Decimal.Context{precision: 6, rounding: :half_up, traps: [:inexact]}
+
+      verdict =
+        Decimal.Context.with(narrow, fn ->
+          Quality.judge(asset(price_usd: Decimal.new("1.146351")), rates())
+        end)
+
+      assert %{status: :suspect, deviation_bps: 100} = verdict
+
+      assert %{status: :no_rate} =
+               Quality.judge(asset([]), %{
+                 "EUR" => {:ok, %{rate: Decimal.new(0), precision_bps: 10}}
+               })
+    end
+
     test "yield-bearing wins over everything, and gets no deviation" do
       verdict = Quality.judge(asset(yield_bearing?: true, price_usd: Decimal.new("9")), rates())
       assert %{status: :yield_bearing, deviation_bps: nil} = verdict
