@@ -76,8 +76,9 @@ defmodule Raxol.Web3.FX do
   repriced nor at which rate, and a `nil` is never handed to `fallback`, which
   might price a euro at a dollar.
 
-  Symbols are compared upper-cased with `String.upcase/1`, as
-  `Raxol.Payments.Assets` compares them: `"eurc"` is EURC both as a lookup,
+  Symbols are compared upper-cased in ASCII only, as
+  `Raxol.Payments.Assets.fold_symbol/1` and `Raxol.Web3.FX.Sleuth` compare
+  them, so a lookalike (`EURı`) is never folded onto a registered symbol: `"eurc"` is EURC both as a lookup,
   which is answered here and never by `fallback`, and as a listing, which can
   veto.
 
@@ -104,7 +105,7 @@ defmodule Raxol.Web3.FX do
     end
   end
 
-  defp fold(symbol) when is_binary(symbol), do: String.upcase(symbol)
+  defp fold(symbol) when is_binary(symbol), do: String.upcase(symbol, :ascii)
   defp fold(symbol), do: symbol
 
   # Folded symbol -> Decimal | nil, with a key for every registered symbol.
@@ -127,11 +128,11 @@ defmodule Raxol.Web3.FX do
 
   # A price function is rebuilt every accounting sweep, so a rate's state is
   # logged when it changes rather than every five minutes. The last state is
-  # kept per peg and per set of RPC URLs, in `:persistent_term`, which is
+  # kept per peg and per route (`Chainlink.route_id/1`), in `:persistent_term`, which is
   # written only on a change. Every reason `Chainlink.rate/2` returns names an
   # origin by id, never a URL.
   defp log_rate(chainlink, {peg, result}) do
-    key = {__MODULE__, :rate_state, :erlang.phash2(chainlink.rpc_urls), peg}
+    key = {__MODULE__, :rate_state, Chainlink.route_id(chainlink), peg}
     state = rate_state(result)
     previous = :persistent_term.get(key, :ok)
 
@@ -141,9 +142,14 @@ defmodule Raxol.Web3.FX do
     end
   end
 
-  defp rate_state({:ok, %{fallback_from: reason}}), do: {:fallback, reason}
+  defp rate_state({:ok, %{fallback_from: reason}}), do: {:fallback, reason_class(reason)}
   defp rate_state({:ok, _rate}), do: :ok
-  defp rate_state({:error, reason}), do: {:unrated, reason}
+  defp rate_state({:error, reason}), do: {:unrated, reason_class(reason)}
+
+  # A reason that carries a changing figure is one state, not a new one each
+  # sweep: `{:rate_limited, retry_after_ms}` differs every time.
+  defp reason_class({:rate_limited, _ms}), do: :rate_limited
+  defp reason_class(reason), do: reason
 
   defp log_change(peg, :ok),
     do: Logger.info("FX rate for #{peg} read from its primary feed again")
