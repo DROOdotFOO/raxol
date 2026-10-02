@@ -202,8 +202,10 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   must be visible ASCII. Sleuth now returns 400 for bad arguments, but a local refusal costs
   no token from the bucket.
 - **Errors**: 401 maps to `{:upstream_refused, :auth}`, 404 to
-  `{:upstream_refused, :not_found}`, 429 to `{:upstream_refused, :rate_limit}` and 400 to
-  `{:invalid_argument, "query"}`. A 403 is `{:http, 403}`, as `Raxol.Web3.Backend` documents
+  `{:upstream_refused, :not_found}`, 429 to `{:upstream_refused, :rate_limit}`, and 400 to
+  `{:invalid_argument, name}` for the argument the request carried (`"query"` on `stables`,
+  `"symbol"` on `stable`), or `{:http, 400}` on `corridors`, which carries none. A 403 is
+  `{:http, 403}`, as `Raxol.Web3.Backend` documents
   it, because in front of a CDN it is as likely a challenge page as a refused key. Any other
   status is `{:http, status}`. No upstream body leaves the module (ADR-0038 decision 6).
 - **Symbols** are canonicalized through a fixed map in `FX.Sleuth`: `EURE` and `MONERIUM` to

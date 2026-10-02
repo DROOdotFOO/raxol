@@ -171,6 +171,18 @@ defmodule Raxol.Web3.FXTest do
       end
     end
 
+    test "a 400 names the argument each endpoint actually sent" do
+      s =
+        sleuth(%{
+          "/api/mcp/fx/stables/EURC" => {400, "{}"},
+          "/api/mcp/fx/corridors" => {400, "{}"}
+        })
+
+      assert Sleuth.stable(s, "EURC") == {:error, {:invalid_argument, "symbol"}}
+      # `corridors` sends no argument, so none can be the one refused.
+      assert Sleuth.corridors(s) == {:error, {:http, 400}}
+    end
+
     test "a body that is not the documented shape is a decode failure" do
       s = sleuth(%{"/api/mcp/fx/stables" => ~s({"assets":"nope"})})
       assert Sleuth.stables(s) == {:error, {:decode_failed, :sleuth}}
