@@ -146,29 +146,42 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
     end
 
     # 1 USDT (6 decimals) into EURe (18 decimals): 0.87 EURe estimated, 0.865
-    # guaranteed after slippage.
+    # stated as the minimum.
     @eure_quote %{
       "to_amount" => "870000000000000000",
       "min_to_amount" => "865000000000000000"
     }
 
-    test "a quote is checked on its own guaranteed minimum, not its estimate" do
+    test "a quote is judged on the lowest amount it states" do
       ctx = %{xochi_config: config(@eure_quote), deposit_attestation_signer: signer_address()}
       run = &ExecuteDepositRoute.run(params(%{to_token: @eure_base, min_to_amount: &1}), ctx)
 
-      assert {:ok, %{deposit_address: @deposit_addr}} = run.("865000000000000000")
+      assert {:ok, %{deposit_address: @deposit_addr, min_to_amount: "865000000000000000"}} =
+               run.("865000000000000000")
 
-      # Below the estimate, above what the quote guarantees.
+      # Below the estimate, above the stated minimum.
       assert {:error,
               {:delivery_below_floor,
-               %{quoted: "865000000000000000", min_to_amount: 866_000_000_000_000_000}}} =
+               %{floor: 866_000_000_000_000_000, lowest: 865_000_000_000_000_000}}} =
                run.("866000000000000000")
 
       # Authoritative for a dollar destination too; this quote states no minimum.
       ctx = %{xochi_config: config(), deposit_attestation_signer: signer_address()}
 
-      assert {:error, {:delivery_below_floor, %{to_amount: "995000"}}} =
+      assert {:error, {:delivery_below_floor, %{to_amount: "995000", lowest: 995_000}}} =
                ExecuteDepositRoute.run(params(%{min_to_amount: "995001"}), ctx)
+    end
+
+    test "a high stated minimum does not hide a low estimate" do
+      # A hostile quote: 1 wei estimated, a reassuring minimum beside it.
+      quote = %{"to_amount" => "1", "min_to_amount" => "900000000000000000"}
+      ctx = %{xochi_config: config(quote), deposit_attestation_signer: signer_address()}
+
+      assert {:error, {:delivery_below_floor, %{lowest: 1}}} =
+               ExecuteDepositRoute.run(
+                 params(%{to_token: @eure_base, min_to_amount: "850000000000000000"}),
+                 ctx
+               )
     end
 
     test "a floor in the source's units on a non-USD destination is refused before any quote" do
@@ -191,7 +204,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
         deposit_attestation_signer: signer_address()
       }
 
-      for floor <- ["1e6", "995000.0", "1,000,000", "1_000_000", "-1", "abc", -5, 995_000.0] do
+      # 79 digits is past any uint256; a million took a quarter second to parse,
+      # and a few million raised `SystemLimitError` rather than a refusal.
+      too_long = String.duplicate("9", 79)
+      huge = String.duplicate("9", 1_000_000)
+
+      for floor <-
+            ["1e6", "995000.0", "1,000,000", "1_000_000", "-1", "abc", -5, 995_000.0] ++
+              [too_long, huge] do
         assert {:error, {:invalid_min_to_amount, ^floor}} =
                  ExecuteDepositRoute.run(params(%{min_to_amount: floor}), ctx)
       end

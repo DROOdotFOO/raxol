@@ -315,8 +315,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # it scales, but with no FX rate there is no par to floor against (ADR-0040
   # decision 7), and a floor on one must be in that token's units. Both tokens
   # have registered decimals by this point (`build_request/2` refuses anything
-  # else). The quote is checked on its own `min_to_amount` when it carries one,
-  # else its `to_amount`.
+  # else). The quote is judged on the lowest amount it states: `toAmount`, its
+  # own `minToAmount`, and the `toAmount` in the EIP-712 message the wallet
+  # would sign.
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
     with {:ok, floor} <- delivery_floor(request, params) do
       DeliveryFloor.check(quote, floor)

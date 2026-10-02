@@ -6,10 +6,11 @@ defmodule Raxol.Payments.DeliveryFloor do
   ## Reading it
 
   `nil`, `""` and `0` are absent. Anything else must be a non-negative integer
-  in destination-chain atomic units, as an integer or a string of digits;
-  `"1e6"`, `"995000.0"`, `"1,000,000"` and `"-1"` are refused as
-  `{:invalid_min_to_amount, value}` rather than read as absent, because a floor
-  the caller wrote and we ignored bounds nothing while looking as if it did.
+  in destination-chain atomic units, as an integer or a string of at most 78
+  digits (a uint256); `"1e6"`, `"995000.0"`, `"1,000,000"` and `"-1"` are
+  refused as `{:invalid_min_to_amount, value}` rather than read as absent,
+  because a floor the caller wrote and we ignored bounds nothing while looking
+  as if it did.
 
   ## A floor on a non-USD stablecoin destination
 
@@ -25,11 +26,15 @@ defmodule Raxol.Payments.DeliveryFloor do
 
   ## Checking a quote against it
 
-  A quote's own `min_to_amount`, when it carries one, is what the solver
-  guarantees after slippage, so the floor is checked against it rather than
-  against the `to_amount` estimate. Neither value is attested by Xochi's
-  deposit attestation, so on the deposit route this is a pre-funding filter on
-  what the quote says, not a bound on what is delivered.
+  The floor is compared with the LOWEST amount the quote states anywhere: its
+  `to_amount`, which must be present, its own `min_to_amount` when it carries
+  one, and the `toAmount` of the EIP-712 message the wallet is asked to sign
+  when there is one. A quote that states a high minimum beside a low estimate,
+  or signs for less than it advertises, is judged on the low figure, and an
+  amount that does not read as a non-negative integer fails the floor. None of
+  these figures is attested by Xochi's deposit attestation, so on the deposit
+  route this is a pre-funding filter on what the quote says, not a bound on
+  what is delivered.
   """
 
   alias Raxol.Payments.Assets
@@ -48,7 +53,7 @@ defmodule Raxol.Payments.DeliveryFloor do
         {:ok, nil}
 
       trimmed ->
-        if trimmed =~ ~r/\A[0-9]+\z/,
+        if trimmed =~ ~r/\A[0-9]{1,78}\z/,
           do: parse(String.to_integer(trimmed)),
           else: {:error, {:invalid_min_to_amount, value}}
     end
@@ -104,26 +109,53 @@ defmodule Raxol.Payments.DeliveryFloor do
   end
 
   @doc """
-  Check a quote against a floor. The quote's `min_to_amount`, when present, is
-  what is compared; otherwise its `to_amount`. A value that does not read as a
-  non-negative integer fails the floor.
+  Check a quote against a floor, on the lowest amount it states (see the
+  moduledoc). `{:delivery_below_floor, detail}` names the floor, the lowest
+  readable amount (`nil` when one did not read) and each figure as served.
   """
   @spec check(map(), floor()) :: :ok | {:error, {:delivery_below_floor, map()}}
   def check(_quote, :none), do: :ok
 
-  def check(quote, {:floor, min_out}) do
-    quoted = Map.get(quote, :min_to_amount) || Map.get(quote, :to_amount)
+  def check(quote, {:floor, floor}) do
+    stated = stated(quote)
 
-    case parse(quoted) do
-      {:ok, delivered} when is_integer(delivered) and delivered >= min_out ->
-        :ok
+    lowest =
+      Enum.reduce_while(stated, nil, fn {_field, value}, lowest ->
+        case amount(value) do
+          {:ok, n} -> {:cont, if(lowest, do: min(lowest, n), else: n)}
+          :error -> {:halt, nil}
+        end
+      end)
 
-      _ ->
-        {:error,
-         {:delivery_below_floor,
-          %{to_amount: Map.get(quote, :to_amount), quoted: quoted, min_to_amount: min_out}}}
-    end
+    if is_integer(lowest) and lowest >= floor,
+      do: :ok,
+      else: {:error, {:delivery_below_floor, Map.merge(%{floor: floor, lowest: lowest}, stated)}}
   end
+
+  # `to_amount` is required, so it is always listed; the others only when the
+  # quote carries them.
+  defp stated(quote) do
+    optional = [
+      min_to_amount: Map.get(quote, :min_to_amount),
+      signed_to_amount: signed_to_amount(quote)
+    ]
+
+    Map.new([
+      {:to_amount, Map.get(quote, :to_amount)} | Enum.reject(optional, &is_nil(elem(&1, 1)))
+    ])
+  end
+
+  defp signed_to_amount(%{eip712_data: %{"message" => %{"toAmount" => value}}}), do: value
+  defp signed_to_amount(_quote), do: nil
+
+  defp amount(n) when is_integer(n) and n >= 0, do: {:ok, n}
+
+  defp amount(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed =~ ~r/\A[0-9]{1,78}\z/, do: {:ok, String.to_integer(trimmed)}, else: :error
+  end
+
+  defp amount(_value), do: :error
 
   defp rescale(amount, from, to) when to >= from, do: amount * Integer.pow(10, to - from)
   defp rescale(amount, from, to), do: div(amount, Integer.pow(10, from - to))

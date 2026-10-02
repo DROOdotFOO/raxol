@@ -209,9 +209,9 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
-  # The caller's floor, refused before any quote is fetched or signed: one that
-  # does not read as atomic units (on Xochi, `0` too), or one on a non-USD
-  # stablecoin destination
+  # The caller's floor, refused before anything is signed (on the deposit and
+  # Relay routes, before any quote is fetched): one that does not read as
+  # atomic units (on Xochi, `0` too), or one on a non-USD stablecoin destination
   # far below the amount sent at the destination's decimals (a wrong-units
   # floor bounds nothing). See `Raxol.Payments.DeliveryFloor`.
   def from({:invalid_min_to_amount, _} = detail),
