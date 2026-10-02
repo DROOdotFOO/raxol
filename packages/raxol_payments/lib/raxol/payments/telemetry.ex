@@ -106,8 +106,8 @@ defmodule Raxol.Payments.Telemetry do
   | Measurement            | Type                 | Notes                                    |
   | ---------------------- | -------------------- | ---------------------------------------- |
   | `:count`               | `integer()`          | settlements in the ledger                |
-  | `:unpriced_count`      | `integer()`          | entries with a leg or fee no price answered |
-  | `:recording_gap_count` | `integer()`          | entries missing a leg's amount or decimals; not in `:usd_revenue` |
+  | `:unpriced_count`      | `integer()`          | entries with a leg or a nonzero fee no price answered (for a recording-gap entry, its fee only) |
+  | `:recording_gap_count` | `integer()`          | entries missing a leg's amount or decimals; not in `:usd_revenue`. Overlaps `:unpriced_count` only where such an entry's fee is unpriced |
   | `:gas_unknown_count`   | `integer()`          | entries with no gas figure yet           |
   | `:usd_revenue`         | `Decimal.t/0` \\| nil | spread of entries with both legs recorded and priced |
   | `:usd_fee`             | `Decimal.t/0` \\| nil | venue fee of entries whose fee is priced |

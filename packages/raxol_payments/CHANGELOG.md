@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `SettlementLedger` values USDG at `usdc_price`, as it does the other dollar
+  stablecoins. It was missing from the set, so every USDG leg or fee was
+  unpriced whatever the price source, and `unpriced_count` overstated the
+  FX gap.
+- `unpriced_count` no longer judges the recorded leg of a recording-gap entry,
+  whose revenue is unknowable anyway; only its fee, which is its margin basis.
+  An entry is now in both `unpriced_count` and `recording_gap_count` only when
+  its legs were not recorded and its fee is unpriced.
 - The FX `price_fn` answers EURC, EURe and ZCHF in any casing, as `Assets`
   does: `"EURE"` or `"eurc"` used to reach the fallback, which could price a
   euro at par, and a lowercase Sleuth listing could not veto. The degraded
