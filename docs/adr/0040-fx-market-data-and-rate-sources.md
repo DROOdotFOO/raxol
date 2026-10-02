@@ -22,7 +22,9 @@ answer). Nothing in those decisions changes.
 ## Context
 
 ADR-0033 names an FX dark pool as the product pulling on the web3 read layer. Raxol still
-models no currency but the dollar. Four facts from the code, all checked on 2026-09-30:
+models no currency but the dollar. Four facts from the code, all checked on 2026-09-30; the
+file:line references in this section are to the tree as it was then, before any of this ADR
+landed, and later changes have moved them:
 
 1. **Nothing prices a non-USD stablecoin.** `Raxol.Payments.SettlementLedger` values every
    member of `@stablecoins` at `:usdc_price`, default 1 (`settlement_ledger.ex:106`,
@@ -250,8 +252,8 @@ marked every EUR asset unpriceable for about twenty hours a day.
   `context[:fx_source]` and answers `{:error, :fx_not_configured}` when the key is absent,
   following `Actions.Web3`. One tool rather than three, for the context-window reason
   `Actions.Web3` records.
-- **Wiring.** Nothing in production sets `context[:web3_router]` today; only
-  `web3_test.exs:16` does. Both keys are injected together, from one configuration reader over
+- **Wiring.** Before this ADR, nothing in production set `context[:web3_router]`; only
+  `web3_test.exs:16` did. Both keys are injected together, from one configuration reader over
   `Application.get_env(:raxol_agent, :web3)` plus `RAXOL_SLEUTH_API_KEY`, at every context
   builder that feeds a tool loop:
   1. `Raxol.Agent.Code.App.run_context/2`, beside `maybe_add_skills`, with the Actions added
@@ -264,8 +266,9 @@ marked every EUR asset unpriceable for about twenty hours a day.
   5. `SessionInbox.start_turn/2`, through the executor's `:context`.
 
   The reader resolves the configuration once, when the `raxol_agent` application boots, and
-  caches it; every builder above reads that cache. A mistake (`fx:` without the key, or
-  `:web3` in a build without `raxol_web3`) refuses the boot and names what is missing, rather
+  caches it; every builder above reads that cache. A mistake (`fx:` without the key, a key
+  `FX.Sleuth.new/1` refuses, a `:web3` or `fx:` that is not a keyword list, or `:web3` in a
+  build without `raxol_web3`) refuses the boot and names what is wrong, never the key, rather
   than raising in every turn or inbox prompt that builds a context. The key is trimmed and
   read then, so changing it takes a restart.
 
