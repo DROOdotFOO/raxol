@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ExecuteXochiIntent`'s 80%-of-par same-asset floor is judged, like any floor,
+  on the lowest amount the quote states, so a `slippage_bps` past about 2000
+  lets an honest quote's own minimum fall under it and is refused. That is the
+  backstop working: a quote that may deliver under 80% of par is what it
+  exists to stop.
 - `SettlementLedger` aggregates and `[:raxol, :payments, :margin]` carry
   `margin_count`, the number of entries `usd_margin` covers. An entry whose gas
   symbol no price answers (POL with a price source that only knows ETH) left

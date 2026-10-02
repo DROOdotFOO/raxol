@@ -6,8 +6,9 @@ defmodule Raxol.Payments.DeliveryFloor do
   ## Reading it
 
   `nil`, `""` and `0` are absent. Anything else must be a non-negative integer
-  in destination-chain atomic units, as an integer or a string of at most 78
-  digits (a uint256); `"1e6"`, `"995000.0"`, `"1,000,000"` and `"-1"` are
+  in destination-chain atomic units, as a string of at most 78 digits (a
+  uint256) -- the type every action's tool schema declares -- or an integer
+  from a direct `run/2` caller; `"1e6"`, `"995000.0"`, `"1,000,000"` and `"-1"` are
   refused as `{:invalid_min_to_amount, value}` rather than read as absent,
   because a floor the caller wrote and we ignored bounds nothing while looking
   as if it did.

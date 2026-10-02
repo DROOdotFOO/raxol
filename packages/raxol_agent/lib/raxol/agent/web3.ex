@@ -113,7 +113,7 @@ defmodule Raxol.Agent.Web3 do
   end
 
   defp resolve_router(nil), do: nil
-  defp resolve_router(router), do: require_web3!(router)
+  defp resolve_router(router), do: router |> require_web3!() |> router!()
 
   defp resolve_fx(nil), do: nil
 
@@ -162,8 +162,17 @@ defmodule Raxol.Agent.Web3 do
     end
 
     defp present(_value), do: nil
+
+    # `router: false` would otherwise enable the `web3` tool over no router.
+    defp router!(%Raxol.Web3.Router{} = router), do: router
+
+    defp router!(value) do
+      raise ArgumentError,
+            "config :raxol_agent, :web3, router: must be a Raxol.Web3.Router, got #{shape(value)}"
+    end
   else
     defp build_fx(_opts), do: nil
+    defp router!(router), do: router
 
     defp require_web3!(_value) do
       raise ArgumentError,

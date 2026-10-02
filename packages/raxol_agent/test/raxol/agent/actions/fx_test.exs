@@ -130,11 +130,13 @@ defmodule Raxol.Agent.Actions.FXTest do
       refute error.message =~ "secret-half"
     end
 
-    test "a :web3 or fx: setting that is not a keyword list refuses the load by name" do
+    test "a malformed :web3, fx: or router: setting refuses the load by name" do
       for {config, setting} <- [
             {[fx: true], "fx:"},
             {[fx: %{sleuth_api_key: "secret-half"}], "fx:"},
-            {%{fx: []}, ":web3"}
+            {%{fx: []}, ":web3"},
+            # It loaded and offered the `web3` tool over no router.
+            {[router: false], "router:"}
           ] do
         Application.put_env(:raxol_agent, :web3, config)
 

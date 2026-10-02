@@ -306,7 +306,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # must be in that token's units. Without one, a same-asset corridor (same
   # token symbol both
   # sides) gets an automatic floor: delivery must be at least `:min_delivery_bps`
-  # of par (default 8000 = 80%). This is a theft backstop, not a pricing check --
+  # of par (default 8000 = 80%), judged like any floor on the lowest amount the
+  # quote states, so a `slippage_bps` past about 2000 lets an honest quote's own
+  # minimum fall under it. This is a theft backstop, not a pricing check --
   # Xochi enforces pricing; legitimate fees and slippage stay well inside 80%. A
   # cross-asset corridor between registered tokens has no on-client price, so it
   # is bound only by an explicit `min_to_amount`. An unregistered destination
