@@ -146,17 +146,17 @@ fallback, and a failure on both means no rate:
   recent. Chainlink's L2 sequencer-feed documentation describes this failure mode.
 - The feed's identity matched. `description()` must equal the expected pair and `decimals()`
   must equal 8. `Chainlink.new/1` does no I/O, so the check runs on the first `rate/2` that
-  reads the feed; a match is cached for a day (ADR-0038's cache stage, keyed by origin,
-  chain id, proxy and selector) and every other answer is re-read on the next call. A
-  decodable answer that names another pair or another scale is `{:blocked, :feed_mismatch}`
-  and is terminal, because a misconfigured address would otherwise answer, correctly, about
-  a pair nobody asked about. An answer that does not decode, such as the `"0x"` a node
-  returns for an address with no code when an RPC URL reaches the wrong chain, is
-  `{:decode_failed, :identity}`: an ordinary failed read that moves to the fallback. The
-  cache key cannot carry the URL path, because the cache takes no request URI as input (a
-  path often holds the provider key), so two handles on one host share an entry. Caching
-  only the expected answer is what makes that safe: the entry says nothing a correct feed
-  would not.
+  reads the feed; a match is cached for a day (ADR-0038's cache stage, keyed by origin, a
+  digest of the RPC URL, chain id, proxy and selector) and every other answer is re-read on
+  the next call. A decodable answer that names another pair or another scale is
+  `{:blocked, :feed_mismatch}` and is terminal, because a misconfigured address would
+  otherwise answer, correctly, about a pair nobody asked about. An answer that does not
+  decode, such as the `"0x"` a node returns for an address with no code when an RPC URL
+  reaches the wrong chain, is `{:decode_failed, :identity}`: an ordinary failed read that
+  moves to the fallback. The URL digest is a truncated SHA-256, so a provider key in the path
+  never enters the cache key, and it is what stops one handle's verified identity from
+  vouching for a handle on the same host whose path reaches another chain. Keying by origin
+  alone let exactly that happen.
 
 A usable rate carries its `precision_bps`: the feed's deviation threshold, 10 for Base and 15
 for Ethereum. This is honest about what a fresh answer means. Between updates, a Chainlink

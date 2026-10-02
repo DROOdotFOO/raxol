@@ -357,6 +357,8 @@ defmodule Raxol.Web3.FXTest do
         cond do
           request.path =~ "base" -> 8453
           request.path =~ "eth" -> 1
+          # A chain answering only what `overrides` puts under `:impostor`.
+          request.path =~ "impostor" -> :impostor
           true -> :elsewhere
         end
 
@@ -534,10 +536,35 @@ defmodule Raxol.Web3.FXTest do
       assert {:ok, %{source: {8453, _}}} =
                Chainlink.rate(chainlink(cache: true, rpc_urls: healthy), "EUR")
 
-      # And the healthy handle's cached identity does not vouch for the
-      # misrouted one: its rounds still come from the wrong chain.
+      # And the healthy handle's cached identity is not the misrouted one's:
+      # it reads its own, which is still the empty answer, and fails over.
       assert {:ok, %{source: {1, _}}} =
                Chainlink.rate(chainlink(cache: true, rpc_urls: misrouted), "EUR")
+    end
+
+    test "a sibling's cached identity does not vouch for a handle on another path" do
+      # `/impostor` reaches a contract at the Base EUR proxy address that
+      # answers as CHF/USD, with a live sequencer and a decodable round at 2.00.
+      now = recorded_at()
+      base = feed("eur_usd_base")
+
+      impostor = %{
+        {:impostor, @base_eur, "0x7284e416"} => feed("chf_usd_ethereum")["description"],
+        {:impostor, @base_eur, "0x313ce567"} => base["decimals"],
+        {:impostor, @base_eur, "0xfeaf968c"} => round_hex(200_000_000, now, now),
+        {:impostor, @base_seq, "0xfeaf968c"} => round_hex(0, now - 7_200, now)
+      }
+
+      {misrouted, host} = urls("/impostor")
+      healthy = %{8453 => "https://#{host}/base", 1 => "https://#{host}/eth"}
+      misrouted = Map.delete(misrouted, 1)
+
+      blocked = {:error, {:blocked, :feed_mismatch}}
+      read = &Chainlink.rate(chainlink(cache: true, overrides: impostor, rpc_urls: &1), "EUR")
+
+      assert read.(misrouted) == blocked
+      assert {:ok, %{source: {8453, _}}} = read.(healthy)
+      assert read.(misrouted) == blocked
     end
 
     test "a matching identity is read once; the round is read every time" do
