@@ -1,6 +1,18 @@
 defmodule Mix.Tasks.Raxol.Broker.Init do
+  @moduledoc """
+  Creates `broker.policy.exs` with explicit notional caps.
+
+      mix raxol.broker.init --max-notional 1000 --daily-cap 5000
+
+  When either flag is omitted, the task prompts only from an interactive
+  terminal. It validates the complete restrictive policy, refuses an unsafe
+  destination directory or existing destination, and publishes the file with
+  mode 0600.
+  """
+
   use Mix.Task
 
+  alias Raxol.Agent.OperatorFile
   alias Raxol.Broker.PolicyFile
 
   @shortdoc "Creates a fail-closed broker.policy.exs"
@@ -17,19 +29,8 @@ defmodule Mix.Tasks.Raxol.Broker.Init do
     max_notional = cap(opts, :max_notional, "Maximum notional per order")
     daily_cap = cap(opts, :daily_cap, "Daily notional cap")
 
-    policy = [
-      max_notional_per_order: max_notional,
-      daily_notional_cap: daily_cap,
-      max_position_weight: :unset,
-      order_types: [:limit],
-      options: false,
-      after_hours_market: false,
-      llm_ask_above: :unset,
-      ask_timeout: 30_000
-    ]
-
-    case PolicyFile.validate(policy) do
-      {:ok, validated} -> write_policy(validated)
+    case PolicyFile.new(max_notional, daily_cap) do
+      {:ok, policy} -> write_policy(policy)
       {:error, reason} -> Mix.raise("invalid broker policy: #{inspect(reason)}")
     end
   end
@@ -43,7 +44,13 @@ defmodule Mix.Tasks.Raxol.Broker.Init do
 
   defp prompt_cap(key, prompt) do
     if interactive?() do
-      parse_cap(key, Mix.shell().prompt("#{prompt} (required):"))
+      case Mix.shell().prompt("#{prompt} (required):") do
+        value when is_binary(value) ->
+          parse_cap(key, String.trim(value))
+
+        _other ->
+          Mix.raise("#{flag(key)} prompt ended before an answer; no policy file was written")
+      end
     else
       Mix.raise("#{flag(key)} is required; no policy file was written")
     end
@@ -95,10 +102,13 @@ defmodule Mix.Tasks.Raxol.Broker.Init do
       {:ok, device} ->
         try do
           try do
+            secure_staging!(staging_path)
             write_and_sync!(device, staging_path, contents)
           after
             close_staging!(device, staging_path)
           end
+
+          ensure_trusted_staging!(staging_path)
 
           publish!(staging_path, path)
         after
@@ -113,6 +123,23 @@ defmodule Mix.Tasks.Raxol.Broker.Init do
   defp staging_path(path) do
     suffix = System.unique_integer([:positive, :monotonic])
     Path.join(Path.dirname(path), ".#{Path.basename(path)}.#{suffix}.tmp")
+  end
+
+  defp secure_staging!(path) do
+    case File.chmod(path, 0o600) do
+      :ok -> :ok
+      {:error, reason} -> Mix.raise("could not secure #{path}: #{:file.format_error(reason)}")
+    end
+  end
+
+  defp ensure_trusted_staging!(path) do
+    case OperatorFile.trusted?(path) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise("refusing to publish untrusted staging file #{path}: #{inspect(reason)}")
+    end
   end
 
   defp write_and_sync!(device, path, contents) do

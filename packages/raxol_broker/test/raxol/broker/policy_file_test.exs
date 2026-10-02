@@ -13,6 +13,7 @@ defmodule Raxol.Broker.PolicyFileTest do
       )
 
     File.mkdir_p!(directory)
+    File.chmod!(directory, 0o700)
     on_exit(fn -> File.rm_rf!(directory) end)
 
     %{directory: directory}
@@ -30,6 +31,43 @@ defmodule Raxol.Broker.PolicyFileTest do
     assert policy[:after_hours_market] == false
     assert policy[:llm_ask_above] == :unset
     assert policy[:ask_timeout] == 30_000
+  end
+
+  test "new builds the complete policy with restrictive schema defaults" do
+    max_notional_per_order = Decimal.new("1000")
+    daily_notional_cap = Decimal.new("5000")
+
+    assert {:ok,
+            [
+              max_notional_per_order: ^max_notional_per_order,
+              daily_notional_cap: ^daily_notional_cap,
+              max_position_weight: :unset,
+              order_types: [:limit],
+              options: false,
+              after_hours_market: false,
+              llm_ask_above: :unset,
+              ask_timeout: 30_000
+            ]} = PolicyFile.new(max_notional_per_order, daily_notional_cap)
+  end
+
+  test "new rejects invalid required caps" do
+    valid_cap = Decimal.new("1")
+
+    for {value, expected_reason} <- [
+          {:unset, {:unset, :max_notional_per_order}},
+          {Decimal.new("0"), {:invalid_value, :max_notional_per_order, Decimal.new("0")}},
+          {"1", {:invalid_value, :max_notional_per_order, "1"}}
+        ] do
+      assert {:error, ^expected_reason} = PolicyFile.new(value, valid_cap)
+    end
+
+    for {value, expected_reason} <- [
+          {:unset, {:unset, :daily_notional_cap}},
+          {Decimal.new("0"), {:invalid_value, :daily_notional_cap, Decimal.new("0")}},
+          {"1", {:invalid_value, :daily_notional_cap, "1"}}
+        ] do
+      assert {:error, ^expected_reason} = PolicyFile.new(valid_cap, value)
+    end
   end
 
   test "reports every missing key with that key", %{directory: directory} do
@@ -186,13 +224,15 @@ defmodule Raxol.Broker.PolicyFileTest do
              PolicyFile.load(path)
   end
 
-  test "validates the timeout" do
-    assert {:ok, _policy} =
-             valid_policy()
-             |> Keyword.put(:ask_timeout, 1)
-             |> PolicyFile.validate()
+  test "validates the explicit timeout boundaries" do
+    for value <- [1, 4_294_967_295] do
+      assert {:ok, _policy} =
+               valid_policy()
+               |> Keyword.put(:ask_timeout, value)
+               |> PolicyFile.validate()
+    end
 
-    for value <- [0, -1, :unset, 1.0] do
+    for value <- [0, 4_294_967_296, -1, :unset, 1.0] do
       assert {:error, {:invalid_value, :ask_timeout, ^value}} =
                valid_policy()
                |> Keyword.put(:ask_timeout, value)
@@ -207,10 +247,38 @@ defmodule Raxol.Broker.PolicyFileTest do
     assert {:error, {:read_failed, ^directory, :eisdir}} = PolicyFile.load(directory)
   end
 
+  test "rejects group- or other-writable policy files on POSIX", %{directory: directory} do
+    if match?({:unix, _}, :os.type()) do
+      path = write_policy(directory, valid_policy_source(), "writable.exs")
+      File.chmod!(path, 0o666)
+
+      assert {:error, {:untrusted_file, ^path, {:group_or_other_writable, 0o666}}} =
+               PolicyFile.load(path)
+    end
+  end
+
+  test "rejects policy files in group- or other-writable directories on POSIX", %{
+    directory: directory
+  } do
+    if match?({:unix, _}, :os.type()) do
+      path = write_policy(directory, valid_policy_source(), "writable-directory.exs")
+      File.chmod!(directory, 0o777)
+
+      assert {:error, {:untrusted_file, ^path, {:dir_group_or_other_writable, 0o777}}} =
+               PolicyFile.load(path)
+    end
+  end
+
   test "rejects malformed source as a parse error", %{directory: directory} do
     path = write_policy(directory, "[max_notional_per_order:")
 
     assert {:error, {:parse_error, ^path, _reason}} = PolicyFile.load(path)
+  end
+
+  test "rejects invalid UTF-8 with the stable parse error", %{directory: directory} do
+    path = write_policy(directory, <<0xFF>>, "invalid-utf8.exs")
+
+    assert {:error, {:parse_error, ^path, :invalid_utf8}} = PolicyFile.load(path)
   end
 
   test "parses with existing atoms only", %{directory: directory} do
@@ -294,19 +362,8 @@ defmodule Raxol.Broker.PolicyFileTest do
   end
 
   defp valid_policy(overrides \\ []) do
-    Keyword.merge(
-      [
-        max_notional_per_order: Decimal.new("1000"),
-        daily_notional_cap: Decimal.new("5000"),
-        max_position_weight: :unset,
-        order_types: [:limit],
-        options: false,
-        after_hours_market: false,
-        llm_ask_above: :unset,
-        ask_timeout: 30_000
-      ],
-      overrides
-    )
+    {:ok, policy} = PolicyFile.new(Decimal.new("1000"), Decimal.new("5000"))
+    Keyword.merge(policy, overrides)
   end
 
   defp valid_policy_source(overrides \\ []) do
@@ -336,6 +393,7 @@ defmodule Raxol.Broker.PolicyFileTest do
   defp write_policy(directory, source, filename \\ "broker.policy.exs") do
     path = Path.join(directory, filename)
     File.write!(path, source)
+    File.chmod!(path, 0o600)
     path
   end
 end

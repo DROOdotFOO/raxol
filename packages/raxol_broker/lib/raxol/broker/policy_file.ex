@@ -8,22 +8,24 @@ defmodule Raxol.Broker.PolicyFile do
 
   @filename "broker.policy.exs"
   @max_file_size 16 * 1024
-  @keys [
-    :max_notional_per_order,
-    :daily_notional_cap,
-    :max_position_weight,
-    :order_types,
-    :options,
-    :after_hours_market,
-    :llm_ask_above,
-    :ask_timeout
+  @schema [
+    max_notional_per_order: {:positive_decimal, :required},
+    daily_notional_cap: {:positive_decimal, :required},
+    max_position_weight: {:weight_or_unset, {:default, :unset}},
+    order_types: {{:unique_nonempty_list, [:market, :limit]}, {:default, [:limit]}},
+    options: {:boolean, {:default, false}},
+    after_hours_market: {:boolean, {:default, false}},
+    llm_ask_above: {:positive_decimal_or_unset, {:default, :unset}},
+    ask_timeout: {{:integer_range, 1, 4_294_967_295}, {:default, 30_000}}
   ]
-  @required_caps [:max_notional_per_order, :daily_notional_cap]
-  @allowed_order_types [:market, :limit]
+  @keys Keyword.keys(@schema)
+  @zero Decimal.new(0)
+  @one Decimal.new(1)
 
   @type reason ::
           {:missing_file, Path.t()}
           | {:read_failed, Path.t(), File.posix()}
+          | {:untrusted_file, Path.t(), Raxol.Agent.OperatorFile.refusal() | :enoent}
           | {:file_too_large, Path.t(), non_neg_integer(), pos_integer()}
           | {:parse_error, Path.t(), term()}
           | {:unsupported_expression, Macro.t()}
@@ -40,7 +42,8 @@ defmodule Raxol.Broker.PolicyFile do
   def load(path \\ @filename) do
     case File.stat(path) do
       {:ok, %File.Stat{type: :regular, size: size}} ->
-        with :ok <- ensure_file_size(size, path) do
+        with :ok <- ensure_file_size(size, path),
+             :ok <- ensure_trusted(path) do
           read_and_load(path)
         end
 
@@ -58,17 +61,33 @@ defmodule Raxol.Broker.PolicyFile do
     end
   end
 
+  @doc """
+  Builds a complete fail-closed policy from the two required notional caps.
+  """
+  @spec new(term(), term()) :: {:ok, keyword()} | {:error, reason()}
+  def new(max_notional_per_order, daily_notional_cap) do
+    required_values = [
+      max_notional_per_order: max_notional_per_order,
+      daily_notional_cap: daily_notional_cap
+    ]
+
+    policy =
+      Enum.map(@schema, fn
+        {key, {_validator, :required}} ->
+          {key, Keyword.fetch!(required_values, key)}
+
+        {key, {_validator, {:default, default}}} ->
+          {key, default}
+      end)
+
+    validate(policy)
+  end
+
   @spec validate(term()) :: {:ok, keyword()} | {:error, reason()}
   def validate(policy) when is_list(policy) do
     with :ok <- validate_keyword(policy),
          :ok <- validate_keys(policy),
-         :ok <- validate_required_caps(policy),
-         :ok <- validate_decimal(policy, :max_position_weight, &valid_weight?/1),
-         :ok <- validate_order_types(policy),
-         :ok <- validate_boolean(policy, :options),
-         :ok <- validate_boolean(policy, :after_hours_market),
-         :ok <- validate_decimal(policy, :llm_ask_above, &positive?/1),
-         :ok <- validate_timeout(policy) do
+         :ok <- validate_schema(policy) do
       {:ok, policy}
     end
   end
@@ -79,6 +98,13 @@ defmodule Raxol.Broker.PolicyFile do
     do: {:error, {:file_too_large, path, size, @max_file_size}}
 
   defp ensure_file_size(_size, _path), do: :ok
+
+  defp ensure_trusted(path) do
+    case Raxol.Agent.OperatorFile.trusted?(path) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:untrusted_file, path, reason}}
+    end
+  end
 
   defp read_and_load(path) do
     case File.open(path, [:read, :binary], fn device ->
@@ -104,6 +130,13 @@ defmodule Raxol.Broker.PolicyFile do
   end
 
   defp parse_and_validate(contents, path) do
+    case String.valid?(contents) do
+      true -> parse_quoted(contents, path)
+      false -> {:error, {:parse_error, path, :invalid_utf8}}
+    end
+  end
+
+  defp parse_quoted(contents, path) do
     case Code.string_to_quoted(contents, file: path, existing_atoms_only: true) do
       {:ok, quoted} ->
         with {:ok, policy} <- decode_expression(quoted) do
@@ -176,66 +209,53 @@ defmodule Raxol.Broker.PolicyFile do
     end
   end
 
-  defp validate_required_caps(policy) do
-    Enum.reduce_while(@required_caps, :ok, fn key, :ok ->
-      case Keyword.fetch!(policy, key) do
-        :unset -> {:halt, {:error, {:unset, key}}}
-        value -> continue_if_valid_decimal(value, key, &positive?/1)
+  defp validate_schema(policy) do
+    Enum.reduce_while(@schema, :ok, fn {key, {validator, marker}}, :ok ->
+      value = Keyword.fetch!(policy, key)
+
+      case validate_schema_value(key, value, validator, marker) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
       end
     end)
   end
 
-  defp validate_decimal(policy, key, predicate) do
-    case Keyword.fetch!(policy, key) do
-      :unset -> :ok
-      value -> unwrap_continue(continue_if_valid_decimal(value, key, predicate))
-    end
-  end
+  defp validate_schema_value(key, :unset, _validator, :required),
+    do: {:error, {:unset, key}}
 
-  defp continue_if_valid_decimal(%Decimal{coef: coefficient} = value, key, predicate)
-       when is_integer(coefficient) do
-    if predicate.(value),
-      do: {:cont, :ok},
-      else: {:halt, {:error, {:invalid_value, key, value}}}
-  end
-
-  defp continue_if_valid_decimal(value, key, _predicate),
-    do: {:halt, {:error, {:invalid_value, key, value}}}
-
-  defp unwrap_continue({:cont, :ok}), do: :ok
-  defp unwrap_continue({:halt, error}), do: error
-
-  defp positive?(value), do: Decimal.compare(value, Decimal.new(0)) == :gt
-
-  defp valid_weight?(value) do
-    positive?(value) and Decimal.compare(value, Decimal.new(1)) in [:lt, :eq]
-  end
-
-  defp validate_order_types(policy) do
-    value = Keyword.fetch!(policy, :order_types)
-
-    if is_list(value) and value != [] and
-         Enum.all?(value, &(&1 in @allowed_order_types)) and
-         length(value) == length(Enum.uniq(value)) do
-      :ok
-    else
-      {:error, {:invalid_value, :order_types, value}}
-    end
-  end
-
-  defp validate_boolean(policy, key) do
-    value = Keyword.fetch!(policy, key)
-
-    if is_boolean(value),
+  defp validate_schema_value(key, value, validator, _marker) do
+    if valid_value?(validator, value),
       do: :ok,
       else: {:error, {:invalid_value, key, value}}
   end
 
-  defp validate_timeout(policy) do
-    value = Keyword.fetch!(policy, :ask_timeout)
+  defp valid_value?(:positive_decimal, %Decimal{coef: coefficient} = value)
+       when is_integer(coefficient),
+       do: Decimal.compare(value, @zero) == :gt
 
-    if is_integer(value) and value > 0,
-      do: :ok,
-      else: {:error, {:invalid_value, :ask_timeout, value}}
-  end
+  defp valid_value?(:positive_decimal_or_unset, :unset), do: true
+
+  defp valid_value?(:positive_decimal_or_unset, value),
+    do: valid_value?(:positive_decimal, value)
+
+  defp valid_value?(:weight_or_unset, :unset), do: true
+
+  defp valid_value?(:weight_or_unset, %Decimal{coef: coefficient} = value)
+       when is_integer(coefficient),
+       do:
+         Decimal.compare(value, @zero) == :gt and
+           Decimal.compare(value, @one) in [:lt, :eq]
+
+  defp valid_value?({:unique_nonempty_list, allowed}, value) when is_list(value),
+    do:
+      value != [] and
+        Enum.all?(value, &(&1 in allowed)) and
+        length(value) == length(Enum.uniq(value))
+
+  defp valid_value?(:boolean, value), do: is_boolean(value)
+
+  defp valid_value?({:integer_range, minimum, maximum}, value),
+    do: is_integer(value) and value >= minimum and value <= maximum
+
+  defp valid_value?(_validator, _value), do: false
 end
