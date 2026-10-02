@@ -160,7 +160,7 @@ defmodule Raxol.Web3.FX.Sleuth do
   @spec stables(t(), keyword()) :: {:ok, snapshot()} | {:error, Backend.error()}
   def stables(%__MODULE__{} = sleuth, opts \\ []) do
     with {:ok, query} <- stables_query(opts) do
-      get(sleuth, "/fx/stables", query, &decode_snapshot/1)
+      get(sleuth, "/fx/stables", query, &decode_snapshot/1, "query")
     end
   end
 
@@ -173,7 +173,7 @@ defmodule Raxol.Web3.FX.Sleuth do
           {:ok, %{as_of: String.t() | nil, asset: map()}} | {:error, Backend.error()}
   def stable(%__MODULE__{} = sleuth, symbol) when is_binary(symbol) do
     if symbol =~ ~r/\A[A-Za-z0-9][A-Za-z0-9.\-]{0,23}\z/ do
-      get(sleuth, "/fx/stables/" <> sleuth_symbol(symbol), [], &decode_detail/1)
+      get(sleuth, "/fx/stables/" <> sleuth_symbol(symbol), [], &decode_detail/1, "symbol")
     else
       {:error, {:invalid_argument, "symbol"}}
     end
@@ -188,7 +188,7 @@ defmodule Raxol.Web3.FX.Sleuth do
   @spec corridors(t(), keyword()) :: {:ok, map()} | {:error, Backend.error()}
   def corridors(%__MODULE__{} = sleuth, opts \\ []) do
     include_assets? = Keyword.get(opts, :include_assets, false)
-    get(sleuth, "/fx/corridors", [], &decode_corridors(&1, include_assets?))
+    get(sleuth, "/fx/corridors", [], &decode_corridors(&1, include_assets?), nil)
   end
 
   @doc """
@@ -237,8 +237,9 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   # The body is decoded here so the cache stage can be told which 200s are worth
   # keeping: one that is not the documented envelope is a failure, and replaying
-  # it for the TTL would answer every caller with it.
-  defp get(sleuth, path, query, decoder) do
+  # it for the TTL would answer every caller with it. `argument` names what a
+  # 400 refused, or is `nil` for a request that carries none.
+  defp get(sleuth, path, query, decoder, argument) do
     query = Enum.sort(query)
     url = sleuth.base_url <> path <> encode_query(query)
 
@@ -252,7 +253,7 @@ defmodule Raxol.Web3.FX.Sleuth do
 
     case HTTP.get(url, opts) do
       {:ok, %{status: status, body: body}} when status in 200..299 -> decoder.(body)
-      {:ok, %{status: status}} -> {:error, status_error(status)}
+      {:ok, %{status: status}} -> {:error, status_error(status, argument)}
       {:error, _} = error -> error
     end
   end
@@ -272,12 +273,14 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   # A 403 is `{:http, 403}`, as `Raxol.Web3.Backend` documents it: in front of
   # a CDN it is as likely a challenge page or an edge block as a refused key,
-  # and reading it as `:auth` sends an operator to rotate a key that works.
-  defp status_error(401), do: {:upstream_refused, :auth}
-  defp status_error(404), do: {:upstream_refused, :not_found}
-  defp status_error(429), do: {:upstream_refused, :rate_limit}
-  defp status_error(400), do: {:invalid_argument, "query"}
-  defp status_error(status), do: {:http, status}
+  # and reading it as `:auth` sends an operator to rotate a key that works. A
+  # 400 names the argument the request carried; on one that carries none
+  # (`corridors`) no argument can be wrong, so it is the status.
+  defp status_error(401, _argument), do: {:upstream_refused, :auth}
+  defp status_error(404, _argument), do: {:upstream_refused, :not_found}
+  defp status_error(429, _argument), do: {:upstream_refused, :rate_limit}
+  defp status_error(400, argument) when is_binary(argument), do: {:invalid_argument, argument}
+  defp status_error(status, _argument), do: {:http, status}
 
   # -- decoding ------------------------------------------------------------------
 
