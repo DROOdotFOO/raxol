@@ -313,8 +313,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # token cannot be classified or scaled at all, so without `min_to_amount` it is
   # refused rather than let through unfloored. A non-USD stablecoin destination
   # (`Assets.fx_peg/2`) is refused the same way: it scales, but with no FX rate
-  # there is no par to floor against (ADR-0040 decision 7). The quote is checked
-  # on its own `min_to_amount` when it carries one, else its `to_amount`.
+  # there is no par to floor against (ADR-0040 decision 7). The quote is judged
+  # on the lowest amount it states: `toAmount`, its own `minToAmount`, and the
+  # `toAmount` in the EIP-712 message the wallet would sign.
   defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
     with {:ok, floor} <- delivery_floor(request, params) do
       DeliveryFloor.check(quote, floor)

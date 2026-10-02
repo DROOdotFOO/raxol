@@ -87,9 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destination got no floor at all. On an EURC, EURe or ZCHF destination a floor
   below a tenth of the source amount rescaled to the destination's decimals is
   refused as `{:implausible_min_to_amount, detail}`, which catches a floor
-  written in the source's 6 decimals for 18-decimal EURe. A quote is checked on
-  its own `min_to_amount` when it states one, the amount guaranteed after
-  slippage, rather than on its `to_amount` estimate.
+  written in the source's 6 decimals for 18-decimal EURe. A quote is judged on
+  the lowest amount it states: its `to_amount`, its own `min_to_amount` when it
+  gives one, and on `ExecuteXochiIntent` the `toAmount` of the EIP-712 message
+  the wallet signs, so neither a high stated minimum beside a 1-wei estimate
+  nor a signed amount below the advertised one passes. A floor of more than 78
+  digits is refused rather than parsed.
 - `ExecuteDepositRoute` returned a verified Tron deposit address for an EURC,
   EURe or ZCHF destination with no delivery floor, so the payer could fund a
   quote stating any amount. It now takes `min_to_amount`, as

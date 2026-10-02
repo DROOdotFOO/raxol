@@ -1226,22 +1226,28 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
     # Base USDC -> Arbitrum USDC: a same-asset corridor, so the automatic floor
     # applies. toAmount is configurable to model a punitive quote.
-    defp stub_floor_quote(to_amount) do
+    defp stub_floor_quote(to_amount, extra \\ %{}, message \\ %{"amount" => 1_000_000}) do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
           "/api/intent/quote" ->
-            Req.Test.json(conn, %{
-              "intentId" => "int_1",
-              "quoteId" => "q_1",
-              "canSolve" => true,
-              "toAmount" => to_amount,
-              "xochiFee" => "1000",
-              "eip712Data" => %{
-                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-                "message" => %{"amount" => 1_000_000}
-              }
-            })
+            Req.Test.json(
+              conn,
+              Map.merge(
+                %{
+                  "intentId" => "int_1",
+                  "quoteId" => "q_1",
+                  "canSolve" => true,
+                  "toAmount" => to_amount,
+                  "xochiFee" => "1000",
+                  "eip712Data" => %{
+                    "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                    "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                    "message" => message
+                  }
+                },
+                extra
+              )
+            )
 
           "/api/intent/execute" ->
             Req.Test.json(conn, %{
@@ -1314,6 +1320,26 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
                ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), floor_ctx())
 
       assert_received :wallet_signed
+    end
+
+    test "a quote that signs for less than it advertises is judged on the signed amount" do
+      # The served toAmount clears the floor; the message the wallet would sign
+      # says 1.
+      stub_floor_quote("960000", %{}, %{"amount" => 1_000_000, "toAmount" => "1"})
+
+      assert {:error, %Failure{reason: :delivery_below_floor, detail: {_, %{lowest: 1}}}} =
+               ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), floor_ctx())
+
+      refute_received :wallet_signed
+    end
+
+    test "a high stated minimum does not hide a low toAmount" do
+      stub_floor_quote("1", %{"minToAmount" => "960000"})
+
+      assert {:error, %Failure{reason: :delivery_below_floor}} =
+               ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), floor_ctx())
+
+      refute_received :wallet_signed
     end
 
     test "a cross-asset corridor with no min_to_amount skips the auto floor" do

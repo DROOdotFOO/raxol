@@ -28,9 +28,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
   `{:invalid_min_to_amount, value}`. A destination with a non-USD peg
   (`Assets.fx_peg/2`: EURC, EURe, ZCHF) needs one, in that token's units, and
   is refused before any quote is fetched without it, because no FX rate gives
-  a par to floor against (ADR-0040 decision 7). The quote is checked on its own
-  `min_to_amount` when it carries one, else its `to_amount`, and a quote below
-  the floor returns no deposit address.
+  a par to floor against (ADR-0040 decision 7). The quote is judged on the lowest
+  amount it states (its `to_amount`, and its own `min_to_amount` when it gives
+  one), and a quote below the floor returns no deposit address.
 
   That is all it does. The deposit attestation binds the deposit address and
   the origin leg, not `to_amount`, `min_to_amount`, the destination or the
@@ -99,6 +99,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
         ],
         from_amount: [type: :string],
         to_amount: [type: :string],
+        min_to_amount: [
+          type: :string,
+          description: "The quote's own stated minimum delivery, when it gives one; unattested"
+        ],
         recipient_address: [type: :string]
       ]
     ]
@@ -156,14 +160,18 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
     }
   end
 
+  # `min_to_amount` only when the quote stated one.
   defp summary(instructions) do
-    Map.take(instructions, [
+    instructions
+    |> Map.take([
       :intent_id,
       :deposit_address,
       :deposit_deadline,
       :from_amount,
       :to_amount,
+      :min_to_amount,
       :recipient_address
     ])
+    |> Map.reject(&match?({:min_to_amount, nil}, &1))
   end
 end

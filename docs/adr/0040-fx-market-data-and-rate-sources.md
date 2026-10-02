@@ -329,8 +329,10 @@ marked every EUR asset unpriceable for about twenty hours a day.
   a non-negative integer of atomic units is refused, not read as absent. On a non-USD
   destination it must be in that token's units: below a tenth of the source amount rescaled
   to the destination's decimals, it is refused as a wrong-units floor (a 6-decimal floor on
-  18-decimal EURe bounds 10^-12 of what it looks like). A quote is checked on its own
-  `min_to_amount` when it states one, else its `to_amount`.
+  18-decimal EURe bounds 10^-12 of what it looks like). A quote is judged on the lowest
+  amount it states: its `to_amount`, its own `min_to_amount` when it gives one, and on the
+  Xochi intent path the `toAmount` of the EIP-712 message the wallet signs. A floor checked
+  only on the stated minimum let a quote advertise a high minimum beside a 1-wei estimate.
 
   This lands first and does not wait on the rest. It removes the 10^12 misscale in context
   item 4 whether or not any FX pricing is enabled, and moves no new funds.
