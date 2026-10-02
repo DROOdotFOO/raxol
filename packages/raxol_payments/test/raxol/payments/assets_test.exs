@@ -78,6 +78,13 @@ defmodule Raxol.Payments.AssetsTest do
       assert Enum.sort(Assets.symbols()) == ["RAXOL", "USDC", "USDG", "USDT", "WETH"]
     end
 
+    test "symbols fold in ASCII only, so a lookalike never resolves to a registered token" do
+      assert {:ok, _} = Assets.address(8453, "usdc")
+      # `ſ` (long s) upper-cases to `S` under Unicode rules.
+      assert :error = Assets.address(8453, "uſdc")
+      assert Assets.decimals("uſdc") == Assets.decimals("NOT-A-TICKER")
+    end
+
     test "symbol_for/2 resolves every fillable (chain, address) back to its symbol" do
       for {chain, symbol, address, _decimals} <- @solver_fillable do
         assert Assets.symbol_for(chain, address) == symbol,

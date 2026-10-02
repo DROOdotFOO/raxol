@@ -359,7 +359,7 @@ defmodule Raxol.Web3.FX.Sleuth do
       symbol: symbol(raw["symbol"]),
       name: string(raw["name"]),
       aliases: aliases(raw["aliases"]),
-      corridor: string(raw["corridor"]),
+      corridor: code(raw["corridor"]),
       peg_currency: peg(raw["pegCurrency"]),
       peg_mechanism: string(raw["pegMechanism"]),
       partner?: raw["partner"] == true,
@@ -390,7 +390,7 @@ defmodule Raxol.Web3.FX.Sleuth do
 
   defp corridor(raw, include_assets?) do
     base = %{
-      corridor: string(raw["corridor"]),
+      corridor: code(raw["corridor"]),
       peg_currency: peg(raw["pegCurrency"]),
       asset_count: count(raw["assetCount"]),
       total_supply_usd: decimal(raw["totalSupplyUsd"]),
@@ -455,17 +455,34 @@ defmodule Raxol.Web3.FX.Sleuth do
   @max_aliases 32
   @max_count 1_000_000_000
 
-  # Text a model may read: no control or format characters (C0/C1 controls,
-  # bidi overrides, zero-width joiners), which no field Sleuth documents uses.
+  # Text a model may read, with nothing in it the model cannot see: control
+  # and format characters (C0/C1, bidi overrides, zero-width), line and
+  # paragraph separators, variation selectors (which can encode arbitrary
+  # bytes) and the Hangul fillers are removed. Stripping rather than refusing
+  # keeps a legitimate name with a soft hyphen or a joined emoji readable.
   defp string(s) when is_binary(s) and byte_size(s) <= @max_string_bytes do
-    if String.match?(s, ~r/[\p{Cc}\p{Cf}]/u), do: nil, else: s
+    case String.replace(
+           s,
+           ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{115F}\x{1160}\x{3164}\x{FFA0}]/u,
+           ""
+         ) do
+      "" -> nil
+      visible -> visible
+    end
   end
 
   defp string(_), do: nil
 
-  # Peg codes compare in upper case, as `Raxol.Web3.FX.Chainlink.pegs/0` lists them.
+  # A code (peg currency, corridor): printable ASCII or nothing, and peg codes
+  # compare in upper case, as `Raxol.Web3.FX.Chainlink.pegs/0` lists them.
+  defp code(code) when is_binary(code) and byte_size(code) <= 16 do
+    if code =~ ~r/\A[\x21-\x7E]+\z/, do: code, else: nil
+  end
+
+  defp code(_), do: nil
+
   defp peg(code) do
-    case string(code) do
+    case code(code) do
       nil -> nil
       code -> String.upcase(code, :ascii)
     end

@@ -293,12 +293,23 @@ defmodule Raxol.Web3.FX.Chainlink do
 
   defp call_opts(chainlink, :round, _url, _feed, _selector), do: chainlink.http_opts
 
-  # Distinguishes two routes and carries nothing back. Headers are sorted, so
-  # their order in `:http_opts` does not split one route into two.
-  defp route_digest(url, http_opts) do
-    headers = http_opts |> Keyword.get(:headers, []) |> Enum.sort()
+  @doc false
+  # Which upstream a handle actually reaches: its RPC URLs and the request
+  # headers in `:http_opts`, which a gateway may route by. Shared by the
+  # identity cache key below and `Raxol.Web3.FX`'s log state, so the two never
+  # disagree about whether two handles are the same route.
+  @spec route_id(t()) :: integer()
+  def route_id(%__MODULE__{rpc_urls: urls, http_opts: http_opts}),
+    do: :erlang.phash2({urls, route_headers(http_opts)})
 
-    :crypto.hash(:sha256, :erlang.term_to_binary({url, headers}))
+  # Headers sorted by name only (a stable sort), so their order in `:http_opts`
+  # does not split one route in two, while repeated headers keep the order a
+  # gateway honouring the first one would see.
+  defp route_headers(http_opts), do: http_opts |> Keyword.get(:headers, []) |> List.keysort(0)
+
+  # Distinguishes two routes and carries nothing back.
+  defp route_digest(url, http_opts) do
+    :crypto.hash(:sha256, :erlang.term_to_binary({url, route_headers(http_opts)}))
     |> Base.url_encode64(padding: false)
     |> binary_part(0, 16)
   end

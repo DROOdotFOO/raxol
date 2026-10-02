@@ -384,8 +384,7 @@ defmodule Raxol.Payments.Assets do
           {:ok, String.t()} | :error
   def address(chain_id, symbol) when is_binary(symbol) do
     chain = normalize_chain_id(chain_id)
-    key = String.upcase(symbol)
-
+    key = fold_symbol(symbol)
     by_chain = Map.get(@evm_tokens, key) || Map.get(@fx_addresses, key, %{})
 
     case Map.get(by_chain, chain) do
@@ -505,6 +504,15 @@ defmodule Raxol.Payments.Assets do
   @spec fx_pegs() :: %{String.t() => String.t()}
   def fx_pegs, do: @fx_pegs
 
+  @doc """
+  The case-insensitive form of a token symbol: upper-cased in ASCII only, so a
+  lookalike such as `uſdc` (long s) or `EURı` (dotless i) stays itself rather
+  than folding onto a registered symbol. Every symbol lookup here, and the FX
+  `price_fn`, compares in this form.
+  """
+  @spec fold_symbol(String.t()) :: String.t()
+  def fold_symbol(symbol) when is_binary(symbol), do: String.upcase(symbol, :ascii)
+
   defp fx_symbol(chain, address) do
     case fx_entry(chain, address) do
       {symbol, _peg, _decimals} -> symbol
@@ -560,7 +568,7 @@ defmodule Raxol.Payments.Assets do
   """
   @spec decimals(String.t() | nil) :: pos_integer()
   def decimals(ticker) when is_binary(ticker) do
-    Map.get(@ticker_decimals, String.upcase(ticker), @default_decimals)
+    Map.get(@ticker_decimals, fold_symbol(ticker), @default_decimals)
   end
 
   def decimals(_), do: @default_decimals

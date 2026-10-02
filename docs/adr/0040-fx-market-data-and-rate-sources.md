@@ -149,7 +149,8 @@ fallback, and a failure on both means no rate:
 - The feed's identity matched. `description()` must equal the expected pair and `decimals()`
   must equal 8. `Chainlink.new/1` does no I/O, so the check runs on the first `rate/2` that
   reads the feed; a match is cached for a day (ADR-0038's cache stage, keyed by origin, a
-  digest of the RPC URL, chain id, proxy and selector) and every other answer is re-read on
+  digest of the route, meaning the RPC URL and the request headers, plus chain id, proxy and
+  selector) and every other answer is re-read on
   the next call. A decodable answer that names another pair or another scale is
   `{:blocked, :feed_mismatch}` and is terminal, because a misconfigured address would
   otherwise answer, correctly, about a pair nobody asked about. An answer that does not
@@ -194,7 +195,9 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   `1e1000000` is nine bytes of JSON and a million digits after the first rounding. A list
   entry that is not a JSON object is skipped, a number included (`1.5` decodes to a
   `%Decimal{}` struct, which a `%{}` pattern matches). Every other field is typed and bounded:
-  text at most 256 bytes, counts non-negative integers below 10^9, at most 32 string
+  text at most 256 bytes with everything invisible stripped (control and format characters,
+  line separators, variation selectors, Hangul fillers), codes (`corridor`, `pegCurrency`)
+  printable ASCII, counts non-negative integers below 10^9, at most 32 string
   `aliases`, else `nil`. No list is decoded past a cap: `assets` past the requested `limit`
   (300 by default), `topPools` past 32, `corridors` past 64 with 400 corridor assets in
   total, and `fxRatesUsd` past 64 three- or four-letter codes, since a byte-bounded body of
@@ -358,9 +361,11 @@ marked every EUR asset unpriceable for about twenty hours a day.
   Accounting is priced at the rate of record, and Sleuth's role is to veto, not to price: its
   payload chooses neither which symbols are repriced nor at which rate. A registered symbol is
   never handed to the fallback, which might price a euro at par. Symbols are compared in
-  ASCII upper case, as `Assets` compares them, so any casing of a registered symbol is
-  answered by the closure and any casing of a listing can veto. A peg with no usable rate is
-  logged with Chainlink's reason, a blocked feed at warning level. Every other symbol is
+  ASCII upper case (`Assets.fold_symbol/1`), so any casing of a registered symbol is answered
+  by the closure, any casing of a listing can veto, and a lookalike (`EURı`) folds onto
+  nothing. `pegCurrency` is compared upper-cased too. A peg's rate state is logged when it
+  changes, per route: no usable rate or a fallback feed with Chainlink's reason, a
+  `{:blocked, _}` refusal at warning, and the return to the primary. Every other symbol is
   delegated to whatever `RAXOL_PRICE_SOURCE` selects, so ETH and POL pricing is unchanged
   whatever the snapshot says. It is enabled by `RAXOL_FX_ENABLED=true` and
   follows the accounting env contract: set-but-empty is unset, an unknown value raises, and
