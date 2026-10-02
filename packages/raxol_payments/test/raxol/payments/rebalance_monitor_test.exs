@@ -262,6 +262,7 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
       assert meas.count == 1
       assert meas.unpriced_count == 0
       assert meas.recording_gap_count == 0
+      assert meas.gas_unpriced_count == 0
       assert meas.margin_count == 1
       assert Decimal.equal?(meas.usd_revenue, Decimal.new("0.02308"))
       assert Decimal.equal?(meas.usd_margin, Decimal.new("-0.17692"))

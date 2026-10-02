@@ -94,11 +94,15 @@ defmodule Raxol.Payments.SettlementLedger do
       gas, over entries that have both. An entry with recorded legs that could
       not be priced has no basis, and is counted in `unpriced_count` instead.
       `margin_count` is how many entries it covers, so `count - margin_count`
-      entries are left out for any reason, an unpriced gas symbol included.
+      entries are left out: for no basis (`unpriced_count`,
+      `recording_gap_count`), unknown gas (`gas_unknown_count`), or gas whose
+      symbol no price answers (`gas_unpriced_count`: gas amount known, gas
+      price missing).
   """
   @type aggregate :: %{
           count: non_neg_integer(),
           gas_unknown_count: non_neg_integer(),
+          gas_unpriced_count: non_neg_integer(),
           unpriced_count: non_neg_integer(),
           recording_gap_count: non_neg_integer(),
           fee_by_currency: %{String.t() => Decimal.t()},
@@ -495,6 +499,7 @@ defmodule Raxol.Payments.SettlementLedger do
       %{
         count: acc.count + 1,
         gas_unknown_count: acc.gas_unknown_count + unknown_gas(e),
+        gas_unpriced_count: acc.gas_unpriced_count + unpriced_gas(e, gas_usd),
         unpriced_count: acc.unpriced_count + unpriced(e, gap, usdc_price, price_fn),
         recording_gap_count: acc.recording_gap_count + gap,
         fee_by_currency:
@@ -529,6 +534,7 @@ defmodule Raxol.Payments.SettlementLedger do
     %{
       count: 0,
       gas_unknown_count: 0,
+      gas_unpriced_count: 0,
       unpriced_count: 0,
       recording_gap_count: 0,
       fee_by_currency: %{},
@@ -604,6 +610,10 @@ defmodule Raxol.Payments.SettlementLedger do
 
   defp unknown_gas(%{gas_native: nil}), do: 1
   defp unknown_gas(_), do: 0
+
+  defp unpriced_gas(%{gas_native: nil}, _gas_usd), do: 0
+  defp unpriced_gas(_entry, nil), do: 1
+  defp unpriced_gas(_entry, _gas_usd), do: 0
 
   defp add_gas(acc, %{gas_native: nil}), do: acc
 

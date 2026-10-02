@@ -110,6 +110,36 @@ defmodule Raxol.Payments.SettlementLedgerTest do
     assert agg.gas_unknown_count == 0 and agg.unpriced_count == 1
   end
 
+  test "gas_unpriced_count counts known gas no price answers, once per entry",
+       %{ledger: ledger} do
+    eth = fn
+      "ETH" -> Decimal.new("1000")
+      _ -> nil
+    end
+
+    count = fn ->
+      agg = SettlementLedger.cumulative_subsidy(ledger, price_fn: eth)
+      {agg.gas_unpriced_count, agg.gas_unknown_count}
+    end
+
+    SettlementLedger.record_settlement(ledger, l1_fill(%{intent_id: "xi_eth"}))
+    assert count.() == {0, 0}
+
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(%{intent_id: "xi_pol", gas_symbol: "POL", gas_chain_id: 137})
+    )
+
+    assert count.() == {1, 0}
+
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(%{intent_id: "xi_pending", gas_symbol: "POL", gas_native: nil})
+    )
+
+    assert count.() == {1, 1}
+  end
+
   test "records a settlement and is idempotent by intent_id", %{ledger: ledger} do
     assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, l1_fill())
     assert {:ok, :duplicate} = SettlementLedger.record_settlement(ledger, l1_fill())

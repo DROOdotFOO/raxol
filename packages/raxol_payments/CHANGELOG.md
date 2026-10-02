@@ -78,6 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convert through `Assets.to_decimal/1`, MPP through the integer. The amount
   then reaches the policy and budget gates, which refuse it when a
   `SpendingPolicy` and ledger are configured.
+- `SettlementLedger` aggregates and the `[:raxol, :payments, :margin]` event
+  carry `gas_unpriced_count`: entries whose gas amount is known but whose gas
+  symbol no price answers. Such an entry left the margin without any count
+  saying why; every reason an entry is left out of `usd_margin` is now
+  countable.
 - `ExecuteXochiIntent` signed a re-quote without checking it. When the first
   execute came back as an expired quote (a 409 the endpoint chooses), the
   retry fetched a new quote and signed it with neither the delivery floor nor

@@ -109,11 +109,12 @@ defmodule Raxol.Payments.Telemetry do
   | `:unpriced_count`      | `integer()`          | entries with a leg or a nonzero fee no price answered (for a recording-gap entry, its fee only) |
   | `:recording_gap_count` | `integer()`          | entries missing a leg's amount or decimals; not in `:usd_revenue`. Overlaps `:unpriced_count` only where such an entry's fee is unpriced |
   | `:gas_unknown_count`   | `integer()`          | entries with no gas figure yet           |
+  | `:gas_unpriced_count`  | `integer()`          | entries whose gas amount is known but whose gas symbol no price answered |
   | `:usd_revenue`         | `Decimal.t/0` \\| nil | spread of entries with both legs recorded and priced |
   | `:usd_fee`             | `Decimal.t/0` \\| nil | venue fee of entries whose fee is priced |
   | `:usd_gas`             | `Decimal.t/0` \\| nil | gas of entries whose gas is known and priced |
   | `:usd_margin`          | `Decimal.t/0` \\| nil | sum of per-entry basis (spread, else fee if legs unrecorded) net of that entry's gas, over entries with both; negative is subsidy |
-  | `:margin_count`        | `integer()`          | entries `:usd_margin` covers; `:count` minus this were left out (no basis, or unknown or unpriced gas). An entry with an unpriced fee but a priced spread is in both this and `:unpriced_count` |
+  | `:margin_count`        | `integer()`          | entries `:usd_margin` covers; `:count` minus this were left out, each reason countable: no basis (`:unpriced_count`, `:recording_gap_count`), unknown gas (`:gas_unknown_count`), unpriced gas (`:gas_unpriced_count`). An entry with an unpriced fee but a priced spread is in both this and `:unpriced_count` |
 
   Each `usd_*` total is over its own population, so `usd_revenue - usd_gas` is
   not the margin; see `Raxol.Payments.SettlementLedger`'s `aggregate` type.

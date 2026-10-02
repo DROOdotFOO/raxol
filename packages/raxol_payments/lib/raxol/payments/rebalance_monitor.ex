@@ -121,6 +121,7 @@ defmodule Raxol.Payments.RebalanceMonitor do
         :unpriced_count,
         :recording_gap_count,
         :gas_unknown_count,
+        :gas_unpriced_count,
         :usd_revenue,
         :usd_fee,
         :usd_gas,
