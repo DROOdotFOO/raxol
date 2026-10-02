@@ -15,12 +15,15 @@ defmodule Raxol.Agent.Web3 do
         fx: [rpc_urls: %{1 => "https://...", 8453 => "https://..."}]
 
   The configuration is resolved once, by `load!/0`, which the `raxol_agent`
-  application calls at boot. A mistake -- `:fx` without the Sleuth key, or
-  `:web3` in a build without `raxol_web3` -- refuses the boot and names what
-  is missing, rather than raising in every turn, inbox prompt or ACP session
+  application calls at boot. A mistake -- `:fx` without the Sleuth key, a key
+  `Raxol.Web3.FX.Sleuth.new/1` refuses, a setting that is not a keyword list,
+  or `:web3` in a build without `raxol_web3` -- refuses the boot and names what
+  is wrong, rather than raising in every turn, inbox prompt or ACP session
   that builds a context. The key is read from the environment then, trimmed,
-  and held only in the handle, which never renders it; changing it takes a
-  restart.
+  and kept in the handle, which never renders it; changing it takes a restart.
+  The variable stays in the node's environment, and the `bash` tool's
+  `Raxol.Agent.Actions.Code.run_shell` unsets it in every shell child, so a
+  command cannot print it.
 
   Outside a booted application (a library embedding, or `mix test`, where the
   application does not start), the first call resolves and caches it.
