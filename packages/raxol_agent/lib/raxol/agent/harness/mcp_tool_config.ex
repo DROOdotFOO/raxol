@@ -74,11 +74,13 @@ defmodule Raxol.Agent.Harness.McpToolConfig do
 
   Writes the manifest (`<dir>/raxol_mcp_tools.json`) and the config
   (`<dir>/raxol_mcp_config.json`), wiring the manifest path into the server env.
-  Returns `{:ok, config_path}`. `:dir` defaults to a unique temp directory.
+  Returns `{:ok, config_path}`. `:dir` defaults to a unique temp directory
+  readable only by the node's user, since the config carries the server's
+  `:env`.
   """
   @spec write(opts()) :: {:ok, Path.t()} | {:error, term()}
   def write(opts) do
-    dir = Keyword.get_lazy(opts, :dir, &unique_tmp_dir/0)
+    dir = Keyword.get_lazy(opts, :dir, &private_tmp_dir/0)
     File.mkdir_p!(dir)
 
     tools = resolve_tools(opts)
@@ -135,7 +137,11 @@ defmodule Raxol.Agent.Harness.McpToolConfig do
     }
   end
 
-  defp unique_tmp_dir do
-    Path.join(System.tmp_dir!(), "raxol_mcp_#{System.unique_integer([:positive])}")
+  # Created and closed to other users before anything is written into it.
+  defp private_tmp_dir do
+    dir = Path.join(System.tmp_dir!(), "raxol_mcp_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    File.chmod!(dir, 0o700)
+    dir
   end
 end

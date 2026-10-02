@@ -33,6 +33,17 @@ case "$mode" in
     cat >/dev/null
     printf '%s\n' '{"type":"result","subtype":"success","result":"read stdin","usage":{}}'
     ;;
+  env)
+    # What the CLI inherited: a raxol secret and a caller-passed variable.
+    printf '{"type":"result","subtype":"success","result":"%s|%s","usage":{}}\n' \
+      "${RAXOL_SHARE_SECRET-unset}" "${RAXOL_NATIVE_PROBE-unset}"
+    ;;
+  mcp_env)
+    # What the CLI would hand the MCP server it launches: the entry's env
+    # value for RAXOL_NATIVE_PROBE in the --mcp-config file ($2).
+    probe=$(sed -n 's/.*"RAXOL_NATIVE_PROBE":"\([^"]*\)".*/\1/p' "${2:-/dev/null}")
+    printf '{"type":"result","subtype":"success","result":"%s","usage":{}}\n' "${probe:-unset}"
+    ;;
   *)
     printf '%s\n' '{"type":"result","subtype":"success","result":"","usage":{}}'
     ;;

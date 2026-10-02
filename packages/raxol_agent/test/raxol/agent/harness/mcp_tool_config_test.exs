@@ -73,5 +73,16 @@ defmodule Raxol.Agent.Harness.McpToolConfigTest do
       manifest = tools_file |> File.read!() |> Jason.decode!()
       assert [%{"name" => "greet"}] = manifest["tools"]
     end
+
+    test "the default directory is closed to other users, as the env may hold a key" do
+      assert {:ok, config_path} =
+               McpToolConfig.write(actions: [Greet], command: "mix", env: %{"K" => "v"})
+
+      dir = Path.dirname(config_path)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      assert Bitwise.band(File.stat!(dir).mode, 0o777) == 0o700
+      assert Jason.decode!(File.read!(config_path))["mcpServers"]["raxol"]["env"]["K"] == "v"
+    end
   end
 end

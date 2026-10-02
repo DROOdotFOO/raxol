@@ -25,6 +25,12 @@ defmodule Raxol.Agent.Backend.Native do
   - `:mcp_server_command` / `:mcp_server_args` -- the MCP server launcher; tools
     are injected only when this is set (and `:actions` is non-empty).
   - `:extra_args` -- raw argv appended to the CLI invocation.
+  - `:env` -- `[{name, value}]` strings added to the CLI's environment and to
+    the injected MCP server's `env` entry. The CLI otherwise gets the node's
+    environment minus raxol's own secrets (`Raxol.Core.ChildEnv`); naming one
+    here passes it, e.g. `RAXOL_SLEUTH_API_KEY` for an MCP server that is a
+    raxol node with `fx:` configured. A value given here is written into the
+    MCP config file, which lives in a directory only the node's user can read.
   """
 
   @default_timeout 120_000
@@ -96,13 +102,14 @@ defmodule Raxol.Agent.Backend.Native do
 
   defp build_stream(driver, exe, args, opts, cleanup) do
     cwd = Keyword.get(opts, :cwd)
+    env = Keyword.get(opts, :env, [])
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     caller = self()
     ref = make_ref()
 
     reader =
       spawn_link(fn ->
-        run_port(exe, args, cwd, driver, timeout, caller, ref)
+        run_port(exe, args, cwd, env, driver, timeout, caller, ref)
       end)
 
     Stream.resource(
@@ -127,7 +134,7 @@ defmodule Raxol.Agent.Backend.Native do
 
   # `:in` closes the CLI's stdin; the prompt goes over argv via `driver.args/1`.
   # See `Raxol.Agent.SpawnedPort` for why.
-  defp run_port(exe, args, cwd, driver, timeout, caller, ref) do
+  defp run_port(exe, args, cwd, env, driver, timeout, caller, ref) do
     port =
       Port.open(
         {:spawn_executable, exe},
@@ -140,7 +147,7 @@ defmodule Raxol.Agent.Backend.Native do
           {:line, @line_bytes},
           {:args, args},
           # The vendor CLI runs its own tool loop, shell included.
-          {:env, Raxol.Core.ChildEnv.port_env()}
+          {:env, Raxol.Core.ChildEnv.port_env(env)}
         ] ++ cd_opt(cwd)
       )
 
@@ -285,7 +292,10 @@ defmodule Raxol.Agent.Backend.Native do
       case McpToolConfig.write(
              actions: actions,
              command: command,
-             args: Keyword.get(opts, :mcp_server_args, [])
+             args: Keyword.get(opts, :mcp_server_args, []),
+             # Not every CLI hands its own environment to the servers it
+             # launches, so what the caller passed goes in the entry too.
+             env: Map.new(Keyword.get(opts, :env, []))
            ) do
         {:ok, path} -> {path, mcp_cleanup(path)}
         {:error, _} -> {nil, &noop/0}
