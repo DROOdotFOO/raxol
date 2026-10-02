@@ -189,7 +189,7 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   `includeChains=1` with a large limit is refused by Sleuth (400) and never requested. The
   body bound does not bound what one number costs, so the decoder does: see Parsing.
 - **Parsing** uses `Jason.decode(body, floats: :decimals)`, so a float never reaches a money
-  path. `raxol_web3` gains `{:decimal, "~> 2.0"}` for this; today it has `decimal` only as an
+  path. `raxol_web3` gains `{:decimal, "~> 3.0"}` for this, matching `raxol_payments`; today it has `decimal` only as an
   optional dependency of `jason`. A figure is `nil` unless it has at most 38 significant
   digits and an exponent within ±30, checked on the decoded struct before any arithmetic:
   `1e1000000` is nine bytes of JSON and a million digits after the first rounding. A list
@@ -311,16 +311,20 @@ marked every EUR asset unpriceable for about twenty hours a day.
   Optimism is a bridged representation and is not registered.
 
   The tokens live in their own `@fx_stables` table, not in the solver-fillable
-  `@evm_tokens`. `symbols/0`, `evm_tokens/0` and `supported_chain_ids/0` are therefore
-  unchanged, and with them `Xochi.Capabilities.fallback/0`, the capacity deriver and the
-  stealth chain check. `Assets.fx_peg/2` names a token's non-USD peg.
+  `@evm_tokens`. EURe on 42161 had been added to `@evm_tokens` by #1137 (dated 2026-09-28,
+  after this ADR's context was read); it moves here, so EURe leaves `symbols/0`,
+  `evm_tokens/0` and the Xochi settlement grid. `supported_chain_ids/0` is unchanged, and
+  with it `Xochi.Capabilities.fallback/0`, the capacity deriver and the stealth chain
+  check. `Assets.fx_peg/2` names a token's non-USD peg.
 
   Registration must not open a fund-moving path, because until now "unregistered" was the
   only thing refusing these tokens on three of them. Each keeps its refusal, now with the
   reason stated as `{:unpriced_asset, detail}`: `ExecuteXochiIntent` and
   `ExecuteRelayTransfer` refuse a non-USD source, and a non-USD destination without a
-  positive `min_to_amount` (with one, it is allowed, as an unregistered destination
-  already was on the Xochi path; `0` bounds nothing and counts as absent). The TransferCore
+  positive `min_to_amount` (with one, it is allowed; `0` bounds nothing, so Relay and the
+  deposit route read it as absent and `ExecuteXochiIntent` refuses it). On the Xochi path both legs must be
+  registered whatever `min_to_amount` says, and on a same-asset corridor an explicit floor
+  can only raise the automatic 80%-of-par floor, never lower it (#1160). The TransferCore
   corridor gate never counts them fillable, whether the static fallback or Xochi's live
   capability matrix (which lists EURe) is deciding, so the refusal holds with the
   stablecoin corridor allowlist off. x402 cannot move them, because it signs under the USDC

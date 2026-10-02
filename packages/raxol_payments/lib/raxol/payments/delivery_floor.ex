@@ -11,7 +11,9 @@ defmodule Raxol.Payments.DeliveryFloor do
   a direct `run/2` caller; `"1e6"`, `"995000.0"`, `"1,000,000"` and `"-1"` are
   refused as `{:invalid_min_to_amount, value}` rather than read as absent,
   because a floor the caller wrote and we ignored bounds nothing while looking
-  as if it did.
+  as if it did. `ExecuteXochiIntent` goes further and refuses a written `0`
+  or `""` too, and on a same-asset corridor takes the higher of this floor and
+  its automatic one.
 
   ## A floor on a non-USD stablecoin destination
 

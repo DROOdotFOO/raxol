@@ -38,8 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destination without a positive `min_to_amount`, as `{:unpriced_asset, detail}`,
   until an FX rate gates the conversion (ADR-0040 decision 7). Dollar spend caps
   would otherwise count them at par. A `min_to_amount` of `0` bounds nothing:
-  Relay reads it as absent and Xochi refuses it. x402 refuses a challenge whose asset is a non-USD
-  stablecoin, which the spend gate would otherwise reserve and charge at par.
+  Relay reads it as absent and Xochi refuses it. x402 refuses a challenge whose
+  asset is a non-USD stablecoin, which the spend gate would otherwise reserve
+  and charge at par.
 - `ExecuteRelayTransfer` accepts `min_to_amount` and refuses a quote delivering
   less before the spend is authorized. It previously had no delivery floor, so
   a quote could deliver any amount.
