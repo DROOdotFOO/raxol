@@ -51,6 +51,7 @@
   New tests over each constructor, the engine, a headless session, the MCP tool, the dispatcher and a real SSH client (pty-req and window change at 4294967295x4294967295, and at 0x0) failed before.
 
 - **`raxol_web3`: keyed RPC URLs no longer render through `inspect/1`.** Provider URLs usually carry the key (`/v2/<key>`, `?api-key=`), and handles reach agent tool contexts, `Router.candidates/3` and crash reports, which format a process's state whole. `FX.Chainlink` now hides `rpc_urls`, `Backend.JSONRPC` and `Backend.Solana` hide `url`, and `Backend.Blockscout` hides `rpc_url`, as each already hid `http_opts`. Error terms keep naming an origin by `Raxol.Web3.Origin` id.
+- **`raxol_agent`: `config :raxol_agent, :web3, router:` must be a `Raxol.Web3.Router`.** `router: false` (or any other value) loaded and offered the `web3` tool over no router. It now refuses the boot with an `ArgumentError` naming the setting and its shape.
 - **`raxol_web3`: smaller FX fixes from the second review.**
   - `FX.Chainlink`'s identity cache key now digests the request headers in `:http_opts` with the URL, so a handle routed to another network by a header no longer reads a sibling's verified identity. A rate served by a fallback feed carries `:fallback_from`, the primary's failure.
   - `FX.price_fn/3` logs a peg's rate state when it changes, not on every sweep: a `{:blocked, _}` refusal at warning, anything else at info, a fallback feed with the primary's reason, and the return to the primary. It folds symbols with `String.upcase/1`, as `Raxol.Payments.Assets` does.

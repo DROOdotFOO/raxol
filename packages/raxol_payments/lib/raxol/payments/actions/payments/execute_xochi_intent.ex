@@ -304,8 +304,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # positive integer in destination atomic units; anything else, `0` included,
   # is refused before quoting (`validate_min_to_amount/1`). A same-asset
   # corridor (same token symbol both sides) always gets an automatic floor:
-  # delivery must be at least `:min_delivery_bps` of par (default 8000 = 80%).
-  # This is a theft backstop, not a pricing check -- Xochi enforces pricing;
+  # delivery must be at least `:min_delivery_bps` of par (default 8000 = 80%),
+  # judged like any floor on the lowest amount the quote states, so a
+  # `slippage_bps` past about 2000 lets an honest quote's own minimum fall under
+  # it. This is a theft backstop, not a pricing check -- Xochi enforces pricing;
   # legitimate fees and slippage stay well inside 80%. An explicit
   # `min_to_amount` can only raise that floor, never lower it: the caller
   # setting it is the agent the backstop exists to bound, so
