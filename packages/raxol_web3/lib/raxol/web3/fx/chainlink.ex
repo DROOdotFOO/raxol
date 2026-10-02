@@ -116,11 +116,12 @@ defmodule Raxol.Web3.FX.Chainlink do
   # A feed's identity cannot change under a proxy address we chose, so a
   # MATCHING identity is cached for a day; any other answer is never cached,
   # so it is re-read and cannot outlive the misconfiguration that produced it.
-  # The key is the origin (`scheme://host:port`, from `Raxol.Web3.HTTP`) plus
-  # chain id, proxy and selector. The URL path cannot be part of it: the cache
-  # takes no request URI as input, because a path often carries the provider
-  # key. Without the path, two handles on one host share an entry, which is
-  # harmless only because the entry is the expected answer and nothing else.
+  # The key is the origin (`scheme://host:port`, from `Raxol.Web3.HTTP`) plus a
+  # digest of the whole RPC URL, chain id, proxy and selector. The digest is
+  # what keeps one handle's verified identity from vouching for another handle
+  # on the same host whose path or query reaches a different chain; it is a
+  # truncated SHA-256, so a provider key in the path never enters the cache
+  # key (`Raxol.Web3.Backend.Aztec` keys its prefix the same way).
   # A round is never cached: its age is the whole question.
   @identity_ttl_ms 86_400_000
 
@@ -263,22 +264,29 @@ defmodule Raxol.Web3.FX.Chainlink do
       url,
       %{to: feed.proxy, data: selector},
       "latest",
-      call_opts(chainlink, kind, feed, selector)
+      call_opts(chainlink, kind, url, feed, selector)
     )
   end
 
-  defp call_opts(%__MODULE__{cache?: false} = chainlink, :identity, _feed, _selector),
+  defp call_opts(%__MODULE__{cache?: false} = chainlink, :identity, _url, _feed, _selector),
     do: chainlink.http_opts
 
-  defp call_opts(chainlink, :identity, feed, selector),
+  defp call_opts(chainlink, :identity, url, feed, selector),
     do:
       Keyword.put(chainlink.http_opts, :cache,
-        key: {:chainlink, feed.chain_id, feed.proxy, selector},
+        key: {:chainlink, url_digest(url), feed.chain_id, feed.proxy, selector},
         ttl_ms: @identity_ttl_ms,
         cacheable: &expected_response?(&1, selector, feed)
       )
 
-  defp call_opts(chainlink, :round, _feed, _selector), do: chainlink.http_opts
+  defp call_opts(chainlink, :round, _url, _feed, _selector), do: chainlink.http_opts
+
+  # Distinguishes two URLs and carries nothing back.
+  defp url_digest(url) do
+    :crypto.hash(:sha256, url)
+    |> Base.url_encode64(padding: false)
+    |> binary_part(0, 16)
+  end
 
   defp expected_response?(%{body: body}, selector, feed) do
     case Jason.decode(body) do
