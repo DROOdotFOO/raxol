@@ -1,0 +1,8 @@
+{
+  "grant_type": "authorization_code",
+  "code": "fake-authorization-code-0001",
+  "redirect_uri": "http://127.0.0.1:{port}/callback",
+  "client_id": "FAKECLIENTID000000000000000000000000TEST",
+  "code_verifier": "{code_verifier}",
+  "resource": "https://agent.robinhood.com/mcp/trading"
+}

@@ -86,6 +86,13 @@ defmodule Raxol.Agent.Auth.FlowTest do
       assert Flow.supported?(:openrouter)
       refute Flow.supported?(:anthropic)
     end
+
+    # The brokerage sign-in has a flow, but it is not a model-provider sign-in
+    # and must never be offered to ACP clients, `raxol login` or the TUI.
+    test "do not include the brokerage sign-in" do
+      refute :robinhood in Flow.providers()
+      refute Flow.supported?(:robinhood)
+    end
   end
 
   describe "a completed sign-in" do
@@ -223,6 +230,143 @@ defmodule Raxol.Agent.Auth.FlowTest do
 
       assert message =~ "op"
       assert message =~ "never writes a key to disk"
+    end
+  end
+
+  describe "the Robinhood sign-in" do
+    @issuer "https://agent.robinhood.com/mcp/trading"
+    @token_url "https://api.robinhood.com/oauth2/token/"
+    @register_url "https://agent.robinhood.com/oauth/trading/register"
+    @client_id "FAKECLIENTID000000000000000000000000TEST"
+    @access "fake-access-token-flow-000001"
+
+    defp rh_server(caller) do
+      fn url, body, _opts ->
+        send(caller, {:http, url, body})
+        rh_answer(url, body)
+      end
+    end
+
+    defp rh_answer(
+           "https://agent.robinhood.com/.well-known/oauth-protected-resource/mcp/trading",
+           :get
+         ) do
+      {:ok,
+       %{
+         status: 200,
+         body: %{"resource" => @issuer, "authorization_servers" => [@issuer]}
+       }}
+    end
+
+    defp rh_answer("https://agent.robinhood.com/.well-known/oauth-authorization-server", :get) do
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "issuer" => @issuer,
+           "authorization_endpoint" => "https://robinhood.com/oauth",
+           "token_endpoint" => @token_url,
+           "registration_endpoint" => @register_url,
+           "code_challenge_methods_supported" => ["S256"],
+           "token_endpoint_auth_methods_supported" => ["none"],
+           "authorization_response_iss_parameter_supported" => true
+         }
+       }}
+    end
+
+    defp rh_answer(@register_url, {:json, %{"redirect_uris" => uris}}) do
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "client_id" => @client_id,
+           "redirect_uris" => uris,
+           "token_endpoint_auth_method" => "none"
+         }
+       }}
+    end
+
+    defp rh_answer(@token_url, {:form, %{"grant_type" => "authorization_code"}}) do
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "access_token" => @access,
+           "token_type" => "Bearer",
+           "expires_in" => 810_101,
+           "refresh_token" => "fake-refresh-token-flow-000001",
+           "scope" => "internal"
+         }
+       }}
+    end
+
+    # The approving browser: follow the authorization URL's redirect_uri back
+    # to the loopback with the state it carried and the issuer, as the real
+    # provider does.
+    defp rh_browser(extra \\ %{}) do
+      fn url ->
+        query = url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+
+        params =
+          Map.merge(
+            %{"code" => "the-code", "state" => query["state"], "iss" => @issuer},
+            extra
+          )
+
+        fetch(query["redirect_uri"] <> "?" <> URI.encode_query(params))
+      end
+    end
+
+    test "returns a credential, with one redirect URI used throughout" do
+      assert {:ok, %Raxol.Agent.Auth.Credential{} = cred} =
+               Flow.run(:robinhood,
+                 browser_fn: rh_browser(),
+                 http_fn: rh_server(self()),
+                 timeout: 2_000
+               )
+
+      assert cred.access_token == @access
+      assert cred.client_id == @client_id
+      assert %DateTime{} = cred.expires_at
+
+      assert_received {:http, @register_url, {:json, %{"redirect_uris" => [registered]}}}
+      assert_received {:http, @token_url, {:form, form}}
+
+      assert registered =~ ~r{\Ahttp://127\.0\.0\.1:\d+/callback\z}
+      assert form["redirect_uri"] == registered
+      assert form["code"] == "the-code"
+    end
+
+    test "a callback from another issuer redeems nothing" do
+      assert {:error, :iss_mismatch} =
+               Flow.run(:robinhood,
+                 browser_fn: rh_browser(%{"iss" => "https://evil.example"}),
+                 http_fn: rh_server(self()),
+                 timeout: 2_000
+               )
+
+      refute_received {:http, @token_url, _form}
+    end
+
+    test "stops before registering when discovery does not match the pins" do
+      http_fn = fn url, body, opts ->
+        case rh_server(self()).(url, body, opts) do
+          {:ok, %{body: %{"token_endpoint" => _} = asm} = resp} ->
+            {:ok, %{resp | body: Map.put(asm, "token_endpoint", "https://evil.example/t")}}
+
+          other ->
+            other
+        end
+      end
+
+      assert {:error, :metadata_mismatch} =
+               Flow.run(:robinhood,
+                 browser_fn: fn _url -> flunk("browser opened") end,
+                 http_fn: http_fn,
+                 timeout: 2_000
+               )
+
+      refute_received {:http, @register_url, _body}
     end
   end
 

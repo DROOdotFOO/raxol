@@ -1,0 +1,232 @@
+{
+  "tools": [
+    {
+      "name": "get_accounts",
+      "description": "List the user's brokerage accounts. Each account includes an agentic_allowed field indicating whether it's tradable by you — accounts where it's false are read-only to you. Use this to look up account_number values needed by other tools. Exactly one account is tradable by you; when the user is choosing an account for a trade, use that account directly without asking. Does NOT return reliable buying power — route buying-power questions through get_portfolio.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "get_equity_quotes",
+      "description": "Get real-time stock quotes and the official last-completed-session close for one or more symbols.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbols": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "One or more stock symbols. Above 20 symbols, quotes still return but closes is omitted with closes_error set."
+          }
+        },
+        "required": [
+          "symbols"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "place_equity_order",
+      "description": "Place a real equity order with real money. Parameters mirror review_equity_order plus the optional ref_id. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.\n\nIdempotency: pass a fresh UUID as ref_id on the first call for each logical order, and re-send the SAME ref_id on retries of transient transport failures. Use a new ref_id only when the user wants a new order.\n\nParameter rules:\n- If the user has not specified type, ask. For immediate fills with price protection, prefer a marketable limit at the current ask over a plain market.\n- Outside regular hours, only limit orders execute. For an immediate fill during extended or overnight/24-hour sessions, place a limit order (a marketable limit at the current ask) with market_hours set to that session — not a market order. Market and stop orders are regular_hours-only; placed after hours as regular_hours they queue for the next regular open.\n- Provide exactly one of quantity or dollar_amount, and take the value from the user — if they did not say how much, ask. Never substitute a default such as 1 share or $100. dollar_amount requires type=market (server computes shares from last_trade_price).\n- Fractional shares: only on type=market with market_hours=regular_hours, eligible accounts, up to 6 decimal places, no short sells.\n- limit_price required for limit/stop_limit; stop_price required for stop_market/stop_limit.\n- Fractional and dollar-based orders only place in regular_hours; the tool rejects them in other sessions.\n- tax_lots (specified-lot selling, sell only): to sell specific lots, first call get_equity_tax_lots for the symbol, then pass tax_lots as {open_lot_id, quantity} pairs whose quantities sum to the order quantity. Omit for default (FIFO) cost basis. US accounts only; not allowed with dollar_amount, stop orders, all_day_hours, or fractional limit orders.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_number": {
+            "type": "string",
+            "description": "Brokerage account number. Must come from the user or be clearly implied — never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Stock symbol."
+          },
+          "side": {
+            "type": "string",
+            "description": "'buy' or 'sell'."
+          },
+          "type": {
+            "type": "string",
+            "description": "'market', 'limit', 'stop_market', or 'stop_limit'."
+          },
+          "quantity": {
+            "type": "string",
+            "description": "Number of shares. Decimals (fractional) allowed for market + regular_hours only."
+          },
+          "dollar_amount": {
+            "type": "string",
+            "description": "USD notional (e.g. '100.00'). Only valid with type=market."
+          },
+          "limit_price": {
+            "type": "string",
+            "description": "Limit price; required for limit or stop_limit."
+          },
+          "stop_price": {
+            "type": "string",
+            "description": "Stop trigger price; required for stop_market or stop_limit."
+          },
+          "time_in_force": {
+            "type": "string",
+            "description": "'gfd' or 'gtc'. Default: gfd."
+          },
+          "market_hours": {
+            "type": "string",
+            "description": "'regular_hours' (default, 9:30–16:00 ET), 'extended_hours' (pre-/post-market), or 'all_day_hours' (the 24 Hour Market / overnight session). extended_hours and all_day_hours execute limit orders only — market, stop_market, and stop_limit are regular_hours-only and are rejected if tagged to another session."
+          },
+          "tax_lots": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "open_lot_id": {
+                  "type": "string",
+                  "description": "open_lot_id of the open tax lot to sell, from get_equity_tax_lots."
+                },
+                "quantity": {
+                  "type": "string",
+                  "description": "Shares to sell from this lot as a decimal string; at most the lot's quantity_available."
+                }
+              },
+              "required": [
+                "open_lot_id",
+                "quantity"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default FIFO cost basis, pass the exact lots as {open_lot_id, quantity} objects, where open_lot_id comes from get_equity_tax_lots and the quantities sum to the order quantity. Omit for default FIFO. Sell only; at most 30 lots; US accounts only. Not allowed with dollar_amount, stop_market/stop_limit, all_day_hours, or fractional-share limit orders."
+          },
+          "ref_id": {
+            "type": "string",
+            "description": "Idempotency key (UUID). Generate once per logical order and re-send on retry — the upstream deduplicates by ref_id. Omitting falls back to a server-generated key (loses client↔gateway idempotency)."
+          }
+        },
+        "required": [
+          "account_number",
+          "symbol",
+          "side",
+          "type"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": null
+    },
+    {
+      "name": "cancel_equity_order",
+      "description": "Cancel an open equity order by order_id. Always confirm with the user before calling. Resolve order_id via get_equity_orders if the user refers to it by symbol or description; pass the same account_number. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call. Cancellation may be rejected if the order has already filled, was already cancelled, or is otherwise ineligible.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_number": {
+            "type": "string",
+            "description": "Brokerage account that owns the order. Must come from the user or be clearly implied — never default from get_accounts. Must be agentic_allowed=true. The upstream rejects mismatches against the order's owning account."
+          },
+          "order_id": {
+            "type": "string",
+            "description": "Order UUID from get_equity_orders. Must live in account_number."
+          }
+        },
+        "required": [
+          "account_number",
+          "order_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": null
+    },
+    {
+      "name": "review_equity_order",
+      "description": "Simulate a stock order without placing it. Returns the current quote plus pre-trade alerts (buying power, PDT, instrument halt, etc.). Call this by default before place_equity_order unless the user has very explicitly asked to skip review. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.\n\nParameter rules:\n- If the user has not specified type, ask. For immediate fills with price protection, prefer a marketable limit at the current ask over a plain market.\n- Outside regular hours, only limit orders execute. For an immediate fill during extended or overnight/24-hour sessions, place a limit order (a marketable limit at the current ask) with market_hours set to that session — not a market order. Market and stop orders are regular_hours-only; placed after hours as regular_hours they queue for the next regular open.\n- Provide exactly one of quantity or dollar_amount, and take the value from the user — if they did not say how much, ask. Never substitute a default such as 1 share or $100. dollar_amount requires type=market (server computes shares from last_trade_price).\n- Fractional shares: only on type=market with market_hours=regular_hours, eligible accounts, up to 6 decimal places, no short sells.\n- limit_price required for limit/stop_limit; stop_price required for stop_market/stop_limit.\n- Fractional and dollar-based orders only place in regular_hours; the tool rejects them in other sessions.\n- tax_lots (specified-lot selling, sell only): to sell specific lots, first call get_equity_tax_lots for the symbol, then pass tax_lots as {open_lot_id, quantity} pairs whose quantities sum to the order quantity. Omit for default (FIFO) cost basis. US accounts only; not allowed with dollar_amount, stop orders, all_day_hours, or fractional limit orders.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_number": {
+            "type": "string",
+            "description": "Brokerage account number. Must come from the user or be clearly implied — never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Stock symbol."
+          },
+          "side": {
+            "type": "string",
+            "description": "'buy' or 'sell'."
+          },
+          "type": {
+            "type": "string",
+            "description": "'market', 'limit', 'stop_market', or 'stop_limit'."
+          },
+          "quantity": {
+            "type": "string",
+            "description": "Number of shares. Decimals (fractional) allowed for market + regular_hours only."
+          },
+          "dollar_amount": {
+            "type": "string",
+            "description": "USD notional (e.g. '100.00'). Only valid with type=market."
+          },
+          "limit_price": {
+            "type": "string",
+            "description": "Limit price; required for limit or stop_limit."
+          },
+          "stop_price": {
+            "type": "string",
+            "description": "Stop trigger price; required for stop_market or stop_limit."
+          },
+          "time_in_force": {
+            "type": "string",
+            "description": "'gfd' (good for day) or 'gtc' (good till cancelled). Default: gfd."
+          },
+          "market_hours": {
+            "type": "string",
+            "description": "'regular_hours' (default, 9:30–16:00 ET), 'extended_hours' (pre-/post-market), or 'all_day_hours' (the 24 Hour Market / overnight session). extended_hours and all_day_hours execute limit orders only — market, stop_market, and stop_limit are regular_hours-only and are rejected if tagged to another session."
+          },
+          "tax_lots": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "open_lot_id": {
+                  "type": "string",
+                  "description": "open_lot_id of the open tax lot to sell, from get_equity_tax_lots."
+                },
+                "quantity": {
+                  "type": "string",
+                  "description": "Shares to sell from this lot as a decimal string; at most the lot's quantity_available."
+                }
+              },
+              "required": [
+                "open_lot_id",
+                "quantity"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default FIFO cost basis, pass the exact lots as {open_lot_id, quantity} objects, where open_lot_id comes from get_equity_tax_lots and the quantities sum to the order quantity. Omit for default FIFO. Sell only; at most 30 lots; US accounts only. Not allowed with dollar_amount, stop_market/stop_limit, all_day_hours, or fractional-share limit orders."
+          }
+        },
+        "required": [
+          "account_number",
+          "symbol",
+          "side",
+          "type"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": null
+    }
+  ]
+}

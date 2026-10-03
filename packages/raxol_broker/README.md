@@ -1,8 +1,8 @@
 # Raxol Broker
 
-Fail-closed brokerage policy parsing and initialization for Raxol. The package
-is pre-alpha. This release does not include order execution, arming, review, or
-journaling.
+Fail-closed brokerage policy parsing and initialization, plus a read-only
+Robinhood MCP session, for Raxol. The package is pre-alpha. This release does
+not include order execution, arming, review, or journaling.
 
 ## Policy
 
@@ -79,3 +79,51 @@ trust checks before publishing the final name atomically without replacement.
 An unsafe destination directory is refused without leaving a policy or staging
 file. An existing file or symlink is left unchanged, and the staging file is
 removed after successful publication or an ordinary error.
+
+## Robinhood sign-in
+
+```elixir
+:ok = Raxol.Broker.Login.run()
+{:ok, session} = Raxol.Broker.MCP.Client.start_link([])
+{:ok, tools} = Raxol.Broker.MCP.Client.list_tools(session)
+{:ok, result} = Raxol.Broker.MCP.Client.call(session, "get_accounts", %{})
+```
+
+`Login.run/1` opens the browser on Robinhood's consent page and waits for the
+redirect on `http://127.0.0.1:<port>/callback`. The endpoints are pinned in
+`Raxol.Agent.Auth.Robinhood`; discovery metadata is fetched only to confirm
+them, and any difference stops the sign-in. The client registers itself
+(dynamic client registration, public client, PKCE S256), and the callback must
+carry the `state` it sent and `iss` equal to
+`https://agent.robinhood.com/mcp/trading`. The resulting credential is written
+encrypted; nothing is stored if any step fails.
+
+### Credential at rest
+
+`Raxol.Broker.CredentialStore` keeps the credential in
+`~/.raxol/broker/robinhood.credential` (override with
+`$RAXOL_BROKER_CREDENTIAL`) as an AES-256-GCM envelope. The 256-bit key lives
+in 1Password when the `op` CLI is installed, otherwise in the macOS login
+keychain (service `raxol.broker.credential-key`, account `robinhood`). On any
+other system without `op` there is no key store, and the store returns
+`{:error, {:keychain_unavailable, :unsupported_os}}` instead of writing.
+
+The keychain item is created by `security`, so any process running as the
+same user can read it without a prompt. The keychain protects copies of
+`~/.raxol` that leave the machine (backups, dotfile sync), not the running
+account. The key is written over stdin and never appears in a process's
+arguments.
+
+### Session
+
+`Raxol.Broker.MCP.Client` is the only path to the MCP server. It refreshes the
+token shortly before it expires. On a 401 it refreshes once, however many
+callers are waiting, stores the rotated refresh token before using the new
+access token, and retries each request once. If the refreshed token is refused
+too, every call returns `{:error, :unauthorized}` until you sign in again; the
+session stops talking to the server but does not crash.
+
+Only the tools Robinhood marks read-only (`get_*`, `preview_scan`, `run_scan`,
+`search`) can be called. Orders, cancels, reviews, watchlist, alert and scan
+changes, and unknown names return `{:error, {:tool_denied, name}}` without a
+request, and `list_tools/1` lists only the allowed tools.

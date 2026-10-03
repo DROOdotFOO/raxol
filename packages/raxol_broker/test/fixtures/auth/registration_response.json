@@ -1,0 +1,8 @@
+{
+  "client_id": "FAKECLIENTID000000000000000000000000TEST",
+  "client_name": "Raxol",
+  "redirect_uris": [
+    "http://127.0.0.1:{port}/callback"
+  ],
+  "token_endpoint_auth_method": "none"
+}

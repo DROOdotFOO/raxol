@@ -1,0 +1,7 @@
+{
+  "status": 401,
+  "headers": {
+    "www-authenticate": "Bearer error=\"invalid_token\", error_description=\"Access token is invalid. Please attempt a token refresh.\", resource_metadata=\"https://agent.robinhood.com/.well-known/oauth-protected-resource\""
+  },
+  "body": "JWT verification failed"
+}

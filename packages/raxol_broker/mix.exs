@@ -32,7 +32,15 @@ defmodule RaxolBroker.MixProject do
   defp deps do
     [
       raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent", []),
+      raxol_dep(:raxol_mcp, "~> 2.7", "../raxol_mcp", []),
       {:decimal, "~> 3.0"},
+      # The Robinhood MCP endpoint is remote: `Raxol.MCP.Client.Transport.Http`
+      # compiles only with mint, and the OAuth discovery, registration and
+      # token calls default to Req. Both are optional upstream.
+      {:mint, "~> 1.8"},
+      {:castore, "~> 1.0"},
+      {:req, "~> 0.5"},
+      {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
@@ -48,7 +56,7 @@ defmodule RaxolBroker.MixProject do
   end
 
   defp description do
-    "Fail-closed brokerage policy parsing and initialization."
+    "Fail-closed brokerage policy, encrypted Robinhood credentials and a read-only MCP session."
   end
 
   defp package do
