@@ -78,6 +78,10 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
   @retry_attempts 3
   @retry_backoff_ms 5
 
+  # Literal map so canonical kinds decode in a fresh VM where nothing has
+  # interned their atoms yet (String.to_existing_atom would raise).
+  @kinds Map.new(ThreadEvent.canonical_kinds(), &{Atom.to_string(&1), &1})
+
   @impl true
   def append(config, thread_id, kind, payload, opts \\ []) do
     ensure_postgrex_loaded!()
@@ -387,11 +391,21 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
     ThreadEvent.new(
       thread_id: thread_id,
       sequence: sequence,
-      kind: String.to_existing_atom(kind_str),
+      kind: decode_kind(kind_str),
       payload: maybe_decode(payload_bin),
       metadata: :erlang.binary_to_term(metadata_bin),
       recorded_at: recorded_at
     )
+  end
+
+  defp decode_kind(kind_str) when is_map_key(@kinds, kind_str), do: Map.fetch!(@kinds, kind_str)
+
+  # Custom kinds round-trip as atoms when interned; otherwise stay strings
+  # rather than crash the read or mint atoms from stored data.
+  defp decode_kind(kind_str) do
+    String.to_existing_atom(kind_str)
+  rescue
+    ArgumentError -> kind_str
   end
 
   defp maybe_decode(nil), do: nil
