@@ -25,12 +25,18 @@ defmodule Raxol.Agent.Backend.Native do
   - `:mcp_server_command` / `:mcp_server_args` -- the MCP server launcher; tools
     are injected only when this is set (and `:actions` is non-empty).
   - `:extra_args` -- raw argv appended to the CLI invocation.
-  - `:env` -- `[{name, value}]` strings added to the CLI's environment and to
-    the injected MCP server's `env` entry. The CLI otherwise gets the node's
-    environment minus raxol's own secrets (`Raxol.Core.ChildEnv`); naming one
-    here passes it, e.g. `RAXOL_SLEUTH_API_KEY` for an MCP server that is a
-    raxol node with `fx:` configured. A value given here is written into the
-    MCP config file, which lives in a directory only the node's user can read.
+  - `:env` -- `[{name, value}]` strings added to the CLI's own environment.
+    The CLI otherwise gets the node's environment minus raxol's own secrets
+    (`Raxol.Core.ChildEnv`); naming one here passes it to the CLI.
+  - `:mcp_env` -- `[{name, value}]` strings written only into the injected
+    MCP server's `env` entry, never into the CLI's environment. A secret the
+    MCP server needs goes here, e.g. `RAXOL_SLEUTH_API_KEY` for an MCP server
+    that is a raxol node with `fx:` configured.
+
+  Anything given to the CLI or to its MCP server is readable by the CLI and
+  by any shell command it runs: they run as the node's user, and `:mcp_env`
+  is written into the MCP config file the CLI reads (in a directory only that
+  user can read). Do not hand either a secret the vendor's model must not see.
   """
 
   @default_timeout 120_000
@@ -293,9 +299,7 @@ defmodule Raxol.Agent.Backend.Native do
              actions: actions,
              command: command,
              args: Keyword.get(opts, :mcp_server_args, []),
-             # Not every CLI hands its own environment to the servers it
-             # launches, so what the caller passed goes in the entry too.
-             env: Map.new(Keyword.get(opts, :env, []))
+             env: Map.new(Keyword.get(opts, :mcp_env, []))
            ) do
         {:ok, path} -> {path, mcp_cleanup(path)}
         {:error, _} -> {nil, &noop/0}

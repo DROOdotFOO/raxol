@@ -120,7 +120,7 @@ defmodule Raxol.Agent.Backend.NativeTest do
     end
   end
 
-  describe ":env" do
+  describe ":env and :mcp_env" do
     setup do
       previous = System.get_env("RAXOL_SHARE_SECRET")
       System.put_env("RAXOL_SHARE_SECRET", "probe-not-a-secret")
@@ -144,11 +144,33 @@ defmodule Raxol.Agent.Backend.NativeTest do
                Native.complete(FakeDriver, messages(), extra_args: ["env"], env: env)
     end
 
-    test "a passed variable is in the env of the MCP server the CLI is told to start" do
+    test "an :mcp_env variable is in the env of the MCP server the CLI is told to start" do
       assert {:ok, %{content: "passed"}} =
                Native.complete(FakeDriver, messages(),
                  extra_args: ["mcp_env"],
+                 mcp_env: [{"RAXOL_NATIVE_PROBE", "passed"}],
+                 actions: [Greet],
+                 mcp_server_command: "raxol-mcp-server"
+               )
+    end
+
+    test "an :env variable is not written into the MCP server entry" do
+      assert {:ok, %{content: "unset"}} =
+               Native.complete(FakeDriver, messages(),
+                 extra_args: ["mcp_env"],
                  env: [{"RAXOL_NATIVE_PROBE", "passed"}],
+                 actions: [Greet],
+                 mcp_server_command: "raxol-mcp-server"
+               )
+    end
+
+    test "an :mcp_env variable never reaches the CLI's own environment" do
+      mcp_env = [{"RAXOL_NATIVE_PROBE", "passed"}, {"RAXOL_SHARE_SECRET", "given"}]
+
+      assert {:ok, %{content: "unset|unset"}} =
+               Native.complete(FakeDriver, messages(),
+                 extra_args: ["env"],
+                 mcp_env: mcp_env,
                  actions: [Greet],
                  mcp_server_command: "raxol-mcp-server"
                )

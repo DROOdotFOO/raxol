@@ -48,6 +48,12 @@ defmodule Raxol.Core.ChildEnv do
   `/proc/<pid>/environ` on Linux). Keeping a secret away from those means not
   putting it in the node's environment at all: a config provider, a 0600 file
   or `op`.
+
+  Nor does it hide what a caller hands a child on purpose. A vendor agent CLI
+  runs its own shell tool as the node's user, so a variable passed to the CLI,
+  or written into the MCP config of a server it launches
+  (`Raxol.Agent.Backend.Native`'s `:env` and `:mcp_env`), is readable by any
+  command the CLI's model runs.
   """
 
   @secrets ~w(
