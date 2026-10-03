@@ -21,9 +21,32 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
       signer; otherwise `config :raxol_payments, :xochi_deposit_attestation_signer`,
       otherwise the live capability matrix's `deposit_attestation_signer`.
 
+  ## Delivery floor: a pre-funding filter, not a bound
+
+  `min_to_amount` is read by `Raxol.Payments.DeliveryFloor`: absent, or a
+  positive integer in destination atomic units, else
+  `{:invalid_min_to_amount, value}`. A destination with a non-USD peg
+  (`Assets.fx_peg/2`: EURC, EURe, ZCHF) needs one, in that token's units, and
+  is refused before any quote is fetched without it, because no FX rate gives
+  a par to floor against (ADR-0040 decision 6). The quote is judged on the lowest
+  amount it states (its `to_amount`, and its own `min_to_amount` when it gives
+  one), and a quote below the floor returns no deposit address.
+
+  That is all it does. The deposit attestation binds the deposit address and
+  the origin leg, not `to_amount`, `min_to_amount`, the destination or the
+  recipient, and the floor is not sent to Xochi, so a compromised quote
+  endpoint can state any amount and nothing here bounds what is delivered
+  after the deposit lands.
+
   Errors are machine-readable: `:attestation_mismatch`, `:missing_attestation`,
   `:deposit_signer_unavailable`, `:not_a_deposit_route`, `{:not_solvable, reason}`,
-  or a request-validation tuple (e.g. `{:invalid_wallet, _}`).
+  `{:unpriced_asset, detail}`, `{:invalid_min_to_amount, value}`,
+  `{:implausible_min_to_amount, detail}`, `{:delivery_below_floor, detail}`,
+  `{:invalid_quote_amount, %{field: field, value: value}}` (the quote served
+  `to_amount` or `min_to_amount` as a JSON float that is not an integer of at
+  most 2^53, which is refused rather than reformatted; an integral one is
+  returned as its integer string), or a request-validation tuple (e.g.
+  `{:invalid_wallet, _}`).
   """
 
   use Raxol.Agent.Action,
@@ -61,6 +84,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
           description: "EVM destination recipient (0x...); the Tron wallet cannot receive on EVM"
         ],
         slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
+        min_to_amount: [
+          type: :string,
+          description:
+            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; \"0\" counts as absent here and on the Relay tool, but the Xochi intent tool refuses it). A quote stating less returns no deposit address. This filters the unattested quote before you fund it; it does not bound what is delivered. Required for a non-USD stablecoin destination, in that token's units."
+        ],
         trust_score: [type: :integer, description: "Trust score for tier/fee"]
       ],
       output: [
@@ -75,10 +103,15 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
         ],
         from_amount: [type: :string],
         to_amount: [type: :string],
+        min_to_amount: [
+          type: :string,
+          description: "The quote's own stated minimum delivery, when it gives one; unattested"
+        ],
         recipient_address: [type: :string]
       ]
     ]
 
+  alias Raxol.Payments.DeliveryFloor
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.DepositRouteRequest
 
@@ -86,11 +119,21 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
   @impl true
   def run(params, context) do
     with {:ok, config} <- fetch_config(context),
-         {:ok, instructions} <-
-           Xochi.deposit_route_quote(config, build_request(params), signer_opts(context)) do
-      {:ok, summary(instructions)}
+         request = build_request(params),
+         {:ok, floor} <- delivery_floor(request, params),
+         {:ok, instructions} <- Xochi.deposit_route_quote(config, request, signer_opts(context)),
+         :ok <- assert_delivery_floor(instructions, floor) do
+      summary(instructions)
     end
   end
+
+  defp delivery_floor(%DepositRouteRequest{} = request, params) do
+    with {:ok, min_out} <- DeliveryFloor.parse(Map.get(params, :min_to_amount)) do
+      DeliveryFloor.for_route(min_out, Map.from_struct(request))
+    end
+  end
+
+  defp assert_delivery_floor(instructions, floor), do: DeliveryFloor.check(instructions, floor)
 
   defp fetch_config(context) do
     case Map.fetch(context, :xochi_config) do
@@ -121,14 +164,45 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
     }
   end
 
+  # `min_to_amount` only when the quote stated one. Amounts are reported as the
+  # strings the output schema declares: a quote may serve them as JSON numbers,
+  # which pass the floor and would otherwise fail output validation. A JSON
+  # float is stringified only when it is integral and at most 2^53, where the
+  # float is exactly the integer the quote wrote; any other float is refused as
+  # `{:invalid_quote_amount, %{field: field, value: value}}` rather than
+  # reformatted into an amount the quote never stated.
   defp summary(instructions) do
-    Map.take(instructions, [
+    instructions
+    |> Map.take([
       :intent_id,
       :deposit_address,
       :deposit_deadline,
       :from_amount,
       :to_amount,
+      :min_to_amount,
       :recipient_address
     ])
+    |> Map.reject(&match?({:min_to_amount, nil}, &1))
+    |> Enum.reduce_while({:ok, %{}}, fn {field, value}, {:ok, acc} ->
+      case amount_string(field, value) do
+        {:ok, value} -> {:cont, {:ok, Map.put(acc, field, value)}}
+        :error -> {:halt, {:error, {:invalid_quote_amount, %{field: field, value: value}}}}
+      end
+    end)
   end
+
+  @max_exact_float Integer.pow(2, 53)
+
+  defp amount_string(field, n) when field in [:to_amount, :min_to_amount] and is_integer(n),
+    do: {:ok, Integer.to_string(n)}
+
+  defp amount_string(field, n) when field in [:to_amount, :min_to_amount] and is_float(n) do
+    int = trunc(n)
+
+    if int == n and abs(int) <= @max_exact_float,
+      do: {:ok, Integer.to_string(int)},
+      else: :error
+  end
+
+  defp amount_string(_field, value), do: {:ok, value}
 end

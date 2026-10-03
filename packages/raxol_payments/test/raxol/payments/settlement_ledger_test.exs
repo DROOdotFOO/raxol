@@ -32,6 +32,114 @@ defmodule Raxol.Payments.SettlementLedgerTest do
     )
   end
 
+  # Margin is summed per entry, each on its own basis, net of its own gas: an
+  # entry that cannot be priced takes neither its fee nor its gas into the total.
+  test "usd_margin sums only entries with a basis, each net of its own gas",
+       %{ledger: ledger} do
+    eth = fn
+      "ETH" -> Decimal.new("1000")
+      _ -> nil
+    end
+
+    # 0.001 ETH of gas at $1000: $1 per entry.
+    gas = %{gas_native: 1_000_000_000_000_000}
+    usdc = %{from_symbol: "USDC", from_decimals: 6, to_symbol: "USDC", to_decimals: 6}
+    margin = fn -> SettlementLedger.cumulative_subsidy(ledger, price_fn: eth).usd_margin end
+
+    # Legs recorded, euro leg unpriced, $5 fee: no basis, so out of the margin
+    # entirely. It used to fall back to the fee and read +$4.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(
+        Map.merge(gas, %{
+          intent_id: "xi_eur",
+          fee_collected: "5000000",
+          from_amount: "1100000",
+          from_symbol: "USDC",
+          from_decimals: 6,
+          to_amount: "950000000000000000",
+          to_symbol: "EURe",
+          to_decimals: 18
+        })
+      )
+    )
+
+    assert margin.() == nil
+
+    # $0.000001 of spread, $1 of gas. With the entry above it used to read
+    # -$1.999999: both entries' gas against one entry's revenue.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(
+        gas
+        |> Map.merge(usdc)
+        |> Map.merge(%{intent_id: "xi_tiny", from_amount: "1000001", to_amount: "1000000"})
+      )
+    )
+
+    assert Decimal.equal?(margin.(), Decimal.new("-0.999999"))
+
+    # Legs never recorded: the $50 venue fee is its basis.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(Map.merge(gas, %{intent_id: "xi_gap", fee_collected: "50000000"}))
+    )
+
+    assert Decimal.equal?(margin.(), Decimal.new("48.000001"))
+
+    # A priced spread whose gas is in POL, which this price_fn does not answer:
+    # out of the margin, and the coverage count says so.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(
+        gas
+        |> Map.merge(usdc)
+        |> Map.merge(%{
+          intent_id: "xi_pol",
+          gas_symbol: "POL",
+          from_amount: "1100000",
+          to_amount: "1000000"
+        })
+      )
+    )
+
+    agg = SettlementLedger.cumulative_subsidy(ledger, price_fn: eth)
+    assert Decimal.equal?(agg.usd_margin, Decimal.new("48.000001"))
+    assert agg.count == 4
+    assert agg.margin_count == 2
+    assert agg.gas_unknown_count == 0 and agg.unpriced_count == 1
+  end
+
+  test "gas_unpriced_count counts known gas no price answers, once per entry",
+       %{ledger: ledger} do
+    eth = fn
+      "ETH" -> Decimal.new("1000")
+      _ -> nil
+    end
+
+    count = fn ->
+      agg = SettlementLedger.cumulative_subsidy(ledger, price_fn: eth)
+      {agg.gas_unpriced_count, agg.gas_unknown_count}
+    end
+
+    SettlementLedger.record_settlement(ledger, l1_fill(%{intent_id: "xi_eth"}))
+    assert count.() == {0, 0}
+
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(%{intent_id: "xi_pol", gas_symbol: "POL", gas_chain_id: 137})
+    )
+
+    assert count.() == {1, 0}
+
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(%{intent_id: "xi_pending", gas_symbol: "POL", gas_native: nil})
+    )
+
+    assert count.() == {1, 1}
+  end
+
   test "records a settlement and is idempotent by intent_id", %{ledger: ledger} do
     assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, l1_fill())
     assert {:ok, :duplicate} = SettlementLedger.record_settlement(ledger, l1_fill())
@@ -146,6 +254,127 @@ defmodule Raxol.Payments.SettlementLedgerTest do
 
     assert Decimal.equal?(agg.usd_revenue, Decimal.new("0.097513"))
     assert Decimal.compare(agg.usd_margin, 0) == :lt
+  end
+
+  # ADR-0040 decision 6: an unpriced leg used to vanish from usd_revenue with no
+  # trace, so a report with EUR legs read as smaller rather than as partial.
+  test "an entry with an unpriced leg is counted, not silently dropped", %{ledger: ledger} do
+    usdc_leg = %{from_amount: "1100000", from_symbol: "USDC", from_decimals: 6}
+    eure_to = %{to_amount: "950000000000000000", to_symbol: "EURe", to_decimals: 18}
+    usdc_to = %{to_amount: "1002487", to_symbol: "USDC", to_decimals: 6}
+
+    SettlementLedger.record_settlement(ledger, l1_fill(Map.merge(usdc_leg, eure_to)))
+
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(Map.merge(%{intent_id: "xi_2"}, Map.merge(usdc_leg, usdc_to)))
+    )
+
+    unpriced = SettlementLedger.margin_by_destination(ledger)[1]
+    assert unpriced.count == 2
+    assert unpriced.unpriced_count == 1
+    assert Decimal.equal?(unpriced.usd_revenue, Decimal.new("0.097513"))
+
+    eur = fn
+      "EURe" -> Decimal.new("1.1336")
+      _ -> nil
+    end
+
+    priced = SettlementLedger.margin_by_destination(ledger, price_fn: eur)[1]
+    assert priced.unpriced_count == 0
+    # 1.10 - 0.95 * 1.1336 = 0.02308, plus the USDC fill's 0.097513.
+    assert Decimal.equal?(priced.usd_revenue, Decimal.new("0.120593"))
+  end
+
+  test "an unpriced fee counts as unpriced, and a missing leg as a recording gap",
+       %{ledger: ledger} do
+    usdc_legs = %{
+      from_amount: "1100000",
+      from_symbol: "USDC",
+      from_decimals: 6,
+      to_amount: "1002487",
+      to_symbol: "USDC",
+      to_decimals: 6
+    }
+
+    eure_fee = %{fee_collected: "50000000000000000", fee_currency: "EURe", fee_decimals: 18}
+    eure_to = %{to_amount: "950000000000000000", to_symbol: "EURe", to_decimals: 18}
+
+    for fill <- [
+          # Priced throughout.
+          Map.put(usdc_legs, :intent_id, "xi_1"),
+          # No delivered amount recorded: a gap, not a pricing failure.
+          usdc_legs |> Map.put(:intent_id, "xi_2") |> Map.put(:to_amount, nil),
+          # Dollar legs, euro fee.
+          usdc_legs |> Map.put(:intent_id, "xi_3") |> Map.merge(eure_fee),
+          # Euro leg and euro fee: one entry, counted once.
+          usdc_legs |> Map.put(:intent_id, "xi_4") |> Map.merge(eure_to) |> Map.merge(eure_fee),
+          # A zero fee is zero in any currency.
+          usdc_legs |> Map.put(:intent_id, "xi_5") |> Map.merge(%{eure_fee | fee_collected: "0"})
+        ] do
+      SettlementLedger.record_settlement(ledger, l1_fill(fill))
+    end
+
+    agg = SettlementLedger.margin_by_destination(ledger)[1]
+    assert agg.count == 5
+    assert agg.unpriced_count == 2
+    assert agg.recording_gap_count == 1
+
+    eur = fn
+      "EURe" -> Decimal.new("1.1336")
+      _ -> nil
+    end
+
+    priced = SettlementLedger.margin_by_destination(ledger, price_fn: eur)[1]
+    assert priced.unpriced_count == 0
+    assert priced.recording_gap_count == 1
+  end
+
+  test "a gap entry's recorded leg is not judged; only its fee can make it unpriced",
+       %{ledger: ledger} do
+    eure_from = %{from_amount: "950000000000000000", from_symbol: "EURe", from_decimals: 18}
+
+    # A euro source with no delivered amount: its revenue is unknowable either
+    # way, so it is a gap and only a gap.
+    SettlementLedger.record_settlement(ledger, l1_fill(Map.put(eure_from, :intent_id, "xi_1")))
+
+    # The same with a euro fee: the fee is its margin basis, so it is both.
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(
+        Map.merge(eure_from, %{
+          intent_id: "xi_2",
+          fee_collected: "50000000000000000",
+          fee_currency: "EURe",
+          fee_decimals: 18
+        })
+      )
+    )
+
+    agg = SettlementLedger.margin_by_destination(ledger)[1]
+    assert agg.recording_gap_count == 2
+    assert agg.unpriced_count == 1
+  end
+
+  test "USDG is a dollar stablecoin, valued at usdc_price", %{ledger: ledger} do
+    SettlementLedger.record_settlement(
+      ledger,
+      l1_fill(%{
+        from_amount: "1100000",
+        from_symbol: "USDC",
+        from_decimals: 6,
+        to_amount: "1000000",
+        to_symbol: "USDG",
+        to_decimals: 6,
+        fee_collected: "2205",
+        fee_currency: "USDG"
+      })
+    )
+
+    agg = SettlementLedger.margin_by_destination(ledger)[1]
+    assert agg.unpriced_count == 0
+    assert Decimal.equal?(agg.usd_revenue, Decimal.new("0.1"))
+    assert Decimal.equal?(agg.usd_fee, Decimal.new("0.002205"))
   end
 
   test "native_drain_by_chain sums wei per destination chain", %{ledger: ledger} do

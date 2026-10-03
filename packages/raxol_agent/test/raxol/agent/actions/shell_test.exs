@@ -38,6 +38,18 @@ defmodule Raxol.Agent.Actions.ShellTest do
       assert result.exit_code == 0
       assert result.timed_out == false
     end
+
+    test "the command does not inherit raxol's secrets" do
+      # A variable no other test in this VM touches, so the async run is safe.
+      System.put_env("RAXOL_WALLET_KEY", "probe-not-a-key")
+      on_exit(fn -> System.delete_env("RAXOL_WALLET_KEY") end)
+
+      assert {:ok, %{output: "unset|home"}} =
+               Shell.run(
+                 %{command: ~s(printf '%s|%s' "${RAXOL_WALLET_KEY-unset}" "${HOME:+home}")},
+                 %{}
+               )
+    end
   end
 
   describe "wall-clock timeout kills the OS process group" do

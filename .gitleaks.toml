@@ -81,3 +81,21 @@ regexes = [
   '''NkfbyG7feH9aJhdnSs4d7D7kWCEnxrmNUbM7dbpC6MM''',
   '''TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq''',
 ]
+
+[[allowlists]]
+description = """
+Circle's EURC token contract on Base, registered in
+`Raxol.Payments.Assets` (ADR-0040) and used as a non-USD source in the
+payments tests. A contract address is published, not secret;
+`generic-api-key` matches it on entropy alone when it sits next to a
+`from_token:` key.
+
+Allowlisted BY VALUE, case-insensitively (the tests write the checksummed
+form, `Assets` the lowercase one), for the same reasons as above. A
+fingerprint goes stale on every rebase, and any other key-shaped string in
+those files still fails.
+"""
+targetRules = ["generic-api-key"]
+regexes = [
+  '''(?i)0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42''',
+]

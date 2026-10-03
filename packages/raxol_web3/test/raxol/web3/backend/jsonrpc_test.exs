@@ -142,6 +142,15 @@ defmodule Raxol.Web3.Backend.JSONRPCTest do
       assert {:error, :invalid_rpc_url} = JSONRPC.new("eip155:1", url: "http://node.test/")
       assert {:error, :invalid_rpc_url} = JSONRPC.new("eip155:1", url: "not a url")
     end
+
+    test "a keyed url does not render when the handle is inspected" do
+      # Provider URLs embed the key in the path, and a crash formats the handle
+      # whole into a log line.
+      {:ok, handle} = JSONRPC.new("eip155:8453", url: "https://base.example/v2/key-not-real")
+
+      refute inspect(handle, limit: :infinity) =~ "key-not-real"
+      assert elem(handle, 1).url =~ "key-not-real"
+    end
   end
 
   describe "capabilities" do
