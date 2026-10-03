@@ -15,6 +15,8 @@ defmodule Raxol.Core.ChildEnv do
   variables, plus each secret the caller did not set, mapped to `false`, which
   unsets it in the child. A caller that passes a secret explicitly keeps it,
   and a caller's own `false` is passed through as Port's unset marker.
+  `cmd_env/1` is the same for `System.cmd/3`'s `:env` option, whose unset
+  marker is `nil`.
 
   ## Configuration
 
@@ -36,6 +38,8 @@ defmodule Raxol.Core.ChildEnv do
 
   Port honours only the LAST `{:env, _}` in its options, so `port_env/1` must
   be the only one, or the last: a later `{:env, _}` drops the scrub silently.
+  For `System.cmd/3`, pass `cmd_env/1` as `:env`, never `port_env/1`: it
+  takes `nil`, not `false`, as the unset marker.
 
   ## What this does not do
 
@@ -122,4 +126,14 @@ defmodule Raxol.Core.ChildEnv do
 
   defp value(false), do: false
   defp value(value), do: to_charlist(value)
+
+  @doc """
+  A `System.cmd/3` `:env` value: `env` (string names and values, or `nil` to
+  unset) followed by every secret it does not name, mapped to `nil`.
+  """
+  @spec cmd_env([{String.t(), String.t() | nil}]) :: [{String.t(), String.t() | nil}]
+  def cmd_env(env \\ []) do
+    unset = for name <- secrets(), not List.keymember?(env, name, 0), do: {name, nil}
+    env ++ unset
+  end
 end

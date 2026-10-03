@@ -86,8 +86,13 @@ defmodule Raxol.Symphony.Review.Contract do
     end
   end
 
-  defp diff_args(nil), do: ["diff", "HEAD"]
-  defp diff_args(base) when is_binary(base), do: ["diff", "#{base}...HEAD"]
+  # The workspace is the implementer's, so its git config is agent-controlled:
+  # no external diff, textconv or fsmonitor command runs, and git itself gets
+  # the environment minus raxol's secrets (a repo's filter drivers still run).
+  @diff_prefix ~w(-c core.fsmonitor=false -c diff.external= diff --no-ext-diff --no-textconv)
+
+  defp diff_args(nil), do: @diff_prefix ++ ["HEAD"]
+  defp diff_args(base) when is_binary(base), do: @diff_prefix ++ ["#{base}...HEAD"]
 
   defp default_git(args, cwd) do
     cond do
@@ -98,7 +103,11 @@ defmodule Raxol.Symphony.Review.Contract do
   end
 
   defp run_git(args, cwd) do
-    case System.cmd("git", args, cd: cwd, stderr_to_stdout: true) do
+    case System.cmd("git", args,
+           cd: cwd,
+           stderr_to_stdout: true,
+           env: Raxol.Core.ChildEnv.cmd_env()
+         ) do
       {output, 0} -> {:ok, output}
       {output, status} -> {:error, {:git_failed, status, String.trim(output)}}
     end

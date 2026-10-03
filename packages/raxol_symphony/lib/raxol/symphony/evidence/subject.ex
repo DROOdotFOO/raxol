@@ -95,8 +95,14 @@ defmodule Raxol.Symphony.Evidence.Subject do
     end
   end
 
+  # The workspace belongs to an agent or a hook: git gets the environment
+  # minus raxol's secrets.
   defp run_git(args, cwd) do
-    case System.cmd("git", args, cd: cwd, stderr_to_stdout: true) do
+    case System.cmd("git", args,
+           cd: cwd,
+           stderr_to_stdout: true,
+           env: Raxol.Core.ChildEnv.cmd_env()
+         ) do
       {output, 0} -> {:ok, output}
       {output, status} -> {:error, {:git_failed, status, String.trim(output)}}
     end

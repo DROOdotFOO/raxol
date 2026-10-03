@@ -50,6 +50,18 @@ defmodule Raxol.Core.ChildEnvTest do
              "given|bar|home"
   end
 
+  test "cmd_env/1 scrubs a System.cmd child the same way, nil unsetting" do
+    script = ~s(printf '%s|%s|%s' "${RAXOL_SLEUTH_API_KEY-unset}" "$FOO" "${HOME:+home}")
+
+    assert {"unset|bar|home", 0} =
+             System.cmd("/bin/sh", ["-c", script], env: ChildEnv.cmd_env([{"FOO", "bar"}]))
+
+    assert {"given||", 0} =
+             System.cmd("/bin/sh", ["-c", script],
+               env: ChildEnv.cmd_env([{"RAXOL_SLEUTH_API_KEY", "given"}, {"HOME", nil}])
+             )
+  end
+
   describe "configuration" do
     setup do
       previous = Application.get_env(:raxol_core, ChildEnv)
