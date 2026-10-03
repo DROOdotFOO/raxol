@@ -294,7 +294,6 @@ defmodule Raxol.Agent.Auth.Loopback do
   defp reason_phrase(200), do: "OK"
   defp reason_phrase(400), do: "Bad Request"
   defp reason_phrase(404), do: "Not Found"
-  defp reason_phrase(_status), do: "OK"
 
   # The only markup a user of this flow ever sees. Plain, self-contained, and
   # escaped, since `message` can carry a provider-supplied description.

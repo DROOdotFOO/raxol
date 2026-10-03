@@ -334,6 +334,4 @@ defmodule Raxol.Agent.Auth.Robinhood do
   end
 
   defp error_kind(%{__struct__: module}), do: module
-  defp error_kind(other) when is_atom(other), do: other
-  defp error_kind(_other), do: :unknown
 end
