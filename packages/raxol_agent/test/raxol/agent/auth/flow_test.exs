@@ -238,7 +238,7 @@ defmodule Raxol.Agent.Auth.FlowTest do
     @token_url "https://api.robinhood.com/oauth2/token/"
     @register_url "https://agent.robinhood.com/oauth/trading/register"
     @client_id "FAKECLIENTID000000000000000000000000TEST"
-    @access "eyJhbGciOiJub25lIn0.eyJmYWtlIjp0cnVlfQ.FAKE-ACCESS-TOKEN-FLOW"
+    @access "fake-access-token-flow-000001"
 
     defp rh_server(caller) do
       fn url, body, _opts ->

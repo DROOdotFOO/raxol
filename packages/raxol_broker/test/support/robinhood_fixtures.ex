@@ -2,7 +2,10 @@ defmodule Raxol.Broker.Test.Fixtures do
   @moduledoc """
   The sanitized Robinhood auth exchange captured on 2026-10-02/03, replayed
   from `test/fixtures/auth`. Every token, code, client id and account id in
-  those files is synthetic.
+  those files is synthetic. The real access token is a JWT of about 1250
+  bytes; the fixtures use opaque `fake-access-token-*` strings instead,
+  because nothing here parses the token (expiry comes from `expires_in`)
+  and a JWT-shaped fake trips secret scanners.
   """
 
   @dir Path.expand("../fixtures/auth", __DIR__)

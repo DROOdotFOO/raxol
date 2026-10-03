@@ -1,5 +1,5 @@
 {
-  "access_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJmYWtlIjp0cnVlLCJnZW4iOjF9.FAKE-ACCESS-TOKEN-GEN1",
+  "access_token": "fake-access-token-gen1-000000",
   "expires_in": 810101,
   "token_type": "Bearer",
   "scope": "internal",

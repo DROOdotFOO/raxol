@@ -11,7 +11,7 @@ defmodule Raxol.Broker.CredentialStoreTest do
   alias Raxol.Broker.CredentialStore
   alias Raxol.Broker.Test.MemoryKeys
 
-  @access "eyJhbGciOiJub25lIn0.eyJmYWtlIjp0cnVlfQ.FAKE-ACCESS-TOKEN-STORE"
+  @access "fake-access-token-store-00001"
   @refresh "fake-refresh-token-store-00001"
   @uuid "00000000-0000-4000-8000-00000000fa4e"
 

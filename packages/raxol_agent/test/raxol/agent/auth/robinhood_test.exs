@@ -20,7 +20,7 @@ defmodule Raxol.Agent.Auth.RobinhoodTest do
   @redirect "http://127.0.0.1:4321/callback"
   @now ~U[2026-10-03 12:00:00Z]
 
-  @access "eyJhbGciOiJub25lIn0.eyJmYWtlIjp0cnVlfQ.FAKE-ACCESS-TOKEN-UNIT"
+  @access "fake-access-token-unit-000001"
   @refresh "fake-refresh-token-unit-000001"
   @rotated "fake-refresh-token-unit-000002"
 
