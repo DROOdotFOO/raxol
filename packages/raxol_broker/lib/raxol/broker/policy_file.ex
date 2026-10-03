@@ -12,9 +12,16 @@ defmodule Raxol.Broker.PolicyFile do
     max_notional_per_order: {:positive_decimal, :required},
     daily_notional_cap: {:positive_decimal, :required},
     max_position_weight: {:weight_or_unset, {:default, :unset}},
-    order_types: {{:unique_nonempty_list, [:market, :limit]}, {:default, [:limit]}},
+    order_types:
+      {{:unique_nonempty_list, [:market, :limit, :stop_limit, :stop_market]},
+       {:default, [:limit]}},
     options: {:boolean, {:default, false}},
+    advanced_orders: {:boolean, {:default, false}},
     after_hours_market: {:boolean, {:default, false}},
+    symbols_allow: {:symbols_or_unset, {:default, :unset}},
+    symbols_deny: {:symbols, {:default, []}},
+    max_orders_per_minute: {{:integer_range_or_unset, 1, 10_000}, {:default, :unset}},
+    drawdown_halt: {:weight_or_unset, {:default, :unset}},
     llm_ask_above: {:positive_decimal_or_unset, {:default, :unset}},
     ask_timeout: {{:integer_range, 1, 4_294_967_295}, {:default, 30_000}}
   ]
@@ -256,6 +263,21 @@ defmodule Raxol.Broker.PolicyFile do
         length(value) == length(Enum.uniq(value))
 
   defp valid_value?(:boolean, value), do: is_boolean(value)
+
+  defp valid_value?(:symbols_or_unset, :unset), do: true
+
+  defp valid_value?(:symbols_or_unset, value),
+    do: value != [] and valid_value?(:symbols, value)
+
+  defp valid_value?(:symbols, value) when is_list(value),
+    do:
+      Enum.all?(value, &Raxol.Broker.Intent.symbol?/1) and
+        length(value) == length(Enum.uniq(value))
+
+  defp valid_value?({:integer_range_or_unset, _minimum, _maximum}, :unset), do: true
+
+  defp valid_value?({:integer_range_or_unset, minimum, maximum}, value),
+    do: valid_value?({:integer_range, minimum, maximum}, value)
 
   defp valid_value?({:integer_range, minimum, maximum}, value),
     do: is_integer(value) and value >= minimum and value <= maximum

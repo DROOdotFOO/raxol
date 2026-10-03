@@ -28,7 +28,12 @@ defmodule Raxol.Broker.PolicyFileTest do
     assert policy[:max_position_weight] == :unset
     assert policy[:order_types] == [:limit]
     assert policy[:options] == false
+    assert policy[:advanced_orders] == false
     assert policy[:after_hours_market] == false
+    assert policy[:symbols_allow] == :unset
+    assert policy[:symbols_deny] == ["GME"]
+    assert policy[:max_orders_per_minute] == :unset
+    assert policy[:drawdown_halt] == :unset
     assert policy[:llm_ask_above] == :unset
     assert policy[:ask_timeout] == 30_000
   end
@@ -44,7 +49,12 @@ defmodule Raxol.Broker.PolicyFileTest do
               max_position_weight: :unset,
               order_types: [:limit],
               options: false,
+              advanced_orders: false,
               after_hours_market: false,
+              symbols_allow: :unset,
+              symbols_deny: [],
+              max_orders_per_minute: :unset,
+              drawdown_halt: :unset,
               llm_ask_above: :unset,
               ask_timeout: 30_000
             ]} = PolicyFile.new(max_notional_per_order, daily_notional_cap)
@@ -169,7 +179,9 @@ defmodule Raxol.Broker.PolicyFileTest do
       {:max_position_weight, Decimal.new("NaN")},
       {:llm_ask_above, Decimal.new("0")},
       {:llm_ask_above, Decimal.new("-1")},
-      {:llm_ask_above, Decimal.new("Infinity")}
+      {:llm_ask_above, Decimal.new("Infinity")},
+      {:drawdown_halt, Decimal.new("0")},
+      {:drawdown_halt, Decimal.new("1.01")}
     ]
 
     for {key, value} <- invalid_values do
@@ -189,7 +201,38 @@ defmodule Raxol.Broker.PolicyFileTest do
       options: :unset,
       after_hours_market: 0,
       llm_ask_above: "10",
-      ask_timeout: Decimal.new("30")
+      ask_timeout: Decimal.new("30"),
+      advanced_orders: :unset,
+      symbols_allow: "AAPL",
+      symbols_deny: :unset,
+      max_orders_per_minute: Decimal.new("5"),
+      drawdown_halt: 0
+    ]
+
+    for {key, value} <- invalid_values do
+      assert {:error, {:invalid_value, ^key, ^value}} =
+               valid_policy()
+               |> Keyword.put(key, value)
+               |> PolicyFile.validate()
+    end
+  end
+
+  test "validates symbol lists and the order-rate limit" do
+    assert {:ok, _policy} =
+             valid_policy()
+             |> Keyword.put(:symbols_allow, ["AAPL", "BRK.B", "BTC-USD"])
+             |> Keyword.put(:symbols_deny, ["GME"])
+             |> Keyword.put(:max_orders_per_minute, 10_000)
+             |> PolicyFile.validate()
+
+    invalid_values = [
+      symbols_allow: [],
+      symbols_allow: ["aapl"],
+      symbols_allow: ["AAPL", "AAPL"],
+      symbols_deny: [""],
+      symbols_deny: [:AAPL],
+      max_orders_per_minute: 0,
+      max_orders_per_minute: 10_001
     ]
 
     for {key, value} <- invalid_values do
@@ -402,7 +445,12 @@ defmodule Raxol.Broker.PolicyFileTest do
       max_position_weight: ":unset",
       order_types: "[:limit]",
       options: "false",
+      advanced_orders: "false",
       after_hours_market: "false",
+      symbols_allow: ":unset",
+      symbols_deny: ~s|["GME"]|,
+      max_orders_per_minute: ":unset",
+      drawdown_halt: ":unset",
       llm_ask_above: ":unset",
       ask_timeout: "30_000"
     ]
