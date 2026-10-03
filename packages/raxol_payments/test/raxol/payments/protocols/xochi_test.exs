@@ -556,6 +556,47 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       assert Jason.decode!(raw_body)["nonce"] == 281_474_976_710_655
     end
 
+    test "derives the execute nonce from a Permit2 pull's decimal uint256 nonce" do
+      # Permit2 serves its nonce as a decimal uint256 string (this one is from a
+      # live api.xochi.fi quote). Read as hex, an odd digit count decodes to
+      # nothing and every Permit2 intent echoed nonce 0; an even one read the
+      # digits as hex. Both lost the uniqueness the worker's dedup needs.
+      Application.put_env(:raxol_payments, :pull_solver_allowlist, [@permit2_spender])
+      on_exit(fn -> Application.delete_env(:raxol_payments, :pull_solver_allowlist) end)
+
+      for nonce <- [
+            "112114396471705291941186730714163110958588040774957772672265374070195054391013",
+            "11211439647170529194118673071416311095858804077495777267226537407019505439101"
+          ] do
+        pull =
+          canonical_permit2_pull(%{
+            message: %{"spender" => @permit2_spender, "nonce" => nonce}
+          })
+
+        quote_resp = %QuoteResponse{
+          intent_id: "xi_p2nonce",
+          quote_id: "xq_p2nonce",
+          can_solve: true,
+          payment_method: "permit2",
+          to_amount: "990000",
+          eip712_data: intent_eip712(@anvil_addr),
+          pull_authorization: pull
+        }
+
+        config = %{
+          base_url: "https://api.xochi.fi",
+          auth: :none,
+          req_options: [plug: echo_plug(self())]
+        }
+
+        assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet, request(@anvil_addr))
+        assert_receive {:req, "POST", "/api/intent/execute", _headers, raw_body}
+
+        assert Jason.decode!(raw_body)["nonce"] ==
+                 Bitwise.band(String.to_integer(nonce), Bitwise.bsl(1, 48) - 1)
+      end
+    end
+
     test "signs the served domain verbatim when it omits verifyingContract" do
       # Canonical XochiIntent domain has no verifyingContract.
       quote_resp =
