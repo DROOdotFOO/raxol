@@ -36,13 +36,19 @@ defmodule Raxol.Web3.FX.Sleuth do
   ## Every other field
 
   Typed and bounded at decode, so no upstream shape or size reaches a caller,
-  a model or `Raxol.Web3.Serialize`. Text fields (`as_of`, `name`, `corridor`,
-  `peg_currency`, the pool fields...) are a string of at most 256 bytes or
-  `nil`; `total` and `asset_count` a non-negative integer below 10^9 or `nil`;
-  `aliases` at most 32 such strings. No list is decoded past its cap: `assets`
-  past the page's `limit` (300 when none is given), `topPools` past 32,
-  `corridors` past 64, their asset lists past 400 in total, and
-  `sleuth_fx_rates_usd` past 64 rates keyed by a three- or four-letter code.
+  a model or `Raxol.Web3.Serialize`. Text fields (`as_of`, `name`,
+  `peg_mechanism`, `aliases`) are a string of at most 256 bytes or `nil`,
+  keeping only letters, numbers, punctuation, symbols, the ASCII space and
+  the combining marks on them: nothing a model reads can be invisible to the
+  person reading the same output. Identities (`symbol`, `corridor`,
+  `peg_currency`, a pool's `chain`, `dex`, `pair`, `base` and `quote`) are
+  printable ASCII or refused, never stripped, so `EUR\\u200BC` is not `EURC`;
+  a refused `symbol` is `""`. `total` and `asset_count` are a non-negative
+  integer below 10^9 or `nil`; `aliases` at most 32 strings. No list is
+  decoded past its cap: `assets` past the page's `limit` (300 when none is
+  given), `topPools` past 32, `corridors` past 64, their asset lists past 400
+  in total, and `sleuth_fx_rates_usd` past 64 rates keyed by a three- or
+  four-letter code.
   A body is bounded in bytes, not in entries: 262 KB of `{}` was 87,000 assets.
   A list entry that is not a JSON object is skipped, a number included: `1.5`
   decodes to a `%Decimal{}` struct, which `%{}` would match. A 200 body that
@@ -389,11 +395,11 @@ defmodule Raxol.Web3.FX.Sleuth do
   # basis-point input (ADR-0040, "A pool-implied rate as the second source").
   defp pool(raw) do
     %{
-      chain: string(raw["chain"]),
-      dex: string(raw["dex"]),
-      pair: string(raw["pair"]),
-      base: string(raw["base"]),
-      quote: string(raw["quote"]),
+      chain: ascii(raw["chain"]),
+      dex: ascii(raw["dex"]),
+      pair: ascii(raw["pair"]),
+      base: ascii(raw["base"]),
+      quote: ascii(raw["quote"]),
       price_usd: decimal(raw["priceUsd"]),
       liquidity_usd: decimal(raw["liquidityUsd"]),
       volume_24h_usd: decimal(raw["volume24hUsd"])
@@ -467,23 +473,36 @@ defmodule Raxol.Web3.FX.Sleuth do
   @max_aliases 32
   @max_count 1_000_000_000
 
-  # Text a model may read, with nothing in it the model cannot see: control
-  # and format characters (C0/C1, bidi overrides, zero-width), line and
-  # paragraph separators, variation selectors (which can encode arbitrary
-  # bytes) and the Hangul fillers are removed. Stripping rather than refusing
-  # keeps a legitimate name with a soft hyphen or a joined emoji readable.
+  # Text a model may read, with nothing in it the model cannot see. An
+  # allowlist, because a denylist is one survivor away from a hidden channel:
+  # letters, numbers, punctuation, symbols and the ASCII space are kept, and a
+  # combining mark only directly after a kept character, so an accent stays on
+  # its letter. Everything else goes: controls, format characters (bidi,
+  # zero-width, the emoji joiner), every separator but the ASCII space, and
+  # private-use and unassigned code points. Inside the kept categories, the
+  # default-ignorable code points (variation selectors, which can encode
+  # arbitrary bytes, the Mongolian and Khmer invisibles, the grapheme joiner,
+  # the Hangul fillers) and the blank-rendering U+2800 and U+1D159 go too.
+  # Stripping rather than refusing keeps a legitimate name readable.
   defp string(s) when is_binary(s) and byte_size(s) <= @max_string_bytes do
-    case String.replace(
-           s,
-           ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{115F}\x{1160}\x{3164}\x{FFA0}]/u,
-           ""
-         ) do
-      "" -> nil
-      visible -> visible
-    end
+    visible =
+      ~r/(?![\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}\x{1D159}])[\p{L}\p{N}\p{P}\p{S} ](?:(?![\x{034F}\x{17B4}\x{17B5}\x{180B}-\x{180D}\x{180F}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}])\p{M})*/u
+      |> Regex.scan(s)
+      |> IO.iodata_to_binary()
+
+    if visible == "", do: nil, else: visible
   end
 
   defp string(_), do: nil
+
+  # An identity (a symbol, a pool's chain, dex, pair or tokens): printable
+  # ASCII or nothing. Refused rather than stripped, so `EUR\u200BC` is not
+  # merged into `EURC` and no hidden character survives in a lookup key.
+  defp ascii(s) when is_binary(s) and byte_size(s) <= @max_string_bytes do
+    if s =~ ~r/\A[\x20-\x7E]+\z/, do: s, else: nil
+  end
+
+  defp ascii(_), do: nil
 
   # A code (peg currency, corridor): printable ASCII or nothing, and peg codes
   # compare in upper case, as `Raxol.Web3.FX.Chainlink.pegs/0` lists them.
@@ -509,7 +528,7 @@ defmodule Raxol.Web3.FX.Sleuth do
   defp aliases(_), do: []
 
   defp symbol(symbol) do
-    case string(symbol) do
+    case ascii(symbol) do
       nil -> ""
       symbol -> canonical_symbol(symbol)
     end

@@ -198,9 +198,11 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   first rounding. A list
   entry that is not a JSON object is skipped, a number included (`1.5` decodes to a
   `%Decimal{}` struct, which a `%{}` pattern matches). Every other field is typed and bounded:
-  text at most 256 bytes with everything invisible stripped (control and format characters,
-  line separators, variation selectors, Hangul fillers), codes (`corridor`, `pegCurrency`)
-  printable ASCII, counts non-negative integers below 10^9, at most 32 string
+  text at most 256 bytes keeping only letters, numbers, punctuation, symbols, the ASCII
+  space and combining marks on a kept character (an allowlist; default-ignorable code points
+  and the blank U+2800 and U+1D159 go too), identities (`symbol`, `corridor`, `pegCurrency`,
+  a pool's `chain`, `dex`, `pair`, `base`, `quote`) printable ASCII or refused, never
+  stripped, counts non-negative integers below 10^9, at most 32 string
   `aliases`, else `nil`. No list is decoded past a cap: `assets` past the requested `limit`
   (300 by default), `topPools` past 32, `corridors` past 64 with 400 corridor assets in
   total, and `fxRatesUsd` past 64 three- or four-letter codes, since a byte-bounded body of
