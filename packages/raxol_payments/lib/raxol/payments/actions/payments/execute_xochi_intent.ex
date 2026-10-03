@@ -554,7 +554,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   defp refuse_retry(:ok, _context, _amount, _store, _key), do: :ok
 
   defp refuse_retry({:error, reason}, context, amount, store, key) do
-    SpendGate.release(context, amount, %{protocol: :xochi, reason: :execute_failed})
+    SpendGate.release(context, amount, %{protocol: :xochi, reason: :requote_refused})
     Checkpoint.delete(store, key)
     {:refused, reason}
   end

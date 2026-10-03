@@ -495,6 +495,68 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       totals = Ledger.get_totals(ledger, "a1", policy())
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
+
+    test "a re-quote with a mismatched method is refused before it is signed" do
+      # WETH on Base is not USDC: the first quote names no method, the re-quote
+      # after a 409 asks for ERC-3009, which signs against the USDC contract.
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            n = Process.get(:quote_calls, 0)
+            Process.put(:quote_calls, n + 1)
+
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_#{n}",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "paymentMethod" => if(n == 0, do: nil, else: "erc3009"),
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      params = base_params(%{from_token: "0x4200000000000000000000000000000000000006"})
+
+      assert {:error, %Failure{reason: :method_mismatch}} = ExecuteXochiIntent.run(params, ctx)
+
+      # Only the first quote was signed.
+      assert_received :wallet_signed
+      refute_received :wallet_signed
+      assert :error = Checkpoint.fetch(store, "pay-1")
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+
+      assert [%{reason: :requote_refused}] =
+               for(
+                 %{metadata: %{type: :release} = meta} <- Ledger.get_history(ledger, "a1"),
+                 do: meta
+               )
+    end
   end
 
   describe "ExecuteXochiIntent spend gate" do
@@ -572,7 +634,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       refute_received :wallet_signed
     end
 
-    # ADR-0040 decision 7: a registered non-USD stablecoin scales correctly but
+    # ADR-0040 decision 6: a registered non-USD stablecoin scales correctly but
     # has no FX rate for the dollar spend cap, so it is refused as a source.
     test "a non-USD stablecoin source is refused before quoting or signing" do
       eurc_base = "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42"

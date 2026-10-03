@@ -204,6 +204,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left `ExecuteXochiIntent`'s spend reservation held and its checkpoint in
   place. It is now a definite failure: the reservation is released, the
   checkpoint deleted, and the action returns an error.
+- A re-quote `ExecuteXochiIntent` refuses after an expired execute releases
+  the reservation with `reason: :requote_refused` in the ledger entry's
+  metadata. It was recorded as `:execute_failed`, though nothing was executed.
 
 ### Security
 
