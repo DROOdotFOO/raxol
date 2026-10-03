@@ -207,6 +207,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A re-quote `ExecuteXochiIntent` refuses after an expired execute releases
   the reservation with `reason: :requote_refused` in the ledger entry's
   metadata. It was recorded as `:execute_failed`, though nothing was executed.
+- `ExecuteDepositRoute` also returns an integral JSON-float `to_amount` or
+  `min_to_amount` (`960000.0`) as its integer string; it failed the output
+  schema. A fractional float, or one above 2^53 that may not be the integer
+  the quote wrote, is refused as `{:invalid_quote_amount, detail}` instead of
+  being reformatted.
 
 ### Security
 

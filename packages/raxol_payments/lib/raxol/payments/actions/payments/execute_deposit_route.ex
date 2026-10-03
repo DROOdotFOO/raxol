@@ -41,8 +41,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
   Errors are machine-readable: `:attestation_mismatch`, `:missing_attestation`,
   `:deposit_signer_unavailable`, `:not_a_deposit_route`, `{:not_solvable, reason}`,
   `{:unpriced_asset, detail}`, `{:invalid_min_to_amount, value}`,
-  `{:implausible_min_to_amount, detail}`, `{:delivery_below_floor, detail}`, or
-  a request-validation tuple (e.g. `{:invalid_wallet, _}`).
+  `{:implausible_min_to_amount, detail}`, `{:delivery_below_floor, detail}`,
+  `{:invalid_quote_amount, %{field: field, value: value}}` (the quote served
+  `to_amount` or `min_to_amount` as a JSON float that is not an integer of at
+  most 2^53, which is refused rather than reformatted; an integral one is
+  returned as its integer string), or a request-validation tuple (e.g.
+  `{:invalid_wallet, _}`).
   """
 
   use Raxol.Agent.Action,
@@ -119,7 +123,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
          {:ok, floor} <- delivery_floor(request, params),
          {:ok, instructions} <- Xochi.deposit_route_quote(config, request, signer_opts(context)),
          :ok <- assert_delivery_floor(instructions, floor) do
-      {:ok, summary(instructions)}
+      summary(instructions)
     end
   end
 
@@ -162,7 +166,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
 
   # `min_to_amount` only when the quote stated one. Amounts are reported as the
   # strings the output schema declares: a quote may serve them as JSON numbers,
-  # which pass the floor and would otherwise fail output validation.
+  # which pass the floor and would otherwise fail output validation. A JSON
+  # float is stringified only when it is integral and at most 2^53, where the
+  # float is exactly the integer the quote wrote; any other float is refused as
+  # `{:invalid_quote_amount, %{field: field, value: value}}` rather than
+  # reformatted into an amount the quote never stated.
   defp summary(instructions) do
     instructions
     |> Map.take([
@@ -175,12 +183,26 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
       :recipient_address
     ])
     |> Map.reject(&match?({:min_to_amount, nil}, &1))
-    |> Map.new(fn
-      {field, n} when field in [:to_amount, :min_to_amount] and is_integer(n) ->
-        {field, Integer.to_string(n)}
-
-      pair ->
-        pair
+    |> Enum.reduce_while({:ok, %{}}, fn {field, value}, {:ok, acc} ->
+      case amount_string(field, value) do
+        {:ok, value} -> {:cont, {:ok, Map.put(acc, field, value)}}
+        :error -> {:halt, {:error, {:invalid_quote_amount, %{field: field, value: value}}}}
+      end
     end)
   end
+
+  @max_exact_float Integer.pow(2, 53)
+
+  defp amount_string(field, n) when field in [:to_amount, :min_to_amount] and is_integer(n),
+    do: {:ok, Integer.to_string(n)}
+
+  defp amount_string(field, n) when field in [:to_amount, :min_to_amount] and is_float(n) do
+    int = trunc(n)
+
+    if int == n and abs(int) <= @max_exact_float,
+      do: {:ok, Integer.to_string(int)},
+      else: :error
+  end
+
+  defp amount_string(_field, value), do: {:ok, value}
 end

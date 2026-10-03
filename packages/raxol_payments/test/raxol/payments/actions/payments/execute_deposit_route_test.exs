@@ -201,6 +201,27 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
                )
     end
 
+    test "an integral JSON float comes back as its integer string" do
+      ctx = %{
+        xochi_config: config(%{"to_amount" => 960_000.0}),
+        deposit_attestation_signer: signer_address()
+      }
+
+      assert {:ok, %{to_amount: "960000"}} = ExecuteDepositRoute.call(params(), ctx)
+    end
+
+    test "a fractional or inexact JSON float amount is refused, not reformatted" do
+      for amount <- [960_000.5, 1.0e30] do
+        ctx = %{
+          xochi_config: config(%{"to_amount" => amount}),
+          deposit_attestation_signer: signer_address()
+        }
+
+        assert {:error, {:invalid_quote_amount, %{field: :to_amount, value: ^amount}}} =
+                 ExecuteDepositRoute.call(params(), ctx)
+      end
+    end
+
     test "a floor in the source's units on a non-USD destination is refused before any quote" do
       ctx = %{xochi_config: config(@eure_quote), deposit_attestation_signer: signer_address()}
 
