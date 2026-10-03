@@ -533,10 +533,7 @@ defmodule Raxol.Web3.FXTest do
     exchange = fn _vetted, request, _opts ->
       # A gateway that picks the network by header, ahead of the path: the
       # first `x-net`, its name compared case-insensitively.
-      net =
-        Enum.find_value(request.headers, fn {name, value} ->
-          if String.downcase(name) == "x-net", do: value
-        end)
+      net = Enum.find_value(request.headers, &x_net/1)
 
       chain =
         cond do
@@ -568,6 +565,10 @@ defmodule Raxol.Web3.FXTest do
       now: fn -> Keyword.get(opts, :now, recorded_at()) end,
       cache: Keyword.get(opts, :cache, false)
     )
+  end
+
+  defp x_net({name, value}) do
+    if String.downcase(name) == "x-net", do: value
   end
 
   defp selectors,

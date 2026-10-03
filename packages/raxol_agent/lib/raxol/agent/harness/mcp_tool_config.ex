@@ -94,16 +94,19 @@ defmodule Raxol.Agent.Harness.McpToolConfig do
         with :ok <- File.mkdir_p(dir), do: write_files(dir, opts, &File.write/2)
 
       :error ->
-        with {:ok, dir} <- private_tmp_dir() do
-          case write_files(dir, opts, &write_private/2) do
-            {:ok, _} = ok ->
-              ok
+        with {:ok, dir} <- private_tmp_dir(), do: write_private_dir(dir, opts)
+    end
+  end
 
-            error ->
-              File.rm_rf(dir)
-              error
-          end
-        end
+  # A half-written private directory is removed, so no secret outlives a failure.
+  defp write_private_dir(dir, opts) do
+    case write_files(dir, opts, &write_private/2) do
+      {:ok, _} = ok ->
+        ok
+
+      error ->
+        File.rm_rf(dir)
+        error
     end
   end
 

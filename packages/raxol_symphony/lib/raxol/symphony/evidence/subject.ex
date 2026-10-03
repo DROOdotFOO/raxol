@@ -20,7 +20,7 @@ defmodule Raxol.Symphony.Evidence.Subject do
   """
   @spec from_workspace(Path.t(), keyword()) :: Raxol.Symphony.Evidence.subject()
   def from_workspace(workspace, opts \\ []) when is_binary(workspace) do
-    git = Keyword.get(opts, :git_runner, &default_git/2)
+    git = Keyword.get(opts, :git_runner, &Raxol.Symphony.WorkspaceGit.run/2)
 
     base = %{workspace: workspace}
 
@@ -81,32 +81,4 @@ defmodule Raxol.Symphony.Evidence.Subject do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp default_git(args, cwd) do
-    cond do
-      not File.dir?(cwd) ->
-        {:error, :workspace_missing}
-
-      is_nil(System.find_executable("git")) ->
-        {:error, :git_not_found}
-
-      true ->
-        run_git(args, cwd)
-    end
-  end
-
-  # The workspace belongs to an agent or a hook: git gets the environment
-  # minus raxol's secrets.
-  defp run_git(args, cwd) do
-    case System.cmd("git", args,
-           cd: cwd,
-           stderr_to_stdout: true,
-           env: Raxol.Core.ChildEnv.cmd_env()
-         ) do
-      {output, 0} -> {:ok, output}
-      {output, status} -> {:error, {:git_failed, status, String.trim(output)}}
-    end
-  rescue
-    e in ErlangError -> {:error, {:exception, e}}
-  end
 end
