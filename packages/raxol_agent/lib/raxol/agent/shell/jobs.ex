@@ -431,7 +431,10 @@ defmodule Raxol.Agent.Shell.Jobs do
     error -> {:error, {:spawn_failed, Exception.message(error)}}
   end
 
-  defp port_spec(command, false), do: {:ok, sh(), ["-c", command], [:in]}
+  # stdin is /dev/null via the script prefix, not `:in` (which would inherit
+  # the BEAM's tty); see `Raxol.Agent.SpawnedPort`.
+  defp port_spec(command, false),
+    do: {:ok, sh(), ["-c", SpawnedPort.null_stdin_command(command)], []}
 
   defp port_spec(command, true) do
     case Pty.spawn_spec(sh(), command) do
