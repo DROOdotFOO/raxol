@@ -85,7 +85,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; 0 counts as absent). A quote delivering less is rejected before the spend is authorized. Required for a non-USD stablecoin destination, in that token's units."
+            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; \"0\" counts as absent here and on the deposit route, but the Xochi intent tool refuses it). A quote delivering less is rejected before the spend is authorized. Required for a non-USD stablecoin destination, in that token's units."
         ]
       ],
       output: [
@@ -270,8 +270,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   end
 
   # A non-USD stablecoin scales correctly but the spend gate caps in dollars and
-  # would count it at par, so it moves no funds until an FX rate gates the
-  # conversion (ADR-0040 decision 7).
+  # would count it at par, so it moves no funds (ADR-0040 decision 6) until an
+  # FX rate gates the conversion (decision 7).
   defp reject_fx_source(chain, token) do
     case Assets.fx_peg(chain, token) do
       nil ->

@@ -327,9 +327,10 @@ marked every EUR asset unpriceable for about twenty hours a day.
   The tokens live in their own `@fx_stables` table, not in the solver-fillable
   `@evm_tokens`. EURe on 42161 had been added to `@evm_tokens` by #1137 (dated 2026-09-28,
   after this ADR's context was read); it moves here, so EURe leaves `symbols/0`,
-  `evm_tokens/0` and the Xochi settlement grid. `supported_chain_ids/0` is unchanged, and
-  with it `Xochi.Capabilities.fallback/0`, the capacity deriver and the stealth chain
-  check. `Assets.fx_peg/2` names a token's non-USD peg.
+  `evm_tokens/0` and the Xochi settlement grid. `Xochi.Capabilities.fallback/0` and the
+  capacity deriver read `evm_tokens/0`, so they drop EURe on 42161 too. Only
+  `supported_chain_ids/0`, and with it the stealth chain check, is unchanged.
+  `Assets.fx_peg/2` names a token's non-USD peg.
 
   Registration must not open a fund-moving path, because until now "unregistered" was the
   only thing refusing these tokens on three of them. Each keeps its refusal, now with the
@@ -351,14 +352,18 @@ marked every EUR asset unpriceable for about twenty hours a day.
   `to_amount`, `min_to_amount`, the destination or the recipient, and the floor is not sent
   to Xochi.
 
+  The refusals cover the FX tokens only. WETH and RAXOL sources are still counted at par
+  by the spend cap, as before this change (context item 3).
+
   All three read `min_to_amount` through `Raxol.Payments.DeliveryFloor`. A value that is not
   a non-negative integer of atomic units is refused, not read as absent. On a non-USD
   destination it must be in that token's units: below a tenth of the source amount rescaled
   to the destination's decimals, it is refused as a wrong-units floor (a 6-decimal floor on
   18-decimal EURe bounds 10^-12 of what it looks like). A quote is judged on the lowest
   amount it states: its `to_amount`, its own `min_to_amount` when it gives one, and on the
-  Xochi intent path the `toAmount` the wallet signs, read as `EIP712` encodes it (a declared
-  field left null or out signs as 0). Every amount must fit a uint256, and `EIP712` refuses one
+  Xochi intent path the declared `toAmount` field the wallet signs (left null or out, it is
+  judged as 0, which is what `EIP712` signs; a whitespace or sign variant fails closed at the
+  floor or the encoder). Every amount must fit a uint256, and `EIP712` refuses one
   that does not rather than sign its low bits. The re-quote an expired execute leads to is
   held to the same floor and method checks before it is signed. A floor checked only on the
   stated minimum let a quote advertise a high minimum beside a 1-wei estimate.

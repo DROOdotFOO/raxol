@@ -121,10 +121,11 @@ defmodule Raxol.Payments.Assets do
   # contracts per chain. Every address was read on-chain (`symbol()`,
   # `decimals()`) on 2026-09-30.
   #
-  # Registered for scaling and recognition only. They are not solver-fillable
-  # (that is `@evm_tokens`), and no fund-moving path spends or delivers one
-  # until an FX rate gates the conversion: a dollar spend cap would otherwise
-  # count 1 EURe as $1. `fx_peg/2` is how those paths refuse them.
+  # Registered for scaling and recognition only. Riddler may fill EURe, but
+  # raxol never lists an FX token as fillable (that is `@evm_tokens`). Xochi,
+  # Relay and the deposit route deliver one only when the caller's
+  # `min_to_amount` bounds it, and a non-USD source is refused: a dollar spend
+  # cap would otherwise count 1 EURe as $1. `fx_peg/2` is how those paths tell.
   #
   # EURe's v1 contracts front the same balance as v2 (equal `totalSupply()` on
   # each chain), so they resolve back to "EURe" but `address/2` never returns
@@ -244,9 +245,10 @@ defmodule Raxol.Payments.Assets do
   # (Ethereum, Optimism, Polygon, Base, Arbitrum, Robinhood Chain). Decimals live
   # in `@addresses`. USDG is Robinhood Chain's native stablecoin (Permit2 pull,
   # no ERC-3009); WETH is also canonical there. RAXOL (Robinhood Chain) is
-  # volatile, so it is not a dollar stablecoin. EURe is solver-fillable on
-  # Arbitrum but lives in @fx_stables, not here: no fund-moving path spends or
-  # delivers a non-USD stablecoin without an FX bound (ADR-0040 decision 6).
+  # volatile, so it is not a dollar stablecoin. Riddler may fill EURe, but it
+  # lives in @fx_stables, not here: raxol never lists an FX token as fillable,
+  # delivers one only when the caller's `min_to_amount` bounds it, and refuses
+  # a non-USD source (ADR-0040 decision 6).
   @evm_tokens %{
     "USDC" => %{
       1 => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -479,8 +481,8 @@ defmodule Raxol.Payments.Assets do
   anything else, dollar stablecoins, WETH and unregistered tokens included.
   Case-insensitive; accepts an integer chain id or a CAIP-2 string.
 
-  Fund-moving paths refuse a token with a peg until an FX rate gates the
-  conversion (ADR-0040 decision 7). Its decimals are known, so its amount
+  Fund-moving paths refuse a token with a peg (ADR-0040 decision 6) until an
+  FX rate gates the conversion (decision 7). Its decimals are known, so its amount
   scales correctly, but a dollar-denominated spend cap would count it at par.
   """
   @spec fx_peg(integer() | String.t() | nil, String.t() | nil) :: String.t() | nil

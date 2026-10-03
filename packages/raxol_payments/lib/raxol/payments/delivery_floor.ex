@@ -32,10 +32,13 @@ defmodule Raxol.Payments.DeliveryFloor do
   The floor is compared with the LOWEST amount the quote states anywhere: its
   `to_amount`, which must be present, its own `min_to_amount` when it carries
   one, and, when the EIP-712 message the wallet is asked to sign declares a
-  `toAmount` field on its primary type, that field read exactly as
-  `Raxol.Payments.EIP712` encodes it: a null or missing value is signed as 0
-  and so judged as 0. A quote that states a high minimum beside a low
-  estimate, or signs for less than it advertises, is judged on the low figure.
+  `toAmount` field on its primary type, that field: only the declared field
+  is read, a null or missing value is judged as 0 (which is what
+  `Raxol.Payments.EIP712` signs), and the value is range-checked. The two do
+  not parse every spelling identically, but a whitespace or sign variant
+  fails closed at one stage or the other. A quote that states a high minimum
+  beside a low estimate, or signs for less than it advertises, is judged on
+  the low figure.
   Every amount must read as an integer in 0..2^256 - 1, or the floor fails: a
   larger one would sign as its low 256 bits. None of these figures is attested
   by Xochi's deposit attestation, so on the deposit route this is a

@@ -28,7 +28,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
   `{:invalid_min_to_amount, value}`. A destination with a non-USD peg
   (`Assets.fx_peg/2`: EURC, EURe, ZCHF) needs one, in that token's units, and
   is refused before any quote is fetched without it, because no FX rate gives
-  a par to floor against (ADR-0040 decision 7). The quote is judged on the lowest
+  a par to floor against (ADR-0040 decision 6). The quote is judged on the lowest
   amount it states (its `to_amount`, and its own `min_to_amount` when it gives
   one), and a quote below the floor returns no deposit address.
 
@@ -87,7 +87,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; 0 counts as absent). A quote stating less returns no deposit address. This filters the unattested quote before you fund it; it does not bound what is delivered. Required for a non-USD stablecoin destination, in that token's units."
+            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; \"0\" counts as absent here and on the Relay tool, but the Xochi intent tool refuses it). A quote stating less returns no deposit address. This filters the unattested quote before you fund it; it does not bound what is delivered. Required for a non-USD stablecoin destination, in that token's units."
         ],
         trust_score: [type: :integer, description: "Trust score for tier/fee"]
       ],

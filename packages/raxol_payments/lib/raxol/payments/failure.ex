@@ -252,7 +252,8 @@ defmodule Raxol.Payments.Failure do
 
   # A registered stablecoin pegged to a currency other than the dollar. Its
   # amount scales, but no FX rate converts it for a dollar spend cap or a
-  # delivery floor yet (ADR-0040 decision 7), so it moves no funds.
+  # delivery floor yet, so it moves no funds (ADR-0040 decision 6; decision 7
+  # lifts the refusal).
   def from({:unpriced_asset, %{side: :destination}} = detail),
     do:
       build(

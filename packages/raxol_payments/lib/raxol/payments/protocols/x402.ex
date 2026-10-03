@@ -64,8 +64,8 @@ defmodule Raxol.Payments.Protocols.X402 do
 
   # `amount/1` scales by the asset's registered decimals and the spend gate caps
   # in dollars, so a non-USD stablecoin would be reserved and charged at par.
-  # Refuse the challenge until an FX rate gates the conversion (ADR-0040
-  # decision 7).
+  # Refuse the challenge (ADR-0040 decision 6) until an FX rate gates the
+  # conversion (decision 7).
   defp reject_fx_asset(network, asset) do
     case Raxol.Payments.Assets.fx_peg(network, asset) do
       nil -> :ok

@@ -31,16 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gains a name and its xDAI gas token. New `Assets.fx_peg/2` names a token's
   non-USD peg. None of these tokens is solver-fillable: EURe leaves
   `symbols/0`, `evm_tokens/0` and the Xochi settlement grid, where it was
-  listed on Arbitrum, and `supported_chain_ids/0` and the capabilities
-  fallback are unchanged.
+  listed on Arbitrum. `Xochi.Capabilities.fallback/0` and the capacity
+  deriver read `evm_tokens/0`, so they drop EURe on 42161 too; only
+  `supported_chain_ids/0` and the stealth chain check are unchanged.
 - Registering them opens no fund-moving path. `ExecuteXochiIntent` and
   `ExecuteRelayTransfer` refuse a non-USD source, and both refuse a non-USD
-  destination without a positive `min_to_amount`, as `{:unpriced_asset, detail}`,
-  until an FX rate gates the conversion (ADR-0040 decision 7). Dollar spend caps
-  would otherwise count them at par. A `min_to_amount` of `0` bounds nothing:
-  Relay reads it as absent and Xochi refuses it. x402 refuses a challenge whose
-  asset is a non-USD stablecoin, which the spend gate would otherwise reserve
-  and charge at par.
+  destination without a positive `min_to_amount`, as `{:unpriced_asset, detail}`
+  (ADR-0040 decision 6), until an FX rate gates the conversion (decision 7).
+  Dollar spend caps would otherwise count them at par. A `min_to_amount` of `0`
+  bounds nothing: Relay and the deposit route read it as absent and Xochi
+  refuses it. x402 refuses a challenge whose asset is a non-USD stablecoin,
+  which the spend gate would otherwise reserve and charge at par. The refusals
+  cover the FX tokens only: WETH and RAXOL sources are still counted at par by
+  the spend cap, as before (ADR-0040 context item 3).
 - `ExecuteRelayTransfer` accepts `min_to_amount` and refuses a quote delivering
   less before the spend is authorized. It previously had no delivery floor, so
   a quote could deliver any amount.
@@ -70,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of aborting the sweep.
   `SettlementLedger.report/2` reads the ledger once instead of four times.
 
+### Changed
+
+- In `{:delivery_below_floor, detail}`, `min_to_amount` is the quote's own
+  stated minimum; the caller's floor is `:floor`, and `:lowest` is what was
+  compared. In v0.2.1 `min_to_amount` was the caller's floor. The refusal's
+  message no longer says "refusing to sign", which was wrong on the deposit
+  route.
+
 ### Fixed
 
 - Under decimal 3, an x402 or MPP amount string of 35 to 78 digits no longer
@@ -89,19 +100,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the method check, so a re-quote delivering 1 was signed and executed. The
   re-quote is now held to both before anything is signed; a refusal releases
   the reservation and reports the refusal itself.
-- The delivery floor reads the signed `toAmount` the way `EIP712` encodes it:
-  only when the message's primary type declares the field, and a null or
-  missing value as 0, which is what the wallet signs. It used to read only a
+- The delivery floor reads the signed `toAmount` only when the message's
+  primary type declares the field, judges a null or missing value as 0, which
+  is what `EIP712` signs, and range-checks it; a whitespace or sign variant
+  fails closed at the floor or the encoder. It used to read only a
   literal `"toAmount"` key and treat null or missing as absent, so a quote
   whose signed amount was 0 passed. Every amount, the caller's floor
   included, must be at most 2^256 - 1, and `EIP712` itself now refuses a
   `uint256` outside 0..2^256 - 1 instead of signing its low 256 bits (2^256 + 1
   signed as 1).
-- In `{:delivery_below_floor, detail}`, `min_to_amount` is the quote's own
-  stated minimum; the caller's floor is `:floor`, and `:lowest` is what was
-  compared. In v0.2.1 `min_to_amount` was the caller's floor. The refusal's
-  message no longer says "refusing to sign", which was wrong on the deposit
-  route.
 - `ExecuteDepositRoute` returns `to_amount` and `min_to_amount` as strings
   even when the quote served them as JSON numbers; a numeric `min_to_amount`
   passed the floor and then failed the tool's output schema, so the payer got

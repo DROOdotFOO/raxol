@@ -90,7 +90,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         min_to_amount: [
           type: :string,
           description:
-            "Optional minimum acceptable delivery, as a string of positive digits in destination-chain atomic units (anything else, 0 included, is refused). A quote delivering less is rejected before signing. Required to bound a cross-asset corridor, and on a non-USD stablecoin destination it must be in that token's units; on a same-asset corridor it can only raise the automatic 80%-of-par floor, never lower it."
+            "Optional minimum acceptable delivery, as a string of positive digits in destination-chain atomic units (anything else, \"0\" included, is refused; the Relay tool and the deposit route read \"0\" as absent instead). A quote delivering less is rejected before signing. Required to bound a cross-asset corridor, and on a non-USD stablecoin destination it must be in that token's units; on a same-asset corridor it can only raise the automatic 80%-of-par floor, never lower it."
         ]
       ],
       output: [
@@ -316,7 +316,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # on-client price, so it is bound only by an explicit `min_to_amount`. A
   # non-USD stablecoin destination (`Assets.fx_peg/2`) without one is refused:
   # it scales, but with no FX rate there is no par to floor against (ADR-0040
-  # decision 7), and a floor on one must be in that token's units. Both tokens
+  # decision 6), and a floor on one must be in that token's units. Both tokens
   # have registered decimals by this point (`build_request/2` refuses anything
   # else). The quote is judged on the lowest amount it states: `toAmount`, its
   # own `minToAmount`, and the `toAmount` in the EIP-712 message the wallet
@@ -410,7 +410,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # means nothing without them. `min_to_amount` does not waive this: the caller
   # setting it cannot know an unregistered token's decimals either. A non-USD
   # stablecoin source scales correctly but is still refused: the spend gate caps
-  # in dollars and would count it at par (ADR-0040 decision 7).
+  # in dollars and would count it at par (ADR-0040 decision 6).
   defp registered_legs(params) do
     from_chain = Map.fetch!(params, :from_chain_id)
     from_token = Map.fetch!(params, :from_token)

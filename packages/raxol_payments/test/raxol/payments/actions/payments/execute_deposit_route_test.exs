@@ -127,7 +127,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
                ExecuteDepositRoute.run(params(), %{})
     end
 
-    # ADR-0040 decision 7: no FX rate gates a conversion yet, so a non-USD
+    # ADR-0040 decision 6: no FX rate gates a conversion yet, so a non-USD
     # destination has no par to floor against and must carry its own.
     @eure_base "0xbf6e2966A9C3D99C9E4D069E04f7Bdb9C8aa762C"
 
