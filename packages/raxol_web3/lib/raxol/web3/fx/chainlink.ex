@@ -302,10 +302,17 @@ defmodule Raxol.Web3.FX.Chainlink do
   def route_id(%__MODULE__{rpc_urls: urls, http_opts: http_opts}),
     do: :erlang.phash2({urls, route_headers(http_opts)})
 
-  # Headers sorted by name only (a stable sort), so their order in `:http_opts`
-  # does not split one route in two, while repeated headers keep the order a
-  # gateway honouring the first one would see.
-  defp route_headers(http_opts), do: http_opts |> Keyword.get(:headers, []) |> List.keysort(0)
+  # Headers as `Raxol.Web3.HTTP` sends them (a list or a map), with names
+  # downcased because a gateway compares them case-insensitively, then sorted
+  # by name only (a stable sort): their order in `:http_opts` does not split
+  # one route in two, while repeated headers, whatever their case, keep the
+  # order a gateway honouring the first one would see.
+  defp route_headers(http_opts) do
+    http_opts
+    |> Keyword.get(:headers, [])
+    |> Enum.map(fn {name, value} -> {String.downcase(name), value} end)
+    |> List.keysort(0)
+  end
 
   # Distinguishes two routes and carries nothing back.
   defp route_digest(url, http_opts) do

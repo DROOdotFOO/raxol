@@ -149,8 +149,9 @@ fallback, and a failure on both means no rate:
 - The feed's identity matched. `description()` must equal the expected pair and `decimals()`
   must equal 8. `Chainlink.new/1` does no I/O, so the check runs on the first `rate/2` that
   reads the feed; a match is cached for a day (ADR-0038's cache stage, keyed by origin, a
-  digest of the route, meaning the RPC URL and the request headers, plus chain id, proxy and
-  selector) and every other answer is re-read on
+  digest of the route, meaning the RPC URL and the request headers with names downcased
+  and repeated names kept in order, plus chain id, proxy and selector) and every other
+  answer is re-read on
   the next call. A decodable answer that names another pair or another scale is
   `{:blocked, :feed_mismatch}` and is terminal, because a misconfigured address would
   otherwise answer, correctly, about a pair nobody asked about. An answer that does not

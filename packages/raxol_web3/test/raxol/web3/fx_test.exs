@@ -531,10 +531,16 @@ defmodule Raxol.Web3.FXTest do
       |> Map.merge(overrides)
 
     exchange = fn _vetted, request, _opts ->
+      # A gateway that picks the network by header, ahead of the path: the
+      # first `x-net`, its name compared case-insensitively.
+      net =
+        Enum.find_value(request.headers, fn {name, value} ->
+          if String.downcase(name) == "x-net", do: value
+        end)
+
       chain =
         cond do
-          # A gateway that picks the network by header, ahead of the path.
-          List.keyfind(request.headers, "x-net", 0) == {"x-net", "impostor"} -> :impostor
+          net == "impostor" -> :impostor
           request.path =~ "base" -> 8453
           request.path =~ "eth" -> 1
           # A chain answering only what `overrides` puts under `:impostor`.
@@ -789,6 +795,37 @@ defmodule Raxol.Web3.FXTest do
       assert read2.(first_impostor) == {:error, {:blocked, :feed_mismatch}}
       assert {:ok, _} = read2.([{"x-net", "base"}, {"x-net", "impostor"}])
       assert read2.(first_impostor) == {:error, {:blocked, :feed_mismatch}}
+
+      # The same, with the names in different case: a gateway compares them
+      # case-insensitively, so the cache key must too.
+      {rpc_urls, _host} = urls("/base")
+      rpc_urls = Map.delete(rpc_urls, 1)
+
+      read3 = fn headers ->
+        Chainlink.rate(
+          chainlink(cache: true, overrides: impostor, rpc_urls: rpc_urls, headers: headers),
+          "EUR"
+        )
+      end
+
+      first_impostor = [{"X-Net", "impostor"}, {"x-net", "base"}]
+      assert read3.(first_impostor) == {:error, {:blocked, :feed_mismatch}}
+      assert {:ok, _} = read3.([{"x-net", "base"}, {"X-Net", "impostor"}])
+      assert read3.(first_impostor) == {:error, {:blocked, :feed_mismatch}}
+    end
+
+    test "route_id separates header orders a gateway would route apart" do
+      route = &Chainlink.route_id(chainlink(headers: &1))
+
+      # Map headers are what `Raxol.Web3.HTTP` accepts too; same route as the list.
+      assert route.(%{"x-net" => "base"}) == route.([{"x-net", "base"}])
+
+      refute route.([{"x-net", "base"}, {"X-Net", "impostor"}]) ==
+               route.([{"X-Net", "impostor"}, {"x-net", "base"}])
+
+      # Order across different names is not a route.
+      assert route.([{"x-net", "base"}, {"x-key", "k"}]) ==
+               route.([{"x-key", "k"}, {"x-net", "base"}])
     end
 
     test "a matching identity is read once; the round is read every time" do
