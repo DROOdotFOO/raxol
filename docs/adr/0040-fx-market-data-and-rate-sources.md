@@ -191,12 +191,20 @@ the pattern `Backend.Canton` uses for its key. Every call is `Raxol.Web3.HTTP.ge
   body bound does not bound what one number costs, so the decoder does: see Parsing.
 - **Parsing** uses `Jason.decode(body, floats: :decimals)`, so a float never reaches a money
   path. `raxol_web3` gains `{:decimal, "~> 3.0"}` for this, matching `raxol_payments`;
-  today it has `decimal` only as an optional dependency of `jason`. decimal 3 refuses a
-  number with more than 34 digits or an exponent past ±6_144, so such a figure fails the
-  whole body as `{:decode_failed, :sleuth}`. Inside that range a figure is `nil` unless it
-  has at most 38 significant digits and an exponent within ±30, checked on the decoded
-  struct before any arithmetic: `1e6000` is six bytes of JSON and 6,000 digits after the
-  first rounding. A list
+  today it has `decimal` only as an optional dependency of `jason`. Jason hands a number
+  with a fraction or an exponent to `Decimal.new/1`, and decimal 3 (3.1.1 as measured)
+  refuses one whose coefficient has more than 34 significant digits, leading zeros not
+  counted and trailing zeros counted (`1.` and 34 zeros is refused), or whose exponent,
+  after the fraction's digits are taken off, is past ±6_144. Jason writes an exponent with
+  no fraction as `.0e`, which adds a digit: `1e6145` decodes as `1.0e6145` (coefficient 10,
+  exponent 6_144), `1e6146` and `1e-6144` are refused, and a 34-digit integer with an
+  exponent becomes 35 digits and is refused. Any such refusal fails the whole body as
+  `{:decode_failed, :sleuth}`. A JSON integer never reaches `Decimal`: Jason decodes it to
+  an Elixir integer of any length. The decoder's own bounds are therefore an integer
+  figure below 10^38 in magnitude and a decimal figure's exponent within ±30 (it also
+  holds a decimal's coefficient below 10^38, which decimal 3's 34 digits already
+  guarantee), checked on the decoded struct before any arithmetic: `1e6000` is six bytes of
+  JSON that decimal 3 accepts, and 6,000 digits after the first rounding. A list
   entry that is not a JSON object is skipped, a number included (`1.5` decodes to a
   `%Decimal{}` struct, which a `%{}` pattern matches). Every other field is typed and bounded:
   text at most 256 bytes keeping only letters, numbers, punctuation, symbols, the ASCII
