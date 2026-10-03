@@ -40,6 +40,9 @@ defmodule Raxol.Earn.TestSupport.FakeXochi do
   - `:floor` -- minimum `from_amount` (atomic), default `1_000_000` (1 USDC); the
     quote must be strictly above it.
   - `:solver` -- the origin-pull recipient, default the canonical Riddler solver.
+  - `:intent_recipient` -- a hostile override for the signed intent's `recipient`
+    (default: the request's `recipient_address`, else its wallet, as the live
+    worker builds it).
   """
 
   # The canonical Riddler universal solver (HD index-0) the live gates pin.
@@ -51,6 +54,7 @@ defmodule Raxol.Earn.TestSupport.FakeXochi do
     state = %{
       solver: Keyword.get(opts, :solver, @canonical_solver),
       floor: Keyword.get(opts, :floor, 1_000_000),
+      intent_recipient: Keyword.get(opts, :intent_recipient),
       unavailable_origins: MapSet.new(Keyword.get(opts, :unavailable_origins, [])),
       inventory: normalize_inventory(Keyword.get(opts, :inventory, %{})),
       intents: %{}
@@ -153,12 +157,13 @@ defmodule Raxol.Earn.TestSupport.FakeXochi do
         st = put_in(st.intents[intent_id], intent)
 
         body =
-          quote_body(intent_id, quote_id, %{
+          quote_body(intent_id, quote_id, body, %{
             from_chain: from_chain,
             from_token: from_token,
             amount: amount,
             wallet: wallet,
-            solver: st.solver
+            solver: st.solver,
+            intent_recipient: st.intent_recipient
           })
 
         {ok_resp(200, body), st}
@@ -217,7 +222,7 @@ defmodule Raxol.Earn.TestSupport.FakeXochi do
 
   # -- Response bodies (snake_case, the canonical worker shape from_json reads) --
 
-  defp quote_body(intent_id, quote_id, req) do
+  defp quote_body(intent_id, quote_id, request, req) do
     %{
       "intent_id" => intent_id,
       "quote_id" => quote_id,
@@ -226,28 +231,61 @@ defmodule Raxol.Earn.TestSupport.FakeXochi do
       "to_amount" => Integer.to_string(req.amount),
       "xochi_fee" => Integer.to_string(div(req.amount, 500)),
       "settlement_options" => [],
-      "eip712" => xochi_intent_eip712(intent_id, req.from_chain),
+      "eip712" => xochi_intent_eip712(intent_id, quote_id, request, req),
       "pull_authorization" => erc3009_pull(intent_id, req)
     }
   end
 
-  # The XochiIntent typed data. Mirrors the live worker's shape -- a salt-bearing
-  # domain with no verifyingContract (the salt-domain the origin-pull signing fix
-  # depends on) -- while staying minimal enough that any wallet signs it. The
-  # intent id ties the signature to this quote.
-  defp xochi_intent_eip712(intent_id, chain_id) do
+  # The XochiIntent typed data, built from the posted request exactly as the live
+  # worker's `build_message` does: a salt-bearing domain with no verifyingContract
+  # (the salt-domain the origin-pull signing fix depends on) and a message binding
+  # wallet, recipient, chains, tokens, amounts, settlement and deadline -- what
+  # `Protocols.Xochi.validate_intent/2` checks before signing. The signed
+  # toAmount equals the top-level `to_amount`.
+  defp xochi_intent_eip712(intent_id, quote_id, request, %{amount: to_amount} = req) do
     %{
       "domain" => %{
         "name" => "Xochi",
         "version" => "1",
-        "chainId" => chain_id,
+        "chainId" => request["from_chain_id"],
         "salt" => "0x" <> Base.encode16(:crypto.hash(:sha256, "salt:" <> intent_id), case: :lower)
       },
       "primaryType" => "XochiIntent",
-      "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
-      "message" => %{"intentId" => intent_id}
+      "types" => %{
+        "XochiIntent" => [
+          %{"name" => "intentId", "type" => "string"},
+          %{"name" => "quoteId", "type" => "string"},
+          %{"name" => "wallet", "type" => "address"},
+          %{"name" => "recipient", "type" => "string"},
+          %{"name" => "fromChainId", "type" => "uint256"},
+          %{"name" => "toChainId", "type" => "uint256"},
+          %{"name" => "fromToken", "type" => "string"},
+          %{"name" => "toToken", "type" => "string"},
+          %{"name" => "fromAmount", "type" => "uint256"},
+          %{"name" => "toAmount", "type" => "uint256"},
+          %{"name" => "settlementPreference", "type" => "string"},
+          %{"name" => "deadline", "type" => "uint256"}
+        ]
+      },
+      "message" => %{
+        "intentId" => intent_id,
+        "quoteId" => quote_id,
+        "wallet" => address_value(request["wallet"]),
+        "recipient" => req.intent_recipient || request["recipient_address"] || request["wallet"],
+        "fromChainId" => request["from_chain_id"],
+        "toChainId" => request["to_chain_id"],
+        "fromToken" => address_value(request["from_token"]),
+        "toToken" => address_value(request["to_token"]),
+        "fromAmount" => request["from_amount"],
+        "toAmount" => Integer.to_string(to_amount),
+        "settlementPreference" => request["settlement_preference"] || "public",
+        "deadline" => System.system_time(:second) + 300
+      }
     }
   end
+
+  defp address_value("0x" <> _ = address), do: String.downcase(address)
+  defp address_value(other), do: other
 
   # A canonical ERC-3009 ReceiveWithAuthorization pull bound to the request: `from`
   # is the buyer, `to` is the pinned solver, `value` == the origin amount, the

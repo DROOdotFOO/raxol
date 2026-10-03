@@ -941,17 +941,53 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       update_in(served_pull(), ["message"], &Map.put(&1, "deadline", deadline))
     end
 
+    defp intent_fields do
+      for {name, type} <- [
+            {"intentId", "string"},
+            {"quoteId", "string"},
+            {"wallet", "address"},
+            {"recipient", "string"},
+            {"fromChainId", "uint256"},
+            {"toChainId", "uint256"},
+            {"fromToken", "string"},
+            {"toToken", "string"},
+            {"fromAmount", "uint256"},
+            {"toAmount", "uint256"},
+            {"settlementPreference", "string"},
+            {"deadline", "uint256"}
+          ],
+          do: %{"name" => name, "type" => type}
+    end
+
     defp quote_response(served) do
+      req = quote_request()
+
       %QuoteResponse{
         intent_id: "xi_prod",
         quote_id: "xq_prod",
         can_solve: true,
         payment_method: "permit2",
+        to_amount: "2990000",
         eip712_data: %{
           "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
           "primaryType" => "XochiIntent",
-          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
-          "message" => %{"intentId" => "xi_prod"}
+          "types" => %{
+            "XochiIntent" => intent_fields()
+          },
+          "message" => %{
+            "intentId" => "xi_prod",
+            "quoteId" => "xq_prod",
+            "wallet" => String.downcase(req.wallet),
+            "recipient" => req.wallet,
+            "fromChainId" => req.from_chain_id,
+            "toChainId" => req.to_chain_id,
+            "fromToken" => req.from_token,
+            "toToken" => req.to_token,
+            "fromAmount" => req.from_amount,
+            "toAmount" => "2990000",
+            "settlementPreference" => "public",
+            "deadline" => System.system_time(:second) + 300
+          }
         },
         pull_authorization: served
       }

@@ -30,8 +30,9 @@ defmodule Raxol.Earn.Test.Scenario do
 
   - `:wallet` (required) -- the buyer's `Raxol.Payments.Wallets.Env` module; it
     signs the EIP-712 intent + origin pull. The caller sets its key env var.
-  - `:inventory`, `:unavailable_origins`, `:solver`, `:floor` -- forwarded to
-    `FakeXochi.start_link/1` (`:solver` is the origin-pull recipient the quote serves).
+  - `:inventory`, `:unavailable_origins`, `:solver`, `:floor`, `:intent_recipient` --
+    forwarded to `FakeXochi.start_link/1` (`:solver` is the origin-pull recipient
+    the quote serves; `:intent_recipient` retargets the signed intent's recipient).
   - `:solver_allowlist` -- pin the origin-pull solver (sets
     `:pull_solver_allowlist` + `:pull_require_solver_pin`, restored on exit), as the
     live gate does. A served `:solver` outside the list is rejected before signing.
@@ -74,7 +75,7 @@ defmodule Raxol.Earn.Test.Scenario do
 
   @type t :: %__MODULE__{}
 
-  @fake_opts [:inventory, :unavailable_origins, :solver, :floor]
+  @fake_opts [:inventory, :unavailable_origins, :solver, :floor, :intent_recipient]
 
   @doc "Start a scenario. See the module docs for options."
   @spec new(keyword()) :: t()

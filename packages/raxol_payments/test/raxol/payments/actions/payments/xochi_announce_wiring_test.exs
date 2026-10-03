@@ -4,6 +4,7 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
 
   alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
   alias Raxol.Payments.{Ledger, SpendingPolicy}
+  alias Raxol.Payments.Test.XochiIntentFixture
   alias Raxol.Payments.Xochi.AgentStream
 
   # Anvil/foundry default account #1 -- a well-known key, not a secret. A real
@@ -40,23 +41,15 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
     fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
+          {body, conn} = XochiIntentFixture.quote_body(conn)
+
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "quoteId" => "q_1",
             "canSolve" => true,
             "toAmount" => "499000",
             "xochiFee" => "1000",
-            "eip712Data" => %{
-              "domain" => %{
-                "name" => "Xochi",
-                "version" => "1",
-                "chainId" => 8453
-              },
-              "types" => %{
-                "Intent" => [%{"name" => "amount", "type" => "uint256"}]
-              },
-              "message" => %{"amount" => 500_000}
-            }
+            "eip712Data" => XochiIntentFixture.eip712(body, "499000")
           })
 
         "/api/intent/execute" ->

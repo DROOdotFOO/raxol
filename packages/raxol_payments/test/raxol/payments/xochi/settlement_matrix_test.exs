@@ -22,6 +22,7 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
   alias Raxol.Payments.Actions.Payments.ExecuteXochiIntent
   alias Raxol.Payments.{Assets, Failure, Ledger, Router, SpendingPolicy}
   alias Raxol.Payments.Xochi.Stealth
+  alias Raxol.Payments.Test.XochiIntentFixture
 
   # Wallet that signals when it signs, so we can assert the intent was signed.
   defmodule SpyWallet do
@@ -110,9 +111,9 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
-          {:ok, raw, conn} = Plug.Conn.read_body(conn)
-          body = Jason.decode!(raw)
+          {body, conn} = XochiIntentFixture.quote_body(conn)
           send(self(), {:quote_body, body})
+          to_amount = to_amount || body["from_amount"]
 
           Req.Test.json(conn, %{
             "intentId" => "int_1",
@@ -120,13 +121,9 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
             "canSolve" => true,
             # Par delivery: echo the atomic from_amount so a same-asset corridor
             # clears its 80% floor at any decimals. Overridable for floor tests.
-            "toAmount" => to_amount || body["from_amount"],
+            "toAmount" => to_amount,
             "xochiFee" => "1000",
-            "eip712Data" => %{
-              "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-              "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-              "message" => %{"amount" => 500_000}
-            }
+            "eip712Data" => XochiIntentFixture.eip712(body, to_amount)
           })
 
         "/api/intent/execute" ->
