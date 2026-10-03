@@ -77,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Permit2 intent's execute `nonce` (the worker's replay-dedup key) was
+  derived by reading Permit2's decimal uint256 pull nonce as hex: an odd digit
+  count sent 0 for every intent, which the worker rejects on the wallet's
+  second non-terminal intent ("Nonce already used"). Decimal nonces now give
+  their low 48 bits, as 0x-hex ERC-3009 nonces already did (#772).
 - raxol signed the Xochi EIP-712 intent without checking it against the
   request (#1164). A quote could carry a signable intent for another wallet,
   recipient, chain, token, amount, settlement preference or a far-off

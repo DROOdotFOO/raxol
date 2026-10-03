@@ -956,30 +956,28 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # NOT part of the intent signature -- the served XochiIntent type carries no
   # nonce field, so the wallet never signs over it. When the signed message does
   # embed an integer nonce, echo it. Otherwise derive a unique, deterministic
-  # value from the pull authorization's server-issued bytes32 nonce: echoing a
-  # constant 0 for every intent makes the worker reject the second non-terminal
-  # intent from a wallet ("Nonce already used"). Fall back to 0 only when neither
-  # a signed nonce nor a pull nonce is present.
+  # value from the pull authorization's server-issued nonce: echoing a constant 0
+  # for every intent makes the worker reject the second non-terminal intent from
+  # a wallet ("Nonce already used"). Fall back to 0 only when neither a signed
+  # nonce nor a readable pull nonce is present.
   defp signed_nonce(%QuoteResponse{
          eip712_data: %{"message" => %{"nonce" => nonce}}
        })
        when is_integer(nonce),
        do: nonce
 
-  defp signed_nonce(%QuoteResponse{
-         pull_authorization: %{"message" => %{"nonce" => nonce}}
-       })
-       when is_binary(nonce),
-       do: replay_nonce_from(nonce)
+  defp signed_nonce(%QuoteResponse{pull_authorization: %{"message" => %{"nonce" => nonce}}}),
+    do: replay_nonce_from(nonce)
 
   defp signed_nonce(_quote_resp), do: 0
 
-  # The pull nonce is a 32-byte hex string; take its low 48 bits as an unsigned
-  # integer -- unique per intent (server-issued) and within the worker's JS Number
-  # range (< 2^53). A malformed value falls back to 0.
-  defp replay_nonce_from("0x" <> hex), do: replay_nonce_from(hex)
+  @low_48_bits Bitwise.bsl(1, 48) - 1
 
-  defp replay_nonce_from(hex) when is_binary(hex) do
+  # Take the pull nonce's low 48 bits -- unique per intent (server-issued) and
+  # within the worker's JS Number range (< 2^53). ERC-3009 serves a bytes32 as
+  # 0x-hex; Permit2 serves its uint256 nonce as a decimal string (or a JSON
+  # integer). A malformed value falls back to 0.
+  defp replay_nonce_from("0x" <> hex) do
     case Base.decode16(hex, case: :mixed) do
       {:ok, bytes} when byte_size(bytes) >= 6 ->
         <<low::unsigned-big-48>> = binary_part(bytes, byte_size(bytes) - 6, 6)
@@ -990,7 +988,12 @@ defmodule Raxol.Payments.Protocols.Xochi do
     end
   end
 
-  defp replay_nonce_from(_), do: 0
+  defp replay_nonce_from(nonce) do
+    case to_uint(nonce) do
+      n when is_integer(n) -> Bitwise.band(n, @low_48_bits)
+      nil -> 0
+    end
+  end
 
   @domain_fields [
     {:name, "name"},
