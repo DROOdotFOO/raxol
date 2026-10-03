@@ -22,7 +22,10 @@ defmodule Raxol.Core.ChildEnvTest do
         :binary,
         :exit_status,
         :in,
-        args: ["-c", ~s(printf '%s|%s|%s' "${RAXOL_SLEUTH_API_KEY-unset}" "$FOO" "${HOME:+home}")],
+        args: [
+          "-c",
+          ~s(printf '%s|%s|%s' "${RAXOL_SLEUTH_API_KEY-unset}" "$FOO" "${HOME:+home}")
+        ],
         env: ChildEnv.port_env(env)
       ])
 
@@ -43,7 +46,8 @@ defmodule Raxol.Core.ChildEnvTest do
   end
 
   test "a secret the caller passes explicitly is kept" do
-    assert child([{"RAXOL_SLEUTH_API_KEY", "given"}, {~c"FOO", ~c"bar"}]) == "given|bar|home"
+    assert child([{"RAXOL_SLEUTH_API_KEY", "given"}, {~c"FOO", ~c"bar"}]) ==
+             "given|bar|home"
   end
 
   describe "configuration" do
@@ -65,10 +69,28 @@ defmodule Raxol.Core.ChildEnvTest do
     test "extra secrets are unset too, and a caller's false unsets rather than sets" do
       System.put_env("RAXOL_TEST_EXTRA_SECRET", "x")
       on_exit(fn -> System.delete_env("RAXOL_TEST_EXTRA_SECRET") end)
+
       Application.put_env(:raxol_core, ChildEnv, extra_secrets: ["RAXOL_TEST_EXTRA_SECRET"])
 
       assert {~c"RAXOL_TEST_EXTRA_SECRET", false} in ChildEnv.port_env()
       assert {~c"FOO", false} in ChildEnv.port_env([{"FOO", false}])
+    end
+
+    test "a malformed config raises naming the config and the key instead of scrubbing less" do
+      for {config, key} <- [
+            {[pass: [nil]], ":pass"},
+            {[extra_secrets: [:MY_WALLET_KEY]], ":extra_secrets"},
+            {[pass: "RAXOL_SLEUTH_API_KEY"], ":pass"},
+            {[extra_secrets: ["MY KEY"]], ":extra_secrets"},
+            {%{pass: ["RAXOL_SLEUTH_API_KEY"]}, nil},
+            {[{"pass", ["RAXOL_SLEUTH_API_KEY"]}], nil}
+          ] do
+        Application.put_env(:raxol_core, ChildEnv, config)
+
+        error = assert_raise ArgumentError, fn -> ChildEnv.port_env() end
+        assert error.message =~ "config :raxol_core, Raxol.Core.ChildEnv"
+        if key, do: assert(error.message =~ key)
+      end
     end
   end
 end

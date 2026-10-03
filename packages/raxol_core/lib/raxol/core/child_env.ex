@@ -18,7 +18,11 @@ defmodule Raxol.Core.ChildEnv do
 
   ## Configuration
 
-  Read when a child is spawned, so a runtime change applies to the next one:
+  Read when a child is spawned, so a runtime change applies to the next one.
+  The config must be a keyword list and both keys lists of variable names
+  (strings matching `[A-Za-z_][A-Za-z0-9_]*`); anything else raises an
+  `ArgumentError` naming the key at the next spawn, instead of scrubbing less
+  than the operator meant:
 
       config :raxol_core, Raxol.Core.ChildEnv,
         # More names to unset, e.g. a custom `Wallets.Env` `env_var:`.
@@ -54,12 +58,46 @@ defmodule Raxol.Core.ChildEnv do
   @doc "The variables unset in every child: the built-in set plus `:extra_secrets`, minus `:pass`."
   @spec secrets() :: [String.t()]
   def secrets do
-    config = Application.get_env(:raxol_core, __MODULE__, [])
-    pass = Keyword.get(config, :pass, [])
+    config = config!()
+    pass = names!(config, :pass)
 
-    (@secrets ++ Keyword.get(config, :extra_secrets, []))
+    (@secrets ++ names!(config, :extra_secrets))
     |> Enum.uniq()
     |> Enum.reject(&(&1 in pass))
+  end
+
+  defp config! do
+    case Application.get_env(:raxol_core, __MODULE__, []) do
+      config when is_list(config) ->
+        if Keyword.keyword?(config),
+          do: config,
+          else: invalid!("must be a keyword list", config)
+
+      config ->
+        invalid!("must be a keyword list", config)
+    end
+  end
+
+  defp names!(config, key) do
+    case Keyword.get(config, key, []) do
+      names when is_list(names) ->
+        Enum.each(names, &name!(&1, key))
+        names
+
+      names ->
+        invalid!("#{inspect(key)} must be a list of variable names", names)
+    end
+  end
+
+  defp name!(name, key) do
+    unless is_binary(name) and name =~ ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/ do
+      invalid!("#{inspect(key)} must be a list of variable names", name)
+    end
+  end
+
+  defp invalid!(problem, got) do
+    raise ArgumentError,
+          "config :raxol_core, Raxol.Core.ChildEnv: #{problem}, got: #{inspect(got)}"
   end
 
   @doc """
@@ -70,7 +108,8 @@ defmodule Raxol.Core.ChildEnv do
   @spec port_env([{String.t() | charlist(), String.t() | charlist() | false}]) ::
           [{charlist(), charlist() | false}]
   def port_env(env \\ []) do
-    given = Enum.map(env, fn {name, value} -> {to_charlist(name), value(value)} end)
+    given =
+      Enum.map(env, fn {name, value} -> {to_charlist(name), value(value)} end)
 
     unset =
       for name <- secrets(),
