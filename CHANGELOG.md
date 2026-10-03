@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- **`raxol_agent`: `ThreadLog.Postgrex` reads canonical event kinds in a fresh VM.** Rows were decoded with `String.to_existing_atom/1`, so reading a `tool_call`, `state_snapshot` or other canonical kind raised `ArgumentError` until some loaded module happened to name the atom. Canonical kinds now decode through a literal map built from the new `ThreadEvent.canonical_kinds/0`; a custom kind decodes to its atom if one exists and otherwise stays a string, without minting atoms. Same bug class as #1196. The `:integration` suite can now run (`postgrex` is a test-only dependency and tables are created one statement at a time); a regression test reads rows from a child VM that has not interned the kinds.
+
 - **Git integration tests isolate repository policy and Git commands run once.** Plugin test repositories now create a deterministic `main` branch, disable commit signing locally, and fail immediately when setup fails instead of cascading from an unborn `HEAD`. `GitIntegrationPlugin` executes each command once and keeps stderr separate so warnings cannot corrupt successful stdout parsing; failed commands return their stdout or exit status while Git writes diagnostics to stderr.
 
 - **Security: the terminal emulator bounds what its output byte stream can make it allocate, loop over or buffer.** That stream is written by programs, remote peers and replayed `.cast` files, and a few bytes carrying a large number were enough: `CSI 50000000 @` (11 bytes) and a sixel `!3000000~` (14 bytes) each ran a process past a 64 MB heap, and an unterminated escape sequence or string grew for as long as the stream did. Where a standard terminal bounds a value `raxol_terminal` now follows it; elsewhere the cap is documented where it is applied:
