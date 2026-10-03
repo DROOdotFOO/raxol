@@ -30,22 +30,25 @@ defmodule Raxol.Agent.Shell.Pty do
   answer is cached in `:persistent_term` because it cannot change while the VM
   runs.
 
-  The probe spawns through a `Port` with `:in`, never `System.cmd/3`. BSD
-  `script` puts *its own* stdin into raw mode when that stdin is a tty, and
-  `System.cmd/3` would hand it the terminal the developer is running the suite
-  in. A port's child never sees that fd at all.
+  The probe spawns through a `Port` opened for both directions, never
+  `System.cmd/3` and never with `:in`. Both of those hand `script` the BEAM's
+  own fd 0 -- `:in` makes erts skip the stdin `dup2` (see
+  `Raxol.Agent.SpawnedPort`) -- and under the TUI or a developer's test run
+  that is a terminal: BSD `script` puts *its own* stdin into raw mode when it
+  is a tty, and copies whatever arrives on it to the pty master, so the
+  user's keystrokes would land in the command.
 
-  ## Why the pty child's stdin is left open
+  ## Why the pty child's stdin is an open pipe, not `/dev/null`
 
-  A port opened with `:in` points the child's stdin at `/dev/null` (see
-  `Raxol.Agent.SpawnedPort` for why every other spawner here wants that). Under
-  `script` the immediate EOF is copied to the pty master, and the line
-  discipline echoes it back as `^D\\b\\b` — so every pty command's output would
-  start with three bytes the command never wrote. Holding the pipe open instead
-  costs a command that reads stdin its EOF, and it blocks until the caller's
-  deadline. That is the correct semantics for this mode: a pty means "a
-  terminal is attached", and a terminal does not EOF. The non-pty path keeps
-  `:in`.
+  Every other spawner here redirects its child's stdin to `/dev/null` (see
+  `Raxol.Agent.SpawnedPort`). Under `script` that immediate EOF is copied to
+  the pty master, and the line discipline echoes it back as `^D\\b\\b` — so
+  every pty command's output would start with bytes the command never wrote.
+  So `script` gets the port's own pipe instead: it never delivers and never
+  closes, which keeps the user's terminal out of reach and costs a command
+  that reads stdin its EOF -- it blocks until the caller's deadline. That is
+  the correct semantics for this mode: a pty means "a terminal is attached",
+  and a terminal does not EOF. `script` still exits when its child does.
 
   ## Why killing a pty job needs `inner_groups/1`
 
@@ -222,7 +225,6 @@ defmodule Raxol.Agent.Shell.Pty do
     port =
       Port.open({:spawn_executable, path}, [
         :binary,
-        :in,
         :exit_status,
         :stderr_to_stdout,
         {:args, args(flavour, shell_path, @probe_command)},
