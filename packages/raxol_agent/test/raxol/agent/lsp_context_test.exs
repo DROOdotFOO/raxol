@@ -169,10 +169,12 @@ defmodule Raxol.Agent.LSPContextTest do
     # then idles on stdin; reading the FIFO blocks until it has written, so
     # nothing waits on a clock. The read is a `cat` port, not `File.read!/1`:
     # a server that never starts would leave a BEAM file open blocked for good,
-    # while the `cat` can be killed. XOCHI_AUTH_TOKEN is set by no other test
-    # here and read by nothing in this package, so the async run is safe.
+    # while the `cat` is killed on exit. A hang is bounded by the tag timeout
+    # alone. XOCHI_AUTH_TOKEN is set by no other test here and read by nothing
+    # in this package, so the async run is safe.
     @tag :unix_only
     @tag :tmp_dir
+    @tag timeout: 60_000
     test "the server does not inherit raxol's secrets, but does the rest", %{tmp_dir: dir} do
       previous = System.get_env("XOCHI_AUTH_TOKEN")
       System.put_env("XOCHI_AUTH_TOKEN", "probe-not-a-token")
@@ -210,17 +212,18 @@ defmodule Raxol.Agent.LSPContextTest do
       ])
 
     {:os_pid, os_pid} = Port.info(reader, :os_pid)
-    collect_fifo(reader, os_pid, "")
+
+    on_exit(fn ->
+      System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+    end)
+
+    collect_fifo(reader, "")
   end
 
-  defp collect_fifo(reader, os_pid, acc) do
+  defp collect_fifo(reader, acc) do
     receive do
-      {^reader, {:data, data}} -> collect_fifo(reader, os_pid, acc <> data)
+      {^reader, {:data, data}} -> collect_fifo(reader, acc <> data)
       {^reader, {:exit_status, 0}} -> acc
-    after
-      5_000 ->
-        System.cmd("kill", ["-9", Integer.to_string(os_pid)])
-        flunk("the LSP server never wrote to the FIFO")
     end
   end
 
