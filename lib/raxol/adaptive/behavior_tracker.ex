@@ -5,6 +5,10 @@ defmodule Raxol.Adaptive.BehaviorTracker do
   Captures pane focus dwell times, command frequency, alert response
   latency, and layout overrides. Computes windowed aggregates and
   notifies subscribers for downstream recommendation.
+
+  Focus events use `:pane_focus` with a `:pane_id`; the next command is
+  annotated with that identifier as `:focused_pane`. `:widget_hover` events are
+  recorded independently and never replace the current focus.
   """
 
   use GenServer
@@ -15,8 +19,11 @@ defmodule Raxol.Adaptive.BehaviorTracker do
   @default_window_size_ms 60_000
   @max_aggregates 100
 
+  @type pane_id :: atom() | String.t()
+
   @type event_type ::
           :pane_focus
+          | :widget_hover
           | :pane_dwell
           | :command_issued
           | :alert_response
@@ -24,7 +31,6 @@ defmodule Raxol.Adaptive.BehaviorTracker do
           | :takeover_start
           | :takeover_end
           | :layout_override
-
   @type behavior_event :: %{
           timestamp: integer(),
           type: event_type(),
@@ -33,16 +39,16 @@ defmodule Raxol.Adaptive.BehaviorTracker do
 
   @type aggregate :: %{
           window_start: integer(),
-          pane_dwell_times: %{atom() => float()},
+          pane_dwell_times: %{pane_id() => float()},
           command_frequency: %{String.t() => non_neg_integer()},
           avg_alert_response_ms: float(),
-          most_used_panes: [atom()],
-          least_used_panes: [atom()],
-          scroll_frequency: %{atom() => non_neg_integer()},
-          scroll_velocity: %{atom() => float()},
-          takeover_duration_ms: %{atom() => float()},
+          most_used_panes: [pane_id()],
+          least_used_panes: [pane_id()],
+          scroll_frequency: %{pane_id() => non_neg_integer()},
+          scroll_velocity: %{pane_id() => float()},
+          takeover_duration_ms: %{pane_id() => float()},
           layout_override_count: non_neg_integer(),
-          command_concentration: %{atom() => non_neg_integer()}
+          command_concentration: %{pane_id() => non_neg_integer()}
         }
 
   @type t :: %__MODULE__{
@@ -54,7 +60,7 @@ defmodule Raxol.Adaptive.BehaviorTracker do
           tracking_enabled: boolean(),
           subscribers: MapSet.t(pid()),
           aggregate_ref: reference() | nil,
-          current_focus: atom() | nil
+          current_focus: pane_id() | nil
         }
 
   defstruct session_id: nil,

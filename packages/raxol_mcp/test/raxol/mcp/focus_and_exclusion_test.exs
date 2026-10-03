@@ -349,7 +349,10 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
       )
 
       :ok = ToolSynchronizer.update_focus(sync, "new_widget")
-      assert_receive {:telemetry_focus, %{widget_id: "new_widget", source: :keyboard}}, 500
+
+      assert_receive {:telemetry_focus,
+                      %{type: :pane_focus, pane_id: "new_widget", source: :keyboard}},
+                     500
 
       :telemetry.detach("test_focus_#{inspect(ref)}")
     end
@@ -360,7 +363,7 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
 
       :telemetry.attach(
         "test_hover_#{inspect(ref)}",
-        [:raxol, :mcp, :focus_changed],
+        [:raxol, :mcp, :hover_changed],
         fn _event, _measurements, metadata, _ ->
           send(self_pid, {:telemetry_hover, metadata})
         end,
@@ -368,7 +371,10 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
       )
 
       :ok = ToolSynchronizer.update_hover(sync, "hovered_btn")
-      assert_receive {:telemetry_hover, %{widget_id: "hovered_btn", source: :mouse}}, 500
+
+      assert_receive {:telemetry_hover,
+                      %{type: :widget_hover, widget_id: "hovered_btn", source: :mouse}},
+                     500
 
       :telemetry.detach("test_hover_#{inspect(ref)}")
     end

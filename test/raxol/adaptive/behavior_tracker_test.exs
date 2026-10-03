@@ -1,7 +1,8 @@
 defmodule Raxol.Adaptive.BehaviorTrackerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Raxol.Adaptive.BehaviorTracker
+  alias Raxol.MCP.{Registry, ToolSynchronizer}
 
   describe "recording events" do
     test "records events and retrieves them" do
@@ -42,6 +43,75 @@ defmodule Raxol.Adaptive.BehaviorTrackerTest do
 
       events = BehaviorTracker.get_recent_events(pid, 10)
       assert length(events) == 1
+    end
+  end
+
+  describe "MCP focus integration" do
+    setup do
+      tracker =
+        start_supervised!({BehaviorTracker, name: BehaviorTracker})
+
+      registry = start_supervised!({Registry, name: nil})
+
+      synchronizer =
+        start_supervised!(
+          {ToolSynchronizer,
+           registry: registry,
+           dispatcher_pid: self(),
+           session_id: :adaptive_focus_test}
+        )
+
+      %{tracker: tracker, synchronizer: synchronizer}
+    end
+
+    test "focused widget annotates the next command with the same identifier",
+         %{
+           tracker: tracker,
+           synchronizer: synchronizer
+         } do
+      :ok = ToolSynchronizer.update_focus(synchronizer, "search_input")
+      _ = :sys.get_state(synchronizer)
+      _ = BehaviorTracker.get_recent_events(tracker, 10)
+
+      :ok =
+        BehaviorTracker.record(tracker, :command_issued, %{command: "search"})
+
+      command =
+        tracker
+        |> BehaviorTracker.get_recent_events(10)
+        |> Enum.find(&(&1.type == :command_issued))
+
+      assert command.data.focused_pane == "search_input"
+    end
+
+    test "hover is recorded separately and does not replace keyboard focus", %{
+      tracker: tracker,
+      synchronizer: synchronizer
+    } do
+      :ok = ToolSynchronizer.update_focus(synchronizer, "search_input")
+      _ = :sys.get_state(synchronizer)
+      _ = BehaviorTracker.get_recent_events(tracker, 10)
+
+      :ok = ToolSynchronizer.update_hover(synchronizer, "submit_button")
+      _ = :sys.get_state(synchronizer)
+      _ = BehaviorTracker.get_recent_events(tracker, 10)
+
+      :ok =
+        BehaviorTracker.record(tracker, :command_issued, %{command: "submit"})
+
+      events = BehaviorTracker.get_recent_events(tracker, 10)
+
+      assert Enum.any?(events, fn event ->
+               event.type == :widget_hover and
+                 event.data.widget_id == "submit_button"
+             end)
+
+      command =
+        Enum.find(events, fn event ->
+          event.type == :command_issued and event.data.command == "submit"
+        end)
+
+      assert command.data.focused_pane == "search_input"
     end
   end
 
