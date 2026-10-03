@@ -107,24 +107,57 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       assert entry == %{op_ref: "op://v/i/f"}
     end
 
-    # This module names :op_ref, so loading it creates the atom and an
+    # This module names the field atoms, so loading it creates them and an
     # in-VM read could never catch the bug. Read from a fresh BEAM where
-    # only Credentials (and what it calls) gets loaded.
-    @tag timeout: 60_000
-    test "reads in a fresh VM that has never seen the field atoms", %{path: path} do
-      File.write!(path, Jason.encode!(%{"openai" => %{"op_ref" => "op://v/i/f"}}))
+    # only Credentials (and what it calls) gets loaded. The child checks that
+    # premise first. Both the call and the expected shape stay out of the
+    # script's parse/expansion: expanding a remote call loads its module,
+    # and parsing a pattern that names the fields creates the atoms.
+    test "reads op_ref, model and base_url in a fresh VM that has never seen those atoms",
+         %{path: path} do
+      File.write!(
+        path,
+        Jason.encode!(%{
+          "openai" => %{"op_ref" => "op://v/i/f", "model" => "m", "base_url" => "http://b"}
+        })
+      )
 
+      # The running install's launcher, not whatever `elixir` PATH finds.
+      elixir = Path.expand("../../bin/elixir", :code.lib_dir(:elixir))
       code_paths = Enum.flat_map(:code.get_path(), &["-pa", to_string(&1)])
-      script = "IO.write(inspect(Raxol.Agent.Backend.Credentials.load()))"
+
+      script = ~S"""
+      for name <- ~w(op_ref model base_url) do
+        try do
+          String.to_existing_atom(name)
+          IO.puts(:stderr, "atom #{name} exists before Credentials.load/0")
+          System.halt(2)
+        rescue
+          ArgumentError -> :ok
+        end
+      end
+
+      store = apply(Raxol.Agent.Backend.Credentials, :load, [])
+
+      Code.eval_string(
+        ~S'''
+        case store do
+          %{"openai" => %{op_ref: _, model: _, base_url: _}} -> :ok
+          other -> IO.puts(:stderr, "unexpected load/0 result: #{inspect(other)}"); System.halt(3)
+        end
+        ''',
+        store: store
+      )
+      """
 
       {out, status} =
-        System.cmd("elixir", code_paths ++ ["-e", script],
+        System.cmd(elixir, code_paths ++ ["-e", script],
           env: [{"RAXOL_PROVIDERS", path}],
+          cd: System.tmp_dir!(),
           stderr_to_stdout: true
         )
 
       assert status == 0, out
-      assert out =~ ~s(%{"openai" => %{op_ref: "op://v/i/f"}})
     end
 
     # An entry here names the vault item a provider key is read from, so a
@@ -181,6 +214,26 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     end
   end
 
+  describe "op lookup" do
+    @tag :unix_only
+    test "ignores an op on a relative PATH entry" do
+      # Under the package's own tmp/ so the relative form resolves from the
+      # test cwd without changing it.
+      relative = Path.join("tmp", "raxol-rel-op-#{System.unique_integer([:positive])}")
+      absolute = Path.expand(relative)
+      fake_op(absolute, "#!/bin/sh\necho planted\n")
+      on_exit(fn -> File.rm_rf!(absolute) end)
+
+      # Positive control: the same directory as an absolute entry is used.
+      put_env_restored("PATH", absolute)
+      assert Credentials.op_available?()
+
+      System.put_env("PATH", relative)
+      refute Credentials.op_available?()
+      assert {:error, :op_unavailable} = Credentials.read_ref("op://v/i/f")
+    end
+  end
+
   describe "op_status/0" do
     test "returns one of the three known states" do
       assert Credentials.op_status() in [:absent, :not_signed_in, :ok]
@@ -192,6 +245,23 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       else
         assert Credentials.op_status() == :absent
       end
+    end
+
+    # 126/127 is the shell saying the `op` it found cannot run; telling the
+    # user to `op signin` for that sends them after the wrong problem.
+    @tag :unix_only
+    test "maps an op whoami exit of 126 or 127 to :absent" do
+      dir = tmp_dir("raxol-broken-op")
+      put_env_restored("PATH", dir)
+
+      for code <- [126, 127] do
+        fake_op(dir, "#!/bin/sh\nexit #{code}\n")
+        assert Credentials.op_status() == :absent
+      end
+
+      # Control: any other failure still reads as signed out.
+      fake_op(dir, "#!/bin/sh\nexit 1\n")
+      assert Credentials.op_status() == :not_signed_in
     end
   end
 
@@ -274,20 +344,15 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
   end
 
   describe "run_executable/3" do
-    # An Erlang port opened without `:in` hands the child a stdin pipe that
-    # never delivers and never closes; with `:in` the child inherits the
-    # BEAM's stdin, which in a terminal is the tty. Either way a child that
-    # READS stdin blocks until the deadline. That is not hypothetical: it is
-    # why `op item create` hung from the BEAM while the identical command
-    # returned in seconds from a shell, which silently broke every path that
-    # stores a credential.
+    # With no `:in` the port's stdin pipe never delivers and never closes, so
+    # if the `</dev/null` redirect is lost a stdin-reading child blocks until
+    # the deadline -- on every host, CI included, not just under a tty. That
+    # is the `op item create` hang: `op` waits on an open stdin instead of
+    # going to the desktop-app integration.
     #
-    # `cat` with no arguments reads stdin to EOF, so it is the cheapest probe
-    # for the regression: EOF means it exits at once, an open pipe or a tty
-    # means it hangs until the timeout. Run the suite from a terminal to
-    # cover the tty case; CI has no tty and covers the pipe case.
+    # `cat` with no arguments reads stdin to EOF: EOF means it exits at once.
     @tag :unix_only
-    test "closes the child's stdin, so a stdin-reading child sees EOF" do
+    test "points the child's stdin at /dev/null, so a stdin-reading child sees EOF" do
       cat = System.find_executable("cat")
       assert cat, "cat is required for this test"
 
@@ -295,6 +360,25 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       # stdin pipe is killed at the 5s deadline and comes back as a timeout
       # error, never as a clean exit. No elapsed-time assertion needed.
       assert {"", 0} = Credentials.run_executable(cat, [], 5_000)
+    end
+
+    # The wrapper shell's own stderr (xtrace here; a setlocale warning or a
+    # PS4 substitution elsewhere) is merged into the output by
+    # :stderr_to_stdout, which for `op read` IS the secret.
+    @tag :unix_only
+    test "returns only the target's output when SHELLOPTS enables xtrace" do
+      put_env_restored("SHELLOPTS", "braceexpand:hashall:interactive-comments:xtrace")
+      echo = System.find_executable("echo")
+
+      assert {"hello\n", 0} = Credentials.run_executable(echo, ["hello"], 5_000)
+    end
+
+    # bash-as-sh exits 126 for a missing `exec` target, dash 127.
+    @tag :unix_only
+    test "reports a missing executable as the shell's 126/127, not a raise" do
+      missing = Path.join(tmp_dir("raxol-no-exe"), "nope")
+      assert {_diagnostic, code} = Credentials.run_executable(missing, [], 5_000)
+      assert code in [126, 127]
     end
 
     @tag :unix_only
@@ -313,5 +397,28 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       assert {:error, :op_timeout} =
                Credentials.run_executable(sleep, ["30"], 300)
     end
+  end
+
+  defp put_env_restored(var, value) do
+    prev = System.get_env(var)
+    System.put_env(var, value)
+
+    on_exit(fn ->
+      if prev, do: System.put_env(var, prev), else: System.delete_env(var)
+    end)
+  end
+
+  defp tmp_dir(prefix) do
+    dir = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    dir
+  end
+
+  defp fake_op(dir, script) do
+    File.mkdir_p!(dir)
+    op = Path.join(dir, "op")
+    File.write!(op, script)
+    File.chmod!(op, 0o755)
   end
 end
