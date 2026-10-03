@@ -72,6 +72,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves EURC, EURe and ZCHF unpriced, and the rest to `RAXOL_PRICE_SOURCE`,
   instead of aborting the sweep.
   `SettlementLedger.report/2` reads the ledger once instead of four times.
+- Xochi quotes can be exact-output. `QuoteRequest` gains `swap_kind`
+  (`"exact_input"` by default, or `"exact_output"`), `output_amount` and
+  `max_from_amount`; an exact-output request sends `output_amount` instead of
+  `from_amount` and never sends `max_from_amount`, which only caps what raxol
+  will sign. `ExecuteXochiIntent` takes `swap_kind` and `output_amount`; on
+  exact output `amount` is the maximum spend, reserved by the spend gate and
+  passed on as `max_from_amount`. Exact output has no automatic same-asset
+  floor; an explicit `min_to_amount` still applies.
+
+### Changed
+
+- `Protocols.Riddler.submit_order/4` takes the Xochi `QuoteRequest` as its
+  fourth argument, so the intent it signs is checked against the request.
+
+### Removed
+
+- `Protocols.Xochi.execute/3` and `Protocols.Xochi.sign_intent/2`. Use
+  `execute/4` and `sign_intent/3`, which take the `QuoteRequest` the quote was
+  fetched with.
 
 ### Changed
 
@@ -94,6 +113,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symbol no price answers. Such an entry left the margin without any count
   saying why; every reason an entry is left out of `usd_margin` is now
   countable.
+- raxol signed the Xochi EIP-712 intent without checking it against the
+  request (#1164). A quote could carry a signable intent for another wallet,
+  recipient, chain, token, amount, settlement preference or a far-off
+  deadline, and raxol would sign it. `Xochi.validate_intent/2` now binds every
+  signed field to the request before any signature, both in `sign_intent/3`
+  and in `ExecuteXochiIntent` ahead of the spend gate, so a mismatch reserves
+  nothing. A refusal is `{:intent_mismatch, field}`, reported as `:rejected`.
+  The reported and telemetry `from_amount` is the signed `fromAmount`.
 - `ExecuteXochiIntent` signed a re-quote without checking it. When the first
   execute came back as an expired quote (a 409 the endpoint chooses), the
   retry fetched a new quote and signed it with neither the delivery floor nor

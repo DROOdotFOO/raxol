@@ -27,6 +27,7 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
   alias Raxol.Payments.Actions.Payments.{ExecuteRelayTransfer, ExecuteXochiIntent}
   alias Raxol.Payments.{Failure, Ledger, SpendingPolicy}
   alias Raxol.Payments.Xochi.Stealth
+  alias Raxol.Payments.Test.XochiIntentFixture
 
   @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
@@ -96,6 +97,26 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
     end
   end
 
+  # -- ExecuteXochiIntent: a signed intent that drifts from the request never signs --
+
+  describe "ExecuteXochiIntent intent binding" do
+    property "any single-field perturbation of the served intent is refused before signing" do
+      # The quote is otherwise honest and well within every cap, so the only
+      # thing standing between it and the signer is the intent-to-request check.
+      check all({field, value} <- member_of(intent_perturbations())) do
+        stub_xochi(%{field => value})
+        ledger = fresh_ledger()
+        ctx = xochi_ctx(ledger, xochi_policy(%{}))
+
+        assert {:error, %Failure{reason: :rejected, detail: {:intent_mismatch, _}}} =
+                 ExecuteXochiIntent.run(xochi_params("0.50"), ctx),
+               "#{field} perturbation reached the signer"
+
+        refute_received :wallet_signed
+      end
+    end
+  end
+
   # -- ExecuteRelayTransfer: gate rejection never signs, even with a gasless
   # quote that WOULD sign if the gate were bypassed --
 
@@ -128,7 +149,7 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
       # classified here. Each entry names how it is kept from reaching a signer
       # without authorization:
       #
-      #   ExecuteXochiIntent  -- SpendGate.authorize/3 before Xochi.execute signs
+      #   ExecuteXochiIntent  -- SpendGate.authorize/3 before Xochi.execute/4 signs
       #   ExecuteRelayTransfer-- SpendGate.authorize/3 before wallet.sign_typed_data
       #   Transfer            -- authorize-only; never signs (returns "authorized")
       #   CreateMandate       -- signs a struct-derived Mandate digest (sign_hash),
@@ -251,21 +272,20 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
   # A quote that would lead to a signature (canSolve, eip712Data). toAmount is
   # large enough to clear any same-asset delivery floor for the tested amounts,
   # so the gate -- not the floor -- is the thing that stops the payment.
-  defp stub_xochi do
+  defp stub_xochi(message_overrides \\ %{}) do
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
+          {body, conn} = XochiIntentFixture.quote_body(conn)
+
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "quoteId" => "q_1",
             "canSolve" => true,
-            "toAmount" => "5000000",
+            "toAmount" => body["from_amount"],
             "xochiFee" => "1000",
-            "eip712Data" => %{
-              "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-              "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-              "message" => %{"amount" => 500_000}
-            }
+            "eip712Data" =>
+              XochiIntentFixture.eip712(body, body["from_amount"], message: message_overrides)
           })
 
         "/api/intent/execute" ->
@@ -277,6 +297,22 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
           })
       end
     end)
+  end
+
+  # One hostile value per signed field; each must fail the intent check.
+  defp intent_perturbations do
+    [
+      {"wallet", "0x2222222222222222222222222222222222222222"},
+      {"recipient", "0x3333333333333333333333333333333333333333"},
+      {"fromChainId", 1},
+      {"toChainId", 10},
+      {"fromToken", "0x4444444444444444444444444444444444444444"},
+      {"toToken", "0x5555555555555555555555555555555555555555"},
+      {"fromAmount", "500001"},
+      {"toAmount", "1"},
+      {"settlementPreference", "public"},
+      {"deadline", System.system_time(:second) + 86_400}
+    ]
   end
 
   defp categorical_xochi_scenarios do

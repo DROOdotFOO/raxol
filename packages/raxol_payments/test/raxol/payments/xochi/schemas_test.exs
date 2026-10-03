@@ -348,6 +348,71 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
     end
   end
 
+  describe "QuoteRequest swap_kind" do
+    @exact_output [
+      swap_kind: "exact_output",
+      from_amount: nil,
+      output_amount: "990000",
+      max_from_amount: "1100000"
+    ]
+
+    test "exact_input keeps the from_amount wire shape with no swap_kind" do
+      json = QuoteRequest.to_json(swap_request([]))
+
+      assert json["from_amount"] == "1000000"
+      refute Map.has_key?(json, "swap_kind")
+      refute Map.has_key?(json, "output_amount")
+      refute Map.has_key?(json, "max_from_amount")
+    end
+
+    test "exact_output sends swap_kind and output_amount, never from_amount or the ceiling" do
+      req = swap_request(@exact_output)
+      assert :ok = QuoteRequest.validate(req)
+
+      json = QuoteRequest.to_json(req)
+      assert json["swap_kind"] == "exact_output"
+      assert json["output_amount"] == "990000"
+      refute Map.has_key?(json, "from_amount")
+      refute Map.has_key?(json, "max_from_amount")
+    end
+
+    test "validate refuses an incomplete or contradictory exact_output request" do
+      for {overrides, reason} <- [
+            {[output_amount: nil], :invalid_output_amount},
+            {[output_amount: "1.5"], :invalid_output_amount},
+            {[max_from_amount: nil], :invalid_max_from_amount},
+            {[max_from_amount: "-1"], :invalid_max_from_amount},
+            {[from_amount: "1000000"], :invalid_from_amount}
+          ] do
+        req = swap_request(Keyword.merge(@exact_output, overrides))
+        assert {:error, {^reason, _}} = QuoteRequest.validate(req)
+      end
+    end
+
+    test "validate refuses output_amount on exact_input and an unknown swap_kind" do
+      assert {:error, {:invalid_output_amount, _}} =
+               QuoteRequest.validate(swap_request(output_amount: "990000"))
+
+      assert {:error, {:invalid_swap_kind, "exact"}} =
+               QuoteRequest.validate(swap_request(swap_kind: "exact"))
+    end
+  end
+
+  defp swap_request(overrides) do
+    struct!(
+      %QuoteRequest{
+        wallet: @valid_addr,
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: @valid_addr,
+        to_token: @valid_addr,
+        from_amount: "1000000",
+        settlement_preference: "public"
+      },
+      overrides
+    )
+  end
+
   describe "QuoteResponse.from_json/1" do
     test "parses JSON response" do
       json = %{
