@@ -65,17 +65,17 @@ defmodule Raxol.MCP.CircuitBreaker do
       [{^key, :closed, _failures, _opened_at}] ->
         :closed
 
-      [{^key, :open, _failures, opened_at}] ->
+      [{^key, :open, failures, opened_at}] ->
         if now_ms() - opened_at >= recovery_ms do
-          # Transition to half_open: allow one probe
-          :ets.insert(table, {key, :half_open, 0, opened_at})
-          :half_open
+          claim_recovery_probe(table, key, failures, opened_at, opts)
         else
           :open
         end
 
       [{^key, :half_open, _failures, _opened_at}] ->
-        :half_open
+        # One process already claimed the recovery probe. Everyone else stays
+        # blocked until that probe records success or failure.
+        :open
     end
   end
 
@@ -96,34 +96,11 @@ defmodule Raxol.MCP.CircuitBreaker do
   def record_failure(table, key, opts \\ []) do
     threshold = get_opt(opts, :failure_threshold)
 
-    case :ets.lookup(table, key) do
-      [] ->
-        # First failure
-        if threshold <= 1 do
-          :ets.insert(table, {key, :open, 1, now_ms()})
-        else
-          :ets.insert(table, {key, :closed, 1, 0})
-        end
-
-      [{^key, :half_open, _failures, _opened_at}] ->
-        # Probe failed, re-open
-        :ets.insert(table, {key, :open, 1, now_ms()})
-
-      [{^key, :closed, failures, _opened_at}] ->
-        new_count = failures + 1
-
-        if new_count >= threshold do
-          :ets.insert(table, {key, :open, new_count, now_ms()})
-        else
-          :ets.insert(table, {key, :closed, new_count, 0})
-        end
-
-      [{^key, :open, failures, opened_at}] ->
-        # Already open, just bump the count
-        :ets.insert(table, {key, :open, failures + 1, opened_at})
-    end
-
-    :ok
+    # The counter update and first-row insertion are one ETS operation. The old
+    # lookup-plus-insert sequence lost increments whenever callbacks completed
+    # concurrently.
+    :ets.update_counter(table, key, {3, 1}, {key, :closed, 0, 0})
+    promote_failed_state(table, key, threshold)
   end
 
   @doc "Manually reset a circuit to closed."
@@ -146,6 +123,47 @@ defmodule Raxol.MCP.CircuitBreaker do
     case :ets.lookup(table, key) do
       [] -> %{state: :closed, failures: 0}
       [{^key, state, failures, _opened_at}] -> %{state: state, failures: failures}
+    end
+  end
+
+  defp claim_recovery_probe(table, key, failures, opened_at, opts) do
+    replaced =
+      :ets.select_replace(table, [
+        {{key, :open, failures, opened_at}, [], [{:const, {key, :half_open, 0, opened_at}}]}
+      ])
+
+    if replaced == 1, do: :half_open, else: check(table, key, opts)
+  end
+
+  defp promote_failed_state(table, key, threshold) do
+    case :ets.lookup(table, key) do
+      [{^key, :half_open, failures, opened_at}] ->
+        replace_failed_state(
+          table,
+          {key, :half_open, failures, opened_at},
+          {key, :open, failures, now_ms()},
+          key,
+          threshold
+        )
+
+      [{^key, :closed, failures, opened_at}] when failures >= threshold ->
+        replace_failed_state(
+          table,
+          {key, :closed, failures, opened_at},
+          {key, :open, failures, now_ms()},
+          key,
+          threshold
+        )
+
+      [{^key, _state, _failures, _opened_at}] ->
+        :ok
+    end
+  end
+
+  defp replace_failed_state(table, old, new, key, threshold) do
+    case :ets.select_replace(table, [{old, [], [{:const, new}]}]) do
+      1 -> :ok
+      0 -> promote_failed_state(table, key, threshold)
     end
   end
 
