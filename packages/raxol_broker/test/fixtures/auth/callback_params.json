@@ -1,0 +1,5 @@
+{
+  "code": "fake-authorization-code-0001",
+  "state": "{state}",
+  "iss": "https://agent.robinhood.com/mcp/trading"
+}

@@ -1,0 +1,10 @@
+{
+  "response_type": "code",
+  "client_id": "FAKECLIENTID000000000000000000000000TEST",
+  "redirect_uri": "http://127.0.0.1:{port}/callback",
+  "code_challenge": "{code_challenge}",
+  "code_challenge_method": "S256",
+  "state": "{state}",
+  "scope": "internal",
+  "resource": "https://agent.robinhood.com/mcp/trading"
+}

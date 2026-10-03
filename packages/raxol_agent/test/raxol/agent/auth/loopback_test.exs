@@ -95,6 +95,131 @@ defmodule Raxol.Agent.Auth.LoopbackTest do
              )
   end
 
+  describe "a callback validated against state and issuer" do
+    @iss "https://issuer.example/mcp"
+    @state "expected-state-value"
+
+    setup do
+      {:ok, listener} = Loopback.open(host: :ip)
+      on_exit(fn -> Loopback.close(listener) end)
+
+      {:ok, ip_listener: listener}
+    end
+
+    defp expect, do: [state: @state, iss: @iss]
+
+    defp callback(params) do
+      "/callback?" <> URI.encode_query(params)
+    end
+
+    # RFC 8252 section 8.3: the literal address the socket is bound to, so the
+    # registered, authorized and redeemed redirect URI is one string.
+    test "advertises the literal loopback address", %{ip_listener: listener} do
+      assert Loopback.redirect_uri(listener) ==
+               "http://127.0.0.1:#{listener.port}/callback"
+    end
+
+    test "returns code, state and iss when both match", %{ip_listener: listener} do
+      fire(listener.port, callback(%{"code" => "c1", "state" => @state, "iss" => @iss}))
+
+      assert {:ok, %{"code" => "c1", "state" => @state, "iss" => @iss}} =
+               Loopback.await(listener, 2_000, expect())
+    end
+
+    # A request with the wrong state is not this flow's redirect, so it cannot
+    # end the wait -- otherwise any local page could cancel a sign-in.
+    test "a wrong state is refused and the wait continues", %{ip_listener: listener} do
+      caller = self()
+
+      spawn_link(fn ->
+        forged = callback(%{"code" => "forged", "state" => "nope", "iss" => @iss})
+        send(caller, {:forged, request(listener.port, forged)})
+        request(listener.port, callback(%{"code" => "real", "state" => @state, "iss" => @iss}))
+      end)
+
+      assert {:ok, %{"code" => "real"}} = Loopback.await(listener, 3_000, expect())
+      assert_receive {:forged, response}, 2_000
+      assert response =~ "400 Bad Request"
+    end
+
+    test "a callback on another path does not end the wait", %{ip_listener: listener} do
+      caller = self()
+
+      spawn_link(fn ->
+        stray =
+          "/elsewhere?" <> URI.encode_query(%{"code" => "x", "state" => @state, "iss" => @iss})
+
+        send(caller, {:stray, request(listener.port, stray)})
+        request(listener.port, callback(%{"code" => "real", "state" => @state, "iss" => @iss}))
+      end)
+
+      assert {:ok, %{"code" => "real"}} = Loopback.await(listener, 3_000, expect())
+      assert_receive {:stray, response}, 2_000
+      assert response =~ "404 Not Found"
+    end
+
+    test "a duplicated parameter is refused and the wait continues", %{ip_listener: listener} do
+      caller = self()
+
+      spawn_link(fn ->
+        dup = "/callback?code=a&code=b&state=#{@state}&iss=#{URI.encode_www_form(@iss)}"
+        send(caller, {:dup, request(listener.port, dup)})
+        request(listener.port, callback(%{"code" => "real", "state" => @state, "iss" => @iss}))
+      end)
+
+      assert {:ok, %{"code" => "real"}} = Loopback.await(listener, 3_000, expect())
+      assert_receive {:dup, response}, 2_000
+      assert response =~ "400 Bad Request"
+    end
+
+    # RFC 9207: the server advertises the iss parameter, so its absence or a
+    # different issuer on a redirect carrying our state is a mix-up, not noise.
+    test "a missing iss fails the flow", %{ip_listener: listener} do
+      fire(listener.port, callback(%{"code" => "c1", "state" => @state}))
+
+      assert {:error, :iss_mismatch} = Loopback.await(listener, 2_000, expect())
+    end
+
+    test "a different iss fails the flow", %{ip_listener: listener} do
+      fire(
+        listener.port,
+        callback(%{"code" => "c1", "state" => @state, "iss" => "https://evil.example"})
+      )
+
+      assert {:error, :iss_mismatch} = Loopback.await(listener, 2_000, expect())
+    end
+
+    # The error code is reported, the provider's free-text description is not:
+    # it would otherwise travel into an ACP error message.
+    test "an error redirect with our state ends the wait without its description", %{
+      ip_listener: listener
+    } do
+      fire(
+        listener.port,
+        callback(%{
+          "error" => "access_denied",
+          "error_description" => "<script>",
+          "state" => @state,
+          "iss" => @iss
+        })
+      )
+
+      assert {:error, {:oauth_error, "access_denied", nil}} =
+               Loopback.await(listener, 2_000, expect())
+    end
+
+    test "an error redirect with a wrong state does not end the wait", %{
+      ip_listener: listener
+    } do
+      spawn_link(fn ->
+        request(listener.port, callback(%{"error" => "access_denied", "state" => "nope"}))
+        request(listener.port, callback(%{"code" => "real", "state" => @state, "iss" => @iss}))
+      end)
+
+      assert {:ok, %{"code" => "real"}} = Loopback.await(listener, 3_000, expect())
+    end
+  end
+
   # Send a request without waiting on its response: reading it inline would
   # block until `await/2` accepts, which the caller has not reached yet.
   defp fire(port, path) do

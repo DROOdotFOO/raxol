@@ -19,11 +19,25 @@ defmodule Raxol.Agent.Auth.Flow do
 
   Every step is a seam (`:browser_fn`, `:http_fn`, `:store_fn`) so the whole
   path is testable without a browser or a network call.
+
+  ## Robinhood
+
+  `run(:robinhood, opts)` is the brokerage sign-in `raxol_broker` uses. It is
+  deliberately NOT in `providers/0`: that list is the model-provider sign-in
+  ACP clients, `raxol login` and the TUI offer, and none of them should be
+  able to start a brokerage consent flow. It binds the callback on the
+  literal `127.0.0.1` (one redirect string for registration, authorization
+  and redemption), verifies discovery against the pins in
+  `Raxol.Agent.Auth.Robinhood`, registers a public client, checks the
+  callback's `state` and `iss` (`Raxol.Agent.Auth.Loopback.await/3`), and
+  returns `{:ok, %Raxol.Agent.Auth.Credential{}}` without storing it.
   """
 
+  alias Raxol.Agent.Auth.Credential
   alias Raxol.Agent.Auth.Loopback
   alias Raxol.Agent.Auth.OpenRouter
   alias Raxol.Agent.Auth.Pkce
+  alias Raxol.Agent.Auth.Robinhood
   alias Raxol.Agent.Setup
 
   # Long enough for a real sign-in (password manager, MFA, an account switch),
@@ -53,8 +67,12 @@ defmodule Raxol.Agent.Auth.Flow do
 
   Returns `{:ok, %{provider: provider, validation: validation}}` or
   `{:error, reason}`; `describe/1` renders a reason for a user.
+
+  `:robinhood` takes `:timeout`, `:browser_fn` and `:http_fn` (the contract
+  `Raxol.Agent.Auth.Robinhood` documents) and returns
+  `{:ok, %Raxol.Agent.Auth.Credential{}}`.
   """
-  @spec run(atom(), keyword()) :: {:ok, result()} | {:error, term()}
+  @spec run(atom(), keyword()) :: {:ok, result() | Credential.t()} | {:error, term()}
   def run(provider, opts \\ [])
 
   def run(:openrouter, opts) do
@@ -65,6 +83,22 @@ defmodule Raxol.Agent.Auth.Flow do
       {:ok, listener} ->
         try do
           collect(:openrouter, listener, pkce, timeout, opts)
+        after
+          Loopback.close(listener)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def run(:robinhood, opts) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+
+    case Loopback.open(host: :ip, path: "/callback") do
+      {:ok, listener} ->
+        try do
+          collect_robinhood(listener, timeout, opts)
         after
           Loopback.close(listener)
         end
@@ -85,6 +119,21 @@ defmodule Raxol.Agent.Auth.Flow do
          {:ok, key} <- OpenRouter.exchange(code, pkce, opts),
          {:ok, validation} <- store(provider, key, opts) do
       {:ok, %{provider: provider, validation: validation}}
+    end
+  end
+
+  defp collect_robinhood(listener, timeout, opts) do
+    redirect_uri = Loopback.redirect_uri(listener)
+    pkce = Pkce.new()
+    state = Robinhood.new_state()
+    browser_fn = Keyword.get(opts, :browser_fn, &open_browser/1)
+    expect = [state: state, iss: Robinhood.issuer()]
+
+    with :ok <- Robinhood.discover(opts),
+         {:ok, client_id} <- Robinhood.register(redirect_uri, opts),
+         :ok <- launch(browser_fn, Robinhood.authorize_url(client_id, redirect_uri, pkce, state)),
+         {:ok, %{"code" => code}} <- Loopback.await(listener, timeout, expect) do
+      Robinhood.exchange(code, pkce, client_id, redirect_uri, opts)
     end
   end
 
@@ -225,6 +274,31 @@ defmodule Raxol.Agent.Auth.Flow do
 
   def describe({:listen_failed, reason}),
     do: "could not bind a local port for the redirect: #{inspect(reason)}"
+
+  def describe(:iss_mismatch),
+    do: "the sign-in redirect did not come from the expected issuer; nothing was redeemed"
+
+  def describe(:metadata_mismatch),
+    do: "the provider's OAuth metadata did not match the pinned endpoints; sign-in stopped"
+
+  def describe({:discovery_failed, status}),
+    do: "could not read the provider's OAuth metadata (HTTP #{status})"
+
+  def describe({:registration_rejected, status}),
+    do: "the provider refused to register this client (HTTP #{status})"
+
+  def describe(:registration_invalid),
+    do: "the provider's client registration did not match what was requested"
+
+  def describe({:token_rejected, status, error}),
+    do: "the provider rejected the token request (HTTP #{status}, #{error})"
+
+  def describe(:token_response_invalid),
+    do: "the provider's token response was not a usable bearer token"
+
+  def describe(:no_refresh_token), do: "the credential has no refresh token; sign in again"
+
+  def describe({:unreachable, _kind}), do: "could not reach the provider"
 
   def describe(reason), do: inspect(reason)
 end
