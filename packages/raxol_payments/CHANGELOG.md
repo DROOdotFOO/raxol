@@ -197,6 +197,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An explicit `min_to_amount` on a same-asset Xochi corridor can only raise
   the automatic 80%-of-par delivery floor. It previously replaced it, so
   `min_to_amount: "1"` switched the theft backstop off.
+- `EIP712.hash/3` refuses a `uint256` string longer than 78 bytes as
+  `{:invalid_uint256, value}` before parsing it. A quote message with a
+  5-million-digit amount raised `SystemLimitError` out of the wallet.
 
 ### Security
 

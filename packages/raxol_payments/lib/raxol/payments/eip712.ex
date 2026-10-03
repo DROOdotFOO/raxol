@@ -388,6 +388,12 @@ defmodule Raxol.Payments.EIP712 do
       else: {:error, {:invalid_uint256, value}}
   end
 
+  # 2^256 - 1 has 78 decimal digits. A longer string is refused before
+  # `Integer.parse`, which would otherwise spend unbounded time on (or raise
+  # `SystemLimitError` for) a multi-megabyte digit string.
+  defp encode_value("uint256", value) when is_binary(value) and byte_size(value) > 78,
+    do: {:error, {:invalid_uint256, value}}
+
   defp encode_value("uint256", value) when is_binary(value) do
     case Integer.parse(value) do
       {int, ""} when int in 0..@max_uint256 -> {:ok, <<int::unsigned-big-256>>}
