@@ -275,14 +275,17 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
 
   describe "run_executable/3" do
     # An Erlang port opened without `:in` hands the child a stdin pipe that
-    # never delivers and never closes, so any child that READS stdin blocks
-    # until the deadline. That is not hypothetical: it is why `op item create`
-    # hung from the BEAM while the identical command returned in seconds from a
-    # shell, which silently broke every path that stores a credential.
+    # never delivers and never closes; with `:in` the child inherits the
+    # BEAM's stdin, which in a terminal is the tty. Either way a child that
+    # READS stdin blocks until the deadline. That is not hypothetical: it is
+    # why `op item create` hung from the BEAM while the identical command
+    # returned in seconds from a shell, which silently broke every path that
+    # stores a credential.
     #
     # `cat` with no arguments reads stdin to EOF, so it is the cheapest probe
-    # for the regression: EOF means it exits at once, an open pipe means it
-    # hangs until the timeout.
+    # for the regression: EOF means it exits at once, an open pipe or a tty
+    # means it hangs until the timeout. Run the suite from a terminal to
+    # cover the tty case; CI has no tty and covers the pipe case.
     @tag :unix_only
     test "closes the child's stdin, so a stdin-reading child sees EOF" do
       cat = System.find_executable("cat")

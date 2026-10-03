@@ -240,25 +240,29 @@ defmodule Raxol.Agent.Backend.Credentials do
   @doc false
   # Spawn `executable` and collect its output, bounded by `timeout_ms`.
   #
-  # `:in` is load-bearing, not tidiness. A port opened without it hands the
-  # child a stdin pipe that never delivers and never closes, so anything the
-  # child tries to READ from stdin blocks until the deadline. `op` decides
-  # whether to prompt by looking at stdin: given that pipe it waits for input
-  # forever, and given EOF it goes straight to the desktop-app integration and
-  # succeeds. That is why `op item create` hung here while the identical
-  # command run from a shell (whose stdin is a terminal, or `/dev/null`)
-  # returned in seconds -- and why the whole `connect_key` path, browser
+  # The child's stdin MUST be `/dev/null`. `op` decides whether to prompt by
+  # looking at stdin: given an open pipe it waits for input forever, and given
+  # EOF it goes straight to the desktop-app integration and succeeds. That is
+  # why `op item create` hung here while the identical command run from a
+  # shell returned in seconds -- and why the whole `connect_key` path, browser
   # sign-in and pasted key alike, could not store a credential from the BEAM.
   #
-  # Every caller here is read-only (nothing ever `Port.command`s), so closing
-  # the write half costs nothing.
+  # No port option provides that. Without `:in` the child gets a pipe that
+  # never delivers and never closes; with `:in` it inherits the BEAM's own
+  # stdin, which under the TUI is the user's terminal -- `op` then prompts
+  # on, and reads keystrokes from, the tty the TUI owns. So `sh` redirects
+  # and `exec`s: the executable and args travel as positional parameters
+  # (never interpolated), and `exec` keeps the pid `kill_os_process` targets.
+  # Windows has no `/bin/sh` and no `/dev/null`; it keeps the direct spawn.
   @spec run_executable(String.t(), [String.t()], pos_integer()) ::
           {String.t(), non_neg_integer()} | {:error, :op_timeout}
   def run_executable(executable, args, timeout_ms) do
+    {spawn_path, spawn_args} = null_stdin_spawn(executable, args, :os.type())
+
     port =
       Port.open(
-        {:spawn_executable, executable},
-        [:binary, :exit_status, :stderr_to_stdout, :in, args: args]
+        {:spawn_executable, spawn_path},
+        [:binary, :exit_status, :stderr_to_stdout, :in, args: spawn_args]
       )
 
     os_pid =
@@ -273,6 +277,12 @@ defmodule Raxol.Agent.Backend.Credentials do
       System.monotonic_time(:millisecond) + timeout_ms,
       []
     )
+  end
+
+  defp null_stdin_spawn(executable, args, {:win32, _}), do: {executable, args}
+
+  defp null_stdin_spawn(executable, args, _unix) do
+    {"/bin/sh", ["-c", ~s(exec "$0" "$@" </dev/null), executable | args]}
   end
 
   defp collect_op(port, os_pid, deadline, acc) do
