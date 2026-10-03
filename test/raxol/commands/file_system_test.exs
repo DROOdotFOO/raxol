@@ -1,7 +1,17 @@
 defmodule Raxol.Commands.FileSystemTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Raxol.Commands.FileSystem
+
+  @state_machine_paths [
+    "/alpha",
+    "/alpha/one",
+    "/alpha/one/deep",
+    "/alpha/two",
+    "/beta",
+    "/beta/one"
+  ]
 
   describe "new/0" do
     test "creates filesystem with root directory" do
@@ -78,12 +88,16 @@ defmodule Raxol.Commands.FileSystemTest do
     test "fails if already exists" do
       fs = FileSystem.new()
       {:ok, fs} = FileSystem.create_file(fs, "/a.txt", "a")
-      assert {:error, :already_exists} = FileSystem.create_file(fs, "/a.txt", "b")
+
+      assert {:error, :already_exists} =
+               FileSystem.create_file(fs, "/a.txt", "b")
     end
 
     test "fails if parent does not exist" do
       fs = FileSystem.new()
-      assert {:error, :parent_not_found} = FileSystem.create_file(fs, "/x/a.txt", "a")
+
+      assert {:error, :parent_not_found} =
+               FileSystem.create_file(fs, "/x/a.txt", "a")
     end
 
     test "stores correct byte size for multi-byte content" do
@@ -97,6 +111,22 @@ defmodule Raxol.Commands.FileSystemTest do
       fs = FileSystem.new()
       {:ok, fs} = FileSystem.create_file(fs, "readme.txt", "Hi")
       assert Map.has_key?(fs.nodes, "/readme.txt")
+    end
+
+    test "refuses files and directories below a file" do
+      fs = FileSystem.new()
+      {:ok, fs} = FileSystem.create_file(fs, "/parent", "payload")
+
+      for {path, create} <- [
+            {"/parent/child.txt",
+             &FileSystem.create_file(&1, "/parent/child.txt", "child")},
+            {"/parent/child-dir", &FileSystem.mkdir(&1, "/parent/child-dir")}
+          ] do
+        assert {:error, :not_a_directory} = create.(fs)
+        refute FileSystem.exists?(fs, path)
+      end
+
+      assert {:ok, "payload"} = FileSystem.cat(fs, "/parent")
     end
   end
 
@@ -408,6 +438,28 @@ defmodule Raxol.Commands.FileSystemTest do
     end
   end
 
+  describe "node parent invariant" do
+    property "every successfully created non-root node has a directory parent" do
+      check all(
+              parent_type <- member_of([:directory, :file]),
+              child_type <- member_of([:directory, :file]),
+              tail <- list_of(vfs_operation(), max_length: 20),
+              max_runs: 50
+            ) do
+        operations = [
+          {parent_type, "/parent"},
+          {child_type, "/parent/child"} | tail
+        ]
+
+        Enum.reduce(
+          operations,
+          {FileSystem.new(), MapSet.new(["/"])},
+          &apply_operation_and_check/2
+        )
+      end
+    end
+  end
+
   describe "path resolution" do
     test "resolves . to cwd" do
       fs = FileSystem.new()
@@ -433,5 +485,48 @@ defmodule Raxol.Commands.FileSystemTest do
       {:ok, fs} = FileSystem.cd(fs, "../../..")
       assert fs.cwd == "/"
     end
+  end
+
+  defp vfs_operation do
+    tuple({
+      member_of([:directory, :file, :remove]),
+      member_of(@state_machine_paths)
+    })
+  end
+
+  defp apply_operation_and_check({kind, path}, {fs, paths}) do
+    result =
+      case kind do
+        :directory -> FileSystem.mkdir(fs, path)
+        :file -> FileSystem.create_file(fs, path, "content")
+        :remove -> FileSystem.rm(fs, path)
+      end
+
+    case result do
+      {:ok, next_fs} ->
+        next_paths =
+          case kind do
+            :remove -> MapSet.delete(paths, path)
+            _ -> MapSet.put(paths, path)
+          end
+
+        assert_directory_parents(next_fs, next_paths)
+        {next_fs, next_paths}
+
+      {:error, _reason} ->
+        {fs, paths}
+    end
+  end
+
+  defp assert_directory_parents(fs, paths) do
+    Enum.each(paths, fn
+      "/" ->
+        :ok
+
+      path ->
+        assert {:ok, %{type: :directory}} =
+                 FileSystem.stat(fs, Path.dirname(path)),
+               "#{path} has a missing or non-directory parent"
+    end)
   end
 end
