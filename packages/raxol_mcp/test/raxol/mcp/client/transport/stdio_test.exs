@@ -3,6 +3,8 @@ defmodule Raxol.MCP.Client.Transport.StdioTest do
   # nothing in it, so the async run is safe.
   use ExUnit.Case, async: true
 
+  @moduletag :unix_only
+
   alias Raxol.MCP.Client.Transport.Stdio
 
   setup do

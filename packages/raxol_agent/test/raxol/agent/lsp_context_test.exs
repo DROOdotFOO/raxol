@@ -167,8 +167,10 @@ defmodule Raxol.Agent.LSPContextTest do
 
     # The server is a sh script that writes what it inherited into a FIFO and
     # then idles on stdin; reading the FIFO blocks until it has written, so
-    # nothing waits on a clock. XOCHI_AUTH_TOKEN is set by no other test here
-    # and read by nothing in this package, so the async run is safe.
+    # nothing waits on a clock. The read is a `cat` port, not `File.read!/1`:
+    # a server that never starts would leave a BEAM file open blocked for good,
+    # while the `cat` can be killed. XOCHI_AUTH_TOKEN is set by no other test
+    # here and read by nothing in this package, so the async run is safe.
     @tag :unix_only
     @tag :tmp_dir
     test "the server does not inherit raxol's secrets, but does the rest", %{tmp_dir: dir} do
@@ -194,10 +196,31 @@ defmodule Raxol.Agent.LSPContextTest do
       File.chmod!(server, 0o755)
 
       {:ok, pid} = LSPContext.start_link(command: server, args: [fifo], root_uri: "file:///tmp")
-      seen = Task.async(fn -> File.read!(fifo) end)
-
-      assert Task.await(seen, 5_000) == "unset|home"
+      assert read_fifo(fifo) == "unset|home"
       GenServer.stop(pid)
+    end
+  end
+
+  defp read_fifo(fifo) do
+    reader =
+      Port.open({:spawn_executable, System.find_executable("cat")}, [
+        :binary,
+        :exit_status,
+        args: [fifo]
+      ])
+
+    {:os_pid, os_pid} = Port.info(reader, :os_pid)
+    collect_fifo(reader, os_pid, "")
+  end
+
+  defp collect_fifo(reader, os_pid, acc) do
+    receive do
+      {^reader, {:data, data}} -> collect_fifo(reader, os_pid, acc <> data)
+      {^reader, {:exit_status, 0}} -> acc
+    after
+      5_000 ->
+        System.cmd("kill", ["-9", Integer.to_string(os_pid)])
+        flunk("the LSP server never wrote to the FIFO")
     end
   end
 
