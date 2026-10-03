@@ -41,6 +41,7 @@ defmodule RaxolBroker.MixProject do
       {:castore, "~> 1.0"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
+      {:stream_data, "~> 1.0", only: [:dev, :test]},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
