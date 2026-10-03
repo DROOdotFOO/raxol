@@ -165,6 +165,24 @@ defmodule Raxol.Agent.ClientProtocol.AgentAuthTest do
 
       assert error.message =~ "unknown auth method"
     end
+
+    # Robinhood has a flow (`Flow.run(:robinhood, ...)`), but a brokerage
+    # consent is not something an editor may start over ACP.
+    test "neither advertises nor runs the brokerage sign-in" do
+      refute Enum.any?(StdioAgent.auth_methods(), &(&1.id == "robinhood"))
+
+      {client, _init} = connect(auth_opts: [])
+
+      assert {:error, error} =
+               Connection.request(
+                 client,
+                 "authenticate",
+                 AuthenticateRequest.new("robinhood"),
+                 2_000
+               )
+
+      assert error.message =~ "unknown auth method"
+    end
   end
 
   # -- scaffolding ------------------------------------------------------------

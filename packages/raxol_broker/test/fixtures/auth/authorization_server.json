@@ -1,0 +1,23 @@
+{
+  "issuer": "https://agent.robinhood.com/mcp/trading",
+  "authorization_endpoint": "https://robinhood.com/oauth",
+  "token_endpoint": "https://api.robinhood.com/oauth2/token/",
+  "registration_endpoint": "https://agent.robinhood.com/oauth/trading/register",
+  "code_challenge_methods_supported": [
+    "S256"
+  ],
+  "grant_types_supported": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types_supported": [
+    "code"
+  ],
+  "scopes_supported": [
+    "internal"
+  ],
+  "token_endpoint_auth_methods_supported": [
+    "none"
+  ],
+  "authorization_response_iss_parameter_supported": true
+}
