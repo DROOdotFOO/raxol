@@ -29,10 +29,16 @@ defmodule Raxol.Core.ChildEnv do
       config :raxol_core, Raxol.Core.ChildEnv,
         # More names to unset, e.g. a custom `Wallets.Env` `env_var:`.
         extra_secrets: ["MY_WALLET_KEY"],
-        # Names to let through after all. A raxol node started from a raxol
-        # shell or as an MCP stdio server needs RAXOL_SLEUTH_API_KEY to boot
-        # with `fx:` configured.
+        # Names to let through after all, to EVERY child (see below).
         pass: ["RAXOL_SLEUTH_API_KEY"]
+
+  `pass:` is global: a passed name reaches every child the node spawns --
+  shell commands and jobs, directives, MCP and LSP servers, vendor agent
+  CLIs, Symphony runners and hooks, the earn bench's agent packages -- not
+  only the one that needs it. A nested raxol node that needs the Sleuth key
+  should get it from its own `config :raxol_agent, :web3, fx: [sleuth_api_key:
+  ...]` instead; a single spawn site that must hand one child a secret names
+  it in that call's `env` (`port_env/1` keeps an explicitly given secret).
 
   ## Using it
 

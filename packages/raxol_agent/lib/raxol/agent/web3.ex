@@ -25,8 +25,10 @@ defmodule Raxol.Agent.Web3 do
   model or a third party (shell commands and jobs, directives, LSP and MCP
   stdio servers, vendor agent CLIs, Symphony runners and hooks, benchmarked
   agent packages) gets that environment without it (`Raxol.Core.ChildEnv`),
-  so inheriting it is closed; a nested raxol node that needs it is allowed
-  through `config :raxol_core, Raxol.Core.ChildEnv, pass: [...]`. A same-user
+  so inheriting it is closed. A nested raxol node that needs the key should get
+  it from its own config (`fx: [sleuth_api_key: ...]`, e.g. read from a 0600
+  file or `op` in `runtime.exs`); `config :raxol_core, Raxol.Core.ChildEnv,
+  pass: [...]` is global and hands it to EVERY child the parent spawns. A same-user
   process can still read the node's launch environment (`ps -E`,
   `/proc/<pid>/environ`); keeping the key from those means not launching the
   node with it.
@@ -134,10 +136,14 @@ defmodule Raxol.Agent.Web3 do
 
       if is_nil(key) do
         raise ArgumentError,
-              "config :raxol_agent, :web3, fx: is set but #{@key_env} is not; " <>
-                "set it or remove :fx. A node started by another raxol node's shell, " <>
-                "job or MCP server has it unset by Raxol.Core.ChildEnv; allow it there " <>
-                "with config :raxol_core, Raxol.Core.ChildEnv, pass: [\"#{@key_env}\"]"
+              "config :raxol_agent, :web3, fx: is set but has no Sleuth key: give this " <>
+                "node its own with config :raxol_agent, :web3, fx: [sleuth_api_key: ...], " <>
+                "set #{@key_env}, or remove :fx. A node started by another raxol node's " <>
+                "shell, job or MCP server has #{@key_env} unset by Raxol.Core.ChildEnv. " <>
+                "The parent's config :raxol_core, Raxol.Core.ChildEnv, " <>
+                "pass: [\"#{@key_env}\"] lets it through, but is global: it hands the key " <>
+                "to EVERY child the parent spawns (shells, jobs, MCP and LSP servers, " <>
+                "vendor agent CLIs, Symphony runners, the earn bench)"
       end
 
       # The reason names the refused argument, never the key.
