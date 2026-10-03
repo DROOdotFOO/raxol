@@ -62,6 +62,12 @@ defmodule Raxol.MCP.Client do
   agent down over one bad spec. A session the origin rejects mid-flight fails
   that one request and is re-established in place, on the same handle.
 
+  The exception is a 401 at connect or handshake: the headers were resolved
+  once, so a retry could only present the same rejected credential. The client
+  stays `:closed` with `{:connect_failed, reason}`, schedules nothing, and
+  answers any `await_ready/2` caller at once. The credential's owner replaces
+  the client.
+
   ## Tool Namespacing
 
   Tools are namespaced with the server name prefix: `mcp__<server>__<tool>`.
@@ -494,13 +500,42 @@ defmodule Raxol.MCP.Client do
   # The delay doubles to a cap, so a permanently-down origin costs one connect
   # a minute rather than a hot loop. Until one succeeds the client answers
   # every call `{:connect_failed, reason}`, which is what it answered before.
+  #
+  # A 401 is the exception. Headers are resolved once, at start, so every
+  # retry would present the same rejected credential: nothing can change the
+  # answer, and each attempt is a failure on the per-origin breaker that other
+  # clients of that origin share. The client stays `:closed` with the reason,
+  # and callers already waiting in `await_ready/2` are answered now rather
+  # than at their deadline. Whoever owns the credential starts a new client.
   defp schedule_reconnect(state, reason) do
-    delay = next_backoff(state)
+    if credential_rejected?(reason) do
+      Logger.warning(
+        "[MCP.Client] Server #{state.name} rejected its credential; not reconnecting"
+      )
 
-    Logger.debug(fn -> "[MCP.Client] Server #{state.name} retrying connect in #{delay} ms" end)
+      %{state | status: :closed, handle: nil, error: reason, backoff_ms: nil}
+      |> answer_waiters({:error, {:connect_failed, reason}})
+    else
+      delay = next_backoff(state)
 
-    Process.send_after(self(), :reconnect, delay)
-    %{state | status: :closed, handle: nil, error: reason, backoff_ms: delay}
+      Logger.debug(fn -> "[MCP.Client] Server #{state.name} retrying connect in #{delay} ms" end)
+
+      Process.send_after(self(), :reconnect, delay)
+      %{state | status: :closed, handle: nil, error: reason, backoff_ms: delay}
+    end
+  end
+
+  defp credential_rejected?({:http, 401}), do: true
+  defp credential_rejected?({:initialization_failed, {:http, 401}}), do: true
+  defp credential_rejected?(_reason), do: false
+
+  defp answer_waiters(state, reply) do
+    Enum.each(state.waiters, fn {from, timer} ->
+      cancel(timer)
+      reply(from, reply)
+    end)
+
+    %{state | waiters: []}
   end
 
   defp next_backoff(%{backoff_ms: nil} = state), do: state.reconnect_ms

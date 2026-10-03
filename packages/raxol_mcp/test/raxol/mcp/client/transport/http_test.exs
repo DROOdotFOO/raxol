@@ -322,6 +322,59 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       assert "initialize" in methods(observations())
     end
 
+    test "a pinned legacy era never probes, even after a rejected session" do
+      # Robinhood's trading endpoint answers `server/discover` with a
+      # plain-text 400, which is correctly not era evidence, so an unpinned
+      # client against it never gets past the probe.
+      tables = tables()
+      state = ReferenceServer.state(:legacy, [])
+      inner = ReferenceServer.seam(Legacy, state)
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "server/discover" do
+          {:ok, %{status: 400, headers: [{"content-type", "text/plain"}], body: "unsupported"}}
+        else
+          inner.(vetted, request, opts)
+        end
+      end
+
+      client = start_client!(spec(seam, tables, era: :legacy))
+      assert %{version: "2025-06-18", concurrency: :serialized} = await_ready(client)
+      assert {:ok, [%{name: "echo"}]} = Client.list_tools(client)
+      assert Era.verdict(tables.eras, @key) == :miss
+
+      :ets.delete_all_objects(state.sessions)
+      assert {:error, :session_rejected} = Client.call_tool(client, "echo", %{})
+      assert {:ok, _result} = Client.call_tool(client, "echo", %{})
+
+      seen = methods(observations())
+      refute "server/discover" in seen
+      assert Enum.count(seen, &(&1 == "initialize")) == 2
+    end
+
+    test "an era that is neither :modern nor :legacy is refused before anything is sent" do
+      client = start_client!(spec(legacy(), tables(), era: :ancient))
+      assert {:error, {:connect_failed, :invalid_era}} = Client.list_tools(client)
+      assert observations() == []
+    end
+
+    test "a 401 at the handshake answers the waiter at once and is not retried" do
+      # The headers are fixed for the life of the client, so a retry could only
+      # present the same rejected credential -- and every attempt is a failure
+      # on the breaker the origin's other clients share.
+      seam = fn _vetted, _request, _opts ->
+        {:ok, %{status: 401, headers: [], body: "unauthorized"}}
+      end
+
+      client = start_client!(spec(seam, tables(), era: :legacy, reconnect_ms: 1))
+
+      assert {:error, {:connect_failed, {:initialization_failed, {:http, 401}}}} =
+               Client.await_ready(client, 30_000)
+
+      assert %{status: :closed} = Client.status(client)
+      assert {:error, {:connect_failed, _}} = Client.list_tools(client)
+    end
+
     test "a client whose first connect failed serves a later request" do
       # The connect ran once. On failure the client sat in `:closed` forever,
       # and a live process is one its supervisor will not restart, so a DNS

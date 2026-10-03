@@ -199,7 +199,9 @@ defmodule Raxol.Broker.Test.MCPServer do
   @moduledoc """
   Robinhood's MCP endpoint, in process: the legacy-era reference server
   (`initialize`, `Mcp-Session-Id`, protocol 2025-06-18) behind a bearer gate
-  that answers the recorded 401 for any token it does not currently accept.
+  that answers the recorded 401 for any token it does not currently accept,
+  and that refuses `server/discover` with the recorded plain-text 400 rather
+  than a JSON-RPC method-not-found.
 
   Every request that reaches it is counted, so a test can prove a denied
   tool or a locked-out session sent nothing.
@@ -263,6 +265,9 @@ defmodule Raxol.Broker.Test.MCPServer do
           bearer(request) not in accepted ->
             unauthorized()
 
+          method == "server/discover" ->
+            discover_refused()
+
           forbid and method == "tools/call" ->
             {:ok, %{status: 403, headers: [], body: "forbidden"}}
 
@@ -292,6 +297,12 @@ defmodule Raxol.Broker.Test.MCPServer do
 
   defp unauthorized do
     recorded = Fixtures.load("invalid_token_401")
+    headers = Enum.map(recorded["headers"], fn {k, v} -> {k, v} end)
+    {:ok, %{status: recorded["status"], headers: headers, body: recorded["body"]}}
+  end
+
+  defp discover_refused do
+    recorded = Fixtures.load("discover_400")
     headers = Enum.map(recorded["headers"], fn {k, v} -> {k, v} end)
     {:ok, %{status: recorded["status"], headers: headers, body: recorded["body"]}}
   end

@@ -1,0 +1,6 @@
+{
+  "_observed": "2026-10-03, authenticated POST of JSON-RPC server/discover to https://agent.robinhood.com/mcp/trading; same answer with and without mcp-method/mcp-name/mcp-protocol-version headers",
+  "status": 400,
+  "headers": {"content-type": "text/plain; charset=utf-8"},
+  "body": "JSON RPC not handled: \"server/discover\" unsupported"
+}

@@ -129,6 +129,21 @@ defmodule Raxol.Broker.MCP.ClientTest do
     assert stored.access_token == ctx.refreshed["access_token"]
   end
 
+  test "a token rejected at the handshake refreshes after exactly one initialize", ctx do
+    # Live, 2026-10-03: the inner client kept re-sending `initialize` with the
+    # dead token once a second until the shared breaker opened, so the broker
+    # saw `:breaker_open` instead of the 401 and never refreshed.
+    seed(ctx)
+    MCPServer.accept(ctx.mcp, [ctx.refreshed["access_token"]])
+    broker = start_broker(ctx)
+
+    assert {:ok, [_ | _]} = Client.list_tools(broker)
+    assert AuthServer.refresh_count(ctx.auth) == 1
+
+    handshakes = for {"initialize", status} <- MCPServer.requests(ctx.mcp), do: status
+    assert handshakes == [401, 200]
+  end
+
   test "a 401 after the refresh is :unauthorized, stays up, and sends nothing more", ctx do
     seed(ctx)
     MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])

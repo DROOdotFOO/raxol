@@ -68,6 +68,11 @@ defmodule Raxol.Broker.MCP.Client do
   @default_skew 300
   @default_connect_timeout 30_000
   @default_call_timeout 60_000
+  # Observed 2026-10-03: the endpoint speaks 2025-06-18 (initialize +
+  # Mcp-Session-Id) and refuses `server/discover` with a plain-text 400, which
+  # the transport's probe correctly does not read as era evidence. Pinned, so
+  # the probe is never sent.
+  @era :legacy
   # `Process.send_after/3` refuses delays past 2^32 - 1 ms.
   @max_timer_ms 4_294_967_295
 
@@ -446,6 +451,7 @@ defmodule Raxol.Broker.MCP.Client do
         name: :robinhood,
         url: state.config.url,
         headers: [{"authorization", Credential.bearer(state.credential)}],
+        era: @era,
         tables: tables
       ] ++ Keyword.drop(state.config.mcp, [:name, :url, :headers, :tables, :registry])
 
