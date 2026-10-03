@@ -20,6 +20,22 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     def sign_hash(_), do: {:ok, <<7::size(520)>>}
   end
 
+  # Wallet that hashes through the real EIP-712 encoder before "signing", so a
+  # malformed quote message reaches the encoder exactly as in production.
+  defmodule EncodingWallet do
+    @moduledoc false
+    def address, do: "0x1111111111111111111111111111111111111111"
+    def chain_id, do: 8453
+
+    def sign_typed_data(domain, types, message) do
+      with {:ok, _hash} <- Raxol.Payments.EIP712.hash(domain, types, message),
+           do: {:ok, <<7::size(520)>>}
+    end
+
+    def sign_message(_), do: {:ok, <<7::size(520)>>}
+    def sign_hash(_), do: {:ok, <<7::size(520)>>}
+  end
+
   @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
   @usdt_tron "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
@@ -921,6 +937,48 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert {:error, %Failure{}} =
                ExecuteXochiIntent.run(base_params(%{}), ctx)
 
+      assert :error = Checkpoint.fetch(store, "pay-1")
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    @tag timeout: 300_000
+    test "a quote whose signing fails releases and drops the checkpoint" do
+      huge = String.duplicate("9", 5_000_000)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => huge}
+              }
+            })
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: EncodingWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
       assert :error = Checkpoint.fetch(store, "pay-1")
 
       totals = Ledger.get_totals(ledger, "a1", policy())

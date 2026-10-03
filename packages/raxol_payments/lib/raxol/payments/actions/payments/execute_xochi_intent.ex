@@ -9,7 +9,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   The spend is gated on the human-decimal `amount`; the atomic `from_amount`
   sent to Xochi is derived from the token's decimals. If execution fails after
-  the gate reserved budget, the reservation is released.
+  the gate reserved budget (including a raise while signing or submitting),
+  the reservation is released and the checkpoint deleted.
 
   ## Idempotent recovery
 
@@ -515,7 +516,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   defp execute(config, request, quote, floor, wallet, context, amount, store, key) do
     Checkpoint.put(store, key, dispatched_record(quote))
 
-    case Xochi.execute(config, quote, wallet, request) do
+    case safe_execute(config, quote, wallet, request) do
       {:ok, exec} ->
         tag_dispatch(context, exec, amount)
         {:ok, exec, quote}
@@ -536,7 +537,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
          :ok <- assert_quote(quote, request, floor) |> refuse_retry(context, amount, store, key) do
       Checkpoint.put(store, key, dispatched_record(quote))
 
-      case Xochi.execute(config, quote, wallet, request) do
+      case safe_execute(config, quote, wallet, request) do
         {:ok, exec} ->
           tag_dispatch(context, exec, amount)
           {:ok, exec, quote}
@@ -556,6 +557,15 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     SpendGate.release(context, amount, %{protocol: :xochi, reason: :execute_failed})
     Checkpoint.delete(store, key)
     {:refused, reason}
+  end
+
+  # A raise inside `Xochi.execute` (signing a malformed quote, say) is a definite
+  # failure, not an unknown outcome: report it as an error so the caller
+  # releases the reservation and drops the checkpoint instead of leaking both.
+  defp safe_execute(config, quote, wallet, request) do
+    Xochi.execute(config, quote, wallet, request)
+  rescue
+    exception -> {:error, {:exception, Exception.message(exception)}}
   end
 
   # A definite execute failure means nothing dispatched: refund the reservation

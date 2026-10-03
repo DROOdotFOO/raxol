@@ -200,6 +200,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `EIP712.hash/3` refuses a `uint256` string longer than 78 bytes as
   `{:invalid_uint256, value}` before parsing it. A quote message with a
   5-million-digit amount raised `SystemLimitError` out of the wallet.
+- A raise inside `Xochi.execute` (on the first execute or the re-quote retry)
+  left `ExecuteXochiIntent`'s spend reservation held and its checkpoint in
+  place. It is now a definite failure: the reservation is released, the
+  checkpoint deleted, and the action returns an error.
 
 ### Security
 
