@@ -23,6 +23,10 @@ code surface below is stable and test-covered.
   (`--no-ext-diff --no-textconv`, `core.fsmonitor=false`). A repository with
   `diff.external` set could print `RAXOL_SLEUTH_API_KEY` into the diff a
   reviewer sees.
+- The Codex runner's `:inherit` auth preflight counts only what Codex will
+  inherit: an `OPENAI_API_KEY` (or `CODEX_HOME`) an operator lists in
+  `Raxol.Core.ChildEnv`'s `extra_secrets:` is unset in the child, so it no
+  longer passes preflight for a run Codex would then fail.
 - **Orchestrator** (`Raxol.Symphony.Orchestrator`): a `BaseManager` GenServer
   that polls a tracker, claims eligible issues, isolates each in a per-issue
   workspace, and runs a coding agent to a workflow-defined terminal state.

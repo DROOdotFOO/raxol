@@ -12,9 +12,11 @@ defmodule Raxol.Symphony.Runners.Codex.Auth do
   secret itself):
 
     * `:inherit` (default) -- inject nothing; the spawned process sees the
-      ambient environment, exactly as before this existed. Considered
-      authenticated if `auth.json` exists under the effective `CODEX_HOME`
-      (`$CODEX_HOME` or `~/.codex`) or `OPENAI_API_KEY` is set.
+      ambient environment minus raxol's secrets (`Raxol.Core.ChildEnv`, its
+      `extra_secrets:` included). Considered authenticated if `auth.json`
+      exists under the effective `CODEX_HOME` (`$CODEX_HOME` or `~/.codex`)
+      or `OPENAI_API_KEY` is set, counting only variables the child inherits:
+      an `OPENAI_API_KEY` listed in `extra_secrets:` does not pass preflight.
     * `:api_key` -- read the key from the env var named by `:api_key_env`
       (default `OPENAI_API_KEY`) at spawn time and inject it as
       `OPENAI_API_KEY`. Authenticated iff that var is set and non-empty.
@@ -76,14 +78,21 @@ defmodule Raxol.Symphony.Runners.Codex.Auth do
   end
 
   defp do_resolve(_inherit_or_unset) do
-    home = env_value("CODEX_HOME") || @default_codex_home
+    scrubbed = Raxol.Core.ChildEnv.secrets()
+    home = inherited_value("CODEX_HOME", scrubbed) || @default_codex_home
 
     %{
       mode: :inherit,
       source: :inherit,
-      authenticated?: home_authenticated?(home) or env_value("OPENAI_API_KEY") != nil,
+      authenticated?:
+        home_authenticated?(home) or inherited_value("OPENAI_API_KEY", scrubbed) != nil,
       env: []
     }
+  end
+
+  # What the spawned Codex will actually see: ChildEnv unsets `scrubbed`.
+  defp inherited_value(var, scrubbed) do
+    if var in scrubbed, do: nil, else: env_value(var)
   end
 
   @doc """
