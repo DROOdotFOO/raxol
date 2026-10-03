@@ -51,6 +51,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
   use Raxol.Agent.Test.InvariantSentinel
 
   alias Raxol.Agent.ClientProtocol.TurnRunner
+  alias Raxol.Agent.BenchmarkProfile
+  alias Raxol.Agent.ClientProtocol.Budget
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptRequest
   alias Raxol.AgentClientProtocol.Schema.ContentBlock
   alias Raxol.AgentClientProtocol.Session
@@ -180,6 +182,71 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     end
   end
 
+  defmodule ShellBackend do
+    @moduledoc "Runs one real bash tool call and leaves it active until cancellation."
+
+    def complete(_messages, opts) do
+      {:ok,
+       %{
+         content: "",
+         tool_calls: [
+           %{
+             "id" => "bash-cancel",
+             "name" => "bash",
+             "arguments" => %{
+               "command" => Keyword.fetch!(opts, :command),
+               "timeout_ms" => 30_000
+             }
+           }
+         ],
+         usage: %{}
+       }}
+    end
+
+    def stream(_messages, _opts), do: {:error, :complete_only}
+  end
+
+  defmodule MeteredToolBackend do
+    @moduledoc "Returns one billed tool iteration followed by a billed final answer."
+
+    def complete(_messages, opts) do
+      call =
+        Agent.get_and_update(Keyword.fetch!(opts, :counter), fn count ->
+          {count, count + 1}
+        end)
+
+      case call do
+        0 ->
+          {:ok,
+           %{
+             content: "",
+             tool_calls: [
+               %{
+                 "id" => "metered-tool",
+                 "name" => Keyword.fetch!(opts, :action),
+                 "arguments" => Keyword.get(opts, :arguments, %{})
+               }
+             ],
+             usage: %{"input_tokens" => Keyword.fetch!(opts, :tool_turn_tokens)}
+           }}
+
+        _later ->
+          if Keyword.get(opts, :fail_after_tool?, false) do
+            {:error, :backend_failed}
+          else
+            {:ok,
+             %{
+               content: "done",
+               tool_calls: [],
+               usage: %{"input_tokens" => Keyword.fetch!(opts, :final_turn_tokens)}
+             }}
+          end
+      end
+    end
+
+    def stream(_messages, _opts), do: {:error, :complete_only}
+  end
+
   # -- helpers ----------------------------------------------------------------
 
   defp interrupt_double(test_pid, outcome_overrides \\ %{}) do
@@ -237,6 +304,57 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
 
   defp cancel!(session), do: GenServer.cast(session, {:acp_session_cancel, 2})
 
+  defp start_budget! do
+    profile =
+      %{
+        "RAXOL_MAX_TURNS" => "100",
+        "RAXOL_COST_PER_MTOK_IN" => "1000",
+        "RAXOL_COST_PER_MTOK_OUT" => "1000"
+      }
+      |> BenchmarkProfile.from_env()
+      |> elem(1)
+
+    {:ok, pid} = Budget.start_link(profile)
+    on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
+  end
+
+  defp await_os_pid(path, attempts \\ 400)
+
+  defp await_os_pid(_path, 0), do: flunk("shell did not write its OS pid")
+
+  defp await_os_pid(path, attempts) do
+    case File.read(path) do
+      {:ok, contents} ->
+        contents
+        |> String.trim()
+        |> String.to_integer()
+
+      {:error, :enoent} ->
+        Process.sleep(5)
+        await_os_pid(path, attempts - 1)
+    end
+  end
+
+  defp os_alive?(os_pid) do
+    {_output, status} =
+      System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+    status == 0
+  end
+
+  defp eventually_dead?(os_pid, attempts \\ 120)
+
+  defp eventually_dead?(_os_pid, 0), do: false
+
+  defp eventually_dead?(os_pid, attempts) do
+    if os_alive?(os_pid) do
+      Process.sleep(25)
+      eventually_dead?(os_pid, attempts - 1)
+    else
+      true
+    end
+  end
+
   defp chunk_text(%{update: {:agent_message_chunk, %{content: {:text, %{text: text}}}}}),
     do: text
 
@@ -291,6 +409,86 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     # One chunk, not two: the {:done, _} arm must not re-post content that
     # deltas already carried, and must not post twice on its own.
     refute_receive {:conn_notify, _, _}, 100
+  end
+
+  test "charges every provider completion in a multi-iteration ReAct turn" do
+    start_budget!()
+    counter = start_supervised!({Agent, fn -> 0 end}, id: make_ref())
+
+    runner =
+      TurnRunner.new(
+        backend: MeteredToolBackend,
+        backend_opts: [
+          counter: counter,
+          action: "echo",
+          arguments: %{"v" => 1},
+          tool_turn_tokens: 4_000,
+          final_turn_tokens: 6_000
+        ],
+        actions: [EchoAction]
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id)
+
+    assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :end_turn}}}, 2_000
+    assert %{turns: 2, cost_usd: cost} = Budget.spent()
+    assert_in_delta cost, 10.0, 0.000_001
+  end
+
+  test "charges a billed provider completion when cancellation interrupts its tool" do
+    start_budget!()
+    counter = start_supervised!({Agent, fn -> 0 end}, id: make_ref())
+
+    runner =
+      TurnRunner.new(
+        backend: MeteredToolBackend,
+        backend_opts: [
+          counter: counter,
+          action: "block_tool",
+          tool_turn_tokens: 7_000,
+          final_turn_tokens: 0
+        ],
+        actions: [BlockingAction],
+        context: %{owner: self()},
+        interrupt: interrupt_double(self())
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id)
+
+    assert_receive {:tool_started, _tool_pid}, 2_000
+    cancel!(session)
+
+    assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :cancelled}}}, 2_000
+    assert %{turns: 1, cost_usd: cost} = Budget.spent()
+    assert_in_delta cost, 7.0, 0.000_001
+  end
+
+  test "retains billed provider usage when a later iteration fails" do
+    start_budget!()
+    counter = start_supervised!({Agent, fn -> 0 end}, id: make_ref())
+
+    runner =
+      TurnRunner.new(
+        backend: MeteredToolBackend,
+        backend_opts: [
+          counter: counter,
+          action: "echo",
+          arguments: %{"v" => 1},
+          tool_turn_tokens: 5_000,
+          final_turn_tokens: 0,
+          fail_after_tool?: true
+        ],
+        actions: [EchoAction]
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id)
+
+    assert_receive {:conn_reply, ^reply_ref, {:error, %{code: -32_603}}}, 2_000
+    assert %{turns: 1, cost_usd: cost} = Budget.spent()
+    assert_in_delta cost, 5.0, 0.000_001
   end
 
   # -- 1b. system prompt threading ----------------------------------------------
@@ -395,6 +593,42 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     # the (dead) pump is poked again.
     send(pump, {:chunk, "two"})
     refute_receive {:conn_notify, _, _}, 150
+  end
+
+  @tag :tmp_dir
+  test "cancel mid-bash kills the real OS process group", %{tmp_dir: tmp_dir} do
+    pid_file = Path.join(tmp_dir, "shell.pid")
+    command = "echo $$ > #{pid_file}; exec sleep 30"
+
+    runner =
+      TurnRunner.new(
+        backend: ShellBackend,
+        backend_opts: [command: command],
+        actions: [Raxol.Agent.Actions.Code.Bash],
+        context: %{
+          cwd: tmp_dir,
+          tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()
+        }
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id)
+
+    assert_receive {:conn_notify, "session/update",
+                    %{update: {:tool_call, %{tool_call_id: "bash-cancel"}}}},
+                   2_000
+
+    os_pid = await_os_pid(pid_file)
+    assert os_alive?(os_pid)
+
+    on_exit(fn ->
+      if os_alive?(os_pid), do: Raxol.Agent.Interrupt.kill_os_pid(os_pid)
+    end)
+
+    cancel!(session)
+
+    assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :cancelled}}}, 2_000
+    assert eventually_dead?(os_pid), "bash OS process #{os_pid} survived ACP cancellation"
   end
 
   # -- 3. hung backend ----------------------------------------------------------

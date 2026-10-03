@@ -11,9 +11,11 @@ defmodule Raxol.Agent.ClientProtocol.Budget do
   Not started when neither cap is set, and `check/0` answers `:ok` when it is
   not running, so callers never branch on whether budgeting is on.
 
-  The bound is the SESSION, not the turn. A turn already under way finishes;
-  the next one is refused. Interrupting mid-turn would abandon a half-applied
-  edit, which is worse than one turn of overshoot.
+  The bound is the SESSION. Each provider completion increments `turns` and
+  folds its usage immediately, including a tool-loop completion whose action
+  is later cancelled or fails. `check/0` runs between ACP prompts, so crossing
+  a cap does not interrupt a prompt that is already applying edits; the next
+  prompt is refused.
   """
 
   use Agent
@@ -39,7 +41,7 @@ defmodule Raxol.Agent.ClientProtocol.Budget do
     end
   end
 
-  @doc "Fold one completed turn's usage into the running total."
+  @doc "Fold one billed provider completion's usage into the running total."
   @spec record(map()) :: :ok
   def record(usage) do
     case Process.whereis(@name) do

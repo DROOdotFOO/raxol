@@ -47,13 +47,13 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
        message; the root task therefore sits in a `receive` that always has
        `:acp_cancel` armed — even mid-chunk against a HUNG backend, the
        cancel is seen immediately, not "between chunks".
-    2. On `:acp_cancel` the pump is killed FIRST and already-queued stream
-       events are flushed unposted — no event can race past the fence.
-    3. `Raxol.Agent.Interrupt.interrupt/3` (or the injected `:interrupt`
-       double) runs the staged OS-pgroup kill IMMEDIATELY. The `tool_ref` is
-       tool-less (`port`/`os_pid` nil) for a mid-provider-stream interrupt;
-       a shell-tool embedder threads the live Port/os_pid via the
-       `:tool_ref` option.
+    2. On `:acp_cancel`, `Raxol.Agent.Interrupt.interrupt/3` (or the injected
+       `:interrupt` double) runs while the shell owner and Port are still
+       alive. Coding-shell actions publish their live Port/os_pid through the
+       per-turn context sink; a mid-provider-stream interrupt remains
+       tool-less.
+    3. The pump is then killed and already-queued stream events are flushed
+       unposted — no event can race past the fence.
     4. The kill-complete fence is emitted (below), then the runner returns
        `{:stop, :cancelled}` — only now does the Session's drain gate close
        and render the **exactly-one** cancelled `PromptResponse`.
@@ -111,13 +111,14 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   as ACP-shaped and say so, instead of folding it into opaque blocks that look
   like corruption. Nothing outside this module reads them yet.
 
-  **Journal trouble never fails a turn.** The handle is opened once per turn
-  and every failure path degrades to running without one, emitting
-  `[:raxol, :agent, :acp_turn_runner, :journal_failed]` so the loss is
-  measurable rather than silent. The Writer is linked to the turn task, which
-  already traps exits, so a Writer crash arrives as an ignored `{:EXIT, _, _}`
-  instead of taking the turn down with it, and a turn task that dies abnormally
-  cannot leak a Writer.
+  Journal write failures do not fail an in-flight turn: opening or appending
+  degrades to running without durable output and emits
+  `[:raxol, :agent, :acp_turn_runner, :journal_failed]`. History reads are
+  different: a damaged journal refuses the turn instead of silently asking the
+  provider to answer without prior context. The Writer is linked to the turn
+  task, which already traps exits, so a Writer crash arrives as an ignored
+  `{:EXIT, _, _}` instead of taking the turn down with it, and a turn task that
+  dies abnormally cannot leak a Writer.
 
   ## Options for `new/1`
 
@@ -313,18 +314,27 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
   # -- the turn body (runs inside the Session's supervised root Task) ----------
 
-  # Two gates before any provider call, in the order that costs least. A turn
-  # with no provider can never succeed, and one over budget must not be paid
-  # for; both answer with the same structured error shape a stream failure
-  # does, so a client handles one case, not three.
-  # Two gates before any provider call, cheapest first. A turn with no provider
-  # can never succeed, and one over budget must not be paid for; both answer
-  # with the same structured error shape a stream failure does, so a client
-  # handles one case, not three.
+  # Three gates before any provider call, cheapest first. A turn with no
+  # provider can never succeed, one over budget must not be paid for, and one
+  # whose durable history cannot be trusted must not answer from missing
+  # context. All return the same structured error shape.
   defp run_turn(session, req, opts) do
     case refusal(opts) do
-      nil -> start_turn(session, req, opts)
+      nil -> prepare_turn(session, req, opts)
       {tag, detail} -> {:error, turn_error(tag, detail)}
+    end
+  end
+
+  defp prepare_turn(session, req, opts) do
+    prompt = prompt_text(req)
+
+    case with_history(opts, session_id(req), prompt) do
+      {:ok, opts} ->
+        start_turn(session, req, prompt, opts)
+
+      {:error, reason} ->
+        journal_failed(:read, reason)
+        {:error, turn_error(:journal_damaged, reason)}
     end
   end
 
@@ -342,22 +352,22 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     end
   end
 
-  defp start_turn(session, req, opts) do
+  defp start_turn(session, req, prompt, opts) do
     # Trap exits: the pump is LINKED (so a root crash can never leak a
     # streaming process) and killed with :kill on every exit path; the trapped
     # {:EXIT, pump, _} is dropped in the loop — the monitor drives the logic.
     Process.flag(:trap_exit, true)
 
     turn_id = "acp-turn-" <> Integer.to_string(System.unique_integer([:positive]))
-    prompt = prompt_text(req)
     parent = self()
+    tool_ref_table = :ets.new(__MODULE__, [:set, :public])
     # The permission gate can only be built HERE: it closes over this turn's
     # session pid and session id, neither of which exists when the launcher
     # assembles turn_opts. Injected unless the caller already supplied an
     # authorizer, so a test (or an embedder with its own policy) can override.
     opts = with_permission_gate(opts, session, session_id(req))
-    # Before the stream is built, because this is what the model is asked.
-    opts = with_history(opts, session_id(req), prompt)
+    opts = with_budget_usage_sink(opts)
+    opts = with_shell_tool_ref_sink(opts, tool_ref_table)
 
     # The stream is BUILT inside the pump, not here: Stream.react/2 spawns its
     # loop eagerly with `caller = self()`, so building it in the root task
@@ -381,6 +391,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       pump: pump,
       mref: mref,
       opts: opts,
+      tool_ref_table: tool_ref_table,
       tool_ids: %{},
       open_tools: %{},
       # Whether any `agent_message_chunk` has reached the wire this turn. Read
@@ -424,19 +435,20 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   # can be counted twice.
   defp with_history(opts, session_id, prompt) do
     seed = Keyword.get(opts, :messages) || []
-    history = journal_history(session_id, opts)
 
-    Keyword.put(opts, :messages, seed ++ history ++ [%{role: :user, content: prompt}])
+    with {:ok, history} <- journal_history(session_id, opts) do
+      {:ok, Keyword.put(opts, :messages, seed ++ history ++ [%{role: :user, content: prompt}])}
+    end
   end
 
   defp journal_history(session_id, opts) do
     if Keyword.get(opts, :journal, true) and SessionKey.valid?(session_id) do
       case FileStore.read_records(session_id, Keyword.get(opts, :journal_opts, [])) do
-        {:ok, records} -> history_messages(records)
-        {:error, _reason} -> []
+        {:ok, records} -> {:ok, history_messages(records)}
+        {:error, reason} -> {:error, reason}
       end
     else
-      []
+      {:ok, []}
     end
   end
 
@@ -487,6 +499,41 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       Keyword.put(opts, :context, Map.put(context, :tool_authorizer, gate))
     end
   end
+
+  defp with_budget_usage_sink(opts) do
+    context = Keyword.get(opts, :context, %{})
+    external_sink = Map.get(context, :tool_turn_usage_sink)
+
+    sink = fn info ->
+      Budget.record(Map.get(info, :usage) || %{})
+      publish_external_usage(external_sink, info)
+    end
+
+    Keyword.put(opts, :context, Map.put(context, :tool_turn_usage_sink, sink))
+  end
+
+  defp publish_external_usage(sink, info) when is_function(sink, 1), do: sink.(info)
+  defp publish_external_usage(_sink, _info), do: :ok
+
+  defp with_shell_tool_ref_sink(opts, table) do
+    context = Keyword.get(opts, :context, %{})
+    external_sink = Map.get(context, :shell_tool_ref_sink)
+
+    sink = fn
+      nil ->
+        :ets.delete(table, :tool_ref)
+        publish_external_tool_ref(external_sink, nil)
+
+      %{} = ref ->
+        :ets.insert(table, {:tool_ref, ref})
+        publish_external_tool_ref(external_sink, ref)
+    end
+
+    Keyword.put(opts, :context, Map.put(context, :shell_tool_ref_sink, sink))
+  end
+
+  defp publish_external_tool_ref(sink, ref) when is_function(sink, 1), do: sink.(ref)
+  defp publish_external_tool_ref(_sink, _ref), do: :ok
 
   defp build_stream(prompt, opts) do
     stream_opts = Keyword.take(opts, @stream_opt_keys)
@@ -712,19 +759,19 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   # -- cancellation ---------------------------------------------------------------
 
   defp cancel(state) do
-    # 1. Stop the event source FIRST: no stream event may race past the fence.
+    # Capture and kill the live OS process group while its owning tool process
+    # still exists. Killing the pump first closes the Port but can leave the OS
+    # process running unattended.
+    outcome = run_interrupt(state)
+
+    # Stop the event source before processing any events queued while the
+    # interrupt ran, then discard those events so none can cross the fence.
     stop_pump(state)
     flush_pump_events(state.pump)
 
-    # 2. The staged OS-pgroup kill, immediately — never the 30s BEAM backstop.
-    outcome = run_interrupt(state)
-
-    # 3. The kill-complete fence (see moduledoc for the encoding decision),
-    #    posted on the Session's FIFO lane so I3 orders it strictly before...
+    # The kill-complete fence is posted on the Session's FIFO lane before the
+    # exactly-one cancelled PromptResponse returned below.
     maybe_post_fence(state, outcome)
-
-    # 4. ...the exactly-one cancelled PromptResponse the Session renders once
-    #    this return drains the turn group.
     {{:stop, :cancelled}, %{}}
   end
 
@@ -807,16 +854,25 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   defp build_tool_ref(state) do
     base = %{turn_id: state.turn_id, port: nil, os_pid: nil}
 
-    case Keyword.get(state.opts, :tool_ref) do
-      fun when is_function(fun, 0) ->
-        case fun.() do
-          %{} = extra -> Map.merge(base, extra)
-          _other -> base
-        end
+    configured =
+      case Keyword.get(state.opts, :tool_ref) do
+        fun when is_function(fun, 0) ->
+          case fun.() do
+            %{} = extra -> extra
+            _other -> %{}
+          end
 
-      _none ->
-        base
-    end
+        _none ->
+          %{}
+      end
+
+    live =
+      case :ets.lookup(state.tool_ref_table, :tool_ref) do
+        [{:tool_ref, %{} = ref}] -> ref
+        [] -> %{}
+      end
+
+    base |> Map.merge(configured) |> Map.merge(live)
   end
 
   defp default_sink(type, payload) do

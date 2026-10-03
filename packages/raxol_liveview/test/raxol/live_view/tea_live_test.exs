@@ -5,6 +5,21 @@ defmodule Raxol.LiveView.TEALiveTest do
   alias Raxol.LiveView.TerminalBridge
   alias Raxol.LiveView.Test.BufferHelper
 
+  defmodule ForwardingDispatcher do
+    use GenServer
+
+    def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
+
+    @impl true
+    def init(owner), do: {:ok, owner}
+
+    @impl true
+    def handle_cast({:dispatch, event}, owner) do
+      send(owner, {:dispatched, event})
+      {:noreply, owner}
+    end
+  end
+
   describe "announcement live region" do
     test "handle_info stores the latest announcement in the assign" do
       socket = %Phoenix.LiveView.Socket{
@@ -92,6 +107,58 @@ defmodule Raxol.LiveView.TEALiveTest do
 
       assert socket.assigns.rows == TerminalBridge.buffer_to_rows(buffer)
     end
+  end
+
+  describe "keydown dispatch" do
+    test "a dead lifecycle process cannot crash the callback" do
+      lifecycle_pid =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      ref = Process.monitor(lifecycle_pid)
+      send(lifecycle_pid, :stop)
+      assert_receive {:DOWN, ^ref, :process, ^lifecycle_pid, :normal}
+
+      socket = keydown_socket(lifecycle_pid: lifecycle_pid, dispatcher_pid: nil)
+
+      assert {:noreply, ^socket} = TEALive.handle_event("keydown", %{"key" => "a"}, socket)
+    end
+
+    test "an unresponsive lifecycle process is not called for each key" do
+      lifecycle_pid = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(lifecycle_pid, :kill) end)
+      socket = keydown_socket(lifecycle_pid: lifecycle_pid, dispatcher_pid: nil)
+
+      task =
+        Task.async(fn ->
+          TEALive.handle_event("keydown", %{"key" => "a"}, socket)
+        end)
+
+      assert {:ok, {:noreply, ^socket}} = Task.yield(task, 100)
+    end
+
+    test "dispatches translated keys through the dispatcher cached at mount" do
+      dispatcher = start_supervised!({ForwardingDispatcher, self()}, id: make_ref())
+      socket = keydown_socket(lifecycle_pid: nil, dispatcher_pid: dispatcher)
+
+      assert {:noreply, ^socket} =
+               TEALive.handle_event("keydown", %{"key" => "ArrowLeft"}, socket)
+
+      assert_receive {:dispatched, %Raxol.Core.Events.Event{type: :key, data: data}}
+      assert data.key == :left
+    end
+  end
+
+  defp keydown_socket(assigns) do
+    %Phoenix.LiveView.Socket{
+      assigns:
+        assigns
+        |> Map.new()
+        |> Map.put(:__changed__, %{})
+    }
   end
 
   defp numbered_buffer do

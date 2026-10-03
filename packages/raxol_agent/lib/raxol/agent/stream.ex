@@ -477,6 +477,15 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp handle_tool_turn(messages, iteration, config, response, tool_calls) do
+    turn_info = %{
+      content: Map.get(response, :content, ""),
+      usage: Map.get(response, :usage, %{}),
+      model: billed_model(response),
+      iteration: iteration
+    }
+
+    report_tool_turn_usage(config.context, turn_info)
+
     Enum.each(tool_calls, fn tc ->
       emit(
         config,
@@ -490,23 +499,23 @@ defmodule Raxol.Agent.Stream do
     end)
 
     tool_messages = execute_tools(tool_calls, config)
-
-    emit(
-      config,
-      {:turn_complete,
-       %{
-         content: Map.get(response, :content, ""),
-         usage: Map.get(response, :usage, %{}),
-         model: billed_model(response),
-         iteration: iteration
-       }}
-    )
+    emit(config, {:turn_complete, turn_info})
 
     assistant_msg = %{role: :assistant, content: format_tool_text(tool_calls)}
     next_messages = messages ++ [assistant_msg | tool_messages]
 
     react_loop(next_messages, iteration + 1, config)
   end
+
+  # A provider response is billed before its requested tools execute. Publish
+  # that usage before tool execution so cancellation or a tool failure cannot
+  # erase spend that already happened. The ordinary `:turn_complete` event is
+  # still emitted after tool results, preserving the public stream ordering.
+  defp report_tool_turn_usage(%{tool_turn_usage_sink: sink}, info)
+       when is_function(sink, 1),
+       do: sink.(info)
+
+  defp report_tool_turn_usage(_context, _info), do: :ok
 
   # The BILLED model, which is not always the configured one: given no :model
   # the backend substitutes its own default and reports here what it actually

@@ -8,6 +8,7 @@ defmodule Raxol.Terminal.ScreenBuffer.Operations do
   require Logger
 
   alias Raxol.Terminal.Cell
+  alias Raxol.Terminal.Buffer.Writer
   alias Raxol.Terminal.CharacterHandling
   alias Raxol.Terminal.ScreenBuffer.Core
   alias Raxol.Terminal.ScreenBuffer.SharedOperations
@@ -23,11 +24,9 @@ defmodule Raxol.Terminal.ScreenBuffer.Operations do
       # Check if we can fit a wide character (need space for placeholder)
       can_write_wide = char_width == 2 and Core.within_bounds?(buffer, x + 1, y)
 
-      cell = Cell.new(char, style)
-
       new_cells =
         List.update_at(buffer.cells, y, fn row ->
-          write_cell_to_row(row, x, cell, char_width, can_write_wide, style)
+          Writer.update_row(row, x, char, style, char_width, buffer.width)
         end)
 
       damage_width = if char_width == 2 and can_write_wide, do: 2, else: 1
@@ -628,22 +627,6 @@ defmodule Raxol.Terminal.ScreenBuffer.Operations do
 
       true ->
         %{buffer | scroll_position: target_line}
-    end
-  end
-
-  defp write_cell_to_row(row, x, cell, char_width, can_write_wide, style) do
-    case {char_width, can_write_wide} do
-      {2, true} ->
-        # Write wide character + placeholder
-        placeholder = Cell.new_wide_placeholder(style)
-
-        row
-        |> List.replace_at(x, cell)
-        |> List.replace_at(x + 1, placeholder)
-
-      _ ->
-        # Write single-width character or wide char at edge
-        List.replace_at(row, x, cell)
     end
   end
 

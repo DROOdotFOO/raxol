@@ -7,6 +7,11 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   * Managing the rendering lifecycle
   * Coordinating with the output backends
 
+  Asynchronous render bursts are coalesced to the active frame plus one
+  trailing frame, which renders the latest dispatcher state. If the dispatcher
+  exits or does not answer before `dispatcher_timeout`, the frame is skipped
+  and the engine remains alive.
+
   REFACTORED: All try/catch blocks replaced with functional error handling patterns.
   """
 
@@ -23,6 +28,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     @moduledoc false
     defstruct app_module: nil,
               dispatcher_pid: nil,
+              dispatcher_timeout: 5_000,
               width: 80,
               height: 24,
               # Screen buffer
@@ -104,43 +110,33 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       "Rendering Engine received :render_frame for #{inspect(state.app_module)}"
     )
 
-    # Fetch the latest model AND theme context from the Dispatcher
-    case GenServer.call(state.dispatcher_pid, :get_render_context) do
-      {:ok, %{model: current_model, theme_id: current_theme_id}} ->
-        # No model dump: it is the app's whole state, once per frame.
-        Raxol.Core.Runtime.Log.debug(
-          "Rendering Engine got render context, theme=#{inspect(current_theme_id)}"
-        )
+    new_state =
+      case fetch_render_context(state) do
+        {:ok, %{model: current_model, theme_id: current_theme_id}} ->
+          # No model dump: it is the app's whole state, once per frame.
+          Raxol.Core.Runtime.Log.debug(
+            "Rendering Engine got render context, theme=#{inspect(current_theme_id)}"
+          )
 
-        # Apply active animations to the model before rendering.
-        # This injects interpolated values (opacity, color, etc.) into
-        # model.elements so view/1 reads animated state naturally.
-        # Falls back to unmodified model if animation system isn't running.
-        animated_model =
-          try do
-            Raxol.Animation.Framework.apply_animations_to_state(current_model)
-          catch
-            :exit, _ -> current_model
+          animated_model = apply_animations(current_model)
+          theme = render_theme(current_theme_id)
+
+          case do_render_frame(animated_model, theme, state) do
+            {:ok, rendered_state} -> rendered_state
+            {:error, _reason, current_state} -> current_state
           end
 
-        theme = render_theme(current_theme_id)
+        {:error, reason} ->
+          Raxol.Core.Runtime.Log.warning_with_context(
+            "Rendering Engine skipped frame because the Dispatcher was unavailable",
+            %{reason: reason, dispatcher_pid: state.dispatcher_pid}
+          )
 
-        case do_render_frame(animated_model, theme, state) do
-          {:ok, new_state} ->
-            {:noreply, new_state}
+          state
+      end
 
-          {:error, _reason, current_state} ->
-            # Logged inside do_render_frame, just keep current state
-            {:noreply, current_state}
-        end
-
-      {:error, reason} ->
-        Raxol.Core.Runtime.Log.error(
-          "RenderingEngine failed to get render context from Dispatcher: #{inspect(reason)}"
-        )
-
-        {:noreply, state}
-    end
+    schedule_trailing_render()
+    {:noreply, new_state}
   end
 
   @impl true
@@ -229,15 +225,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   end
 
   defp render_sync(state) do
-    case GenServer.call(state.dispatcher_pid, :get_render_context) do
+    case fetch_render_context(state) do
       {:ok, %{model: current_model, theme_id: current_theme_id}} ->
-        animated_model =
-          try do
-            Raxol.Animation.Framework.apply_animations_to_state(current_model)
-          catch
-            :exit, _ -> current_model
-          end
-
+        animated_model = apply_animations(current_model)
         theme = render_theme(current_theme_id)
 
         case do_render_frame(animated_model, theme, state) do
@@ -250,6 +240,49 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
       {:error, reason} ->
         {:error, reason, state}
+    end
+  end
+
+  defp fetch_render_context(state) do
+    Raxol.Core.ErrorHandling.safe_call(fn ->
+      GenServer.call(
+        state.dispatcher_pid,
+        :get_render_context,
+        state.dispatcher_timeout
+      )
+    end)
+    |> case do
+      {:ok, {:ok, %{model: _model, theme_id: _theme_id}} = context} -> context
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:ok, other} -> {:error, {:unexpected_render_context, other}}
+      {:error, {:exit, {:timeout, _call}}} -> {:error, :timeout}
+      {:error, {:exit, {:noproc, _call}}} -> {:error, :noproc}
+      {:error, {:exit, reason}} -> {:error, {:dispatcher_exit, reason}}
+      {:error, reason} -> {:error, {:dispatcher_error, reason}}
+    end
+  end
+
+  defp apply_animations(current_model) do
+    try do
+      Raxol.Animation.Framework.apply_animations_to_state(current_model)
+    catch
+      :exit, _reason -> current_model
+    end
+  end
+
+  # Keep one trailing frame when a burst arrives during a render. Dropping all
+  # queued casts can miss an update that landed after the context snapshot;
+  # retaining one renders the latest dispatcher state without replaying every
+  # intermediate frame.
+  defp schedule_trailing_render do
+    if drain_render_casts(false), do: GenServer.cast(self(), :render_frame)
+  end
+
+  defp drain_render_casts(found?) do
+    receive do
+      {:"$gen_cast", :render_frame} -> drain_render_casts(true)
+    after
+      0 -> found?
     end
   end
 

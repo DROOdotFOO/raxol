@@ -42,6 +42,10 @@ defmodule MyAppWeb.TerminalLive do
 end
 ```
 
+`TEALive` resolves and caches the app dispatcher during the connected mount.
+Keyboard events therefore do not synchronously call the lifecycle process; a
+stopped or busy lifecycle cannot crash or stall the LiveView keydown callback.
+
 Or embed as a component:
 
 ```heex
@@ -56,7 +60,7 @@ Include the CSS asset at `priv/static/raxol_terminal.css` in your layout.
 ## Tests
 
 ```bash
-cd packages/raxol_liveview && MIX_ENV=test mix test  # 37 tests, 0 failures
+cd packages/raxol_liveview && MIX_ENV=test mix test
 ```
 
 See [LiveView cookbook](../../docs/cookbook/LIVEVIEW_INTEGRATION.md) for more patterns.
