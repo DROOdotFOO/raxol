@@ -115,15 +115,15 @@ defmodule Raxol.Agent.Backend.Credentials do
 
   # Keep only the three known string fields; drop everything else so a
   # hand-edited file can never smuggle unexpected shapes downstream.
-  defp sanitize_entry(entry) when is_map(entry) do
-    ~w(op_ref model base_url)
-    |> Enum.reduce(%{}, fn field, acc ->
-      case Map.get(entry, field) do
-        value when is_binary(value) and value != "" ->
-          Map.put(acc, String.to_existing_atom(field), value)
+  # Literal atoms, not String.to_existing_atom/1: a ~w sigil holds strings,
+  # so the atoms exist only if some other loaded module happens to name them.
+  @entry_fields [{"op_ref", :op_ref}, {"model", :model}, {"base_url", :base_url}]
 
-        _ ->
-          acc
+  defp sanitize_entry(entry) when is_map(entry) do
+    Enum.reduce(@entry_fields, %{}, fn {field, key}, acc ->
+      case Map.get(entry, field) do
+        value when is_binary(value) and value != "" -> Map.put(acc, key, value)
+        _ -> acc
       end
     end)
   end

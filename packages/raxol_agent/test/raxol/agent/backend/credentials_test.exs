@@ -107,6 +107,26 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       assert entry == %{op_ref: "op://v/i/f"}
     end
 
+    # This module names :op_ref, so loading it creates the atom and an
+    # in-VM read could never catch the bug. Read from a fresh BEAM where
+    # only Credentials (and what it calls) gets loaded.
+    @tag timeout: 60_000
+    test "reads in a fresh VM that has never seen the field atoms", %{path: path} do
+      File.write!(path, Jason.encode!(%{"openai" => %{"op_ref" => "op://v/i/f"}}))
+
+      code_paths = Enum.flat_map(:code.get_path(), &["-pa", to_string(&1)])
+      script = "IO.write(inspect(Raxol.Agent.Backend.Credentials.load()))"
+
+      {out, status} =
+        System.cmd("elixir", code_paths ++ ["-e", script],
+          env: [{"RAXOL_PROVIDERS", path}],
+          stderr_to_stdout: true
+        )
+
+      assert status == 0, out
+      assert out =~ ~s(%{"openai" => %{op_ref: "op://v/i/f"}})
+    end
+
     # An entry here names the vault item a provider key is read from, so a
     # store another account may rewrite is a store that can redirect
     # `op read`. The resolver falls through to env vars instead.
