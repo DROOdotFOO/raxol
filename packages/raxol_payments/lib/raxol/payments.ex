@@ -50,7 +50,7 @@ defmodule Raxol.Payments do
       }
 
       {:ok, quote} = Xochi.get_quote(config, request)
-      {:ok, exec} = Xochi.execute(config, quote, wallet)
+      {:ok, exec} = Xochi.execute(config, quote, wallet, request)
       {:ok, status} = Xochi.poll_status(config, exec.intent_id)
   """
 end

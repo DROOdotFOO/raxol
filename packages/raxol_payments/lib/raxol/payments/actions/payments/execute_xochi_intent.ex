@@ -11,6 +11,15 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   sent to Xochi is derived from the token's decimals. If execution fails after
   the gate reserved budget, the reservation is released.
 
+  With `swap_kind: "exact_output"` the caller fixes the delivered
+  `output_amount` instead, the solver picks the origin amount, and `amount` is
+  the most the caller will spend: it is what the gate reserves and the ceiling
+  the signed `fromAmount` is held to.
+
+  Before the spend is authorized, the served EIP-712 intent is bound to the
+  request (`Protocols.Xochi.validate_intent/2`): a quote whose signed terms
+  differ from what was asked for is refused without reserving or signing.
+
   ## Idempotent recovery
 
   When a `:checkpoint` store is supplied, the intent is checkpointed by a stable
@@ -57,7 +66,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         amount: [
           type: :string,
           required: true,
-          description: "Human-decimal amount to send, e.g. \"1.00\""
+          description:
+            "Human-decimal amount to send, e.g. \"1.00\". With swap_kind exact_output, the most to spend."
         ],
         from_chain_id: [type: :integer, required: true],
         to_chain_id: [type: :integer, required: true],
@@ -83,6 +93,16 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           type: :string,
           description:
             "Destination recipient for a plaintext (public) transfer. Required for a cross-VM route; omit for same-VM, where Xochi defaults it to the sending wallet."
+        ],
+        swap_kind: [
+          type: :string,
+          description:
+            "exact_input (default): send exactly `amount`. exact_output: deliver exactly `output_amount`, spending at most `amount`."
+        ],
+        output_amount: [
+          type: :string,
+          description:
+            "exact_output only: the amount to deliver, as a string of digits in destination-chain atomic units."
         ],
         slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
         trust_score: [type: :integer, description: "Trust score for tier/fee"],
@@ -145,11 +165,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
          {:ok, exec, filled_quote} <-
            execute(config, request, quote, floor, wallet, context, amount, store, key),
          :ok <- assert_settlement_privacy(request, exec) do
-      summary = summary(request, filled_quote, exec)
+      # On exact_output the request carries no origin amount; report the one the
+      # signed intent bound (equal to the request's on exact_input).
+      reported = %{request | from_amount: Xochi.intent_from_amount(filled_quote)}
+      summary = summary(reported, filled_quote, exec)
       # Best-effort, non-blocking: emit a signed activity row to the user's live
       # feed (and stash the route for the terminal announce). Never affects the
       # swap; a no-op unless a capability topic_id is configured.
-      SwapAnnouncer.announce_execute(context, request, filled_quote, exec)
+      SwapAnnouncer.announce_execute(context, reported, filled_quote, exec)
       Checkpoint.put(store, key, settled_record(summary))
       {:ok, summary}
     end
@@ -252,6 +275,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           request.from_token,
           request.to_token,
           request.from_amount,
+          request.swap_kind,
+          request.output_amount,
+          request.max_from_amount,
           # The recipient is part of the payment's identity: a transfer to
           # recipient A must never be treated as a resume of one to recipient B.
           request.recipient_address,
@@ -316,12 +342,25 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # refused rather than let through unfloored. A non-USD stablecoin destination
   # (`Assets.fx_peg/2`) is refused the same way: it scales, but with no FX rate
   # there is no par to floor against (ADR-0040 decision 7). The quote is judged
-  # on the lowest amount it states: `toAmount`, its own `minToAmount`, and the
   # `toAmount` in the EIP-712 message the wallet would sign.
-  # Every quote that may be signed passes both checks: the first, and the
-  # re-quote an expired execute leads to.
+  # Every quote that may be signed passes these checks and the intent binding
+  # (`Xochi.validate_intent/2`, which also requires the signed `toAmount` to
+  # equal the served `to_amount`): the first quote, and the re-quote an expired
+  # execute leads to.
   defp assert_quote(%QuoteResponse{} = quote, %QuoteRequest{} = request, floor) do
-    with :ok <- assert_method(quote, request), do: DeliveryFloor.check(quote, floor)
+    with :ok <- assert_method(quote, request),
+         :ok <- Xochi.validate_intent(quote, request),
+         do: DeliveryFloor.check(quote, floor)
+  end
+
+  # exact_output pins the delivered amount exactly (`validate_intent/2`), so no
+  # par floor applies; an explicit `min_to_amount` still does.
+  defp delivery_floor(%QuoteRequest{swap_kind: "exact_output"} = request, params) do
+    case DeliveryFloor.parse(Map.get(params, :min_to_amount)) do
+      {:ok, nil} -> {:ok, :none}
+      {:ok, min_out} -> explicit_floor(min_out, request)
+      {:error, _} = error -> error
+    end
   end
 
   defp delivery_floor(%QuoteRequest{} = request, params) do
@@ -383,25 +422,48 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     settlement = settlement(params)
 
     with {:ok, decimals} <- source_decimals(from_chain, from_token),
-         {:ok, spending_key, viewing_key} <- stealth_keys(settlement, params) do
-      from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
-
-      request = %QuoteRequest{
-        wallet: wallet.address(),
-        from_chain_id: from_chain,
-        to_chain_id: Map.fetch!(params, :to_chain_id),
-        from_token: from_token,
-        to_token: Map.fetch!(params, :to_token),
-        from_amount: from_amount,
-        recipient_address: Map.get(params, :recipient_address),
-        settlement_preference: settlement,
-        slippage_bps: Map.get(params, :slippage_bps) || 50,
-        trust_score: Map.get(params, :trust_score),
-        stealth_spending_pub_key: spending_key,
-        stealth_viewing_pub_key: viewing_key
-      }
+         {:ok, spending_key, viewing_key} <- stealth_keys(settlement, params),
+         {:ok, amounts} <- swap_amounts(params, Assets.to_atomic(amount, decimals)) do
+      request =
+        struct!(
+          QuoteRequest,
+          Map.merge(amounts, %{
+            wallet: wallet.address(),
+            from_chain_id: from_chain,
+            to_chain_id: Map.fetch!(params, :to_chain_id),
+            from_token: from_token,
+            to_token: Map.fetch!(params, :to_token),
+            recipient_address: Map.get(params, :recipient_address),
+            settlement_preference: settlement,
+            slippage_bps: Map.get(params, :slippage_bps) || 50,
+            trust_score: Map.get(params, :trust_score),
+            stealth_spending_pub_key: spending_key,
+            stealth_viewing_pub_key: viewing_key
+          })
+        )
 
       {:ok, request, amount}
+    end
+  end
+
+  # exact_input sends the atomic `amount`; exact_output sends `output_amount`
+  # and holds the solver's origin amount to the atomic `amount` as a ceiling.
+  defp swap_amounts(params, atomic) do
+    case Map.get(params, :swap_kind) || "exact_input" do
+      "exact_input" ->
+        {:ok, %{swap_kind: "exact_input", from_amount: Integer.to_string(atomic)}}
+
+      "exact_output" ->
+        {:ok,
+         %{
+           swap_kind: "exact_output",
+           from_amount: nil,
+           output_amount: Map.get(params, :output_amount),
+           max_from_amount: Integer.to_string(atomic)
+         }}
+
+      other ->
+        {:error, {:invalid_swap_kind, other}}
     end
   end
 

@@ -142,6 +142,23 @@ defmodule Raxol.Earn.Xochi.JourneyTest do
     end
   end
 
+  describe "signed intent binding" do
+    test "a quote whose intent redirects the payout is rejected before signing" do
+      # The pull is honest and pinned; only the XochiIntent's recipient is swapped
+      # for the attacker. Signing it would authorize delivery to them.
+      scenario =
+        new(
+          wallet: BuyerWallet,
+          intent_recipient: @attacker,
+          solver_allowlist: [@canonical_solver]
+        )
+        |> order("USDC", from: 8453, to: 10, amount: @amount)
+        |> assert_order_rejected()
+
+      assert {:quote_failed, {:intent_mismatch, :recipient}} = error(scenario)
+    end
+  end
+
   describe "liquidity caps" do
     test "an order within the destination cap settles" do
       {:ok, dst} = Assets.address(10, "USDC")

@@ -56,11 +56,11 @@ The fee has three additive layers rather than a single tier percentage: a solver
 
 The quote will carry an optional `fee_breakdown`: the per-layer split (solver, venue, routing), price impact, gas floor, total, and `surplus_share_pct` (the solver keeps 15% of positive-slippage surplus, the user keeps 85%). The routing line is raxol's own cut, worth surfacing to agents. It stays absent until Riddler emits it and the worker forwards it, and the `QuoteResponse` schema does not parse it yet, so treat it as a forthcoming field rather than something to read today.
 
-Flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712 intent) -> `poll_status/3`.
+Flow: `get_quote/2` -> `execute/4` (wallet signs EIP-712 intent) -> `poll_status/3`. Before signing, raxol checks the quote's EIP-712 intent against the `QuoteRequest` it sent (wallet, recipient, chains, tokens, amounts, settlement preference, deadline) and refuses a mismatch as `{:intent_mismatch, field}`.
 
 For a storefront that settles on a buyer's behalf, the signing and the submission split into a buyer-side half and a relay-side half:
 
-- `sign_intent/2,3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting**: the buyer hands this to the storefront.
+- `sign_intent/3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting**: the buyer hands this to the storefront.
 - `execute_signed/2` (relay side) posts a pre-signed bundle to Xochi **without re-signing**, so the relay never holds the buyer's key.
 - `execute/4` is the two composed: `sign_intent` then `execute_signed`.
 
