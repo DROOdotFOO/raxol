@@ -143,10 +143,11 @@ defmodule Raxol.Workflow.ParallelTest do
 
       {:ok, compiled} = Graph.compile(graph)
 
-      assert {:ok, final, _meta} = Compiled.invoke(compiled, %{})
+      assert {:ok, final, meta} = Compiled.invoke(compiled, %{})
       assert final.a == "from-a"
       assert final.b == "from-b"
       assert final.report == "a=from-a b=from-b"
+      assert meta.nodes_executed == 4
     end
   end
 
