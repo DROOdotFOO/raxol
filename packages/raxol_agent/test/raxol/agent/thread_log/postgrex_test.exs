@@ -141,6 +141,16 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
     end
   end
 
+  # create_table_sql/1 is two statements; the extended protocol
+  # Postgrex.query!/3 uses accepts one per call.
+  defp create_table!(conn, table) do
+    table
+    |> Adapter.create_table_sql()
+    |> String.split(";", trim: true)
+    |> Enum.reject(&(String.trim(&1) == ""))
+    |> Enum.each(&Postgrex.query!(conn, &1, []))
+  end
+
   defp unique_table do
     "raxol_agent_threads_test_#{:erlang.unique_integer([:positive])}"
   end
@@ -149,7 +159,7 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
     test "append + latest returns the same event" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Adapter.create_table_sql(table), [])
+      create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       assert {:ok, event} =
@@ -167,7 +177,7 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
     test "sequence increments monotonically within a thread" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Adapter.create_table_sql(table), [])
+      create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       for n <- 0..4 do
@@ -180,7 +190,7 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
     test "list_by_kind narrows by kind" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Adapter.create_table_sql(table), [])
+      create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       Adapter.append(config, "thr-1", :directive, "d1")
@@ -194,7 +204,7 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
     test "truncate removes events with sequence < before" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Adapter.create_table_sql(table), [])
+      create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       for n <- 0..4, do: Adapter.append(config, "thr-1", :tool_call, n)
@@ -203,6 +213,61 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
 
       assert {:ok, events} = Adapter.list(config, "thr-1")
       assert Enum.map(events, & &1.sequence) == [3, 4]
+    end
+  end
+
+  describe "decoding in a fresh VM" do
+    # This test module names the canonical kind atoms, so only a child VM
+    # that has loaded nothing but the adapter can observe the load-order bug.
+    test "canonical kinds decode before anything interns their atoms" do
+      conn = start_conn!()
+      table = unique_table()
+      create_table!(conn, table)
+      config = %{conn: conn, table: table}
+
+      {:ok, _} = Adapter.append(config, "thr-1", :tool_call, 1)
+      {:ok, _} = Adapter.append(config, "thr-1", :state_snapshot, 2)
+
+      Postgrex.query!(
+        conn,
+        Adapter.insert_sql(table),
+        ["thr-1", "never_interned_kind_x9", nil, :erlang.term_to_binary(%{}), DateTime.utc_now()]
+      )
+
+      script = """
+      for name <- ["tool" <> "_call", "state" <> "_snapshot"] do
+        try do
+          String.to_existing_atom(name)
+          System.halt(2)
+        rescue
+          ArgumentError -> :ok
+        end
+      end
+
+      {:ok, _} = Application.ensure_all_started(:postgrex)
+      {opts, table} = System.fetch_env!("RAXOL_PG_CHILD") |> Base.decode64!() |> :erlang.binary_to_term()
+      {:ok, conn} = Postgrex.start_link(opts)
+      # Built at runtime: a literal remote call lets the compiler load the
+      # adapter (and intern its atoms) before the check above runs.
+      adapter = Module.concat(["Raxol", "Agent", "ThreadLog", "Postgrex"])
+      {:ok, events} = adapter.list(%{conn: conn, table: table}, "thr-1")
+      IO.write(inspect(Enum.map(events, & &1.kind)))
+      """
+
+      elixir = Path.expand("../../bin/elixir", :code.lib_dir(:elixir))
+      pa = Enum.flat_map(:code.get_path(), &["-pa", List.to_string(&1)])
+      payload = {pg_conn_opts(), table} |> :erlang.term_to_binary() |> Base.encode64()
+
+      {out, status} =
+        System.cmd(elixir, pa ++ ["-e", script],
+          cd: System.tmp_dir!(),
+          env: [{"RAXOL_PG_CHILD", payload}],
+          stderr_to_stdout: true
+        )
+
+      # Status 2 means the child already had the atoms; the check is void.
+      assert status == 0, "child exited #{status}: #{out}"
+      assert out =~ ~s([:tool_call, :state_snapshot, "never_interned_kind_x9"])
     end
   end
 end

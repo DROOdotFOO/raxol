@@ -730,14 +730,14 @@ defmodule Raxol.Agent.Actions.Code do
         {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
       end)
 
-    # `:in` closes the command's stdin; see `Raxol.Agent.SpawnedPort` for why.
+    # stdin is /dev/null via the script prefix, not `:in` (which would
+    # inherit the BEAM's tty); see `Raxol.Agent.SpawnedPort`.
     base = [
       :binary,
-      :in,
       :exit_status,
       :use_stdio,
       :stderr_to_stdout,
-      {:args, ["-c", command]},
+      {:args, ["-c", Raxol.Agent.SpawnedPort.null_stdin_command(command)]},
       {:cd, cd}
     ]
 

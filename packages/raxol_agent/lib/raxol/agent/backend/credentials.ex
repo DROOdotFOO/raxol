@@ -26,6 +26,7 @@ defmodule Raxol.Agent.Backend.Credentials do
   """
 
   alias Raxol.Agent.OperatorFile
+  alias Raxol.Agent.SpawnedPort
 
   @env_path "RAXOL_PROVIDERS"
   @filename "providers.json"
@@ -113,15 +114,14 @@ defmodule Raxol.Agent.Backend.Credentials do
     end
   end
 
+  # Atoms written as literals so they exist whenever this module is loaded.
+  @entry_fields ~w(op_ref model base_url)a
+
   # Keep only the three known string fields; drop everything else so a
   # hand-edited file can never smuggle unexpected shapes downstream.
-  # Literal atoms, not String.to_existing_atom/1: a ~w sigil holds strings,
-  # so the atoms exist only if some other loaded module happens to name them.
-  @entry_fields [{"op_ref", :op_ref}, {"model", :model}, {"base_url", :base_url}]
-
   defp sanitize_entry(entry) when is_map(entry) do
-    Enum.reduce(@entry_fields, %{}, fn {field, key}, acc ->
-      case Map.get(entry, field) do
+    Enum.reduce(@entry_fields, %{}, fn key, acc ->
+      case Map.get(entry, Atom.to_string(key)) do
         value when is_binary(value) and value != "" -> Map.put(acc, key, value)
         _ -> acc
       end
@@ -207,9 +207,31 @@ defmodule Raxol.Agent.Backend.Credentials do
     Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
   end
 
-  @doc "True when the `op` (1Password) CLI is available on PATH."
+  @doc """
+  True when the `op` (1Password) CLI is on an absolute `PATH` entry.
+
+  Relative entries (`bin`, `.`, an empty element) are ignored: they resolve
+  against the BEAM's cwd, so a cloned repository could plant its own `op`.
+  """
   @spec op_available?() :: boolean()
-  def op_available?, do: not is_nil(System.find_executable("op"))
+  def op_available?, do: not is_nil(find_op())
+
+  defp find_op do
+    separator = if match?({:win32, _}, :os.type()), do: ";", else: ":"
+
+    absolute_dirs =
+      (System.get_env("PATH") || "")
+      |> String.split(separator)
+      |> Enum.filter(&(Path.type(&1) == :absolute))
+
+    with [_ | _] <- absolute_dirs,
+         op when is_list(op) <-
+           :os.find_executable(~c"op", String.to_charlist(Enum.join(absolute_dirs, separator))) do
+      List.to_string(op)
+    else
+      _ -> nil
+    end
+  end
 
   # `System.cmd` has no timeout, and a locked 1Password vault blocks `op`
   # on its desktop-app authorization prompt indefinitely — freezing
@@ -231,59 +253,54 @@ defmodule Raxol.Agent.Backend.Credentials do
   end
 
   defp run_op(args, timeout_ms \\ nil) do
-    case System.find_executable("op") do
+    case find_op() do
       nil -> {:error, :op_unavailable}
       op -> run_executable(op, args, timeout_ms || op_timeout_ms())
     end
   end
 
   @doc false
-  # Spawn `executable` and collect its output, bounded by `timeout_ms`.
-  #
-  # The child's stdin MUST be `/dev/null`. `op` decides whether to prompt by
-  # looking at stdin: given an open pipe it waits for input forever, and given
-  # EOF it goes straight to the desktop-app integration and succeeds. That is
-  # why `op item create` hung here while the identical command run from a
-  # shell returned in seconds -- and why the whole `connect_key` path, browser
-  # sign-in and pasted key alike, could not store a credential from the BEAM.
-  #
-  # No port option provides that. Without `:in` the child gets a pipe that
-  # never delivers and never closes; with `:in` it inherits the BEAM's own
-  # stdin, which under the TUI is the user's terminal -- `op` then prompts
-  # on, and reads keystrokes from, the tty the TUI owns. So `sh` redirects
-  # and `exec`s: the executable and args travel as positional parameters
-  # (never interpolated), and `exec` keeps the pid `kill_os_process` targets.
-  # Windows has no `/bin/sh` and no `/dev/null`; it keeps the direct spawn.
+  # Spawn `executable` and collect its output, bounded by `timeout_ms`, with
+  # stdin on `/dev/null` (why: `Raxol.Agent.SpawnedPort`; `op` prompts on any
+  # other stdin). `executable` is expanded to an absolute path; on Unix a
+  # missing or non-executable target comes back as `{sh_diagnostic, 126 | 127}`.
   @spec run_executable(String.t(), [String.t()], pos_integer()) ::
-          {String.t(), non_neg_integer()} | {:error, :op_timeout}
+          {String.t(), non_neg_integer()}
+          | {:error, :op_timeout | :op_spawn_failed | {:op_spawn_failed, term()}}
   def run_executable(executable, args, timeout_ms) do
-    {spawn_path, spawn_args} = null_stdin_spawn(executable, args, :os.type())
+    spec = SpawnedPort.spawn_spec(executable, args)
 
-    port =
-      Port.open(
-        {:spawn_executable, spawn_path},
-        [:binary, :exit_status, :stderr_to_stdout, :in, args: spawn_args]
-      )
+    with {:ok, port} <- open_port(spec) do
+      os_pid =
+        case Port.info(port, :os_pid) do
+          {:os_pid, pid} -> pid
+          _ -> nil
+        end
 
-    os_pid =
-      case Port.info(port, :os_pid) do
-        {:os_pid, pid} -> pid
-        _ -> nil
-      end
-
-    collect_op(
-      port,
-      os_pid,
-      System.monotonic_time(:millisecond) + timeout_ms,
-      []
-    )
+      port
+      |> collect_op(os_pid, System.monotonic_time(:millisecond) + timeout_ms, [])
+      |> target_result(spec)
+    end
   end
 
-  defp null_stdin_spawn(executable, args, {:win32, _}), do: {executable, args}
-
-  defp null_stdin_spawn(executable, args, _unix) do
-    {"/bin/sh", ["-c", ~s(exec "$0" "$@" </dev/null), executable | args]}
+  # A direct spawn (Windows, or no `sh`) raises on enoent/eacces.
+  defp open_port(spec) do
+    opts = [:binary, :exit_status, :stderr_to_stdout, {:args, spec.args}] ++ spec.opts
+    {:ok, Port.open({:spawn_executable, spec.path}, opts)}
+  rescue
+    error in ErlangError -> {:error, {:op_spawn_failed, error.original}}
   end
+
+  # Output before the marker is the wrapper shell's; no marker means the
+  # wrapper died before exec.
+  defp target_result({output, code}, spec) when is_binary(output) do
+    case SpawnedPort.target_output(output, spec) do
+      {:ok, target} -> {target, code}
+      :error -> {:error, :op_spawn_failed}
+    end
+  end
+
+  defp target_result({:error, _reason} = error, _spec), do: error
 
   defp collect_op(port, os_pid, deadline, acc) do
     remaining = deadline - System.monotonic_time(:millisecond)
@@ -352,7 +369,8 @@ defmodule Raxol.Agent.Backend.Credentials do
   @doc """
   The 1Password CLI availability + auth state.
 
-    * `:absent`         — the `op` binary is not on PATH.
+    * `:absent`         — no `op` on an absolute PATH entry, or the one found
+      cannot be executed (exit 126/127, spawn failure).
     * `:not_signed_in`  — `op` is installed but no account session is active.
     * `:ok`             — `op` is installed and signed in.
 
@@ -362,13 +380,17 @@ defmodule Raxol.Agent.Backend.Credentials do
   """
   @spec op_status() :: :absent | :not_signed_in | :ok
   def op_status do
-    cond do
-      not op_available?() -> :absent
-      match?({_out, 0}, run_op(["whoami"])) -> :ok
-      # A timeout (locked vault) reads as not signed in: unusable either way.
-      true -> :not_signed_in
-    end
+    if op_available?(), do: whoami_status(run_op(["whoami"])), else: :absent
   end
+
+  defp whoami_status({_out, 0}), do: :ok
+  # 126/127: the `op` found on PATH cannot be executed -- as good as absent.
+  defp whoami_status({_out, code}) when code in [126, 127], do: :absent
+  defp whoami_status({:error, :op_unavailable}), do: :absent
+  defp whoami_status({:error, :op_spawn_failed}), do: :absent
+  defp whoami_status({:error, {:op_spawn_failed, _reason}}), do: :absent
+  # A timeout (locked vault) reads as not signed in: unusable either way.
+  defp whoami_status(_other), do: :not_signed_in
 
   @doc """
   Create a 1Password item holding `key` and return its `op://...` reference.
