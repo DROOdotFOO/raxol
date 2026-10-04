@@ -769,7 +769,12 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
           run_id
         end
 
-      events = await_terminals(rig.bus, submitted)
+      # Each refused submit sheds one parked run. When a shed lands mid-loop
+      # (see below), one more run parks than is refused, so one parked run has
+      # no shed coming and ends only at park_timeout_ms -- longer than the
+      # default wait. Wait past it so its terminal is observed.
+      events =
+        await_terminals(rig.bus, submitted, CacheRideProbe.spec().park_timeout_ms + 5_000)
 
       # The parked set never grows past the cap.
       assert L.bounded_parking(events, max_parked) == :ok, "seed=#{@seed}"
