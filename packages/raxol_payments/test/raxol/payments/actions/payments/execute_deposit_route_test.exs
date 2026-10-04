@@ -61,18 +61,26 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
     "0x" <> Base.encode16(EIP712.pack_signature(sig), case: :lower)
   end
 
-  defp config do
-    body = %{
-      "intent_id" => @intent_id,
-      "quote_id" => @quote_id,
-      "can_solve" => true,
-      "to_amount" => "995000",
-      "deposit_address" => @deposit_addr,
-      "deposit_attestation" => attestation(),
-      "deposit_deadline" => 1_900_000_000
-    }
+  defp config(quote \\ %{}) do
+    body =
+      Map.merge(
+        %{
+          "intent_id" => @intent_id,
+          "quote_id" => @quote_id,
+          "can_solve" => true,
+          "to_amount" => "995000",
+          "deposit_address" => @deposit_addr,
+          "deposit_attestation" => attestation(),
+          "deposit_deadline" => 1_900_000_000
+        },
+        quote
+      )
+
+    test = self()
 
     plug = fn conn ->
+      send(test, :quote_requested)
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, Jason.encode!(body))
@@ -117,6 +125,136 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
     test "errors when :xochi_config is absent from the context" do
       assert {:error, {:missing_context, :xochi_config}} =
                ExecuteDepositRoute.run(params(), %{})
+    end
+
+    # ADR-0040 decision 6: no FX rate gates a conversion yet, so a non-USD
+    # destination has no par to floor against and must carry its own.
+    @eure_base "0xbf6e2966A9C3D99C9E4D069E04f7Bdb9C8aa762C"
+
+    test "a non-USD destination without a positive min_to_amount is refused before any quote" do
+      ctx = %{xochi_config: config(), deposit_attestation_signer: signer_address()}
+
+      for floor <- [nil, "0", " 0 "] do
+        assert {:error, {:unpriced_asset, %{side: :destination, chain_id: 8453, peg: "EUR"}}} =
+                 ExecuteDepositRoute.run(
+                   params(%{to_token: @eure_base, min_to_amount: floor}),
+                   ctx
+                 )
+      end
+
+      refute_received :quote_requested
+    end
+
+    # 1 USDT (6 decimals) into EURe (18 decimals): 0.87 EURe estimated, 0.865
+    # stated as the minimum.
+    @eure_quote %{
+      "to_amount" => "870000000000000000",
+      "min_to_amount" => "865000000000000000"
+    }
+
+    test "a quote is judged on the lowest amount it states" do
+      ctx = %{xochi_config: config(@eure_quote), deposit_attestation_signer: signer_address()}
+      run = &ExecuteDepositRoute.run(params(%{to_token: @eure_base, min_to_amount: &1}), ctx)
+
+      assert {:ok, %{deposit_address: @deposit_addr, min_to_amount: "865000000000000000"}} =
+               run.("865000000000000000")
+
+      # Below the estimate, above the stated minimum.
+      assert {:error,
+              {:delivery_below_floor,
+               %{floor: 866_000_000_000_000_000, lowest: 865_000_000_000_000_000}}} =
+               run.("866000000000000000")
+
+      # Authoritative for a dollar destination too; this quote states no minimum.
+      ctx = %{xochi_config: config(), deposit_attestation_signer: signer_address()}
+
+      assert {:error, {:delivery_below_floor, %{to_amount: "995000", lowest: 995_000}}} =
+               ExecuteDepositRoute.run(params(%{min_to_amount: "995001"}), ctx)
+    end
+
+    test "a high stated minimum does not hide a low estimate" do
+      # A hostile quote: 1 wei estimated, a reassuring minimum beside it.
+      quote = %{"to_amount" => "1", "min_to_amount" => "900000000000000000"}
+      ctx = %{xochi_config: config(quote), deposit_attestation_signer: signer_address()}
+
+      assert {:error, {:delivery_below_floor, %{lowest: 1}}} =
+               ExecuteDepositRoute.run(
+                 params(%{to_token: @eure_base, min_to_amount: "850000000000000000"}),
+                 ctx
+               )
+    end
+
+    test "amounts served as JSON numbers come back as the strings the output declares" do
+      quote = %{
+        "to_amount" => 870_000_000_000_000_000,
+        "min_to_amount" => 865_000_000_000_000_000
+      }
+
+      ctx = %{xochi_config: config(quote), deposit_attestation_signer: signer_address()}
+
+      # Through `call/2`, which validates the output schema: an integer
+      # `min_to_amount` passed the floor and then failed `:string`.
+      assert {:ok, %{to_amount: "870000000000000000", min_to_amount: "865000000000000000"}} =
+               ExecuteDepositRoute.call(
+                 params(%{to_token: @eure_base, min_to_amount: "865000000000000000"}),
+                 ctx
+               )
+    end
+
+    test "an integral JSON float comes back as its integer string" do
+      ctx = %{
+        xochi_config: config(%{"to_amount" => 960_000.0}),
+        deposit_attestation_signer: signer_address()
+      }
+
+      assert {:ok, %{to_amount: "960000"}} = ExecuteDepositRoute.call(params(), ctx)
+    end
+
+    test "a fractional or inexact JSON float amount is refused, not reformatted" do
+      for amount <- [960_000.5, 1.0e30] do
+        ctx = %{
+          xochi_config: config(%{"to_amount" => amount}),
+          deposit_attestation_signer: signer_address()
+        }
+
+        assert {:error, {:invalid_quote_amount, %{field: :to_amount, value: ^amount}}} =
+                 ExecuteDepositRoute.call(params(), ctx)
+      end
+    end
+
+    test "a floor in the source's units on a non-USD destination is refused before any quote" do
+      ctx = %{xochi_config: config(@eure_quote), deposit_attestation_signer: signer_address()}
+
+      # 0.99 written at USDT's 6 decimals: about 10^-12 EURe at EURe's 18.
+      assert {:error, {:implausible_min_to_amount, %{par_to_amount: 1_000_000_000_000_000_000}}} =
+               ExecuteDepositRoute.run(
+                 params(%{to_token: @eure_base, min_to_amount: "990000"}),
+                 ctx
+               )
+
+      refute_received :quote_requested
+    end
+
+    test "a floor that is not an integer of atomic units is refused, not ignored" do
+      # This quote would deliver 0.000001 USDC for 1 USDT.
+      ctx = %{
+        xochi_config: config(%{"to_amount" => "1"}),
+        deposit_attestation_signer: signer_address()
+      }
+
+      # 79 digits is past any uint256; a million took a quarter second to parse,
+      # and a few million raised `SystemLimitError` rather than a refusal.
+      too_long = String.duplicate("9", 79)
+      huge = String.duplicate("9", 1_000_000)
+
+      for floor <-
+            ["1e6", "995000.0", "1,000,000", "1_000_000", "-1", "abc", -5, 995_000.0] ++
+              [too_long, huge] do
+        assert {:error, {:invalid_min_to_amount, ^floor}} =
+                 ExecuteDepositRoute.run(params(%{min_to_amount: floor}), ctx)
+      end
+
+      refute_received :quote_requested
     end
   end
 

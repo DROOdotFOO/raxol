@@ -1,0 +1,191 @@
+{
+ "asOf": "2026-09-30T17:38:18Z",
+ "refreshSec": 60,
+ "fxRatesUsd": {
+  "USD": 1.0,
+  "CAD": 0.704964,
+  "CNY": 0.148857,
+  "EUR": 1.134404,
+  "MXN": 0.055481,
+  "GHS": 0.085462,
+  "PHP": 0.015975,
+  "GBP": 1.32282,
+  "TRY": 0.020401,
+  "XOF": 0.001729,
+  "JPY": 0.006354,
+  "NGN": 0.000753,
+  "KRW": 0.000739,
+  "RUB": 0.011897,
+  "CLP": 0.001034,
+  "ARS": 0.000656,
+  "AUD": 0.698889,
+  "BRL": 0.191653,
+  "HKD": 0.127453,
+  "COP": 0.000297,
+  "ZAR": 0.06095,
+  "PEN": 0.29107,
+  "SGD": 0.782367,
+  "CHF": 1.198681,
+  "MYR": 0.245035,
+  "KES": 0.007711,
+  "UAH": 0.022289
+ },
+ "fxRatesAsOf": "2026-09-30T00:02:31Z",
+ "fxRatesSource": "https://open.er-api.com/v6/latest/USD",
+ "fxRatesStaleAfterSec": 14400,
+ "corridors": [
+  {
+   "corridor": "USD",
+   "pegCurrency": "USD",
+   "totalSupplyUsd": 295569540770.38,
+   "totalVolume24hUsd": 83733791322.79,
+   "totalPartnerLiquidityUsd": 128371195.0,
+   "totalSupplyChange24hUsd": -507557365.95,
+   "partnerLiquidityAssets": 2,
+   "assets": [
+    {
+     "symbol": "USDT",
+     "aliases": [
+      "USDT"
+     ],
+     "name": "Tether",
+     "partner": true,
+     "supplyUsd": 183809560809.6,
+     "volume24hUsd": 63034110556.0,
+     "partnerLiquidityUsd": 19921063.75,
+     "deviationBps": -5,
+     "supplyChange24hUsd": 135216674.5
+    },
+    {
+     "symbol": "USDC",
+     "aliases": [
+      "USDC"
+     ],
+     "name": "USD Coin",
+     "partner": true,
+     "supplyUsd": 74334526579.72,
+     "volume24hUsd": 17699043347.0,
+     "partnerLiquidityUsd": 108450131.25,
+     "deviationBps": -2,
+     "supplyChange24hUsd": -493044699.43
+    }
+   ],
+   "assetCount": 249
+  },
+  {
+   "corridor": "EUR",
+   "pegCurrency": "EUR",
+   "totalSupplyUsd": 947232956.24,
+   "totalVolume24hUsd": 102382460.83,
+   "totalPartnerLiquidityUsd": 7961731.41,
+   "totalSupplyChange24hUsd": 14657213.01,
+   "partnerLiquidityAssets": 2,
+   "assets": [
+    {
+     "symbol": "EURC",
+     "aliases": [
+      "EURC"
+     ],
+     "name": "EURC",
+     "partner": true,
+     "supplyUsd": 529688535.03,
+     "volume24hUsd": 40052959.0,
+     "partnerLiquidityUsd": 7649507.43,
+     "deviationBps": -9,
+     "supplyChange24hUsd": 8216128.31
+    },
+    {
+     "symbol": "EURCV",
+     "aliases": [
+      "EURCV"
+     ],
+     "name": "EUR CoinVertible",
+     "partner": false,
+     "supplyUsd": 210104541.25,
+     "volume24hUsd": 35414937.0,
+     "partnerLiquidityUsd": null,
+     "deviationBps": -9,
+     "supplyChange24hUsd": 3774891.24
+    }
+   ],
+   "assetCount": 25
+  },
+  {
+   "corridor": "CHF",
+   "pegCurrency": "CHF",
+   "totalSupplyUsd": 53103160.16,
+   "totalVolume24hUsd": 622676.31,
+   "totalPartnerLiquidityUsd": 9166023.09,
+   "totalSupplyChange24hUsd": -86460.11,
+   "partnerLiquidityAssets": 1,
+   "assets": [
+    {
+     "symbol": "ZCHF",
+     "aliases": [
+      "FRANKENCOIN",
+      "ZCHF"
+     ],
+     "name": "Frankencoin",
+     "partner": true,
+     "supplyUsd": 49765845.87,
+     "volume24hUsd": 345425.0,
+     "partnerLiquidityUsd": 9166023.09,
+     "deviationBps": 24,
+     "supplyChange24hUsd": 29070.64
+    },
+    {
+     "symbol": "VCHF",
+     "aliases": [
+      "VCHF"
+     ],
+     "name": "VNX Swiss Franc",
+     "partner": false,
+     "supplyUsd": 3160396.78,
+     "volume24hUsd": 276154.0,
+     "partnerLiquidityUsd": null,
+     "deviationBps": 285,
+     "supplyChange24hUsd": -92933.74
+    }
+   ],
+   "assetCount": 4
+  },
+  {
+   "corridor": "VAR",
+   "pegCurrency": null,
+   "totalSupplyUsd": 19954529.89,
+   "totalVolume24hUsd": 24588.22,
+   "totalPartnerLiquidityUsd": 0.0,
+   "totalSupplyChange24hUsd": -1825.9,
+   "partnerLiquidityAssets": 0,
+   "assets": [
+    {
+     "symbol": "FPI",
+     "aliases": [
+      "FPI"
+     ],
+     "name": "Frax Price Index",
+     "partner": false,
+     "supplyUsd": 8124100.82,
+     "volume24hUsd": null,
+     "partnerLiquidityUsd": null,
+     "deviationBps": null,
+     "supplyChange24hUsd": 0.0
+    },
+    {
+     "symbol": "ISC",
+     "aliases": [
+      "ISC"
+     ],
+     "name": "International Stable Currency",
+     "partner": false,
+     "supplyUsd": 5317539.37,
+     "volume24hUsd": null,
+     "partnerLiquidityUsd": null,
+     "deviationBps": null,
+     "supplyChange24hUsd": -0.89
+    }
+   ],
+   "assetCount": 10
+  }
+ ]
+}

@@ -2,6 +2,7 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.ThreadLog.Postgrex, as: Adapter
+  import ExUnit.CaptureLog
 
   describe "create_table_sql/1" do
     test "produces the canonical schema for the default table" do
@@ -144,11 +145,19 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
   # create_table_sql/1 is two statements; the extended protocol
   # Postgrex.query!/3 uses accepts one per call.
   defp create_table!(conn, table) do
+    drop_table!(conn, table)
+
     table
     |> Adapter.create_table_sql()
     |> String.split(";", trim: true)
     |> Enum.reject(&(String.trim(&1) == ""))
     |> Enum.each(&Postgrex.query!(conn, &1, []))
+  end
+
+  # unique_integer restarts with each VM, so a table name can repeat across
+  # runs against the same database; clear whatever a previous run left.
+  defp drop_table!(conn, table) do
+    Postgrex.query!(conn, "DROP TABLE IF EXISTS #{table}", [])
   end
 
   defp unique_table do
@@ -199,6 +208,72 @@ defmodule Raxol.Agent.ThreadLog.PostgrexTest do
 
       assert {:ok, [%{payload: "d1"}, %{payload: "d2"}]} =
                Adapter.list_by_kind(config, "thr-1", :directive)
+    end
+
+    test "list_by_kind honours from/to/limit/order with and without an upper bound" do
+      conn = start_conn!()
+      table = unique_table()
+      create_table!(conn, table)
+      config = %{conn: conn, table: table}
+
+      # directives land on even sequences 0..8, tool calls on odd 1..9
+      for n <- 0..4 do
+        {:ok, _} = Adapter.append(config, "thr-1", :directive, "d#{n}")
+        {:ok, _} = Adapter.append(config, "thr-1", :tool_call, "t#{n}")
+      end
+
+      seqs = fn opts ->
+        assert {:ok, events} = Adapter.list_by_kind(config, "thr-1", :directive, opts)
+        assert Enum.all?(events, &(&1.kind == :directive))
+        Enum.map(events, & &1.sequence)
+      end
+
+      assert seqs.(to: :infinity) == [0, 2, 4, 6, 8]
+      assert seqs.(from: 3, to: :infinity) == [4, 6, 8]
+      assert seqs.(to: :infinity, limit: 2) == [0, 2]
+      assert seqs.(to: :infinity, order: :desc, limit: 2) == [8, 6]
+      assert seqs.(to: 5) == [0, 2, 4]
+      assert seqs.(from: 2, to: 6, limit: 2) == [2, 4]
+      assert seqs.(from: 2, to: 6, order: :desc) == [6, 4, 2]
+    end
+
+    test "list honours from/to/limit/order" do
+      conn = start_conn!()
+      table = unique_table()
+      create_table!(conn, table)
+      config = %{conn: conn, table: table}
+
+      for n <- 0..5, do: {:ok, _} = Adapter.append(config, "thr-1", :tool_call, n)
+
+      seqs = fn opts ->
+        assert {:ok, events} = Adapter.list(config, "thr-1", opts)
+        Enum.map(events, & &1.sequence)
+      end
+
+      assert seqs.([]) == [0, 1, 2, 3, 4, 5]
+      assert seqs.(from: 2, limit: 2) == [2, 3]
+      assert seqs.(from: 1, to: 3) == [1, 2, 3]
+      assert seqs.(to: 4, order: :desc, limit: 2) == [4, 3]
+    end
+
+    test "a failed read query is logged, not silently empty" do
+      conn = start_conn!()
+      # Absent table, so every read errors with undefined_table.
+      table = unique_table()
+      drop_table!(conn, table)
+      config = %{conn: conn, table: table}
+
+      for {op, call, expected} <- [
+            {"list", fn -> Adapter.list(config, "thr-1") end, {:ok, []}},
+            {"list_by_kind", fn -> Adapter.list_by_kind(config, "thr-1", :directive) end,
+             {:ok, []}},
+            {"latest", fn -> Adapter.latest(config, "thr-1") end, {:error, :not_found}}
+          ] do
+        log = capture_log(fn -> assert call.() == expected end)
+        assert log =~ "[ThreadLog.Postgrex] #{op} on #{table}"
+        assert log =~ ~s(thread "thr-1")
+        assert log =~ "undefined_table"
+      end
     end
 
     test "truncate removes events with sequence < before" do

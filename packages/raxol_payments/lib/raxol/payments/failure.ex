@@ -197,6 +197,18 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
+  # The EIP-712 intent the quote served -- what Riddler settles -- does not match
+  # the request (wallet, chains, tokens, recipient, settlement, amounts, or an
+  # over-long deadline). Refuse to sign rather than authorize different terms.
+  def from({:intent_mismatch, _} = detail),
+    do:
+      build(
+        :rejected,
+        "The quote's signable intent did not match the requested transfer; refusing to sign.",
+        false,
+        detail
+      )
+
   # The quote delivers less than the agent's floor (an explicit min_to_amount or
   # the same-asset delivery floor). Refuse to sign rather than overpay into a
   # punitive or hostile quote.
@@ -204,7 +216,30 @@ defmodule Raxol.Payments.Failure do
     do:
       build(
         :delivery_below_floor,
-        "The quote delivers less than the minimum acceptable amount; refusing to sign.",
+        "The quote states less than the minimum acceptable amount, or an amount that does not read; refused.",
+        false,
+        detail
+      )
+
+  # The caller's floor, refused before anything is signed (on the deposit and
+  # Relay routes, before any quote is fetched): one that does not read as
+  # atomic units (on Xochi, `0` too), or one on a non-USD stablecoin destination
+  # far below the amount sent at the destination's decimals (a wrong-units
+  # floor bounds nothing). See `Raxol.Payments.DeliveryFloor`.
+  def from({:invalid_min_to_amount, _} = detail),
+    do:
+      build(
+        :invalid_request,
+        "min_to_amount must be a positive integer in destination-chain atomic units.",
+        false,
+        detail
+      )
+
+  def from({:implausible_min_to_amount, _} = detail),
+    do:
+      build(
+        :invalid_request,
+        "min_to_amount is far below the amount sent at the destination token's decimals; it is probably in the source token's units.",
         false,
         detail
       )
@@ -214,6 +249,10 @@ defmodule Raxol.Payments.Failure do
   def from({:invalid_from_token, _} = detail), do: invalid_request(detail)
   def from({:invalid_to_token, _} = detail), do: invalid_request(detail)
   def from({:invalid_chain_id, _} = detail), do: invalid_request(detail)
+  def from({:invalid_from_amount, _} = detail), do: invalid_request(detail)
+  def from({:invalid_output_amount, _} = detail), do: invalid_request(detail)
+  def from({:invalid_max_from_amount, _} = detail), do: invalid_request(detail)
+  def from({:invalid_swap_kind, _} = detail), do: invalid_request(detail)
 
   # A token with no registered decimals on its chain (including any chain this
   # build does not know): an amount in it cannot be scaled or bounded, so the
@@ -227,12 +266,24 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
-  # A zero, negative, or unparseable floor bounds nothing; refused, not ignored.
-  def from({:invalid_min_to_amount, _} = detail),
+  # A registered stablecoin pegged to a currency other than the dollar. Its
+  # amount scales, but no FX rate converts it for a dollar spend cap or a
+  # delivery floor yet, so it moves no funds (ADR-0040 decision 6; decision 7
+  # lifts the refusal).
+  def from({:unpriced_asset, %{side: :destination}} = detail),
     do:
       build(
         :invalid_request,
-        "min_to_amount must be a positive integer in destination atomic units.",
+        "The destination token is pegged to a non-USD currency; pass min_to_amount to bound delivery.",
+        false,
+        detail
+      )
+
+  def from({:unpriced_asset, _} = detail),
+    do:
+      build(
+        :invalid_request,
+        "The source token is pegged to a non-USD currency; spending it is not enabled.",
         false,
         detail
       )

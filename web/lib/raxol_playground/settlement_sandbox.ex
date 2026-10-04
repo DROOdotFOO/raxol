@@ -182,17 +182,15 @@ defmodule RaxolPlayground.SettlementSandbox do
     fee_bps = FeeSchedule.headline_bps(tier, :stable)
     fee = div(from_amount * fee_bps, 10_000)
 
+    to_amount = Integer.to_string(from_amount - fee)
+
     json(conn, %{
       "intentId" => @intent_id,
       "quoteId" => @quote_id,
       "canSolve" => true,
-      "toAmount" => Integer.to_string(from_amount - fee),
+      "toAmount" => to_amount,
       "xochiFee" => Integer.to_string(fee),
-      "eip712Data" => %{
-        "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => @base},
-        "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-        "message" => %{"amount" => from_amount}
-      }
+      "eip712Data" => intent_eip712(request, to_amount)
     })
   end
 
@@ -229,4 +227,56 @@ defmodule RaxolPlayground.SettlementSandbox do
     |> put_resp_content_type("application/json")
     |> send_resp(200, Jason.encode!(body))
   end
+
+  # The XochiIntent Riddler's worker serves, built from the posted quote body the
+  # way its `build_message` does, so the production signer's request-binding
+  # check passes exactly as it would live. Signed toAmount == top-level toAmount.
+  defp intent_eip712(request, to_amount) do
+    %{
+      "domain" => %{
+        "name" => "Xochi",
+        "version" => "1",
+        "chainId" => request["from_chain_id"],
+        "salt" => "0x" <> String.duplicate("00", 32)
+      },
+      "primaryType" => "XochiIntent",
+      "types" => %{
+        "XochiIntent" =>
+          Enum.map(
+            [
+              {"intentId", "string"},
+              {"quoteId", "string"},
+              {"wallet", "address"},
+              {"recipient", "string"},
+              {"fromChainId", "uint256"},
+              {"toChainId", "uint256"},
+              {"fromToken", "string"},
+              {"toToken", "string"},
+              {"fromAmount", "uint256"},
+              {"toAmount", "uint256"},
+              {"settlementPreference", "string"},
+              {"deadline", "uint256"}
+            ],
+            fn {name, type} -> %{"name" => name, "type" => type} end
+          )
+      },
+      "message" => %{
+        "intentId" => @intent_id,
+        "quoteId" => @quote_id,
+        "wallet" => address_value(request["wallet"]),
+        "recipient" => request["recipient_address"] || request["wallet"],
+        "fromChainId" => request["from_chain_id"],
+        "toChainId" => request["to_chain_id"],
+        "fromToken" => address_value(request["from_token"]),
+        "toToken" => address_value(request["to_token"]),
+        "fromAmount" => request["from_amount"],
+        "toAmount" => to_amount,
+        "settlementPreference" => request["settlement_preference"] || "public",
+        "deadline" => System.system_time(:second) + 300
+      }
+    }
+  end
+
+  defp address_value("0x" <> _ = address), do: String.downcase(address)
+  defp address_value(other), do: other
 end

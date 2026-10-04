@@ -468,8 +468,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # contract. Which makes --fund the thing that decides whether the allowance is
   # granted at all, so the plan says that before the run signs anything.
   defp permit2_lines(cfg, opts) do
-    pull_lines(cfg, Keyword.get(opts, :dry_run, false), Keyword.get(opts, :fund, false)) ++
+    Enum.concat(
+      pull_lines(cfg, Keyword.get(opts, :dry_run, false), Keyword.get(opts, :fund, false)),
       ["             spender pin: #{spender_pin(cfg)}"]
+    )
   end
 
   defp pull_lines(cfg, true = _dry_run?, _funding?) do
@@ -1382,6 +1384,20 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     Do not widen the pin to whatever the quote served -- checking that value is
     the entire point of it.
+    """
+  end
+
+  # The served XochiIntent does not describe the order that was requested. The
+  # worker builds that message from our own quote body, so any drift is a bug or
+  # an attack upstream -- never something to sign through.
+  defp sign_intent_error({:intent_mismatch, field}) do
+    """
+    the quote's signed intent does not match this order (#{field}).
+
+    Nothing was signed. The XochiIntent the solver served disagrees with the
+    request on #{field} (wallet, recipient, chains, tokens, amounts, settlement
+    and deadline are all checked). Re-run to fetch a fresh quote; if it fails
+    the same way, report it upstream with the quote id rather than overriding.
     """
   end
 

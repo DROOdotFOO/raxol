@@ -14,6 +14,10 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
 
 ### Added
 
+- The console bench runs a buyer-supplied agent package without raxol's own
+  secrets in its environment (`Raxol.Core.ChildEnv`), `RAXOL_ACP_AGENT_PRIVATE_KEY`
+  and `XOCHI_AUTH_TOKEN` included; it used to inherit the node's whole
+  environment.
 - **Job session**: `Raxol.Earn.JobSession` plus
   `JobSession.{Registry, Supervisor, Status, Provider, HandlerSeam, Client, Tools}`.
   One supervised process per active job, registered by `{chain_id, job_id}`.
@@ -84,6 +88,12 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
   `:acp_version` switch are gone; the v2 hook/event model
   (`JobSession` + `HookClient` -> `AgenticCommerceV3`) is the only runtime.
   See `MIGRATION_V2.md`.
+- **The corridor gate never fills a non-USD stablecoin.** EURC, EURe and ZCHF
+  are now registered for scaling (ADR-0040), and they stay unfillable on both
+  paths: under `Capabilities.fallback/0`, and when Xochi's live capability
+  matrix lists them (it lists EURe), including with the stablecoin corridor
+  allowlist off. They reject as `{:unsupported_src_token, _, _}` /
+  `{:unsupported_dst_token, _, _}`.
 
 ### Security
 

@@ -129,10 +129,11 @@ defmodule Raxol.Web3.Backend.JSONRPC do
   @hex_digits Enum.concat([?0..?9, ?a..?f, ?A..?F])
 
   # `:http_opts` is an operator's own keyword list and may carry an
-  # authorization header, so it is not something `inspect/1` may render: a
-  # handle reaches an operator through `Raxol.Web3.Router.candidates/3`, and a
-  # crash anywhere below formats the struct whole into a log line.
-  @derive {Inspect, except: [:http_opts]}
+  # authorization header, and `:url` often embeds a provider key, so neither is
+  # something `inspect/1` may render: a handle reaches an operator through
+  # `Raxol.Web3.Router.candidates/3`, and a crash anywhere below formats the
+  # struct whole into a log line.
+  @derive {Inspect, except: [:url, :http_opts]}
   @enforce_keys [:chain_ref, :chain_id, :url]
   defstruct [
     :chain_ref,

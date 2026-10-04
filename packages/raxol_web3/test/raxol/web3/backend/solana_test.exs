@@ -188,6 +188,14 @@ defmodule Raxol.Web3.Backend.SolanaTest do
       # ends up matching on one of them.
       assert {:error, {:unsupported_source, :helius}} = Solana.new(@mainnet, source: :helius)
     end
+
+    test "a keyed url override does not render when the handle is inspected" do
+      # A hosted Solana RPC carries its key in the query string.
+      handle = rpc(%{}, url: "https://sol.example/?api-key=key-not-real")
+
+      refute inspect(handle, limit: :infinity) =~ "key-not-real"
+      assert state(handle).url =~ "key-not-real"
+    end
   end
 
   describe "capabilities" do

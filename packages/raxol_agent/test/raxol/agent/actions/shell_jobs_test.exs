@@ -97,6 +97,21 @@ defmodule Raxol.Agent.Actions.ShellJobsTest do
       assert replay.output == "hi\n"
     end
 
+    test "a background job does not inherit raxol's secrets", %{owner: owner} do
+      # A variable no other test in this VM touches, so the async run is safe.
+      System.put_env("RAXOL_ACP_AGENT_PRIVATE_KEY", "probe-not-a-key")
+      on_exit(fn -> System.delete_env("RAXOL_ACP_AGENT_PRIVATE_KEY") end)
+
+      {:ok, job} =
+        Jobs.start(~s(printf '%s' "${RAXOL_ACP_AGENT_PRIVATE_KEY-unset}"),
+          owner: owner,
+          timeout_ms: 10_000
+        )
+
+      assert {:ok, _done} = Jobs.await(job.job_id, owner, 10_000)
+      assert {:ok, %{output: "unset"}} = Jobs.poll(job.job_id, owner, 0)
+    end
+
     test "a wait that expires reports the job still running instead of hanging", %{owner: owner} do
       gate = Path.join(owner, "gate")
       {:ok, job} = Jobs.start(gated("", gate, ""), owner: owner, timeout_ms: 20_000)

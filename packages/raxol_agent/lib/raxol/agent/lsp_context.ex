@@ -343,7 +343,7 @@ defmodule Raxol.Agent.LSPContext do
     # `{:packet, 0}` raises `:badarg` before a server ever starts.
     port_opts =
       [:binary, :exit_status, :use_stdio, :hide]
-      |> maybe_add_opt(:env, if(charlist_env != [], do: charlist_env))
+      |> maybe_add_opt(:env, Raxol.Core.ChildEnv.port_env(charlist_env))
 
     case find_executable(state.command) do
       nil ->

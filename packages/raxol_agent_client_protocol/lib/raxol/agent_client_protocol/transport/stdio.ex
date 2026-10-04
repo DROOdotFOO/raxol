@@ -122,6 +122,12 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     * `:env` — list of `{name, value}` environment overrides, passed
       straight to `Port.open/2`'s `:env` option.
 
+  The child inherits the node's WHOLE environment plus `:env`: this package
+  does not scrub anything. An agent is third-party code, so a caller on a
+  node that holds secrets (a raxol node's `RAXOL_SLEUTH_API_KEY`, signing
+  keys, bearer tokens) must unset them itself, e.g. by passing
+  `env: Raxol.Core.ChildEnv.port_env(overrides)` from `raxol_core`.
+
   Returns `{:error, :executable_not_found}` if `cmd` cannot be resolved.
   """
   @spec start_spawn(String.t(), [String.t()], keyword()) ::

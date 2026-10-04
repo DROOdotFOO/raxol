@@ -45,6 +45,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0037](0037-remote-mcp-client-transport.md) | Remote transport for the MCP client | Implemented | 2026-09-14 |
 | [0038](0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |
 | [0039](0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
+| [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
 
 ## Template
 
@@ -123,6 +124,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0037: Remote transport for the MCP client](0037-remote-mcp-client-transport.md)
 - [0038: The guarded outbound client and the EVM REST backend](0038-guarded-outbound-client-evm-rest-backend.md)
 - [0039: The required callback set, and what a partial source is](0039-required-callback-set-partial-sources.md)
+- [0040: FX market data and rate sources](0040-fx-market-data-and-rate-sources.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
@@ -150,4 +152,4 @@ They preserve context for why decisions were made, help new contributors underst
 
 ## Coverage
 
-37 authored ADRs (35 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, the indexer-agnostic web3 data surface, foreign coding-agent integration seams, cost metering for multi-rate providers, agent telemetry coverage and shape, the remote MCP client transport, and the guarded outbound client with its EVM REST backend. (Numbers 0004 and 0006 are withdrawn placeholders.)
+38 authored ADRs (36 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, the indexer-agnostic web3 data surface, foreign coding-agent integration seams, cost metering for multi-rate providers, agent telemetry coverage and shape, the remote MCP client transport, the guarded outbound client with its EVM REST backend, and FX market data with its rate sources. (Numbers 0004 and 0006 are withdrawn placeholders.)

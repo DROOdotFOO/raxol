@@ -53,6 +53,29 @@ defmodule Raxol.Payments.Protocols.X402Test do
       assert {:error, {:missing_header, "payment-required"}} =
                X402.parse_challenge([])
     end
+
+    test "refuses a non-USD stablecoin asset, which the dollar spend gate would count at par" do
+      # 1 EURe (18 decimals) would otherwise gate as $1.00. Mixed-case address
+      # and CAIP-2 network, as a hostile server could send.
+      for {network, asset, peg} <- [
+            {"eip155:8453", "0xBF6E2966A9C3D99C9E4D069E04F7BDB9C8AA762C", "EUR"},
+            {"eip155:100", "0xcB444e90D8198415266c6a2724b7900fb12FC56E", "EUR"},
+            {"eip155:1", "0xB58E61C3098d85632Df34EecfB899A1Ed80921cB", "CHF"}
+          ] do
+        encoded =
+          Base.encode64(
+            Jason.encode!(%{
+              "maxAmountRequired" => "1000000000000000000",
+              "asset" => asset,
+              "network" => network,
+              "payTo" => "0x1234567890abcdef1234567890abcdef12345678"
+            })
+          )
+
+        assert {:error, {:unpriced_asset, %{peg: ^peg}}} =
+                 X402.parse_challenge([{"payment-required", encoded}])
+      end
+    end
   end
 
   describe "amount/1" do

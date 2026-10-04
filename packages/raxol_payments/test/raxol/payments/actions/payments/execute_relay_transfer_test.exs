@@ -245,6 +245,25 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
       assert {:error, %Failure{reason: :route_unsupported}} =
                ExecuteRelayTransfer.run(params, ctx())
     end
+
+    test "refuses a non-USD stablecoin source before any relay call (ADR-0040)" do
+      parent = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(parent, {:relay_called, conn.request_path})
+        Req.Test.json(conn, %{})
+      end)
+
+      params = base_params(%{from_token: "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42"})
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :source, chain_id: 8453, peg: "EUR"}}
+              }} = ExecuteRelayTransfer.run(params, ctx())
+
+      refute_received {:relay_called, _}
+    end
   end
 
   describe "spend gate" do
@@ -346,6 +365,127 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
 
       totals = Ledger.get_totals(context.ledger, "a1", policy())
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+  end
+
+  describe "delivery floor" do
+    @eure_arb "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8"
+
+    defp stub_delivering(to_amount) do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/relay/quote" ->
+            Req.Test.json(conn, %{
+              "transfer_id" => "t_1",
+              "quote_id" => "q_1",
+              "can_fill" => true,
+              "to_amount" => to_amount,
+              "deposit_address" => @tron_addr
+            })
+
+          "/relay/execute" ->
+            send(self(), :relay_executed)
+            Req.Test.json(conn, %{"transfer_id" => "t_1", "status" => "pending"})
+        end
+      end)
+    end
+
+    defp tron_to_eure(overrides) do
+      base_params(
+        Map.merge(
+          %{
+            from_chain_id: @tron,
+            to_chain_id: 42_161,
+            from_token: @usdt_trc20,
+            to_token: @eure_arb,
+            to_address: "0x" <> String.duplicate("cd", 20),
+            from_address: @tron_addr
+          },
+          overrides
+        )
+      )
+    end
+
+    test "a non-USD destination without min_to_amount is refused before execute" do
+      stub_delivering("1")
+      context = ctx()
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :destination, chain_id: 42_161, peg: "EUR"}}
+              }} = ExecuteRelayTransfer.run(tron_to_eure(%{}), context)
+
+      refute_received :relay_executed
+      totals = Ledger.get_totals(context.ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "a zero min_to_amount counts as absent, so the non-USD destination is still refused" do
+      stub_delivering("1")
+
+      assert {:error, %Failure{detail: {:unpriced_asset, %{side: :destination}}}} =
+               ExecuteRelayTransfer.run(tron_to_eure(%{min_to_amount: "0"}), ctx())
+
+      refute_received :relay_executed
+    end
+
+    test "a quote below an explicit min_to_amount is refused before the spend is authorized" do
+      stub_delivering("490000000000000000")
+      context = ctx()
+
+      assert {:error, %Failure{reason: :delivery_below_floor}} =
+               ExecuteRelayTransfer.run(
+                 tron_to_eure(%{min_to_amount: "500000000000000000"}),
+                 context
+               )
+
+      refute_received :relay_executed
+      totals = Ledger.get_totals(context.ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "a quote meeting an explicit min_to_amount executes" do
+      stub_delivering("500000000000000000")
+
+      assert {:ok, %{status: "pending"}} =
+               ExecuteRelayTransfer.run(
+                 tron_to_eure(%{min_to_amount: "500000000000000000"}),
+                 ctx()
+               )
+
+      assert_received :relay_executed
+    end
+
+    test "an explicit min_to_amount also binds a USD corridor" do
+      stub_delivering("499000")
+
+      assert {:error, %Failure{reason: :delivery_below_floor}} =
+               ExecuteRelayTransfer.run(base_params(%{min_to_amount: "499001"}), ctx())
+
+      refute_received :relay_executed
+    end
+
+    test "a min_to_amount that is not an integer of atomic units is refused, not ignored" do
+      stub_delivering("1")
+      context = ctx()
+
+      for floor <- ["1e6", "499000.0", "-1", "abc"] do
+        assert {:error,
+                %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, ^floor}}} =
+                 ExecuteRelayTransfer.run(base_params(%{min_to_amount: floor}), context)
+      end
+
+      refute_received :relay_executed
+    end
+
+    test "a floor in the source's units on a non-USD destination is refused" do
+      stub_delivering("1000000")
+
+      assert {:error, %Failure{detail: {:implausible_min_to_amount, _}}} =
+               ExecuteRelayTransfer.run(tron_to_eure(%{min_to_amount: "990000"}), ctx())
+
+      refute_received :relay_executed
     end
   end
 

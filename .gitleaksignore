@@ -109,3 +109,11 @@ dfa45d5041c2de2f5865306683319efae5d633cb:packages/raxol_payments/test/raxol/paym
 e4ae26e4203d613809f625bcf6a7d7750f6f75c1:packages/raxol_earn/test/mix/tasks/raxol_earn.order_test.exs:generic-api-key:20
 e4ae26e4203d613809f625bcf6a7d7750f6f75c1:packages/raxol_earn/test/raxol/earn/order_spend_plan_test.exs:generic-api-key:30
 f04f7271eda237bbf41b2bcdd78f8eedadaf2fc1:packages/raxol_agent/test/raxol/agent/sandbox_hook_test.exs:generic-api-key:168
+
+# Public ERC-20 contract address used as a relay transfer test token.
+6dcd631450d7cb791057aee4308efe4952556dd7:packages/raxol_payments/test/raxol/payments/actions/payments/execute_relay_transfer_test.exs:generic-api-key:257
+
+# Public USDC contract addresses (Base, Arbitrum) used as Xochi intent test tokens (#1164).
+a9bb2294dc2816d1f5db8c9b0f48ee8089cf2b03:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:192
+a9bb2294dc2816d1f5db8c9b0f48ee8089cf2b03:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:1220
+a9bb2294dc2816d1f5db8c9b0f48ee8089cf2b03:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:1221

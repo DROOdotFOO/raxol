@@ -5,6 +5,10 @@ defmodule RaxolAgent.Application do
 
   @impl true
   def start(_type, _args) do
+    # Resolve the web3/fx tool configuration once, here, so a mistake refuses
+    # the boot with its name instead of raising in every context build.
+    Raxol.Agent.Web3.load!()
+
     # The main `raxol` app already starts Raxol.Agent.Supervisor whenever
     # the module is compiled in (application.ex maybe_add_agent_supervisor),
     # and raxol_agent depends on raxol -- so when raxol_agent boots as the

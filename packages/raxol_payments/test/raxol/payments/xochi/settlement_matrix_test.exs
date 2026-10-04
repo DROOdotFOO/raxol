@@ -8,7 +8,9 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
   every registered (chain, token) settling to every other-chain (chain, token).
   It is therefore cross-asset by construction (e.g. Base USDC -> Robinhood Chain
   USDG), and it auto-extends the moment a chain or token is added to `Assets`.
-  Robinhood Chain (4663, USDG + WETH + RAXOL) and Arbitrum EURe are in the grid.
+  Robinhood Chain (4663, USDG + WETH + RAXOL) is in the grid. The non-USD
+  stablecoins (EURe, EURC, ZCHF) are not solver-fillable endpoints: no
+  fund-moving path spends one (ADR-0040 decision 6).
 
   This proves the client half: request construction, decimals-correct origin
   sizing, ERC-5564 stealth key derivation, EIP-712 signing, protocol/settlement
@@ -21,6 +23,7 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
 
   alias Raxol.Payments.Actions.Payments.ExecuteXochiIntent
   alias Raxol.Payments.{Assets, Failure, Ledger, Router, SpendingPolicy}
+  alias Raxol.Payments.Test.XochiIntentFixture
   alias Raxol.Payments.Xochi.Stealth
 
   # Wallet that signals when it signs, so we can assert the intent was signed.
@@ -69,7 +72,6 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     "USDT" => "500000",
     "USDG" => "500000",
     "WETH" => "500000000000000000",
-    "EURe" => "500000000000000000",
     "RAXOL" => "500000000000000000"
   }
 
@@ -112,9 +114,9 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
-          {:ok, raw, conn} = Plug.Conn.read_body(conn)
-          body = Jason.decode!(raw)
+          {body, conn} = XochiIntentFixture.quote_body(conn)
           send(self(), {:quote_body, body})
+          to_amount = to_amount || body["from_amount"]
 
           Req.Test.json(conn, %{
             "intentId" => "int_1",
@@ -122,13 +124,9 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
             "canSolve" => true,
             # Par delivery: echo the atomic from_amount so a same-asset corridor
             # clears its 80% floor at any decimals. Overridable for floor tests.
-            "toAmount" => to_amount || body["from_amount"],
+            "toAmount" => to_amount,
             "xochiFee" => "1000",
-            "eip712Data" => %{
-              "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-              "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-              "message" => %{"amount" => 500_000}
-            }
+            "eip712Data" => XochiIntentFixture.eip712(body, to_amount)
           })
 
         "/api/intent/execute" ->
@@ -183,11 +181,11 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
 
   describe "the corridor grid" do
     test "is the full cross-chain cross-product of Assets endpoints, incl. Robinhood" do
-      # 19 endpoints: USDC/USDT/WETH on 5 chains, EURe on Arbitrum, and
-      # USDG/WETH/RAXOL on Robinhood (4663).
-      assert length(@endpoints) == 19
+      # 18 endpoints: USDC/USDT/WETH on 5 chains and USDG/WETH/RAXOL on
+      # Robinhood (4663).
+      assert length(@endpoints) == 18
       # Every ordered cross-chain endpoint pair.
-      assert length(@corridors) == 300
+      assert length(@corridors) == 270
 
       # USDG lives only on Robinhood Chain, and shows up as both origin and dest.
       assert for({c, "USDG", _} <- @endpoints, do: c) == [4663]
@@ -198,13 +196,10 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
 
       assert Enum.any?(@corridors, fn {_, _, _, tc, ts, _} -> {tc, ts} == {4663, "USDG"} end)
 
-      # EURe and RAXOL are each both an origin and a destination: the live
-      # EURe <-> RAXOL pairs run in both directions (Permit2 origin pull).
-      for {from, to} <- [{{42_161, "EURe"}, {4663, "RAXOL"}}, {{4663, "RAXOL"}, {42_161, "EURe"}}] do
-        assert Enum.any?(@corridors, fn {fc, fs, _, tc, ts, _} ->
-                 {{fc, fs}, {tc, ts}} == {from, to}
-               end)
-      end
+      # RAXOL is both an origin and a destination (Permit2 origin pull).
+      assert Enum.any?(@corridors, fn {fc, fs, _, _, _, _} -> {fc, fs} == {4663, "RAXOL"} end)
+      assert Enum.any?(@corridors, fn {_, _, _, tc, ts, _} -> {tc, ts} == {4663, "RAXOL"} end)
+      refute Enum.any?(@endpoints, fn {_, symbol, _} -> symbol == "EURe" end)
 
       # The grid is cross-asset (origin and destination symbols differ) somewhere.
       assert Enum.any?(@corridors, fn {_, fs, _, _, ts, _} -> fs != ts end)
