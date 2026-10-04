@@ -47,7 +47,10 @@ title = "golden contract corpus v#{schema_version}"
 #
 # One turn per shape the corpus must carry. Together they cover every journaled
 # contract type, all three `item_type` variants, and all three `evidence`
-# states -- the marker that 1.1.0 exists for.
+# states -- the marker that 1.1.0 exists for. From 1.2.0 the corpus is written
+# as a hash-chained journal (`chain: true`), the shape 1.2.0 exists for: every
+# record carries `prev_hash`/`hash`, `meta.json` carries `"chain": true`, and
+# `HEAD` carries `tip_hash`.
 
 scenarios = [
   {"turn-1",
@@ -195,7 +198,8 @@ File.mkdir_p!(staging)
       base_dir: staging,
       cwd: cwd,
       git_branch: git_branch,
-      title: title
+      title: title,
+      chain: true
     ]
   )
 

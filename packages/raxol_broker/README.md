@@ -1,8 +1,9 @@
 # Raxol Broker
 
-Fail-closed brokerage policy parsing, initialization and order evaluation,
-plus a read-only Robinhood MCP session, for Raxol. The package is pre-alpha.
-This release does not include order execution, arming, review, or journaling.
+Fail-closed brokerage policy parsing, initialization and order evaluation, a
+hash-chained decision journal, and a read-only Robinhood MCP session, for
+Raxol. The package is pre-alpha. This release does not include order
+execution, arming, or review.
 
 ## Policy
 
@@ -113,6 +114,70 @@ ALLOW. `Policy.rule_ids/0` lists the stable rule ids in evaluation order; the
 Caps are inclusive. A rule that needs a context field left `nil` denies; an
 invalid policy or a context field of the wrong type denies before any rule
 runs. Untrusted provenance always asks. Cancels are always allowed.
+
+## Decision journal
+
+`Raxol.Broker.Journal` records every order decision in one hash-chained
+journal per install, `~/.raxol/broker/journal` (override with
+`$RAXOL_BROKER_JOURNAL` or the `:path` option). Start it under your
+supervisor:
+
+```elixir
+children = [Raxol.Broker.Journal]
+
+{:ok, group} = Raxol.Broker.Journal.open_group(intent, context)
+:ok = Raxol.Broker.Journal.append_to_group(group, {:verdict, :pre_review, Policy.evaluate(intent, context)})
+:ok = Raxol.Broker.Journal.append_to_group(group, {:review, review_response})
+:ok = Raxol.Broker.Journal.append_to_group(group, {:verdict, :post_review, verdict})
+:ok = Raxol.Broker.Journal.append_to_group(group, {:order, :placed, order_response})
+```
+
+A group is the intent, a snapshot of the policy context, each verdict, the
+review response, and one terminal record: the order response (`:placed` or
+`:failed`), a DENY verdict, or `{:close, reason}`. `open_group/2` makes the
+intent durable before any review or order call; `append_group/1` writes a
+whole group as one contiguous run. Every record is synced before the call
+returns.
+
+Each record carries `prev_hash` and `hash` (SHA-256 of its canonical JSON),
+so changing, removing or truncating any committed record is detected. On
+start the journal verifies the chain:
+
+  * A damaged journal answers every append and query with
+    `{:error, {:journal_damaged, offset}}`; `status/0` and `verify/0` name
+    the offset. No order can be sized against it.
+  * A group left open by a crash is closed before anything else is written.
+    Without a post-review ALLOW it becomes DENY `crash_before_verdict`. After
+    one, the order call may have gone out, so it becomes
+    `crash_outcome_unknown` and counts toward the caps.
+
+The chain has no key: it catches corruption and naive edits, not someone who
+can rewrite the whole directory.
+
+The policy context reads from an index built on start:
+
+```elixir
+{:ok, notional} = Raxol.Broker.Journal.today_notional(start_of_exchange_day_utc)
+{:ok, count} = Raxol.Broker.Journal.orders_last_minute(DateTime.utc_now())
+{:ok, pnl} = Raxol.Broker.Journal.realized_pnl_today(start_of_exchange_day_utc)
+```
+
+Placed orders and unknown-outcome groups count; cancels, denials and failed
+orders do not. The caller chooses the day boundary. `realized_pnl_today/1`
+sums the realized P&L recorded with `append_fill/1`.
+
+### Replay
+
+```sh
+mix raxol.broker.replay --date 2026-10-02 [--journal PATH]
+```
+
+Prints every group opened that day (UTC) in journal order: intent, context,
+each rule's verdict for each policy pass, review, order, and outcome. Rules
+before a denying rule show `pass` (they allowed or asked) and rules after it
+`not run`, because the policy stops at the first DENY. The task reads without
+taking the writer lock, so it works while the broker runs, and refuses a
+journal whose chain does not verify.
 
 ## Robinhood sign-in
 

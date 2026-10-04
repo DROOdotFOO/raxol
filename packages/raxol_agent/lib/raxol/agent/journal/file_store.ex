@@ -18,6 +18,16 @@ defmodule Raxol.Agent.Journal.FileStore do
   (`Raxol.Agent.Journal.FileStore.Writer`) and a tolerant replay reader
   (`Raxol.Agent.Journal.FileStore.Reader`). See those modules and
   `Raxol.Agent.Journal` for the durability and torn-tail-recovery contract.
+
+  ## Chained journals
+
+  `open(session_id, chain: true)` creates a hash-chained journal (see
+  `Raxol.Agent.Journal.Chain`): every record carries `prev_hash` and `hash`,
+  `meta.json` records `"chain": true`, and `HEAD` anchors the tip hash. The
+  mode is fixed when the journal is created; a chained journal stays chained
+  whatever later openers pass, and `chain: true` on an existing unchained
+  journal is refused with `{:error, :unchained_journal}`. `read/2`, `status/1`
+  and `verify/1` all walk the chain, so a broken one is never surfaced.
   """
 
   @behaviour Raxol.Agent.Journal
@@ -95,8 +105,8 @@ defmodule Raxol.Agent.Journal.FileStore do
     * `:segment_cap` — segment size cap in bytes before rotation (default 8 MiB).
     * `:immediate_sync_types` — event `type`s that force an immediate datasync
       (default `["tool_result", "approval"]`).
-    * `:sync_ceiling_ms` — batched-sync ceiling in ms (default 200).
     * `:schema_version`, `:cwd`, `:git_branch`, `:title` — recorded in `meta.json` on first open.
+    * `:chain` — `true` to create a hash-chained journal (see "Chained journals").
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
@@ -110,7 +120,7 @@ defmodule Raxol.Agent.Journal.FileStore do
     # EmitBridge's fail-closed `:journal_open_failed` arm) never fires for
     # real filesystem failures. (Found by the I1 `:open_fail` fault site in
     # test/invariants/identity_invariants_test.exs.)
-    with :ok <- validate_session_id(session_id),
+    with :ok <- preflight(session_id, dir, opts),
          :ok <- ensure_layout(dir),
          :ok <- ensure_unlocked(dir) do
       writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
@@ -188,6 +198,18 @@ defmodule Raxol.Agent.Journal.FileStore do
     :exit, reason -> {:error, {:writer_down, exit_reason(reason)}}
   end
 
+  @doc """
+  Append `events` as consecutive records in one Writer call: no other append
+  can land between them. Returns their offsets in order; nothing is appended
+  when any event fails to encode or seal.
+  """
+  @spec append_many(t(), [map()]) :: {:ok, [non_neg_integer()]} | {:error, term()}
+  def append_many(%__MODULE__{writer: pid}, events) when is_list(events) do
+    Writer.append_many(pid, events)
+  catch
+    :exit, reason -> {:error, {:writer_down, exit_reason(reason)}}
+  end
+
   @impl Raxol.Agent.Journal
   def read(%__MODULE__{dir: dir, writer: pid}, opts \\ []) do
     flush(pid)
@@ -216,9 +238,44 @@ defmodule Raxol.Agent.Journal.FileStore do
 
     case Reader.scan(dir) do
       {:ok, _} -> :ok
-      {:damaged, _} -> :damaged
+      {:damaged, before} -> {:damaged, next_offset(before)}
     end
   end
+
+  @doc """
+  Walk the hash chain of an open journal: `:ok`, `{:broken, offset}` for the
+  first record that does not verify, or `{:error, :unchained}` for a journal
+  created without `chain: true`.
+  """
+  @impl Raxol.Agent.Journal
+  def verify(%__MODULE__{dir: dir, writer: pid}) do
+    flush(pid)
+    verify_dir(dir)
+  end
+
+  @doc """
+  `verify/1` read-side, without a Writer: safe against a journal another OS
+  process is appending to, and on read-only media. Used by replay tooling.
+  """
+  @spec verify_session(String.t(), keyword()) ::
+          :ok | {:broken, non_neg_integer()} | {:error, :unchained}
+  def verify_session(session_id, opts \\ []) when is_binary(session_id),
+    do: verify_dir(session_dir(session_id, opts))
+
+  defp verify_dir(dir) do
+    if Reader.chained?(dir) do
+      case Reader.scan(dir) do
+        {:ok, _} -> :ok
+        {:damaged, before} -> {:broken, next_offset(before)}
+      end
+    else
+      {:error, :unchained}
+    end
+  end
+
+  # The offset where damage was detected: the one after the last good record.
+  defp next_offset([]), do: 1
+  defp next_offset(records), do: List.last(records)["id"] + 1
 
   # --- helpers ---------------------------------------------------------------
 
@@ -231,6 +288,21 @@ defmodule Raxol.Agent.Journal.FileStore do
         {:error, reason} -> {:halt, {:error, {:mkdir_failed, reason, dir}}}
       end
     end)
+  end
+
+  defp preflight(session_id, dir, opts) do
+    with :ok <- validate_session_id(session_id), do: ensure_chain_mode(dir, opts)
+  end
+
+  # A chained journal is chained from its first record or not at all: once
+  # meta.json exists without the flag, records were written unchained.
+  defp ensure_chain_mode(dir, opts) do
+    if Keyword.get(opts, :chain, false) == true and File.exists?(Path.join(dir, "meta.json")) and
+         not Reader.chained?(dir) do
+      {:error, :unchained_journal}
+    else
+      :ok
+    end
   end
 
   defp validate_session_id(id) when id in [".", ".."],

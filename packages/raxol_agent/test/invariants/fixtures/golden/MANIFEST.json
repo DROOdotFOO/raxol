@@ -5,7 +5,7 @@
     "frozen fixture fails CI, and these bytes are immutable history.",
     "Freeze a new version with packages/raxol_agent/scripts/freeze_golden_journal.exs, then re-bless."
   ],
-  "current_schema_version": "1.1.0",
+  "current_schema_version": "1.2.0",
   "versions": {
     "1.0.0": {
       "session": "golden-v1",
@@ -21,6 +21,14 @@
         "HEAD": "3e225008209b368041d013771dbf15ceb8fa14833c306d51b4cf1274d23c54a5",
         "journal/000001.jsonl": "047a4ba0482e7b90c25620f25b5cf6cfc1c2b1c2efa1a4326e94fa1cbe4bbaa4",
         "meta.json": "7bbee0994644dfcf3a69b746d39b85e55b9f658a26c607e5e4330e666d763756"
+      }
+    },
+    "1.2.0": {
+      "session": "golden-v12",
+      "files": {
+        "HEAD": "c556d6f32c2d12e293e8ecdf0c7ff16f7cbd8414aad851ac63d7a5f8067e5ae2",
+        "journal/000001.jsonl": "1c5deddbe7662a0b2749d851894a6abf303c6920481b892cbccbfa8d449532d4",
+        "meta.json": "17cbed6975dbe928a47b1a158aeafbd2d60b4743d27eb33d8f37f4f843f005ca"
       }
     }
   }

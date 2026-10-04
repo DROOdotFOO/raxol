@@ -154,26 +154,33 @@ defmodule Raxol.Broker.Policy do
 
   # -- Notional ---------------------------------------------------------------
 
-  defp notional(%Intent{kind: kind, notional: notional}, _context)
-       when kind in [:buy_usd, :option, :advanced],
-       do: positive(notional, :notional)
+  @doc """
+  The USD notional of `intent` as the policy computes it: the stated amount,
+  `qty` x limit or stop, or `qty` x the context quote for market orders in
+  shares. `{:error, reason}` when it cannot be computed, including for cancels.
+  The journal uses it to count what an order spent against the daily cap.
+  """
+  @spec notional(Intent.t(), Context.t()) :: {:ok, Decimal.t()} | {:error, term()}
+  def notional(%Intent{kind: kind, notional: notional}, _context)
+      when kind in [:buy_usd, :option, :advanced],
+      do: positive(notional, :notional)
 
-  defp notional(%Intent{kind: kind, qty: qty, limit: limit}, _context)
-       when kind in [:limit, :stop_limit],
-       do: product(qty, limit, :limit)
+  def notional(%Intent{kind: kind, qty: qty, limit: limit}, _context)
+      when kind in [:limit, :stop_limit],
+      do: product(qty, limit, :limit)
 
-  defp notional(%Intent{kind: :stop_market, qty: qty, stop: stop}, _context),
+  def notional(%Intent{kind: :stop_market, qty: qty, stop: stop}, _context),
     do: product(qty, stop, :stop)
 
-  defp notional(%Intent{kind: kind, qty: qty, symbol: symbol}, %Context{quotes: quotes})
-       when kind in [:buy_shares, :sell] do
+  def notional(%Intent{kind: kind, qty: qty, symbol: symbol}, %Context{quotes: quotes})
+      when kind in [:buy_shares, :sell] do
     case Map.fetch(quotes, symbol) do
       {:ok, price} -> product(qty, price, {:quote, symbol})
       :error -> {:error, {:missing_context, {:quote, symbol}}}
     end
   end
 
-  defp notional(%Intent{kind: kind}, _context), do: {:error, {:unknown_kind, kind}}
+  def notional(%Intent{kind: kind}, _context), do: {:error, {:unknown_kind, kind}}
 
   defp product(qty, price, price_field) do
     with {:ok, qty} <- positive(qty, :qty),

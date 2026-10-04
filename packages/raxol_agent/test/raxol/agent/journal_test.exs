@@ -176,7 +176,7 @@ defmodule Raxol.Agent.JournalTest do
         capture_log(fn ->
           # Interior corruption never returns the damaged content downstream.
           assert {:error, :damaged} = FileStore.read(j2)
-          assert FileStore.status(j2) == :damaged
+          assert FileStore.status(j2) == {:damaged, 2}
         end)
 
       assert log =~ "interior corruption"
@@ -202,7 +202,8 @@ defmodule Raxol.Agent.JournalTest do
       assert meta["cwd"] == "/tmp/wd"
       assert meta["title"] == "hello"
       assert is_binary(meta["created_at"])
-      assert meta["schema_version"] == "1.1.0"
+      assert meta["schema_version"] == "1.2.0"
+      refute Map.has_key?(meta, "chain")
 
       created = meta["created_at"]
       FileStore.append(j, %{"type" => "x"})
@@ -344,7 +345,7 @@ defmodule Raxol.Agent.JournalTest do
       log =
         capture_log(fn ->
           assert {:error, :damaged} = FileStore.read(j2)
-          assert FileStore.status(j2) == :damaged
+          assert FileStore.status(j2) == {:damaged, 4}
         end)
 
       assert log =~ "interior corruption"

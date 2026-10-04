@@ -248,7 +248,7 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       log =
         capture_log(fn ->
           assert {:error, :damaged} = FileStore.read(j)
-          assert FileStore.status(j) == :damaged
+          assert FileStore.status(j) == {:damaged, 2}
         end)
 
       assert log =~ "interior corruption"
@@ -441,7 +441,7 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
                "deleting segment #{victim} must mark the session damaged, " <>
                  "not silently concatenate around the hole"
 
-        assert FileStore.status(j) == :damaged
+        assert {:damaged, _offset} = FileStore.status(j)
       end)
 
       # No-delete under damage: the surviving segments are all still there.
@@ -467,7 +467,7 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
         for _ <- 1..3 do
           {:ok, j} = FileStore.open(session, base_dir: base)
           {:error, :damaged} = FileStore.read(j)
-          :damaged = FileStore.status(j)
+          {:damaged, _offset} = FileStore.status(j)
           :ok = FileStore.close(j)
         end
       end)
