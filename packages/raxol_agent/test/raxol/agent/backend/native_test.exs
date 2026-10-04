@@ -44,6 +44,23 @@ defmodule Raxol.Agent.Backend.NativeTest do
     def run(%{name: name}, _ctx), do: {:ok, %{greeting: "hi #{name}"}}
   end
 
+  # Fails the run on any line the fake CLI could not have written -- every one
+  # of its lines is JSON -- so a wrapper line reaching `parse_line/1` shows.
+  defmodule StrictDriver do
+    @behaviour Raxol.Agent.NativeHarness
+
+    @impl true
+    def executable, do: Raxol.Agent.Backend.NativeTest.FakeDriver.executable()
+    @impl true
+    def name, do: "Strict"
+    @impl true
+    def args(_config), do: ["happy"]
+
+    @impl true
+    def parse_line("{" <> _ = line), do: Raxol.Agent.Harness.StreamJson.parse_line(line)
+    def parse_line(line), do: [{:error, {:foreign_line, line}}]
+  end
+
   defp messages, do: [%{role: :user, content: "hello"}]
 
   defp run_scenario(scenario) do
@@ -81,13 +98,18 @@ defmodule Raxol.Agent.Backend.NativeTest do
     end
 
     test "a CLI that reads stdin sees EOF instead of an open pipe" do
-      # The port is never written to, so a child that reads stdin before doing
-      # its work blocks until the run times out. The short timeout keeps the
-      # regression cheap to observe: without `:in` this is `{:error, :timeout}`.
+      # The port is never written to and passes no `:in`, so a child that
+      # reads stdin blocks until the run times out unless the
+      # `SpawnedPort.spawn_spec/2` redirect is in place.
       {:ok, stream} =
         Native.stream(FakeDriver, messages(), extra_args: ["stdin_read"], timeout: 2_000)
 
       assert [{:done, %{content: "read stdin"}}] = Enum.to_list(stream)
+    end
+
+    test "the wrapper's marker line is never handed to the driver" do
+      {:ok, stream} = Native.stream(StrictDriver, messages(), [])
+      assert [{:chunk, "Hello "}, {:chunk, "world"}, {:done, _}] = Enum.to_list(stream)
     end
 
     test "returns an error when the executable is not found" do

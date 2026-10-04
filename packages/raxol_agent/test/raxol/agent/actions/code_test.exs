@@ -410,9 +410,9 @@ defmodule Raxol.Agent.Actions.CodeTest do
     end
 
     test "a command that reads stdin sees EOF instead of an open pipe" do
-      # `run_shell/4` never writes to the port, so an inherited write pipe only
-      # signals "more input is coming". Without `:in`, `cat` blocks until the
-      # deadline and comes back timed out.
+      # `run_shell/4` never writes to the port and passes no `:in`, so without
+      # the `SpawnedPort.null_stdin_command/1` redirect `cat` waits on an open
+      # pipe until the deadline and comes back timed out.
       assert {:ok, result} =
                Code.Bash.call(%{command: "cat", timeout_ms: 2_000}, %{})
 

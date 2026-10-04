@@ -1,0 +1,683 @@
+defmodule Raxol.Broker.MCP.Client do
+  @moduledoc """
+  The authenticated session to Robinhood's agent MCP server
+  (`https://agent.robinhood.com/mcp/trading`), and the only way to reach it.
+
+  It owns one unregistered `Raxol.MCP.Client`, so nothing else in the VM can
+  call the upstream around `call/3`'s authorization. Headers are fixed when an
+  MCP client connects, so a new bearer means a new inner client: on refresh
+  the old one is stopped and another is started with the new token.
+
+  ## Read-only, fail closed
+
+  `call/3` admits only the tools the server annotated `readOnlyHint: true`
+  when its tool list was captured (`get_*`, `preview_scan`, `run_scan`,
+  `search`). Everything else -- orders, cancels, reviews, watchlist, alert
+  and scan mutators, and any name not on the list -- is
+  `{:error, {:tool_denied, name}}` before any request is made. `list_tools/1`
+  returns only the allowed tools, so what is offered is what may be called.
+
+  ## Tokens
+
+  * The tool list is fetched on connect and cached.
+  * A refresh is scheduled `:refresh_skew` seconds (default 300) before
+    `expires_at`; a credential without an expiry is never refreshed early.
+    A credential already expired is refreshed before it is used.
+  * A 401 (on a call, or at connect) starts ONE refresh: concurrent callers
+    wait on it, and a 401 for a request sent with an older token is retried
+    with the current one instead of refreshing again. The rotated credential
+    is persisted with `Raxol.Broker.CredentialStore` BEFORE it is used, the
+    inner client is restarted with it, and each waiting request is retried
+    once.
+  * A 401 on the retry, or on a token fresh from a refresh that has not yet
+    succeeded once, means the grant is gone: every caller gets
+    `{:error, :unauthorized}`, the inner client is stopped (so nothing keeps
+    reconnecting with a dead token), and this process stays up answering
+    `{:error, :unauthorized}` until it is restarted with a new sign-in. A
+    refresh the server rejects (`invalid_grant`) ends the same way.
+  * A 403 is never a reason to refresh; it is returned as `{:error, {:http, 403}}`.
+  * A refresh whose rotated credential cannot be stored keeps the new
+    credential in memory without using it (the old refresh token is spent),
+    answers `{:error, {:store_failed, reason}}`, and retries the write on the
+    next request.
+
+  ## Options
+
+  `:credential` (else read from the store), `:store` (options for
+  `Raxol.Broker.CredentialStore`), `:url`, `:auth` (options for
+  `Raxol.Agent.Auth.Robinhood.refresh/2`, e.g. `:http_fn`), `:mcp` (extra
+  `Raxol.MCP.Client` spec keys such as `:resolver` or `:exchange`),
+  `:refresh_skew`, `:connect_timeout`, `:name`.
+
+  Neither `Inspect` nor `format_status/1` (what `:sys.get_status/1` and crash
+  reports print) shows the credential, and no log line here carries a token.
+  """
+
+  use GenServer
+
+  require Logger
+
+  alias Raxol.Agent.Auth.Credential
+  alias Raxol.Agent.Auth.Robinhood
+  alias Raxol.Broker.CredentialStore
+  alias Raxol.MCP.CircuitBreaker
+  alias Raxol.MCP.Client, as: Upstream
+  alias Raxol.MCP.Client.Reservation
+
+  @default_url "https://agent.robinhood.com/mcp/trading"
+  @default_skew 300
+  @default_connect_timeout 30_000
+  @default_call_timeout 60_000
+  # Observed 2026-10-03: the endpoint speaks 2025-06-18 (initialize +
+  # Mcp-Session-Id) and refuses `server/discover` with a plain-text 400, which
+  # the transport's probe correctly does not read as era evidence. Pinned, so
+  # the probe is never sent.
+  @era :legacy
+  # `Process.send_after/3` refuses delays past 2^32 - 1 ms.
+  @max_timer_ms 4_294_967_295
+
+  # The tools Robinhood's server annotated `readOnlyHint: true` in the tool
+  # list captured on 2026-10-02 (76 tools). Static and fail-closed on purpose:
+  # an unannotated or unknown tool is denied. #1174 replaces this with the
+  # generated catalog and #1178 adds the policy-gated write path.
+  @read_only_tools MapSet.new(~w(
+    get_accounts get_alert_log get_alerts get_crypto_account_onboarding_info
+    get_crypto_orders get_crypto_positions get_crypto_quotes get_currency_pairs
+    get_earnings_calendar get_earnings_results get_equity_analyst_ratings
+    get_equity_fundamentals get_equity_historicals get_equity_orders
+    get_equity_positions get_equity_price_book get_equity_quotes
+    get_equity_tax_lots get_equity_technical_indicators get_equity_tradability
+    get_financials get_index_historicals get_index_quotes get_indexes
+    get_limited_margin_upgrade_info get_option_chains get_option_historicals
+    get_option_instruments get_option_level_upgrade_info get_option_orders
+    get_option_positions get_option_quotes get_option_watchlist
+    get_pnl_trade_history get_politician_trades get_popular_watchlists
+    get_portfolio get_realized_pnl get_scanner_datapoints
+    get_scanner_filter_specs get_scans get_sec_filing get_sec_filing_facts
+    get_sec_filing_facts_catalog get_sec_filing_index get_watchlist_items
+    get_watchlists preview_scan run_scan search
+  ))
+
+  defmodule State do
+    @moduledoc false
+    defstruct [
+      :credential,
+      :inner,
+      :tables,
+      :reservations,
+      :tools,
+      :task,
+      :timer,
+      :unpersisted,
+      status: :connecting,
+      generation: 0,
+      fresh: false,
+      queue: [],
+      requests: %{},
+      config: %{}
+    ]
+
+    defimpl Inspect do
+      def inspect(state, _opts) do
+        "#Raxol.Broker.MCP.Client.State<status: #{inspect(state.status)}, " <>
+          "generation: #{state.generation}, tools: #{tool_count(state.tools)}>"
+      end
+
+      defp tool_count(nil), do: "nil"
+      defp tool_count(tools), do: Integer.to_string(length(tools))
+    end
+  end
+
+  # -- public API -------------------------------------------------------------
+
+  @doc "Start the broker session. See the moduledoc for options."
+  @spec start_link(keyword()) :: GenServer.on_start()
+  def start_link(opts) do
+    {gen_opts, opts} = Keyword.split(opts, [:name])
+    GenServer.start_link(__MODULE__, opts, gen_opts)
+  end
+
+  @doc "The allowed (read-only) tools, from the list fetched at connect."
+  @spec list_tools(GenServer.server(), timeout()) :: {:ok, [map()]} | {:error, term()}
+  def list_tools(server, timeout \\ @default_call_timeout) do
+    GenServer.call(server, :list_tools, timeout)
+  end
+
+  @doc """
+  Call `tool_name` with `args`. A tool outside the read-only allowlist is
+  `{:error, {:tool_denied, tool_name}}` and nothing is sent.
+  """
+  @spec call(GenServer.server(), String.t(), map(), timeout()) ::
+          {:ok, map()} | {:error, term()}
+  def call(server, tool_name, args, timeout \\ @default_call_timeout)
+      when is_binary(tool_name) and is_map(args) do
+    with :ok <- authorize_tool(tool_name) do
+      GenServer.call(server, {:call, tool_name, args}, timeout)
+    end
+  end
+
+  @doc """
+  The authorization `call/3` applies: `:ok` for a read-only tool,
+  `{:error, {:tool_denied, name}}` for anything else.
+  """
+  # The single decision point #1174's Catalog replaces (#1178 adds the
+  # policy-gated write path). Checked again right before the upstream call.
+  @spec authorize_tool(String.t()) :: :ok | {:error, {:tool_denied, String.t()}}
+  def authorize_tool(name) when is_binary(name) do
+    if MapSet.member?(@read_only_tools, name), do: :ok, else: {:error, {:tool_denied, name}}
+  end
+
+  # -- GenServer --------------------------------------------------------------
+
+  @impl GenServer
+  def init(opts) do
+    Process.flag(:trap_exit, true)
+
+    with {:ok, credential} <- initial_credential(opts) do
+      config = %{
+        url: Keyword.get(opts, :url, @default_url),
+        store: Keyword.get(opts, :store, []),
+        auth: Keyword.get(opts, :auth, []),
+        mcp: Keyword.get(opts, :mcp, []),
+        skew: Keyword.get(opts, :refresh_skew, @default_skew),
+        connect_timeout: Keyword.get(opts, :connect_timeout, @default_connect_timeout)
+      }
+
+      state = %State{
+        credential: credential,
+        config: config,
+        reservations: Reservation.new(:robinhood_reservations)
+      }
+
+      {:ok, state, {:continue, :start}}
+    end
+  end
+
+  defp initial_credential(opts) do
+    case Keyword.fetch(opts, :credential) do
+      {:ok, %Credential{provider: :robinhood} = credential} ->
+        {:ok, credential}
+
+      :error ->
+        case CredentialStore.fetch(Keyword.get(opts, :store, [])) do
+          {:ok, credential} -> {:ok, credential}
+          {:error, reason} -> {:stop, {:no_credential, reason}}
+        end
+    end
+  end
+
+  @impl GenServer
+  def handle_continue(:start, state) do
+    state = schedule_refresh(state)
+
+    if expired?(state),
+      do: {:noreply, start_refresh(state)},
+      else: {:noreply, connect(state)}
+  end
+
+  @impl GenServer
+  def handle_call(:list_tools, _from, %State{status: :unauthorized} = state),
+    do: {:reply, {:error, :unauthorized}, state}
+
+  def handle_call(:list_tools, _from, %State{tools: tools} = state) when is_list(tools),
+    do: {:reply, {:ok, tools}, state}
+
+  def handle_call(:list_tools, from, state),
+    do: {:noreply, admit(state, from, :list_tools, :first)}
+
+  def handle_call({:call, name, args}, from, state) do
+    case authorize_tool(name) do
+      :ok -> {:noreply, admit(state, from, {:call, name, args}, :first)}
+      denied -> {:reply, denied, state}
+    end
+  end
+
+  @impl GenServer
+  def handle_info({ref, result}, %State{task: {kind, ref}} = state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    finished(%{state | task: nil}, kind, result)
+  end
+
+  def handle_info({ref, result}, %State{requests: requests} = state)
+      when is_reference(ref) and is_map_key(requests, ref) do
+    Process.demonitor(ref, [:flush])
+    {entry, requests} = Map.pop(requests, ref)
+    {:noreply, completed(%{state | requests: requests}, entry, result)}
+  end
+
+  # A task that died never sent its result. Its exit reason is not logged:
+  # it could be an exception carrying a request.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %State{task: {kind, ref}} = state) do
+    failure = if kind == :connect, do: {:error, :upstream_down}, else: {:error, :refresh_crashed}
+    finished(%{state | task: nil}, kind, failure)
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %State{requests: requests} = state)
+      when is_map_key(requests, ref) do
+    {entry, requests} = Map.pop(requests, ref)
+    {:noreply, completed(%{state | requests: requests}, entry, {:error, :upstream_down})}
+  end
+
+  def handle_info(
+        {:refresh_due, generation},
+        %State{generation: generation, status: :ready} = state
+      ),
+      do: {:noreply, start_refresh(%{state | timer: nil})}
+
+  def handle_info({:refresh_due, _stale}, state), do: {:noreply, state}
+
+  # The inner client is linked; this process traps exits so its death is a
+  # message, not ours. A client that died unasked is replaced on next use.
+  def handle_info({:EXIT, pid, _reason}, %State{inner: pid} = state) do
+    drop_tables(state.tables)
+    {:noreply, %{state | inner: nil, tables: nil, tools: nil}}
+  end
+
+  def handle_info(_other, state), do: {:noreply, state}
+
+  @impl GenServer
+  def terminate(_reason, state) do
+    stop_inner(state)
+    :ok
+  end
+
+  @impl GenServer
+  def format_status(status) do
+    Map.new(status, fn
+      {key, value} when key in [:state, :message, :reason] -> {key, scrub(value)}
+      other -> other
+    end)
+  end
+
+  defp finished(state, :connect, result), do: {:noreply, connected(state, result)}
+  defp finished(state, :refresh, result), do: {:noreply, refreshed(state, result)}
+
+  # -- admission --------------------------------------------------------------
+
+  defp admit(%State{status: :unauthorized} = state, from, _request, _attempt) do
+    GenServer.reply(from, {:error, :unauthorized})
+    state
+  end
+
+  defp admit(%State{status: status} = state, from, request, attempt)
+       when status in [:connecting, :refreshing] do
+    enqueue(state, from, request, attempt)
+  end
+
+  defp admit(%State{unpersisted: %Credential{}} = state, from, request, attempt) do
+    state |> start_refresh() |> enqueue(from, request, attempt)
+  end
+
+  defp admit(state, from, request, attempt) do
+    cond do
+      expired?(state) -> state |> start_refresh() |> enqueue(from, request, attempt)
+      is_nil(state.inner) -> state |> connect() |> enqueue(from, request, attempt)
+      true -> send_request(state, from, request, attempt)
+    end
+  end
+
+  # Newest first; `flush_queue/1` and `fail_queue/2` restore arrival order.
+  defp enqueue(state, from, request, attempt) do
+    %{state | queue: [{from, request, attempt} | state.queue]}
+  end
+
+  defp send_request(state, from, request, attempt) do
+    inner = state.inner
+    task = Task.async(fn -> perform(inner, request) end)
+    entry = {from, request, attempt, state.generation}
+    %{state | requests: Map.put(state.requests, task.ref, entry)}
+  end
+
+  defp flush_queue(%State{queue: queue} = state) do
+    queue
+    |> Enum.reverse()
+    |> Enum.reduce(%{state | queue: []}, fn {from, request, attempt}, acc ->
+      admit(acc, from, request, attempt)
+    end)
+  end
+
+  defp fail_queue(%State{queue: queue} = state, reply) do
+    queue
+    |> Enum.reverse()
+    |> Enum.each(fn {from, _request, _attempt} -> GenServer.reply(from, reply) end)
+
+    %{state | queue: []}
+  end
+
+  # Runs in a task: the only place the upstream is called.
+  defp perform(inner, :list_tools), do: guarded(fn -> Upstream.list_tools(inner) end)
+
+  defp perform(inner, {:call, name, args}) do
+    with :ok <- authorize_tool(name) do
+      guarded(fn -> Upstream.call_tool(inner, name, args) end)
+    end
+  end
+
+  defp guarded(fun) do
+    fun.()
+  catch
+    :exit, _reason -> {:error, :upstream_down}
+  end
+
+  # -- results ----------------------------------------------------------------
+
+  defp completed(state, entry, result) do
+    state |> disposition(entry, result) |> act(state, entry, result)
+  end
+
+  defp act(:unauthorized, state, {from, _request, _attempt, _generation}, _result) do
+    GenServer.reply(from, {:error, :unauthorized})
+    state
+  end
+
+  defp act(:retry_now, state, {from, request, _attempt, _generation}, _result),
+    do: admit(state, from, request, :retry)
+
+  defp act(:retry_after_refresh, state, {from, request, _attempt, _generation}, _result),
+    do: enqueue(state, from, request, :retry)
+
+  defp act(:reply, state, {from, request, _attempt, generation}, result) do
+    GenServer.reply(from, shape(request, result))
+    mark_verified(state, generation, request, result)
+  end
+
+  defp act(:lock_out, state, {from, request, attempt, _generation}, _result),
+    do: state |> enqueue(from, request, attempt) |> lock_out()
+
+  defp act(:refresh, state, {from, request, _attempt, _generation}, _result),
+    do: state |> start_refresh() |> enqueue(from, request, :retry)
+
+  # A request sent with a token (or on an inner client) that has since been
+  # replaced, or answered while that replacement is under way, is retried on
+  # the new one rather than spending another refresh on a stale answer. A
+  # 401 on a retry, or on a token fresh from a refresh, ends the session.
+  defp disposition(state, {_from, _request, attempt, generation}, result) do
+    cond do
+      locked_out?(state, result) -> :unauthorized
+      stale?(state, generation, result) -> :retry_now
+      awaiting_refresh?(state, result) -> :retry_after_refresh
+      not unauthorized?(result) -> :reply
+      attempt == :retry or state.fresh -> :lock_out
+      true -> :refresh
+    end
+  end
+
+  defp locked_out?(state, result),
+    do: state.status == :unauthorized and match?({:error, _}, result)
+
+  defp stale?(state, generation, result), do: generation < state.generation and retryable?(result)
+  defp awaiting_refresh?(state, result), do: state.status == :refreshing and retryable?(result)
+
+  # What a burst of 401s leaves behind on the inner client it hit: the
+  # 401s themselves, the per-client breaker they opened, or the client this
+  # process stopped to replace. None of them says anything about the new token.
+  defp retryable?({:error, :upstream_down}), do: true
+  defp retryable?({:error, :breaker_open}), do: true
+  defp retryable?(result), do: unauthorized?(result)
+
+  defp shape(:list_tools, {:ok, tools}), do: {:ok, allowed(tools)}
+  defp shape(_request, result), do: result
+
+  defp mark_verified(%State{generation: generation} = state, generation, request, {:ok, value}) do
+    state = %{state | fresh: false}
+    if request == :list_tools, do: %{state | tools: allowed(value)}, else: state
+  end
+
+  defp mark_verified(state, _generation, _request, _result), do: state
+
+  defp allowed(tools) do
+    Enum.filter(tools, fn tool -> authorize_tool(tool_name(tool)) == :ok end)
+  end
+
+  defp tool_name(%{name: name}) when is_binary(name), do: name
+  defp tool_name(_tool), do: ""
+
+  defp unauthorized?({:error, {:http, 401}}), do: true
+  defp unauthorized?({:error, {:connect_failed, {:http, 401}}}), do: true
+
+  defp unauthorized?({:error, {:connect_failed, {:initialization_failed, {:http, 401}}}}),
+    do: true
+
+  defp unauthorized?(_result), do: false
+
+  # -- connecting -------------------------------------------------------------
+
+  defp connect(state) do
+    state = stop_inner(state)
+    tables = new_tables(state)
+
+    spec =
+      [
+        name: :robinhood,
+        url: state.config.url,
+        headers: [{"authorization", Credential.bearer(state.credential)}],
+        era: @era,
+        tables: tables
+      ] ++ Keyword.drop(state.config.mcp, [:name, :url, :headers, :tables, :registry])
+
+    case Upstream.start_link(spec) do
+      {:ok, pid} ->
+        timeout = state.config.connect_timeout
+        task = Task.async(fn -> await_tools(pid, timeout) end)
+
+        %{
+          state
+          | inner: pid,
+            tables: tables,
+            tools: nil,
+            status: :connecting,
+            task: {:connect, task.ref}
+        }
+
+      {:error, reason} ->
+        drop_tables(tables)
+        log_failure("could not start the MCP client", reason)
+        fail_queue(%{state | status: :ready}, {:error, reason})
+    end
+  end
+
+  # A legacy session handshakes after the probe; `await_ready/2` waits for
+  # that. A probe refused outright (a 401 at connect) is already visible as
+  # `{:connect_failed, _}` and must not be awaited: the client would sit in
+  # its reconnect backoff with the same dead token until the budget ran out.
+  defp await_tools(pid, timeout) do
+    guarded(fn ->
+      case Upstream.list_tools(pid) do
+        {:error, {:not_ready, _status}} ->
+          _ = Upstream.await_ready(pid, timeout)
+          Upstream.list_tools(pid)
+
+        other ->
+          other
+      end
+    end)
+  end
+
+  defp connected(state, {:ok, tools}) do
+    flush_queue(%{state | status: :ready, tools: allowed(tools), fresh: false})
+  end
+
+  defp connected(state, result) do
+    cond do
+      unauthorized?(result) and state.fresh ->
+        lock_out(state)
+
+      unauthorized?(result) ->
+        start_refresh(state)
+
+      true ->
+        reason = error_reason(result)
+        log_failure("could not connect", reason)
+        fail_queue(%{state | status: :ready}, {:error, reason})
+    end
+  end
+
+  defp error_reason({:error, reason}), do: reason
+  defp error_reason(_other), do: :unexpected_response
+
+  # Fresh era and breaker tables per inner client: a burst of 401s is an
+  # authorization event, and must not leave a breaker open (or a cached era
+  # that skips the probe) in front of the client started with the new token.
+  defp new_tables(state) do
+    %{
+      eras: :ets.new(:robinhood_eras, [:set, :public]),
+      breakers: CircuitBreaker.new(:robinhood_breakers),
+      reservations: state.reservations
+    }
+  end
+
+  defp stop_inner(%State{inner: nil} = state), do: state
+
+  defp stop_inner(%State{inner: pid} = state) do
+    try do
+      Upstream.stop(pid)
+    catch
+      :exit, _reason -> :ok
+    end
+
+    drop_tables(state.tables)
+    %{state | inner: nil, tables: nil}
+  end
+
+  defp drop_tables(nil), do: :ok
+
+  defp drop_tables(tables) do
+    :ets.delete(tables.eras)
+    :ets.delete(tables.breakers)
+    :ok
+  end
+
+  # -- refresh ----------------------------------------------------------------
+
+  defp start_refresh(%State{status: :refreshing} = state), do: state
+
+  defp start_refresh(state) do
+    task = Task.async(refresh_work(state))
+    %{state | status: :refreshing, task: {:refresh, task.ref}}
+  end
+
+  # The persist happens inside the task, before the result reaches this
+  # process: a rotated credential is never used before it is on disk. A
+  # credential that refreshed but failed to persist is kept (the old refresh
+  # token is spent) and the next attempt only retries the write.
+  defp refresh_work(%State{unpersisted: %Credential{} = pending, config: config}) do
+    fn -> persist(pending, config.store) end
+  end
+
+  defp refresh_work(%State{credential: credential, config: config}) do
+    fn ->
+      case Robinhood.refresh(credential, config.auth) do
+        {:ok, rotated} -> persist(rotated, config.store)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp persist(credential, store_opts) do
+    case CredentialStore.put(credential, store_opts) do
+      :ok -> {:ok, credential}
+      {:error, reason} -> {:unpersisted, credential, reason}
+    end
+  end
+
+  defp refreshed(state, {:ok, credential}) do
+    Logger.info("[Broker.MCP] Robinhood token refreshed")
+
+    %{
+      state
+      | credential: credential,
+        unpersisted: nil,
+        generation: state.generation + 1,
+        fresh: true
+    }
+    |> schedule_refresh()
+    |> connect()
+  end
+
+  defp refreshed(state, {:unpersisted, credential, reason}) do
+    log_failure("refreshed but could not store the rotated credential", reason)
+
+    %{state | unpersisted: credential, status: :ready}
+    |> fail_queue({:error, {:store_failed, reason}})
+  end
+
+  defp refreshed(state, {:error, {:token_rejected, status, _code}}) when status in [400, 401] do
+    lock_out(state)
+  end
+
+  defp refreshed(state, {:error, :no_refresh_token}), do: lock_out(state)
+
+  defp refreshed(state, {:error, reason}) do
+    log_failure("token refresh failed", reason)
+
+    %{state | status: :ready}
+    |> fail_queue({:error, {:refresh_failed, reason}})
+  end
+
+  defp lock_out(state) do
+    Logger.warning("[Broker.MCP] Robinhood rejected the credential; sign in again")
+    state = state |> stop_inner() |> cancel_timer()
+    fail_queue(%{state | status: :unauthorized, tools: nil}, {:error, :unauthorized})
+  end
+
+  defp schedule_refresh(state) do
+    state = cancel_timer(state)
+
+    case state.credential.expires_at do
+      nil ->
+        state
+
+      %DateTime{} = at ->
+        delay =
+          at
+          |> DateTime.add(-state.config.skew, :second)
+          |> DateTime.diff(DateTime.utc_now(), :millisecond)
+          |> max(0)
+          |> min(@max_timer_ms)
+
+        %{state | timer: Process.send_after(self(), {:refresh_due, state.generation}, delay)}
+    end
+  end
+
+  defp cancel_timer(%State{timer: nil} = state), do: state
+
+  defp cancel_timer(%State{timer: timer} = state) do
+    Process.cancel_timer(timer)
+    %{state | timer: nil}
+  end
+
+  defp expired?(%State{credential: credential}),
+    do: Credential.expired?(credential, DateTime.utc_now(), 0)
+
+  # Reasons here are closed sets (atoms, statuses); never a token or a body.
+  defp log_failure(what, reason) do
+    Logger.warning("[Broker.MCP] #{what}: #{inspect(reason)}")
+  end
+
+  # -- redaction --------------------------------------------------------------
+
+  defp scrub(%Credential{}), do: :redacted_credential
+
+  defp scrub(%State{} = state) do
+    %{
+      state
+      | credential: scrub(state.credential),
+        unpersisted: scrub(state.unpersisted),
+        config: Map.take(state.config, [:url, :skew, :connect_timeout]),
+        queue: length(state.queue),
+        requests: map_size(state.requests)
+    }
+  end
+
+  defp scrub(%_{} = struct), do: struct
+
+  defp scrub(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&scrub/1) |> List.to_tuple()
+
+  defp scrub([_ | _] = list) do
+    if List.improper?(list), do: list, else: Enum.map(list, &scrub/1)
+  end
+
+  defp scrub(map) when is_map(map), do: Map.new(map, fn {k, v} -> {k, scrub(v)} end)
+  defp scrub(other), do: other
+end

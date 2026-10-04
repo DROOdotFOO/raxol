@@ -71,6 +71,17 @@ defmodule Raxol.Agent.Actions.ShellJobsTest do
       assert tail.cursor == byte_size("one\ntwo\n")
     end
 
+    test "a command that reads stdin sees EOF, not an open pipe or the tty", %{owner: owner} do
+      # No `:in` on this port, so without the `SpawnedPort` redirect `read`
+      # blocks into the job's timeout on any host.
+      {:ok, job} =
+        Jobs.start("read x; echo got:$?:$x", owner: owner, timeout_ms: 10_000)
+
+      assert {:ok, done} = Jobs.await(job.job_id, owner, 10_000)
+      assert done.exit_code == 0
+      assert {:ok, %{output: "got:1:\n"}} = Jobs.poll(job.job_id, owner, 0)
+    end
+
     test "polling at the cursor is idempotent, and from 0 replays everything", %{owner: owner} do
       {:ok, job} = Jobs.start("echo hi", owner: owner, timeout_ms: 10_000)
       assert {:ok, _done} = Jobs.await(job.job_id, owner, 10_000)

@@ -411,23 +411,14 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPlugin do
   end
 
   defp run_git_command(args, repo_path) do
-    # Verify directory exists and is accessible
-    case File.exists?(repo_path) do
-      true ->
-        case System.cmd("git", args, cd: repo_path) do
-          {output, 0} ->
-            {output, 0}
-
-          {_output, exit_code} ->
-            # Get detailed error information
-            {error_output, _} =
-              System.cmd("git", args, cd: repo_path, stderr_to_stdout: true)
-
-            {error_output, exit_code}
-        end
-
-      false ->
-        {"Repository path does not exist: #{repo_path}", 1}
+    if File.exists?(repo_path) do
+      case System.cmd("git", args, cd: repo_path) do
+        {output, 0} -> {output, 0}
+        {"", exit_code} -> {"git exited with status #{exit_code}", exit_code}
+        result -> result
+      end
+    else
+      {"Repository path does not exist: #{repo_path}", 1}
     end
   end
 

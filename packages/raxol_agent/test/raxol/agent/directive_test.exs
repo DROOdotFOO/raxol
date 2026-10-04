@@ -115,10 +115,10 @@ defmodule Raxol.Agent.DirectiveTest do
                      2_000
     end
 
-    # Nothing ever writes to this port, so a command that reads stdin can only
-    # ever wait. Without `:in` the Erlang port hands it a pipe that never
-    # delivers and never closes, and a bare `cat` burns the whole timeout
-    # instead of exiting at once -- so an agent's shell call looked hung.
+    # Nothing ever writes to this port and it passes no `:in`, so without the
+    # `SpawnedPort.null_stdin_command/1` redirect a bare `cat` waits on a pipe
+    # that never closes and burns the whole timeout -- an agent's shell call
+    # looked hung.
     @tag :unix_only
     test "a command that reads stdin sees EOF instead of burning the timeout" do
       directive = Directive.shell("cat", timeout: 5_000)

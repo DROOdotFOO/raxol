@@ -77,20 +77,16 @@ defimpl Raxol.Core.Runtime.Directive.Executor,
           {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
         end)
 
-      # `:in` closes the child's stdin. Without it an Erlang port hands the
-      # command a pipe that never delivers and never closes, so anything that
-      # READS stdin -- a bare `cat`, a tool that prompts, a `read` in a script
-      # -- blocks until the timeout instead of seeing EOF. Nothing here ever
-      # writes to the port, so there is no input to lose; this is what
-      # `sh -c '...' < /dev/null` gives every other non-interactive runner.
+      # stdin is /dev/null via the script prefix, so a command that reads it
+      # sees EOF. Not `:in`: that makes the child inherit the BEAM's fd 0 (the
+      # user's tty under the TUI); see `Raxol.Agent.SpawnedPort`.
       port_opts =
         [
           :binary,
           :exit_status,
           :use_stdio,
           :stderr_to_stdout,
-          :in,
-          args: ["-c", command]
+          args: ["-c", Raxol.Agent.SpawnedPort.null_stdin_command(command)]
         ]
         |> maybe_add_port_opt(:cd, cd)
         |> maybe_add_port_opt(:env, Raxol.Core.ChildEnv.port_env(charlist_env))

@@ -44,6 +44,7 @@ defmodule Raxol.Agent.Backend.Native do
 
   alias Raxol.Agent.Harness.McpToolConfig
   alias Raxol.Agent.NativeHarness
+  alias Raxol.Agent.SpawnedPort
 
   @doc false
   defmacro __using__(macro_opts) do
@@ -138,33 +139,42 @@ defmodule Raxol.Agent.Backend.Native do
     end
   end
 
-  # `:in` closes the CLI's stdin; the prompt goes over argv via `driver.args/1`.
-  # See `Raxol.Agent.SpawnedPort` for why.
+  # The prompt goes over argv via `driver.args/1`; stdin is /dev/null through
+  # `SpawnedPort.spawn_spec/2` (see there for why not `:in`). Lines before the
+  # wrapper's marker are the shell's, never the CLI's, so they are not parsed.
   defp run_port(exe, args, cwd, env, driver, timeout, caller, ref) do
+    spec = SpawnedPort.spawn_spec(exe, args)
+
     port =
       Port.open(
-        {:spawn_executable, exe},
+        {:spawn_executable, spec.path},
         [
           :binary,
-          :in,
           :exit_status,
           :stderr_to_stdout,
           :hide,
           {:line, @line_bytes},
-          {:args, args},
-          # The vendor CLI runs its own tool loop, shell included.
-          {:env, Raxol.Core.ChildEnv.port_env(env)}
-        ] ++ cd_opt(cwd)
+          {:args, spec.args}
+        ] ++ cd_opt(cwd) ++ child_env_opts(spec.opts, env)
       )
 
-    drain(port, driver, timeout, caller, ref, %{buffer: "", content: "", usage: %{}, done: false})
+    state = %{
+      buffer: "",
+      content: "",
+      usage: %{},
+      done: false,
+      spec: spec,
+      started: spec.exec_marker == nil
+    }
+
+    drain(port, driver, timeout, caller, ref, state)
   end
 
   defp drain(port, driver, timeout, caller, ref, state) do
     receive do
       {^port, {:data, {:eol, chunk}}} ->
         line = state.buffer <> chunk
-        state = handle_line(driver, line, caller, ref, %{state | buffer: ""})
+        state = route_line(driver, line, caller, ref, %{state | buffer: ""})
         if state.done, do: close(port), else: drain(port, driver, timeout, caller, ref, state)
 
       {^port, {:data, {:noeol, chunk}}} ->
@@ -178,6 +188,12 @@ defmodule Raxol.Agent.Backend.Native do
         send(caller, {ref, {:error, :timeout}})
     end
   end
+
+  defp route_line(driver, line, caller, ref, %{started: true} = state),
+    do: handle_line(driver, line, caller, ref, state)
+
+  defp route_line(_driver, line, _caller, _ref, state),
+    do: %{state | started: SpawnedPort.exec_marker_line?(line, state.spec)}
 
   defp handle_line(driver, line, caller, ref, state) do
     driver.parse_line(line)
@@ -217,7 +233,7 @@ defmodule Raxol.Agent.Backend.Native do
     send(caller, {ref, {:error, {:exit, status}}})
   end
 
-  defp close(port), do: Raxol.Agent.SpawnedPort.close(port)
+  defp close(port), do: SpawnedPort.close(port)
 
   defp response(content, usage) do
     %{content: content, usage: usage, metadata: %{backend: :native}}
@@ -317,4 +333,18 @@ defmodule Raxol.Agent.Backend.Native do
 
   defp cd_opt(nil), do: []
   defp cd_opt(cwd), do: [{:cd, cwd}]
+
+  # The vendor CLI runs its own tool loop, shell included: no raxol secrets
+  # (`Raxol.Core.ChildEnv`). `Port.open/2` keeps only the last `:env`, so the
+  # wrapper's own (unsetting the shell's startup variables) joins the scrub in
+  # one list rather than replacing it.
+  defp child_env_opts(spec_opts, env) do
+    {wrapper_env, rest} =
+      case List.keytake(spec_opts, :env, 0) do
+        {{:env, wrapper_env}, rest} -> {wrapper_env, rest}
+        nil -> {[], spec_opts}
+      end
+
+    [{:env, Raxol.Core.ChildEnv.port_env(env ++ wrapper_env)} | rest]
+  end
 end

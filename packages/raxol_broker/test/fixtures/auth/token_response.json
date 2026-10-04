@@ -1,0 +1,10 @@
+{
+  "access_token": "fake-access-token-gen1-000000",
+  "expires_in": 810101,
+  "token_type": "Bearer",
+  "scope": "internal",
+  "refresh_token": "fake-refresh-token-gen1-000000",
+  "mfa_code": null,
+  "backup_code": null,
+  "user_uuid": "00000000-0000-4000-8000-00000000fa4e"
+}

@@ -29,10 +29,9 @@ defmodule Raxol.Agent.Actions.ShellTest do
     end
 
     test "a command that reads stdin sees EOF instead of an open pipe" do
-      # Nothing ever writes to this port, so an inherited write pipe carries
-      # nothing and only signals "more input is coming". Without `:in`, `cat`
-      # blocks until the deadline and the tool reports a timeout it never
-      # earned. The short timeout keeps the regression cheap to observe.
+      # Nothing ever writes to this port and it passes no `:in`, so without
+      # the `SpawnedPort.null_stdin_command/1` redirect `cat` waits on an open
+      # pipe until the deadline and the tool reports a timeout it never earned.
       assert {:ok, result} = Shell.run(%{command: "cat", timeout_ms: 2_000}, %{})
 
       assert result.exit_code == 0

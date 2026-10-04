@@ -1,0 +1,5 @@
+{
+  "grant_type": "refresh_token",
+  "refresh_token": "fake-refresh-token-gen1-000000",
+  "client_id": "FAKECLIENTID000000000000000000000000TEST"
+}

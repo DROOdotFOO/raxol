@@ -18,6 +18,13 @@ if Code.ensure_loaded?(Mint.HTTP) do
     a LATER probe, the one a rejected session triggers, runs in a monitored
     task like every other exchange here.
 
+    A spec that knows its server's era may pin it with `era: :modern` or
+    `era: :legacy`; nothing is probed then, at connect or after a rejected
+    session. That exists for servers that refuse `server/discover` with
+    something other than the demoting answers -- Robinhood's trading endpoint
+    answers it with a plain-text 400 -- where the probe would otherwise wedge
+    the connection on a status that is correctly not era evidence.
+
     ## Every request is a monitored task
 
     `send/3` returns as soon as the request is on its way, so the client's
@@ -59,7 +66,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
         | {:http, status} | {:redirect_refused, status} | {:too_large, limit}
         | {:timeout, :connect | :chunk | :deadline} | {:transport, atom()}
         | :session_rejected | {:task_down, atom()}
-        | :unmetered_call | {:unknown_price, tool}
+        | :unmetered_call | {:unknown_price, tool} | :invalid_era
 
     The `Inspect` implementation below redacts header values, because a
     GenServer crash report prints its state and the handle lives in it.
@@ -105,7 +112,8 @@ if Code.ensure_loaded?(Mint.HTTP) do
       prices: %{},
       metered: false,
       tasks: %{},
-      reprobed?: false
+      reprobed?: false,
+      pinned_era: nil
     ]
 
     @type t :: %__MODULE__{}
@@ -148,7 +156,8 @@ if Code.ensure_loaded?(Mint.HTTP) do
       # server, the tool list this connect fetches is what lands in the
       # model's context.
       with :ok <- Raxol.MCP.Client.Transport.permit(config, Map.fetch!(config, :url)),
-           {:ok, vetted} <- vet(config) do
+           {:ok, vetted} <- vet(config),
+           {:ok, pinned_era} <- pinned_era(config) do
         handle = %__MODULE__{
           name: Map.get(config, :name),
           vetted: vetted,
@@ -159,7 +168,8 @@ if Code.ensure_loaded?(Mint.HTTP) do
           bounds: bounds(config),
           era_ttl: era_ttl(config),
           prices: prices(config),
-          metered: metered?(config)
+          metered: metered?(config),
+          pinned_era: pinned_era
         }
 
         resolve_era(handle)
@@ -368,6 +378,18 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     # -- the era probe -----------------------------------------------------------
 
+    defp pinned_era(config) do
+      case Map.get(config, :era) do
+        nil -> {:ok, nil}
+        era when era in [:modern, :legacy] -> {:ok, era}
+        _other -> {:error, :invalid_era}
+      end
+    end
+
+    defp resolve_era(%__MODULE__{pinned_era: era} = handle) when not is_nil(era) do
+      {:ok, %{handle | era: era, version: version(era)}}
+    end
+
     defp resolve_era(handle) do
       case Era.verdict(handle.tables.eras, handle.key, handle.era_ttl) do
         {:ok, era} -> {:ok, %{handle | era: era, version: version(era)}}
@@ -456,6 +478,11 @@ if Code.ensure_loaded?(Mint.HTTP) do
     # `{:request_timeout, id}` -- for up to `deadline_ms`.
     defp reprobe(%__MODULE__{reprobed?: true} = handle, id) do
       fail(handle, id, :session_rejected)
+    end
+
+    # A pinned era has nothing to re-learn: the session is gone, the era is not.
+    defp reprobe(%__MODULE__{pinned_era: era} = handle, id) when not is_nil(era) do
+      fail(%{handle | session_id: nil, reprobed?: true}, id, :session_rejected)
     end
 
     defp reprobe(handle, id) do

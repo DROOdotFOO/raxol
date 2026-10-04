@@ -451,6 +451,35 @@ defmodule Raxol.Plugins.Testing.FrameworkHelpers do
     |> Map.to_list()
   end
 
+  @doc """
+  Initializes a deterministic Git repository for plugin integration tests.
+
+  The repository has a `main` branch, local test identity, commit signing
+  disabled, and one committed `README.md`.
+  """
+  @spec initialize_git_repository!(Path.t()) :: :ok
+  def initialize_git_repository!(repo_path) do
+    File.mkdir_p!(repo_path)
+    git!(repo_path, ["init", "--initial-branch=main"])
+    git!(repo_path, ["config", "user.email", "test@example.com"])
+    git!(repo_path, ["config", "user.name", "Test User"])
+    git!(repo_path, ["config", "commit.gpgSign", "false"])
+    File.write!(Path.join(repo_path, "README.md"), "# Test Repository")
+    git!(repo_path, ["add", "README.md"])
+    git!(repo_path, ["commit", "-m", "Initial commit"])
+    :ok
+  end
+
+  defp git!(repo_path, args) do
+    case System.cmd("git", args, cd: repo_path, stderr_to_stdout: true) do
+      {_output, 0} ->
+        :ok
+
+      {output, exit_code} ->
+        raise "git #{inspect(args)} failed in #{repo_path} with exit #{exit_code}: #{output}"
+    end
+  end
+
   def simulate_file_change(plugin_pid, path, events \\ [:modified]) do
     GenServer.cast(plugin_pid, {:file_event, path, events})
   end

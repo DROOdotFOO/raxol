@@ -1,0 +1,8 @@
+{
+  "status": 401,
+  "headers": {
+    "content-type": "text/plain",
+    "www-authenticate": "Bearer resource_metadata=\"https://agent.robinhood.com/.well-known/oauth-protected-resource/mcp/trading\""
+  },
+  "body": "authentication required"
+}

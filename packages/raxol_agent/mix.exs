@@ -50,7 +50,10 @@ defmodule RaxolAgent.MixProject do
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:stream_data, "~> 1.0", only: [:dev, :test]}
+      {:stream_data, "~> 1.0", only: [:dev, :test]},
+      # Lets the :integration ThreadLog.Postgrex suite run; the adapter
+      # itself leaves the driver to the host app.
+      {:postgrex, "~> 0.22.0", only: :test}
     ] ++ acp_dep() ++ web3_dep()
   end
 
