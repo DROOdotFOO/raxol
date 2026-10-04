@@ -459,8 +459,15 @@ defmodule Raxol.Agent.Shell.Jobs do
 
     Port.open(
       {:spawn_executable, executable},
-      [:binary, :exit_status, :stderr_to_stdout, {:args, args}, {:cd, cwd}] ++
-        extra ++ [{:env, Raxol.Core.ChildEnv.port_env(env)}]
+      [
+        {:env, Raxol.Core.ChildEnv.port_env(env)},
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        {:args, args},
+        {:cd, cwd}
+        | extra
+      ]
     )
   end
 
