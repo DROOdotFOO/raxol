@@ -591,7 +591,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
 
       File.mkdir_p!(outside)
       File.write!(Path.join(outside, "secret.txt"), "TOPSECRET value\n")
-      File.ln_s!(outside, Path.join(dir, "vendor"))
+      Raxol.Agent.Test.DirLink.ln_s!(outside, Path.join(dir, "vendor"))
 
       on_exit(fn -> File.rm_rf!(outside) end)
       %{outside: outside}

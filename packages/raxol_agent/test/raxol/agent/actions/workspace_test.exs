@@ -238,7 +238,7 @@ defmodule Raxol.Agent.Actions.WorkspaceTest do
       on_exit(fn -> File.rm_rf!(outside) end)
 
       link = Path.join(tmp, "escape_dir")
-      File.ln_s!(outside, link)
+      Raxol.Agent.Test.DirLink.ln_s!(outside, link)
 
       # The pattern is lexically INSIDE cwd (`escape_dir/*` never contains a
       # literal `../`), so the first gate lets it through -- but the walk
@@ -252,7 +252,7 @@ defmodule Raxol.Agent.Actions.WorkspaceTest do
     test "a symlink chain that stays inside the sandbox is unaffected", %{tmp: tmp} do
       File.mkdir_p!(Path.join(tmp, "sub"))
       File.write!(Path.join(tmp, "sub/inside.ex"), "")
-      File.ln_s!(Path.join(tmp, "sub"), Path.join(tmp, "inside_link"))
+      Raxol.Agent.Test.DirLink.ln_s!(Path.join(tmp, "sub"), Path.join(tmp, "inside_link"))
 
       assert {:ok, res} = Glob.call(%{pattern: "inside_link/*"})
       assert "inside_link/inside.ex" in res.matches

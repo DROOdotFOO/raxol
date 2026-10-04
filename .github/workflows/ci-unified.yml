@@ -672,6 +672,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The runner's %TEMP% is spelled with an 8.3 short name
+      # (C:\Users\RUNNER~1\...), but a symlink's target reads back with the
+      # long one (runneradmin), so a link inside a temp-dir sandbox would look
+      # like it leaves it. RUNNER_TEMP (D:\a\_temp) has no short components.
+      - name: Use a long-path temp dir
+        working-directory: .
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
