@@ -13,9 +13,14 @@ defmodule Raxol.Broker.Executor.Review do
 
   A response with `isError` set fails the review (no order). Each text
   content block is decoded as JSON; the warnings are the non-empty
-  `"alerts"` and `"warnings"` lists in it. A block that is not a JSON object
-  counts as one warning, `"unreadable review response"`, so a response this
-  stage cannot read asks a human instead of allowing.
+  `"alerts"` and `"warnings"` lists in it. Each of these counts as one
+  warning, `"unreadable review response"`, so a response this stage cannot
+  read asks a human instead of allowing:
+
+    * empty content (this also covers a server that answers only in
+      `structuredContent`, which the client does not expose);
+    * a block that is not text or not a JSON object;
+    * a JSON object with none of `"quote"`, `"alerts"` or `"warnings"`.
   """
 
   alias Raxol.Broker.Executor.Port
@@ -26,9 +31,14 @@ defmodule Raxol.Broker.Executor.Review do
 
   @doc "The review tool for `intent`: a name, `:none` for a cancel, or `{:error, {:no_adapter, kind}}`."
   @spec tool(Intent.t()) :: {:ok, String.t() | :none} | {:error, {:no_adapter, atom()}}
-  def tool(%Intent{kind: kind}) when kind in @equity_kinds, do: {:ok, "review_equity_order"}
   def tool(%Intent{kind: :cancel}), do: {:ok, :none}
-  def tool(%Intent{kind: kind}), do: {:error, {:no_adapter, kind}}
+
+  def tool(%Intent{kind: kind} = intent),
+    do: if(equity?(intent), do: {:ok, "review_equity_order"}, else: {:error, {:no_adapter, kind}})
+
+  @doc "Is `intent` an equity order (not a cancel)? The single list of equity kinds."
+  @spec equity?(Intent.t()) :: boolean()
+  def equity?(%Intent{kind: kind}), do: kind in @equity_kinds
 
   @doc """
   Run the review for `intent`. Returns `{:ok, response, warnings}` where
@@ -51,17 +61,25 @@ defmodule Raxol.Broker.Executor.Review do
 
   defp read({:ok, %{is_error: false, content: content}}, tool) when is_list(content) do
     response = %{"tool" => tool, "is_error" => false, "content" => content}
-    {:ok, response, Enum.flat_map(content, &warnings/1)}
+    {:ok, response, content_warnings(content)}
   end
 
   defp read({:ok, %{is_error: true}}, tool), do: {:error, {:review_failed, tool, :is_error}}
   defp read({:ok, _other}, tool), do: {:error, {:review_failed, tool, :invalid_response}}
   defp read({:error, reason}, tool), do: {:error, {:review_failed, tool, reason}}
 
+  defp content_warnings([]), do: [@unreadable]
+  defp content_warnings(content), do: Enum.flat_map(content, &warnings/1)
+
   defp warnings(%{"type" => "text", "text" => text}) when is_binary(text) do
     case Jason.decode(text) do
-      {:ok, %{} = body} -> listed(body["alerts"]) ++ listed(body["warnings"])
-      _ -> [@unreadable]
+      {:ok, %{} = body}
+      when is_map_key(body, "quote") or is_map_key(body, "alerts") or
+             is_map_key(body, "warnings") ->
+        listed(body["alerts"]) ++ listed(body["warnings"])
+
+      _ ->
+        [@unreadable]
     end
   end
 

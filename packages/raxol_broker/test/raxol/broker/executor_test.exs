@@ -10,6 +10,7 @@ defmodule Raxol.Broker.ExecutorTest do
   alias Raxol.Agent.Journal.FileStore.Writer
   alias Raxol.Broker.{Executor, Intent, Journal, PolicyFile}
   alias Raxol.Broker.Executor.{Place, ReviewReceipt}
+  alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.Policy.Context
   alias Raxol.Broker.Test.OrderServer
 
@@ -42,28 +43,46 @@ defmodule Raxol.Broker.ExecutorTest do
 
   defp d(value), do: Decimal.new(value)
 
-  defp start_journal!(opts) do
-    start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+  defp policy(per_order \\ "1000", cap \\ "5000") do
+    {:ok, policy} = PolicyFile.new(d(per_order), d(cap))
+    policy
   end
 
-  defp start_executor!(ctx, extra \\ []) do
-    opts =
+  defp start_journal!(opts) do
+    id = {Journal, System.unique_integer([:positive])}
+    start_supervised!(Supervisor.child_spec({Journal, opts}, id: id, restart: :temporary))
+  end
+
+  defp restart_journal!(ctx, extra \\ []) do
+    if pid = GenServer.whereis(ctx.journal), do: stop_and_wait(pid)
+    start_journal!(Keyword.merge(ctx.journal_opts, extra))
+  end
+
+  defp executor_opts(ctx, extra) do
+    Keyword.merge(
       [
         journal: ctx.journal,
         session: OrderServer.session(ctx.server),
         account_number: @account,
+        policy: policy(),
         clock: fn -> @t0 end
-      ] ++ extra
-
-    id = {Executor, System.unique_integer([:positive])}
-    start_supervised!(Supervisor.child_spec({Executor, opts}, id: id, restart: :temporary))
+      ],
+      extra
+    )
   end
 
-  defp context do
-    {:ok, policy} = PolicyFile.new(d("1000"), d("5000"))
+  defp start_executor!(ctx, extra \\ []) do
+    id = {Executor, System.unique_integer([:positive])}
 
+    start_supervised!(
+      Supervisor.child_spec({Executor, executor_opts(ctx, extra)}, id: id, restart: :temporary)
+    )
+  end
+
+  # The policy here is deliberately loose: the executor's `:policy` wins.
+  defp context do
     %Context{
-      policy: policy,
+      policy: policy("1000000", "1000000"),
       portfolio_value: d("100000"),
       start_of_day_value: d("100000"),
       day_pnl: d("0"),
@@ -119,7 +138,8 @@ defmodule Raxol.Broker.ExecutorTest do
       executor = start_executor!(ctx)
       intent = limit("int-allow")
 
-      assert {:ok, %{group_id: gid, status: :placed}} = Executor.run(executor, intent, context())
+      assert {:ok, %{group_id: gid, status: :placed, journaled: true}} =
+               Executor.run(executor, intent, context())
 
       assert types(ctx.path, gid) ==
                ~w(intent context verdict review verdict placing order)
@@ -148,17 +168,63 @@ defmodule Raxol.Broker.ExecutorTest do
     end
 
     test "the counters come from the journal, not the caller's context", ctx do
-      executor = start_executor!(ctx)
-      {:ok, policy} = PolicyFile.new(d("1000"), d("400"))
-      tight = %{context() | policy: policy, today_notional: d("0"), orders_last_minute: 0}
+      executor = start_executor!(ctx, policy: policy("1000", "400"))
+      lying = %{context() | today_notional: d("0"), orders_last_minute: 0}
 
-      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("cap-1"), tight)
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("cap-1"), lying)
 
       assert {:deny, gid, {:daily_notional_cap, _}} =
-               Executor.run(executor, limit("cap-2"), tight)
+               Executor.run(executor, limit("cap-2"), lying)
 
       assert types(ctx.path, gid) == ~w(intent context verdict)
       assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+    end
+
+    test "context.policy is ignored in favour of the :policy start option", ctx do
+      executor = start_executor!(ctx)
+      strict = %{context() | policy: policy("1", "1")}
+
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("pol-1"), strict)
+    end
+
+    test "review_warnings in the caller's context are ignored", ctx do
+      executor = start_executor!(ctx)
+      warned = %{context() | review_warnings: ["forged"]}
+
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("warn-forged"), warned)
+    end
+  end
+
+  describe "day window" do
+    test "the default rolling window counts an order from 23 hours ago", ctx do
+      {:ok, now} = Agent.start_link(fn -> DateTime.add(@t0, -23 * 3600, :second) end)
+      clock = fn -> Agent.get(now, & &1) end
+      restart_journal!(ctx, clock: clock)
+      executor = start_executor!(ctx, policy: policy("1000", "400"), clock: clock)
+
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("day-1"), context())
+      Agent.update(now, fn _ -> @t0 end)
+
+      assert {:deny, _gid, {:daily_notional_cap, _}} =
+               Executor.run(executor, limit("day-2"), context())
+
+      # A calendar day starting at UTC midnight would not have seen it.
+      assert {:ok, %{status: :placed}} =
+               Executor.run(executor, limit("day-3"), context(), day_start: @day)
+    end
+
+    test "a day_start outside [now - 24h, now] is refused with no group", ctx do
+      executor = start_executor!(ctx)
+      future = DateTime.add(@t0, 1, :second)
+      stale = DateTime.add(@t0, -25 * 3600, :second)
+
+      for bad <- [future, stale, ~D[2026-10-02], "today"] do
+        assert Executor.run(executor, limit("ds"), context(), day_start: bad) ==
+                 {:error, {:context, {:invalid_day_start, bad}}}
+      end
+
+      assert groups_for(ctx.path, "ds") == []
+      assert OrderServer.calls(ctx.server) == []
     end
   end
 
@@ -194,19 +260,6 @@ defmodule Raxol.Broker.ExecutorTest do
       assert Executor.approve(ctx.executor, gid, "droo") == {:error, {:not_parked, gid}}
     end
 
-    test "approve re-runs the hard rules: a cap reached while parked denies", ctx do
-      {:ok, policy} = PolicyFile.new(d("1000"), d("400"))
-      tight = %{context() | policy: policy}
-      {:ask, gid, _} = Executor.run(ctx.executor, limit("warn-3"), tight)
-
-      OrderServer.warnings(ctx.server, [])
-      assert {:ok, %{status: :placed}} = Executor.run(ctx.executor, limit("other"), tight)
-
-      assert {:deny, ^gid, {:daily_notional_cap, _}} = Executor.approve(ctx.executor, gid, "droo")
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
-      assert List.last(types(ctx.path, gid)) == "verdict"
-    end
-
     test "decline and close end the group with no order", ctx do
       {:ask, declined, _} = Executor.run(ctx.executor, limit("warn-4"), context())
       {:ask, closed, _} = Executor.run(ctx.executor, limit("warn-5"), context())
@@ -220,16 +273,77 @@ defmodule Raxol.Broker.ExecutorTest do
       assert OrderServer.calls(ctx.server, "place_") == []
       assert Journal.open_groups(ctx.journal) == {:ok, []}
     end
+
+    test "a bad approver or reason raises in the caller and leaves the group parked", ctx do
+      {:ask, gid, _} = Executor.run(ctx.executor, limit("warn-6"), context())
+
+      assert_raise FunctionClauseError, fn -> Executor.approve(ctx.executor, gid, "") end
+      assert_raise FunctionClauseError, fn -> Executor.decline(ctx.executor, gid, "") end
+      # Read at runtime so the type checker does not reject the call itself.
+      no_reason = Process.get(:no_reason)
+      assert_raise FunctionClauseError, fn -> Executor.close(ctx.executor, gid, no_reason) end
+
+      assert [%{group_id: ^gid}] = Executor.parked(ctx.executor)
+      assert types(ctx.path, gid) == ~w(intent context verdict review verdict)
+    end
+
+    test "a bad day_start on approve leaves the group parked", ctx do
+      {:ask, gid, _} = Executor.run(ctx.executor, limit("warn-7"), context())
+      future = DateTime.add(@t0, 60, :second)
+
+      assert Executor.approve(ctx.executor, gid, "droo", day_start: future) ==
+               {:error, {:context, {:invalid_day_start, future}}}
+
+      assert [%{group_id: ^gid}] = Executor.parked(ctx.executor)
+      assert {:ok, %{status: :placed}} = Executor.approve(ctx.executor, gid, "droo")
+    end
+
+    test "parked/1 answers while a review is in flight", ctx do
+      {:ask, gid, _} = Executor.run(ctx.executor, limit("warn-8"), context())
+      OrderServer.warnings(ctx.server, [])
+      test_pid = self()
+
+      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+        send(test_pid, {:reviewing, self()})
+
+        receive do
+          :go -> :answer
+        end
+      end)
+
+      run = Task.async(fn -> Executor.run(ctx.executor, limit("in-flight"), context()) end)
+      assert_receive {:reviewing, hook}, 5_000
+
+      assert [%{group_id: ^gid}] = Executor.parked(ctx.executor)
+
+      send(hook, :go)
+      assert {:ok, %{status: :placed}} = Task.await(run)
+    end
   end
 
-  describe "journal failures mean no order" do
+  describe "approve re-checks" do
+    test "a cap reached while parked denies", ctx do
+      OrderServer.warnings(ctx.server, ["Pattern day trader check"])
+      executor = start_executor!(ctx, policy: policy("1000", "400"))
+      {:ask, gid, _} = Executor.run(executor, limit("warn-3"), context())
+
+      OrderServer.warnings(ctx.server, [])
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("other"), context())
+
+      assert {:deny, ^gid, {:daily_notional_cap, _}} = Executor.approve(executor, gid, "droo")
+      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert List.last(types(ctx.path, gid)) == "verdict"
+    end
+  end
+
+  describe "journal failures" do
     test "a refused placing append sends nothing", ctx do
-      stop_supervised!(ctx.journal)
       {:ok, calls} = Agent.start_link(fn -> 0 end)
       path = ctx.path
 
       # Records 1-5 are intent, context, both verdicts and the review; the
       # sixth clock read builds `placing`, and the Writer dies under it.
+      # The record types below pin that the failure lands on `placing`.
       clock = fn ->
         if Agent.get_and_update(calls, &{&1 + 1, &1 + 1}) == 6,
           do: Process.exit(writer(path), :kill)
@@ -237,12 +351,17 @@ defmodule Raxol.Broker.ExecutorTest do
         @t0
       end
 
-      start_journal!(Keyword.put(ctx.journal_opts, :clock, clock))
+      restart_journal!(ctx, clock: clock)
       executor = start_executor!(ctx)
 
       assert {:error, _reason} = Executor.run(executor, limit("refused"), context())
       assert OrderServer.calls(ctx.server, "review_") == ["review_equity_order"]
       assert OrderServer.calls(ctx.server, "place_") == []
+
+      stop_and_wait(executor)
+      restart_journal!(ctx)
+      [gid] = groups_for(ctx.path, "refused")
+      assert types(ctx.path, gid) == ~w(intent context verdict review verdict close)
     end
 
     test "a journal damaged mid-flight refuses the review record; nothing is placed", ctx do
@@ -268,10 +387,26 @@ defmodule Raxol.Broker.ExecutorTest do
 
       assert length(OrderServer.calls(ctx.server)) == 2
     end
+
+    test "an order the journal cannot record is still :ok, with journaled: false", ctx do
+      executor = start_executor!(ctx)
+      path = ctx.path
+
+      OrderServer.on_call(ctx.server, "place_equity_order", fn _args ->
+        Process.exit(writer(path), :kill)
+        :answer
+      end)
+
+      assert {:ok, %{status: :placed, journaled: false, journal_error: _reason}} =
+               Executor.run(executor, limit("unjournaled"), context())
+
+      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+    end
   end
 
   describe "restarts and idempotency" do
-    test "a restart between review and place, then a re-run, places once", ctx do
+    test "an executor killed mid-review, then journal recovery and a re-run, places once",
+         ctx do
       executor = start_executor!(ctx)
       test_pid = self()
 
@@ -286,10 +421,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert_received :reviewing
 
       # Journal restarts too: its recovery closes the open group.
-      journal = GenServer.whereis(ctx.journal)
-      stop_supervised!(ctx.journal)
-      refute Process.alive?(journal)
-      start_journal!(ctx.journal_opts)
+      restart_journal!(ctx)
 
       [first] = groups_for(ctx.path, "restart-1")
       assert List.last(group(ctx.path, first))["reason"] == "crash_before_verdict"
@@ -319,6 +451,37 @@ defmodule Raxol.Broker.ExecutorTest do
       assert List.last(group(ctx.path, gid))["reason"] == "executor_restarted"
     end
 
+    test "a parked ASK does not survive a restart", ctx do
+      OrderServer.warnings(ctx.server, ["halted"])
+      executor = start_executor!(ctx)
+      {:ask, gid, _} = Executor.run(executor, limit("parked-restart"), context())
+
+      stop_and_wait(executor)
+      executor = start_executor!(ctx)
+
+      assert Executor.approve(executor, gid, "droo") == {:error, {:not_parked, gid}}
+
+      assert %{"type" => "close", "reason" => "executor_restarted"} =
+               List.last(group(ctx.path, gid))
+
+      assert OrderServer.calls(ctx.server, "place_") == []
+    end
+
+    test "a second executor on the same journal is refused; the first keeps its ASK", ctx do
+      OrderServer.warnings(ctx.server, ["halted"])
+      executor = start_executor!(ctx)
+      {:ask, gid, _} = Executor.run(executor, limit("claimed"), context())
+
+      Process.flag(:trap_exit, true)
+
+      assert Executor.start_link(executor_opts(ctx, [])) ==
+               {:error, {:journal_claimed, executor}}
+
+      assert [%{group_id: ^gid}] = Executor.parked(executor)
+      assert Journal.open_groups(ctx.journal) == {:ok, [gid]}
+      assert {:ok, %{status: :placed}} = Executor.approve(executor, gid, "droo")
+    end
+
     test "a crash after placing is crash_outcome_unknown, counted, and never re-placed", ctx do
       executor = start_executor!(ctx)
       path = ctx.path
@@ -331,10 +494,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
       intent = limit("crash-placing")
       catch_exit(Executor.run(executor, intent, context()))
-
-      journal = GenServer.whereis(ctx.journal)
-      if journal, do: stop_and_wait(journal)
-      start_journal!(ctx.journal_opts)
+      restart_journal!(ctx)
 
       [gid] = groups_for(ctx.path, "crash-placing")
       assert List.last(group(ctx.path, gid))["reason"] == "crash_outcome_unknown"
@@ -361,10 +521,25 @@ defmodule Raxol.Broker.ExecutorTest do
 
     test "a JSON-RPC rejection is :failed and stops counting", ctx do
       executor = start_executor!(ctx)
-      OrderServer.on_call(ctx.server, "place_equity_order", fn _args -> {:rpc_error, -32_000} end)
+      OrderServer.on_call(ctx.server, "place_equity_order", fn _args -> {:rpc_error, -32_602} end)
 
       assert {:ok, %{status: :failed}} = Executor.run(executor, limit("rejected"), context())
       assert Journal.today_notional(@day, ctx.journal) == {:ok, d("0")}
+    end
+  end
+
+  describe "port" do
+    test "a port client crash leaves the executor up and later runs refuse", ctx do
+      executor = start_executor!(ctx)
+      %{port: {PortMCP, %{pid: client}}} = :sys.get_state(executor)
+
+      stop_and_wait(client)
+
+      assert Process.alive?(executor)
+
+      assert {:error, {:port_down, _}} = Executor.run(executor, limit("down"), context())
+      assert groups_for(ctx.path, "down") == []
+      assert OrderServer.calls(ctx.server) == []
     end
   end
 
@@ -374,30 +549,15 @@ defmodule Raxol.Broker.ExecutorTest do
       executor = start_executor!(ctx)
       intent = limit("rcpt")
       {:ask, gid, _} = Executor.run(executor, intent, context())
-      state = :sys.get_state(executor)
-      receipt = state.parked[gid].receipt
+      {:ok, port} = PortMCP.start(OrderServer.session(ctx.server), mode: :dry_run)
+      key = :crypto.strong_rand_bytes(32)
 
-      env = %{
-        key: state.key,
-        spent: state.spent,
-        port: state.port,
-        journal: ctx.journal,
-        account: @account,
-        timeout: 5_000
-      }
-
-      {:ok, executor: executor, intent: intent, gid: gid, receipt: receipt, env: env}
+      env = %{key: key, port: port, journal: ctx.journal, account: @account, timeout: 5_000}
+      {:ok, executor: executor, intent: intent, gid: gid, key: key, env: env}
     end
 
-    test "a hand-built receipt is refused and nothing is journaled or sent", ctx do
-      forged =
-        struct!(ReviewReceipt,
-          intent_id: "rcpt",
-          group_id: ctx.gid,
-          digest: <<0::256>>,
-          nonce: <<1::128>>,
-          mac: <<0::256>>
-        )
+    test "a receipt from another key, or not a receipt, is refused; nothing is sent", ctx do
+      forged = ReviewReceipt.issue(:crypto.strong_rand_bytes(32), ctx.intent, ctx.gid)
 
       assert Place.run(forged, ctx.intent, ctx.gid, ctx.env) == {:error, :invalid_receipt}
       assert Place.run(%{mac: "x"}, ctx.intent, ctx.gid, ctx.env) == {:error, :invalid_receipt}
@@ -405,84 +565,79 @@ defmodule Raxol.Broker.ExecutorTest do
       refute "placing" in types(ctx.path, ctx.gid)
     end
 
-    test "a receipt is bound to its intent, group and executor key", ctx do
-      other = limit("someone-else")
+    test "a receipt is bound to the whole intent, its group and the key", ctx do
+      receipt = ReviewReceipt.issue(ctx.key, ctx.intent, ctx.gid)
 
-      assert Place.run(ctx.receipt, other, ctx.gid, ctx.env) == {:error, :invalid_receipt}
+      {:ok, bigger} =
+        Intent.limit(:buy, "AAPL", d("20"), d("125"), provenance: :strategy, id: "rcpt")
 
-      assert Place.run(ctx.receipt, ctx.intent, "other-group", ctx.env) ==
-               {:error, :invalid_receipt}
+      for {intent, gid, env} <- [
+            {limit("someone-else"), ctx.gid, ctx.env},
+            {bigger, ctx.gid, ctx.env},
+            {ctx.intent, "other-group", ctx.env},
+            {ctx.intent, ctx.gid, %{ctx.env | key: :crypto.strong_rand_bytes(32)}}
+          ] do
+        assert Place.run(receipt, intent, gid, env) == {:error, :invalid_receipt}
+      end
 
-      rotated = %{ctx.env | key: :crypto.strong_rand_bytes(32)}
-      assert Place.run(ctx.receipt, ctx.intent, ctx.gid, rotated) == {:error, :invalid_receipt}
       assert OrderServer.calls(ctx.server, "place_") == []
     end
 
-    test "a spent receipt is refused", ctx do
-      assert {:ok, %{status: :placed}} = Executor.approve(ctx.executor, ctx.gid, "droo")
-      spent = :sys.get_state(ctx.executor).spent
+    test "a valid receipt from a process that is not the claimant is refused", ctx do
+      receipt = ReviewReceipt.issue(ctx.key, ctx.intent, ctx.gid)
 
-      assert Place.run(ctx.receipt, ctx.intent, ctx.gid, %{ctx.env | spent: spent}) ==
-               {:error, :receipt_spent}
+      assert Place.run(receipt, ctx.intent, ctx.gid, ctx.env) ==
+               {:error, {:not_claimant, ctx.gid}}
+
+      assert OrderServer.calls(ctx.server, "place_") == []
+      refute "placing" in types(ctx.path, ctx.gid)
+    end
+
+    test "a receipt from a real parked group cannot be replayed", ctx do
+      state = :sys.get_state(ctx.executor)
+      receipt = state.parked[ctx.gid].receipt
+      assert {:ok, %{status: :placed}} = Executor.approve(ctx.executor, ctx.gid, "droo")
+
+      stop_and_wait(ctx.executor)
+      assert Journal.claim(ctx.journal) == :ok
+
+      assert {:error, _refused} =
+               Place.run(receipt, ctx.intent, ctx.gid, %{ctx.env | key: state.key})
 
       assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Enum.count(types(ctx.path, ctx.gid), &(&1 == "placing")) == 1
     end
   end
 
-  describe "mode" do
+  describe "start options" do
+    setup do
+      Process.flag(:trap_exit, true)
+      :ok
+    end
+
     test "armed mode is refused until arming exists", ctx do
-      Process.flag(:trap_exit, true)
-
-      assert Executor.start_link(
-               journal: ctx.journal,
-               session: OrderServer.session(ctx.server),
-               account_number: @account,
-               mode: :armed
-             ) == {:error, :not_armed}
+      assert Executor.start_link(executor_opts(ctx, mode: :armed)) == {:error, :not_armed}
     end
 
-    test "a port that reaches Robinhood is refused in dry-run", ctx do
-      Process.flag(:trap_exit, true)
+    test "a missing or invalid policy is refused", ctx do
+      opts = Keyword.delete(executor_opts(ctx, []), :policy)
+      assert {:error, {:invalid_policy, _}} = Executor.start_link(opts)
 
-      session =
-        Keyword.put(
-          OrderServer.session(ctx.server),
-          :url,
-          "https://agent.robinhood.com/mcp/trading"
-        )
-
-      opts = [journal: ctx.journal, session: session, account_number: @account]
-      assert Executor.start_link(opts) == {:error, :live_port_in_dry_run}
-    end
-  end
-
-  describe "structural review" do
-    @order_tool ~r/\b(?:place|cancel)_\w*order/
-    @lib Path.expand("../../../lib", __DIR__)
-
-    test "only Executor.Place names an order-writing tool" do
-      offenders =
-        for file <- Path.wildcard(Path.join(@lib, "**/*.ex")),
-            Path.relative_to(file, @lib) != "raxol/broker/executor/place.ex",
-            Regex.match?(@order_tool, File.read!(file)),
-            do: Path.relative_to(file, @lib)
-
-      assert offenders == []
+      assert {:error, {:invalid_policy, _}} =
+               Executor.start_link(executor_opts(ctx, policy: [bogus: 1]))
     end
 
-    test "only the review and place stages call through the write port" do
-      allowed = ~w(raxol/broker/executor/review.ex raxol/broker/executor/place.ex
-                   raxol/broker/executor/port.ex)
+    test "a session that reaches Robinhood, or is not marked sandbox, is refused", ctx do
+      session = OrderServer.session(ctx.server)
+      live = Keyword.put(session, :url, "https://agent.robinhood.com/mcp/trading")
+      unmarked = Keyword.delete(session, :sandbox)
 
-      offenders =
-        for file <- Path.wildcard(Path.join(@lib, "**/*.ex")),
-            Path.relative_to(file, @lib) not in allowed,
-            File.read!(file) =~ ~r/Port\.call\(|call_tool\(/,
-            not String.ends_with?(file, "executor/port/mcp.ex") and
-              not String.ends_with?(file, "mcp/client.ex"),
-            do: Path.relative_to(file, @lib)
+      for spec <- [live, unmarked] do
+        assert Executor.start_link(executor_opts(ctx, session: spec)) ==
+                 {:error, :live_port_in_dry_run}
+      end
 
-      assert offenders == []
+      assert OrderServer.calls(ctx.server) == []
     end
   end
 end

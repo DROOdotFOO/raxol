@@ -11,9 +11,12 @@ defmodule Raxol.Broker.Test.OrderServer do
     * Any other tool answers `{"order_id": ..., "state": "queued"}`.
     * `on_call/3` runs a function in the server before it answers a tool;
       returning `:hang` never answers (a timed-out call), `{:rpc_error, code}`
-      answers a JSON-RPC error, anything else answers normally.
+      answers a JSON-RPC error, `{:result, map}` answers that raw `tools/call`
+      result (for example `%{"content" => [], "isError" => false}`), anything
+      else answers normally.
 
-  Every `tools/call` is logged with its arguments for assertions.
+  Every `tools/call` is logged with its arguments for assertions, and every
+  HTTP exchange (including `initialize`) is counted by `exchanges/1`.
   """
 
   alias Raxol.Broker.Test.Fixtures
@@ -22,7 +25,7 @@ defmodule Raxol.Broker.Test.OrderServer do
 
   @spec start() :: pid()
   def start do
-    {:ok, pid} = Agent.start_link(fn -> %{warnings: [], hooks: %{}, calls: []} end)
+    {:ok, pid} = Agent.start_link(fn -> %{warnings: [], hooks: %{}, calls: [], exchanges: 0} end)
     pid
   end
 
@@ -42,7 +45,11 @@ defmodule Raxol.Broker.Test.OrderServer do
   def calls(server, prefix),
     do: for({name, _args} <- calls(server), String.starts_with?(name, prefix), do: name)
 
-  @doc "A `Raxol.Broker.Executor.Port.MCP.start/1` spec reaching this server."
+  @doc "How many HTTP exchanges reached the server, of any method."
+  @spec exchanges(pid()) :: non_neg_integer()
+  def exchanges(server), do: Agent.get(server, & &1.exchanges)
+
+  @doc "A `Raxol.Broker.Executor.Port.MCP.start/2` spec reaching this server (a sandbox)."
   @spec session(pid()) :: keyword()
   def session(server) do
     tools = Fixtures.load("tools_list")["tools"]
@@ -50,15 +57,21 @@ defmodule Raxol.Broker.Test.OrderServer do
     state =
       ReferenceServer.state(:legacy, tools: tools, observer: nil, result: &answer(server, &1, &2))
 
+    seam = ReferenceServer.seam(Legacy, state)
+
     [
       name: :broker_executor_test,
+      sandbox: true,
       url: "https://orders.test/mcp",
       era: :legacy,
       resolver: fn
         _host, :inet -> {:ok, [{93, 184, 216, 34}]}
         _host, :inet6 -> {:ok, []}
       end,
-      exchange: ReferenceServer.seam(Legacy, state)
+      exchange: fn vetted, request, opts ->
+        Agent.update(server, &%{&1 | exchanges: &1.exchanges + 1})
+        seam.(vetted, request, opts)
+      end
     ]
   end
 
@@ -78,6 +91,8 @@ defmodule Raxol.Broker.Test.OrderServer do
   end
 
   defp respond({:rpc_error, code}, _name, _args, _warnings), do: {:error, {code, "rejected"}}
+
+  defp respond({:result, result}, _name, _args, _warnings), do: {:ok, result}
 
   defp respond(_answer, name, args, warnings),
     do: {:ok, %{"content" => [text(body(name, args, warnings))], "isError" => false}}

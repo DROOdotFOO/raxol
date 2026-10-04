@@ -58,6 +58,7 @@ defmodule Mix.Tasks.Raxol.Broker.ReplayTest do
   test "prints each group's intent, per-rule verdicts, review, order and outcome in journal order",
        %{opts: opts, name: name, path: path, clock: clock} do
     start_supervised!({Journal, opts})
+    :ok = Journal.claim(name)
     ctx = context()
 
     placed = limit("2")

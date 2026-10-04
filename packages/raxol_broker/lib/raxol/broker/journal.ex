@@ -15,10 +15,27 @@ defmodule Raxol.Broker.Journal do
   with `append_to_group/2` as they happen; every broker record is synced to
   disk before the call returns.
 
+  ## Claim
+
+  One executor writes orders per journal. `claim/1` claims the journal for
+  the calling process and monitors it; the claim is released when that
+  process exits. The same process may claim again; any other process is
+  refused with `{:error, {:journal_claimed, pid}}` while the claimant lives.
+  A claim is taken even on a damaged journal; `placing` is still refused there.
+
   ## Placing
 
-  `{:placing}` is written immediately before the order call. The journal
-  prices the order from the group's own intent and context
+  `{:placing}` is written immediately before the order call, and only when
+  all of these hold (otherwise nothing is written):
+
+    * the caller is the claimant (`{:error, {:not_claimant, id}}`);
+    * the group has a `review` record and either its latest `:post_review`
+      verdict is ALLOW or it has an approved `approval` record
+      (`{:error, {:not_reviewed, id}}`);
+    * no other group for the same intent id reached `placing` with an
+      outcome other than `:failed` (`{:error, {:duplicate_intent, other_id}}`).
+
+  The journal prices the order from the group's own intent and context
   (`Raxol.Broker.Policy.notional/2`) and records that notional; it refuses an
   order it cannot price (`{:error, {:unpriced_order, reason}}`), so nothing
   unpriced is ever sent. Cancels record a `nil` notional. After `placing` the
@@ -58,9 +75,11 @@ defmodule Raxol.Broker.Journal do
   reason}` while the journal is damaged or not running; a policy context left
   `nil` then denies.
 
-  `placing_for_intent/2` answers whether any group for an intent id ever
-  reached `placing`, whatever its outcome: the executor's idempotency check,
-  so a re-run of the same intent after a restart never sends a second order.
+  `placing_for_intent/2` answers whether a group for an intent id reached
+  `placing` with an outcome other than `:failed`: the executor's idempotency
+  check, so a re-run of the same intent after a restart never sends a second
+  order, while an intent whose order definitely failed may be retried. The
+  same index backs the duplicate-intent gate on `placing`.
 
   Arming (#1179) must check `verify/1` first: it walks the chain on disk now,
   where `status/1` reports what was found at start.
@@ -145,6 +164,7 @@ defmodule Raxol.Broker.Journal do
         table: table,
         clock: Keyword.get(opts, :clock, &DateTime.utc_now/0),
         open: %{},
+        claimant: nil,
         status: :ok
       }
 
@@ -209,12 +229,16 @@ defmodule Raxol.Broker.Journal do
     * `{:review, response}`;
     * `{:approval, :approved | :declined, by}`: a human's answer to an ASK; a
       decline finishes the group as DENY;
-    * `{:placing}`: written immediately before the order call; the journal
-      records the order's notional and counts it from here, and refuses with
-      `{:unpriced_order, reason}` when a non-cancel intent cannot be priced;
+    * `{:placing}`: written immediately before the order call; refused unless
+      the caller is the claimant (`{:not_claimant, id}`), the group was
+      reviewed and allowed or approved (`{:not_reviewed, id}`), and no other
+      group placed this intent without failing (`{:duplicate_intent, other}`).
+      The journal records the order's notional and counts it from here, and
+      refuses with `{:unpriced_order, reason}` when a non-cancel intent cannot
+      be priced;
     * `{:order, :placed | :failed | :unknown, response}`: finishes the group;
       refused with `{:not_placing, id}` before `{:placing}`. `:failed` stops
-      the order counting;
+      the order counting and frees the intent for a retry;
     * `{:close, reason}`: finishes the group, as DENY before `{:placing}` and
       as an unknown outcome (still counted) after it.
 
@@ -246,6 +270,15 @@ defmodule Raxol.Broker.Journal do
   @spec append_fill(fill(), server()) :: :ok | {:error, term()}
   def append_fill(fill, server \\ __MODULE__), do: GenServer.call(server, {:append_fill, fill})
 
+  @doc """
+  Claim the journal for the calling process, the only one allowed to write
+  `{:placing}`. Released when the claimant exits; the claimant may claim
+  again. Returns `{:error, {:journal_claimed, pid}}` while another live
+  process holds the claim.
+  """
+  @spec claim(server()) :: :ok | {:error, term()}
+  def claim(server \\ __MODULE__), do: GenServer.call(server, :claim)
+
   # -- Queries ------------------------------------------------------------------
 
   @doc "USD notional of counted orders at or after `since` (both sides)."
@@ -272,8 +305,8 @@ defmodule Raxol.Broker.Journal do
   end
 
   @doc """
-  The id of a group for `intent_id` that reached `placing` (any outcome), or
-  nil when none did.
+  The id of a group for `intent_id` that reached `placing` with an outcome
+  other than `:failed`, or nil when none did.
   """
   @spec placing_for_intent(String.t(), server()) :: {:ok, group_id() | nil} | {:error, term()}
   def placing_for_intent(intent_id, server \\ __MODULE__) when is_binary(intent_id) do
@@ -333,6 +366,24 @@ defmodule Raxol.Broker.Journal do
     end
   end
 
+  def handle_call(:claim, {pid, _tag}, state) do
+    case state.claimant do
+      nil ->
+        {:reply, :ok, %{state | claimant: {pid, Process.monitor(pid)}}}
+
+      {^pid, _ref} ->
+        {:reply, :ok, state}
+
+      {other, ref} ->
+        if Process.alive?(other) do
+          {:reply, {:error, {:journal_claimed, other}}, state}
+        else
+          Process.demonitor(ref, [:flush])
+          {:reply, :ok, %{state | claimant: {pid, Process.monitor(pid)}}}
+        end
+    end
+  end
+
   def handle_call(_request, _from, %{status: status} = state) when status != :ok,
     do: {:reply, {:error, refusal(status)}, state}
 
@@ -341,13 +392,13 @@ defmodule Raxol.Broker.Journal do
     {:reply, {:ok, ids}, state}
   end
 
-  def handle_call({:append_group, intent, context, entries, opts}, _from, state) do
+  def handle_call({:append_group, intent, context, entries, opts}, {caller, _tag}, state) do
     id = Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
     seq = System.unique_integer([:monotonic])
-    group = %{intent: intent, context: context, placing: nil, finished?: false, seq: seq}
+    group = new_group(intent, context, seq)
     head = group_head(state, id, intent, context, Keyword.get(opts, :mode))
 
-    with {:ok, records, group} <- apply_entries(entries, id, group, state),
+    with {:ok, records, group} <- apply_entries(entries, id, group, gate(state, caller)),
          {:ok, _offsets} <- write(state, head ++ records) do
       {:reply, {:ok, id}, settle(state, id, group, records)}
     else
@@ -355,9 +406,9 @@ defmodule Raxol.Broker.Journal do
     end
   end
 
-  def handle_call({:append_to_group, id, entry}, _from, state) do
+  def handle_call({:append_to_group, id, entry}, {caller, _tag}, state) do
     with {:ok, group} <- fetch_open(state, id),
-         {:ok, records, group} <- apply_entries([entry], id, group, state),
+         {:ok, records, group} <- apply_entries([entry], id, group, gate(state, caller)),
          {:ok, _offsets} <- write(state, records) do
       {:reply, :ok, settle(state, id, group, records)}
     else
@@ -381,6 +432,9 @@ defmodule Raxol.Broker.Journal do
   def handle_info({:EXIT, writer, reason}, %{handle: %{writer: writer}} = state),
     do: {:stop, {:journal_writer_down, reason}, state}
 
+  def handle_info({:DOWN, ref, :process, pid, _reason}, %{claimant: {pid, ref}} = state),
+    do: {:noreply, %{state | claimant: nil}}
+
   def handle_info(message, state) do
     Logger.warning("#{inspect(__MODULE__)} ignored an unexpected message: #{inspect(message)}")
     {:noreply, state}
@@ -403,11 +457,30 @@ defmodule Raxol.Broker.Journal do
   defp mode_name(:dry_run), do: "dry_run"
   defp mode_name(:armed), do: "armed"
 
+  defp new_group(intent, context, seq) do
+    %{
+      intent: intent,
+      context: context,
+      placing: nil,
+      finished?: false,
+      seq: seq,
+      reviewed?: false,
+      post_action: nil,
+      approved?: false
+    }
+  end
+
+  # The state `entry_record/4` sees: whether the calling process holds the claim.
+  defp gate(state, caller),
+    do: Map.put(state, :claimant?, match?({^caller, _ref}, state.claimant))
+
   # Validate entries in order against the group's state and build their
   # records. The group state carries what the rules need: the group's own
-  # intent and context (to price `placing`), its `placing` record (an order
-  # response needs one; nothing but an order response or a close may follow
-  # it) and whether a terminal record has been written.
+  # intent and context (to price `placing`), whether it was reviewed, its
+  # latest post-review action and whether an ASK was approved (to gate
+  # `placing`), its `placing` record (an order response needs one; nothing but
+  # an order response or a close may follow it) and whether a terminal record
+  # has been written.
   defp apply_entries(entries, id, group, state) do
     Enum.reduce_while(entries, {:ok, [], group}, fn
       _entry, {:ok, _records, %{finished?: true}} ->
@@ -437,21 +510,27 @@ defmodule Raxol.Broker.Journal do
         "rule_ids" => Enum.map(Policy.rule_ids(), &Atom.to_string/1)
       }
 
-      {:ok, record(state, "verdict", id, fields), finish_if(group, encoded["action"] == "deny")}
+      group = finish_if(group, encoded["action"] == "deny")
+      group = if phase == :post_review, do: %{group | post_action: encoded["action"]}, else: group
+      {:ok, record(state, "verdict", id, fields), group}
     end
   end
 
-  defp entry_record({:review, response}, id, group, state) when is_map(response),
-    do: {:ok, record(state, "review", id, %{"response" => Codec.term(response)}), group}
+  defp entry_record({:review, response}, id, group, state) when is_map(response) do
+    record = record(state, "review", id, %{"response" => Codec.term(response)})
+    {:ok, record, %{group | reviewed?: true}}
+  end
 
   defp entry_record({:approval, decision, by}, id, group, state)
        when decision in @decisions and is_binary(by) and by != "" do
     fields = %{"decision" => Atom.to_string(decision), "by" => by}
+    group = %{group | approved?: group.approved? or decision == :approved}
     {:ok, record(state, "approval", id, fields), finish_if(group, decision == :declined)}
   end
 
   defp entry_record({:placing}, id, group, state) do
-    with {:ok, notional} <- placing_notional(group.intent, group.context) do
+    with :ok <- placing_allowed(id, group, state),
+         {:ok, notional} <- placing_notional(group.intent, group.context) do
       record = record(state, "placing", id, %{"notional" => notional})
       {:ok, record, %{group | placing: record}}
     end
@@ -477,6 +556,18 @@ defmodule Raxol.Broker.Journal do
   defp entry_record(entry, _id, _group, _state), do: {:error, {:invalid_entry, entry}}
 
   defp finish_if(group, finished?), do: %{group | finished?: finished?}
+
+  defp placing_allowed(id, _group, %{claimant?: false}), do: {:error, {:not_claimant, id}}
+
+  defp placing_allowed(id, %{reviewed?: true} = group, state)
+       when group.post_action == "allow" or group.approved? do
+    case :ets.lookup(state.table, {:intent_placing, group.intent.id}) do
+      [{_key, other}] when other != id -> {:error, {:duplicate_intent, other}}
+      _ -> :ok
+    end
+  end
+
+  defp placing_allowed(id, _group, _state), do: {:error, {:not_reviewed, id}}
 
   # The notional recorded on `placing`: a decimal string, or nil for a cancel,
   # which never counts. Anything else that cannot be priced is not sent.
@@ -510,6 +601,7 @@ defmodule Raxol.Broker.Journal do
         end
 
       %{"type" => "order", "status" => "failed"}, state ->
+        :ets.delete_object(state.table, {{:intent_placing, group.intent.id}, id})
         uncount(state, id, group.placing)
 
       _record, state ->
@@ -604,6 +696,9 @@ defmodule Raxol.Broker.Journal do
   defp index_intents(table, groups) do
     Enum.reduce_while(groups, :ok, fn
       %Groups{placing: nil}, :ok ->
+        {:cont, :ok}
+
+      %Groups{order: %{"status" => "failed"}}, :ok ->
         {:cont, :ok}
 
       %Groups{intent: %{"id" => intent_id}, id: id}, :ok when is_binary(intent_id) ->

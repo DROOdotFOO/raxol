@@ -24,8 +24,12 @@ defmodule Raxol.Broker.JournalTest do
 
   defp d(value), do: Decimal.new(value)
 
+  # Start a journal and claim it for the test process, the only writer of
+  # `placing`.
   defp start!(opts) do
-    start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+    pid = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+    :ok = Journal.claim(opts[:name])
+    pid
   end
 
   defp at(clock, datetime), do: Agent.update(clock, fn _ -> datetime end)
@@ -197,14 +201,19 @@ defmodule Raxol.Broker.JournalTest do
       {:ok, intent} = Intent.buy_shares("MSFT", d("3"), provenance: :strategy)
       ctx = context()
       {:ok, id} = Journal.open_group(intent, ctx, name)
+      reviewed = [{:review, %{"warnings" => []}}, {:verdict, :post_review, {:allow, intent}}]
+      Enum.each(reviewed, &(:ok = Journal.append_to_group(id, &1, name)))
 
       assert {:error, {:unpriced_order, _reason}} =
                Journal.append_to_group(id, {:placing}, name)
 
       assert {:error, {:unpriced_order, _reason}} =
-               Journal.append_group(%{intent: intent, context: ctx, entries: [{:placing}]}, name)
+               Journal.append_group(
+                 %{intent: intent, context: ctx, entries: Enum.concat(reviewed, [{:placing}])},
+                 name
+               )
 
-      assert Enum.map(records(path), & &1["type"]) == ~w(intent context)
+      assert Enum.map(records(path), & &1["type"]) == ~w(intent context review verdict)
 
       assert Journal.append_to_group(id, {:order, :placed, %{}}, name) ==
                {:error, {:not_placing, id}}
@@ -227,6 +236,181 @@ defmodule Raxol.Broker.JournalTest do
       end
 
       assert :ok = Journal.append_to_group(id, {:order, :placed, %{}}, name)
+    end
+
+    test "placing is refused for a process that does not hold the claim",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      intent = limit("2")
+      ctx = context()
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+
+      placed_entries(intent, ctx)
+      |> Enum.take(3)
+      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
+
+      before = length(records(path))
+      other = Task.async(fn -> Journal.append_to_group(id, {:placing}, name) end)
+      assert Task.await(other) == {:error, {:not_claimant, id}}
+
+      group = %{intent: limit("2"), context: ctx, entries: placed_entries(limit("2"), ctx)}
+      other = Task.async(fn -> Journal.append_group(group, name) end)
+      assert {:error, {:not_claimant, _}} = Task.await(other)
+
+      assert length(records(path)) == before
+      assert :ok = Journal.append_to_group(id, {:placing}, name)
+    end
+
+    test "placing is refused without a review, and on an ASK without approval",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      ctx = context()
+      intent = limit("2")
+      allow = Policy.evaluate(intent, ctx)
+
+      # An ALLOW with no review record.
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+      :ok = Journal.append_to_group(id, {:verdict, :pre_review, allow}, name)
+      :ok = Journal.append_to_group(id, {:verdict, :post_review, allow}, name)
+      assert Journal.append_to_group(id, {:placing}, name) == {:error, {:not_reviewed, id}}
+
+      # A review with no post-review verdict.
+      {:ok, id} = Journal.open_group(limit("2"), ctx, name)
+      :ok = Journal.append_to_group(id, {:review, %{"warnings" => []}}, name)
+      assert Journal.append_to_group(id, {:placing}, name) == {:error, {:not_reviewed, id}}
+
+      # An ASK, reviewed, never approved.
+      {:ok, ask_intent} = Intent.limit(:buy, "AAPL", d("2"), d("125"), provenance: :llm)
+      {:ask, _} = ask = Policy.evaluate(ask_intent, ctx)
+
+      entries = [
+        {:verdict, :pre_review, ask},
+        {:review, %{"warnings" => []}},
+        {:verdict, :post_review, ask},
+        {:placing}
+      ]
+
+      assert {:error, {:not_reviewed, _}} =
+               Journal.append_group(%{intent: ask_intent, context: ctx, entries: entries}, name)
+
+      refute Enum.any?(records(path), &(&1["type"] == "placing"))
+    end
+
+    test "a reviewed ASK with an approval may be placed", %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      ctx = context()
+      {:ok, intent} = Intent.limit(:buy, "AAPL", d("2"), d("125"), provenance: :llm)
+      {:ask, _} = ask = Policy.evaluate(intent, ctx)
+
+      entries = [
+        {:verdict, :pre_review, ask},
+        {:review, %{"warnings" => []}},
+        {:verdict, :post_review, ask},
+        {:approval, :approved, "operator"},
+        {:placing}
+      ]
+
+      assert {:ok, id} =
+               Journal.append_group(%{intent: intent, context: ctx, entries: entries}, name)
+
+      assert %{"type" => "placing", "group_id" => ^id} = List.last(records(path))
+    end
+
+    test "a second placing for the same intent is refused until the first fails",
+         %{opts: opts} do
+      name = opts[:name]
+      start!(opts)
+      ctx = context()
+      intent = limit("2")
+      first = in_flight!(name, intent, ctx)
+
+      {:ok, second} = Journal.open_group(intent, ctx, name)
+
+      placed_entries(intent, ctx)
+      |> Enum.take(3)
+      |> Enum.each(&(:ok = Journal.append_to_group(second, &1, name)))
+
+      assert Journal.append_to_group(second, {:placing}, name) ==
+               {:error, {:duplicate_intent, first}}
+
+      assert {:error, {:duplicate_intent, ^first}} =
+               Journal.append_group(
+                 %{intent: intent, context: ctx, entries: placed_entries(intent, ctx)},
+                 name
+               )
+
+      assert Journal.placing_for_intent(intent.id, name) == {:ok, first}
+
+      :ok = Journal.append_to_group(first, {:order, :failed, %{"error" => "rejected"}}, name)
+      assert Journal.placing_for_intent(intent.id, name) == {:ok, nil}
+
+      assert :ok = Journal.append_to_group(second, {:placing}, name)
+      assert Journal.placing_for_intent(intent.id, name) == {:ok, second}
+    end
+
+    test "the intent index rebuilt on start skips failed orders", %{opts: opts} do
+      name = opts[:name]
+      start!(opts)
+      ctx = context()
+      failed = limit("2")
+      placed = limit("2")
+
+      entries =
+        List.replace_at(placed_entries(failed, ctx), -1, {:order, :failed, %{"error" => "no"}})
+
+      {:ok, _} = Journal.append_group(%{intent: failed, context: ctx, entries: entries}, name)
+
+      {:ok, placed_id} =
+        Journal.append_group(
+          %{intent: placed, context: ctx, entries: placed_entries(placed, ctx)},
+          name
+        )
+
+      stop_supervised!(name)
+      start!(opts)
+
+      assert Journal.placing_for_intent(failed.id, name) == {:ok, nil}
+      assert Journal.placing_for_intent(placed.id, name) == {:ok, placed_id}
+
+      assert {:ok, _} =
+               Journal.append_group(
+                 %{intent: failed, context: ctx, entries: placed_entries(failed, ctx)},
+                 name
+               )
+
+      assert {:error, {:duplicate_intent, ^placed_id}} =
+               Journal.append_group(
+                 %{intent: placed, context: ctx, entries: placed_entries(placed, ctx)},
+                 name
+               )
+    end
+
+    test "a second live claimant is refused; the claim is released when the claimant dies",
+         %{opts: opts} do
+      name = opts[:name]
+      start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+      parent = self()
+
+      claimant =
+        spawn(fn ->
+          send(parent, {:claimed, Journal.claim(name), Journal.claim(name)})
+          receive do: (:stop -> :ok)
+        end)
+
+      assert_receive {:claimed, :ok, :ok}
+      assert Journal.claim(name) == {:error, {:journal_claimed, claimant}}
+
+      ref = Process.monitor(claimant)
+      send(claimant, :stop)
+      assert_receive {:DOWN, ^ref, :process, ^claimant, _}
+
+      # The claimant is dead, so the claim is free even if the journal has
+      # not yet handled its :DOWN.
+      assert Journal.claim(name) == :ok
+      assert Journal.claim(name) == :ok
     end
 
     test "a float in an order response is recorded as a string and the order counts",
