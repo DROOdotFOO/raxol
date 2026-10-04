@@ -20,7 +20,9 @@ defmodule Raxol.Agent.ThreadEvent do
   | `:policy_result` | `%{policy, decision, ...}` | record a policy outcome (cache hit, retry attempt, timeout, ...) |
 
   Adapters MAY round-trip arbitrary additional kinds; the canonical
-  set above is what the framework emits.
+  set above is what the framework emits. An adapter that stores kinds
+  as text returns a custom kind as a string when its atom does not
+  exist in the reading VM.
 
   ## Metadata
 
@@ -39,6 +41,7 @@ defmodule Raxol.Agent.ThreadEvent do
           | :sandbox_deny
           | :policy_result
           | atom()
+          | String.t()
 
   @type t :: %__MODULE__{
           thread_id: binary(),
@@ -58,6 +61,25 @@ defmodule Raxol.Agent.ThreadEvent do
     payload: nil,
     metadata: %{}
   ]
+
+  @canonical_kinds [
+    :directive,
+    :tool_call,
+    :tool_result,
+    :message,
+    :state_snapshot,
+    :summary,
+    :sandbox_deny,
+    :policy_result
+  ]
+
+  @doc """
+  The canonical kinds the framework emits (see "Kinds"). Adapters that
+  persist kinds as strings decode against this list so the atoms exist
+  regardless of which modules happen to be loaded.
+  """
+  @spec canonical_kinds() :: [atom()]
+  def canonical_kinds, do: @canonical_kinds
 
   @doc """
   Construct a ThreadEvent. Used by adapters when materializing

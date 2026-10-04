@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- **`raxol_agent`: `ThreadLog.Postgrex` reads canonical event kinds in a fresh VM.** Rows were decoded with `String.to_existing_atom/1`, so reading a `tool_call`, `state_snapshot` or other canonical kind raised `ArgumentError` until some loaded module happened to name the atom. Canonical kinds now decode through a literal map built from the new `ThreadEvent.canonical_kinds/0`; a custom kind decodes to its atom if one exists and otherwise stays a string, without minting atoms. Same bug class as #1196. The `:integration` suite can now run (`postgrex` is a test-only dependency and tables are created one statement at a time); a regression test reads rows from a child VM that has not interned the kinds.
+
 - **Git integration tests isolate repository policy and Git commands run once.** Plugin test repositories now create a deterministic `main` branch, disable commit signing locally, and fail immediately when setup fails instead of cascading from an unborn `HEAD`. `GitIntegrationPlugin` executes each command once and keeps stderr separate so warnings cannot corrupt successful stdout parsing; failed commands return their stdout or exit status while Git writes diagnostics to stderr.
 
 - **`raxol_agent`: reading `~/.raxol/providers.json` no longer depends on which modules are loaded (#1196).** `Credentials.sanitize_entry/1` turned the `~w(op_ref model base_url)` field names into atoms with `String.to_existing_atom/1`, which raised when no loaded module had named `:op_ref` yet, so `fetch/1`, `delete/1`, `put/2` and `load/0` could crash depending on load order. The fields now map to literal atoms. A regression reads the store from a fresh BEAM where only `Credentials` is loaded.
