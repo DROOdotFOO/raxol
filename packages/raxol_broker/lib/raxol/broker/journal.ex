@@ -58,6 +58,10 @@ defmodule Raxol.Broker.Journal do
   reason}` while the journal is damaged or not running; a policy context left
   `nil` then denies.
 
+  `placing_for_intent/2` answers whether any group for an intent id ever
+  reached `placing`, whatever its outcome: the executor's idempotency check,
+  so a re-run of the same intent after a restart never sends a second order.
+
   Arming (#1179) must check `verify/1` first: it walks the chain on disk now,
   where `status/1` reports what was found at start.
   """
@@ -182,10 +186,21 @@ defmodule Raxol.Broker.Journal do
   @doc """
   Write the intent and its context snapshot, durable before any review or
   order call. Returns the new group's id.
+
+  `opts[:mode]` (`:dry_run` or `:armed`) is stored on the intent record and
+  shown by replay; it is omitted when not given.
   """
-  @spec open_group(Intent.t(), Context.t(), server()) :: {:ok, group_id()} | {:error, term()}
-  def open_group(%Intent{} = intent, %Context{} = context, server \\ __MODULE__),
-    do: GenServer.call(server, {:append_group, intent, context, []})
+  @spec open_group(Intent.t(), Context.t(), server(), keyword()) ::
+          {:ok, group_id()} | {:error, term()}
+  def open_group(%Intent{} = intent, %Context{} = context, server \\ __MODULE__, opts \\ []) do
+    case Keyword.get(opts, :mode) do
+      mode when mode in [nil, :dry_run, :armed] ->
+        GenServer.call(server, {:append_group, intent, context, [], opts})
+
+      mode ->
+        {:error, {:invalid_mode, mode}}
+    end
+  end
 
   @doc """
   Add one record to an open group (see `t:entry/0`):
@@ -223,7 +238,7 @@ defmodule Raxol.Broker.Journal do
         server
       )
       when is_list(entries),
-      do: GenServer.call(server, {:append_group, intent, context, entries})
+      do: GenServer.call(server, {:append_group, intent, context, entries, []})
 
   def append_group(other, _server), do: {:error, {:invalid_group, other}}
 
@@ -255,6 +270,26 @@ defmodule Raxol.Broker.Journal do
   def realized_pnl_today(%DateTime{} = since, server \\ __MODULE__) do
     with :ok <- healthy(server), do: select(fn -> {:ok, sum(server, :fill, to_us(since))} end)
   end
+
+  @doc """
+  The id of a group for `intent_id` that reached `placing` (any outcome), or
+  nil when none did.
+  """
+  @spec placing_for_intent(String.t(), server()) :: {:ok, group_id() | nil} | {:error, term()}
+  def placing_for_intent(intent_id, server \\ __MODULE__) when is_binary(intent_id) do
+    with :ok <- healthy(server), do: select(fn -> intent_placing(server, intent_id) end)
+  end
+
+  defp intent_placing(table, intent_id) do
+    case :ets.lookup(table, {:intent_placing, intent_id}) do
+      [{_key, group_id}] -> {:ok, group_id}
+      [] -> {:ok, nil}
+    end
+  end
+
+  @doc "Ids of the groups still open (no terminal record), oldest first."
+  @spec open_groups(server()) :: {:ok, [group_id()]} | {:error, term()}
+  def open_groups(server \\ __MODULE__), do: GenServer.call(server, :open_groups)
 
   @doc """
   What start-up recovery found: `:ok`, `{:damaged, offset}`, or `{:error,
@@ -301,10 +336,16 @@ defmodule Raxol.Broker.Journal do
   def handle_call(_request, _from, %{status: status} = state) when status != :ok,
     do: {:reply, {:error, refusal(status)}, state}
 
-  def handle_call({:append_group, intent, context, entries}, _from, state) do
+  def handle_call(:open_groups, _from, state) do
+    ids = state.open |> Enum.sort_by(fn {_id, group} -> group.seq end) |> Enum.map(&elem(&1, 0))
+    {:reply, {:ok, ids}, state}
+  end
+
+  def handle_call({:append_group, intent, context, entries, opts}, _from, state) do
     id = Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
-    group = %{intent: intent, context: context, placing: nil, finished?: false}
-    head = group_head(state, id, intent, context)
+    seq = System.unique_integer([:monotonic])
+    group = %{intent: intent, context: context, placing: nil, finished?: false, seq: seq}
+    head = group_head(state, id, intent, context, Keyword.get(opts, :mode))
 
     with {:ok, records, group} <- apply_entries(entries, id, group, state),
          {:ok, _offsets} <- write(state, head ++ records) do
@@ -347,12 +388,20 @@ defmodule Raxol.Broker.Journal do
 
   # -- Entries ------------------------------------------------------------------
 
-  defp group_head(state, id, intent, context) do
+  defp group_head(state, id, intent, context, mode) do
+    intent_fields = %{"intent" => Codec.encode_intent(intent)}
+
+    intent_fields =
+      if mode, do: Map.put(intent_fields, "mode", mode_name(mode)), else: intent_fields
+
     [
-      record(state, "intent", id, %{"intent" => Codec.encode_intent(intent)}),
+      record(state, "intent", id, intent_fields),
       record(state, "context", id, %{"context" => Codec.encode_context(context)})
     ]
   end
+
+  defp mode_name(:dry_run), do: "dry_run"
+  defp mode_name(:armed), do: "armed"
 
   # Validate entries in order against the group's state and build their
   # records. The group state carries what the rules need: the group's own
@@ -453,6 +502,8 @@ defmodule Raxol.Broker.Journal do
 
     Enum.reduce(records, state, fn
       %{"type" => "placing"} = placing, state ->
+        :ets.insert(state.table, {{:intent_placing, group.intent.id}, id})
+
         case index_placing(state.table, id, placing) do
           :ok -> state
           {:error, reason} -> set_status(state, {:error, reason})
@@ -526,6 +577,7 @@ defmodule Raxol.Broker.Journal do
 
     with {:ok, _offsets} <- write(state, crash_closes(state, groups)),
          :ok <- index_groups(state.table, Enum.filter(groups, &Groups.counts?/1)),
+         :ok <- index_intents(state.table, groups),
          :ok <- index_fills(state.table, fills) do
       set_status(state, :ok)
     else
@@ -546,6 +598,20 @@ defmodule Raxol.Broker.Journal do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
       end
+    end)
+  end
+
+  defp index_intents(table, groups) do
+    Enum.reduce_while(groups, :ok, fn
+      %Groups{placing: nil}, :ok ->
+        {:cont, :ok}
+
+      %Groups{intent: %{"id" => intent_id}, id: id}, :ok when is_binary(intent_id) ->
+        :ets.insert(table, {{:intent_placing, intent_id}, id})
+        {:cont, :ok}
+
+      %Groups{id: id}, :ok ->
+        {:halt, {:error, {:unindexable_group, id, :intent}}}
     end)
   end
 
