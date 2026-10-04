@@ -154,6 +154,9 @@ defmodule Raxol.Agent.Backend.NativeTest do
   end
 
   describe ":env and :mcp_env" do
+    # Same `#!/bin/sh` fake CLI as stream/3.
+    @describetag :unix_only
+
     setup do
       previous = System.get_env("RAXOL_SHARE_SECRET")
       System.put_env("RAXOL_SHARE_SECRET", "probe-not-a-secret")

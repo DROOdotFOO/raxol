@@ -74,6 +74,8 @@ defmodule Raxol.Agent.Harness.McpToolConfigTest do
       assert [%{"name" => "greet"}] = manifest["tools"]
     end
 
+    # POSIX permission bits; Windows reports 0o777 whatever the ACL says.
+    @tag :unix_only
     test "the default directory is closed to other users, as the env may hold a key" do
       assert {:ok, config_path} =
                McpToolConfig.write(actions: [Greet], command: "mix", env: %{"K" => "v"})
