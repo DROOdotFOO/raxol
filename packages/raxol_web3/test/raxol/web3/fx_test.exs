@@ -417,7 +417,13 @@ defmodule Raxol.Web3.FXTest do
 
       exchange = fn _vetted, _request, _opts ->
         send(test, :sleuth_request)
-        body = Agent.get_and_update(agent, fn [b | rest] -> {b, rest ++ [b]} end)
+
+        body =
+          Agent.get_and_update(agent, fn
+            [b] -> {b, [b]}
+            [b | rest] -> {b, rest}
+          end)
+
         {:ok, %{status: 200, headers: [], body: body}}
       end
 

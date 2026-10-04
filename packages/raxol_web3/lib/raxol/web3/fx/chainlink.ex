@@ -246,14 +246,16 @@ defmodule Raxol.Web3.FX.Chainlink do
         :ok
 
       {:ok, proxy} ->
-        with {:ok, %{answer: status, started_at: started_at}} <-
-               latest_round(chainlink, url, proxy) do
-          if status == 0 and now - started_at >= @sequencer_grace_s,
-            do: :ok,
-            else: {:error, :sequencer_down}
-        end
+        with {:ok, round} <- latest_round(chainlink, url, proxy), do: sequencer_up(round, now)
     end
   end
+
+  # Up (answer 0) and past the grace period since it last came back.
+  defp sequencer_up(%{answer: 0, started_at: started_at}, now)
+       when now - started_at >= @sequencer_grace_s,
+       do: :ok
+
+  defp sequencer_up(_round, _now), do: {:error, :sequencer_down}
 
   defp latest_round(chainlink, url, proxy) do
     with {:ok, hex} <- call(chainlink, url, %{proxy: proxy}, @latest_round_data, :round) do
