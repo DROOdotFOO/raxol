@@ -115,6 +115,61 @@ Caps are inclusive. A rule that needs a context field left `nil` denies; an
 invalid policy or a context field of the wrong type denies before any rule
 runs. Untrusted provenance always asks. Cancels are always allowed.
 
+## Executor
+
+`Raxol.Broker.Executor` is the one path every order takes: policy, the
+order's `review_*` tool, policy again with the review's warnings, then
+`placing` and the order tool, each step journaled before the next.
+
+```elixir
+{:ok, executor} =
+  Raxol.Broker.Executor.start_link(
+    journal: Raxol.Broker.Journal,
+    session: mcp_client_spec,
+    account_number: "..."
+  )
+
+{:ok, intent} = Raxol.Broker.Intent.limit(:buy, "AAPL", qty, price, provenance: :strategy, id: "dip-2026-10-02")
+
+case Raxol.Broker.Executor.run(executor, intent, context) do
+  {:ok, %{group_id: id, status: :placed | :failed | :unknown}} -> :sent
+  {:ok, :duplicate} -> :already_placed
+  {:ask, token, prompts} -> Raxol.Broker.Executor.approve(executor, token, "operator")
+  {:deny, id, {rule_id, detail}} -> :denied
+  {:error, reason} -> :nothing_sent
+end
+```
+
+* **Review is mandatory.** `Raxol.Broker.Executor.Place` is the only module
+  that names an order tool, and it refuses without a `ReviewReceipt` issued
+  by the review stage for the same intent and group (an HMAC under a key the
+  executor generates at start). A test greps the package for order tool
+  names outside `Place`.
+* **Any review warning asks.** A warning turns ALLOW into ASK
+  (`:review_warning`); a review response that cannot be read counts as one.
+  `approve/3` journals the approval, reads the counters again and re-runs the
+  policy: a cap reached while the ASK waited still denies. `decline/3` and
+  `close/3` end the group.
+* **Counters come from the journal.** `today_notional` and
+  `orders_last_minute` in the caller's context are replaced with the
+  journal's at decision time, and decisions are serialized, so two callers
+  cannot both pass the daily cap.
+* **Idempotent.** An intent id that already reached `placing` returns
+  `{:ok, :duplicate}` and sends nothing, across restarts. Each place carries
+  a `ref_id` derived from the intent id, which Robinhood deduplicates on.
+  Give intents a stable `:id` for this to work.
+* **Fail closed.** Any journal error, review error or unsupported order kind
+  means no order. A place call that times out is journaled `:unknown` and
+  keeps counting. A group parked before an executor restart is closed with
+  `executor_restarted`; run one executor per journal.
+* **Dry run only for now.** Only `mode: :dry_run` runs, and it refuses a
+  session that reaches `agent.robinhood.com`. `mode: :armed` is
+  `{:error, :not_armed}` until `mix raxol.broker.arm` exists.
+
+Only equity orders (`review_equity_order`, `place_equity_order`) and equity
+cancels are mapped until the generated tool adapters land; options and
+advanced orders are refused with `{:error, {:no_adapter, kind}}`.
+
 ## Decision journal
 
 `Raxol.Broker.Journal` records every order decision in one hash-chained

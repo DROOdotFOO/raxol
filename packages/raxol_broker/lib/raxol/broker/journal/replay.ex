@@ -101,8 +101,10 @@ defmodule Raxol.Broker.Journal.Replay do
     ])
   end
 
-  defp record_lines(%{"type" => "intent", "intent" => intent}),
-    do: ["  intent   " <> intent_line(intent)]
+  defp record_lines(%{"type" => "intent", "intent" => intent} = record) do
+    mode = if is_binary(record["mode"]), do: " mode=" <> text(record["mode"]), else: ""
+    ["  intent   " <> intent_line(intent) <> mode]
+  end
 
   defp record_lines(%{"type" => "context", "context" => context}),
     do: ["  context  " <> context_line(context)]

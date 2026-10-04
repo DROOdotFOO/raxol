@@ -79,7 +79,8 @@ defmodule Raxol.Broker.MCP.Client do
   # The tools Robinhood's server annotated `readOnlyHint: true` in the tool
   # list captured on 2026-10-02 (76 tools). Static and fail-closed on purpose:
   # an unannotated or unknown tool is denied. #1174 replaces this with the
-  # generated catalog and #1178 adds the policy-gated write path.
+  # generated catalog; order tools never go through this session, only through
+  # the executor's own write port (`Raxol.Broker.Executor.Port`).
   @read_only_tools MapSet.new(~w(
     get_accounts get_alert_log get_alerts get_crypto_account_onboarding_info
     get_crypto_orders get_crypto_positions get_crypto_quotes get_currency_pairs
@@ -160,8 +161,9 @@ defmodule Raxol.Broker.MCP.Client do
   The authorization `call/3` applies: `:ok` for a read-only tool,
   `{:error, {:tool_denied, name}}` for anything else.
   """
-  # The single decision point #1174's Catalog replaces (#1178 adds the
-  # policy-gated write path). Checked again right before the upstream call.
+  # The single decision point #1174's Catalog replaces. Order tools have their
+  # own session (`Raxol.Broker.Executor.Port`). Checked again right before the
+  # upstream call.
   @spec authorize_tool(String.t()) :: :ok | {:error, {:tool_denied, String.t()}}
   def authorize_tool(name) when is_binary(name) do
     if MapSet.member?(@read_only_tools, name), do: :ok, else: {:error, {:tool_denied, name}}
