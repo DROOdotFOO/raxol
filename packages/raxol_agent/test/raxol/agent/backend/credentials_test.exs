@@ -397,6 +397,38 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       assert {:error, :op_timeout} =
                Credentials.run_executable(sleep, ["30"], 300)
     end
+
+    # Windows takes the direct-spawn clause of `SpawnedPort.spawn_spec/3`: no
+    # wrapper shell, just `:in`, which erts turns into a NUL stdin. `sort`
+    # with no file argument reads stdin to EOF, the same discriminator as
+    # `cat` above: an open stdin pipe would hold it until the deadline and
+    # come back as `{:error, :op_timeout}`, never as a clean `{"", 0}`.
+    @tag :windows_only
+    test "a stdin-reading child sees EOF on Windows" do
+      assert {"", 0} = Credentials.run_executable(system32("sort.exe"), [], 5_000)
+    end
+
+    @tag :windows_only
+    test "returns the child's output and exit status on Windows" do
+      assert {"hello\r\n", 0} =
+               Credentials.run_executable(system32("cmd.exe"), ["/c", "echo hello"], 5_000)
+    end
+
+    # No wrapper shell to turn a missing target into an exit code: the spawn
+    # itself fails, and that must come back as a value, not a raise.
+    @tag :windows_only
+    test "reports a missing executable as a spawn failure on Windows" do
+      missing = Path.join(tmp_dir("raxol-no-exe"), "nope.exe")
+
+      assert {:error, {:op_spawn_failed, :enoent}} =
+               Credentials.run_executable(missing, [], 5_000)
+    end
+
+    @tag :windows_only
+    test "bounds a child that outlives its deadline on Windows" do
+      assert {:error, :op_timeout} =
+               Credentials.run_executable(system32("PING.EXE"), ["-n", "30", "127.0.0.1"], 300)
+    end
   end
 
   defp put_env_restored(var, value) do
@@ -407,6 +439,10 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       if prev, do: System.put_env(var, prev), else: System.delete_env(var)
     end)
   end
+
+  # Absolute, so Git-for-Windows' `/usr/bin` lookalikes on the runner's PATH
+  # never stand in for the native binary.
+  defp system32(exe), do: Path.join([System.fetch_env!("SystemRoot"), "System32", exe])
 
   defp tmp_dir(prefix) do
     dir = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive])}")

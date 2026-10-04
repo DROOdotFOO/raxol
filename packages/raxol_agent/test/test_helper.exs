@@ -52,6 +52,15 @@ for f <- [
   unless Code.ensure_loaded?(mod), do: Code.require_file(f, __DIR__)
 end
 
+# :unix_only / :skip_on_windows mirror the root suite's Windows exclusion
+# (test/test_helper.exs); :windows_only is its mirror image, for tests of the
+# `{:win32, _}` branches that only a Windows host can exercise for real.
+os_excludes =
+  case :os.type() do
+    {:win32, _} -> [:unix_only, :skip_on_windows]
+    _ -> [:windows_only]
+  end
+
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
 # (meta-invariant m4), run on demand, never in regular CI.
@@ -83,5 +92,6 @@ ExUnit.start(
     # crate, so it is minutes and a toolchain rather than seconds; run with
     # `mix test --only live_lsp`.
     :live_lsp
+    | os_excludes
   ]
 )

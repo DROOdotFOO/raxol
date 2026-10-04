@@ -646,6 +646,60 @@ jobs:
         working-directory: packages/${{ matrix.package }}
         run: mix format --check-formatted
 
+  # raxol_agent spawns OS processes through `Raxol.Agent.SpawnedPort`, whose
+  # Windows clause (a direct spawn whose stdin erts opens on NUL) has no
+  # wrapper shell to fall back on, and the matrix above runs only on Linux.
+  # Its `:windows_only` tests (Credentials.run_executable/3 against native
+  # binaries) can run nowhere else. The package test_helper drops
+  # `:unix_only` / `:skip_on_windows` on Windows, as the root suite does.
+  # `--timeout`: same runner-speed reasoning as the root Windows leg below.
+  # Not in `ci-status`, like `test-cross-platform`: a Windows-runner flake
+  # should not block a merge, but a red X here is still a red X on the PR.
+  package-tests-windows:
+    name: Package Tests (raxol_agent, Windows)
+    needs: setup
+    runs-on: windows-2022
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/raxol_agent
+    env:
+      MIX_ENV: test
+      SKIP_TERMBOX2_TESTS: "true"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ needs.setup.outputs.elixir-version }}
+          otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
+
+      # Same key shape as the Linux matrix; runner.os keeps the caches apart.
+      - name: Cache package dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            packages/raxol_agent/deps
+            packages/raxol_agent/_build
+          key: pkg-raxol_agent-${{ runner.os }}-${{ needs.setup.outputs.elixir-version }}-${{ needs.setup.outputs.otp-version }}-${{ hashFiles('packages/raxol_agent/mix.lock') }}-${{ hashFiles('mix.exs', 'packages/*/mix.exs') }}
+
+      - name: Compile package
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --check-locked
+          mix compile --warnings-as-errors
+
+      # :skip_on_ci for the same reason as the Linux cell; no live_* tag in
+      # this package is outside its test_helper's own exclusions.
+      - name: Run package tests
+        run: mix test --timeout 180000 --exclude skip_on_ci
+
   # The local terminal input path is BEAM/OTP-coupled: keystrokes arrive by
   # tracing prim_tty's reader (a private protocol). Every unit test fabricates
   # that trace message, so none can catch an OTP change to it. This canary types
