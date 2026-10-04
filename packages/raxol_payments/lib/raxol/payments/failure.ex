@@ -197,6 +197,18 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
+  # The EIP-712 intent the quote served -- what Riddler settles -- does not match
+  # the request (wallet, chains, tokens, recipient, settlement, amounts, or an
+  # over-long deadline). Refuse to sign rather than authorize different terms.
+  def from({:intent_mismatch, _} = detail),
+    do:
+      build(
+        :rejected,
+        "The quote's signable intent did not match the requested transfer; refusing to sign.",
+        false,
+        detail
+      )
+
   # The quote delivers less than the agent's floor (an explicit min_to_amount or
   # the same-asset delivery floor). Refuse to sign rather than overpay into a
   # punitive or hostile quote.
@@ -237,6 +249,10 @@ defmodule Raxol.Payments.Failure do
   def from({:invalid_from_token, _} = detail), do: invalid_request(detail)
   def from({:invalid_to_token, _} = detail), do: invalid_request(detail)
   def from({:invalid_chain_id, _} = detail), do: invalid_request(detail)
+  def from({:invalid_from_amount, _} = detail), do: invalid_request(detail)
+  def from({:invalid_output_amount, _} = detail), do: invalid_request(detail)
+  def from({:invalid_max_from_amount, _} = detail), do: invalid_request(detail)
+  def from({:invalid_swap_kind, _} = detail), do: invalid_request(detail)
 
   # A token with no registered decimals on its chain (including any chain this
   # build does not know): an amount in it cannot be scaled or bounded, so the

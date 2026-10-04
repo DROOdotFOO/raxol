@@ -2,6 +2,7 @@ defmodule Raxol.Payments.Protocols.XochiSettledTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Protocols.Xochi
+  alias Raxol.Payments.Test.XochiIntentFixture
   alias Raxol.Payments.Xochi.Schemas.QuoteRequest
 
   defmodule Wallet do
@@ -37,17 +38,15 @@ defmodule Raxol.Payments.Protocols.XochiSettledTest do
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
+          {body, conn} = XochiIntentFixture.quote_body(conn)
+
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "quoteId" => "q_1",
             "canSolve" => true,
             "toAmount" => "1002487",
             "xochiFee" => "2205",
-            "eip712Data" => %{
-              "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-              "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-              "message" => %{"amount" => 1_100_000}
-            }
+            "eip712Data" => XochiIntentFixture.eip712(body, "1002487")
           })
 
         "/api/intent/execute" ->

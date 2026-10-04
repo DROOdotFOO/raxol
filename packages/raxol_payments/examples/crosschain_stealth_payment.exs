@@ -249,31 +249,25 @@ defmodule CrosschainStealthPayment do
   # In-process Xochi sim: canned quote / execute / status responses. The quote
   # delivers what was sent minus the fee, so it clears the same-asset delivery
   # floor at any amount and step 4 is refused by the spend gate, not the floor.
+  # It serves the XochiIntent Riddler would build for the posted request:
+  # raxol refuses to sign an intent whose terms differ from what it asked for.
   defp sim do
     fn conn ->
       body =
         case conn.request_path do
           "/api/intent/quote" ->
             {:ok, raw, _conn} = Plug.Conn.read_body(conn)
-            sent = raw |> Jason.decode!() |> Map.fetch!("from_amount") |> String.to_integer()
+            req = Jason.decode!(raw)
+            sent = req |> Map.fetch!("from_amount") |> String.to_integer()
+            to_amount = Integer.to_string(sent - 1000)
 
             %{
               "intentId" => "demo_intent",
               "quoteId" => "demo_quote",
               "canSolve" => true,
-              "toAmount" => Integer.to_string(sent - 1000),
+              "toAmount" => to_amount,
               "xochiFee" => "1000",
-              "eip712Data" => %{
-                "domain" => %{
-                  "name" => "Xochi",
-                  "version" => "1",
-                  "chainId" => @base
-                },
-                "types" => %{
-                  "Intent" => [%{"name" => "amount", "type" => "uint256"}]
-                },
-                "message" => %{"amount" => 500_000}
-              }
+              "eip712Data" => intent(req, to_amount)
             }
 
           "/api/intent/execute" ->
@@ -297,6 +291,68 @@ defmodule CrosschainStealthPayment do
       Req.Test.json(conn, body)
     end
   end
+
+  # Riddler-shaped XochiIntent typed data for a decoded quote request.
+  defp intent(req, to_amount) do
+    %{
+      "domain" => %{
+        "name" => "Xochi",
+        "version" => "3",
+        "chainId" => req["from_chain_id"],
+        "salt" => "0x" <> String.duplicate("00", 31) <> "01"
+      },
+      "primaryType" => "XochiIntent",
+      "types" => intent_types(),
+      "message" => intent_message(req, to_amount)
+    }
+  end
+
+  defp intent_types do
+    field = fn name, type -> %{"name" => name, "type" => type} end
+
+    %{
+      "EIP712Domain" => [
+        field.("name", "string"),
+        field.("version", "string"),
+        field.("chainId", "uint256"),
+        field.("salt", "bytes32")
+      ],
+      "XochiIntent" => [
+        field.("intentId", "string"),
+        field.("quoteId", "string"),
+        field.("wallet", "address"),
+        field.("recipient", "string"),
+        field.("fromChainId", "uint256"),
+        field.("toChainId", "uint256"),
+        field.("fromToken", "string"),
+        field.("toToken", "string"),
+        field.("fromAmount", "uint256"),
+        field.("toAmount", "uint256"),
+        field.("settlementPreference", "string"),
+        field.("deadline", "uint256")
+      ]
+    }
+  end
+
+  defp intent_message(req, to_amount) do
+    %{
+      "intentId" => "demo_intent",
+      "quoteId" => "demo_quote",
+      "wallet" => lower(req["wallet"]),
+      "recipient" => req["recipient_address"] || lower(req["wallet"]),
+      "fromChainId" => req["from_chain_id"],
+      "toChainId" => req["to_chain_id"],
+      "fromToken" => lower(req["from_token"]),
+      "toToken" => lower(req["to_token"]),
+      "fromAmount" => req["from_amount"],
+      "toAmount" => to_amount,
+      "settlementPreference" => req["settlement_preference"] || "public",
+      "deadline" => System.system_time(:second) + 300
+    }
+  end
+
+  defp lower("0x" <> _ = addr), do: String.downcase(addr)
+  defp lower(other), do: other
 
   # In-process Relay sim: quote returns a deposit address, status settles.
   defp relay_sim do

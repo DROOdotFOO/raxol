@@ -23,7 +23,17 @@ defmodule Raxol.Payments.Xochi.Schemas do
   def put_non_nil(map, key, val), do: Map.put(map, key, val)
 
   defmodule QuoteRequest do
-    @moduledoc false
+    @moduledoc """
+    A Xochi intent quote request.
+
+    `swap_kind` picks which amount the caller fixes. `"exact_input"` (default)
+    sends `from_amount` and the solver computes `to_amount`. `"exact_output"`
+    sends `output_amount` (destination atomic units) and the solver
+    back-computes `from_amount`, so `from_amount` is nil and `max_from_amount`
+    -- the most origin atomic units the caller will spend -- is required. It is
+    never sent: it is the client-side ceiling `Protocols.Xochi.validate_intent/2`
+    holds the signed `fromAmount` to.
+    """
     @enforce_keys [
       :wallet,
       :from_chain_id,
@@ -44,7 +54,10 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :trust_score,
       :stealth_spending_pub_key,
       :stealth_viewing_pub_key,
+      :output_amount,
+      :max_from_amount,
       settlement_preference: "public",
+      swap_kind: "exact_input",
       deadline: nil,
       slippage_bps: 50,
       gasless: false,
@@ -59,7 +72,10 @@ defmodule Raxol.Payments.Xochi.Schemas do
             to_chain_id: pos_integer(),
             from_token: String.t(),
             to_token: String.t(),
-            from_amount: String.t(),
+            from_amount: String.t() | nil,
+            swap_kind: String.t(),
+            output_amount: String.t() | nil,
+            max_from_amount: String.t() | nil,
             recipient_address: String.t() | nil,
             settlement_preference: settlement(),
             deadline: integer() | nil,
@@ -110,9 +126,42 @@ defmodule Raxol.Payments.Xochi.Schemas do
           {:error, {:invalid_recipient_address, "must be a non-empty string when set"}}
 
         true ->
+          validate_swap_kind(req)
+      end
+    end
+
+    @digits ~r/\A[0-9]{1,78}\z/
+
+    # Exactly one caller-fixed amount per kind, as Riddler requires. exact_output
+    # also needs the ceiling, since nothing else bounds what leaves the wallet.
+    defp validate_swap_kind(%__MODULE__{swap_kind: "exact_input", output_amount: nil}), do: :ok
+
+    defp validate_swap_kind(%__MODULE__{swap_kind: "exact_input"}),
+      do: {:error, {:invalid_output_amount, "must be omitted for exact_input"}}
+
+    defp validate_swap_kind(%__MODULE__{swap_kind: "exact_output"} = req) do
+      cond do
+        not digits?(req.output_amount) ->
+          {:error,
+           {:invalid_output_amount, "exact_output requires output_amount in atomic units"}}
+
+        not digits?(req.max_from_amount) ->
+          {:error,
+           {:invalid_max_from_amount, "exact_output requires max_from_amount in atomic units"}}
+
+        not is_nil(req.from_amount) ->
+          {:error, {:invalid_from_amount, "must be omitted for exact_output"}}
+
+        true ->
           :ok
       end
     end
+
+    defp validate_swap_kind(%__MODULE__{swap_kind: kind}),
+      do: {:error, {:invalid_swap_kind, kind}}
+
+    defp digits?(value) when is_binary(value), do: Regex.match?(@digits, value)
+    defp digits?(_), do: false
 
     # `recipient_address` is optional: nil lets Riddler default it to `wallet`
     # (same-VM). When set (required for a cross-VM route, e.g. an EVM wallet
@@ -143,7 +192,6 @@ defmodule Raxol.Payments.Xochi.Schemas do
         "to_chain_id" => req.to_chain_id,
         "from_token" => req.from_token,
         "to_token" => req.to_token,
-        "from_amount" => req.from_amount,
         "settlement_preference" => req.settlement_preference,
         "deadline" => req.deadline || :os.system_time(:second) + 300,
         "slippage_bps" => req.slippage_bps,
@@ -151,6 +199,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
       }
 
       base
+      |> put_amount(req)
       |> Raxol.Payments.Xochi.Schemas.put_non_nil("recipient_address", req.recipient_address)
       |> Raxol.Payments.Xochi.Schemas.put_non_nil("trust_score", req.trust_score)
       |> Raxol.Payments.Xochi.Schemas.put_non_nil(
@@ -163,6 +212,14 @@ defmodule Raxol.Payments.Xochi.Schemas do
       )
       |> maybe_put_attestations(req.attestations)
     end
+
+    # exact_input keeps the pre-swap_kind wire shape (Riddler defaults the kind);
+    # exact_output names its kind and omits from_amount, which Riddler rejects.
+    defp put_amount(map, %__MODULE__{swap_kind: "exact_output"} = req) do
+      Map.merge(map, %{"swap_kind" => "exact_output", "output_amount" => req.output_amount})
+    end
+
+    defp put_amount(map, %__MODULE__{} = req), do: Map.put(map, "from_amount", req.from_amount)
 
     defp maybe_put_attestations(map, []), do: map
 

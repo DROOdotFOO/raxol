@@ -15,8 +15,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
       config = %{base_url: "https://api.xochi.fi", auth: {:member, "..."}}
       wallet = MyWallet
 
-      {:ok, quote} = Xochi.quote(config, %QuoteRequest{...})
-      {:ok, exec} = Xochi.execute(config, quote, wallet)
+      {:ok, quote} = Xochi.get_quote(config, request)
+      {:ok, exec} = Xochi.execute(config, quote, wallet, request)
       {:ok, status} = Xochi.poll_status(config, exec.intent_id)
 
   ## Fee Tiers
@@ -145,10 +145,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
           {:ok, map()} | {:error, term()}
   def deposit_route_quote(config, %DepositRouteRequest{} = request, opts \\ []) do
     with {:ok, quote} <- Client.get_deposit_route_quote(config, request),
-         :ok <- ensure_solvable(quote),
-         {:ok, instructions} <-
-           verify_deposit_route(config, request, quote, opts) do
-      {:ok, instructions}
+         :ok <- ensure_solvable(quote) do
+      verify_deposit_route(config, request, quote, opts)
     end
   end
 
@@ -253,36 +251,19 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @doc """
   Sign and execute an intent from a quote.
 
-  Signs the EIP-712 typed data from the quote response using the wallet,
-  then submits the signed intent for execution.
+  Binds the served EIP-712 intent (`validate_intent/2`) and any origin-pull
+  authorization (`validate_pull/3`) to the caller's intended transfer
+  (`request`) before signing either, then submits the signed intent.
+
+  The agent signs typed data the quote endpoint serves; a hostile or
+  compromised endpoint could otherwise serve an intent that pays a different
+  recipient, token, or chain, or a pull that drains the wallet. Nothing is
+  signed unless both match the request.
   """
-  @spec execute(Client.config(), QuoteResponse.t(), module()) ::
+  @spec execute(Client.config(), QuoteResponse.t(), module(), QuoteRequest.t()) ::
           {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()}
           | {:error, term()}
-  def execute(config, %QuoteResponse{} = quote_resp, wallet) do
-    execute(config, quote_resp, wallet, nil)
-  end
-
-  @doc """
-  Like `execute/3`, but binds the served `pull_authorization` to the caller's
-  intended transfer (`request`) before signing it.
-
-  The agent signs an ERC-3009/Permit2 authorization the solver serves; a hostile
-  or compromised quote endpoint could otherwise serve one that pulls the wallet's
-  full balance to an attacker. With the `request`, the origin pull is checked
-  against the intended signer, token, chain, and amount before any signature is
-  released. Pass `nil` only when there is no pull authorization to validate; a
-  pull authorization presented with a `nil` request fails closed.
-  """
-  @spec execute(
-          Client.config(),
-          QuoteResponse.t(),
-          module(),
-          QuoteRequest.t() | nil
-        ) ::
-          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()}
-          | {:error, term()}
-  def execute(config, %QuoteResponse{} = quote_resp, wallet, request) do
+  def execute(config, %QuoteResponse{} = quote_resp, wallet, %QuoteRequest{} = request) do
     with {:ok, bundle} <- sign_intent(quote_resp, wallet, request) do
       execute_signed(config, bundle)
     end
@@ -291,26 +272,18 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @doc """
   Sign a quoted intent into a relayable bundle WITHOUT executing it.
 
-  The buyer-side counterpart to `execute_signed/2`: validates the quote, signs
-  the EIP-712 intent with `wallet`, and returns the opaque bundle
+  The buyer-side counterpart to `execute_signed/2`: validates the quote, binds
+  the served intent and origin pull to `request` (see `execute/4`), signs the
+  EIP-712 intent with `wallet`, and returns the opaque bundle
   `%{intent_id, quote_id, signature, nonce}` (plus `pull_signature` when the
   quote carried an origin-pull authorization) to hand to a storefront/relay or
   to `execute_signed/2` directly. Does not talk to the worker.
   """
-  @spec sign_intent(QuoteResponse.t(), module()) ::
+  @spec sign_intent(QuoteResponse.t(), module(), QuoteRequest.t()) ::
           {:ok, signed_intent()} | {:error, term()}
-  def sign_intent(quote_resp, wallet), do: sign_intent(quote_resp, wallet, nil)
-
-  @doc """
-  Like `sign_intent/2`, but binds the served `pull_authorization` to the caller's
-  intended transfer (`request`) before signing it -- see `execute/4` for why this
-  matters. Pass `nil` only when there is no pull authorization to validate; a
-  pull presented with a `nil` request fails closed.
-  """
-  @spec sign_intent(QuoteResponse.t(), module(), QuoteRequest.t() | nil) ::
-          {:ok, signed_intent()} | {:error, term()}
-  def sign_intent(%QuoteResponse{} = quote_resp, wallet, request) do
+  def sign_intent(%QuoteResponse{} = quote_resp, wallet, %QuoteRequest{} = request) do
     with :ok <- validate_quote(quote_resp),
+         :ok <- validate_intent(quote_resp, request),
          :ok <- validate_pull_authorization(quote_resp, request, wallet),
          {:ok, signature} <- sign_quote(quote_resp, wallet),
          {:ok, pull_signature} <- sign_pull_authorization(quote_resp, wallet) do
@@ -441,7 +414,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
         to_chain_id: request.to_chain_id,
         from_token: request.from_token,
         to_token: request.to_token,
-        from_amount: request.from_amount,
+        from_amount: intent_from_amount(quote_resp),
         to_amount: quote_resp.to_amount,
         xochi_fee: quote_resp.xochi_fee,
         tx_hash: status.tx_hash,
@@ -451,6 +424,147 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   defp emit_settled(_request, _quote_resp, _status, _elapsed_ms), do: :ok
+
+  @intent_primary_type "XochiIntent"
+  @intent_bound_fields MapSet.new(
+                         ~w(wallet recipient fromChainId toChainId fromToken toToken fromAmount toAmount settlementPreference deadline)
+                       )
+  # Riddler issues quotes valid for ~300s; an hour of headroom tolerates a slow
+  # local clock. A fast clock fails open -- the wall clock is the one value on
+  # this path the server does not supply. Matches riddler-sdk's
+  # MAX_INTENT_DEADLINE_AHEAD_OF_NOW_SECONDS.
+  @intent_max_deadline_ahead_seconds 3600
+
+  @doc """
+  Bind the served EIP-712 intent to the caller's request WITHOUT signing -- the
+  check `sign_intent/3` runs before it signs.
+
+  The intent is what Riddler settles, so its signed values -- not the quote's
+  top-level fields -- are compared: `wallet`, `fromChainId`/`toChainId`,
+  `fromToken`/`toToken`, `recipient` (the request's `recipient_address`, else
+  `wallet`, as Riddler defaults it), `settlementPreference`, a `deadline` no
+  more than an hour ahead of the wall clock, and the signed `toAmount` against
+  the quote's own `to_amount`. On `exact_input` the signed `fromAmount` must
+  equal the request's `from_amount`; on `exact_output` the signed `toAmount`
+  must equal `output_amount` and `fromAmount` must not exceed `max_from_amount`,
+  which is required. The primary type must be `XochiIntent` and declare each of
+  those fields, so every compared value is one the signature covers.
+
+  Returns `:ok` or `{:error, {:intent_mismatch, field}}` naming the first field
+  that does not match. Mirrors riddler-sdk's `assertIntentMatchesRequest`.
+  """
+  @spec validate_intent(QuoteResponse.t(), QuoteRequest.t()) :: :ok | {:error, term()}
+  def validate_intent(%QuoteResponse{eip712_data: nil}, %QuoteRequest{}),
+    do: {:error, :no_eip712_data}
+
+  def validate_intent(%QuoteResponse{eip712_data: eip712}, %QuoteRequest{})
+      when not is_map(eip712),
+      do: {:error, {:intent_mismatch, :intent_type}}
+
+  def validate_intent(%QuoteResponse{eip712_data: eip712} = quote_resp, %QuoteRequest{} = request) do
+    message = intent_message(eip712)
+
+    intent_mismatch(
+      Enum.concat([
+        [{:intent_type, intent_envelope?(eip712)}],
+        route_checks(message, request),
+        [
+          {:deadline, deadline_bounded?(message["deadline"])},
+          {:quoted_to_amount, int_match?(message["toAmount"], quote_resp.to_amount)}
+        ],
+        amount_checks(message, request)
+      ])
+    )
+  end
+
+  @doc """
+  The origin amount the served intent signs (`fromAmount`), as a string, or nil
+  when the quote carries none. After `validate_intent/2` it equals the request's
+  `from_amount` on `exact_input` and is the solver-chosen amount, at most
+  `max_from_amount`, on `exact_output`.
+  """
+  @spec intent_from_amount(QuoteResponse.t()) :: String.t() | nil
+  def intent_from_amount(%QuoteResponse{eip712_data: %{"message" => %{} = message}}) do
+    case to_uint(message["fromAmount"]) do
+      n when is_integer(n) -> Integer.to_string(n)
+      nil -> nil
+    end
+  end
+
+  def intent_from_amount(%QuoteResponse{}), do: nil
+
+  defp intent_message(eip712) do
+    case eip712["message"] do
+      %{} = message -> message
+      _ -> %{}
+    end
+  end
+
+  # Who pays whom, on which chains and tokens, settled how.
+  defp route_checks(message, %QuoteRequest{} = request) do
+    [
+      {:wallet, addressish_match?(message["wallet"], request.wallet)},
+      {:from_chain_id, int_match?(message["fromChainId"], request.from_chain_id)},
+      {:to_chain_id, int_match?(message["toChainId"], request.to_chain_id)},
+      {:from_token, addressish_match?(message["fromToken"], request.from_token)},
+      {:to_token, addressish_match?(message["toToken"], request.to_token)},
+      {:recipient,
+       addressish_match?(message["recipient"], request.recipient_address || request.wallet)},
+      {:settlement_preference,
+       message["settlementPreference"] == (request.settlement_preference || "public")}
+    ]
+  end
+
+  # `swap_kind` decides which amount the caller chose. Comparing the
+  # server-derived one for equality would reject every honest quote; on
+  # `exact_output` it is what leaves the wallet, so it gets the ceiling instead.
+  defp amount_checks(message, %QuoteRequest{swap_kind: "exact_output"} = request) do
+    [
+      {:to_amount, int_match?(message["toAmount"], request.output_amount)},
+      {:max_from_amount, is_integer(to_uint(request.max_from_amount))},
+      {:from_amount, int_within?(message["fromAmount"], request.max_from_amount)}
+    ]
+  end
+
+  defp amount_checks(message, %QuoteRequest{swap_kind: "exact_input"} = request),
+    do: [{:from_amount, int_match?(message["fromAmount"], request.from_amount)}]
+
+  defp amount_checks(_message, %QuoteRequest{}), do: [{:swap_kind, false}]
+
+  defp intent_envelope?(eip712) do
+    eip712["primaryType"] == @intent_primary_type and
+      MapSet.subset?(@intent_bound_fields, type_field_names(eip712, @intent_primary_type))
+  end
+
+  # No lower bound: a lapsed deadline is the server's to reject.
+  defp deadline_bounded?(value) do
+    case to_uint(value) do
+      t when is_integer(t) ->
+        t <= System.system_time(:second) + @intent_max_deadline_ahead_seconds
+
+      nil ->
+        false
+    end
+  end
+
+  defp intent_mismatch(checks) do
+    case Enum.find(checks, fn {_field, ok?} -> not ok? end) do
+      nil -> :ok
+      {field, _} -> {:error, {:intent_mismatch, field}}
+    end
+  end
+
+  # Riddler signs an EVM (0x-hex) wallet, token, or recipient lowercased and a
+  # base58 (TVM/SVM) one verbatim, since base58 is case-sensitive.
+  defp addressish_match?(a, b) when is_binary(a) and is_binary(b) and a != "",
+    do: addressish(a) == addressish(b)
+
+  defp addressish_match?(_, _), do: false
+
+  defp addressish(<<prefix::binary-size(2), _::binary>> = value) when prefix in ["0x", "0X"],
+    do: String.downcase(value)
+
+  defp addressish(value), do: value
 
   @doc """
   Validate the served origin-pull authorization against the intended transfer
@@ -588,10 +702,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   defp validate_quote(%QuoteResponse{can_solve: true}), do: :ok
 
-  defp sign_quote(%QuoteResponse{eip712_data: nil}, _wallet) do
-    {:error, :no_eip712_data}
-  end
-
+  # `validate_intent/2` has already refused a quote with no `eip712_data`.
   defp sign_quote(%QuoteResponse{eip712_data: eip712}, wallet) do
     domain = eip712_domain(eip712)
     types = eip712_types(eip712)
@@ -647,13 +758,6 @@ defmodule Raxol.Payments.Protocols.Xochi do
        do: :ok
 
   defp validate_pull_authorization(
-         %QuoteResponse{pull_authorization: _pull},
-         nil,
-         _wallet
-       ),
-       do: {:error, {:authorization_mismatch, :no_request_context}}
-
-  defp validate_pull_authorization(
          %QuoteResponse{pull_authorization: pull, payment_method: method},
          %QuoteRequest{} = request,
          wallet
@@ -696,7 +800,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
       {:pull_from, addr_match?(message["from"], signer)},
       {:pull_token, addr_match?(domain["verifyingContract"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
-      {:pull_value, int_within?(message["value"], request.from_amount)},
+      {:pull_value, int_within?(message["value"], pull_ceiling(request))},
       {:pull_to, solver_allowed?(message["to"], :erc3009)},
       {:pull_expiry, valid_window?(message["validBefore"])}
     ])
@@ -728,11 +832,16 @@ defmodule Raxol.Payments.Protocols.Xochi do
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
       {:pull_verifier, addr_match?(domain["verifyingContract"], Permit2.verifying_contract())},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
-      {:pull_value, int_within?(permitted["amount"], request.from_amount)},
+      {:pull_value, int_within?(permitted["amount"], pull_ceiling(request))},
       {:pull_spender, solver_allowed?(message["spender"], :permit2)},
       {:pull_expiry, valid_window?(message["deadline"])}
     ])
   end
+
+  # The most the pull may authorize: the exact origin amount on `exact_input`,
+  # the caller's ceiling on `exact_output` (the solver picks the amount).
+  defp pull_ceiling(%QuoteRequest{swap_kind: "exact_output", max_from_amount: max}), do: max
+  defp pull_ceiling(%QuoteRequest{from_amount: from_amount}), do: from_amount
 
   # The served envelope must be exactly the canonical struct for the method: the
   # right `primaryType` and precisely its field set (no missing, no extra signable
