@@ -294,13 +294,6 @@ defmodule CrosschainStealthPayment do
 
   # Riddler-shaped XochiIntent typed data for a decoded quote request.
   defp intent(req, to_amount) do
-    lower = fn
-      "0x" <> _ = addr -> String.downcase(addr)
-      other -> other
-    end
-
-    field = fn name, type -> %{"name" => name, "type" => type} end
-
     %{
       "domain" => %{
         "name" => "Xochi",
@@ -309,44 +302,57 @@ defmodule CrosschainStealthPayment do
         "salt" => "0x" <> String.duplicate("00", 31) <> "01"
       },
       "primaryType" => "XochiIntent",
-      "types" => %{
-        "EIP712Domain" => [
-          field.("name", "string"),
-          field.("version", "string"),
-          field.("chainId", "uint256"),
-          field.("salt", "bytes32")
-        ],
-        "XochiIntent" => [
-          field.("intentId", "string"),
-          field.("quoteId", "string"),
-          field.("wallet", "address"),
-          field.("recipient", "string"),
-          field.("fromChainId", "uint256"),
-          field.("toChainId", "uint256"),
-          field.("fromToken", "string"),
-          field.("toToken", "string"),
-          field.("fromAmount", "uint256"),
-          field.("toAmount", "uint256"),
-          field.("settlementPreference", "string"),
-          field.("deadline", "uint256")
-        ]
-      },
-      "message" => %{
-        "intentId" => "demo_intent",
-        "quoteId" => "demo_quote",
-        "wallet" => lower.(req["wallet"]),
-        "recipient" => req["recipient_address"] || lower.(req["wallet"]),
-        "fromChainId" => req["from_chain_id"],
-        "toChainId" => req["to_chain_id"],
-        "fromToken" => lower.(req["from_token"]),
-        "toToken" => lower.(req["to_token"]),
-        "fromAmount" => req["from_amount"],
-        "toAmount" => to_amount,
-        "settlementPreference" => req["settlement_preference"] || "public",
-        "deadline" => System.system_time(:second) + 300
-      }
+      "types" => intent_types(),
+      "message" => intent_message(req, to_amount)
     }
   end
+
+  defp intent_types do
+    field = fn name, type -> %{"name" => name, "type" => type} end
+
+    %{
+      "EIP712Domain" => [
+        field.("name", "string"),
+        field.("version", "string"),
+        field.("chainId", "uint256"),
+        field.("salt", "bytes32")
+      ],
+      "XochiIntent" => [
+        field.("intentId", "string"),
+        field.("quoteId", "string"),
+        field.("wallet", "address"),
+        field.("recipient", "string"),
+        field.("fromChainId", "uint256"),
+        field.("toChainId", "uint256"),
+        field.("fromToken", "string"),
+        field.("toToken", "string"),
+        field.("fromAmount", "uint256"),
+        field.("toAmount", "uint256"),
+        field.("settlementPreference", "string"),
+        field.("deadline", "uint256")
+      ]
+    }
+  end
+
+  defp intent_message(req, to_amount) do
+    %{
+      "intentId" => "demo_intent",
+      "quoteId" => "demo_quote",
+      "wallet" => lower(req["wallet"]),
+      "recipient" => req["recipient_address"] || lower(req["wallet"]),
+      "fromChainId" => req["from_chain_id"],
+      "toChainId" => req["to_chain_id"],
+      "fromToken" => lower(req["from_token"]),
+      "toToken" => lower(req["to_token"]),
+      "fromAmount" => req["from_amount"],
+      "toAmount" => to_amount,
+      "settlementPreference" => req["settlement_preference"] || "public",
+      "deadline" => System.system_time(:second) + 300
+    }
+  end
+
+  defp lower("0x" <> _ = addr), do: String.downcase(addr)
+  defp lower(other), do: other
 
   # In-process Relay sim: quote returns a deposit address, status settles.
   defp relay_sim do

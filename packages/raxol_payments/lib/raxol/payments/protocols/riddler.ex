@@ -23,7 +23,7 @@ defmodule Raxol.Payments.Protocols.Riddler do
   @behaviour Raxol.Payments.Protocol
 
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
-  alias Raxol.Payments.Riddler.Schemas.{QuoteRequest, QuoteResponse, OrderStatus}
+  alias Raxol.Payments.Riddler.Schemas.{OrderStatus, QuoteRequest, QuoteResponse}
   alias Raxol.Payments.Xochi.Schemas, as: XochiSchemas
 
   @default_poll_interval_ms 2_000

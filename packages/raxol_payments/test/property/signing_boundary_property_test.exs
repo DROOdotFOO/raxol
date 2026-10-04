@@ -26,8 +26,8 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
   alias Raxol.Payments.Actions.Payments
   alias Raxol.Payments.Actions.Payments.{ExecuteRelayTransfer, ExecuteXochiIntent}
   alias Raxol.Payments.{Failure, Ledger, SpendingPolicy}
-  alias Raxol.Payments.Xochi.Stealth
   alias Raxol.Payments.Test.XochiIntentFixture
+  alias Raxol.Payments.Xochi.Stealth
 
   @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"

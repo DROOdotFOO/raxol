@@ -76,36 +76,43 @@ defmodule Raxol.Payments.Test.XochiIntentFixture do
 
   def eip712(%{} = body, to_amount, opts) do
     from_chain = body["from_chain_id"]
-    to_amount = to_amount || body["output_amount"]
 
     message =
-      %{
-        "intentId" => Keyword.get(opts, :intent_id, "int_1"),
-        "quoteId" => Keyword.get(opts, :quote_id, "q_1"),
-        "wallet" => lower(body["wallet"]),
-        "recipient" => body["recipient_address"] || lower(body["wallet"]),
-        "fromChainId" => from_chain,
-        "toChainId" => body["to_chain_id"],
-        "fromToken" => lower(body["from_token"]),
-        "toToken" => lower(body["to_token"]),
-        "fromAmount" => to_string(Keyword.get(opts, :from_amount, body["from_amount"])),
-        "toAmount" => to_string(to_amount),
-        "settlementPreference" => body["settlement_preference"] || "public",
-        "deadline" => System.system_time(:second) + 300
-      }
+      body
+      |> intent_message(to_amount || body["output_amount"], opts)
       |> Map.merge(Keyword.get(opts, :message, %{}))
 
     %{
-      "domain" =>
-        Keyword.get(opts, :domain, %{
-          "name" => "Xochi",
-          "version" => "3",
-          "chainId" => from_chain,
-          "salt" => "0x" <> String.duplicate("00", 31) <> "01"
-        }),
+      "domain" => Keyword.get(opts, :domain, default_domain(from_chain)),
       "primaryType" => "XochiIntent",
       "types" => @types,
       "message" => message
+    }
+  end
+
+  defp intent_message(body, to_amount, opts) do
+    %{
+      "intentId" => Keyword.get(opts, :intent_id, "int_1"),
+      "quoteId" => Keyword.get(opts, :quote_id, "q_1"),
+      "wallet" => lower(body["wallet"]),
+      "recipient" => body["recipient_address"] || lower(body["wallet"]),
+      "fromChainId" => body["from_chain_id"],
+      "toChainId" => body["to_chain_id"],
+      "fromToken" => lower(body["from_token"]),
+      "toToken" => lower(body["to_token"]),
+      "fromAmount" => to_string(Keyword.get(opts, :from_amount, body["from_amount"])),
+      "toAmount" => to_string(to_amount),
+      "settlementPreference" => body["settlement_preference"] || "public",
+      "deadline" => System.system_time(:second) + 300
+    }
+  end
+
+  defp default_domain(from_chain) do
+    %{
+      "name" => "Xochi",
+      "version" => "3",
+      "chainId" => from_chain,
+      "salt" => "0x" <> String.duplicate("00", 31) <> "01"
     }
   end
 

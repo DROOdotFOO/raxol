@@ -23,8 +23,8 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
 
   alias Raxol.Payments.Actions.Payments.ExecuteXochiIntent
   alias Raxol.Payments.{Assets, Failure, Ledger, Router, SpendingPolicy}
-  alias Raxol.Payments.Xochi.Stealth
   alias Raxol.Payments.Test.XochiIntentFixture
+  alias Raxol.Payments.Xochi.Stealth
 
   # Wallet that signals when it signs, so we can assert the intent was signed.
   defmodule SpyWallet do

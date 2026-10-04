@@ -145,10 +145,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
           {:ok, map()} | {:error, term()}
   def deposit_route_quote(config, %DepositRouteRequest{} = request, opts \\ []) do
     with {:ok, quote} <- Client.get_deposit_route_quote(config, request),
-         :ok <- ensure_solvable(quote),
-         {:ok, instructions} <-
-           verify_deposit_route(config, request, quote, opts) do
-      {:ok, instructions}
+         :ok <- ensure_solvable(quote) do
+      verify_deposit_route(config, request, quote, opts)
     end
   end
 
@@ -464,27 +462,18 @@ defmodule Raxol.Payments.Protocols.Xochi do
       do: {:error, {:intent_mismatch, :intent_type}}
 
   def validate_intent(%QuoteResponse{eip712_data: eip712} = quote_resp, %QuoteRequest{} = request) do
-    message =
-      case eip712["message"] do
-        %{} = message -> message
-        _ -> %{}
-      end
+    message = intent_message(eip712)
 
     intent_mismatch(
-      [
-        {:intent_type, intent_envelope?(eip712)},
-        {:wallet, addressish_match?(message["wallet"], request.wallet)},
-        {:from_chain_id, int_match?(message["fromChainId"], request.from_chain_id)},
-        {:to_chain_id, int_match?(message["toChainId"], request.to_chain_id)},
-        {:from_token, addressish_match?(message["fromToken"], request.from_token)},
-        {:to_token, addressish_match?(message["toToken"], request.to_token)},
-        {:recipient,
-         addressish_match?(message["recipient"], request.recipient_address || request.wallet)},
-        {:settlement_preference,
-         message["settlementPreference"] == (request.settlement_preference || "public")},
-        {:deadline, deadline_bounded?(message["deadline"])},
-        {:quoted_to_amount, int_match?(message["toAmount"], quote_resp.to_amount)}
-      ] ++ amount_checks(message, request)
+      Enum.concat([
+        [{:intent_type, intent_envelope?(eip712)}],
+        route_checks(message, request),
+        [
+          {:deadline, deadline_bounded?(message["deadline"])},
+          {:quoted_to_amount, int_match?(message["toAmount"], quote_resp.to_amount)}
+        ],
+        amount_checks(message, request)
+      ])
     )
   end
 
@@ -503,6 +492,28 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   def intent_from_amount(%QuoteResponse{}), do: nil
+
+  defp intent_message(eip712) do
+    case eip712["message"] do
+      %{} = message -> message
+      _ -> %{}
+    end
+  end
+
+  # Who pays whom, on which chains and tokens, settled how.
+  defp route_checks(message, %QuoteRequest{} = request) do
+    [
+      {:wallet, addressish_match?(message["wallet"], request.wallet)},
+      {:from_chain_id, int_match?(message["fromChainId"], request.from_chain_id)},
+      {:to_chain_id, int_match?(message["toChainId"], request.to_chain_id)},
+      {:from_token, addressish_match?(message["fromToken"], request.from_token)},
+      {:to_token, addressish_match?(message["toToken"], request.to_token)},
+      {:recipient,
+       addressish_match?(message["recipient"], request.recipient_address || request.wallet)},
+      {:settlement_preference,
+       message["settlementPreference"] == (request.settlement_preference || "public")}
+    ]
+  end
 
   # `swap_kind` decides which amount the caller chose. Comparing the
   # server-derived one for equality would reject every honest quote; on

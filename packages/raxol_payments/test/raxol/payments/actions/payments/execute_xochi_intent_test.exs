@@ -105,19 +105,6 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     signed = Keyword.get(opts, :signed_to_amount, to_amount)
     quote_id = Keyword.get(opts, :quote_id, "q_1")
 
-    eip712 =
-      XochiIntentFixture.eip712(
-        body,
-        signed,
-        Keyword.take(opts, [:from_amount, :message]) ++ [quote_id: quote_id]
-      )
-
-    eip712 =
-      case Keyword.fetch(opts, :types) do
-        {:ok, types} -> Map.put(eip712, "types", types)
-        :error -> eip712
-      end
-
     Req.Test.json(
       conn,
       Map.merge(
@@ -127,11 +114,25 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
           "canSolve" => true,
           "toAmount" => to_amount,
           "xochiFee" => "1000",
-          "eip712Data" => eip712
+          "eip712Data" => served_eip712(body, signed, quote_id, opts)
         },
         Keyword.get(opts, :extra, %{})
       )
     )
+  end
+
+  defp served_eip712(body, signed, quote_id, opts) do
+    eip712 =
+      XochiIntentFixture.eip712(
+        body,
+        signed,
+        [{:quote_id, quote_id} | Keyword.take(opts, [:from_amount, :message])]
+      )
+
+    case Keyword.fetch(opts, :types) do
+      {:ok, types} -> Map.put(eip712, "types", types)
+      :error -> eip712
+    end
   end
 
   defp stub_quote_and_execute do

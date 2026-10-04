@@ -1139,7 +1139,7 @@ defmodule Raxol.Payments.Protocols.XochiTest do
         canonical_erc3009_pull(%{
           types: %{
             "ReceiveWithAuthorization" =>
-              transfer_fields ++ [%{"name" => "evil", "type" => "address"}]
+              Enum.concat(transfer_fields, [%{"name" => "evil", "type" => "address"}])
           }
         })
 
@@ -1246,7 +1246,7 @@ defmodule Raxol.Payments.Protocols.XochiTest do
   defp declare_intent_field(%QuoteResponse{} = quote_resp, name, type) do
     update_in(
       quote_resp.eip712_data["types"]["XochiIntent"],
-      &(&1 ++ [%{"name" => name, "type" => type}])
+      &Enum.concat(&1, [%{"name" => name, "type" => type}])
     )
   end
 

@@ -468,8 +468,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # contract. Which makes --fund the thing that decides whether the allowance is
   # granted at all, so the plan says that before the run signs anything.
   defp permit2_lines(cfg, opts) do
-    pull_lines(cfg, Keyword.get(opts, :dry_run, false), Keyword.get(opts, :fund, false)) ++
+    Enum.concat(
+      pull_lines(cfg, Keyword.get(opts, :dry_run, false), Keyword.get(opts, :fund, false)),
       ["             spender pin: #{spender_pin(cfg)}"]
+    )
   end
 
   defp pull_lines(cfg, true = _dry_run?, _funding?) do

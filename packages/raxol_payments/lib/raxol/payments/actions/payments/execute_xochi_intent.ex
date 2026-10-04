@@ -141,17 +141,21 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
          {:ok, config} <- fetch(context, :xochi_config),
          {:ok, request, amount} <- build_request(params, wallet),
          {:ok, store} <- resolve_checkpoint(context, request) do
-      key = idempotency_key(context, request)
-
-      case Checkpoint.fetch(store, key) do
-        # Poll-before-re-sign: this payment is already in flight from an earlier
-        # run that crashed before confirming. Return the recorded intent without
-        # reserving budget or signing again.
-        {:ok, record} -> {:ok, resume_summary(record)}
-        :error -> settle(config, wallet, request, amount, params, context, store, key)
-      end
+      resume_or_settle(config, wallet, request, amount, params, context, store)
     end
     |> normalize_error()
+  end
+
+  defp resume_or_settle(config, wallet, request, amount, params, context, store) do
+    key = idempotency_key(context, request)
+
+    case Checkpoint.fetch(store, key) do
+      # Poll-before-re-sign: this payment is already in flight from an earlier
+      # run that crashed before confirming. Return the recorded intent without
+      # reserving budget or signing again.
+      {:ok, record} -> {:ok, resume_summary(record)}
+      :error -> settle(config, wallet, request, amount, params, context, store, key)
+    end
   end
 
   defp normalize_error({:ok, _result} = ok), do: ok
@@ -166,17 +170,21 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
          {:ok, exec, filled_quote} <-
            execute(config, request, quote, floor, wallet, context, amount, store, key),
          :ok <- assert_settlement_privacy(request, exec) do
-      # On exact_output the request carries no origin amount; report the one the
-      # signed intent bound (equal to the request's on exact_input).
-      reported = %{request | from_amount: Xochi.intent_from_amount(filled_quote)}
-      summary = summary(reported, filled_quote, exec)
-      # Best-effort, non-blocking: emit a signed activity row to the user's live
-      # feed (and stash the route for the terminal announce). Never affects the
-      # swap; a no-op unless a capability topic_id is configured.
-      SwapAnnouncer.announce_execute(context, reported, filled_quote, exec)
-      Checkpoint.put(store, key, settled_record(summary))
-      {:ok, summary}
+      record_settled(context, request, filled_quote, exec, store, key)
     end
+  end
+
+  defp record_settled(context, request, filled_quote, exec, store, key) do
+    # On exact_output the request carries no origin amount; report the one the
+    # signed intent bound (equal to the request's on exact_input).
+    reported = %{request | from_amount: Xochi.intent_from_amount(filled_quote)}
+    summary = summary(reported, filled_quote, exec)
+    # Best-effort, non-blocking: emit a signed activity row to the user's live
+    # feed (and stash the route for the terminal announce). Never affects the
+    # swap; a no-op unless a capability topic_id is configured.
+    SwapAnnouncer.announce_execute(context, reported, filled_quote, exec)
+    Checkpoint.put(store, key, settled_record(summary))
+    {:ok, summary}
   end
 
   # An in-doubt (reconciling) settlement has not landed yet: the worker could not
@@ -417,34 +425,37 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   defp build_request(params, wallet) do
     amount = Decimal.new(Map.fetch!(params, :amount))
-    from_token = Map.fetch!(params, :from_token)
-    from_chain = Map.fetch!(params, :from_chain_id)
     settlement = settlement(params)
 
     with {:ok, decimals} <- registered_legs(params),
          :ok <- validate_min_to_amount(params),
          {:ok, spending_key, viewing_key} <- stealth_keys(settlement, params),
          {:ok, amounts} <- swap_amounts(params, Assets.to_atomic(amount, decimals)) do
-      request =
-        struct!(
-          QuoteRequest,
-          Map.merge(amounts, %{
-            wallet: wallet.address(),
-            from_chain_id: from_chain,
-            to_chain_id: Map.fetch!(params, :to_chain_id),
-            from_token: from_token,
-            to_token: Map.fetch!(params, :to_token),
-            recipient_address: Map.get(params, :recipient_address),
-            settlement_preference: settlement,
-            slippage_bps: Map.get(params, :slippage_bps) || 50,
-            trust_score: Map.get(params, :trust_score),
-            stealth_spending_pub_key: spending_key,
-            stealth_viewing_pub_key: viewing_key
-          })
-        )
+      fields =
+        params
+        |> route_fields()
+        |> Map.merge(amounts)
+        |> Map.merge(%{
+          wallet: wallet.address(),
+          settlement_preference: settlement,
+          stealth_spending_pub_key: spending_key,
+          stealth_viewing_pub_key: viewing_key
+        })
 
-      {:ok, request, amount}
+      {:ok, struct!(QuoteRequest, fields), amount}
     end
+  end
+
+  defp route_fields(params) do
+    %{
+      from_chain_id: Map.fetch!(params, :from_chain_id),
+      to_chain_id: Map.fetch!(params, :to_chain_id),
+      from_token: Map.fetch!(params, :from_token),
+      to_token: Map.fetch!(params, :to_token),
+      recipient_address: Map.get(params, :recipient_address),
+      slippage_bps: Map.get(params, :slippage_bps) || 50,
+      trust_score: Map.get(params, :trust_score)
+    }
   end
 
   # exact_input sends the atomic `amount`; exact_output sends `output_amount`
@@ -578,12 +589,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # The dispatched intent is checkpointed before submit so that a crash during
   # submit leaves a record a resumed run can poll instead of re-signing.
   defp execute(config, request, quote, floor, wallet, context, amount, store, key) do
-    Checkpoint.put(store, key, dispatched_record(quote))
-
-    case safe_execute(config, quote, wallet, request) do
-      {:ok, exec} ->
-        tag_dispatch(context, exec, amount)
-        {:ok, exec, quote}
+    case submit(config, quote, wallet, request, context, amount, store, key) do
+      {:ok, _exec, _quote} = dispatched ->
+        dispatched
 
       {:error, reason} ->
         if quote_expired?(reason),
@@ -598,20 +606,24 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # execute failure.
   defp retry_execute(config, request, floor, wallet, context, amount, store, key) do
     with {:ok, quote} <- solvable_quote(config, request),
-         :ok <- assert_quote(quote, request, floor) |> refuse_retry(context, amount, store, key) do
-      Checkpoint.put(store, key, dispatched_record(quote))
-
-      case safe_execute(config, quote, wallet, request) do
-        {:ok, exec} ->
-          tag_dispatch(context, exec, amount)
-          {:ok, exec, quote}
-
-        {:error, reason} ->
-          release_and_clear(context, amount, reason, store, key)
-      end
+         :ok <- assert_quote(quote, request, floor) |> refuse_retry(context, amount, store, key),
+         {:ok, _exec, _quote} = dispatched <-
+           submit(config, quote, wallet, request, context, amount, store, key) do
+      dispatched
     else
       {:refused, reason} -> {:error, reason}
       {:error, reason} -> release_and_clear(context, amount, reason, store, key)
+    end
+  end
+
+  # Checkpoint the intent as dispatched, then submit it; a dispatched intent has
+  # its reservation tagged.
+  defp submit(config, quote, wallet, request, context, amount, store, key) do
+    Checkpoint.put(store, key, dispatched_record(quote))
+
+    with {:ok, exec} <- safe_execute(config, quote, wallet, request) do
+      tag_dispatch(context, exec, amount)
+      {:ok, exec, quote}
     end
   end
 

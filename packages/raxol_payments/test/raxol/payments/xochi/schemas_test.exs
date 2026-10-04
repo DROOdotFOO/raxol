@@ -3,11 +3,11 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
 
   alias Raxol.Payments.Xochi.Schemas.{
     DepositRouteRequest,
-    QuoteRequest,
-    QuoteResponse,
     ExecuteRequest,
     ExecuteResponse,
-    IntentStatus
+    IntentStatus,
+    QuoteRequest,
+    QuoteResponse
   }
 
   describe "QuoteRequest.to_json/1" do
