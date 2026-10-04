@@ -4,10 +4,14 @@ defmodule Raxol.Agent.Actions.FsTest do
   alias Raxol.Agent.Actions.Fs
 
   setup do
+    # Expanded, as Fs reports paths: on Windows that turns `C:\...\Temp`
+    # into `c:/.../Temp`.
     dir =
-      Path.join(
-        System.tmp_dir!(),
-        "raxol-fs-test-#{System.unique_integer([:positive])}"
+      Path.expand(
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-fs-test-#{System.unique_integer([:positive])}"
+        )
       )
 
     File.mkdir_p!(Path.join(dir, "sub"))
@@ -165,7 +169,7 @@ defmodule Raxol.Agent.Actions.FsTest do
     test "a symlinked directory pointing outside the sandbox is rejected",
          %{dir: dir, outside: outside} do
       link = Path.join(dir, "escape_dir")
-      File.ln_s!(outside, link)
+      Raxol.Agent.Test.DirLink.ln_s!(outside, link)
 
       assert {:error, :outside_cwd} = Fs.resolve("escape_dir/secret.txt")
 
@@ -212,7 +216,7 @@ defmodule Raxol.Agent.Actions.FsTest do
          %{dir: dir} do
       target = Path.join(dir, "sub")
       link = Path.join(dir, "inside_link")
-      File.ln_s!(target, link)
+      Raxol.Agent.Test.DirLink.ln_s!(target, link)
 
       assert {:ok, _abs} = Fs.resolve("inside_link")
       assert {:ok, %{entries: []}} = Fs.ListDir.run(%{path: "inside_link"}, %{})

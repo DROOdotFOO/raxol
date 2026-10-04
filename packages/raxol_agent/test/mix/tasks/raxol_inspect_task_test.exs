@@ -6,10 +6,14 @@ defmodule Mix.Tasks.Raxol.InspectTaskTest do
   import ExUnit.CaptureIO
 
   setup do
+    # Expanded, as the task reports the cwd: on Windows that turns
+    # `C:\...\Temp` into `c:/.../Temp`.
     cwd =
-      Path.join(
-        System.tmp_dir!(),
-        "raxol-inspect-task-#{System.unique_integer([:positive])}"
+      Path.expand(
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-inspect-task-#{System.unique_integer([:positive])}"
+        )
       )
 
     File.mkdir_p!(cwd)

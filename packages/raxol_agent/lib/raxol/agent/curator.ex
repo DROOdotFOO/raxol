@@ -92,7 +92,10 @@ defmodule Raxol.Agent.Curator do
       Map.merge(config, %{
         skills: skills,
         root: root,
-        backups_dir: opts[:backups_dir] || default_backups_dir(root),
+        # Expanded, as Skills.Store expands its roots: `Path.wildcard/1` reads
+        # `\` as an escape, so a Windows path spelled with backslashes globbed
+        # nothing and rollback reported :no_backup beside a fresh backup.
+        backups_dir: Path.expand(opts[:backups_dir] || default_backups_dir(root)),
         last_pass_at: nil,
         last_activity_at: now,
         next_allowed_at: now + config.interval_hours * @seconds_per_hour

@@ -87,6 +87,8 @@ defmodule Raxol.Agent.DirectiveTest do
   end
 
   describe "Executor for Shell" do
+    # Shell directives run through `/bin/sh -c`.
+    @tag :unix_only
     test "captures stdout and exit_status 0" do
       directive = Directive.shell("echo hello-from-shell")
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
@@ -98,6 +100,7 @@ defmodule Raxol.Agent.DirectiveTest do
       assert String.contains?(output, "hello-from-shell")
     end
 
+    @tag :unix_only
     test "non-zero exit_status is returned" do
       directive = Directive.shell("exit 7")
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
@@ -106,6 +109,7 @@ defmodule Raxol.Agent.DirectiveTest do
                      5_000
     end
 
+    @tag :unix_only
     test "timeout closes the port and reports :timeout" do
       directive = Directive.shell("sleep 5", timeout: 100)
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})

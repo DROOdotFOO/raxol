@@ -76,6 +76,8 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatchTest do
   end
 
   describe "read_ppid/0" do
+    # Reads /proc/self/stat or POSIX `ps -o ppid=`; Windows has neither.
+    @tag :unix_only
     test "returns this process's real parent" do
       assert {:ok, ppid} = ParentWatch.read_ppid()
       assert is_integer(ppid) and ppid > 0

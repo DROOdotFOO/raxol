@@ -404,9 +404,11 @@ defmodule Raxol.Agent.Skills.Store do
   end
 
   # Reject absolute paths and any `..` segment so a supporting-file read can
-  # never escape the skill directory.
+  # never escape the skill directory. `== :relative`, not `!= :absolute`: on
+  # Windows "/etc/passwd" and "c:etc" are `:volumerelative`, rooted on a
+  # drive rather than in the skill directory.
   defp safe_relative?(path) do
-    not (Path.type(path) == :absolute or ".." in Path.split(path))
+    Path.type(path) == :relative and ".." not in Path.split(path)
   end
 
   # -- usage telemetry --------------------------------------------------------

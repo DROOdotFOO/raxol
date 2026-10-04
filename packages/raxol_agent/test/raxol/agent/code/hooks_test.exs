@@ -42,6 +42,8 @@ defmodule Raxol.Agent.Code.HooksTest do
   end
 
   describe "before_call/2 (pre-tool veto)" do
+    # Hook commands run through `/bin/sh -c` (Actions.Code.run_shell/4).
+    @tag :unix_only
     test "a matching pre-hook that exits non-zero vetoes the call", %{dir: dir} do
       config = %{pre: [%{match: "bash", command: "exit 1"}], post: [], stop: []}
       context = %{code_hooks: config, hook_cwd: dir}
@@ -51,6 +53,7 @@ defmodule Raxol.Agent.Code.HooksTest do
                Hooks.before_call(call, context)
     end
 
+    @tag :unix_only
     test "a matching pre-hook that exits zero allows the call", %{dir: dir} do
       config = %{pre: [%{match: "bash", command: "exit 0"}], post: [], stop: []}
       context = %{code_hooks: config, hook_cwd: dir}
@@ -69,6 +72,8 @@ defmodule Raxol.Agent.Code.HooksTest do
   end
 
   describe "after_call/3" do
+    @describetag :unix_only
+
     test "runs post-hooks and returns the result unchanged", %{dir: dir} do
       config = %{pre: [], post: [%{match: "*", command: "true"}], stop: []}
       context = %{code_hooks: config, hook_cwd: dir}
@@ -79,6 +84,8 @@ defmodule Raxol.Agent.Code.HooksTest do
   end
 
   describe "run_stop/2" do
+    @describetag :unix_only
+
     test "runs each stop command and reports its exit status", %{dir: dir} do
       config = %{pre: [], post: [], stop: ["exit 0", "exit 2"]}
       receipts = Hooks.run_stop(config, dir)

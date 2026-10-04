@@ -73,6 +73,9 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       refute File.read!(Credentials.path()) =~ "sk-secret"
     end
 
+    # POSIX mode bits: Windows reports 0o666/0o444 whatever chmod asked for,
+    # and OperatorFile skips the mode check there by design.
+    @tag :unix_only
     test "writes the file with owner-only permissions", %{path: path} do
       Credentials.put(:openai, op_ref: "op://Vault/OpenAI/key")
       %File.Stat{mode: mode} = File.stat!(path)
@@ -150,8 +153,13 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       )
       """
 
+      # A file, not `-e`: Windows' elixir.bat cuts a multi-line argument at
+      # its first newline.
+      script_file = Path.join(tmp_dir("raxol-fresh-vm"), "check.exs")
+      File.write!(script_file, script)
+
       {out, status} =
-        System.cmd(elixir, code_paths ++ ["-e", script],
+        System.cmd(elixir, code_paths ++ [script_file],
           env: [{"RAXOL_PROVIDERS", path}],
           cd: System.tmp_dir!(),
           stderr_to_stdout: true
@@ -163,6 +171,7 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     # An entry here names the vault item a provider key is read from, so a
     # store another account may rewrite is a store that can redirect
     # `op read`. The resolver falls through to env vars instead.
+    @tag :unix_only
     test "a store another account may rewrite grants nothing", %{path: path} do
       File.write!(path, Jason.encode!(%{"openai" => %{"op_ref" => "op://attacker/item/f"}}))
       File.chmod!(path, 0o666)
@@ -178,6 +187,7 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     # other provider reference in the file with the new entry (and chmodded
     # it 600 on the way out). A refused store is still writable by its owner;
     # 0664 is what umask 002 produces.
+    @tag :unix_only
     test "a store another account may rewrite is not overwritten", %{path: path} do
       contents = Jason.encode!(%{"openai" => %{"op_ref" => "op://Vault/OpenAI/key"}})
       File.write!(path, contents)
@@ -266,6 +276,9 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
   end
 
   describe "bounded op shell-out" do
+    # The fake `op` is a `#!/bin/sh` script on a `:`-separated PATH.
+    @describetag :unix_only
+
     # A fake `op` that hangs stands in for a locked vault: the runner
     # must give up (bounded by RAXOL_OP_TIMEOUT_MS) and kill the child
     # instead of blocking the caller for the child's lifetime.
@@ -397,6 +410,38 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       assert {:error, :op_timeout} =
                Credentials.run_executable(sleep, ["30"], 300)
     end
+
+    # Windows takes the direct-spawn clause of `SpawnedPort.spawn_spec/3`: no
+    # wrapper shell, just `:in`, which erts turns into a NUL stdin. `sort`
+    # with no file argument reads stdin to EOF, the same discriminator as
+    # `cat` above: an open stdin pipe would hold it until the deadline and
+    # come back as `{:error, :op_timeout}`, never as a clean `{"", 0}`.
+    @tag :windows_only
+    test "a stdin-reading child sees EOF on Windows" do
+      assert {"", 0} = Credentials.run_executable(system32("sort.exe"), [], 5_000)
+    end
+
+    @tag :windows_only
+    test "returns the child's output and exit status on Windows" do
+      assert {"hello\r\n", 0} =
+               Credentials.run_executable(system32("cmd.exe"), ["/c", "echo hello"], 5_000)
+    end
+
+    # No wrapper shell to turn a missing target into an exit code: the spawn
+    # itself fails, and that must come back as a value, not a raise.
+    @tag :windows_only
+    test "reports a missing executable as a spawn failure on Windows" do
+      missing = Path.join(tmp_dir("raxol-no-exe"), "nope.exe")
+
+      assert {:error, {:op_spawn_failed, :enoent}} =
+               Credentials.run_executable(missing, [], 5_000)
+    end
+
+    @tag :windows_only
+    test "bounds a child that outlives its deadline on Windows" do
+      assert {:error, :op_timeout} =
+               Credentials.run_executable(system32("PING.EXE"), ["-n", "30", "127.0.0.1"], 300)
+    end
   end
 
   defp put_env_restored(var, value) do
@@ -407,6 +452,10 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       if prev, do: System.put_env(var, prev), else: System.delete_env(var)
     end)
   end
+
+  # Absolute, so Git-for-Windows' `/usr/bin` lookalikes on the runner's PATH
+  # never stand in for the native binary.
+  defp system32(exe), do: Path.join([System.fetch_env!("SystemRoot"), "System32", exe])
 
   defp tmp_dir(prefix) do
     dir = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive])}")

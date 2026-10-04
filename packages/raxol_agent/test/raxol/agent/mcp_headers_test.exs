@@ -110,6 +110,8 @@ defmodule Raxol.Agent.McpHeadersTest do
       assert length(String.split(log, "mcp headers:")) == 2
     end
 
+    # The fake `op` (top of file) is a `#!/bin/sh` script.
+    @tag :unix_only
     test "resolves only the reference the operator allowlisted for that header", %{
       allowlist: allowlist
     } do
@@ -147,6 +149,7 @@ defmodule Raxol.Agent.McpHeadersTest do
   end
 
   describe "a user-level spec" do
+    @tag :unix_only
     test "resolves an op:// reference through op read", %{log: log} do
       assert {:ok, [{"Authorization", @secret}]} =
                McpHeaders.resolve([{"Authorization", "op://Employee/Intel/token"}],
@@ -159,6 +162,7 @@ defmodule Raxol.Agent.McpHeadersTest do
       assert File.read!(log) =~ "read op://Employee/Intel/token"
     end
 
+    @tag :unix_only
     test "interpolates ${env:} and ${op://} inside a value" do
       System.put_env("INTEL_TOKEN", "env-resolved-s3cr3t")
 
@@ -191,6 +195,7 @@ defmodule Raxol.Agent.McpHeadersTest do
                )
     end
 
+    @tag :unix_only
     test "op's own failure text never reaches the error term or the log" do
       captured =
         capture_log(fn ->
@@ -208,6 +213,8 @@ defmodule Raxol.Agent.McpHeadersTest do
   # The allowlist is the only thing standing between a cloned `.mcp.json` and
   # this operator's secrets, so where it comes from is part of the control.
   describe "an allowlist that is not demonstrably the operator's" do
+    # $HOME, POSIX modes and uids: OperatorFile's Unix-only checks.
+    @tag :unix_only
     test "does not exist at all when the process has no home directory", %{dir: dir} do
       # What the old fallback would have read: `System.tmp_dir!/0` honours
       # TMPDIR, so this IS the `/tmp/.raxol/mcp_headers.json` any local user
@@ -241,6 +248,7 @@ defmodule Raxol.Agent.McpHeadersTest do
       assert log =~ "no home directory"
     end
 
+    @tag :unix_only
     test "is refused when another account may write it", %{allowlist: allowlist} do
       allow(allowlist, %{"Authorization" => ["${env:INTEL_TOKEN}"]})
       File.chmod!(allowlist, 0o664)
@@ -262,6 +270,7 @@ defmodule Raxol.Agent.McpHeadersTest do
     # A test cannot chown, so the foreign owner is a file the system owns.
     # Running as root makes every file ours, and the premise unstageable.
     if OperatorFile.uid() not in [0, :unknown] do
+      @tag :unix_only
       test "is refused, legibly, when another account owns it" do
         System.put_env("RAXOL_MCP_HEADER_ALLOWLIST", "/etc/hosts")
         System.put_env("INTEL_TOKEN", "env-resolved-s3cr3t")

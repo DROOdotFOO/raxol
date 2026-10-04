@@ -142,6 +142,10 @@ defmodule Raxol.Agent.Code.McpConfigTest do
   # lets it reach any host. Where the file came from is therefore part of the
   # grant, not a detail of path construction.
   describe "user-level provenance" do
+    # $HOME and POSIX modes: on Windows OperatorFile takes the home from
+    # System.user_home/0 and skips the mode check.
+    @describetag :unix_only
+
     setup %{dir: dir} do
       previous = %{
         "HOME" => System.get_env("HOME"),

@@ -374,9 +374,26 @@ defmodule Raxol.Agent.Actions.Fs do
 
   @spec safe_realpath(String.t()) :: {:ok, String.t()} | :error
   defp safe_realpath(path) do
-    case walk(Path.split(path), "/", 0) do
+    {root, rest} = split_root(path)
+
+    case walk(rest, root, 0) do
       {:ok, real} -> {:ok, real}
       {:error, :symlink_loop} -> :error
+    end
+  end
+
+  # The walk must start at the path's own root. Joining a Windows drive root
+  # ("c:/") onto "/" yields a path no file call resolves, so every
+  # `read_link` missed and containment silently fell back to the lexical
+  # path -- a symlink out of the sandbox passed. The root is expanded so a
+  # "C:/" and a "c:/" spelling of one drive compare equal.
+  defp split_root(path) do
+    case Path.split(path) do
+      [first | rest] = parts ->
+        if Path.type(first) == :absolute, do: {Path.expand(first), rest}, else: {"/", parts}
+
+      [] ->
+        {"/", []}
     end
   end
 
@@ -399,7 +416,8 @@ defmodule Raxol.Agent.Actions.Fs do
             Path.expand(target, acc)
           end
 
-        walk(Path.split(resolved) ++ rest, "/", hops + 1)
+        {root, parts} = split_root(resolved)
+        walk(parts ++ rest, root, hops + 1)
 
       {:error, _not_a_symlink_or_missing} ->
         walk(rest, candidate, hops)

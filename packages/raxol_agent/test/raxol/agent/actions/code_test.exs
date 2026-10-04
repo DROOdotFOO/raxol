@@ -79,6 +79,8 @@ defmodule Raxol.Agent.Actions.CodeTest do
                Code.Write.run(%{path: "../escape", content: "x"}, %{})
     end
 
+    # The fake server is test/support/fake_lsp_server.py, run by its shebang.
+    @tag :unix_only
     test "includes post-write diagnostics when LSP is available", %{dir: dir} do
       assert {:ok, result} =
                Code.Write.run(
@@ -132,6 +134,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
                )
     end
 
+    @tag :unix_only
     test "includes post-edit diagnostics when LSP is available", %{dir: dir} do
       File.write!(Path.join(dir, "edit.toy"), "def alpha\n  fine\n")
 
@@ -358,6 +361,8 @@ defmodule Raxol.Agent.Actions.CodeTest do
   end
 
   describe "Bash" do
+    # Bash is `/bin/sh -c` (run_shell/4).
+    @tag :unix_only
     test "runs a command and captures stdout + exit status" do
       assert {:ok, result} =
                Code.Bash.run(%{command: "echo hello"}, %{})
@@ -367,6 +372,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert result.truncated == false
     end
 
+    @tag :unix_only
     test "captures a non-zero exit status" do
       assert {:ok, %{exit_status: status}} =
                Code.Bash.run(%{command: "exit 3"}, %{})
@@ -377,6 +383,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
     # These two go through `call/2` rather than `run/2` deliberately. `run/2`
     # skips output-schema validation, so a test written against it passes while
     # the path the tool loop actually takes fails.
+    @tag :unix_only
     test "a timed-out command reports 124 and survives output validation" do
       # Two defects met here. The port was closed unguarded, so the SIGKILL on
       # the line above left `Port.close/1` raising on an already dead port; and
@@ -390,6 +397,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert result.timed_out == true
     end
 
+    @tag :unix_only
     test "a timed-out command leaves no port message in the caller's mailbox" do
       # The SIGKILL brings the port down before the close, so its exit status is
       # already queued and closing does not retract it. Nothing matches it
@@ -409,6 +417,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert port_messages == []
     end
 
+    @tag :unix_only
     test "a command that reads stdin sees EOF instead of an open pipe" do
       # `run_shell/4` never writes to the port and passes no `:in`, so without
       # the `SpawnedPort.null_stdin_command/1` redirect `cat` waits on an open
@@ -421,6 +430,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert result.truncated == false
     end
 
+    @tag :unix_only
     test "the Sleuth key and raxol's own secrets do not reach the child" do
       previous = System.get_env("RAXOL_SLEUTH_API_KEY")
       System.put_env("RAXOL_SLEUTH_API_KEY", "sk-probe-not-real")
@@ -451,6 +461,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
                )
     end
 
+    @tag :unix_only
     test "runs in the working directory by default", %{dir: dir} do
       # `/bin/sh pwd` reports the physical path (macOS resolves /var ->
       # /private/var), so match on the unique dir basename rather than the
@@ -466,6 +477,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
                Code.Bash.run(%{command: "rm -rf /"}, %{shell_sandbox: sandbox})
     end
 
+    @tag :unix_only
     test "allows a command permitted by the sandbox allowlist" do
       sandbox = Sandbox.Shell.allowlist(["echo"])
 
@@ -610,7 +622,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
 
       File.mkdir_p!(outside)
       File.write!(Path.join(outside, "secret.txt"), "TOPSECRET value\n")
-      File.ln_s!(outside, Path.join(dir, "vendor"))
+      Raxol.Agent.Test.DirLink.ln_s!(outside, Path.join(dir, "vendor"))
 
       on_exit(fn -> File.rm_rf!(outside) end)
       %{outside: outside}

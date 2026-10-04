@@ -595,6 +595,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     refute_receive {:conn_notify, _, _}, 150
   end
 
+  # POSIX shell and process groups.
+  @tag :unix_only
   @tag :tmp_dir
   test "cancel mid-bash kills the real OS process group", %{tmp_dir: tmp_dir} do
     pid_file = Path.join(tmp_dir, "shell.pid")

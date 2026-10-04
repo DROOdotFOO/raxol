@@ -172,6 +172,8 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
     end
   end
 
+  # The fake `op` (setup) is a `#!/bin/sh` script.
+  @tag :unix_only
   test "a user-level spec resolves the same reference and hands over the resolved value", %{
     op_log: op_log
   } do
@@ -205,6 +207,7 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
   # reference server in `lib/` standing in for the socket, and a resolver, so
   # the address vet runs without DNS. Everything between the spec and the tool
   # list is production code.
+  @tag :unix_only
   test "a remote spec reaches a real client and lists the server's tools", %{op_log: op_log} do
     # The HTTP transport, its exchange and the shared bounded read all sit
     # behind a compile-time `Code.ensure_loaded?(Mint.HTTP)` in raxol_mcp, and
@@ -396,6 +399,8 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
       assert log =~ hosts
     end
 
+    # POSIX mode bits; OperatorFile skips the mode check on Windows.
+    @tag :unix_only
     test "is refused when the allowlist is one another account may write", %{hosts: hosts} do
       File.chmod!(hosts, 0o666)
 

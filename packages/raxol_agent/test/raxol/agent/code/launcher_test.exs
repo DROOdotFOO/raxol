@@ -311,7 +311,8 @@ defmodule Raxol.Agent.Code.LauncherTest do
       end)
 
       assert_received {:served, Raxol.Agent.Code.App, opts}
-      assert opts[:tenants_dir] == "/srv/tenants"
+      # Expanded: on Windows "/srv" is drive-relative.
+      assert opts[:tenants_dir] == Path.expand("/srv/tenants")
       refute Keyword.has_key?(opts, :authorized_keys_dir)
 
       # The tenant fun derives that user's jailed option set.

@@ -42,6 +42,18 @@ defmodule Raxol.Agent.SkillTest do
                skill.metadata
     end
 
+    # A SKILL.md saved on Windows. Built with String.replace/3 rather than a
+    # literal so the test means the same under an autocrlf checkout.
+    test "parses a SKILL.md with CRLF line endings" do
+      crlf = @sample |> String.replace("\r\n", "\n") |> String.replace("\n", "\r\n")
+
+      assert {:ok, skill} = Skill.parse(crlf)
+      assert skill.name == "deploy-fly"
+      assert skill.category == "ops"
+      assert %{"metadata" => %{"tags" => ["deploy", "fly"]}} = skill.metadata
+      assert skill.body =~ "flyctl deploy"
+    end
+
     test "decodes created_by to :agent, :user, or nil" do
       assert {:ok, %{created_by: :user}} = Skill.parse(frontmatter("name: x\ncreated_by: user"))
       assert {:ok, %{created_by: nil}} = Skill.parse(frontmatter("name: x\ncreated_by: robot"))
