@@ -55,6 +55,25 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
     end)
   end
 
+  # capture_log sees every process's log while it runs, and this module is
+  # async: another test's deliberate crash log (Input.Buffer's raising
+  # callback) landed in the capture and failed CI. Parsing runs in the
+  # calling process, so only its events count.
+  defmodule OwnPidFormatter do
+    @moduledoc false
+    def format(%{meta: %{pid: pid}} = event, {owner, formatter}) when pid == owner do
+      {mod, config} = formatter
+      mod.format(event, config)
+    end
+
+    def format(_event, _config), do: ""
+  end
+
+  defp capture_own_log(fun) do
+    formatter = {OwnPidFormatter, {self(), Logger.default_formatter()}}
+    ExUnit.CaptureLog.capture_log([level: :info, formatter: formatter], fun)
+  end
+
   defp reductions_to_feed(input) do
     in_capped_process(fn ->
       emulator = Emulator.new(80, 24)
@@ -370,10 +389,7 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
         "\e[5y\e[1$y\e]999;x\a\e]x\a\eP$qzz\e\\\ePq#9999;9;1;1;1~\e\\\e[9K\e[?9K" <>
           <<0x8E, 0x8F>> <> "\e[1\x80\e]0;a\eZ\ec"
 
-      log =
-        ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          feed(Emulator.new(80, 24), input)
-        end)
+      log = capture_own_log(fn -> feed(Emulator.new(80, 24), input) end)
 
       assert log == ""
     end
@@ -382,7 +398,7 @@ defmodule Raxol.Terminal.Emulator.OutputBoundsTest do
   describe "EL (CSI Ps K) with an unknown mode" do
     test "is ignored and logs nothing at :info" do
       log =
-        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        capture_own_log(fn ->
           emulator = feed(Emulator.new(80, 24), "kept\e[9K\e[?9K")
           assert String.starts_with?(get_line_text(emulator, 0), "kept")
         end)

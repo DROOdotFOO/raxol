@@ -52,6 +52,22 @@ defmodule Raxol.Symphony.Runners.Codex.AuthTest do
 
       assert Auth.resolve(codex(%{mode: :inherit})).authenticated?
     end
+
+    test "an OPENAI_API_KEY the child never sees does not count", %{tmp: tmp} do
+      previous = Application.get_env(:raxol_core, Raxol.Core.ChildEnv)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:raxol_core, Raxol.Core.ChildEnv, previous),
+          else: Application.delete_env(:raxol_core, Raxol.Core.ChildEnv)
+      end)
+
+      Application.put_env(:raxol_core, Raxol.Core.ChildEnv, extra_secrets: ["OPENAI_API_KEY"])
+      System.put_env("CODEX_HOME", tmp)
+      System.put_env("OPENAI_API_KEY", "sk-ambient")
+
+      refute Auth.resolve(codex(%{mode: :inherit})).authenticated?
+    end
   end
 
   describe "resolve/1 :api_key" do

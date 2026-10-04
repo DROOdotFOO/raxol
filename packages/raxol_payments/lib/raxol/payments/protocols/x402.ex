@@ -41,11 +41,13 @@ defmodule Raxol.Payments.Protocols.X402 do
            decoded["maxAmountRequired"] || decoded["price"],
          :ok <- validate_positive_amount(price),
          pay_to when not is_nil(pay_to) <- decoded["payTo"] || decoded["pay_to"],
-         :ok <- validate_address(pay_to) do
+         :ok <- validate_address(pay_to),
+         currency = decoded["asset"] || decoded["currency"],
+         :ok <- reject_fx_asset(decoded["network"], currency) do
       {:ok,
        %{
          price: price,
-         currency: decoded["asset"] || decoded["currency"],
+         currency: currency,
          network: decoded["network"],
          pay_to: pay_to,
          nonce: decoded["nonce"],
@@ -57,6 +59,17 @@ defmodule Raxol.Payments.Protocols.X402 do
       nil -> {:error, :missing_required_field}
       {:error, _} = err -> err
       _ -> {:error, :invalid_challenge}
+    end
+  end
+
+  # `amount/1` scales by the asset's registered decimals and the spend gate caps
+  # in dollars, so a non-USD stablecoin would be reserved and charged at par.
+  # Refuse the challenge (ADR-0040 decision 6) until an FX rate gates the
+  # conversion (decision 7).
+  defp reject_fx_asset(network, asset) do
+    case Raxol.Payments.Assets.fx_peg(network, asset) do
+      nil -> :ok
+      peg -> {:error, {:unpriced_asset, %{network: network, asset: asset, peg: peg}}}
     end
   end
 

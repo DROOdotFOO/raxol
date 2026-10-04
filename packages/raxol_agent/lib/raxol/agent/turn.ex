@@ -82,6 +82,7 @@ defmodule Raxol.Agent.Turn do
     |> maybe_put(:skills, skills_context(agent_module, opts))
     |> maybe_put(:user_context, user_context(opts))
     |> maybe_put(:session_search, session_search_context(opts))
+    |> Raxol.Agent.Web3.put_context()
   end
 
   @doc """

@@ -189,6 +189,24 @@ enum rather than thirteen, because an Action sits in a coding agent's toolset
 for the whole session and thirteen tool definitions in every prompt is a cost
 paid by every turn, including the turns that never touch a chain.
 
+### FX market data (ADR-0040)
+
+`Raxol.Web3.FX` pairs two sources and attaches a verdict to every asset.
+Sleuth (`FX.Sleuth`) supplies the market: stablecoins with price, supply,
+volume and corridor totals, keyed by a Bearer credential that never reaches a
+URL, a log line or `inspect/1`. Chainlink (`FX.Chainlink`) is the rate of
+record, read by `eth_call` over RPC URLs that `inspect/1` never renders
+either, after checking the feed's identity, its freshness
+(`heartbeat * 1.1`) and, on Base, the L2 sequencer. EUR prefers Base and falls
+back to Ethereum, CHF reads Ethereum, and USD is exactly 1. `FX.Quality`
+judges each asset against that rate, never against Sleuth's own deviation or
+FX rates: `:yield_bearing`, `:no_rate`, `:suspect` (more than 100 bps off peg,
+or no price) or `:ok`.
+
+None of it implements `Raxol.Web3.Backend`: Sleuth knows nothing about any
+chain's identity or height, which is what ADR-0039 makes a backend. RPC URLs
+and the Sleuth key come from the caller; the package reads no environment.
+
 ## What is not here yet
 
 `Raxol.MCP.Aggregator` (ADR-0033 decision 1) is not here: nothing in this

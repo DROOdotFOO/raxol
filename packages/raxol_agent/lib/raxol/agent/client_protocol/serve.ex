@@ -335,7 +335,10 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   defp turn_opts({:ok, executor}) do
     [
       executor: executor,
-      actions: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all(),
+      actions:
+        Raxol.Agent.Actions.Fs.all() ++
+          Raxol.Agent.Actions.Code.all() ++ Raxol.Agent.Web3.enabled_actions(),
+      context: Raxol.Agent.Web3.put_context(%{}),
       system_prompt:
         "You are a coding assistant driven by an editor over ACP. Inspect " <>
           "files with the read tools, and use write_file, edit_file and bash " <>

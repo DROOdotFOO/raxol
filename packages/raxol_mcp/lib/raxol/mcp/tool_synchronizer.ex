@@ -2,10 +2,10 @@ defmodule Raxol.MCP.ToolSynchronizer do
   @moduledoc """
   Per-session GenServer that bridges the render pipeline to the MCP Registry.
 
-  Listens for `[:raxol, :runtime, :view_tree_updated]` telemetry events,
-  derives tools from the view tree via `TreeWalker`, diffs against the
-  previously registered set, and updates the Registry. Debounces rapid
-  renders (50ms) to avoid thrashing.
+  When an app module is provided, pulls the current model and derives its
+  initial tools synchronously before startup returns. Subsequent
+  `[:raxol, :runtime, :view_tree_updated]` telemetry events refresh tools from
+  the rendered view tree. Rapid renders are debounced for 50ms.
 
   Also manages model-projected resources when the app implements
   `Raxol.MCP.ResourceProvider`, and registers context tree + widget tree
@@ -69,6 +69,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   When a widget gains focus (keyboard or mouse click), call this to
   adjust which tools are exposed via `FocusLens`.
+
+  Emits `:pane_focus` behavior data with the focused ID in `:pane_id`, plus
+  `[:raxol, :mcp, :focus_changed]` telemetry.
   """
   @spec update_focus(GenServer.server(), String.t() | nil) :: :ok
   def update_focus(synchronizer, widget_id) do
@@ -80,6 +83,10 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   When the mouse hovers over a widget, call this so `FocusLens`
   can pre-expose that widget's tools alongside the focused widget's.
+
+  Hover emits a separate `:widget_hover` behavior event and
+  `[:raxol, :mcp, :hover_changed]` telemetry; it does not change adaptive
+  keyboard focus.
   """
   @spec update_hover(GenServer.server(), String.t() | nil) :: :ok
   def update_hover(synchronizer, widget_id) do
@@ -119,20 +126,11 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
     # Register session-level resources (context tree, widget tree)
     resource_uris = register_session_resources(state)
+    state = %{state | current_resource_uris: resource_uris}
 
-    # No initial pull here: the session owner seeds the first view tree.
-    # `Raxol.Headless.start/2` does NOT force a synchronous engine render on
-    # this path -- `create_session/5` starts the app, then this synchronizer,
-    # then returns; the only forced `:render_frame_sync_buffer` calls live
-    # inside the screenshot/buffer APIs (`screenshot/1`, `get_buffer/1`), not
-    # here. Cold-start tool derivation instead depends on a race between the
-    # telemetry handler attach above and the engine's OWN first render --
-    # triggered by the app's normal boot, independent of this synchronizer --
-    # which emits [:raxol, :runtime, :view_tree_updated] via
-    # `Engine.sync_dispatcher/3` on every cycle. Lose that race and there is
-    # no recovery here: derived tools simply wait for the next event-driven
-    # re-render.
-    {:ok, %{state | current_resource_uris: resource_uris}}
+    # Seed tools synchronously so callers never observe a meta-tool-only
+    # session when the engine's first render preceded telemetry attachment.
+    {:ok, sync_initial_view(state)}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -159,7 +157,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   def handle_manager_cast({:focus_changed, widget_id}, state) do
     if widget_id != state.focused_id do
-      emit_behavior_event(:pane_focus, %{widget_id: widget_id, source: :keyboard})
+      emit_behavior_event(
+        :pane_focus,
+        %{pane_id: widget_id, source: :keyboard},
+        :focus_changed
+      )
+
       {:noreply, %{state | focused_id: widget_id}}
     else
       {:noreply, state}
@@ -168,7 +171,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   def handle_manager_cast({:hover_changed, widget_id}, state) do
     if widget_id != state.hover_id do
-      emit_behavior_event(:pane_focus, %{widget_id: widget_id, source: :mouse})
+      emit_behavior_event(
+        :widget_hover,
+        %{widget_id: widget_id, source: :mouse},
+        :hover_changed
+      )
+
       {:noreply, %{state | hover_id: widget_id}}
     else
       {:noreply, state}
@@ -237,6 +245,39 @@ defmodule Raxol.MCP.ToolSynchronizer do
   def handle_telemetry_event(_event_name, _measurements, _metadata, _config), do: :ok
 
   # -- Private: sync --
+
+  defp sync_initial_view(%{app_module: nil} = state), do: state
+
+  defp sync_initial_view(state) do
+    case GenServer.call(state.dispatcher_pid, :get_model) do
+      {:ok, model} ->
+        case state.app_module.view(model) do
+          nil -> state
+          view_tree -> do_sync(view_tree, model, state)
+        end
+
+      {:error, reason} ->
+        Logger.warning(
+          "[MCP.ToolSynchronizer] Initial model pull failed for #{inspect(state.session_id)}: #{inspect(reason)}"
+        )
+
+        state
+    end
+  rescue
+    exception ->
+      Logger.warning(
+        "[MCP.ToolSynchronizer] Initial view sync failed for #{inspect(state.session_id)}: #{Exception.message(exception)}"
+      )
+
+      state
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[MCP.ToolSynchronizer] Initial view sync failed for #{inspect(state.session_id)}: #{inspect({kind, reason})}"
+      )
+
+      state
+  end
 
   defp do_sync(view_tree, model, state) do
     context = %{
@@ -420,7 +461,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     MapSet.new([context_uri, widgets_uri])
   end
 
-  defp emit_behavior_event(event_type, data) do
+  defp emit_behavior_event(event_type, data, telemetry_event) do
     if Code.ensure_loaded?(Raxol.Adaptive.BehaviorTracker) and
          function_exported?(Raxol.Adaptive.BehaviorTracker, :record, 3) do
       try do
@@ -435,7 +476,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     end
 
     :telemetry.execute(
-      [:raxol, :mcp, :focus_changed],
+      [:raxol, :mcp, telemetry_event],
       %{},
       Map.put(data, :type, event_type)
     )

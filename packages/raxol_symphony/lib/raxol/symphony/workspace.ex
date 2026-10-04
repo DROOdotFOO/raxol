@@ -729,7 +729,9 @@ defmodule Raxol.Symphony.Workspace do
               :stderr_to_stdout,
               :hide,
               {:cd, cwd},
-              {:args, ["-lc", "exec </dev/null\n" <> script]}
+              {:args, ["-lc", "exec </dev/null\n" <> script]},
+              # A hook is repository code: no raxol secrets (`Raxol.Core.ChildEnv`).
+              {:env, Raxol.Core.ChildEnv.port_env()}
             ]
           )
 

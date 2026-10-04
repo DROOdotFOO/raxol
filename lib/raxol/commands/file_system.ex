@@ -5,7 +5,10 @@ defmodule Raxol.Commands.FileSystem do
   Every operation takes a filesystem struct and returns `{:ok, result}` or
   `{:error, reason}`. The struct is immutable -- mutations return a new copy.
 
-  Internally uses a flat map keyed by absolute path for O(1) lookups.
+  Internally uses a flat map keyed by absolute path for O(1) lookups. Every
+  non-root node has an existing directory parent; attempts to create a child
+  below a file return `{:error, :not_a_directory}` without changing the
+  filesystem.
 
   ## Example
 
@@ -73,14 +76,22 @@ defmodule Raxol.Commands.FileSystem do
   # Core CRUD
   # -------------------------------------------------------------------
 
-  @doc "Create a directory at `path`. Parent directories must exist."
+  @doc """
+  Create a directory at `path`.
+
+  The parent must exist and be a directory.
+  """
   @spec mkdir(t(), String.t()) :: {:ok, t()} | {:error, atom()}
   def mkdir(%__MODULE__{} = fs, path) do
     now = System.monotonic_time(:millisecond)
     insert_node(fs, path, dir_node(now))
   end
 
-  @doc "Create a file at `path` with `content`. Parent directory must exist."
+  @doc """
+  Create a file at `path` with `content`.
+
+  The parent must exist and be a directory.
+  """
   @spec create_file(t(), String.t(), String.t()) ::
           {:ok, t()} | {:error, atom()}
   def create_file(%__MODULE__{} = fs, path, content) when is_binary(content) do
@@ -341,17 +352,21 @@ defmodule Raxol.Commands.FileSystem do
           {:ok, t()} | {:error, atom()}
   defp insert_node(fs, path, node) do
     abs = resolve_path(fs.cwd, path)
+    parent = parent_path(abs)
+    parent_node = Map.get(fs.nodes, parent)
 
     cond do
       Map.has_key?(fs.nodes, abs) ->
         {:error, :already_exists}
 
-      not parent_exists?(fs, abs) ->
+      is_nil(parent_node) ->
         {:error, :parent_not_found}
+
+      parent_node.type != :directory ->
+        {:error, :not_a_directory}
 
       true ->
         name = Path.basename(abs)
-        parent = parent_path(abs)
         now = node.created_at
 
         nodes =
@@ -393,11 +408,6 @@ defmodule Raxol.Commands.FileSystem do
   @spec parent_path(String.t()) :: String.t()
   defp parent_path("/"), do: "/"
   defp parent_path(path), do: Path.dirname(path)
-
-  @spec parent_exists?(t(), String.t()) :: boolean()
-  defp parent_exists?(fs, path) do
-    Map.has_key?(fs.nodes, parent_path(path))
-  end
 
   @spec format_size(non_neg_integer()) :: String.t()
   defp format_size(bytes) when bytes < @bytes_per_kb, do: "#{bytes}B"

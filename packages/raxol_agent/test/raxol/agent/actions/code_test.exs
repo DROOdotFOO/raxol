@@ -431,6 +431,37 @@ defmodule Raxol.Agent.Actions.CodeTest do
     end
 
     @tag :unix_only
+    test "the Sleuth key and raxol's own secrets do not reach the child" do
+      previous = System.get_env("RAXOL_SLEUTH_API_KEY")
+      System.put_env("RAXOL_SLEUTH_API_KEY", "sk-probe-not-real")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("RAXOL_SLEUTH_API_KEY", previous),
+          else: System.delete_env("RAXOL_SLEUTH_API_KEY")
+      end)
+
+      assert {out, 0} =
+               Code.run_shell(
+                 ~s(printf '%s|%s' "${RAXOL_SLEUTH_API_KEY-unset}" "${HOME:+home}"),
+                 System.tmp_dir!(),
+                 2_000
+               )
+
+      # Gone, while the rest of the environment is inherited as before.
+      assert out == "unset|home"
+
+      # A caller that passes one explicitly still gets it.
+      assert {"given", 0} =
+               Code.run_shell(
+                 ~s(printf '%s' "$RAXOL_SLEUTH_API_KEY"),
+                 System.tmp_dir!(),
+                 2_000,
+                 [{"RAXOL_SLEUTH_API_KEY", "given"}]
+               )
+    end
+
+    @tag :unix_only
     test "runs in the working directory by default", %{dir: dir} do
       # `/bin/sh pwd` reports the physical path (macOS resolves /var ->
       # /private/var), so match on the unique dir basename rather than the

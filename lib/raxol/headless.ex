@@ -119,6 +119,10 @@ defmodule Raxol.Headless do
   When given a path, the file is compiled and the first module meeting that
   contract is used.
 
+  When `Raxol.MCP.Registry` is running, startup also derives the app's initial
+  MCP tools synchronously. A successful return therefore exposes tools from a
+  static first view without waiting for another render.
+
   ## Passing a path executes code
 
   Compiling a `defmodule` runs its body, so **whoever chooses the path string
@@ -402,7 +406,7 @@ defmodule Raxol.Headless do
   defp create_session(module, id, width, height, subscriptions, state) do
     case start_headless_app(module, width, height, subscriptions) do
       {:ok, lifecycle_pid} ->
-        synchronizer_pid = start_tool_synchronizer(lifecycle_pid, id)
+        synchronizer_pid = start_tool_synchronizer(lifecycle_pid, id, module)
 
         session = %Session{
           id: id,
@@ -892,7 +896,7 @@ defmodule Raxol.Headless do
 
   @compile {:no_warn_undefined, Raxol.MCP.ToolSynchronizer}
 
-  defp start_tool_synchronizer(lifecycle_pid, session_id) do
+  defp start_tool_synchronizer(lifecycle_pid, session_id, app_module) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
          pid when is_pid(pid) <- Process.whereis(Raxol.MCP.Registry),
          dispatcher_pid when is_pid(dispatcher_pid) <-
@@ -901,7 +905,8 @@ defmodule Raxol.Headless do
            Raxol.MCP.ToolSynchronizer.start_link(
              registry: pid,
              dispatcher_pid: dispatcher_pid,
-             session_id: session_id
+             session_id: session_id,
+             app_module: app_module
            ) do
       sync_pid
     else

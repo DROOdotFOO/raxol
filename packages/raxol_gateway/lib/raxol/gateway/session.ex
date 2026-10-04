@@ -48,17 +48,20 @@ defmodule Raxol.Gateway.Session do
 
     * `:route` (required) -- the `Raxol.Gateway.Route` this session serves
     * `:handler` (required) -- `{module, opts}` implementing `Gateway.Handler`
-    * `:deliver` -- `(Route.t(), rendered -> any())`, default a no-op
+    * `:deliver` -- `(Route.t(), rendered -> any())`, default a no-op.
+      `{:error, reason}`, a raised exception, or an exit reports
+      `[:raxol_gateway, :session, :delivery_failed]`; the session remains alive.
     * `:idle_timeout` -- ms before the session stops (default 10 minutes)
     * `:handler_init_timeout` -- ms the handler's `init/2` may take before the
       session is killed (default 30 seconds), or `:infinity` to wait forever
     * `:conversation_id` -- a stable id for this chat (default `Route.key/1`)
     * `:log` -- `{module, server}` whose `append(server, conversation_id, items)`
-      records each inbound event and outbound reply (e.g.
-      `{Raxol.Agent.Conversation.Log, log_server}`); default none
+      records each inbound event and each successfully delivered outbound reply
+      (e.g. `{Raxol.Agent.Conversation.Log, log_server}`); default none
   """
 
   use GenServer
+  require Logger
 
   alias Raxol.Gateway.Route
 
@@ -154,8 +157,7 @@ defmodule Raxol.Gateway.Session do
 
     case state.handler_mod.handle_event(event, state.handler_state) do
       {:reply, rendered, handler_state} ->
-        state.deliver.(state.route, rendered)
-        record(state, %{type: :message, created_by: :gateway_out, data: %{rendered: rendered}})
+        deliver_reply(state, rendered)
         {:noreply, arm_timer(%{state | handler_state: handler_state})}
 
       {:noreply, handler_state} ->
@@ -199,6 +201,33 @@ defmodule Raxol.Gateway.Session do
     end
 
     :ok
+  end
+
+  defp deliver_reply(state, rendered) do
+    case invoke_delivery(state, rendered) do
+      :ok ->
+        record(state, %{type: :message, created_by: :gateway_out, data: %{rendered: rendered}})
+
+      {:error, reason} ->
+        Logger.warning(fn ->
+          "gateway delivery failed for #{inspect(Route.key(state.route))} " <>
+            "via #{inspect(state.handler_mod)}: #{inspect(reason)}"
+        end)
+
+        emit(:delivery_failed, state.route, %{handler: state.handler_mod, reason: reason})
+    end
+  end
+
+  defp invoke_delivery(state, rendered) do
+    case state.deliver.(state.route, rendered) do
+      {:error, reason} -> {:error, reason}
+      _delivered -> :ok
+    end
+  rescue
+    exception -> {:error, {:exception, exception}}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+    :throw, reason -> {:error, {:throw, reason}}
   end
 
   defp record(%{log: nil}, _item), do: :ok

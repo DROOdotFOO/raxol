@@ -89,7 +89,7 @@ defimpl Raxol.Core.Runtime.Directive.Executor,
           args: ["-c", Raxol.Agent.SpawnedPort.null_stdin_command(command)]
         ]
         |> maybe_add_port_opt(:cd, cd)
-        |> maybe_add_port_opt(:env, if(charlist_env != [], do: charlist_env))
+        |> maybe_add_port_opt(:env, Raxol.Core.ChildEnv.port_env(charlist_env))
 
       port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
       result = collect_port_output(port, [], timeout)

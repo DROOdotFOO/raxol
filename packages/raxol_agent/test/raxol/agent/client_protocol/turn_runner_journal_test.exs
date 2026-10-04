@@ -13,8 +13,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     3. Stored notifications round-trip through `SessionNotification.from_json/1`,
        so a replay can re-send the frames rather than reconstruct them.
     4. A cancelled turn is recorded as cancelled.
-    5. Journaling never decides whether a turn can answer: disabled, or
-       pointed at an id that cannot be a directory, the turn still completes.
+    5. Disabled or unavailable journaling does not prevent a turn, but an
+       existing damaged journal refuses the turn before the backend is called.
   """
 
   use ExUnit.Case, async: true
@@ -25,6 +25,13 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
   alias Raxol.AgentClientProtocol.Schema.ContentBlock
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
   alias Raxol.AgentClientProtocol.Session
+
+  # How long to wait for a turn's messages: a hang guard, not a speed claim.
+  # A journaled turn runs its Writer's datasyncs inline (16 across the two
+  # turns of "history is per session"), and on macOS each is a device flush
+  # that queues behind every other write on the host, so under load one turn
+  # can take seconds.
+  @turn_timeout_ms 30_000
 
   defmodule FakeConn do
     @moduledoc false
@@ -157,10 +164,10 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     session = start_session!(runner, session_id)
 
     ref1 = begin_prompt!(session, session_id, "one")
-    assert_receive {:conn_reply, ^ref1, {:ok, %{stop_reason: :end_turn}}}, 2_000
+    assert_receive {:conn_reply, ^ref1, {:ok, %{stop_reason: :end_turn}}}, @turn_timeout_ms
 
     ref2 = begin_prompt!(session, session_id, "two")
-    assert_receive {:conn_reply, ^ref2, {:ok, %{stop_reason: :end_turn}}}, 2_000
+    assert_receive {:conn_reply, ^ref2, {:ok, %{stop_reason: :end_turn}}}, @turn_timeout_ms
 
     records = records!(session_id, dir)
 
@@ -213,20 +220,52 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     session = start_session!(runner, session_id)
 
     ref1 = begin_prompt!(session, session_id, "first")
-    assert_receive {:backend_saw, first_seen}, 2_000
-    assert_receive {:conn_reply, ^ref1, {:ok, %{stop_reason: :end_turn}}}, 2_000
+    assert_receive {:backend_saw, first_seen}, @turn_timeout_ms
+    assert_receive {:conn_reply, ^ref1, {:ok, %{stop_reason: :end_turn}}}, @turn_timeout_ms
 
     assert first_seen == [%{role: :user, content: "first"}]
 
     ref2 = begin_prompt!(session, session_id, "second")
-    assert_receive {:backend_saw, second_seen}, 2_000
-    assert_receive {:conn_reply, ^ref2, {:ok, %{stop_reason: :end_turn}}}, 2_000
+    assert_receive {:backend_saw, second_seen}, @turn_timeout_ms
+    assert_receive {:conn_reply, ^ref2, {:ok, %{stop_reason: :end_turn}}}, @turn_timeout_ms
 
     assert second_seen == [
              %{role: :user, content: "first"},
              %{role: :assistant, content: "ok"},
              %{role: :user, content: "second"}
            ]
+  end
+
+  @tag :tmp_dir
+  test "an interior-damaged journal refuses the prompt before calling the backend",
+       %{tmp_dir: dir} do
+    session_id = "sess-damaged-#{System.unique_integer([:positive])}"
+    journal_dir = Path.join([dir, session_id, "journal"])
+    File.mkdir_p!(journal_dir)
+
+    File.write!(
+      Path.join(journal_dir, "000001.jsonl"),
+      ~s({"id":1,"kind":"first"}\nnot-json\n{"id":2,"kind":"last"}\n)
+    )
+
+    assert {:error, :damaged} = FileStore.read_records(session_id, base_dir: dir)
+
+    runner =
+      TurnRunner.new(
+        backend: HistoryBackend,
+        backend_opts: [owner: self()],
+        journal_opts: [base_dir: dir]
+      )
+
+    session = start_session!(runner, session_id)
+    reply_ref = begin_prompt!(session, session_id, "must not run")
+
+    refute_receive {:backend_saw, _messages}, 100
+
+    assert_receive {:conn_reply, ^reply_ref,
+                    {:error,
+                     %{code: -32_603, data: %{"tag" => "journal_damaged", "reason" => ":damaged"}}}},
+                   2_000
   end
 
   # An append-only journal that snapshots the whole conversation every turn
@@ -246,8 +285,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
 
     for n <- 1..3 do
       ref = begin_prompt!(session, session_id, "turn #{n}")
-      assert_receive {:backend_saw, seen}, 2_000
-      assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :end_turn}}}, 2_000
+      assert_receive {:backend_saw, seen}, @turn_timeout_ms
+      assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :end_turn}}}, @turn_timeout_ms
       # History still accumulates: 1, 3, 5 messages as the turns pile up.
       assert length(seen) == 2 * (n - 1) + 1
     end
@@ -277,13 +316,13 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
 
     session_a = start_session!(runner, a)
     ref_a = begin_prompt!(session_a, a, "mine")
-    assert_receive {:backend_saw, _}, 2_000
-    assert_receive {:conn_reply, ^ref_a, {:ok, _}}, 2_000
+    assert_receive {:backend_saw, _}, @turn_timeout_ms
+    assert_receive {:conn_reply, ^ref_a, {:ok, _}}, @turn_timeout_ms
 
     session_b = start_session!(runner, b)
     ref_b = begin_prompt!(session_b, b, "theirs")
-    assert_receive {:backend_saw, b_seen}, 2_000
-    assert_receive {:conn_reply, ^ref_b, {:ok, _}}, 2_000
+    assert_receive {:backend_saw, b_seen}, @turn_timeout_ms
+    assert_receive {:conn_reply, ^ref_b, {:ok, _}}, @turn_timeout_ms
 
     assert b_seen == [%{role: :user, content: "theirs"}]
   end
@@ -315,9 +354,9 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     session = start_session!(hung, session_id)
 
     ref = begin_prompt!(session, session_id, "abandoned")
-    assert_receive {:backend_up, _pid}, 2_000
+    assert_receive {:backend_up, _pid}, @turn_timeout_ms
     GenServer.cast(session, {:acp_session_cancel, 2})
-    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :cancelled}}}, 5_000
+    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :cancelled}}}, @turn_timeout_ms
 
     # A fresh runner over the SAME session id, so the next turn reads the
     # journal the cancelled turn left behind.
@@ -330,8 +369,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
 
     session2 = start_session!(resumed, session_id)
     ref2 = begin_prompt!(session2, session_id, "next")
-    assert_receive {:backend_saw, seen}, 2_000
-    assert_receive {:conn_reply, ^ref2, {:ok, _}}, 2_000
+    assert_receive {:backend_saw, seen}, @turn_timeout_ms
+    assert_receive {:conn_reply, ^ref2, {:ok, _}}, @turn_timeout_ms
 
     assert seen == [%{role: :user, content: "next"}]
   end
@@ -362,9 +401,9 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     session = start_session!(runner, session_id)
     ref = begin_prompt!(session, session_id, "hang")
 
-    assert_receive {:backend_up, _pid}, 2_000
+    assert_receive {:backend_up, _pid}, @turn_timeout_ms
     GenServer.cast(session, {:acp_session_cancel, 2})
-    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :cancelled}}}, 5_000
+    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :cancelled}}}, @turn_timeout_ms
 
     records = records!(session_id, dir)
 
@@ -389,7 +428,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     session = start_session!(runner, session_id)
     ref = begin_prompt!(session, session_id, "hi")
 
-    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :end_turn}}}, 2_000
+    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :end_turn}}}, @turn_timeout_ms
     assert records!(session_id, dir) == []
   end
 
@@ -410,7 +449,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     session = start_session!(runner, session_id)
     ref = begin_prompt!(session, session_id, "hi")
 
-    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :end_turn}}}, 2_000
+    assert_receive {:conn_reply, ^ref, {:ok, %{stop_reason: :end_turn}}}, @turn_timeout_ms
     assert File.ls!(dir) == []
   end
 end

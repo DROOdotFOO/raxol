@@ -96,6 +96,31 @@ defmodule Raxol.Payments.Telemetry do
   Metadata: `:intent_id`, `:from_chain_id`, `:to_chain_id`, `:token_symbol`,
   `:gas_chain_id`, `:gas_symbol`, `:gas_status`, `:settlement_type`.
 
+  ### `[:raxol, :payments, :margin]`
+
+  Fires once per `Raxol.Payments.RebalanceMonitor` sweep with the totals of
+  `SettlementLedger.report/2`, priced with the sweep's `price_fn` (FX in front
+  of the configured price source when `:fx` is set). The full report, per
+  corridor and destination, is `RebalanceMonitor.margin_report/1`.
+
+  | Measurement            | Type                 | Notes                                    |
+  | ---------------------- | -------------------- | ---------------------------------------- |
+  | `:count`               | `integer()`          | settlements in the ledger                |
+  | `:unpriced_count`      | `integer()`          | entries with a leg or a nonzero fee no price answered (for a recording-gap entry, its fee only) |
+  | `:recording_gap_count` | `integer()`          | entries missing a leg's amount or decimals; not in `:usd_revenue`. Overlaps `:unpriced_count` only where such an entry's fee is unpriced |
+  | `:gas_unknown_count`   | `integer()`          | entries with no gas figure yet           |
+  | `:gas_unpriced_count`  | `integer()`          | entries whose gas amount is known but whose gas symbol no price answered |
+  | `:usd_revenue`         | `Decimal.t/0` \\| nil | spread of entries with both legs recorded and priced |
+  | `:usd_fee`             | `Decimal.t/0` \\| nil | venue fee of entries whose fee is priced |
+  | `:usd_gas`             | `Decimal.t/0` \\| nil | gas of entries whose gas is known and priced |
+  | `:usd_margin`          | `Decimal.t/0` \\| nil | sum of per-entry basis (spread, else fee if legs unrecorded) net of that entry's gas, over entries with both; negative is subsidy |
+  | `:margin_count`        | `integer()`          | entries `:usd_margin` covers; `:count` minus this were left out, each reason countable: no basis (`:unpriced_count`, `:recording_gap_count`), unknown gas (`:gas_unknown_count`), unpriced gas (`:gas_unpriced_count`). An entry with an unpriced fee but a priced spread is in both this and `:unpriced_count` |
+
+  Each `usd_*` total is over its own population, so `usd_revenue - usd_gas` is
+  not the margin; see `Raxol.Payments.SettlementLedger`'s `aggregate` type.
+
+  Metadata: `:corridor_count`.
+
   ### `[:raxol, :payments, :rebalance, :recommendation]`
 
   Fires once per `Raxol.Payments.RebalanceAdvisor.advise/4` recommendation.
@@ -159,6 +184,11 @@ defmodule Raxol.Payments.Telemetry do
       # OPERATIONAL. `SettlementLedger` booked a completed fill, once per
       # intent. The success path of accounting.
       [:raxol, :payments, :settlement] => :operational,
+
+      # OPERATIONAL. `RebalanceMonitor`'s per-sweep margin totals. Pure output
+      # of a function over the ledger; a negative margin is a fact about the
+      # corridors, not a defect here.
+      [:raxol, :payments, :margin] => :operational,
 
       # OPERATIONAL x2. `RebalanceAdvisor`'s per-recommendation rows and the
       # per-call summary. Pure output of a function over observed balances --

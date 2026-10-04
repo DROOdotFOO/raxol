@@ -23,7 +23,7 @@ defmodule Raxol.Payments.Protocols.Riddler do
   @behaviour Raxol.Payments.Protocol
 
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
-  alias Raxol.Payments.Riddler.Schemas.{QuoteRequest, QuoteResponse, OrderStatus}
+  alias Raxol.Payments.Riddler.Schemas.{OrderStatus, QuoteRequest, QuoteResponse}
   alias Raxol.Payments.Xochi.Schemas, as: XochiSchemas
 
   @default_poll_interval_ms 2_000
@@ -90,18 +90,25 @@ defmodule Raxol.Payments.Protocols.Riddler do
   @doc """
   Sign and submit an order for a given quote.
 
-  Deprecated: use `Raxol.Payments.Protocols.Xochi.execute/3`.
+  Deprecated: use `Raxol.Payments.Protocols.Xochi.execute/4`.
 
   Signs with EIP-712 (Xochi typed data) instead of ERC-3009/Permit2.
-  The quote must contain `eip712_data` with a `message` field.
+  The quote must contain `eip712_data` with a `message` field, and its intent
+  must match `request` (the request the quote was fetched for) or nothing is
+  signed -- see `Raxol.Payments.Protocols.Xochi.validate_intent/2`.
   """
-  @spec submit_order(map(), QuoteResponse.t(), module()) ::
+  @spec submit_order(map(), QuoteResponse.t(), module(), XochiSchemas.QuoteRequest.t()) ::
           {:ok, map()} | {:error, term()}
-  def submit_order(config, %QuoteResponse{} = quote_resp, wallet) do
+  def submit_order(
+        config,
+        %QuoteResponse{} = quote_resp,
+        wallet,
+        %XochiSchemas.QuoteRequest{} = request
+      ) do
     xochi_config = to_xochi_config(config)
     xochi_quote = to_xochi_quote_response(quote_resp)
 
-    case XochiProtocol.execute(xochi_config, xochi_quote, wallet) do
+    case XochiProtocol.execute(xochi_config, xochi_quote, wallet, request) do
       {:ok, exec_resp} ->
         {:ok, %{"intentId" => exec_resp.intent_id, "status" => to_string(exec_resp.status)}}
 

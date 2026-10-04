@@ -50,6 +50,32 @@ defmodule Raxol.MCP.CircuitBreakerTest do
     end
   end
 
+  test "counts concurrent failures without losing increments", %{table: t} do
+    parent = self()
+
+    tasks =
+      for _ <- 1..200 do
+        Task.async(fn ->
+          send(parent, {:ready, self()})
+
+          receive do
+            :record -> CircuitBreaker.record_failure(t, @key, failure_threshold: 1_000)
+          end
+        end)
+      end
+
+    pids =
+      for _ <- tasks do
+        assert_receive {:ready, pid}
+        pid
+      end
+
+    Enum.each(pids, &send(&1, :record))
+    Task.await_many(tasks)
+
+    assert CircuitBreaker.status(t, @key) == %{state: :closed, failures: 200}
+  end
+
   describe "open state" do
     test "blocks calls while open", %{table: t} do
       for _ <- 1..3 do
@@ -93,6 +119,37 @@ defmodule Raxol.MCP.CircuitBreakerTest do
 
       assert CircuitBreaker.check(t, @key, recovery_ms: 60_000) == :open
     end
+  end
+
+  test "admits exactly one concurrent recovery probe", %{table: t} do
+    parent = self()
+
+    # Return the setup probe to open, then let every contender observe an
+    # elapsed recovery window at once.
+    CircuitBreaker.record_failure(t, @key, failure_threshold: 1)
+
+    tasks =
+      for _ <- 1..100 do
+        Task.async(fn ->
+          send(parent, {:ready, self()})
+
+          receive do
+            :check -> CircuitBreaker.check(t, @key, recovery_ms: 0)
+          end
+        end)
+      end
+
+    pids =
+      for _ <- tasks do
+        assert_receive {:ready, pid}
+        pid
+      end
+
+    Enum.each(pids, &send(&1, :check))
+    results = Task.await_many(tasks)
+
+    assert Enum.count(results, &(&1 == :half_open)) == 1
+    assert Enum.count(results, &(&1 == :open)) == 99
   end
 
   describe "reset" do

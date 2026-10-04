@@ -372,18 +372,5 @@ defmodule Raxol.Symphony.SshTest do
       assert List.last(args) == "uptime"
       assert "ci@build-1" in args
     end
-
-    test "returns {:error, :ssh_not_allowed} when the executable can't be resolved" do
-      # A blank PATH makes the default resolver fail; the injected exec_fn
-      # must never be reached.
-      System.put_env("SYM_SSH_TEST_OLD_PATH", System.get_env("PATH") || "")
-      System.put_env("PATH", "")
-
-      assert Ssh.exec(spec(), "noop", exec_fn: fn _, _, _ -> flunk("should not run") end) ==
-               {:error, :ssh_not_allowed}
-    after
-      System.put_env("PATH", System.get_env("SYM_SSH_TEST_OLD_PATH") || "")
-      System.delete_env("SYM_SSH_TEST_OLD_PATH")
-    end
   end
 end

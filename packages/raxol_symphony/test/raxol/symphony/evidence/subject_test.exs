@@ -1,5 +1,5 @@
 defmodule Raxol.Symphony.Evidence.SubjectTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Raxol.Symphony.{Config, Issue}
   alias Raxol.Symphony.Evidence.Subject
@@ -54,6 +54,48 @@ defmodule Raxol.Symphony.Evidence.SubjectTest do
       git = fn _args, _cwd -> {:error, :anything} end
       subject = Subject.from_workspace("/tmp/x", git_runner: git)
       assert subject == %{workspace: "/tmp/x"}
+    end
+  end
+
+  describe "from_workspace/2 with the default git" do
+    @describetag :unix_only
+
+    # The `git` on PATH reports its environment as the origin URL, so the
+    # parsed repo name shows what a workspace's git would see.
+    setup do
+      dir = Path.join(System.tmp_dir!(), "subject-git-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      git = Path.join(dir, "git")
+
+      File.write!(git, """
+      #!/bin/sh
+      printf 'git@github.com:env/%s.git\\n' "${RAXOL_SLEUTH_API_KEY-unset}"
+      """)
+
+      File.chmod!(git, 0o755)
+
+      previous = %{
+        "PATH" => System.get_env("PATH"),
+        "RAXOL_SLEUTH_API_KEY" => System.get_env("RAXOL_SLEUTH_API_KEY")
+      }
+
+      System.put_env("PATH", dir <> ":" <> previous["PATH"])
+      System.put_env("RAXOL_SLEUTH_API_KEY", "sk-probe-not-real")
+
+      on_exit(fn ->
+        Enum.each(previous, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+
+        File.rm_rf!(dir)
+      end)
+
+      %{dir: dir}
+    end
+
+    test "git runs without raxol's secrets in its environment", %{dir: dir} do
+      assert %{repo: "env/unset"} = Subject.from_workspace(dir)
     end
   end
 

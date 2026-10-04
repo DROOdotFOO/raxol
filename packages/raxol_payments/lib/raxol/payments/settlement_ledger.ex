@@ -81,16 +81,37 @@ defmodule Raxol.Payments.SettlementLedger do
           metadata: map()
         }
 
-  @typedoc "Aggregated margin over a set of entries."
+  @typedoc """
+  Aggregated margin over a set of entries. Each `usd_*` total is over its own
+  population, so they do not subtract from one another:
+
+    * `usd_revenue` - the delivered spread of entries with both legs recorded
+      and priced;
+    * `usd_fee` - the venue fee of entries whose fee is priced;
+    * `usd_gas` - the gas of entries whose gas is known and priced;
+    * `usd_margin` - the sum of per-entry margins: each entry's basis (its
+      spread, or its fee when its legs were never recorded) net of its own
+      gas, over entries that have both. An entry with recorded legs that could
+      not be priced has no basis, and is counted in `unpriced_count` instead.
+      `margin_count` is how many entries it covers, so `count - margin_count`
+      entries are left out: for no basis (`unpriced_count`,
+      `recording_gap_count`), unknown gas (`gas_unknown_count`), or gas whose
+      symbol no price answers (`gas_unpriced_count`: gas amount known, gas
+      price missing).
+  """
   @type aggregate :: %{
           count: non_neg_integer(),
           gas_unknown_count: non_neg_integer(),
+          gas_unpriced_count: non_neg_integer(),
+          unpriced_count: non_neg_integer(),
+          recording_gap_count: non_neg_integer(),
           fee_by_currency: %{String.t() => Decimal.t()},
           gas_by_chain: %{pos_integer() => Decimal.t()},
           usd_revenue: Decimal.t() | nil,
           usd_fee: Decimal.t() | nil,
           usd_gas: Decimal.t() | nil,
-          usd_margin: Decimal.t() | nil
+          usd_margin: Decimal.t() | nil,
+          margin_count: non_neg_integer()
         }
 
   @typedoc """
@@ -103,7 +124,9 @@ defmodule Raxol.Payments.SettlementLedger do
   """
   @type demand :: %{total: Decimal.t(), peak: Decimal.t(), count: pos_integer()}
 
-  @stablecoins ["USDC", "USDT", "USDBC", "PYUSD", "DAI"]
+  # Dollar stablecoins, valued at `usdc_price`. USDG (Paxos' Global Dollar) is
+  # the Robinhood Chain stable `RebalancePolicy` already treats as one.
+  @stablecoins ["USDC", "USDT", "USDBC", "PYUSD", "DAI", "USDG"]
 
   # -- Public API --
 
@@ -289,7 +312,9 @@ defmodule Raxol.Payments.SettlementLedger do
 
   @doc """
   One aggregate over all (filtered) settlements. A negative `usd_margin` is the
-  cumulative subsidy the solver has spent keeping those corridors live.
+  cumulative subsidy the solver has spent keeping those corridors live, over
+  the entries it covers: each entry with a basis and a gas price (see the
+  `aggregate` type), never one entry's gas against another's revenue.
   """
   @spec cumulative_subsidy(GenServer.server(), keyword()) :: aggregate()
   def cumulative_subsidy(server, opts \\ []) do
@@ -298,7 +323,12 @@ defmodule Raxol.Payments.SettlementLedger do
     |> aggregate(opts)
   end
 
-  @doc "A structured margin report: corridors, destinations, native drain, and totals."
+  @doc """
+  A structured margin report: corridors, destinations, native drain, and totals.
+
+  One read of the ledger feeds all four, so a periodic report costs the write
+  path one table scan rather than four.
+  """
   @spec report(GenServer.server(), keyword()) :: %{
           corridors: map(),
           destinations: map(),
@@ -306,11 +336,13 @@ defmodule Raxol.Payments.SettlementLedger do
           totals: aggregate()
         }
   def report(server, opts \\ []) do
+    entries = list_settlements(server, filter_opts(opts))
+
     %{
-      corridors: margin_by_corridor(server, opts),
-      destinations: margin_by_destination(server, opts),
-      drain: native_drain_by_chain(server, opts),
-      totals: cumulative_subsidy(server, opts)
+      corridors: group_by(entries, &{&1.from_chain_id, &1.to_chain_id}, opts),
+      destinations: group_by(entries, & &1.to_chain_id, opts),
+      drain: fold_drain(entries),
+      totals: aggregate(entries, opts)
     }
   end
 
@@ -457,15 +489,19 @@ defmodule Raxol.Payments.SettlementLedger do
     price_fn = Keyword.get(opts, :price_fn, fn _sym -> nil end)
     usdc_price = Keyword.get(opts, :usdc_price, Decimal.new(1))
 
-    entries
-    |> Enum.reduce(empty_aggregate(), fn e, acc ->
+    Enum.reduce(entries, empty_aggregate(), fn e, acc ->
       revenue_usd = revenue_usd(e, usdc_price, price_fn)
       fee_usd = fee_usd(e, usdc_price, price_fn)
       gas_usd = gas_usd(e, price_fn)
+      gap = recording_gap(e)
+      margin = margin(gap, revenue_usd, fee_usd, gas_usd)
 
       %{
         count: acc.count + 1,
         gas_unknown_count: acc.gas_unknown_count + unknown_gas(e),
+        gas_unpriced_count: acc.gas_unpriced_count + unpriced_gas(e, gas_usd),
+        unpriced_count: acc.unpriced_count + unpriced(e, gap, usdc_price, price_fn),
+        recording_gap_count: acc.recording_gap_count + gap,
         fee_by_currency:
           Map.update(
             acc.fee_by_currency,
@@ -476,21 +512,38 @@ defmodule Raxol.Payments.SettlementLedger do
         gas_by_chain: add_gas(acc.gas_by_chain, e),
         usd_revenue: add_or_keep(acc.usd_revenue, revenue_usd),
         usd_fee: add_or_keep(acc.usd_fee, fee_usd),
-        usd_gas: add_or_keep(acc.usd_gas, gas_usd)
+        usd_gas: add_or_keep(acc.usd_gas, gas_usd),
+        usd_margin: add_or_keep(acc.usd_margin, margin),
+        margin_count: acc.margin_count + if(margin, do: 1, else: 0)
       }
     end)
-    |> finalize_margin()
   end
+
+  # One entry's margin: its basis net of its own gas, or nil. The basis is the
+  # delivered spread when both legs were recorded, which is nil when a leg could
+  # not be priced; the venue fee only when the legs were never recorded (an
+  # entry booked before from/to amounts were captured). Never the fee for a
+  # recorded-but-unpriced entry: its spread is unknown, not equal to its fee.
+  defp margin(_gap, _revenue, _fee, nil), do: nil
+  defp margin(0, nil, _fee, _gas), do: nil
+  defp margin(0, revenue, _fee, gas), do: Decimal.sub(revenue, gas)
+  defp margin(_gap, _revenue, nil, _gas), do: nil
+  defp margin(_gap, _revenue, fee, gas), do: Decimal.sub(fee, gas)
 
   defp empty_aggregate do
     %{
       count: 0,
       gas_unknown_count: 0,
+      gas_unpriced_count: 0,
+      unpriced_count: 0,
+      recording_gap_count: 0,
       fee_by_currency: %{},
       gas_by_chain: %{},
       usd_revenue: nil,
       usd_fee: nil,
-      usd_gas: nil
+      usd_gas: nil,
+      usd_margin: nil,
+      margin_count: 0
     }
   end
 
@@ -515,8 +568,52 @@ defmodule Raxol.Payments.SettlementLedger do
     mult_or_nil(Assets.to_human(amount, decimals), price)
   end
 
+  # An entry with something its totals use that could not be priced: a leg or
+  # the fee whose symbol neither `usdc_price` nor `price_fn` answers.
+  # `add_or_keep/2` drops such an amount from `usd_revenue` or `usd_fee` without
+  # a trace, so this is the trace: a report with EUR legs and no FX source reads
+  # as partial rather than as smaller (ADR-0040 decision 6). A zero fee is zero
+  # in any currency and is not counted. Each entry counts at most once.
+  #
+  # A recording-gap entry's legs are not used (its revenue is unknowable and its
+  # basis is the fee), so only its fee is judged here. An entry is therefore in
+  # both counts only when its legs were not recorded AND its fee is unpriced.
+  defp unpriced(e, 0 = _gap, usdc_price, price_fn) do
+    legs = [
+      {e.from_amount, e.from_symbol, e.from_decimals},
+      {e.to_amount, e.to_symbol, e.to_decimals}
+    ]
+
+    unpriced_leg? =
+      Enum.any?(legs, fn {amount, symbol, decimals} ->
+        is_nil(leg_usd(amount, symbol, decimals, usdc_price, price_fn))
+      end)
+
+    if unpriced_leg? or unpriced_fee?(e, usdc_price, price_fn), do: 1, else: 0
+  end
+
+  defp unpriced(e, _gap, usdc_price, price_fn),
+    do: if(unpriced_fee?(e, usdc_price, price_fn), do: 1, else: 0)
+
+  defp unpriced_fee?(e, usdc_price, price_fn),
+    do: not Decimal.eq?(e.fee_collected, 0) and is_nil(fee_usd(e, usdc_price, price_fn))
+
+  # An entry whose revenue cannot be computed because a leg's amount or
+  # decimals were never recorded, such as one booked before both legs were
+  # captured. Not a pricing failure, and counted apart from `unpriced/3`, so a
+  # report says why `usd_revenue` left it out. Each entry counts at most once.
+  defp recording_gap(e) do
+    if Enum.any?([e.from_amount, e.from_decimals, e.to_amount, e.to_decimals], &is_nil/1),
+      do: 1,
+      else: 0
+  end
+
   defp unknown_gas(%{gas_native: nil}), do: 1
   defp unknown_gas(_), do: 0
+
+  defp unpriced_gas(%{gas_native: nil}, _gas_usd), do: 0
+  defp unpriced_gas(_entry, nil), do: 1
+  defp unpriced_gas(_entry, _gas_usd), do: 0
 
   defp add_gas(acc, %{gas_native: nil}), do: acc
 
@@ -539,20 +636,6 @@ defmodule Raxol.Payments.SettlementLedger do
       Assets.to_human(entry.gas_native, entry.gas_decimals),
       price_fn.(entry.gas_symbol)
     )
-  end
-
-  # Margin is the solver spread (usd_revenue) net of gas. Falls back to the venue
-  # fee only when the revenue legs were not recorded (e.g. an entry booked before
-  # from/to amounts were captured), so an old-shape entry still yields a number.
-  defp finalize_margin(agg) do
-    basis = agg.usd_revenue || agg.usd_fee
-
-    margin =
-      if is_nil(basis) or is_nil(agg.usd_gas),
-        do: nil,
-        else: Decimal.sub(basis, agg.usd_gas)
-
-    Map.put(agg, :usd_margin, margin)
   end
 
   defp mult_or_nil(_human, nil), do: nil

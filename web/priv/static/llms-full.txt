@@ -3760,7 +3760,7 @@ FileSystem.exists?(fs, "readme.txt")                # => true
 # => {"/", :directory, [{"docs", :directory, []}]}
 ```
 
-Anything that changes the filesystem returns `{:ok, new_fs}` or `{:error, reason}`. Error reasons are atoms: `:not_found`, `:already_exists`, `:parent_not_found`, `:not_a_directory`, `:is_a_directory`, `:directory_not_empty`, `:cannot_remove_root`.
+Anything that changes the filesystem returns `{:ok, new_fs}` or `{:error, reason}`. Error reasons are atoms: `:not_found`, `:already_exists`, `:parent_not_found`, `:not_a_directory`, `:is_a_directory`, `:directory_not_empty`, `:cannot_remove_root`. Every non-root node has a directory parent; `mkdir/2` and `create_file/3` return `{:error, :not_a_directory}` without changing the filesystem when the parent path is a file.
 
 ## REPL Integration
 

@@ -9,7 +9,7 @@ defmodule Raxol.Payments.AccountingTest do
     RPC_ETH RPC_OPTIMISM RPC_POLYGON RPC_BASE RPC_ARBITRUM RPC_ROBINHOOD
     XOCHI_SOLVER_ADDRESS RAXOL_REBALANCE_INTERVAL_MS RAXOL_PRICE_SOURCE
     RAXOL_REBALANCE_DEMAND_MULTIPLIER RAXOL_REBALANCE_DEMAND_FLOOR_CAP
-    RAXOL_REBALANCE_DEMAND_WINDOW_MS
+    RAXOL_REBALANCE_DEMAND_WINDOW_MS RAXOL_FX_ENABLED RAXOL_SLEUTH_API_KEY
   )
 
   setup do
@@ -216,6 +216,50 @@ defmodule Raxol.Payments.AccountingTest do
       System.put_env("RAXOL_PRICE_SOURCE", "NONE")
       {opts, _} = Accounting.env_config()
       assert opts[:price_source] == :none
+    end
+  end
+
+  describe "FX pricing (ADR-0040)" do
+    setup do
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "true")
+      :ok
+    end
+
+    test "off unless exactly true; blank and false are off" do
+      for value <- [nil, "", "false"] do
+        if value, do: System.put_env("RAXOL_FX_ENABLED", value)
+        {opts, _} = Accounting.env_config()
+        assert opts[:fx] == nil
+      end
+    end
+
+    test "an unrecognized value is refused, naming the variable" do
+      System.put_env("RAXOL_FX_ENABLED", "yes")
+      assert_raise ArgumentError, ~r/RAXOL_FX_ENABLED/, &Accounting.env_config/0
+    end
+
+    test "enabled without the key or without an FX feed RPC is refused, naming what is missing" do
+      System.put_env("RAXOL_FX_ENABLED", "true")
+      System.put_env("RPC_BASE", "https://base.example")
+      assert_raise ArgumentError, ~r/RAXOL_SLEUTH_API_KEY/, &Accounting.env_config/0
+
+      System.put_env("RAXOL_SLEUTH_API_KEY", "k-123")
+      System.delete_env("RPC_BASE")
+      System.put_env("RPC_OPTIMISM", "https://op.example")
+      assert_raise ArgumentError, ~r/RPC_BASE or RPC_ETH/, &Accounting.env_config/0
+    end
+
+    test "enabled, it carries the key as a Secret and only the FX feed chains" do
+      System.put_env("RAXOL_FX_ENABLED", "true")
+      System.put_env("RAXOL_SLEUTH_API_KEY", "k-123")
+      System.put_env("RPC_BASE", "https://base.example")
+      System.put_env("RPC_OPTIMISM", "https://op.example")
+
+      {opts, true} = Accounting.env_config()
+
+      assert opts[:fx][:rpc_urls] == %{8453 => "https://base.example"}
+      assert Raxol.Payments.Secret.reveal(opts[:fx][:sleuth_api_key]) == "k-123"
+      refute inspect(opts) =~ "k-123"
     end
   end
 

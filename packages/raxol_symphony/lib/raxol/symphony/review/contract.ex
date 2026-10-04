@@ -74,7 +74,7 @@ defmodule Raxol.Symphony.Review.Contract do
   defp diff_from_git(opts) do
     case Keyword.get(opts, :workspace_path) do
       workspace when is_binary(workspace) ->
-        git = Keyword.get(opts, :git_runner, &default_git/2)
+        git = Keyword.get(opts, :git_runner, &Raxol.Symphony.WorkspaceGit.run/2)
 
         case git.(diff_args(Keyword.get(opts, :base_ref)), workspace) do
           {:ok, output} -> output
@@ -86,23 +86,13 @@ defmodule Raxol.Symphony.Review.Contract do
     end
   end
 
-  defp diff_args(nil), do: ["diff", "HEAD"]
-  defp diff_args(base) when is_binary(base), do: ["diff", "#{base}...HEAD"]
+  # The workspace is the implementer's, so its git config is agent-controlled:
+  # no external diff, textconv or fsmonitor command runs, and git itself gets
+  # the environment minus raxol's secrets (a repo's filter drivers still run).
+  @diff_prefix ~w(-c core.fsmonitor=false -c diff.external= diff --no-ext-diff --no-textconv)
 
-  defp default_git(args, cwd) do
-    cond do
-      not File.dir?(cwd) -> {:error, :workspace_missing}
-      is_nil(System.find_executable("git")) -> {:error, :git_not_found}
-      true -> run_git(args, cwd)
-    end
-  end
+  defp diff_args(base), do: @diff_prefix ++ diff_range(base)
 
-  defp run_git(args, cwd) do
-    case System.cmd("git", args, cd: cwd, stderr_to_stdout: true) do
-      {output, 0} -> {:ok, output}
-      {output, status} -> {:error, {:git_failed, status, String.trim(output)}}
-    end
-  rescue
-    e in ErlangError -> {:error, {:exception, e}}
-  end
+  defp diff_range(nil), do: ["HEAD"]
+  defp diff_range(base) when is_binary(base), do: ["#{base}...HEAD"]
 end

@@ -1,0 +1,234 @@
+{
+ "asOf": "2026-09-30T17:38:18Z",
+ "refreshSec": 60,
+ "symbol": "EURC",
+ "canonicalSymbol": "EURC",
+ "lookupSymbol": "EURC",
+ "fxRatesUsd": {
+  "USD": 1.0,
+  "CAD": 0.704964,
+  "CNY": 0.148857,
+  "EUR": 1.134404,
+  "MXN": 0.055481,
+  "GHS": 0.085462,
+  "PHP": 0.015975,
+  "GBP": 1.32282,
+  "TRY": 0.020401,
+  "XOF": 0.001729,
+  "JPY": 0.006354,
+  "NGN": 0.000753,
+  "KRW": 0.000739,
+  "RUB": 0.011897,
+  "CLP": 0.001034,
+  "ARS": 0.000656,
+  "AUD": 0.698889,
+  "BRL": 0.191653,
+  "HKD": 0.127453,
+  "COP": 0.000297,
+  "ZAR": 0.06095,
+  "PEN": 0.29107,
+  "SGD": 0.782367,
+  "CHF": 1.198681,
+  "MYR": 0.245035,
+  "KES": 0.007711,
+  "UAH": 0.022289
+ },
+ "fxRatesAsOf": "2026-09-30T00:02:31Z",
+ "fxRatesSource": "https://open.er-api.com/v6/latest/USD",
+ "fxRatesStaleAfterSec": 14400,
+ "asset": {
+  "symbol": "EURC",
+  "aliases": [
+   "EURC"
+  ],
+  "name": "EURC",
+  "corridor": "EUR",
+  "partner": true,
+  "yieldBearing": false,
+  "pegType": "peggedEUR",
+  "pegCurrency": "EUR",
+  "pegFxAvailable": true,
+  "pegMechanism": "fiat-backed",
+  "priceUsd": 1.133365,
+  "pegTargetUsd": 1.134404,
+  "pegTargetSource": "fx",
+  "deviationBps": -9,
+  "supplyNative": 467359121.7611,
+  "supplyUsd": 529688535.03,
+  "supplyChange24hNative": 7249321.5487,
+  "supplyChange24hUsd": 8216128.31,
+  "volume24hUsd": 40052959.0,
+  "volume24hDexUsd": 9720411.55,
+  "partnerLiquidityUsd": 7649507.43,
+  "marketCapUsd": 467799841.0,
+  "chains": [
+   {
+    "chain": "Ethereum",
+    "supplyNative": 342510074.0739,
+    "supplyUsd": 388188977.0
+   },
+   {
+    "chain": "Base",
+    "supplyNative": 57049345.8616,
+    "supplyUsd": 64657739.68
+   },
+   {
+    "chain": "Solana",
+    "supplyNative": 48273396.9782,
+    "supplyUsd": 54711385.18
+   },
+   {
+    "chain": "Arc",
+    "supplyNative": 6159725.4862,
+    "supplyUsd": 6981218.12
+   },
+   {
+    "chain": "Avalanche",
+    "supplyNative": 6094578.9284,
+    "supplyUsd": 6907383.28
+   },
+   {
+    "chain": "Stellar",
+    "supplyNative": 4746300.8536,
+    "supplyUsd": 5379291.92
+   },
+   {
+    "chain": "Tempo",
+    "supplyNative": 1611309.2046,
+    "supplyUsd": 1826201.68
+   },
+   {
+    "chain": "World Chain",
+    "supplyNative": 665591.8426,
+    "supplyUsd": 754358.59
+   },
+   {
+    "chain": "Cronos",
+    "supplyNative": 233908.4418,
+    "supplyUsd": 265103.67
+   },
+   {
+    "chain": "Sonic",
+    "supplyNative": 10665.5928,
+    "supplyUsd": 12088.01
+   },
+   {
+    "chain": "Polygon",
+    "supplyNative": 3957.4277,
+    "supplyUsd": 4485.21
+   },
+   {
+    "chain": "Cardano",
+    "supplyNative": 202.2823,
+    "supplyUsd": 229.26
+   },
+   {
+    "chain": "ICP",
+    "supplyNative": 64.7874,
+    "supplyUsd": 73.43
+   }
+  ],
+  "topPools": [
+   {
+    "chain": "ethereum",
+    "dex": "uniswap",
+    "pair": "0x95DBB3C7546F22BCE375900AbFdd64a4E5bD73d6",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.13,
+    "liquidityUsd": 2943738.32,
+    "volume24hUsd": 2744255.32
+   },
+   {
+    "chain": "ethereum",
+    "dex": "uniswap",
+    "pair": "0xb2b92b56988a4edbe255989792c6ea239b25eaf66b42093145cbf8f630db3a17",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.13,
+    "liquidityUsd": 2187528.52,
+    "volume24hUsd": 3313749.34
+   },
+   {
+    "chain": "solana",
+    "dex": "orca",
+    "pair": "ArisQNcbjXPJD7RgPRvysatX3xcfHPTbcTkfD8kDoZ9i",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.13,
+    "liquidityUsd": 464522.84,
+    "volume24hUsd": 2106954.57
+   },
+   {
+    "chain": "arc",
+    "dex": "aero",
+    "pair": "0xbe080aC37ad1305DFCc9521F5e6F68CFDc41B7fa",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.13,
+    "liquidityUsd": 403528.52,
+    "volume24hUsd": 893736.4
+   },
+   {
+    "chain": "arc",
+    "dex": "0xc481038c013fe96f38ce7a2dc417b2b1b78b16a4",
+    "pair": "0xb88C08E31C1bC7d41f2cFc4FbAfAD5B3B0a5eAe9",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.13,
+    "liquidityUsd": 199626.39,
+    "volume24hUsd": 110678.44
+   },
+   {
+    "chain": "arc",
+    "dex": "uniswap",
+    "pair": "0xeb0fd02fb8044d5514fb6e165ee134fd547eff0378bb33b76f4b81d8b03bd1ae",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.13,
+    "liquidityUsd": 152307.5,
+    "volume24hUsd": 160932.18
+   },
+   {
+    "chain": "worldchain",
+    "dex": "uniswap",
+    "pair": "0xEE4c0Cd5BC4A68c7573d82bB31d4dc9de1f53eCA",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.16,
+    "liquidityUsd": 147359.63,
+    "volume24hUsd": 21192.5
+   },
+   {
+    "chain": "base",
+    "dex": "pancakeswap",
+    "pair": "0x1Ca42C7219F0cB1B67927e26502320cB98F725bd",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.13,
+    "liquidityUsd": 133747.32,
+    "volume24hUsd": 16551.55
+   },
+   {
+    "chain": "avalanche",
+    "dex": "blackhole",
+    "pair": "0x65f83CCacaBaAC4eD2f80289A02dF4D35d744aE8",
+    "base": "EURC",
+    "quote": "USDC",
+    "priceUsd": 1.12,
+    "liquidityUsd": 122079.54,
+    "volume24hUsd": 5849.05
+   },
+   {
+    "chain": "bsc",
+    "dex": "pancakeswap",
+    "pair": "0x5C363C97acCc6349aCD33CD68B51A0A223782a43",
+    "base": "EURC",
+    "quote": "USDT",
+    "priceUsd": 1.17,
+    "liquidityUsd": 119236.97,
+    "volume24hUsd": 622.33
+   }
+  ]
+ }
+}
