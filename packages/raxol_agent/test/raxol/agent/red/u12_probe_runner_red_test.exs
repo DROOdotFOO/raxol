@@ -794,10 +794,34 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
             into: MapSet.new(),
             do: id
 
-      assert MapSet.size(refused) == n - max_parked,
-             "seed=#{@seed}: exactly #{n - max_parked} over-cap runs must shed :exhausted " <>
-               "(reason :max_parked), got #{MapSet.size(refused)} — a silently discarded run " <>
-               "is the N-U12.3 breach"
+      # A max_parked overflow schedules a pressure shed of the oldest parked
+      # run (`@pressure_shed_ms` later). If it fires before the last submit --
+      # on Windows, `Process.sleep(1)` is a ~16 ms timer tick, so the loop can
+      # outlast it -- the freed slot parks a later run instead of refusing it.
+      # So the refused count is n - max_parked only when no shed landed
+      # mid-loop; the law is that every run is refused or parked (none
+      # silently discarded), and each parked run past the cap took a slot a
+      # pressure shed freed.
+      parked =
+        for %{kind: :probe_run, run_id: id, status: :parked} <- events,
+            into: MapSet.new(),
+            do: id
+
+      pressured =
+        for %{kind: :probe_run, run_id: id, status: :exhausted, reason: :pressure} <- events,
+            into: MapSet.new(),
+            do: id
+
+      assert MapSet.size(refused) + MapSet.size(parked) == n,
+             "seed=#{@seed}: every submit must be refused (reason :max_parked) or parked, " <>
+               "got #{MapSet.size(refused)} refused + #{MapSet.size(parked)} parked of #{n} " <>
+               "— a silently discarded run is the N-U12.3 breach"
+
+      assert MapSet.size(refused) >= 1, "seed=#{@seed}: no over-cap submit was refused"
+
+      assert MapSet.size(parked) - max_parked <= MapSet.size(pressured),
+             "seed=#{@seed}: #{MapSet.size(parked)} runs parked past a cap of #{max_parked} " <>
+               "with only #{MapSet.size(pressured)} pressure sheds to free slots"
 
       for run_id <- refused do
         refute Enum.any?(
