@@ -92,10 +92,7 @@ defmodule Raxol.Agent.Curator do
       Map.merge(config, %{
         skills: skills,
         root: root,
-        # Expanded, as Skills.Store expands its roots: `Path.wildcard/1` reads
-        # `\` as an escape, so a Windows path spelled with backslashes globbed
-        # nothing and rollback reported :no_backup beside a fresh backup.
-        backups_dir: Path.expand(opts[:backups_dir] || default_backups_dir(root)),
+        backups_dir: opts[:backups_dir] || default_backups_dir(root),
         last_pass_at: nil,
         last_activity_at: now,
         next_allowed_at: now + config.interval_hours * @seconds_per_hour
@@ -215,10 +212,8 @@ defmodule Raxol.Agent.Curator do
   end
 
   defp prune_backups(state) do
-    state.backups_dir
-    |> Path.join("skills-*.tar.gz")
-    |> Path.wildcard()
-    |> Enum.sort(:desc)
+    state
+    |> backups()
     |> Enum.drop(state.keep_backups)
     |> Enum.each(&File.rm/1)
   end
@@ -243,12 +238,28 @@ defmodule Raxol.Agent.Curator do
     end
   end
 
-  defp latest_backup(state) do
-    state.backups_dir
-    |> Path.join("skills-*.tar.gz")
-    |> Path.wildcard()
-    |> Enum.sort(:desc)
-    |> List.first()
+  defp latest_backup(state), do: state |> backups() |> List.first()
+
+  # Newest first. Listed, not `Path.wildcard/1`-ed: a glob built from
+  # backups_dir reads the directory's own `[`, `{`, `*` and `\` as syntax, so a
+  # backups dir named `x [1]` matched nothing (rollback said :no_backup beside
+  # a fresh backup) and one named `bk{a,b}` matched backups in `bka/` and
+  # `bkb/`, which pruning then deleted.
+  defp backups(state) do
+    case File.ls(state.backups_dir) do
+      {:ok, names} ->
+        names
+        |> Enum.filter(&(String.starts_with?(&1, "skills-") and String.ends_with?(&1, ".tar.gz")))
+        |> Enum.sort(:desc)
+        |> Enum.map(&Path.join(state.backups_dir, &1))
+
+      {:error, :enoent} ->
+        []
+
+      {:error, reason} ->
+        Logger.warning("curator cannot list #{state.backups_dir}: #{inspect(reason)}")
+        []
+    end
   end
 
   # -- helpers ----------------------------------------------------------------

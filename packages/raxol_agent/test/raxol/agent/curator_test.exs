@@ -101,5 +101,46 @@ defmodule Raxol.Agent.CuratorTest do
       cur = start_curator(ctx, [])
       assert {:error, :no_backup} = Curator.rollback(cur)
     end
+
+    # Backups are found by listing backups_dir, not by globbing a pattern built
+    # from it: a glob reads the directory's own `[`, `{` and `\` as syntax.
+    test "rollback finds a backup in a directory whose name has glob characters",
+         %{store: sk} = ctx do
+      ctx = %{ctx | backups: Path.join(Path.dirname(ctx.backups), "backups [1]")}
+      create(ctx, "keep", :agent)
+      cur = start_curator(ctx, stale_after_days: 999_999, archive_after_days: 999_999)
+
+      assert %{backup: path} = Curator.run(cur)
+      Store.delete("keep", server: sk)
+
+      assert {:ok, ^path} = Curator.rollback(cur)
+      assert {:ok, _} = Store.get("keep", server: sk)
+    end
+
+    test "pruning never touches backups outside backups_dir", ctx do
+      base = Path.dirname(ctx.backups)
+
+      siblings =
+        for dir <- ["bka", "bkb"] do
+          path = Path.join([base, dir, "skills-1.tar.gz"])
+          File.mkdir_p!(Path.dirname(path))
+          File.write!(path, "not ours")
+          path
+        end
+
+      ctx = %{ctx | backups: Path.join(base, "bk{a,b}")}
+      create(ctx, "keep", :agent)
+
+      cur =
+        start_curator(ctx,
+          stale_after_days: 999_999,
+          archive_after_days: 999_999,
+          keep_backups: 1
+        )
+
+      assert %{backup: path} = Curator.run(cur)
+      assert File.exists?(path)
+      for sibling <- siblings, do: assert(File.exists?(sibling), "pruned #{sibling}")
+    end
   end
 end

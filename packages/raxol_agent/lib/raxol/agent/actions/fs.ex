@@ -353,12 +353,12 @@ defmodule Raxol.Agent.Actions.Fs do
   not exist (the final segment of a not-yet-created file, for a future
   write path) is kept literally rather than erroring — only EXISTING
   components can be symlinks. On a symlink cycle (more than
-  #{@max_symlink_hops} hops), returns `path` unresolved — callers that
-  need a containment guarantee (see `resolve/1`) must not treat that
-  fallback as trustworthy; use `safe_realpath/1` there instead, which
-  surfaces the cycle as an error so containment fails closed rather
-  than falling back to an unresolved (and possibly still
-  lexically-matching) path.
+  #{@max_symlink_hops} hops) or a link whose target cannot be read,
+  returns `path` unresolved — callers that need a containment guarantee
+  (see `resolve/1`) must not treat that fallback as trustworthy; use
+  `safe_realpath/1` there instead, which surfaces either as an error so
+  containment fails closed rather than falling back to an unresolved (and
+  possibly still lexically-matching) path.
 
   `path` must already be absolute (callers canonicalize an
   already-`Path.expand/2`-ed path); this function does no cwd-relative
@@ -379,6 +379,7 @@ defmodule Raxol.Agent.Actions.Fs do
     case walk(rest, root, 0) do
       {:ok, real} -> {:ok, real}
       {:error, :symlink_loop} -> :error
+      {:error, :unresolvable_link} -> :error
     end
   end
 
@@ -419,8 +420,29 @@ defmodule Raxol.Agent.Actions.Fs do
         {root, parts} = split_root(resolved)
         walk(parts ++ rest, root, hops + 1)
 
-      {:error, _not_a_symlink_or_missing} ->
+      # Not a link: the common case, settled without a second call.
+      {:error, :einval} ->
         walk(rest, candidate, hops)
+
+      {:error, _reason} ->
+        if unreadable_link?(candidate),
+          do: {:error, :unresolvable_link},
+          else: walk(rest, candidate, hops)
+    end
+  end
+
+  # A read_link error other than :einval is either a component that does not
+  # exist yet (kept literally, for a write's final segment) or a link whose
+  # target cannot be read. Windows is the second case for every DANGLING link:
+  # its read_link resolves the final path, which does not exist. Treating that
+  # as a missing file passed a link out of the sandbox as contained, and a
+  # write through it created the target outside. So ask lstat which it is, and
+  # fail closed on anything but a plain absence or a non-link.
+  defp unreadable_link?(candidate) do
+    case File.lstat(candidate) do
+      {:error, absent} when absent in [:enoent, :enotdir] -> false
+      {:ok, %File.Stat{type: type}} -> type == :symlink
+      {:error, _unknown} -> true
     end
   end
 
