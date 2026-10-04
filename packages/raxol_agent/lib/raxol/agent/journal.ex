@@ -20,15 +20,24 @@ defmodule Raxol.Agent.Journal do
     * `append/2`  — append one event, returning `{:ok, offset}`.
     * `read/2`    — replay durable events in offset order.
     * `close/2`   — release the handle (flush + stop the writer).
-    * `status/1`  — `:ok` for a healthy journal, `:damaged` if interior corruption was detected.
+    * `status/1`  — `:ok` for a healthy journal, `{:damaged, offset}` if corruption was detected.
+    * `verify/1`  — walk a hash-chained journal: `:ok` or `{:broken, offset}`.
 
   ## Durability & recovery
 
   Only *complete* records are ever returned. On replay a parse failure on the
   final line of the last segment is treated as a torn tail (a crash mid-write)
   and truncated away — everything before it is recovered and `status/1` stays
-  `:ok`. A parse failure anywhere interior marks the session `:damaged`, raises a
+  `:ok`. A parse failure anywhere interior marks the session damaged, raises a
   hard alarm, deletes nothing, and never returns the damaged content downstream.
+
+  ## Hash chain
+
+  A backend may offer hash-chained journals (`Raxol.Agent.Journal.FileStore`
+  does with `chain: true`): each record links to the hash of the one before
+  it, so changing, removing or truncating any committed record is detected.
+  `verify/1` reports the offset of the first record that fails, and
+  `status/1` reports the same offset as damage.
   """
 
   @typedoc "Stable identifier for a session (also the on-disk directory name)."
@@ -68,6 +77,20 @@ defmodule Raxol.Agent.Journal do
   @doc "Release the handle (flush pending writes and stop the writer)."
   @callback close(handle) :: :ok
 
-  @doc "`:ok` for a healthy journal, `:damaged` if interior corruption was detected."
-  @callback status(handle) :: :ok | :damaged
+  @doc """
+  `:ok` for a healthy journal, `{:damaged, offset}` naming the first offset
+  where corruption (or, on a chained journal, a chain break) was detected.
+  """
+  @callback status(handle) :: :ok | {:damaged, offset}
+
+  @doc """
+  Walk the hash chain. `:ok` when every record links and verifies,
+  `{:broken, offset}` for the first that does not, `{:error, :unchained}` for
+  a journal created without a chain.
+  """
+  @callback verify(handle) :: :ok | {:broken, offset} | {:error, :unchained}
+
+  @doc "Dispatch `verify/1` to the backend module that owns `handle`."
+  @spec verify(%{__struct__: module()}) :: :ok | {:broken, offset} | {:error, :unchained}
+  def verify(%module{} = handle), do: module.verify(handle)
 end

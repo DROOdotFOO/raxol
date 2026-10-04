@@ -505,6 +505,34 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
     end
   end
 
+  describe "I9 — every frozen corpus under the current reader" do
+    test "each pinned version opens, replays densely, and keeps its chain mode", %{base: base} do
+      for {version, %{"session" => session}} <- @manifest["versions"] do
+        File.cp_r!(
+          Path.join([@fixtures, "golden/v#{version}", session]),
+          Path.join(base, session)
+        )
+
+        {:ok, j} = FileStore.open(session, base_dir: base)
+        assert {:ok, records} = FileStore.read(j), "#{version} no longer replays"
+        assert FileStore.status(j) == :ok
+        assert Enum.map(records, & &1["id"]) == Enum.to_list(1..length(records))
+        assert Enum.all?(records, &(&1["schema_version"] == version))
+
+        # 1.2.0 is the first chained corpus; earlier ones were written unchained
+        # and must stay readable as such, never retro-verified.
+        chained? = Version.compare(version, "1.2.0") != :lt
+        assert Enum.all?(records, &Map.has_key?(&1, "hash")) == chained?
+        assert FileStore.verify(j) == if(chained?, do: :ok, else: {:error, :unchained})
+
+        assert {:ok, next} = FileStore.append(j, %{"type" => "chunk"})
+        assert next == length(records) + 1
+        assert FileStore.status(j) == :ok
+        :ok = FileStore.close(j)
+      end
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
 
   defp pump_shape_key(%Event{type: :item_completed, payload: %{item_type: it}}),
