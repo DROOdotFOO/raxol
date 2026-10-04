@@ -164,16 +164,22 @@ defmodule Raxol.Core.Metrics.MetricsCollectorTest do
   end
 
   describe "system metrics collection" do
-    @tag :skip_on_ci
-    test "collects system metrics automatically" do
-      # Wait for the periodic system metrics collection to run
-      Process.sleep(200)
+    test "collects system metrics on each collection tick" do
+      # The real interval is 10s; deliver the tick it schedules instead of
+      # waiting for it, then sync on the server so the handler has run.
+      send(MetricsCollector, :collect_system_metrics)
+      :sys.get_state(MetricsCollector)
 
       metrics = MetricsCollector.get_metrics_by_type(:resource)
-      resource_metrics = Map.keys(metrics)
-      assert :process_count in resource_metrics
-      assert :runtime_ratio in resource_metrics
-      assert :gc_stats in resource_metrics
+
+      assert Enum.sort(Map.keys(metrics)) ==
+               Enum.sort([
+                 :process_count,
+                 :memory_total,
+                 :runtime_ms,
+                 :gc_count,
+                 :gc_words_reclaimed
+               ])
     end
   end
 

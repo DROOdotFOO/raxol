@@ -22,6 +22,16 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
     }
   end
 
+  # The recommender notifies subscribers inside its handle_info, and a reply
+  # to a later call cannot overtake that send, so once this returns any
+  # recommendation is already in the mailbox: assert_received/refute_received
+  # need no timeout window.
+  defp deliver(pid, aggregate) do
+    send(pid, {:behavior_aggregate, aggregate})
+    _ = LayoutRecommender.get_last_recommendation(pid)
+    :ok
+  end
+
   describe "fixture parity with the real producer" do
     test "make_aggregate carries the same keys BehaviorTracker emits" do
       {:ok, tracker} = BehaviorTracker.start_link(name: nil)
@@ -48,9 +58,9 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
       aggregate =
         make_aggregate(%{scout: 0.15, analyst: 3.5, comms: 3.5, ops: 2.85})
 
-      send(pid, {:behavior_aggregate, aggregate})
+      deliver(pid, aggregate)
 
-      assert_receive {:layout_recommendation, rec}, 200
+      assert_received {:layout_recommendation, rec}
       assert length(rec.layout_changes) == 1
       [change] = rec.layout_changes
       assert change.action == :hide
@@ -68,9 +78,9 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
 
       # analyst gets 60%, others share 40%
       aggregate = make_aggregate(%{analyst: 6.0, scout: 2.0, comms: 2.0})
-      send(pid, {:behavior_aggregate, aggregate})
+      deliver(pid, aggregate)
 
-      assert_receive {:layout_recommendation, rec}, 200
+      assert_received {:layout_recommendation, rec}
       assert [change | _] = rec.layout_changes
       assert change.action == :expand
       assert change.pane_id == :analyst
@@ -92,9 +102,9 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
           least_used_panes: [:hidden_pane]
         )
 
-      send(pid, {:behavior_aggregate, aggregate})
+      deliver(pid, aggregate)
 
-      assert_receive {:layout_recommendation, rec}, 200
+      assert_received {:layout_recommendation, rec}
       assert [change | _] = rec.layout_changes
       assert change.action == :show
       assert change.pane_id == :hidden_pane
@@ -110,9 +120,9 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
       LayoutRecommender.subscribe(pid)
 
       aggregate = make_aggregate(%{scout: 3.0, analyst: 3.0, comms: 4.0})
-      send(pid, {:behavior_aggregate, aggregate})
+      deliver(pid, aggregate)
 
-      refute_receive {:layout_recommendation, _}, 50
+      refute_received {:layout_recommendation, _}
     end
   end
 
@@ -127,12 +137,12 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
       LayoutRecommender.subscribe(pid)
 
       aggregate = make_aggregate(%{scout: 0.1, analyst: 9.9})
-      send(pid, {:behavior_aggregate, aggregate})
-      assert_receive {:layout_recommendation, _}, 200
+      deliver(pid, aggregate)
+      assert_received {:layout_recommendation, _}
 
       # Second aggregate within cooldown should not produce recommendation
-      send(pid, {:behavior_aggregate, aggregate})
-      refute_receive {:layout_recommendation, _}, 50
+      deliver(pid, aggregate)
+      refute_received {:layout_recommendation, _}
     end
   end
 
@@ -149,9 +159,9 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
 
       # Hide rule has confidence 0.8, below 0.95 threshold
       aggregate = make_aggregate(%{scout: 0.1, analyst: 9.9})
-      send(pid, {:behavior_aggregate, aggregate})
+      deliver(pid, aggregate)
 
-      refute_receive {:layout_recommendation, _}, 50
+      refute_received {:layout_recommendation, _}
     end
   end
 
@@ -169,8 +179,7 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
         )
 
       aggregate = make_aggregate(%{scout: 0.1, analyst: 9.9})
-      send(pid, {:behavior_aggregate, aggregate})
-      Process.sleep(20)
+      deliver(pid, aggregate)
 
       rec = LayoutRecommender.get_last_recommendation(pid)
       assert rec != nil
@@ -208,9 +217,9 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
       assert_receive {:DOWN, ^ref, :process, ^tracker, :killed}, 500
 
       aggregate = make_aggregate(%{analyst: 6.0, scout: 2.0, comms: 2.0})
-      send(pid, {:behavior_aggregate, aggregate})
+      deliver(pid, aggregate)
 
-      assert_receive {:layout_recommendation, rec}, 500
+      assert_received {:layout_recommendation, rec}
       assert [change | _] = rec.layout_changes
       assert change.action == :expand
       assert Process.alive?(pid)
