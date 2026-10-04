@@ -14,7 +14,13 @@ defmodule Raxol.Broker.Journal.Replay do
   with it. The policy stops at the first DENY, so rules before the denying
   one are shown as `pass` (they allowed or asked) and rules after it as
   `not run`. A group still open on disk (the broker stopped and has not
-  restarted since) is shown the way the next start will close it.
+  restarted since) is shown the way the next start will close it; one with a
+  `placing` record and no terminal record is `IN FLIGHT`.
+
+  Every rendered line passes through `escape/1`: C0 controls, DEL and C1
+  controls are written as visible `\\uXXXX` escapes and invalid UTF-8 bytes
+  as `\\xNN`, so journal content (intent ids and strategies can come from
+  model output) cannot drive the terminal.
   """
 
   alias Raxol.Agent.Journal.Chain
@@ -52,7 +58,31 @@ defmodule Raxol.Broker.Journal.Replay do
       "broker journal #{Date.to_iso8601(date)} (UTC): #{length(groups)} group(s), #{length(fills)} fill(s)"
 
     [header | Enum.flat_map(groups, &group_lines/1) ++ Enum.map(fills, &fill_line/1)]
+    |> Enum.map(&escape/1)
   end
+
+  @doc """
+  Make `line` safe to print: C0 controls (< 0x20), DEL and C1 controls
+  (U+0080..U+009F) become `\\uXXXX`, bytes that are not valid UTF-8 become
+  `\\xNN`. Everything else passes through.
+  """
+  @spec escape(binary()) :: String.t()
+  def escape(line) when is_binary(line), do: escape(line, [])
+
+  defp escape(<<>>, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+  defp escape(<<c::utf8, rest::binary>>, acc) when c < 0x20 or c in 0x7F..0x9F,
+    do: escape(rest, [unicode_escape(c) | acc])
+
+  defp escape(<<c::utf8, rest::binary>>, acc), do: escape(rest, [<<c::utf8>> | acc])
+
+  defp escape(<<byte, rest::binary>>, acc),
+    do: escape(rest, ["\\x" <> hex(byte, 2) | acc])
+
+  defp unicode_escape(c), do: "\\u" <> hex(c, 4)
+
+  defp hex(n, width),
+    do: n |> Integer.to_string(16) |> String.downcase() |> String.pad_leading(width, "0")
 
   defp on?(at, date) when is_binary(at) do
     case DateTime.from_iso8601(at) do
@@ -87,11 +117,21 @@ defmodule Raxol.Broker.Journal.Replay do
   defp record_lines(%{"type" => "review", "response" => response}),
     do: ["  review   " <> json(response)]
 
+  defp record_lines(%{"type" => "approval"} = record),
+    do: ["  approval #{text(record["decision"])} by #{text(record["by"])}"]
+
+  defp record_lines(%{"type" => "placing"} = record) do
+    case record["notional"] do
+      nil -> ["  placing  cancel"]
+      notional -> ["  placing  notional=#{text(notional)}"]
+    end
+  end
+
   defp record_lines(%{"type" => "order"} = record),
-    do: ["  order    #{record["status"]} #{json(record["response"])}"]
+    do: ["  order    #{text(record["status"])} #{json(record["response"])}"]
 
   defp record_lines(%{"type" => "close"} = record),
-    do: ["  close    #{record["reason"]} (#{record["outcome"]})"]
+    do: ["  close    #{text(record["reason"])} (#{text(record["outcome"])})"]
 
   defp record_lines(record), do: ["  record   " <> json(record)]
 
@@ -130,19 +170,30 @@ defmodule Raxol.Broker.Journal.Replay do
     case Groups.outcome(group) do
       :placed -> "PLACED"
       :failed -> "FAILED"
-      :unknown -> "UNKNOWN #{group.close["reason"]} (counted)"
+      :unknown -> "UNKNOWN" <> unknown_reason(group) <> counted(group)
       :denied -> "DENY" <> deny_reason(group)
+      :in_flight -> "IN FLIGHT" <> counted(group) <> " " <> open_note(group)
       :open -> open_outcome(group)
     end
   end
 
-  defp deny_reason(%{close: %{"reason" => reason}}), do: " " <> reason
+  defp counted(group), do: if(Groups.counts?(group), do: " (counted)", else: " (not counted)")
+
+  defp unknown_reason(%{close: %{"reason" => reason}}), do: " " <> text(reason)
+  defp unknown_reason(_group), do: ""
+
+  defp deny_reason(%{close: %{"reason" => reason}}), do: " " <> text(reason)
 
   defp deny_reason(group) do
     case Groups.last_verdict(group) do
-      %{"result" => %{"rule" => rule}} -> " " <> rule
+      %{"result" => %{"rule" => rule}} -> " " <> text(rule)
       _ -> ""
     end
+  end
+
+  defp open_note(group) do
+    {reason, close_outcome} = Groups.crash_close(group)
+    "(open on disk; closed at next start as #{String.upcase(close_outcome)} #{reason})"
   end
 
   defp open_outcome(group) do
@@ -151,6 +202,12 @@ defmodule Raxol.Broker.Journal.Replay do
       {reason, "unknown"} -> "UNKNOWN #{reason} (open on disk; closed at next start, counted)"
     end
   end
+
+  # A scalar from the journal as text; non-strings are shown as JSON so a
+  # malformed record cannot crash interpolation.
+  defp text(value) when is_binary(value), do: value
+  defp text(nil), do: ""
+  defp text(value), do: json(value)
 
   defp intent_line(intent) do
     [
@@ -164,7 +221,7 @@ defmodule Raxol.Broker.Journal.Replay do
       field(intent, "order_id"),
       "provenance=" <> json(intent["provenance"]),
       field(intent, "strategy"),
-      "id=" <> intent["id"]
+      "id=" <> text(intent["id"])
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" ")
@@ -192,8 +249,9 @@ defmodule Raxol.Broker.Journal.Replay do
   end
 
   defp fill_line(%{"fill" => fill, "at" => at}) do
-    "fill #{at} #{fill["side"]} #{fill["symbol"]} qty=#{fill["qty"]} price=#{fill["price"]} " <>
-      "realized_pnl=#{fill["realized_pnl"]} order_id=#{fill["order_id"]}"
+    "fill #{text(at)} #{text(fill["side"])} #{text(fill["symbol"])} qty=#{text(fill["qty"])} " <>
+      "price=#{text(fill["price"])} realized_pnl=#{text(fill["realized_pnl"])} " <>
+      "order_id=#{text(fill["order_id"])}"
   end
 
   defp json(value), do: value |> Chain.canonical() |> IO.iodata_to_binary()

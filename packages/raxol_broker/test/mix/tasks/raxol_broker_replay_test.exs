@@ -72,6 +72,7 @@ defmodule Mix.Tasks.Raxol.Broker.ReplayTest do
             {:verdict, :pre_review, allow},
             {:review, %{"warnings" => []}},
             {:verdict, :post_review, allow},
+            {:placing},
             {:order, :placed, %{"order_id" => "rh-1"}}
           ]
         },
@@ -118,6 +119,7 @@ defmodule Mix.Tasks.Raxol.Broker.ReplayTest do
     assert "  verdict  pre_review ALLOW" in placed_lines
     assert "    max_notional_per_order   allow" in placed_lines
     assert ~s(  review   {"warnings":[]}) in placed_lines
+    assert "  placing  notional=250" in placed_lines
     assert ~s(  order    placed {"order_id":"rh-1"}) in placed_lines
     assert List.last(placed_lines) == ""
     assert Enum.at(placed_lines, -2) == "  outcome  PLACED"

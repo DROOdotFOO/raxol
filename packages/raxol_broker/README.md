@@ -129,32 +129,44 @@ children = [Raxol.Broker.Journal]
 :ok = Raxol.Broker.Journal.append_to_group(group, {:verdict, :pre_review, Policy.evaluate(intent, context)})
 :ok = Raxol.Broker.Journal.append_to_group(group, {:review, review_response})
 :ok = Raxol.Broker.Journal.append_to_group(group, {:verdict, :post_review, verdict})
+:ok = Raxol.Broker.Journal.append_to_group(group, {:approval, :approved, "operator"})
+:ok = Raxol.Broker.Journal.append_to_group(group, {:placing})
+# only now call place_*
 :ok = Raxol.Broker.Journal.append_to_group(group, {:order, :placed, order_response})
 ```
 
-A group is the intent, a snapshot of the policy context, each verdict, the
-review response, and one terminal record: the order response (`:placed` or
-`:failed`), a DENY verdict, or `{:close, reason}`. `open_group/2` makes the
-intent durable before any review or order call; `append_group/1` writes a
+A group is the intent, a snapshot of the policy context, each verdict, any
+human approval of an ASK, the review response, a `placing` record, and one
+terminal record: the order response (`:placed`, `:failed` or `:unknown`), a
+DENY verdict, a declined approval, or `{:close, reason}`. `open_group/2` makes
+the intent durable before any review or order call; `append_group/1` writes a
 whole group as one contiguous run. Every record is synced before the call
 returns.
 
+`{:placing}` is the write-ahead point for the order call. The journal prices
+the order from the group's own intent and context (`Policy.notional/2`) and
+refuses an order it cannot price, so nothing unpriced can be sent. An order
+response is refused for a group with no `placing` record. Order and review
+responses are recorded as given, with floats written as decimal strings.
+
 Each record carries `prev_hash` and `hash` (SHA-256 of its canonical JSON),
-so changing, removing or truncating any committed record is detected. On
-start the journal verifies the chain:
+so changing, removing or truncating any committed record is detected. The
+journal directory is created mode 0700 and its files 0600, and a symlinked,
+foreign-owned or group- or other-writable directory is refused. On start the
+journal verifies the chain:
 
   * A damaged journal answers every append and query with
     `{:error, {:journal_damaged, offset}}`; `status/0` and `verify/0` name
     the offset. No order can be sized against it.
   * A group left open by a crash is closed before anything else is written.
-    Without a post-review ALLOW it becomes DENY `crash_before_verdict`. After
+    Without a `placing` record it becomes DENY `crash_before_verdict`. With
     one, the order call may have gone out, so it becomes
-    `crash_outcome_unknown` and counts toward the caps.
+    `crash_outcome_unknown` and keeps counting toward the caps.
 
 The chain has no key: it catches corruption and naive edits, not someone who
 can rewrite the whole directory.
 
-The policy context reads from an index built on start:
+The policy context reads from an index built on start and kept current:
 
 ```elixir
 {:ok, notional} = Raxol.Broker.Journal.today_notional(start_of_exchange_day_utc)
@@ -162,9 +174,25 @@ The policy context reads from an index built on start:
 {:ok, pnl} = Raxol.Broker.Journal.realized_pnl_today(start_of_exchange_day_utc)
 ```
 
-Placed orders and unknown-outcome groups count; cancels, denials and failed
-orders do not. The caller chooses the day boundary. `realized_pnl_today/1`
-sums the realized P&L recorded with `append_fill/1`.
+An order counts from the moment its `placing` record is written, at the
+notional recorded there, and stops counting only when its order response says
+`:failed`. Placed, in-flight and unknown-outcome orders all count; cancels,
+denials and groups that never reached `placing` do not. The live index and the
+one rebuilt at start agree. The caller chooses the day boundary.
+`realized_pnl_today/1` sums the realized P&L recorded with `append_fill/1`.
+
+### A damaged journal
+
+A damaged journal stops trading until an operator acts. There is no repair:
+the chain exists so history cannot be edited. To recover:
+
+1. Stop the broker and keep the damaged directory as evidence
+   (`mv ~/.raxol/broker/journal ~/.raxol/broker/journal.damaged-<date>`).
+2. Run `mix raxol.broker.replay --date <today> --journal <archived path>` to
+   see the offset of the first broken record.
+3. Do not trade again until the next exchange day. A new journal starts with
+   empty counters, so on the day of the move it knows nothing about orders
+   already placed: today's notional and order rate would start from zero.
 
 ### Replay
 
@@ -173,11 +201,12 @@ mix raxol.broker.replay --date 2026-10-02 [--journal PATH]
 ```
 
 Prints every group opened that day (UTC) in journal order: intent, context,
-each rule's verdict for each policy pass, review, order, and outcome. Rules
-before a denying rule show `pass` (they allowed or asked) and rules after it
-`not run`, because the policy stops at the first DENY. The task reads without
-taking the writer lock, so it works while the broker runs, and refuses a
-journal whose chain does not verify.
+each rule's verdict for each policy pass, review, approval, placing, order,
+and outcome. Rules before a denying rule show `pass` (they allowed or asked)
+and rules after it `not run`, because the policy stops at the first DENY.
+Control characters in recorded text are printed escaped, never raw. The task
+reads without taking the writer lock, so it works while the broker runs, and
+refuses a journal whose chain does not verify.
 
 ## Robinhood sign-in
 

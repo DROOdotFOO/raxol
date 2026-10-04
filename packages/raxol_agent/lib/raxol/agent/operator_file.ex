@@ -167,7 +167,7 @@ defmodule Raxol.Agent.OperatorFile do
   def trusted?(path) do
     with :ok <- trusted_dir?(Path.dirname(path)) do
       case File.stat(path) do
-        {:ok, %File.Stat{type: :regular} = stat} -> vet(stat)
+        {:ok, %File.Stat{type: :regular} = stat} -> owned_unshared(stat)
         {:ok, %File.Stat{type: type}} -> {:error, {:not_a_regular_file, type}}
         {:error, :enoent} -> {:error, :enoent}
         {:error, reason} -> {:error, {:stat_failed, reason}}
@@ -217,9 +217,21 @@ defmodule Raxol.Agent.OperatorFile do
     end
   end
 
+  @doc """
+  The owner and mode half of `trusted?/1` for a stat already taken: `:ok`
+  when it belongs to `uid/0` and carries no group- or other-write bit.
+
+  No type check and no sticky-bit allowance: a caller vetting something other
+  than a control file (the journal's private session directories, say) adds
+  the rules its own resource needs.
+  """
+  @spec owned_unshared(File.Stat.t()) ::
+          :ok
+          | {:error,
+             {:not_owned, non_neg_integer()} | {:group_or_other_writable, non_neg_integer()}}
   # Windows reports neither a meaningful uid nor POSIX mode bits through
   # File.Stat, so both tests would be theatre there; the path rule still holds.
-  defp vet(%File.Stat{uid: file_uid, mode: mode}) do
+  def owned_unshared(%File.Stat{uid: file_uid, mode: mode}) do
     permissions = band(mode, 0o777)
     owner = uid()
 

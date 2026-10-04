@@ -4,7 +4,9 @@ defmodule Raxol.Broker.Journal.Codec do
 
   Decimals are written as strings with their exact digits and exponent
   (`Decimal.to_string/1`), so they read back equal. The journal is hash-chained
-  and refuses floats, so nothing here produces one.
+  and refuses JSON floats, so nothing here produces one: floats inside opaque
+  terms (order and review responses, params) are written as strings
+  (`term/1`).
 
     * `%Raxol.Broker.Intent{}` and `%Raxol.Broker.Policy.Context{}` round-trip:
       `decode_intent(encode_intent(i)) == {:ok, i}`, and the same for a context
@@ -284,7 +286,12 @@ defmodule Raxol.Broker.Journal.Codec do
   atoms as strings (`true`, `false` and `nil` stay JSON literals), tuples as
   arrays, structs as their fields, map keys as strings, anything else that has
   no JSON form (pids, functions, non-UTF-8 binaries) as `inspect/1` text.
-  Floats pass through and are refused by the chained journal.
+
+  Floats become strings of their shortest round-tripping digits
+  (`:erlang.float_to_binary(f, [:short])`, so `125.01` is `"125.01"`): the
+  chained journal refuses JSON floats, whose text form is not canonical, and
+  an order or review response must always be recordable. Integers stay
+  numbers.
   """
   @spec term(term()) :: term()
   def term(%Decimal{} = d), do: Decimal.to_string(d)
@@ -295,7 +302,8 @@ defmodule Raxol.Broker.Journal.Codec do
   def term(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> term()
   def term(value) when is_boolean(value) or is_nil(value), do: value
   def term(atom) when is_atom(atom), do: Atom.to_string(atom)
-  def term(number) when is_number(number), do: number
+  def term(float) when is_float(float), do: :erlang.float_to_binary(float, [:short])
+  def term(integer) when is_integer(integer), do: integer
 
   def term(binary) when is_binary(binary),
     do: if(String.valid?(binary), do: binary, else: inspect(binary))

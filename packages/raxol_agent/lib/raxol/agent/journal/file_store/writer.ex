@@ -53,6 +53,15 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   If the chain does not verify when the Writer starts, it refuses every
   append with `{:error, :damaged}` and leaves `HEAD` untouched: a broken
   chain cannot be extended, and its anchor is evidence.
+
+  ## Private journals
+
+  With `private: true` every file this Writer creates -- segments,
+  `meta.json`, `HEAD`, `writer.lock` and the temp files behind atomic writes
+  -- is chmod 0600 before a byte is written to it, and a segment it reopens
+  is tightened the same way. `Raxol.Agent.Journal.FileStore.open/2` has
+  already made the directories 0700, so no other account can open a file in
+  the moment between its creation and the chmod.
   """
 
   use GenServer
@@ -87,6 +96,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     # Chained journals only: `{:ok, tip_hash}` while the chain verifies,
     # `:damaged` when it did not at start. nil for an unchained journal.
     chain: nil,
+    private?: false,
     dirty: false
   ]
 
@@ -170,7 +180,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     # damaging the journal. A pid lock file closes the same-host case; it fails
     # OPEN (proceeds without a lock) on any uncertainty, and refuses ONLY when
     # the holder is a confirmed-live foreign OS process.
-    case acquire_lock(dir) do
+    case acquire_lock(dir, private?(opts)) do
       {:ok, lock_path} ->
         try do
           init_after_lock(opts, dir, session_id, journal_dir, lock_path)
@@ -223,7 +233,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     chained? = Keyword.get(opts, :chain, false) == true or Reader.chained?(dir)
     {offset, chain} = resume(dir, chained?)
     {seg_num, seg_size} = current_segment(journal_dir, seg_cap)
-    io = open_segment!(journal_dir, seg_num)
+    io = open_segment!(journal_dir, seg_num, private?(opts))
 
     state = %__MODULE__{
       session_id: session_id,
@@ -238,12 +248,15 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       immediate_types: immediate_types,
       sync_ceiling_ms: Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms),
       lock_path: lock_path,
-      chain: chain
+      chain: chain,
+      private?: private?(opts)
     }
 
     write_head(state)
     {:ok, state}
   end
+
+  defp private?(opts), do: Keyword.get(opts, :private, false) == true
 
   defp resume(dir, false), do: {resume_offset(dir), nil}
 
@@ -468,7 +481,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   defp maybe_rotate(%{seg_size: size, seg_cap: cap} = state) when size >= cap do
     seg_num = state.seg_num + 1
 
-    case open_segment(state.journal_dir, seg_num) do
+    case open_segment(state.journal_dir, seg_num, state.private?) do
       {:ok, io} ->
         _ = safe_datasync(state)
         if state.io, do: :file.close(state.io)
@@ -482,14 +495,28 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   defp maybe_rotate(state), do: state
 
-  defp open_segment(journal_dir, seg_num) do
+  defp open_segment(journal_dir, seg_num, private?) do
     path = Path.join(journal_dir, segment_name(seg_num))
+
     # :raw + :append, never :delayed_write (durability guarantees depend on it).
-    :file.open(path, [:append, :raw, :binary])
+    with {:ok, io} <- :file.open(path, [:append, :raw, :binary]) do
+      case restrict(path, private?) do
+        :ok ->
+          {:ok, io}
+
+        {:error, _reason} = error ->
+          _ = :file.close(io)
+          error
+      end
+    end
   end
 
-  defp open_segment!(journal_dir, seg_num) do
-    case open_segment(journal_dir, seg_num) do
+  # Private journals: 0600 before the first byte (see the moduledoc).
+  defp restrict(_path, false), do: :ok
+  defp restrict(path, true), do: :file.change_mode(path, 0o600)
+
+  defp open_segment!(journal_dir, seg_num, private?) do
+    case open_segment(journal_dir, seg_num, private?) do
       {:ok, io} ->
         io
 
@@ -565,10 +592,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       }
       |> put_tip(state.chain)
 
-    case atomic_write(
-           Path.join(state.dir, "HEAD"),
-           Jason.encode_to_iodata!(head)
-         ) do
+    case atomic_write(Path.join(state.dir, "HEAD"), Jason.encode_to_iodata!(head), state.private?) do
       :ok -> :ok
       {:error, reason} -> write_failed(:head, reason)
     end
@@ -590,7 +614,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
       meta = if Keyword.get(opts, :chain) == true, do: Map.put(meta, "chain", true), else: meta
 
-      case atomic_write(path, Jason.encode_to_iodata!(meta)) do
+      case atomic_write(path, Jason.encode_to_iodata!(meta), private?(opts)) do
         :ok -> :ok
         {:error, reason} -> write_failed(:meta, reason)
       end
@@ -612,11 +636,11 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   # Non-raising: a full/failing disk returns {:error, reason} so the caller can
   # log and continue instead of crashing the Writer mid-append.
-  defp atomic_write(path, data) do
+  defp atomic_write(path, data, private?) do
     tmp =
       path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive]))
 
-    with :ok <- write_temp(tmp, data),
+    with :ok <- write_temp(tmp, data, private?),
          :ok <- :file.rename(tmp, path) do
       # Durability of the rename itself needs the *directory* entry flushed,
       # else a power loss can lose the newly-renamed name. Best-effort (some
@@ -630,10 +654,16 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
-  defp write_temp(tmp, data) do
+  # The rename carries the temp file's mode, so a private temp file makes a
+  # private HEAD / meta.json.
+  defp write_temp(tmp, data, private?) do
     case :file.open(tmp, [:write, :raw, :binary]) do
       {:ok, io} ->
-        result = with :ok <- :file.write(io, data), do: :file.datasync(io)
+        result =
+          with :ok <- restrict(tmp, private?),
+               :ok <- :file.write(io, data),
+               do: :file.datasync(io)
+
         _ = :file.close(io)
         result
 
@@ -681,21 +711,21 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
-  defp acquire_lock(dir) do
+  defp acquire_lock(dir, private?) do
     if lockable?() do
-      claim_lock(Path.join(dir, @lock_file), System.pid())
+      claim_lock(Path.join(dir, @lock_file), System.pid(), private?)
     else
       {:ok, nil}
     end
   end
 
-  defp claim_lock(path, our_pid) do
-    case File.write(path, our_pid, [:exclusive]) do
+  defp claim_lock(path, our_pid, private?) do
+    case write_lock(path, our_pid, [:exclusive], private?) do
       :ok ->
         {:ok, path}
 
       {:error, :eexist} ->
-        resolve_existing_lock(path, our_pid)
+        resolve_existing_lock(path, our_pid, private?)
 
       {:error, reason} ->
         # Could not even create the lock (e.g. a read-only dir): do not block
@@ -705,27 +735,41 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
-  defp resolve_existing_lock(path, our_pid) do
+  defp resolve_existing_lock(path, our_pid, private?) do
     case File.read(path) do
       {:ok, contents} ->
         holder = String.trim(contents)
 
         cond do
-          holder == "" or holder == our_pid -> reclaim_lock(path, our_pid)
+          holder == "" or holder == our_pid -> reclaim_lock(path, our_pid, private?)
           os_pid_alive?(holder) -> {:refused, holder}
-          true -> reclaim_lock(path, our_pid)
+          true -> reclaim_lock(path, our_pid, private?)
         end
 
       {:error, _reason} ->
         # Unreadable lock: treat as stale and reclaim (fail open).
-        reclaim_lock(path, our_pid)
+        reclaim_lock(path, our_pid, private?)
     end
   end
 
-  defp reclaim_lock(path, our_pid) do
-    case File.write(path, our_pid) do
+  defp reclaim_lock(path, our_pid, private?) do
+    case write_lock(path, our_pid, [], private?) do
       :ok -> {:ok, path}
       {:error, _reason} -> {:ok, nil}
+    end
+  end
+
+  # `File.write/3`, except that a private journal's lock is 0600 before the
+  # pid is written into it.
+  defp write_lock(path, our_pid, modes, private?) do
+    case :file.open(path, [:write, :raw, :binary | modes]) do
+      {:ok, io} ->
+        result = with :ok <- restrict(path, private?), do: :file.write(io, our_pid)
+        _ = :file.close(io)
+        result
+
+      {:error, _reason} = error ->
+        error
     end
   end
 

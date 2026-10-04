@@ -28,11 +28,27 @@ defmodule Raxol.Agent.Journal.FileStore do
   whatever later openers pass, and `chain: true` on an existing unchained
   journal is refused with `{:error, :unchained_journal}`. `read/2`, `status/1`
   and `verify/1` all walk the chain, so a broken one is never surfaced.
+
+  Removing the flag from `meta.json` does not unchain a journal: one that
+  still carries a chain marker (`HEAD`'s `tip_hash`, the first record's
+  `prev_hash`/`hash`) reads as damaged from offset 1 and its Writer refuses
+  every append (see `Raxol.Agent.Journal.FileStore.Reader`).
+
+  ## Private journals
+
+  `open(session_id, private: true)` keeps the journal to the account that
+  writes it: the session directory, `journal/` and `snapshots/` are 0700 and
+  every file the Writer creates is 0600 before a byte is written to it. The
+  base and session directories must be real directories (not symlinks), owned
+  by this account and writable by no one else (the owner and mode rules of
+  `Raxol.Agent.OperatorFile.owned_unshared/1`); otherwise the open is refused
+  with `{:error, {:untrusted_dir, {path, reason}}}` and nothing is created.
   """
 
   @behaviour Raxol.Agent.Journal
 
   alias Raxol.Agent.Journal.FileStore.{Reader, Writer}
+  alias Raxol.Agent.OperatorFile
 
   @enforce_keys [:session_id, :dir, :writer]
   defstruct [:session_id, :dir, :writer, owner?: true]
@@ -107,6 +123,9 @@ defmodule Raxol.Agent.Journal.FileStore do
       (default `["tool_result", "approval"]`).
     * `:schema_version`, `:cwd`, `:git_branch`, `:title` — recorded in `meta.json` on first open.
     * `:chain` — `true` to create a hash-chained journal (see "Chained journals").
+    * `:private` — `true` for a journal only this account can read (see
+      "Private journals"): directories 0700, files 0600, and an untrusted base
+      or session directory refused with `{:error, {:untrusted_dir, {path, reason}}}`.
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
@@ -120,9 +139,7 @@ defmodule Raxol.Agent.Journal.FileStore do
     # EmitBridge's fail-closed `:journal_open_failed` arm) never fires for
     # real filesystem failures. (Found by the I1 `:open_fail` fault site in
     # test/invariants/identity_invariants_test.exs.)
-    with :ok <- preflight(session_id, dir, opts),
-         :ok <- ensure_layout(dir),
-         :ok <- ensure_unlocked(dir) do
+    with :ok <- preflight(session_id, dir, opts) do
       writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
 
       case Writer.start_link(writer_opts) do
@@ -245,7 +262,8 @@ defmodule Raxol.Agent.Journal.FileStore do
   @doc """
   Walk the hash chain of an open journal: `:ok`, `{:broken, offset}` for the
   first record that does not verify, or `{:error, :unchained}` for a journal
-  created without `chain: true`.
+  created without `chain: true` and carrying no chain marker. A chained
+  journal whose `meta.json` flag was removed is `{:broken, 1}`.
   """
   @impl Raxol.Agent.Journal
   def verify(%__MODULE__{dir: dir, writer: pid}) do
@@ -279,6 +297,15 @@ defmodule Raxol.Agent.Journal.FileStore do
 
   # --- helpers ---------------------------------------------------------------
 
+  defp preflight(session_id, dir, opts) do
+    with :ok <- validate_session_id(session_id),
+         :ok <- ensure_private(dir, opts),
+         :ok <- ensure_chain_mode(dir, opts),
+         :ok <- ensure_layout(dir) do
+      ensure_unlocked(dir)
+    end
+  end
+
   # Non-raising layout creation, so open failures surface as error tuples
   # instead of an abnormal Writer.init exit (see the comment in open/2).
   defp ensure_layout(dir) do
@@ -290,12 +317,83 @@ defmodule Raxol.Agent.Journal.FileStore do
     end)
   end
 
-  defp preflight(session_id, dir, opts) do
-    with :ok <- validate_session_id(session_id), do: ensure_chain_mode(dir, opts)
+  # Private journals: every directory is vetted, and created 0700 when
+  # missing, BEFORE anything is read from or written into it. The base is
+  # vetted but its mode is the operator's; the session's own directories are
+  # tightened to 0700. A refusal leaves nothing created.
+  defp ensure_private(dir, opts) do
+    if Keyword.get(opts, :private, false) == true do
+      base = Path.dirname(dir)
+
+      with :ok <- mkdir_parent(base),
+           :ok <- private_dir(base, false),
+           :ok <- private_dir(dir, true),
+           :ok <- private_dir(Path.join(dir, "journal"), true) do
+        private_dir(Path.join(dir, "snapshots"), true)
+      end
+    else
+      :ok
+    end
   end
 
+  defp mkdir_parent(base) do
+    case File.mkdir_p(Path.dirname(base)) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:mkdir_failed, reason, Path.dirname(base)}}
+    end
+  end
+
+  # lstat, never stat: a symlink is refused, not followed.
+  defp private_dir(path, tighten?, create? \\ true) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory} = stat} ->
+        with :ok <- owned_unshared(path, stat), do: tighten(path, tighten?)
+
+      {:ok, %File.Stat{type: :symlink}} ->
+        untrusted(path, :symlink)
+
+      {:ok, %File.Stat{type: type}} ->
+        untrusted(path, {:not_a_directory, type})
+
+      {:error, :enoent} when create? ->
+        # Created 0700 before anything goes in, then vetted like any other.
+        with :ok <- mkdir(path), :ok <- chmod_700(path), do: private_dir(path, false, false)
+
+      {:error, reason} ->
+        untrusted(path, {:stat_failed, reason})
+    end
+  end
+
+  defp tighten(path, true), do: chmod_700(path)
+  defp tighten(_path, false), do: :ok
+
+  defp owned_unshared(path, stat) do
+    case OperatorFile.owned_unshared(stat) do
+      :ok -> :ok
+      {:error, reason} -> untrusted(path, reason)
+    end
+  end
+
+  defp mkdir(path) do
+    case File.mkdir(path) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:mkdir_failed, reason, path}}
+    end
+  end
+
+  defp chmod_700(path) do
+    case File.chmod(path, 0o700) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:chmod_failed, reason, path}}
+    end
+  end
+
+  defp untrusted(path, reason), do: {:error, {:untrusted_dir, {path, reason}}}
+
   # A chained journal is chained from its first record or not at all: once
-  # meta.json exists without the flag, records were written unchained.
+  # meta.json exists without the flag, records were written unchained -- unless
+  # a chain marker survives, in which case the flag was removed and the Writer
+  # opens it as the damaged chained journal it is.
   defp ensure_chain_mode(dir, opts) do
     if Keyword.get(opts, :chain, false) == true and File.exists?(Path.join(dir, "meta.json")) and
          not Reader.chained?(dir) do

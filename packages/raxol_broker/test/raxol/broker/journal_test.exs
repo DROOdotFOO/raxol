@@ -53,16 +53,34 @@ defmodule Raxol.Broker.JournalTest do
     intent
   end
 
-  # The full happy path: both policy passes allow and the order is placed.
-  defp placed_entries(intent, context) do
+  # The full happy path: both policy passes allow, the order is marked as
+  # placing and then placed.
+  defp placed_entries(intent, context, response \\ nil) do
     {:allow, _} = verdict = Policy.evaluate(intent, context)
 
     [
       {:verdict, :pre_review, verdict},
       {:review, %{"warnings" => []}},
       {:verdict, :post_review, verdict},
-      {:order, :placed, %{"order_id" => "o-#{intent.id}"}}
+      {:placing},
+      {:order, :placed, response || %{"order_id" => "o-#{intent.id}"}}
     ]
+  end
+
+  # Open a group and write it up to (not including) the order call: both
+  # passes allow, then `placing`.
+  defp in_flight!(name, intent, context) do
+    {:ok, id} = Journal.open_group(intent, context, name)
+
+    placed_entries(intent, context)
+    |> Enum.drop(-1)
+    |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
+
+    id
+  end
+
+  defp counters(name, now) do
+    {Journal.today_notional(@day, name), Journal.orders_last_minute(now, name)}
   end
 
   defp records(path) do
@@ -76,7 +94,7 @@ defmodule Raxol.Broker.JournalTest do
     writer = :global.whereis_name({Writer, Path.join(base, session)})
     ref = Process.monitor(journal)
     Process.exit(writer, :kill)
-    assert_receive {:DOWN, ^ref, :process, ^journal, :killed}
+    assert_receive {:DOWN, ^ref, :process, ^journal, {:journal_writer_down, :killed}}, 5_000
   end
 
   describe "writing groups" do
@@ -95,9 +113,13 @@ defmodule Raxol.Broker.JournalTest do
                )
 
       records = records(path)
-      assert Enum.map(records, & &1["type"]) == ~w(intent context verdict review verdict order)
+
+      assert Enum.map(records, & &1["type"]) ==
+               ~w(intent context verdict review verdict placing order)
+
       assert Enum.all?(records, &(&1["group_id"] == id))
-      assert Enum.map(records, & &1["id"]) == Enum.to_list(1..6)
+      assert Enum.map(records, & &1["id"]) == Enum.to_list(1..7)
+      assert %{"type" => "placing", "notional" => "250"} = Enum.at(records, 5)
 
       [intent_record, context_record | _] = records
       assert Codec.decode_intent(intent_record["intent"]) == {:ok, intent}
@@ -147,6 +169,114 @@ defmodule Raxol.Broker.JournalTest do
                )
 
       assert length(records(path)) == 2
+    end
+
+    test "an order response is refused before placing, in either write path",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      intent = limit("2")
+      ctx = context()
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+
+      assert Journal.append_to_group(id, {:order, :placed, %{}}, name) ==
+               {:error, {:not_placing, id}}
+
+      entries = List.delete(placed_entries(intent, ctx), {:placing})
+
+      assert {:error, {:not_placing, _}} =
+               Journal.append_group(%{intent: intent, context: ctx, entries: entries}, name)
+
+      assert length(records(path)) == 2
+      assert Journal.orders_last_minute(@t0, name) == {:ok, 0}
+    end
+
+    test "placing an order the journal cannot price is refused", %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      {:ok, intent} = Intent.buy_shares("MSFT", d("3"), provenance: :strategy)
+      ctx = context()
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+
+      assert {:error, {:unpriced_order, _reason}} =
+               Journal.append_to_group(id, {:placing}, name)
+
+      assert {:error, {:unpriced_order, _reason}} =
+               Journal.append_group(%{intent: intent, context: ctx, entries: [{:placing}]}, name)
+
+      assert Enum.map(records(path), & &1["type"]) == ~w(intent context)
+
+      assert Journal.append_to_group(id, {:order, :placed, %{}}, name) ==
+               {:error, {:not_placing, id}}
+    end
+
+    test "after placing only an order response or a close is taken", %{opts: opts} do
+      name = opts[:name]
+      start!(opts)
+      intent = limit("2")
+      ctx = context()
+      id = in_flight!(name, intent, ctx)
+
+      for entry <- [
+            {:placing},
+            {:review, %{}},
+            {:approval, :approved, "operator"},
+            {:verdict, :post_review, Policy.evaluate(intent, ctx)}
+          ] do
+        assert Journal.append_to_group(id, entry, name) == {:error, {:already_placing, id}}
+      end
+
+      assert :ok = Journal.append_to_group(id, {:order, :placed, %{}}, name)
+    end
+
+    test "a float in an order response is recorded as a string and the order counts",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      intent = limit("2")
+      ctx = context()
+      response = %{"order_id" => "o-1", "avg_price" => 125.01, "legs" => [%{"px" => 1.0e-3}]}
+
+      assert {:ok, _id} =
+               Journal.append_group(
+                 %{intent: intent, context: ctx, entries: placed_entries(intent, ctx, response)},
+                 name
+               )
+
+      assert %{"type" => "order", "status" => "placed", "response" => recorded} =
+               List.last(records(path))
+
+      assert recorded == %{
+               "order_id" => "o-1",
+               "avg_price" => "125.01",
+               "legs" => [%{"px" => "0.001"}]
+             }
+
+      assert counters(name, @t0) == {{:ok, d("250")}, {:ok, 1}}
+      assert Journal.verify(name) == :ok
+    end
+
+    test "a declined approval finishes the group as DENY, uncounted", %{opts: opts} do
+      name = opts[:name]
+      start!(opts)
+      {:ok, intent} = Intent.limit(:buy, "AAPL", d("2"), d("125"), provenance: :llm)
+      ctx = context()
+      {:ask, _} = verdict = Policy.evaluate(intent, ctx)
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+
+      :ok = Journal.append_to_group(id, {:verdict, :pre_review, verdict}, name)
+      :ok = Journal.append_to_group(id, {:approval, :declined, "operator"}, name)
+
+      assert Journal.append_to_group(id, {:placing}, name) ==
+               {:error, {:unknown_or_finished_group, id}}
+
+      assert {:error, {:invalid_entry, _}} =
+               Journal.append_group(
+                 %{intent: intent, context: ctx, entries: [{:approval, :maybe, "operator"}]},
+                 name
+               )
+
+      assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
     end
   end
 
@@ -294,31 +424,168 @@ defmodule Raxol.Broker.JournalTest do
                {:error, {:unknown_or_finished_group, crashed}}
     end
 
-    test "a crash after the post-review ALLOW is an unknown outcome and counts",
-         %{opts: opts, path: path, clock: clock} do
+    test "a crash after the post-review ALLOW but before placing is a DENY, uncounted",
+         %{opts: opts, path: path} do
       name = opts[:name]
       journal = start!(opts)
       intent = limit("4")
       ctx = context()
-      {:allow, _} = verdict = Policy.evaluate(intent, ctx)
+      id = in_flight!(name, limit("2"), ctx)
+      :ok = Journal.append_to_group(id, {:order, :placed, %{}}, name)
+
+      {:ok, crashed} = Journal.open_group(intent, ctx, name)
+
+      placed_entries(intent, ctx)
+      |> Enum.take(3)
+      |> Enum.each(&(:ok = Journal.append_to_group(crashed, &1, name)))
+
+      kill_writer!(path, journal)
+      start!(opts)
+
+      assert %{
+               "group_id" => ^crashed,
+               "reason" => "crash_before_verdict",
+               "outcome" => "deny"
+             } = List.last(records(path))
+
+      assert counters(name, @t0) == {{:ok, d("250")}, {:ok, 1}}
+    end
+
+    test "an approved ASK placed and then crashed is an unknown outcome, counted at placing",
+         %{opts: opts, path: path, clock: clock} do
+      name = opts[:name]
+      journal = start!(opts)
+      {:ok, intent} = Intent.limit(:buy, "AAPL", d("4"), d("125"), provenance: :llm)
+      ctx = context()
+      {:ask, _} = verdict = Policy.evaluate(intent, ctx)
 
       {:ok, id} = Journal.open_group(intent, ctx, name)
       :ok = Journal.append_to_group(id, {:verdict, :pre_review, verdict}, name)
       :ok = Journal.append_to_group(id, {:review, %{"warnings" => []}}, name)
-      at(clock, DateTime.add(@t0, 10, :second))
       :ok = Journal.append_to_group(id, {:verdict, :post_review, verdict}, name)
+      :ok = Journal.append_to_group(id, {:approval, :approved, "operator"}, name)
+      at(clock, DateTime.add(@t0, 10, :second))
+      :ok = Journal.append_to_group(id, {:placing}, name)
+
+      placed_at = DateTime.add(@t0, 10, :second)
+      live = counters(name, placed_at)
+      assert live == {{:ok, d("500")}, {:ok, 1}}
 
       kill_writer!(path, journal)
       at(clock, ~U[2026-10-03 09:00:00Z])
       start!(opts)
 
-      assert %{"reason" => "crash_outcome_unknown", "outcome" => "unknown"} =
+      assert %{
+               "group_id" => ^id,
+               "reason" => "crash_outcome_unknown",
+               "outcome" => "unknown"
+             } = List.last(records(path))
+
+      # Counted at the placing record, not at the restart a day later.
+      assert counters(name, placed_at) == live
+      assert Journal.today_notional(~U[2026-10-03 00:00:00Z], name) == {:ok, d("0")}
+    end
+  end
+
+  describe "counting from placing" do
+    test "an in-flight order counts live and after a restart alike", %{opts: opts, clock: clock} do
+      name = opts[:name]
+      start!(opts)
+      placed_at = DateTime.add(@t0, 5, :second)
+      at(clock, placed_at)
+      in_flight!(name, limit("4"), context())
+
+      live = counters(name, placed_at)
+      assert live == {{:ok, d("500")}, {:ok, 1}}
+      assert Journal.orders_last_minute(DateTime.add(placed_at, 60, :second), name) == {:ok, 0}
+
+      stop_supervised!(name)
+      start!(opts)
+
+      assert Journal.status(name) == :ok
+      assert counters(name, placed_at) == live
+    end
+
+    test "a failed order stops counting, live and after a restart", %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      id = in_flight!(name, limit("4"), context())
+      assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
+
+      :ok = Journal.append_to_group(id, {:order, :failed, %{"error" => "rejected"}}, name)
+      assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
+
+      stop_supervised!(name)
+      start!(opts)
+
+      assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
+      assert %{"type" => "order", "status" => "failed"} = List.last(records(path))
+    end
+
+    test "an unknown order response keeps counting", %{opts: opts} do
+      name = opts[:name]
+      start!(opts)
+      id = in_flight!(name, limit("4"), context())
+      :ok = Journal.append_to_group(id, {:order, :unknown, %{"error" => "timeout"}}, name)
+      assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
+
+      stop_supervised!(name)
+      start!(opts)
+      assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
+    end
+
+    test "a close after placing is an unknown outcome and keeps counting",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      id = in_flight!(name, limit("4"), context())
+      :ok = Journal.append_to_group(id, {:close, :abandoned}, name)
+
+      assert %{"type" => "close", "reason" => "abandoned", "outcome" => "unknown"} =
                List.last(records(path))
 
-      # Counted at the post-review ALLOW, not at the restart a day later.
-      assert Journal.today_notional(@day, name) == {:ok, d("500")}
-      assert Journal.orders_last_minute(DateTime.add(@t0, 10, :second), name) == {:ok, 1}
-      assert Journal.today_notional(~U[2026-10-03 00:00:00Z], name) == {:ok, d("0")}
+      assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
+      written = length(records(path))
+
+      stop_supervised!(name)
+      start!(opts)
+
+      assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
+      assert length(records(path)) == written
+    end
+
+    test "a close before placing is a DENY", %{opts: opts, path: path} do
+      name = opts[:name]
+      start!(opts)
+      {:ok, id} = Journal.open_group(limit("4"), context(), name)
+      :ok = Journal.append_to_group(id, {:close, :abandoned}, name)
+
+      assert %{"type" => "close", "outcome" => "deny"} = List.last(records(path))
+      assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
+    end
+  end
+
+  describe "lifecycle" do
+    test "a supervisor shutdown stops the Writer the journal started", %{opts: opts, path: path} do
+      start!(opts)
+      {base, session} = Journal.location(path)
+      writer = :global.whereis_name({Writer, Path.join(base, session)})
+      ref = Process.monitor(writer)
+
+      stop_supervised!(opts[:name])
+      assert_receive {:DOWN, ^ref, :process, ^writer, _reason}
+    end
+
+    test "a journal that joined a running Writer stops when that Writer dies",
+         %{opts: opts, path: path} do
+      {base, session} = Journal.location(path)
+      {:ok, handle} = FileStore.open(session, base_dir: base, chain: true)
+      Process.unlink(handle.writer)
+
+      journal = start!(opts)
+      assert Journal.status(opts[:name]) == :ok
+
+      kill_writer!(path, journal)
     end
   end
 
@@ -382,6 +649,34 @@ defmodule Raxol.Broker.JournalTest do
       assert Journal.today_notional(@day, name) == {:error, {:journal_damaged, 1}}
       assert Journal.open_group(limit("1"), ctx, name) == {:error, {:journal_damaged, 1}}
     end
+
+    test "verify/1 on a journal whose chain flag was removed reports it and refuses it", %{
+      opts: opts,
+      path: path
+    } do
+      name = opts[:name]
+      journal = start!(opts)
+      ctx = context()
+
+      {:ok, _} =
+        Journal.append_group(
+          %{intent: limit("2"), context: ctx, entries: placed_entries(limit("2"), ctx)},
+          name
+        )
+
+      meta = Path.join(path, "meta.json")
+
+      File.write!(
+        meta,
+        meta |> File.read!() |> Jason.decode!() |> Map.delete("chain") |> Jason.encode!()
+      )
+
+      refute Journal.verify(name) == :ok
+      assert Process.alive?(journal)
+      refute Journal.status(name) == :ok
+      assert {:error, _} = Journal.open_group(limit("1"), ctx, name)
+      assert {:error, _} = Journal.today_notional(@day, name)
+    end
   end
 
   describe "codec" do
@@ -412,6 +707,11 @@ defmodule Raxol.Broker.JournalTest do
 
       json = ctx |> Codec.encode_context() |> Jason.encode!() |> Jason.decode!()
       assert Codec.decode_context(json) == {:ok, ctx}
+    end
+
+    test "floats in opaque terms become their shortest decimal strings" do
+      assert Codec.term(%{"px" => 125.01, "qty" => 2, "fees" => [0.1, -3.0e-7]}) ==
+               %{"px" => "125.01", "qty" => 2, "fees" => ["0.1", "-3.0e-7"]}
     end
   end
 end

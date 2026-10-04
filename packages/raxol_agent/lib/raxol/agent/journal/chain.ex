@@ -31,6 +31,11 @@ defmodule Raxol.Agent.Journal.Chain do
 
   @genesis String.duplicate("0", 64)
 
+  # The canonical form's Jason options, spelled out rather than inherited from
+  # Jason's defaults: a default that changed under us would re-spell every
+  # escaped string and mark every chained journal on disk damaged.
+  @encode_opts [escape: :json, maps: :naive]
+
   @doc "The `prev_hash` of the first record of a chain: 64 zeros."
   @spec genesis() :: String.t()
   def genesis, do: @genesis
@@ -49,9 +54,9 @@ defmodule Raxol.Agent.Journal.Chain do
   def seal(record, prev_hash) when is_map(record) and is_binary(prev_hash) do
     with {:ok, decoded} <- normalize(record),
          :ok <- reject_floats(decoded, []) do
-      body = decoded |> Map.delete("hash") |> Map.put("prev_hash", prev_hash)
-      hash = digest(body)
-      {:ok, canonical(Map.put(body, "hash", hash)), hash}
+      members = decoded |> Map.delete("hash") |> Map.put("prev_hash", prev_hash) |> members()
+      hash = digest(object(members))
+      {:ok, object(:lists.keymerge(1, members, [{"hash", hash}])), hash}
     end
   end
 
@@ -63,8 +68,12 @@ defmodule Raxol.Agent.Journal.Chain do
   @spec check(map(), String.t(), binary()) :: :ok | :broken
   def check(%{"prev_hash" => prev_hash, "hash" => hash} = record, prev_hash, raw)
       when is_binary(hash) do
-    if digest(Map.delete(record, "hash")) == hash and
-         IO.iodata_to_binary(canonical(record)) == raw,
+    # Each top-level value is encoded once, as a fragment shared by the hash
+    # (taken without "hash") and the byte comparison (with it).
+    members = members(record)
+
+    if digest(object(List.keydelete(members, "hash", 0))) == hash and
+         IO.iodata_to_binary(object(members)) == raw,
        do: :ok,
        else: :broken
   end
@@ -73,23 +82,30 @@ defmodule Raxol.Agent.Journal.Chain do
 
   @doc "Canonical JSON (see the moduledoc) of a decoded JSON value, as iodata."
   @spec canonical(term()) :: iodata()
-  def canonical(map) when is_map(map) do
-    members =
-      map
-      |> Enum.sort_by(fn {key, _value} -> key end)
-      |> Enum.map(fn {key, value} -> [Jason.encode_to_iodata!(key), ?:, canonical(value)] end)
+  def canonical(value), do: value |> ordered() |> encode()
 
-    [?{, Enum.intersperse(members, ?,), ?}]
-  end
+  defp encode(value), do: Jason.encode_to_iodata!(value, @encode_opts)
 
-  def canonical(list) when is_list(list),
-    do: [?[, Enum.intersperse(Enum.map(list, &canonical/1), ?,), ?]]
+  # Objects become Jason.OrderedObjects with byte-ordered keys, at every depth,
+  # so one encode call spells the whole value. Term order on binaries is byte
+  # order, and keys are unique, so sorting the pairs sorts by key alone.
+  defp ordered(map) when is_map(map) and not is_struct(map),
+    do: Jason.OrderedObject.new(for {key, value} <- sorted(map), do: {key, ordered(value)})
 
-  def canonical(scalar), do: Jason.encode_to_iodata!(scalar)
+  defp ordered(list) when is_list(list), do: :lists.map(&ordered/1, list)
+  defp ordered(scalar), do: scalar
 
-  defp digest(body) do
+  defp sorted(map), do: map |> :maps.to_list() |> :lists.sort()
+
+  # `{key, canonical value as a Jason.Fragment}` per top-level key, in key order.
+  defp members(map),
+    do: for({key, value} <- sorted(map), do: {key, Jason.Fragment.new(canonical(value))})
+
+  defp object(members), do: members |> Jason.OrderedObject.new() |> encode()
+
+  defp digest(canonical) do
     :sha256
-    |> :crypto.hash(canonical(body))
+    |> :crypto.hash(canonical)
     |> Base.encode16(case: :lower)
   end
 

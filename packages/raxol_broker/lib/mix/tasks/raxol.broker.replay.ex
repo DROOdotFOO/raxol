@@ -6,8 +6,10 @@ defmodule Mix.Tasks.Raxol.Broker.Replay do
 
   For every decision group opened that day (UTC), in journal order: the
   intent, the policy context, each rule's verdict for each policy pass, the
-  review response, the order response, and the outcome. Fills recorded that
-  day follow.
+  review response, the approval, the placing record (notional about to be
+  sent), the order response, and the outcome (`IN FLIGHT` for an order whose
+  send was started but not resolved). Fills recorded that day follow.
+  Control characters in journal content are printed as visible escapes.
 
   The journal defaults to `~/.raxol/broker/journal` (`$RAXOL_BROKER_JOURNAL`).
   It is read without taking the writer lock, so this works while the broker
