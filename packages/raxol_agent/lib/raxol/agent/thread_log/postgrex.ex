@@ -73,6 +73,8 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
 
   alias Raxol.Agent.ThreadEvent
 
+  require Logger
+
   @default_table "raxol_agent_threads"
   @safe_identifier ~r/\A[a-zA-Z_][a-zA-Z0-9_]{0,62}\z/
   @retry_attempts 3
@@ -192,7 +194,8 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
       {:ok, %{rows: rows}} ->
         {:ok, Enum.map(rows, &row_to_event(&1, thread_id))}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        log_read_error(:list, table, thread_id, reason)
         {:ok, []}
     end
   end
@@ -221,7 +224,8 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
       {:ok, %{rows: rows}} ->
         {:ok, Enum.map(rows, &row_to_event(&1, thread_id))}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        log_read_error(:list_by_kind, table, thread_id, reason)
         {:ok, []}
     end
   end
@@ -238,7 +242,8 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
       {:ok, %{rows: []}} ->
         {:error, :not_found}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        log_read_error(:latest, table, thread_id, reason)
         {:error, :not_found}
     end
   end
@@ -315,44 +320,34 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
   end
 
   # Parametric list query: range-bounds + optional kind filter + order + limit.
+  # Placeholders are numbered from the params list as it grows, so optional
+  # clauses can't collide on a position.
   defp build_list_query(table, thread_id, from, to, limit, order, kind_str) do
     table = quote_identifier!(table)
     order_sql = if order == :desc, do: "DESC", else: "ASC"
 
-    {to_clause, params_tail} =
-      case to do
-        :infinity -> {"", []}
-        n when is_integer(n) -> {" AND sequence <= $4", [n]}
-      end
-
-    {kind_clause, params_tail2} =
-      case kind_str do
-        nil ->
-          {to_clause, params_tail}
-
-        k ->
-          {to_clause <> kind_clause_sql(to), params_tail ++ [k]}
-      end
-
-    limit_pos = 3 + length(params_tail2)
+    {clauses, params} =
+      [{"thread_id = ", thread_id}, {"sequence >= ", from}]
+      |> add_filter(to != :infinity, {"sequence <= ", to})
+      |> add_filter(kind_str != nil, {"kind = ", kind_str})
+      |> Enum.with_index(1)
+      |> Enum.map(fn {{lhs, value}, pos} -> {"#{lhs}$#{pos}", value} end)
+      |> Enum.unzip()
 
     sql =
       """
       SELECT sequence, kind, payload, metadata, recorded_at
       FROM #{table}
-      WHERE thread_id = $1
-        AND sequence >= $2
-      #{kind_clause}
+      WHERE #{Enum.join(clauses, " AND ")}
       ORDER BY sequence #{order_sql}
-      LIMIT $#{limit_pos}
+      LIMIT $#{length(params) + 1}
       """
 
-    params = [thread_id, from] ++ params_tail2 ++ [limit_to_int(limit)]
-    {sql, params}
+    {sql, params ++ [limit_to_int(limit)]}
   end
 
-  defp kind_clause_sql(:infinity), do: " AND kind = $4"
-  defp kind_clause_sql(_n), do: " AND kind = $5"
+  defp add_filter(filters, true, filter), do: filters ++ [filter]
+  defp add_filter(filters, false, _filter), do: filters
 
   defp limit_to_int(:all), do: 1_000_000
   defp limit_to_int(n) when is_integer(n) and n > 0, do: n
@@ -363,6 +358,15 @@ defmodule Raxol.Agent.ThreadLog.Postgrex do
     conn = Map.fetch!(config, :conn)
     table = Map.get(config, :table, @default_table)
     {conn, table}
+  end
+
+  # The behaviour gives list/list_by_kind no error channel and latest only
+  # :not_found, so a failed query must at least be visible to the operator.
+  defp log_read_error(op, table, thread_id, reason) do
+    Logger.error(fn ->
+      "[ThreadLog.Postgrex] #{op} on #{table} for thread #{inspect(thread_id)} failed: " <>
+        Exception.message(reason)
+    end)
   end
 
   defp quote_identifier!(name) when is_binary(name) do
