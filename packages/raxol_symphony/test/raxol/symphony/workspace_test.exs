@@ -178,6 +178,19 @@ defmodule Raxol.Symphony.WorkspaceTest do
       assert {:error, {:before_run_hook_failed, {:exit, 1}}} =
                Workspace.run_before_run_hook(config, path)
     end
+
+    # The port leaves its stdin pipe open, so only the `</dev/null` prefix
+    # stands between a stdin-reading hook and the timeout, on any host.
+    @tag :tmp_dir
+    test "a hook that reads stdin sees EOF", %{tmp_dir: tmp_dir} do
+      sentinel = "stdin-#{System.unique_integer([:positive])}"
+      script = "if [ /dev/stdin -ef /dev/null ]; then echo null; fi > #{sentinel}; cat"
+      config = build_config(tmp_dir, %{before_run: script, timeout_ms: 5_000})
+      {:ok, %{path: path}} = Workspace.ensure(config, "MT-stdin")
+
+      assert :ok = Workspace.run_before_run_hook(config, path)
+      assert path |> Path.join(sentinel) |> File.read!() == "null\n"
+    end
   end
 
   describe "run_after_run_hook/2" do

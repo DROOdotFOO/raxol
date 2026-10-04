@@ -5,8 +5,8 @@ defmodule Raxol.Broker.KeyProvider.Keychain do
 
   Reading is `security find-generic-password -s raxol.broker.credential-key
   -a robinhood -w`, run with `Raxol.Agent.Backend.Credentials.run_executable/3`
-  (bounded, stdin closed). The key is printed on the child's stdout, which is
-  this process's pipe.
+  (bounded, stdin on `/dev/null`). The key is printed on the child's stdout,
+  which is this process's pipe.
 
   Writing must not put the key on argv, where any process of the same user
   can read it from the process table. `security add-generic-password -w KEY`
@@ -77,6 +77,10 @@ defmodule Raxol.Broker.KeyProvider.Keychain do
     case Credentials.run_executable(exe, args, timeout) do
       {:error, :op_timeout} ->
         {:error, {:keychain_unavailable, :timeout}}
+
+      # Carries no command output: `:op_spawn_failed` or `{:op_spawn_failed, posix}`.
+      {:error, spawn_failed} ->
+        {:error, {:keychain_unavailable, spawn_failed}}
 
       {out, 0} ->
         case KeyProvider.decode_hex(out) do

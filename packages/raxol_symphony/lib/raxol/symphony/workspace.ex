@@ -713,10 +713,13 @@ defmodule Raxol.Symphony.Workspace do
         {:error, :bash_not_found}
 
       bash_path ->
-        # `:in` closes the child's stdin. Without it the port hands the script a
-        # pipe that never delivers and never closes, so a setup/verify step
-        # that reads stdin blocks until the timeout rather than seeing EOF.
-        # Nothing here writes to the port, so there is no input to lose.
+        # stdin is /dev/null via the script prefix, so a setup/verify step that
+        # reads it sees EOF. Not `:in`: on Unix that makes the child inherit
+        # the BEAM's own fd 0 (the user's tty under a TUI) rather than closing
+        # it. Without `:in` the port's pipe never closes, so a lost prefix
+        # hangs a stdin-reading hook on every host. Nothing here writes to the
+        # port. (`Raxol.Agent.SpawnedPort` has the full story; raxol_agent is
+        # only an optional dep here.)
         port =
           Port.open(
             {:spawn_executable, bash_path},
@@ -725,9 +728,8 @@ defmodule Raxol.Symphony.Workspace do
               :binary,
               :stderr_to_stdout,
               :hide,
-              :in,
               {:cd, cwd},
-              {:args, ["-lc", script]}
+              {:args, ["-lc", "exec </dev/null\n" <> script]}
             ]
           )
 

@@ -91,6 +91,7 @@ defmodule Raxol.Agent.Actions.Shell do
 
   alias Raxol.Agent.Interrupt
   alias Raxol.Agent.Shell.Pty
+  alias Raxol.Agent.SpawnedPort
 
   @default_timeout_ms 30_000
   @max_output_bytes 65_536
@@ -168,9 +169,10 @@ defmodule Raxol.Agent.Actions.Shell do
     end
   end
 
-  # `:in` closes the command's stdin; see `Raxol.Agent.SpawnedPort` for why.
+  # stdin is /dev/null via the script prefix, not `:in` (which would inherit
+  # the BEAM's tty); see `Raxol.Agent.SpawnedPort`.
   defp open_port(command, cwd, false) do
-    {:ok, spawn_port(shell_path(), ["-c", command], cwd, [:in])}
+    {:ok, spawn_port(shell_path(), ["-c", SpawnedPort.null_stdin_command(command)], cwd, [])}
   end
 
   # A pty leaves stdin open instead: the EOF would be echoed back through the
