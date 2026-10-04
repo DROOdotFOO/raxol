@@ -73,6 +73,9 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       refute File.read!(Credentials.path()) =~ "sk-secret"
     end
 
+    # POSIX mode bits: Windows reports 0o666/0o444 whatever chmod asked for,
+    # and OperatorFile skips the mode check there by design.
+    @tag :unix_only
     test "writes the file with owner-only permissions", %{path: path} do
       Credentials.put(:openai, op_ref: "op://Vault/OpenAI/key")
       %File.Stat{mode: mode} = File.stat!(path)
@@ -150,8 +153,13 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       )
       """
 
+      # A file, not `-e`: Windows' elixir.bat cuts a multi-line argument at
+      # its first newline.
+      script_file = Path.join(tmp_dir("raxol-fresh-vm"), "check.exs")
+      File.write!(script_file, script)
+
       {out, status} =
-        System.cmd(elixir, code_paths ++ ["-e", script],
+        System.cmd(elixir, code_paths ++ [script_file],
           env: [{"RAXOL_PROVIDERS", path}],
           cd: System.tmp_dir!(),
           stderr_to_stdout: true
@@ -163,6 +171,7 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     # An entry here names the vault item a provider key is read from, so a
     # store another account may rewrite is a store that can redirect
     # `op read`. The resolver falls through to env vars instead.
+    @tag :unix_only
     test "a store another account may rewrite grants nothing", %{path: path} do
       File.write!(path, Jason.encode!(%{"openai" => %{"op_ref" => "op://attacker/item/f"}}))
       File.chmod!(path, 0o666)
@@ -178,6 +187,7 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     # other provider reference in the file with the new entry (and chmodded
     # it 600 on the way out). A refused store is still writable by its owner;
     # 0664 is what umask 002 produces.
+    @tag :unix_only
     test "a store another account may rewrite is not overwritten", %{path: path} do
       contents = Jason.encode!(%{"openai" => %{"op_ref" => "op://Vault/OpenAI/key"}})
       File.write!(path, contents)
@@ -266,6 +276,9 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
   end
 
   describe "bounded op shell-out" do
+    # The fake `op` is a `#!/bin/sh` script on a `:`-separated PATH.
+    @describetag :unix_only
+
     # A fake `op` that hangs stands in for a locked vault: the runner
     # must give up (bounded by RAXOL_OP_TIMEOUT_MS) and kill the child
     # instead of blocking the caller for the child's lifetime.

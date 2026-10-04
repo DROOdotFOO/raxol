@@ -53,6 +53,8 @@ defmodule Raxol.Agent.Backend.NativeTest do
   end
 
   describe "stream/3" do
+    # The fake CLI is test/support/fake_stream_cli.sh, a `#!/bin/sh` script.
+    @tag :unix_only
     test "streams text chunks then a done event with the final content and usage" do
       events = run_scenario("happy")
 
@@ -61,6 +63,7 @@ defmodule Raxol.Agent.Backend.NativeTest do
       assert done.usage == %{"input_tokens" => 3, "output_tokens" => 2}
     end
 
+    @tag :unix_only
     test "tool_use blocks are not surfaced as text (the MCP server owns execution)" do
       events = run_scenario("tool")
       texts = for {:chunk, t} <- events, do: t
@@ -68,19 +71,23 @@ defmodule Raxol.Agent.Backend.NativeTest do
       assert {:done, %{content: "done"}} = List.last(events)
     end
 
+    @tag :unix_only
     test "an error result becomes an error event" do
       assert [{:error, {:result_error, "error_max_turns", "too long"}}] = run_scenario("error")
     end
 
+    @tag :unix_only
     test "a non-zero exit with no result line becomes an exit error" do
       assert [{:error, {:exit, 3}}] = run_scenario("exit_nonzero")
     end
 
+    @tag :unix_only
     test "a clean exit without a result line synthesizes a done from accumulated text" do
       events = run_scenario("no_done")
       assert [{:chunk, "partial"}, {:done, %{content: "partial"}}] = events
     end
 
+    @tag :unix_only
     test "a CLI that reads stdin sees EOF instead of an open pipe" do
       # The port is never written to and passes no `:in`, so a child that
       # reads stdin blocks until the run times out unless the
@@ -91,6 +98,7 @@ defmodule Raxol.Agent.Backend.NativeTest do
       assert [{:done, %{content: "read stdin"}}] = Enum.to_list(stream)
     end
 
+    @tag :unix_only
     test "the wrapper's marker line is never handed to the driver" do
       {:ok, stream} = Native.stream(StrictDriver, messages(), [])
       assert [{:chunk, "Hello "}, {:chunk, "world"}, {:done, _}] = Enum.to_list(stream)
@@ -115,6 +123,9 @@ defmodule Raxol.Agent.Backend.NativeTest do
   end
 
   describe "complete/3" do
+    # Same `#!/bin/sh` fake CLI as stream/3.
+    @describetag :unix_only
+
     test "drains the stream and returns the final response" do
       assert {:ok, %{content: "Hello world", usage: %{"input_tokens" => 3}}} =
                Native.complete(FakeDriver, messages(), extra_args: ["happy"])

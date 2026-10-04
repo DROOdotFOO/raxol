@@ -337,6 +337,9 @@ defmodule Raxol.Agent.Backend.ResolverTest do
   end
 
   describe "diagnostics/0 against an unusable op CLI" do
+    # The fake `op` below is a `#!/bin/sh` script.
+    @describetag :unix_only
+
     # A fake `op` that records every invocation and always fails, standing in
     # for a signed-out CLI. A locked vault behaves worse still: each call blocks
     # on a desktop authorization prompt until the timeout.
@@ -408,6 +411,9 @@ defmodule Raxol.Agent.Backend.ResolverTest do
   # on a desktop authorization nobody is going to give. Each provider then paid
   # a full budget in SERIES.
   describe "diagnostics/0 against a signed-in but unresponsive vault" do
+    # The fake `op` below is a `#!/bin/sh` script.
+    @describetag :unix_only
+
     setup do
       dir =
         Path.join(
@@ -494,6 +500,9 @@ defmodule Raxol.Agent.Backend.ResolverTest do
   end
 
   describe "resolve/1 opts" do
+    # The fake `op` below is a `#!/bin/sh` script.
+    @describetag :unix_only
+
     # A fake `op` that RESOLVES, so the two outcomes are distinguishable: the
     # vault answers "from-the-vault" and the environment answers something
     # else. Without a working `op` this test would pass either way.

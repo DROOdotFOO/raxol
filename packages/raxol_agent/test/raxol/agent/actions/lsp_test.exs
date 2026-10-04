@@ -88,7 +88,12 @@ defmodule Raxol.Agent.Actions.LspTest do
     end
   end
 
+  # Tagged :unix_only below: the fake server (@server) is a Python script run
+  # by its shebang, which Windows cannot execute directly, so Config reports
+  # it :not_installed.
   describe "diagnostics" do
+    @describetag :unix_only
+
     test "reports what the server publishes for a file", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n  BROKEN thing\n  SUSPECT other\n")
 
@@ -141,6 +146,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       %{pool: pool(dir)}
     end
 
+    @tag :unix_only
     test "symbols lists the file's declarations", %{pool: p} do
       assert {:ok, %{symbols: symbols}} =
                Lsp.Query.run(%{op: "symbols", path: "a.toy"}, context(p))
@@ -148,6 +154,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert [%{name: "alpha", kind: "function", line: 1}, %{name: "beta", line: 3}] = symbols
     end
 
+    @tag :unix_only
     test "definition resolves a use to its declaration", %{pool: p} do
       # Line 2, column 3 is inside the `alpha` use.
       assert {:ok, %{locations: [location]}} =
@@ -160,6 +167,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert location.line == 1
     end
 
+    @tag :unix_only
     test "references finds every use", %{pool: p} do
       assert {:ok, %{locations: locations}} =
                Lsp.Query.run(
@@ -171,6 +179,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert Enum.all?(locations, &(&1.path == "a.toy"))
     end
 
+    @tag :unix_only
     test "hover returns the server's description", %{pool: p} do
       assert {:ok, %{hover: hover}} =
                Lsp.Query.run(%{op: "hover", path: "a.toy", line: 1, column: 5}, context(p))
@@ -178,6 +187,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert hover =~ "alpha"
     end
 
+    @tag :unix_only
     test "a position query without a line is refused", %{pool: p} do
       assert {:error, :line_required} =
                Lsp.Query.run(%{op: "definition", path: "a.toy"}, context(p))
@@ -217,6 +227,8 @@ defmodule Raxol.Agent.Actions.LspTest do
   # so the approver sees a position and a new name and cannot see the width of
   # what they are approving.
   describe "rename blast radius" do
+    @describetag :unix_only
+
     test "a rename wider than the cap is refused with its count", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n  alpha and beta\ndef beta\n")
 
@@ -264,6 +276,7 @@ defmodule Raxol.Agent.Actions.LspTest do
   end
 
   describe "rename" do
+    @tag :unix_only
     test "rewrites every occurrence and reports the files touched", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n  alpha and beta\ndef beta\n")
 
@@ -281,6 +294,7 @@ defmodule Raxol.Agent.Actions.LspTest do
                "def renamed\n  renamed and beta\ndef beta\n"
     end
 
+    @tag :unix_only
     test "a server that refuses the rename does not report success", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n")
       before = File.read!(Path.join(dir, "a.toy"))
@@ -294,6 +308,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert File.read!(Path.join(dir, "a.toy")) == before
     end
 
+    @tag :unix_only
     test "an edit aimed outside the workspace is refused and nothing is written", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n")
       before = File.read!(Path.join(dir, "a.toy"))
@@ -320,6 +335,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       end
     end
 
+    @tag :unix_only
     test "preserves a file that does not end in a newline", %{dir: dir} do
       write(dir, "a.toy", "def alpha")
 
@@ -332,6 +348,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert File.read!(Path.join(dir, "a.toy")) == "def renamed"
     end
 
+    @tag :unix_only
     test "an edit on a line with non-ASCII text lands on the right characters", %{dir: dir} do
       # LSP counts UTF-16 code units. The emoji is two of them and one
       # codepoint, so a codepoint-based slice would cut one column early.
@@ -354,6 +371,7 @@ defmodule Raxol.Agent.Actions.LspTest do
   end
 
   describe "pool lifecycle" do
+    @tag :unix_only
     test "starts one server per language, reused across calls", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n")
       write(dir, "b.toy", "def beta\n")
@@ -372,6 +390,7 @@ defmodule Raxol.Agent.Actions.LspTest do
     # which `LSPContext` is not. So the client survived its pool, its
     # `terminate/2` never ran, and the OS subprocess stayed up for the life of
     # the BEAM. The client and the subprocess are the things worth asserting.
+    @tag :unix_only
     test "the pool dies with its owner, taking the server with it", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n")
       test = self()
@@ -405,6 +424,7 @@ defmodule Raxol.Agent.Actions.LspTest do
              "the language server subprocess (#{os_pid}) outlived the session"
     end
 
+    @tag :unix_only
     test "Pool.stop/1 also stops the servers it owns", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n")
       {:ok, p} = Pool.start_link(root: dir, servers: servers())
@@ -423,6 +443,7 @@ defmodule Raxol.Agent.Actions.LspTest do
     # could not read its own mailbox for the whole start timeout -- including
     # the owner's `:DOWN`. A session ending during a cold start therefore left
     # the subprocess running until the wait finished.
+    @tag :unix_only
     test "a start in flight does not block the pool's mailbox", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n")
       # The fake server sits on `initialize` for 2s, so the window below lands
@@ -472,6 +493,7 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert names == ["elixir", "go", "python", "rust", "typescript"]
     end
 
+    @tag :unix_only
     test "maps a file to its server by extension" do
       assert {:ok, %{name: "toy"}} = Config.for_path(servers(), "lib/a.toy")
     end

@@ -79,6 +79,8 @@ defmodule Raxol.Agent.TrajectoryTest do
     assert decoded["outcome"]["exit_code"] == 0
   end
 
+  # Needs a path that cannot be created: /dev/null is a file only on Unix.
+  @tag :unix_only
   test "write/2 reports failure without raising" do
     trajectory = Trajectory.build([], sample_meta())
 

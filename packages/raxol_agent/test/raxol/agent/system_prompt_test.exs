@@ -114,7 +114,10 @@ defmodule Raxol.Agent.SystemPromptTest do
     test "an explicitly configured location that is missing is an error (no fallback)" do
       System.put_env("RAXOL_BONDED_PROMPT", "/nonexistent/core.prompt.md")
 
-      assert {:error, {:configured_missing, "/nonexistent/core.prompt.md"}} =
+      # Expanded: on Windows "/nonexistent" is drive-relative ("d:/nonexistent").
+      missing = Path.expand("/nonexistent/core.prompt.md")
+
+      assert {:error, {:configured_missing, ^missing}} =
                SystemPrompt.resolve(:bonded)
 
       assert SystemPrompt.bonded_available?() == false

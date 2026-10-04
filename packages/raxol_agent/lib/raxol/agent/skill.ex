@@ -42,8 +42,10 @@ defmodule Raxol.Agent.Skill do
   @modeled_keys ~w(name description version category created_by)
 
   # Closing `---` may carry trailing spaces/tabs and an optional single newline;
-  # `[ \t]` (not `\s`) so the delimiter never swallows body newlines.
-  @frontmatter ~r/\A---[ \t]*\n(?<front>.*?)\n---[ \t]*\n?(?<body>.*)\z/s
+  # `[ \t]` (not `\s`) so the delimiter never swallows body newlines. `\r?`
+  # because a SKILL.md saved on Windows (or checked out with autocrlf) ends
+  # its lines in CRLF.
+  @frontmatter ~r/\A---[ \t]*\r?\n(?<front>.*?)\r?\n---[ \t]*(?:\r?\n)?(?<body>.*)\z/s
 
   @doc "Parse a `SKILL.md` string into a `%Skill{}`."
   @spec parse(String.t()) :: {:ok, t()} | {:error, term()}

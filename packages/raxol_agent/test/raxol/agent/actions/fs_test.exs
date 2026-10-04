@@ -4,10 +4,14 @@ defmodule Raxol.Agent.Actions.FsTest do
   alias Raxol.Agent.Actions.Fs
 
   setup do
+    # Expanded, as Fs reports paths: on Windows that turns `C:\...\Temp`
+    # into `c:/.../Temp`.
     dir =
-      Path.join(
-        System.tmp_dir!(),
-        "raxol-fs-test-#{System.unique_integer([:positive])}"
+      Path.expand(
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-fs-test-#{System.unique_integer([:positive])}"
+        )
       )
 
     File.mkdir_p!(Path.join(dir, "sub"))

@@ -4,11 +4,15 @@ defmodule Raxol.Agent.Code.ProjectContextTest do
   alias Raxol.Agent.Code.ProjectContext
 
   # A workspace rooted at a `.git` marker, so the upward walk has a stop.
+  # Expanded, as ProjectContext reports paths: on Windows that turns
+  # `C:\...\Temp` into `c:/.../Temp`.
   defp workspace do
     dir =
-      Path.join(
-        System.tmp_dir!(),
-        "raxol-projctx-#{System.unique_integer([:positive])}"
+      Path.expand(
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-projctx-#{System.unique_integer([:positive])}"
+        )
       )
 
     File.mkdir_p!(dir)

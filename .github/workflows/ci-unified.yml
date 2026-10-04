@@ -700,6 +700,12 @@ jobs:
       - name: Run package tests
         run: mix test --timeout 180000 --exclude skip_on_ci
 
+      # The run above prints dots. Re-run the `:windows_only` tests by name so
+      # the log shows each one ran here; they are the only coverage of the
+      # direct-spawn clause.
+      - name: List Windows-only tests
+        run: mix test test/raxol/agent/backend/credentials_test.exs --only windows_only --trace
+
   # The local terminal input path is BEAM/OTP-coupled: keystrokes arrive by
   # tracing prim_tty's reader (a private protocol). Every unit test fabricates
   # that trace message, so none can catch an OTP change to it. This canary types

@@ -67,6 +67,8 @@ defmodule Raxol.Agent.Code.TenantTest do
   # then ask me anything" is arbitrary execution as the server uid, around
   # the cwd jail and the :jail shell gate alike.
   describe "the jail confines execution, not just paths" do
+    # The positive control runs a stop hook (`touch`) through `/bin/sh -c`.
+    @tag :unix_only
     test "a jailed session loads no workspace hooks" do
       root = tmp_root()
       on_exit(fn -> File.rm_rf!(root) end)

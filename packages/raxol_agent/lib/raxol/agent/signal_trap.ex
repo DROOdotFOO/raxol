@@ -16,9 +16,18 @@ defmodule Raxol.Agent.SignalTrap do
 
   @behaviour :gen_event
 
-  @doc "Route SIGTERM to `pid` as `{:os_signal, :sigterm}`."
+  @doc """
+  Route SIGTERM to `pid` as `{:os_signal, :sigterm}`.
+
+  A no-op on Windows: there is no SIGTERM to claim (`:os.set_signal/2`
+  rejects the name), and a process killed there gets no signal to handle.
+  """
   @spec install(pid()) :: :ok | {:error, term()}
-  def install(pid) when is_pid(pid) do
+  def install(pid) when is_pid(pid), do: install(pid, :os.type())
+
+  defp install(_pid, {:win32, _}), do: :ok
+
+  defp install(pid, _unix) do
     with :ok <- :gen_event.add_handler(:erl_signal_server, __MODULE__, pid) do
       :os.set_signal(:sigterm, :handle)
     end

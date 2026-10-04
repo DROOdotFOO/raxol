@@ -1577,6 +1577,8 @@ defmodule Raxol.Agent.Code.AppTest do
       assert File.ls!(neighbour) == []
     end
 
+    # POSIX mode bits; Windows reports 0o666 whatever was asked for.
+    @tag :unix_only
     test "/transcript writes a private temp file and hints at a pager" do
       model = answered_model()
       {model, []} = submit(model, "/transcript")
