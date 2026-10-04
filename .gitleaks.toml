@@ -99,3 +99,40 @@ targetRules = ["generic-api-key"]
 regexes = [
   '''(?i)0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42''',
 ]
+
+[[allowlists]]
+description = """
+Public stablecoin contracts used as swap/transfer test tokens in the payments
+tests: native USDC on Base and on Arbitrum One, and Tether's USDT TRC-20
+contract on Tron. All are published and resolvable in any block explorer;
+`generic-api-key` matches them on entropy alone next to `from_token:` /
+`to_token:` keys.
+
+Allowlisted BY VALUE, case-insensitively (the tests write both checksummed and
+lowercase forms). These were first accepted by fingerprint, and those
+fingerprints went stale twice in one day: once on rebase, once on squash-merge
+of #1198, failing the scheduled scan both times. Any other key-shaped string
+in those files still fails. Base USDC also appears in the
+`scripts/run_live_gates.sh` block above, which stays case-sensitive.
+"""
+targetRules = ["generic-api-key"]
+regexes = [
+  '''(?i)0x833589fcd6edb6e08f4c7c32d4f71b54bda02913''',
+  '''(?i)0xaf88d065e77c8cc2239327c5edb3a432268e5831''',
+  '''TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t''',
+]
+
+[[allowlists]]
+description = """
+Unsigned fake JWTs in the raxol_broker auth fixtures. The header is exactly
+`{"alg":"none","typ":"JWT"}`, the payload starts `{"fake":true`, and the
+signature segment is a literal `FAKE-...` marker. An `alg:none` token
+authenticates nothing.
+
+The pattern requires all three parts, so a real token pasted into the same
+fixture (signed, so its header is not `alg:none`) still fails `jwt`.
+"""
+targetRules = ["jwt"]
+regexes = [
+  '''eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0\.eyJmYWtlIjp0cnVl[A-Za-z0-9_-]*\.FAKE-[A-Z0-9-]+''',
+]
