@@ -146,6 +146,24 @@ defmodule Raxol.HeadlessTest do
     def subscriptions(_model), do: []
   end
 
+  defmodule StaticToolApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model) do
+      Raxol.Core.Renderer.View.button("Ready",
+        id: "cold_start_button",
+        on_click: :ready
+      )
+    end
+  end
+
   setup do
     # The app-level Headless may or may not be running depending on
     # test mode. Ensure one exists, clean slate for each test.
@@ -186,6 +204,26 @@ defmodule Raxol.HeadlessTest do
     test "starts a session from a module" do
       {:ok, id} = Headless.start(TestApp, id: :test_start)
       assert id == :test_start
+    end
+
+    test "publishes derived tools before every static app start returns" do
+      registry =
+        Process.whereis(Raxol.MCP.Registry) ||
+          start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      for iteration <- 1..10 do
+        id = :"mcp_cold_start_#{iteration}"
+
+        assert {:ok, ^id} = Headless.start(StaticToolApp, id: id)
+
+        names =
+          registry
+          |> Raxol.MCP.Registry.list_tools()
+          |> Enum.map(& &1.name)
+
+        assert "cold_start_button.click" in names
+        assert :ok = Headless.stop(id)
+      end
     end
 
     test "derives id from module name" do

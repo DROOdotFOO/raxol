@@ -316,7 +316,13 @@ defmodule Raxol.Agent.Actions.Code do
       with :ok <- Raxol.Agent.Actions.Code.shell_allow(context, command),
            {:ok, cd} <- resolve_cd(Map.get(params, :cd), context) do
         {output, status} =
-          Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
+          Raxol.Agent.Actions.Code.run_shell(
+            command,
+            cd,
+            timeout,
+            [],
+            Map.get(context, :shell_tool_ref_sink)
+          )
 
         {truncated, output} = Raxol.Agent.Actions.Code.truncate_output(output)
         {exit_status, timed_out} = exit_status(status)
@@ -711,11 +717,15 @@ defmodule Raxol.Agent.Actions.Code do
   (`Raxol.Core.ChildEnv`), unless `env` passes one explicitly. On timeout the spawned OS process group is SIGKILLed (so no
   child is orphaned), the port is closed, and `exit_status` is `:timeout`.
   """
-  @spec run_shell(String.t(), String.t(), pos_integer(), [
-          {String.t(), String.t()}
-        ]) ::
+  @spec run_shell(
+          String.t(),
+          String.t(),
+          pos_integer(),
+          [{String.t(), String.t()}],
+          (map() | nil -> any()) | nil
+        ) ::
           {binary(), integer() | :timeout}
-  def run_shell(command, cd, timeout, env \\ []) do
+  def run_shell(command, cd, timeout, env \\ [], tool_ref_sink \\ nil) do
     charlist_env =
       Enum.map(env, fn {k, v} ->
         {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
@@ -735,7 +745,14 @@ defmodule Raxol.Agent.Actions.Code do
     port_opts = [{:env, Raxol.Core.ChildEnv.port_env(charlist_env)} | base]
 
     port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
-    collect_port(port, port_os_pid(port), [], timeout)
+    os_pid = port_os_pid(port)
+    publish_tool_ref(tool_ref_sink, %{port: port, os_pid: os_pid})
+
+    try do
+      collect_port(port, os_pid, [], timeout)
+    after
+      publish_tool_ref(tool_ref_sink, nil)
+    end
   end
 
   defp collect_port(port, os_pid, acc, timeout) do
@@ -757,6 +774,15 @@ defmodule Raxol.Agent.Actions.Code do
         {acc |> Enum.reverse() |> IO.iodata_to_binary(), :timeout}
     end
   end
+
+  defp publish_tool_ref(nil, _ref), do: :ok
+
+  defp publish_tool_ref(sink, ref) when is_function(sink, 1) do
+    sink.(ref)
+    :ok
+  end
+
+  defp publish_tool_ref(_sink, _ref), do: :ok
 
   defp close_port(port), do: Raxol.Agent.SpawnedPort.close(port)
 

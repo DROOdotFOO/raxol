@@ -67,13 +67,15 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
             environment: :liveview,
             liveview_topic: topic,
             width: 80,
-            height: 24,
-            name: :"tea_live_lifecycle_#{inspect(self())}"
+            height: 24
           )
+
+        dispatcher_pid = fetch_dispatcher(lifecycle_pid)
 
         socket =
           socket
           |> assign(:lifecycle_pid, lifecycle_pid)
+          |> assign(:dispatcher_pid, dispatcher_pid)
           |> assign(:topic, topic)
           |> assign(:app_module, app_module)
           |> assign(:rows, [])
@@ -86,6 +88,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
         socket =
           socket
           |> assign(:lifecycle_pid, nil)
+          |> assign(:dispatcher_pid, nil)
           |> assign(:topic, topic)
           |> assign(:app_module, app_module)
           |> assign(:rows, [])
@@ -100,7 +103,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     @impl true
     def handle_event("keydown", params, socket) do
       event = InputAdapter.translate_key_event(params)
-      dispatch_to_app(socket.assigns.lifecycle_pid, event)
+      dispatch_to_app(socket.assigns[:dispatcher_pid], event)
       {:noreply, socket}
     end
 
@@ -232,20 +235,27 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       _error -> :ok
     end
 
-    defp dispatch_to_app(nil, _event), do: :ok
+    defp fetch_dispatcher(lifecycle_pid) do
+      Raxol.Core.ErrorHandling.safe_call(fn ->
+        GenServer.call(lifecycle_pid, :get_full_state)
+      end)
+      |> case do
+        {:ok, %{dispatcher_pid: pid}} when is_pid(pid) ->
+          pid
 
-    defp dispatch_to_app(lifecycle_pid, event) do
-      case GenServer.call(lifecycle_pid, :get_full_state) do
-        %{dispatcher_pid: pid} when is_pid(pid) ->
-          GenServer.cast(pid, {:dispatch, event})
+        {:ok, _state} ->
+          nil
 
-        _ ->
-          :ok
+        {:error, reason} ->
+          Logger.debug("TEALive dispatcher lookup failed: #{inspect(reason)}")
+          nil
       end
-    rescue
-      e ->
-        Logger.debug("TEALive dispatch failed: #{Exception.message(e)}")
-        :ok
     end
+
+    defp dispatch_to_app(pid, event) when is_pid(pid) do
+      GenServer.cast(pid, {:dispatch, event})
+    end
+
+    defp dispatch_to_app(_dispatcher_pid, _event), do: :ok
   end
 end

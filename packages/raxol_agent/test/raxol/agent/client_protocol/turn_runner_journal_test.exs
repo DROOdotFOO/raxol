@@ -13,8 +13,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
     3. Stored notifications round-trip through `SessionNotification.from_json/1`,
        so a replay can re-send the frames rather than reconstruct them.
     4. A cancelled turn is recorded as cancelled.
-    5. Journaling never decides whether a turn can answer: disabled, or
-       pointed at an id that cannot be a directory, the turn still completes.
+    5. Disabled or unavailable journaling does not prevent a turn, but an
+       existing damaged journal refuses the turn before the backend is called.
   """
 
   use ExUnit.Case, async: true
@@ -234,6 +234,38 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerJournalTest do
              %{role: :assistant, content: "ok"},
              %{role: :user, content: "second"}
            ]
+  end
+
+  @tag :tmp_dir
+  test "an interior-damaged journal refuses the prompt before calling the backend",
+       %{tmp_dir: dir} do
+    session_id = "sess-damaged-#{System.unique_integer([:positive])}"
+    journal_dir = Path.join([dir, session_id, "journal"])
+    File.mkdir_p!(journal_dir)
+
+    File.write!(
+      Path.join(journal_dir, "000001.jsonl"),
+      ~s({"id":1,"kind":"first"}\nnot-json\n{"id":2,"kind":"last"}\n)
+    )
+
+    assert {:error, :damaged} = FileStore.read_records(session_id, base_dir: dir)
+
+    runner =
+      TurnRunner.new(
+        backend: HistoryBackend,
+        backend_opts: [owner: self()],
+        journal_opts: [base_dir: dir]
+      )
+
+    session = start_session!(runner, session_id)
+    reply_ref = begin_prompt!(session, session_id, "must not run")
+
+    refute_receive {:backend_saw, _messages}, 100
+
+    assert_receive {:conn_reply, ^reply_ref,
+                    {:error,
+                     %{code: -32_603, data: %{"tag" => "journal_damaged", "reason" => ":damaged"}}}},
+                   2_000
   end
 
   # An append-only journal that snapshots the whole conversation every turn

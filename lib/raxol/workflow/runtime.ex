@@ -25,9 +25,9 @@ defmodule Raxol.Workflow.Runtime do
       `Compiled.resume/4`.
 
   Async wrappers (`async_invoke`, `stream_events`, `async_resume`,
-  `resume_events`) live in `Raxol.Workflow.Async`. Joins
-  (`add_join/4`) and channel reducers (`add_channel/4`) are still
-  follow-ups: the runtime is single-branch sequential today.
+  `resume_events`) live in `Raxol.Workflow.Async`. Conditional fan-out
+  branches run concurrently and reconverge through `add_join/4`; channel
+  reducers merge branch state before the join node executes.
   """
 
   alias Raxol.Core.Runtime.Directive
@@ -45,6 +45,7 @@ defmodule Raxol.Workflow.Runtime do
   alias Raxol.Workflow.Runtime.BranchMerge
 
   @executed_key :__raxol_workflow_executed__
+  @nodes_executed_key :__raxol_workflow_nodes_executed__
   @branch_id_key :__raxol_workflow_branch_id__
   @fan_out_key :__raxol_workflow_fan_out__
 
@@ -68,7 +69,13 @@ defmodule Raxol.Workflow.Runtime do
   Run the compiled graph synchronously.
 
   `opts` may include `:run_timeout_ms` (default 60_000) to bound the
-  total wall-clock time. Returns one of:
+  total wall-clock time.
+
+  `nodes_executed` counts each user node once after its retries settle,
+  including nodes in concurrent branches. Checkpoint step addresses use
+  separate branch strides and are never reported as execution progress.
+
+  Returns one of:
 
     * `{:ok, final_state, %{run_id, nodes_executed}}`
     * `{:interrupted, run_id, state, value}` when a node returns `{:interrupt, value}`
@@ -81,11 +88,11 @@ defmodule Raxol.Workflow.Runtime do
       deadline_us: deadline_us,
       resume_from: resume_from,
       resume_mode: resume_mode,
-      start_count: start_count,
-      count_offset: count_offset
+      start_count: start_count
     } = prepare_invocation(compiled, initial_state, opts)
 
     Process.put(@executed_key, [])
+    Process.put(@nodes_executed_key, 0)
 
     try do
       emit_run_event(:started, %{run_id: run_id, graph_id: compiled.id})
@@ -100,11 +107,12 @@ defmodule Raxol.Workflow.Runtime do
         resume_mode
       )
       |> maybe_compensate_on_error(compiled, run_id)
-      |> wrap_outcome(run_id, compiled.id, count_offset)
+      |> wrap_outcome(run_id, compiled.id)
     after
       _ = TraceContext.clear()
       Scratchpad.clear()
       Process.delete(@executed_key)
+      Process.delete(@nodes_executed_key)
     end
   end
 
@@ -133,8 +141,7 @@ defmodule Raxol.Workflow.Runtime do
       deadline_us: deadline_us,
       resume_from: resume_from,
       resume_mode: resume_mode,
-      start_count: start_count,
-      count_offset: start_count - initial_count
+      start_count: start_count
     }
   end
 
@@ -335,6 +342,7 @@ defmodule Raxol.Workflow.Runtime do
     initial_count = checkpoint.step + 1
 
     Process.put(@executed_key, [])
+    Process.put(@nodes_executed_key, 0)
     _ = TraceContext.start_trace()
     maybe_seed_scratchpad(run_id, [resume_value])
 
@@ -349,11 +357,12 @@ defmodule Raxol.Workflow.Runtime do
         initial_count
       )
       |> maybe_compensate_on_error(compiled, run_id)
-      |> wrap_outcome(run_id, compiled.id, 0)
+      |> wrap_outcome(run_id, compiled.id)
     after
       _ = TraceContext.clear()
       Scratchpad.clear()
       Process.delete(@executed_key)
+      Process.delete(@nodes_executed_key)
       Process.delete(@branch_id_key)
     end
   end
@@ -507,6 +516,16 @@ defmodule Raxol.Workflow.Runtime do
 
   defp executed_nodes, do: Process.get(@executed_key, [])
 
+  defp increment_nodes_executed do
+    Process.put(@nodes_executed_key, nodes_executed() + 1)
+  end
+
+  defp add_nodes_executed(count) do
+    Process.put(@nodes_executed_key, nodes_executed() + count)
+  end
+
+  defp nodes_executed, do: Process.get(@nodes_executed_key, 0)
+
   defp current_branch_id, do: Process.get(@branch_id_key)
 
   defp with_branch_id(branch_id, fun) when is_function(fun, 0) do
@@ -592,8 +611,8 @@ defmodule Raxol.Workflow.Runtime do
 
   defp do_compensate(%TypedNode{}, state), do: {:ok, state}
 
-  defp wrap_outcome({:ok, final_state, count}, run_id, graph_id, offset) do
-    nodes_executed = count - offset
+  defp wrap_outcome({:ok, final_state, _checkpoint_count}, run_id, graph_id) do
+    nodes_executed = nodes_executed()
 
     emit_run_event(:completed, %{
       run_id: run_id,
@@ -605,12 +624,11 @@ defmodule Raxol.Workflow.Runtime do
   end
 
   defp wrap_outcome(
-         {:interrupted, state, value, count},
+         {:interrupted, state, value, _checkpoint_count},
          run_id,
-         graph_id,
-         offset
+         graph_id
        ) do
-    nodes_executed = count - offset
+    nodes_executed = nodes_executed()
 
     emit_run_event(:interrupted, %{
       run_id: run_id,
@@ -623,13 +641,15 @@ defmodule Raxol.Workflow.Runtime do
     {:interrupted, run_id, state, value}
   end
 
-  defp wrap_outcome({:error, reason, state, count}, run_id, graph_id, offset) do
-    nodes_executed = count - offset
-
+  defp wrap_outcome(
+         {:error, reason, state, _checkpoint_count},
+         run_id,
+         graph_id
+       ) do
     emit_run_event(:failed, %{
       run_id: run_id,
       graph_id: graph_id,
-      nodes_executed: nodes_executed,
+      nodes_executed: nodes_executed(),
       reason: reason
     })
 
@@ -738,6 +758,20 @@ defmodule Raxol.Workflow.Runtime do
   # again, up to the configured max_attempts. Per-attempt telemetry
   # makes attempt counts and retry latencies observable.
   defp attempt_node_with_retry(compiled, current_id, state, run_id, attempt) do
+    result =
+      do_attempt_node_with_retry(
+        compiled,
+        current_id,
+        state,
+        run_id,
+        attempt
+      )
+
+    increment_nodes_executed()
+    result
+  end
+
+  defp do_attempt_node_with_retry(compiled, current_id, state, run_id, attempt) do
     case execute_node_once(compiled, current_id, state, run_id) do
       {:error, _reason, _state} = err ->
         max = retry_max_attempts(compiled)
@@ -745,7 +779,7 @@ defmodule Raxol.Workflow.Runtime do
         if retry?(compiled) and attempt < max do
           Process.sleep(compute_backoff(retry_backoff_ms(compiled), attempt))
 
-          attempt_node_with_retry(
+          do_attempt_node_with_retry(
             compiled,
             current_id,
             state,
@@ -1312,7 +1346,8 @@ defmodule Raxol.Workflow.Runtime do
         on_timeout: :kill_task
       )
       |> Enum.reduce_while([], fn
-        {:ok, {:branch_outcome, _idx, {:error, _, _, _}, _, _}} = result, acc ->
+        {:ok, {:branch_outcome, _idx, {:error, _, _, _}, _, _, _}} = result,
+        acc ->
           {:halt, [result | acc]}
 
         {:ok, _outcome} = result, acc ->
@@ -1340,6 +1375,7 @@ defmodule Raxol.Workflow.Runtime do
     install_branch_trace(parent_trace)
     Process.put(@branch_id_key, {join_target, index})
     Process.put(@executed_key, [])
+    Process.put(@nodes_executed_key, 0)
 
     task_start_count = base_count + index * @branch_step_stride
 
@@ -1358,10 +1394,13 @@ defmodule Raxol.Workflow.Runtime do
         end)
 
       executed = Process.get(@executed_key, [])
-      {:branch_outcome, index, result, task_start_count, Enum.reverse(executed)}
+
+      {:branch_outcome, index, result, task_start_count, Enum.reverse(executed),
+       nodes_executed()}
     after
       Process.delete(@branch_id_key)
       Process.delete(@executed_key)
+      Process.delete(@nodes_executed_key)
       TraceContext.clear()
     end
   end
@@ -1382,31 +1421,39 @@ defmodule Raxol.Workflow.Runtime do
   defp fold_concurrent_results(stream_results, source_state, base_count) do
     outcomes =
       Enum.map(stream_results, fn
-        {:ok, {:branch_outcome, _idx, _result, _start, _executed} = outcome} ->
+        {:ok,
+         {:branch_outcome, _idx, _result, _start, _executed, _nodes_executed} =
+             outcome} ->
           outcome
 
         {:exit, reason} ->
           {:task_exit, reason}
       end)
 
+    completed_outcomes =
+      Enum.filter(outcomes, &match?({:branch_outcome, _, _, _, _, _}, &1))
+
+    sorted =
+      Enum.sort_by(completed_outcomes, fn {:branch_outcome, idx, _, _, _, _} ->
+        idx
+      end)
+
+    Enum.each(sorted, fn {:branch_outcome, _idx, _res, _start, executed_nodes,
+                          branch_nodes_executed} ->
+      Enum.each(executed_nodes, &track_executed/1)
+      add_nodes_executed(branch_nodes_executed)
+    end)
+
     case Enum.find(outcomes, &match?({:task_exit, _}, &1)) do
       {:task_exit, reason} ->
         {:error, {:branch_task_exit, reason}, source_state, base_count}
 
       nil ->
-        sorted =
-          Enum.sort_by(outcomes, fn {:branch_outcome, idx, _, _, _} -> idx end)
-
-        Enum.each(sorted, fn {:branch_outcome, _idx, _res, _start,
-                              executed_nodes} ->
-          Enum.each(executed_nodes, &track_executed/1)
-        end)
-
         case Enum.find(sorted, fn
-               {:branch_outcome, _, {:error, _, _, _}, _, _} -> true
+               {:branch_outcome, _, {:error, _, _, _}, _, _, _} -> true
                _ -> false
              end) do
-          {:branch_outcome, _, {:error, _, _, _} = err, _, _} ->
+          {:branch_outcome, _, {:error, _, _, _} = err, _, _, _} ->
             err
 
           nil ->
@@ -1418,21 +1465,19 @@ defmodule Raxol.Workflow.Runtime do
   defp build_slots_from_outcomes(sorted_outcomes, base_count) do
     # new_count skips past every branch stride so any pause checkpoint
     # the caller writes is the saver's `get_latest` answer.
-    {slots, _} =
-      Enum.reduce(sorted_outcomes, {[], 0}, fn
+    slots =
+      Enum.map(sorted_outcomes, fn
         {:branch_outcome, _idx, {:branch_done, branch_state, _branch_count},
-         _task_start, _exec},
-        {acc, sum} ->
-          {[{:done, branch_state} | acc], sum}
+         _task_start, _exec, _nodes_executed} ->
+          {:done, branch_state}
 
         {:branch_outcome, _idx,
          {:branch_paused, value, state_at_pause, paused_node_id, _branch_count},
-         _task_start, _exec},
-        {acc, sum} ->
-          {[{:paused, paused_node_id, state_at_pause, value} | acc], sum}
+         _task_start, _exec, _nodes_executed} ->
+          {:paused, paused_node_id, state_at_pause, value}
       end)
 
-    ordered = Enum.reverse(slots)
+    ordered = slots
     new_count = base_count + length(sorted_outcomes) * @branch_step_stride
 
     if Enum.any?(ordered, &match?({:paused, _, _, _}, &1)) do

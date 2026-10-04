@@ -52,6 +52,13 @@ single adapter contract.
   to another platform's route and reuses that id, so the log resumes the same
   history across platforms.
 
+### Fixed
+
+- Delivery failures are no longer discarded or recorded as successful outbound
+  history. `Raxol.Gateway.Session` handles adapter `{:error, reason}` returns,
+  exceptions, and exits without crashing the chat session, logs the failure,
+  and emits `[:raxol_gateway, :session, :delivery_failed]`.
+
 ### Notes
 
 - `raxol_core` is the only required dependency. `raxol` (for

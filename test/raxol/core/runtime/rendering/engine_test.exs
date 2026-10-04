@@ -3,6 +3,35 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
 
   alias Raxol.Core.Runtime.Rendering.Engine
 
+  defmodule NilViewApp do
+    def view(_model), do: nil
+  end
+
+  defmodule GatedDispatcher do
+    use GenServer
+
+    def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
+
+    @impl true
+    def init(owner), do: {:ok, %{owner: owner, calls: 0, waiting: %{}}}
+
+    @impl true
+    def handle_call(:get_render_context, from, state) do
+      call = state.calls + 1
+      send(state.owner, {:render_context_requested, call})
+
+      {:noreply,
+       %{state | calls: call, waiting: Map.put(state.waiting, call, from)}}
+    end
+
+    @impl true
+    def handle_cast({:release, call}, state) do
+      {from, waiting} = Map.pop!(state.waiting, call)
+      GenServer.reply(from, {:ok, %{model: %{}, theme_id: nil}})
+      {:noreply, %{state | waiting: waiting}}
+    end
+  end
+
   describe "start_link/1 and init/1" do
     test "starts with keyword list opts" do
       {:ok, pid} =
@@ -155,6 +184,57 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
 
       assert :ok = GenServer.call(pid, {:update_props, %{some: :prop}})
       GenServer.stop(pid)
+    end
+  end
+
+  describe "asynchronous render resilience" do
+    test "coalesces a queued burst into one trailing latest-state render" do
+      dispatcher = start_supervised!({GatedDispatcher, self()})
+
+      engine =
+        start_supervised!(
+          {Engine,
+           app_module: NilViewApp,
+           dispatcher_pid: dispatcher,
+           width: 10,
+           height: 3,
+           environment: :agent},
+          id: make_ref()
+        )
+
+      GenServer.cast(engine, :render_frame)
+      assert_receive {:render_context_requested, 1}
+
+      for _ <- 1..20, do: GenServer.cast(engine, :render_frame)
+      GenServer.cast(dispatcher, {:release, 1})
+
+      assert_receive {:render_context_requested, 2}
+      GenServer.cast(dispatcher, {:release, 2})
+
+      refute_receive {:render_context_requested, 3}, 100
+      assert %Engine.State{} = GenServer.call(engine, {:get_state})
+    end
+
+    test "a dispatcher timeout skips the frame without terminating the engine" do
+      dispatcher = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(dispatcher, :kill) end)
+
+      engine =
+        start_supervised!(
+          {Engine,
+           app_module: NilViewApp,
+           dispatcher_pid: dispatcher,
+           dispatcher_timeout: 25,
+           width: 10,
+           height: 3,
+           environment: :agent},
+          id: make_ref()
+        )
+
+      GenServer.cast(engine, :render_frame)
+
+      assert %Engine.State{} = GenServer.call(engine, {:get_state}, 500)
+      assert Process.alive?(engine)
     end
   end
 end

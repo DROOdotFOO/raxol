@@ -70,6 +70,19 @@ defmodule Raxol.MCP.Server do
   eviction emits `[:raxol, :mcp, :server, :client_capabilities_evicted]`.
   An evicted connection keeps working; it just cannot be asked, so an ASK
   becomes the deny, until it sends `initialize` again.
+
+  ## Callback isolation
+
+  Tool, resource, prompt, completion, and authorization callbacks run in
+  linked, monitored workers rather than in the shared server process. The
+  server remains responsive to other clients, notifications, subscriber exits,
+  and elicitation timers while callback work is pending.
+
+  `:max_in_flight` bounds concurrent callback workers (default 32).
+  `:callback_timeout_ms` bounds each worker's lifetime (default 300,000 ms).
+  Work above the concurrency bound receives a structured busy error. A finite
+  timeout passed to `handle_message/4` also cancels that call's worker if the
+  caller stops waiting.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -95,6 +108,13 @@ defmodule Raxol.MCP.Server do
   # never subscribes can mint entries the `:DOWN` path will never reach.
   @default_max_client_capabilities 1024
 
+  # Callback code is supplied by applications and may call agents, terminals,
+  # or remote services. It runs outside this GenServer, with both concurrency
+  # and lifetime bounded so one wedged callback cannot occupy the shared MCP
+  # router forever.
+  @default_max_in_flight 32
+  @default_callback_timeout_ms 300_000
+
   # The implicit single connection. stdio has exactly one peer and the OS
   # process boundary IS the principal, so it never names a connection and every
   # message it carries belongs to this one. A multi-client transport must mint
@@ -113,8 +133,12 @@ defmodule Raxol.MCP.Server do
     resource_subscriptions: %{},
     client_capabilities: %{},
     pending_elicitations: %{},
+    in_flight: %{},
+    worker_refs: %{},
     elicitation_timeout_ms: @default_elicitation_timeout_ms,
-    max_client_capabilities: @default_max_client_capabilities
+    max_client_capabilities: @default_max_client_capabilities,
+    max_in_flight: @default_max_in_flight,
+    callback_timeout_ms: @default_callback_timeout_ms
   ]
 
   @typedoc """
@@ -166,8 +190,12 @@ defmodule Raxol.MCP.Server do
           resource_subscriptions: %{String.t() => boolean()},
           client_capabilities: %{conn_id() => {integer(), map()}},
           pending_elicitations: %{String.t() => pending_elicitation()},
+          in_flight: %{reference() => map()},
+          worker_refs: %{reference() => reference()},
           elicitation_timeout_ms: pos_integer(),
-          max_client_capabilities: pos_integer()
+          max_client_capabilities: pos_integer(),
+          max_in_flight: pos_integer(),
+          callback_timeout_ms: pos_integer()
         }
 
   @typedoc """
@@ -234,20 +262,25 @@ defmodule Raxol.MCP.Server do
   elicit), whereas reusing one client's id for another hands over its approvals.
   """
   #
-  # `timeout` defaults to `:infinity`, not the usual 5s: tool callbacks run
-  # inline in the server (`Registry.call_tool/3` invokes them in the calling
-  # process), and a slow tool -- an agent turn, a screenshot of a busy app --
-  # must stall a stdio or SSE transport rather than crash it with a call-timeout
-  # exit. Slow tools bound their own work; that transport's job is to wait.
-  #
-  # A surface that previously ran its callbacks CONCURRENTLY should pass a
-  # bound instead. Everything now funnels through this one process, so an
-  # unbounded wait there turns one slow tool into head-of-line blocking for
-  # every other client -- see `Raxol.Headless.MCPTools`.
+  # Callback work is isolated from the server process. A finite caller timeout
+  # still applies to the `GenServer.call`; if it expires, the cancellation cast
+  # below terminates that request's worker instead of merely abandoning it.
   @spec handle_message(GenServer.server(), map(), conn_id(), timeout()) ::
           {:reply, map() | nil}
   def handle_message(server, message, conn_id, timeout \\ :infinity) do
-    GenServer.call(server, {:handle_message, message, conn_id}, timeout)
+    request_ref = make_ref()
+
+    try do
+      GenServer.call(
+        server,
+        {:handle_message, message, conn_id, request_ref, timeout},
+        timeout
+      )
+    catch
+      :exit, {:timeout, _} = reason ->
+        GenServer.cast(server, {:cancel_request, request_ref})
+        exit(reason)
+    end
   end
 
   @doc """
@@ -326,6 +359,8 @@ defmodule Raxol.MCP.Server do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
+    Process.flag(:trap_exit, true)
+
     registry = Keyword.get(opts, :registry, Registry)
     authorizer = Keyword.get(opts, :authorizer)
     read_authorizer = Keyword.get(opts, :read_authorizer)
@@ -353,14 +388,34 @@ defmodule Raxol.MCP.Server do
        max_client_capabilities:
          max_client_capabilities!(
            Keyword.get(opts, :max_client_capabilities, @default_max_client_capabilities)
-         )
+         ),
+       max_in_flight: positive_option!(opts, :max_in_flight, @default_max_in_flight),
+       callback_timeout_ms:
+         positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms)
      }}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:handle_message, message, conn_id}, _from, state) do
-    {response, state} = dispatch(message, state, conn_id)
-    {:reply, {:reply, response}, state}
+  def handle_manager_call(
+        {:handle_message, message, conn_id, request_ref, call_timeout},
+        from,
+        state
+      ) do
+    case async_action(message, state, conn_id) do
+      {:call, work} ->
+        start_async_call(work, from, request_ref, call_timeout, state)
+
+      {:push, pending, work} ->
+        {_pending, state} = take_pending(state, message.id)
+        start_async_push(work, pending, state)
+
+      {:reply, response} ->
+        {:reply, {:reply, response}, state}
+
+      :sync ->
+        {response, state} = dispatch(message, state, conn_id)
+        {:reply, {:reply, response}, state}
+    end
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -402,6 +457,10 @@ defmodule Raxol.MCP.Server do
     end
   end
 
+  def handle_manager_cast({:cancel_request, request_ref}, state) do
+    {:noreply, cancel_in_flight(state, request_ref)}
+  end
+
   # Resource-updated notifications honor resources/subscribe: with no
   # subscription for the URI, the notification is not broadcast. This is
   # what makes the subscribe call (and its authorization gate) meaningful
@@ -426,17 +485,51 @@ defmodule Raxol.MCP.Server do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  # A dead subscriber takes its connection with it: the capabilities it declared
-  # and any elicitation it parked die too. Leaving either behind would let the
-  # next connection to reuse the id inherit them, and would leave a pending
-  # entry answerable by a connection that no longer exists.
-  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    gone =
-      state.subscribers
-      |> Enum.filter(fn {_conn_id, subscriber} -> subscriber == pid end)
-      |> Enum.map(fn {conn_id, _} -> conn_id end)
+  def handle_manager_info({:mcp_request_result, request_ref, result}, state) do
+    case pop_in_flight(state, request_ref) do
+      {:ok, entry, state} ->
+        {:noreply, complete_async(entry, result, state)}
 
-    {:noreply, Enum.reduce(gone, state, &drop_connection/2)}
+      :error ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_manager_info({:mcp_request_timeout, request_ref}, state) do
+    case pop_in_flight(state, request_ref) do
+      {:ok, entry, state} ->
+        stop_worker(entry)
+        {:noreply, deliver_async(entry, callback_error(entry.work, :callback_timeout), state)}
+
+      :error ->
+        {:noreply, state}
+    end
+  end
+
+  # Worker monitors and subscriber monitors share this mailbox. Resolve worker
+  # refs first; a callback crash fails only its own request. Every other DOWN is
+  # the existing subscriber cleanup path.
+  def handle_manager_info({:DOWN, ref, :process, pid, reason}, state) do
+    case Map.fetch(state.worker_refs, ref) do
+      {:ok, request_ref} ->
+        case pop_in_flight(state, request_ref) do
+          {:ok, entry, state} ->
+            Logger.error("[MCP.Server] callback worker crashed: #{inspect(reason)}")
+            response = callback_error(entry.work, :callback_crashed)
+            {:noreply, deliver_async(entry, response, state)}
+
+          :error ->
+            {:noreply, state}
+        end
+
+      :error ->
+        gone =
+          state.subscribers
+          |> Enum.filter(fn {_conn_id, subscriber} -> subscriber == pid end)
+          |> Enum.map(fn {conn_id, _} -> conn_id end)
+
+        {:noreply, Enum.reduce(gone, state, &drop_connection/2)}
+    end
   end
 
   # The client advertised elicitation, was asked, and never answered. Close the
@@ -464,7 +557,397 @@ defmodule Raxol.MCP.Server do
     end
   end
 
+  # Linked callback workers are also monitored. EXIT is lifecycle coupling
+  # only; result and failure attribution is driven by the monitor ref above.
+  def handle_manager_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
   def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  # -- Isolated callback execution ---------------------------------------------
+
+  defp async_action(
+         %{method: "tools/call", id: id, params: params},
+         state,
+         conn_id
+       ) do
+    name = Map.get(params, "name") || Map.get(params, :name, "")
+    arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
+
+    if state.authorizer == nil and sensitive_tool?(state.registry, name) do
+      {:reply, authorization_required(id, name, :deny, :sensitive_tool_unguarded)}
+    else
+      {:call,
+       {:authorize_tool, id, name, arguments, state.registry, state.authorizer,
+        authz_context(state, conn_id), conn_id}}
+    end
+  end
+
+  defp async_action(%{method: "tools/list", id: id}, state, conn_id) do
+    read_action(
+      id,
+      "tools/list",
+      %{},
+      {:tools_list, state.registry, state.authorizer},
+      state,
+      conn_id
+    )
+  end
+
+  defp async_action(%{method: "resources/list", id: id}, state, conn_id) do
+    read_action(
+      id,
+      "resources/list",
+      %{},
+      {:resources_list, state.registry},
+      state,
+      conn_id
+    )
+  end
+
+  defp async_action(
+         %{method: "resources/subscribe", id: id, params: params},
+         state,
+         conn_id
+       ) do
+    uri = Map.get(params, "uri") || Map.get(params, :uri, "")
+    read_action(id, "resources/subscribe", %{"uri" => uri}, {:subscribe, uri}, state, conn_id)
+  end
+
+  defp async_action(
+         %{method: "resources/unsubscribe", id: id, params: params},
+         state,
+         conn_id
+       ) do
+    uri = Map.get(params, "uri") || Map.get(params, :uri, "")
+
+    read_action(
+      id,
+      "resources/unsubscribe",
+      %{"uri" => uri},
+      {:unsubscribe, uri},
+      state,
+      conn_id
+    )
+  end
+
+  defp async_action(%{method: "resources/read", id: id, params: params}, state, conn_id) do
+    uri = Map.get(params, "uri") || Map.get(params, :uri, "")
+
+    read_action(
+      id,
+      "resources/read",
+      %{"uri" => uri},
+      {:resource_read, state.registry, uri},
+      state,
+      conn_id
+    )
+  end
+
+  defp async_action(%{method: "prompts/list", id: id}, state, conn_id) do
+    read_action(
+      id,
+      "prompts/list",
+      %{},
+      {:prompts_list, state.registry},
+      state,
+      conn_id
+    )
+  end
+
+  defp async_action(%{method: "prompts/get", id: id, params: params}, state, conn_id) do
+    name = Map.get(params, "name") || Map.get(params, :name, "")
+    arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
+
+    read_action(
+      id,
+      "prompts/get",
+      %{"name" => name, "arguments" => arguments},
+      {:prompt_get, state.registry, name, arguments},
+      state,
+      conn_id
+    )
+  end
+
+  defp async_action(
+         %{method: "completion/complete", id: id, params: params},
+         state,
+         conn_id
+       ) do
+    ref = Map.get(params, "ref") || Map.get(params, :ref, %{})
+    argument = Map.get(params, "argument") || Map.get(params, :argument, %{})
+
+    read_action(
+      id,
+      "completion/complete",
+      %{"ref" => ref},
+      {:completion, state.registry, ref, argument},
+      state,
+      conn_id
+    )
+  end
+
+  defp async_action(%{id: id, result: result}, state, conn_id) do
+    case Map.fetch(state.pending_elicitations, id) do
+      {:ok, %{owner: ^conn_id} = pending} ->
+        if approved?(result) do
+          {:push, pending,
+           {:call_tool, pending.request_id, pending.tool, pending.arguments, state.registry}}
+        else
+          :sync
+        end
+
+      _other ->
+        :sync
+    end
+  end
+
+  defp async_action(_message, _state, _conn_id), do: :sync
+
+  defp read_action(id, method, detail, operation, state, conn_id) do
+    {:call,
+     {:read_operation, id, method, detail, operation, state.read_authorizer,
+      authz_context(state, conn_id)}}
+  end
+
+  defp approved?(result) do
+    action = fetch_field(result, "action", nil)
+    content = fetch_field(result, "content", %{})
+    action == "accept" and fetch_field(content, "approve", false) == true
+  end
+
+  defp start_async_call(work, from, request_ref, _call_timeout, state) do
+    case start_worker(state, request_ref, work, {:reply, from}) do
+      {:ok, state} ->
+        {:noreply, state}
+
+      :busy ->
+        {:reply, {:reply, callback_error(work, :server_busy)}, state}
+    end
+  end
+
+  defp start_async_push(work, pending, state) do
+    request_ref = make_ref()
+
+    case start_worker(state, request_ref, work, {:push, pending}) do
+      {:ok, state} ->
+        {:reply, {:reply, nil}, state}
+
+      :busy ->
+        state = answer_parked(state, pending, callback_error(work, :server_busy))
+        {:reply, {:reply, nil}, state}
+    end
+  end
+
+  defp start_worker(state, request_ref, work, delivery) do
+    if map_size(state.in_flight) >= state.max_in_flight do
+      :busy
+    else
+      server = self()
+
+      {pid, monitor_ref} =
+        :erlang.spawn_opt(
+          fn ->
+            result = execute_async(work)
+            send(server, {:mcp_request_result, request_ref, result})
+          end,
+          [:link, :monitor]
+        )
+
+      timer =
+        Process.send_after(
+          self(),
+          {:mcp_request_timeout, request_ref},
+          state.callback_timeout_ms
+        )
+
+      entry = %{
+        pid: pid,
+        monitor_ref: monitor_ref,
+        timer: timer,
+        delivery: delivery,
+        work: work
+      }
+
+      {:ok,
+       %{
+         state
+         | in_flight: Map.put(state.in_flight, request_ref, entry),
+           worker_refs: Map.put(state.worker_refs, monitor_ref, request_ref)
+       }}
+    end
+  end
+
+  defp execute_async({:authorize_tool, id, name, arguments, registry, authorizer, ctx, conn_id}) do
+    case safe_decide(authorizer, name, arguments, ctx) do
+      :allow ->
+        {:response, call_tool_response(id, name, Registry.call_tool(registry, name, arguments))}
+
+      {:ask, prompt} ->
+        {:ask, id, name, arguments, prompt, conn_id}
+
+      {:deny, reason} ->
+        {:response, authorization_required(id, name, :deny, reason)}
+    end
+  end
+
+  defp execute_async({:call_tool, id, name, arguments, registry}) do
+    {:response, call_tool_response(id, name, Registry.call_tool(registry, name, arguments))}
+  end
+
+  defp execute_async({:read_operation, id, method, detail, operation, read_authorizer, ctx}) do
+    case safe_decide(read_authorizer, method, detail, ctx) do
+      :allow ->
+        execute_read_operation(id, operation, ctx)
+
+      {:ask, _prompt} ->
+        {:response, authz_error_response(id, method, :interactive_approval_unsupported)}
+
+      {:deny, reason} ->
+        {:response, authz_error_response(id, method, reason)}
+    end
+  end
+
+  defp execute_read_operation(id, {:tools_list, registry, nil}, _ctx) do
+    {:response, Protocol.response(id, %{tools: Registry.list_tools(registry)})}
+  end
+
+  defp execute_read_operation(id, {:tools_list, registry, tool_authorizer}, ctx) do
+    tools =
+      registry
+      |> Registry.list_tools()
+      |> Enum.filter(fn tool ->
+        name = Map.get(tool, :name) || Map.get(tool, "name")
+        safe_decide(tool_authorizer, name, %{}, ctx) == :allow
+      end)
+
+    {:response, Protocol.response(id, %{tools: tools})}
+  end
+
+  defp execute_read_operation(id, {:resources_list, registry}, _ctx) do
+    {:response, Protocol.response(id, %{resources: Registry.list_resources(registry)})}
+  end
+
+  defp execute_read_operation(id, {:resource_read, registry, uri}, _ctx) do
+    {:response, do_read_resource(id, uri, %{registry: registry})}
+  end
+
+  defp execute_read_operation(id, {:prompts_list, registry}, _ctx) do
+    {:response, Protocol.response(id, %{prompts: Registry.list_prompts(registry)})}
+  end
+
+  defp execute_read_operation(id, {:prompt_get, registry, name, arguments}, _ctx) do
+    {:response, do_get_prompt(id, name, arguments, %{registry: registry})}
+  end
+
+  defp execute_read_operation(id, {:completion, registry, ref, argument}, _ctx) do
+    completions = compute_completions(ref, argument, %{registry: registry})
+    {:response, Protocol.response(id, %{completion: %{values: completions}})}
+  end
+
+  defp execute_read_operation(id, {:subscribe, uri}, _ctx),
+    do: {:read_mutation, id, :subscribe, uri}
+
+  defp execute_read_operation(id, {:unsubscribe, uri}, _ctx),
+    do: {:read_mutation, id, :unsubscribe, uri}
+
+  defp complete_async(entry, {:response, response}, state),
+    do: deliver_async(entry, response, state)
+
+  defp complete_async(
+         %{delivery: {:reply, from}},
+         {:ask, id, name, arguments, prompt, conn_id},
+         state
+       ) do
+    {response, state} = ask(id, name, arguments, prompt, state, conn_id)
+    GenServer.reply(from, {:reply, response})
+    state
+  end
+
+  defp complete_async(
+         %{delivery: {:reply, from}},
+         {:read_mutation, id, action, uri},
+         state
+       ) do
+    resource_subscriptions =
+      case action do
+        :subscribe -> Map.put_new(state.resource_subscriptions, uri, true)
+        :unsubscribe -> Map.delete(state.resource_subscriptions, uri)
+      end
+
+    GenServer.reply(from, {:reply, Protocol.response(id, %{})})
+    %{state | resource_subscriptions: resource_subscriptions}
+  end
+
+  defp complete_async(entry, _unexpected, state) do
+    deliver_async(entry, callback_error(entry.work, :invalid_callback_result), state)
+  end
+
+  defp deliver_async(%{delivery: {:reply, from}}, response, state) do
+    GenServer.reply(from, {:reply, response})
+    state
+  end
+
+  defp deliver_async(%{delivery: {:push, pending}}, response, state),
+    do: answer_parked(state, pending, response)
+
+  defp callback_error(
+         {:read_operation, id, method, _detail, _operation, _read_authorizer, _ctx},
+         reason
+       ) do
+    Protocol.error_response(
+      id,
+      Protocol.internal_error(),
+      "MCP callback failed",
+      %{"error" => Atom.to_string(reason), "method" => method}
+    )
+  end
+
+  defp callback_error(work, reason) do
+    {id, name} = work_identity(work)
+    call_tool_response(id, name, {:error, reason})
+  end
+
+  defp work_identity(
+         {:authorize_tool, id, name, _arguments, _registry, _authorizer, _ctx, _conn}
+       ),
+       do: {id, name}
+
+  defp work_identity({:call_tool, id, name, _arguments, _registry}), do: {id, name}
+
+  defp cancel_in_flight(state, request_ref) do
+    case pop_in_flight(state, request_ref) do
+      {:ok, entry, state} ->
+        stop_worker(entry)
+        state
+
+      :error ->
+        state
+    end
+  end
+
+  defp pop_in_flight(state, request_ref) do
+    case Map.pop(state.in_flight, request_ref) do
+      {nil, _in_flight} ->
+        :error
+
+      {entry, in_flight} ->
+        Process.cancel_timer(entry.timer)
+        Process.unlink(entry.pid)
+        Process.demonitor(entry.monitor_ref, [:flush])
+
+        {:ok, entry,
+         %{
+           state
+           | in_flight: in_flight,
+             worker_refs: Map.delete(state.worker_refs, entry.monitor_ref)
+         }}
+    end
+  end
+
+  defp stop_worker(entry) do
+    if Process.alive?(entry.pid), do: Process.exit(entry.pid, :kill)
+    :ok
+  end
 
   # -- Dispatch -----------------------------------------------------------------
 
@@ -503,20 +986,6 @@ defmodule Raxol.MCP.Server do
     {Protocol.response(id, result), state}
   end
 
-  defp dispatch(%{method: "tools/call", id: id, params: params}, state, conn_id) do
-    name = Map.get(params, "name") || Map.get(params, :name, "")
-    arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
-
-    # A sensitive tool with no authorizer never runs, whatever the transport.
-    # The boot check catches this for tools present at start; this catches one
-    # registered afterwards, which would otherwise slip past it.
-    if state.authorizer == nil and sensitive_tool?(state.registry, name) do
-      {authorization_required(id, name, :deny, :sensitive_tool_unguarded), state}
-    else
-      authorize_and_call(id, name, arguments, state, conn_id)
-    end
-  end
-
   # The client's answer to an `elicitation/create` we sent. It arrives as an
   # ordinary inbound message, so it is dispatched like one -- but it is a
   # RESPONSE (id + result, no method), and it resumes a `tools/call` that is
@@ -530,7 +999,7 @@ defmodule Raxol.MCP.Server do
   defp dispatch(%{id: id, result: result}, state, conn_id) do
     case owned_pending(state, id, conn_id) do
       {:ok, pending, state} ->
-        {nil, answer_parked(state, pending, resume(pending, result, state))}
+        {nil, answer_parked(state, pending, resume(pending, result))}
 
       :error ->
         dispatch_common(
@@ -1031,42 +1500,10 @@ defmodule Raxol.MCP.Server do
   defp normalize_content(other),
     do: [%{type: "text", text: inspect(other, pretty: true)}]
 
-  # -- Sensitive-tool guard -----------------------------------------------------
-
-  defp authorize_and_call(id, name, arguments, state, conn_id) do
-    # Authorize before the tool runs. A nil authorizer allows (stdio inherits
-    # the OS boundary).
-    ctx = authz_context(state, conn_id)
-
-    case safe_decide(state.authorizer, name, arguments, ctx) do
-      :allow ->
-        {call_tool_response(
-           id,
-           name,
-           Registry.call_tool(state.registry, name, arguments)
-         ), state}
-
-      {:ask, prompt} ->
-        ask(id, name, arguments, prompt, state, conn_id)
-
-      {:deny, reason} ->
-        {authorization_required(id, name, :deny, reason), state}
-    end
-  end
-
-  # An authorizer is operator-supplied code, and this is the one place it runs
-  # on a client-driven path. Letting it raise is fail-closed for the call that
-  # hit it -- the tool never runs -- but the CLIENT chooses when and how often,
-  # so a policy bug or an argument shape the policy did not expect becomes a
-  # remote lever on the supervisor's restart intensity: enough `tools/call`s
-  # and the server is gone, taking every other connection with it. A term
-  # outside `Authorizer.decision()` is worse, since `case` would raise
-  # CaseClauseError from inside the same call.
-  #
-  # Contain both as a deny, and log them: an authorizer that cannot answer is
-  # not an authorizer that said yes. The reason is deliberately coarse in the
-  # response (`authz_detail/1` renders it to the client) while the log keeps
-  # the stacktrace.
+  # An authorizer is operator-supplied code. It runs in the same isolated
+  # worker as the callback it guards, and this helper contains contract
+  # violations, raises, exits, and throws as a deny. The response stays coarse;
+  # the operator log keeps the stacktrace.
   defp safe_decide(authorizer, name, arguments, ctx) do
     case Authorizer.decide(authorizer, name, arguments, ctx) do
       :allow ->
@@ -1130,6 +1567,18 @@ defmodule Raxol.MCP.Server do
     raise ArgumentError,
           "Raxol.MCP.Server :max_client_capabilities must be a positive integer, " <>
             "got: #{inspect(other)}"
+  end
+
+  defp positive_option!(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value > 0 ->
+        value
+
+      other ->
+        raise ArgumentError,
+              "Raxol.MCP.Server #{inspect(key)} must be a positive integer, " <>
+                "got: #{inspect(other)}"
+    end
   end
 
   # Registering a tool that declares itself destructive/sensitive while no
@@ -1385,27 +1834,17 @@ defmodule Raxol.MCP.Server do
     {pending, %{state | pending_elicitations: rest}}
   end
 
-  # Only an explicit accept-with-approval runs the tool. Decline, cancel, a
-  # missing action, and accept-without-approval all fail closed -- the same
-  # direction absence takes everywhere else in this seam.
-  defp resume(pending, result, state) do
+  # Approved answers are intercepted by `async_action/3` and run in a worker.
+  # Every answer that reaches this synchronous fallback fails closed.
+  defp resume(pending, result) do
     action = fetch_field(result, "action", nil)
-    content = fetch_field(result, "content", %{})
 
-    if action == "accept" and fetch_field(content, "approve", false) == true do
-      call_tool_response(
-        pending.request_id,
-        pending.tool,
-        Registry.call_tool(state.registry, pending.tool, pending.arguments)
-      )
-    else
-      authorization_required(
-        pending.request_id,
-        pending.tool,
-        :ask,
-        "user #{action || "declined"}"
-      )
-    end
+    authorization_required(
+      pending.request_id,
+      pending.tool,
+      :ask,
+      "user #{action || "declined"}"
+    )
   end
 
   # Decoded wire maps carry atom keys; hand-built ones may carry strings.

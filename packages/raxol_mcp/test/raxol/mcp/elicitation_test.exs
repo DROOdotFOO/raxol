@@ -133,6 +133,46 @@ defmodule Raxol.MCP.ElicitationTest do
       refute Map.get(response.result, :isError)
     end
 
+    test "an approved slow tool does not block unrelated requests", %{
+      server: server,
+      registry: registry
+    } do
+      parent = self()
+
+      :ok =
+        Registry.register_tools(registry, [
+          %{
+            name: "spend",
+            description: "move money slowly",
+            inputSchema: %{type: "object"},
+            callback: fn _args ->
+              send(parent, {:approved_tool_entered, self()})
+
+              receive do
+                :release -> {:ok, "spent eventually"}
+              end
+            end
+          }
+        ])
+
+      assert {:reply, nil} = call_spend(server, 43)
+      elicit_id = await_elicit_id()
+
+      assert {:reply, nil} =
+               answer(server, %{action: "accept", content: %{approve: true}}, elicit_id)
+
+      assert_receive {:approved_tool_entered, callback_pid}, 2_000
+      assert callback_pid != server
+
+      assert {:reply, %{id: 44, result: %{}}} =
+               Server.handle_message(server, %{id: 44, method: "ping"}, "other-client")
+
+      send(callback_pid, :release)
+
+      assert_receive {:mcp_notification, %{id: 43} = response}, 500
+      assert %{content: [%{text: "spent eventually"} | _]} = response.result
+    end
+
     for {label, result} <- [
           {"decline", %{action: "decline"}},
           {"cancel", %{action: "cancel"}},
