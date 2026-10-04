@@ -119,11 +119,12 @@ runs. Untrusted provenance always asks. Cancels are always allowed.
 
 `Raxol.Broker.Journal` records every order decision in one hash-chained
 journal per install, `~/.raxol/broker/journal` (override with
-`$RAXOL_BROKER_JOURNAL` or the `:path` option). Start it under your
-supervisor:
+`$RAXOL_BROKER_JOURNAL` or the `:path` option). Start it through
+`Raxol.Broker.Supervisor` (`:rest_for_one`, journal first), passing journal
+options under `:journal`:
 
 ```elixir
-children = [Raxol.Broker.Journal]
+children = [{Raxol.Broker.Supervisor, journal: []}]
 
 {:ok, group} = Raxol.Broker.Journal.open_group(intent, context)
 :ok = Raxol.Broker.Journal.append_to_group(group, {:verdict, :pre_review, Policy.evaluate(intent, context)})
