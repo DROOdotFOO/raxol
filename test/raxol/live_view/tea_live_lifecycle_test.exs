@@ -41,6 +41,13 @@ defmodule Raxol.LiveView.TEALiveLifecycleTest do
         }
 
         TEALive.mount(%{}, %{}, socket, app_module: MountApp)
+
+        # Stay alive as a real LiveView process would. Returning ends this
+        # process, the lifecycle stops with it, and the link the test looks
+        # for may be gone before it is read.
+        receive do
+          :stop -> :ok
+        end
       end)
 
     on_exit(fn ->

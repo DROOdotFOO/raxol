@@ -7,10 +7,12 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   * Managing the rendering lifecycle
   * Coordinating with the output backends
 
-  Asynchronous render bursts are coalesced to the active frame plus one
-  trailing frame, which renders the latest dispatcher state. If the dispatcher
-  exits or does not answer before `dispatcher_timeout`, the frame is skipped
-  and the engine remains alive.
+  Asynchronous `:render_frame` casts are coalesced: casts that queue up while
+  a frame renders are absorbed into one trailing frame, drawn straight after
+  it from the latest dispatcher state. A cast is rendered when it is handled,
+  never deferred behind later messages. If the dispatcher exits or does not
+  answer before `dispatcher_timeout`, the frame is skipped and the engine
+  remains alive.
 
   REFACTORED: All try/catch blocks replaced with functional error handling patterns.
   """
@@ -106,36 +108,13 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
   @impl true
   def handle_cast(:render_frame, state) do
-    Raxol.Core.Runtime.Log.debug(
-      "Rendering Engine received :render_frame for #{inspect(state.app_module)}"
-    )
+    new_state = render_async(state)
 
+    # Casts that queued during that render are one trailing frame, drawn now
+    # rather than re-queued behind whatever else arrived meanwhile.
     new_state =
-      case fetch_render_context(state) do
-        {:ok, %{model: current_model, theme_id: current_theme_id}} ->
-          # No model dump: it is the app's whole state, once per frame.
-          Raxol.Core.Runtime.Log.debug(
-            "Rendering Engine got render context, theme=#{inspect(current_theme_id)}"
-          )
+      if drain_render_casts(false), do: render_async(new_state), else: new_state
 
-          animated_model = apply_animations(current_model)
-          theme = render_theme(current_theme_id)
-
-          case do_render_frame(animated_model, theme, state) do
-            {:ok, rendered_state} -> rendered_state
-            {:error, _reason, current_state} -> current_state
-          end
-
-        {:error, reason} ->
-          Raxol.Core.Runtime.Log.warning_with_context(
-            "Rendering Engine skipped frame because the Dispatcher was unavailable",
-            %{reason: reason, dispatcher_pid: state.dispatcher_pid}
-          )
-
-          state
-      end
-
-    schedule_trailing_render()
     {:noreply, new_state}
   end
 
@@ -262,20 +241,30 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     end
   end
 
-  defp apply_animations(current_model) do
-    try do
-      Raxol.Animation.Framework.apply_animations_to_state(current_model)
-    catch
-      :exit, _reason -> current_model
-    end
-  end
+  defp render_async(state) do
+    case fetch_render_context(state) do
+      {:ok, %{model: current_model, theme_id: current_theme_id}} ->
+        # No model dump: it is the app's whole state, once per frame.
+        Raxol.Core.Runtime.Log.debug(
+          "Rendering Engine got render context, theme=#{inspect(current_theme_id)}"
+        )
 
-  # Keep one trailing frame when a burst arrives during a render. Dropping all
-  # queued casts can miss an update that landed after the context snapshot;
-  # retaining one renders the latest dispatcher state without replaying every
-  # intermediate frame.
-  defp schedule_trailing_render do
-    if drain_render_casts(false), do: GenServer.cast(self(), :render_frame)
+        animated_model = apply_animations(current_model)
+        theme = render_theme(current_theme_id)
+
+        case do_render_frame(animated_model, theme, state) do
+          {:ok, rendered_state} -> rendered_state
+          {:error, _reason, current_state} -> current_state
+        end
+
+      {:error, reason} ->
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "Rendering Engine skipped frame because the Dispatcher was unavailable",
+          %{reason: reason, dispatcher_pid: state.dispatcher_pid}
+        )
+
+        state
+    end
   end
 
   defp drain_render_casts(found?) do
@@ -283,6 +272,14 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       {:"$gen_cast", :render_frame} -> drain_render_casts(true)
     after
       0 -> found?
+    end
+  end
+
+  defp apply_animations(current_model) do
+    try do
+      Raxol.Animation.Framework.apply_animations_to_state(current_model)
+    catch
+      :exit, _reason -> current_model
     end
   end
 
