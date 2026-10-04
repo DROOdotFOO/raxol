@@ -211,11 +211,18 @@ defmodule Raxol.Agent.LSPContextTest do
         args: [fifo]
       ])
 
-    {:os_pid, os_pid} = Port.info(reader, :os_pid)
+    # A server already blocked opening the FIFO lets `cat` copy it and exit at
+    # once; its port can be closed before this runs. Its output and exit status
+    # are in the mailbox by then, and there is nothing left to kill.
+    case Port.info(reader, :os_pid) do
+      {:os_pid, os_pid} ->
+        on_exit(fn ->
+          System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+        end)
 
-    on_exit(fn ->
-      System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
-    end)
+      nil ->
+        :ok
+    end
 
     collect_fifo(reader, "")
   end
