@@ -13,6 +13,20 @@ code surface below is stable and test-covered.
 
 ### Added
 
+- The Codex runner and workspace hooks run without raxol's own secrets in
+  their environment (`Raxol.Core.ChildEnv`): they execute tracker-issue and
+  repository content, and used to inherit the node's whole environment.
+- The review contract's `git diff` and the evidence subject's `git` calls run
+  in an implementer's workspace, whose git config the agent controls: they now
+  get the environment without raxol's secrets (`Raxol.Core.ChildEnv.cmd_env/1`),
+  and the diff runs no external diff, textconv or fsmonitor command
+  (`--no-ext-diff --no-textconv`, `core.fsmonitor=false`). A repository with
+  `diff.external` set could print `RAXOL_SLEUTH_API_KEY` into the diff a
+  reviewer sees.
+- The Codex runner's `:inherit` auth preflight counts only what Codex will
+  inherit: an `OPENAI_API_KEY` (or `CODEX_HOME`) an operator lists in
+  `Raxol.Core.ChildEnv`'s `extra_secrets:` is unset in the child, so it no
+  longer passes preflight for a run Codex would then fail.
 - **Orchestrator** (`Raxol.Symphony.Orchestrator`): a `BaseManager` GenServer
   that polls a tracker, claims eligible issues, isolates each in a per-issue
   workspace, and runs a coding agent to a workflow-defined terminal state.

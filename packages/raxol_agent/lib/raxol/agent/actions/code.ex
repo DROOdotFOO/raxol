@@ -707,7 +707,8 @@ defmodule Raxol.Agent.Actions.Code do
   @doc """
   Run `command` via `/bin/sh -c` in `cd`, returning `{combined_output,
   exit_status}`. `env` adds environment variables (`{name, value}`
-  strings). On timeout the spawned OS process group is SIGKILLed (so no
+  strings). The child gets the node's environment minus raxol's own secrets
+  (`Raxol.Core.ChildEnv`), unless `env` passes one explicitly. On timeout the spawned OS process group is SIGKILLed (so no
   child is orphaned), the port is closed, and `exit_status` is `:timeout`.
   """
   @spec run_shell(String.t(), String.t(), pos_integer(), [
@@ -731,8 +732,7 @@ defmodule Raxol.Agent.Actions.Code do
       {:cd, cd}
     ]
 
-    port_opts =
-      if charlist_env == [], do: base, else: [{:env, charlist_env} | base]
+    port_opts = [{:env, Raxol.Core.ChildEnv.port_env(charlist_env)} | base]
 
     port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
     collect_port(port, port_os_pid(port), [], timeout)

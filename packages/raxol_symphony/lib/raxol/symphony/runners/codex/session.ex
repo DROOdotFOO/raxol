@@ -509,10 +509,9 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   def launch_spec(nil, bash, command, workspace, env) do
     opts = base_port_opts() ++ [{:cd, workspace}, {:args, ["-lc", command]}]
 
-    # Only add {:env, _} when there is something to inject: an empty list still
-    # scopes the child to an explicit env on some OTP versions, so `:inherit`
-    # (env == []) must pass through untouched to keep the ambient environment.
-    opts = if env == [], do: opts, else: opts ++ [{:env, env}]
+    # Codex runs on tracker-issue content, so it gets the ambient environment
+    # minus raxol's secrets (`Raxol.Core.ChildEnv`), plus anything injected.
+    opts = opts ++ [{:env, Raxol.Core.ChildEnv.port_env(env)}]
 
     {:ok, {bash, opts}}
   end

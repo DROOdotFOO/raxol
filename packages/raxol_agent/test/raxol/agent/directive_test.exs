@@ -140,6 +140,29 @@ defmodule Raxol.Agent.DirectiveTest do
 
       assert String.trim(output) == "0"
     end
+
+    # A directive's command is model-chosen; the node's secrets stay out of it.
+    # This module is not async, so setting the variable races nothing.
+    @tag :unix_only
+    test "the command does not inherit raxol's secrets, but does the rest" do
+      previous = System.get_env("RAXOL_SESSION_STREAM_TOKEN")
+      System.put_env("RAXOL_SESSION_STREAM_TOKEN", "probe-not-a-token")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("RAXOL_SESSION_STREAM_TOKEN", previous),
+          else: System.delete_env("RAXOL_SESSION_STREAM_TOKEN")
+      end)
+
+      directive =
+        Directive.shell(~s(printf '%s|%s' "${RAXOL_SESSION_STREAM_TOKEN-unset}" "${HOME:+home}"))
+
+      Executor.execute(directive, %{pid: self(), runtime_pid: self()})
+
+      assert_receive {:command_result, {:shell_result, %{exit_status: 0, output: "unset|home"}},
+                      %{turn_id: nil}},
+                     5_000
+    end
   end
 
   describe "Executor for SendAgent" do

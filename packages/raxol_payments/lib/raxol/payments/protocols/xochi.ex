@@ -245,6 +245,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
       to_token: request.to_token,
       recipient_address: request.recipient_address,
       to_amount: quote.to_amount,
+      min_to_amount: quote.min_to_amount,
       expires_at: quote.expiry
     }
   end

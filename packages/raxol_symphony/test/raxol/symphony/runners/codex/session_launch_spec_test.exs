@@ -20,14 +20,17 @@ defmodule Raxol.Symphony.Runners.Codex.SessionLaunchSpecTest do
       assert :exit_status in opts
     end
 
-    test "injects env only when non-empty" do
+    test "injects the env given, and always unsets raxol's secrets" do
       {:ok, {_, no_env}} = Session.launch_spec(nil, "/bin/bash", "c", "/ws", [])
-      refute Enum.any?(no_env, &match?({:env, _}, &1))
+      {:env, scrubbed} = List.keyfind(no_env, :env, 0)
+      assert {~c"RAXOL_SLEUTH_API_KEY", false} in scrubbed
 
       {:ok, {_, with_env}} =
         Session.launch_spec(nil, "/bin/bash", "c", "/ws", [{~c"K", ~c"V"}])
 
-      assert {:env, [{~c"K", ~c"V"}]} in with_env
+      {:env, env} = List.keyfind(with_env, :env, 0)
+      assert {~c"K", ~c"V"} in env
+      assert {~c"RAXOL_SLEUTH_API_KEY", false} in env
     end
   end
 

@@ -25,6 +25,18 @@ defmodule Raxol.Agent.Backend.Native do
   - `:mcp_server_command` / `:mcp_server_args` -- the MCP server launcher; tools
     are injected only when this is set (and `:actions` is non-empty).
   - `:extra_args` -- raw argv appended to the CLI invocation.
+  - `:env` -- `[{name, value}]` strings added to the CLI's own environment.
+    The CLI otherwise gets the node's environment minus raxol's own secrets
+    (`Raxol.Core.ChildEnv`); naming one here passes it to the CLI.
+  - `:mcp_env` -- `[{name, value}]` strings written only into the injected
+    MCP server's `env` entry, never into the CLI's environment. A secret the
+    MCP server needs goes here, e.g. `RAXOL_SLEUTH_API_KEY` for an MCP server
+    that is a raxol node with `fx:` configured.
+
+  Anything given to the CLI or to its MCP server is readable by the CLI and
+  by any shell command it runs: they run as the node's user, and `:mcp_env`
+  is written into the MCP config file the CLI reads (in a directory only that
+  user can read). Do not hand either a secret the vendor's model must not see.
   """
 
   @default_timeout 120_000
@@ -97,13 +109,14 @@ defmodule Raxol.Agent.Backend.Native do
 
   defp build_stream(driver, exe, args, opts, cleanup) do
     cwd = Keyword.get(opts, :cwd)
+    env = Keyword.get(opts, :env, [])
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     caller = self()
     ref = make_ref()
 
     reader =
       spawn_link(fn ->
-        run_port(exe, args, cwd, driver, timeout, caller, ref)
+        run_port(exe, args, cwd, env, driver, timeout, caller, ref)
       end)
 
     Stream.resource(
@@ -129,7 +142,7 @@ defmodule Raxol.Agent.Backend.Native do
   # The prompt goes over argv via `driver.args/1`; stdin is /dev/null through
   # `SpawnedPort.spawn_spec/2` (see there for why not `:in`). Lines before the
   # wrapper's marker are the shell's, never the CLI's, so they are not parsed.
-  defp run_port(exe, args, cwd, driver, timeout, caller, ref) do
+  defp run_port(exe, args, cwd, env, driver, timeout, caller, ref) do
     spec = SpawnedPort.spawn_spec(exe, args)
 
     port =
@@ -142,7 +155,7 @@ defmodule Raxol.Agent.Backend.Native do
           :hide,
           {:line, @line_bytes},
           {:args, spec.args}
-        ] ++ cd_opt(cwd) ++ spec.opts
+        ] ++ cd_opt(cwd) ++ child_env_opts(spec.opts, env)
       )
 
     state = %{
@@ -301,7 +314,8 @@ defmodule Raxol.Agent.Backend.Native do
       case McpToolConfig.write(
              actions: actions,
              command: command,
-             args: Keyword.get(opts, :mcp_server_args, [])
+             args: Keyword.get(opts, :mcp_server_args, []),
+             env: Map.new(Keyword.get(opts, :mcp_env, []))
            ) do
         {:ok, path} -> {path, mcp_cleanup(path)}
         {:error, _} -> {nil, &noop/0}
@@ -319,4 +333,18 @@ defmodule Raxol.Agent.Backend.Native do
 
   defp cd_opt(nil), do: []
   defp cd_opt(cwd), do: [{:cd, cwd}]
+
+  # The vendor CLI runs its own tool loop, shell included: no raxol secrets
+  # (`Raxol.Core.ChildEnv`). `Port.open/2` keeps only the last `:env`, so the
+  # wrapper's own (unsetting the shell's startup variables) joins the scrub in
+  # one list rather than replacing it.
+  defp child_env_opts(spec_opts, env) do
+    {wrapper_env, rest} =
+      case List.keytake(spec_opts, :env, 0) do
+        {{:env, wrapper_env}, rest} -> {wrapper_env, rest}
+        nil -> {[], spec_opts}
+      end
+
+    [{:env, Raxol.Core.ChildEnv.port_env(env ++ wrapper_env)} | rest]
+  end
 end

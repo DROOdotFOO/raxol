@@ -81,7 +81,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
           type: :string,
           description: "public | stealth | shielded (Tron is public-only)"
         ],
-        slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"]
+        slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
+        min_to_amount: [
+          type: :string,
+          description:
+            "Optional minimum acceptable delivery, as a string of digits in destination-chain atomic units (anything else is refused; \"0\" counts as absent here and on the deposit route, but the Xochi intent tool refuses it). A quote delivering less is rejected before the spend is authorized. Required for a non-USD stablecoin destination, in that token's units."
+        ]
       ],
       output: [
         transfer_id: [type: :string],
@@ -96,7 +101,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
     ]
 
   alias Raxol.Payments.Actions.SpendGate
-  alias Raxol.Payments.{Assets, Checkpoint, Failure, Relay, Router}
+  alias Raxol.Payments.{Assets, Checkpoint, DeliveryFloor, Failure, Relay, Router}
   alias Raxol.Payments.Relay.Schemas.{QuoteRequest, QuoteResponse}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
@@ -119,17 +124,19 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   end
 
   defp fresh(config, params, from_address, context, store, key) do
-    with {:ok, request, amount, warnings} <- build_request(params, from_address) do
-      settle(config, request, amount, warnings, context, store, key)
+    with {:ok, request, amount, warnings} <- build_request(params, from_address),
+         {:ok, floor} <- delivery_floor(request, params) do
+      settle(config, request, amount, floor, warnings, context, store, key)
     end
   end
 
   defp normalize_error({:ok, _result} = ok), do: ok
   defp normalize_error({:error, reason}), do: {:error, Failure.from(reason)}
 
-  defp settle(config, request, amount, warnings, context, store, key) do
+  defp settle(config, request, amount, floor, warnings, context, store, key) do
     with :ok <- assert_relay_route(request),
          {:ok, quote} <- fillable_quote(config, request),
+         :ok <- assert_delivery_floor(quote, floor),
          :ok <- authorize(context, config, amount) do
       # Checkpoint the dispatched transfer before any funds move so a crash in the
       # funding step leaves a record a resume can poll instead of re-funding.
@@ -226,10 +233,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   defp build_request(params, from_address) do
     to_chain = Map.fetch!(params, :to_chain_id)
 
-    with :ok <- reject_stealth_on_tron(Map.get(params, :settlement, "public"), to_chain) do
+    with :ok <- reject_stealth_on_tron(Map.get(params, :settlement, "public"), to_chain),
+         from_chain = Map.fetch!(params, :from_chain_id),
+         from_token = Map.fetch!(params, :from_token),
+         :ok <- reject_fx_source(from_chain, from_token) do
       amount = Decimal.new(Map.fetch!(params, :amount))
-      from_chain = Map.fetch!(params, :from_chain_id)
-      from_token = Map.fetch!(params, :from_token)
       decimals = Assets.decimals(from_chain, from_token)
       from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
 
@@ -260,6 +268,34 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
       :ok
     end
   end
+
+  # A non-USD stablecoin scales correctly but the spend gate caps in dollars and
+  # would count it at par, so it moves no funds (ADR-0040 decision 6) until an
+  # FX rate gates the conversion (decision 7).
+  defp reject_fx_source(chain, token) do
+    case Assets.fx_peg(chain, token) do
+      nil ->
+        :ok
+
+      peg ->
+        {:error, {:unpriced_asset, %{chain_id: chain, token: token, side: :source, peg: peg}}}
+    end
+  end
+
+  # Relay quotes carry a solver-chosen `to_amount`; `can_fill` says nothing about
+  # how much arrives. `Raxol.Payments.DeliveryFloor` reads `min_to_amount` and
+  # refuses a non-USD destination without a plausible one. Every Relay route
+  # has a Tron leg and `Assets` gives Tron tokens no symbol, so
+  # `ExecuteXochiIntent`'s same-asset floor never applies here, and refusing
+  # unregistered destinations as it does would close the rail itself.
+  defp delivery_floor(%QuoteRequest{} = request, params) do
+    with {:ok, min_out} <- DeliveryFloor.parse(Map.get(params, :min_to_amount)) do
+      DeliveryFloor.for_route(min_out, Map.from_struct(request))
+    end
+  end
+
+  defp assert_delivery_floor(%QuoteResponse{} = quote, floor),
+    do: DeliveryFloor.check(quote, floor)
 
   defp generate_transfer_id do
     "relay_" <> (:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower))

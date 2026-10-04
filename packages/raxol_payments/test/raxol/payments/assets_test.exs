@@ -4,7 +4,8 @@ defmodule Raxol.Payments.AssetsTest do
   alias Raxol.Payments.Assets
 
   # The Riddler solver fills USDC, USDT, and WETH on the five original EVM chains,
-  # plus EURe on Arbitrum and USDG, WETH and RAXOL on Robinhood Chain (4663). Each
+  # plus USDG, WETH and RAXOL on Robinhood Chain (4663). (It fills EURe on
+  # Arbitrum too; that is a non-USD stablecoin, pinned below.) Each
   # must be a registered Assets entry: an unregistered token falls back to 6
   # decimals, wrong for an 18-decimal token like WETH. This fixture pins the set
   # so a dropped or wrong-decimal entry fails here. Addresses mirror Riddler's
@@ -30,8 +31,6 @@ defmodule Raxol.Payments.AssetsTest do
     {42_161, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", 6},
     {42_161, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", 6},
     {42_161, "WETH", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", 18},
-    # "EURe" is the exact mixed-case wire symbol; address/2 must still resolve it.
-    {42_161, "EURe", "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8", 18},
     # Robinhood Chain (USDG is the native stablecoin; WETH also canonical)
     {4663, "USDG", "0x5fc5360d0400a0fd4f2af552add042d716f1d168", 6},
     {4663, "WETH", "0x0bd7d308f8e1639fab988df18a8011f41eacad73", 18},
@@ -76,7 +75,14 @@ defmodule Raxol.Payments.AssetsTest do
     end
 
     test "symbols/0 is exactly the solver-fillable set" do
-      assert Enum.sort(Assets.symbols()) == ["EURe", "RAXOL", "USDC", "USDG", "USDT", "WETH"]
+      assert Enum.sort(Assets.symbols()) == ["RAXOL", "USDC", "USDG", "USDT", "WETH"]
+    end
+
+    test "symbols fold in ASCII only, so a lookalike never resolves to a registered token" do
+      assert {:ok, _} = Assets.address(8453, "usdc")
+      # `ſ` (long s) upper-cases to `S` under Unicode rules.
+      assert :error = Assets.address(8453, "uſdc")
+      assert Assets.decimals("uſdc") == Assets.decimals("NOT-A-TICKER")
     end
 
     test "symbol_for/2 resolves every fillable (chain, address) back to its symbol" do
@@ -116,6 +122,98 @@ defmodule Raxol.Payments.AssetsTest do
       # ERC-3009 signs against the USDC contract; USDG has no ERC-3009, so
       # usdc?/2 must be false or the agent would sign an invalid authorization.
       refute Assets.usdc?(4663, @usdg)
+    end
+  end
+
+  # ADR-0040 decision 6. Every row was read on-chain on 2026-09-30 (`symbol()`,
+  # `decimals()`). Unregistered, the 18-decimal EURe and ZCHF scale at the
+  # 6-decimal fallback and every amount is off by 10^12.
+  describe "non-USD stablecoins" do
+    @zchf_l2 "0xd4dd9e2f021bb459d5a5f6c24c12fe09c5d45553"
+
+    @fx_stables [
+      {1, "EURC", "0x1abaea1f7c830bd89acc67ec4af516284b1bc33c", 6, "EUR"},
+      {8453, "EURC", "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42", 6, "EUR"},
+      {1, "EURe", "0x39b8b6385416f4ca36a20319f70d28621895279d", 18, "EUR"},
+      {100, "EURe", "0x420ca0f9b9b604ce0fd9c18ef134c705e5fa3430", 18, "EUR"},
+      {137, "EURe", "0xe0aea583266584dafbb3f9c3211d5588c73fea8d", 18, "EUR"},
+      {8453, "EURe", "0xbf6e2966a9c3d99c9e4d069e04f7bdb9c8aa762c", 18, "EUR"},
+      {42_161, "EURe", "0x0c06ccf38114ddfc35e07427b9424adcca9f44f8", 18, "EUR"},
+      {1, "ZCHF", "0xb58e61c3098d85632df34eecfb899a1ed80921cb", 18, "CHF"},
+      {10, "ZCHF", @zchf_l2, 18, "CHF"},
+      {100, "ZCHF", @zchf_l2, 18, "CHF"},
+      {137, "ZCHF", @zchf_l2, 18, "CHF"},
+      {8453, "ZCHF", @zchf_l2, 18, "CHF"},
+      {42_161, "ZCHF", @zchf_l2, 18, "CHF"}
+    ]
+
+    # EURe v1: the same balance as v2 behind a second address (equal
+    # totalSupply() per chain), so recognized but never resolved.
+    @eure_v1 [
+      {1, "0x3231cb76718cdef2155fc47b5286d82e6eda273f"},
+      {100, "0xcb444e90d8198415266c6a2724b7900fb12fc56e"},
+      {137, "0x18ec0a6e18e5bc3784fdd3a3634b31245ab704f6"}
+    ]
+
+    test "each scales at its on-chain decimals, through both lookups" do
+      for {chain, symbol, address, decimals, _peg} <- @fx_stables do
+        assert Assets.fetch_decimals(chain, address) == {:ok, decimals},
+               "#{symbol} on #{chain} is not registered at #{decimals} decimals"
+
+        assert Assets.decimals(chain, String.upcase(address)) == decimals
+      end
+    end
+
+    test "each resolves to its canonical contract and back, with its peg" do
+      for {chain, symbol, address, _decimals, peg} <- @fx_stables do
+        assert Assets.address(chain, symbol) == {:ok, address}
+        assert Assets.symbol_for(chain, address) == symbol
+        assert Assets.fx_peg(chain, address) == peg
+      end
+
+      assert Assets.address("eip155:100", "eure") ==
+               {:ok, "0x420ca0f9b9b604ce0fd9c18ef134c705e5fa3430"}
+    end
+
+    test "EURe v1 is recognized as EURe but never resolved, so it cannot be summed with v2" do
+      for {chain, v1} <- @eure_v1 do
+        assert Assets.symbol_for(chain, v1) == "EURe"
+        assert Assets.fx_peg(chain, v1) == "EUR"
+        assert Assets.fetch_decimals(chain, v1) == {:ok, 18}
+        refute Assets.address(chain, "EURe") == {:ok, v1}
+      end
+    end
+
+    test "an address registered on one chain is not an FX token on another" do
+      # EURC's Base address has no code on Optimism; the EURC there is bridged.
+      refute Assets.known?(10, "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42")
+      assert Assets.address(10, "EURC") == :error
+      assert Assets.fx_peg(10, "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42") == nil
+    end
+
+    test "fx_peg/2 is nil for dollar stablecoins, WETH, unknown and missing input" do
+      assert Assets.fx_peg(8453, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913") == nil
+      assert Assets.fx_peg(8453, "0x4200000000000000000000000000000000000006") == nil
+      assert Assets.fx_peg(8453, "0x" <> String.duplicate("ab", 20)) == nil
+      assert Assets.fx_peg(8453, nil) == nil
+      assert Assets.fx_peg(nil, "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42") == nil
+    end
+
+    test "they are not solver-fillable, so the capabilities fallback never advertises them" do
+      fx_symbols = @fx_stables |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+
+      for symbol <- fx_symbols do
+        refute Map.has_key?(Assets.evm_tokens(), symbol)
+        refute symbol in Assets.symbols()
+      end
+
+      refute 100 in Assets.supported_chain_ids()
+    end
+
+    test "ticker lookup is case-insensitive" do
+      assert Assets.decimals("EURe") == 18
+      assert Assets.decimals("eurc") == 6
+      assert Assets.decimals("ZCHF") == 18
     end
   end
 

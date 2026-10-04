@@ -164,6 +164,74 @@ defmodule Raxol.Agent.LSPContextTest do
 
       GenServer.stop(pid)
     end
+
+    # The server is a sh script that writes what it inherited into a FIFO and
+    # then idles on stdin; reading the FIFO blocks until it has written, so
+    # nothing waits on a clock. The read is a `cat` port, not `File.read!/1`:
+    # a server that never starts would leave a BEAM file open blocked for good,
+    # while the `cat` is killed on exit. A hang is bounded by the tag timeout
+    # alone. XOCHI_AUTH_TOKEN is set by no other test here and read by nothing
+    # in this package, so the async run is safe.
+    @tag :unix_only
+    @tag :tmp_dir
+    @tag timeout: 60_000
+    test "the server does not inherit raxol's secrets, but does the rest", %{tmp_dir: dir} do
+      previous = System.get_env("XOCHI_AUTH_TOKEN")
+      System.put_env("XOCHI_AUTH_TOKEN", "probe-not-a-token")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("XOCHI_AUTH_TOKEN", previous),
+          else: System.delete_env("XOCHI_AUTH_TOKEN")
+      end)
+
+      fifo = Path.join(dir, "env")
+      {_, 0} = System.cmd("mkfifo", [fifo])
+      server = Path.join(dir, "server.sh")
+
+      File.write!(server, """
+      #!/bin/sh
+      printf '%s|%s' "${XOCHI_AUTH_TOKEN-unset}" "${HOME:+home}" > "$1"
+      exec cat >/dev/null
+      """)
+
+      File.chmod!(server, 0o755)
+
+      {:ok, pid} = LSPContext.start_link(command: server, args: [fifo], root_uri: "file:///tmp")
+      assert read_fifo(fifo) == "unset|home"
+      GenServer.stop(pid)
+    end
+  end
+
+  defp read_fifo(fifo) do
+    reader =
+      Port.open({:spawn_executable, System.find_executable("cat")}, [
+        :binary,
+        :exit_status,
+        args: [fifo]
+      ])
+
+    # A server already blocked opening the FIFO lets `cat` copy it and exit at
+    # once; its port can be closed before this runs. Its output and exit status
+    # are in the mailbox by then, and there is nothing left to kill.
+    case Port.info(reader, :os_pid) do
+      {:os_pid, os_pid} ->
+        on_exit(fn ->
+          System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+        end)
+
+      nil ->
+        :ok
+    end
+
+    collect_fifo(reader, "")
+  end
+
+  defp collect_fifo(reader, acc) do
+    receive do
+      {^reader, {:data, data}} -> collect_fifo(reader, acc <> data)
+      {^reader, {:exit_status, 0}} -> acc
+    end
   end
 
   describe "diagnostics/2 when not ready" do

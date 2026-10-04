@@ -298,11 +298,14 @@ defmodule Raxol.Earn.Xochi.TransferCore do
 
   # Corridor gate: the live capability matrix decides fillability, direction
   # aware; the static Assets set survives as the fallback and backstops a live
-  # matrix that omits addresses for a leg the static table knows.
+  # matrix that omits addresses for a leg the static table knows. A non-USD
+  # stablecoin is registered for scaling only and is never fillable, even when
+  # the live matrix lists it (ADR-0040 decision 6).
   defp fillable?(caps, chain, token, role) do
-    Capabilities.fillable?(caps, chain, token, role) or
-      (caps.source == :fallback and fallback_chain?(caps, chain) and
-         Assets.known?(chain, token))
+    is_nil(Assets.fx_peg(chain, token)) and
+      (Capabilities.fillable?(caps, chain, token, role) or
+         (caps.source == :fallback and fallback_chain?(caps, chain) and
+            Assets.known?(chain, token)))
   end
 
   defp fallback_chain?(caps, chain), do: Enum.any?(caps.chains, &(&1.chain_id == chain))

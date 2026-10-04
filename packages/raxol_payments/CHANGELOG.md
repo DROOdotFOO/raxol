@@ -9,11 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Registered Monerium EURe on Arbitrum (`0x0c06...44f8`, 18 decimals) and
-  RAXOL on Robinhood Chain (`0xf447...53af`, 18 decimals) in
+- Registered RAXOL on Robinhood Chain (`0xf447...53af`, 18 decimals) in
   `Raxol.Payments.Assets`, so the Xochi client sizes, resolves and classifies
-  USDC->EURe, EURe->RAXOL and USDC/USDT/USDG->RAXOL legs. `address/2` matches
-  the mixed-case wire symbol `"EURe"` case-insensitively.
+  USDC/USDT/USDG->RAXOL legs.
 - `Raxol.Payments.Prices.CoinGecko` prices EURe (USD quote, not dollar par)
   and RAXOL. Neither is a settlement-ledger stablecoin, so an unpriced leg
   reports `nil`, never $1.
@@ -21,6 +19,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uint256, and `Assets.to_decimal/1` converts an amount to a `Decimal`, taking
   an integer string of up to 78 digits through the integer (decimal 3's
   string parse stops at 34 digits).
+- `Raxol.Payments.Assets` registers the non-USD stablecoins of ADR-0040:
+  EURC on 1 and 8453, EURe on 1, 100, 137, 8453 and 42161, and ZCHF on 1 plus
+  the CCIP-bridged contract on 10, 100, 137, 8453 and 42161, each at its
+  on-chain decimals. EURe was previously registered on 1 and 42161 only, so
+  elsewhere the lenient `decimals/2` scaled it at 6 instead of 18, off by
+  10^12. `address/2` matches the mixed-case wire symbol `"EURe"`
+  case-insensitively. EURe's legacy v1
+  contracts resolve to `"EURe"` through `symbol_for/2` and are never returned
+  by `address/2`, since they front the same balance as v2. Chain 100 (Gnosis)
+  gains a name and its xDAI gas token. New `Assets.fx_peg/2` names a token's
+  non-USD peg. None of these tokens is solver-fillable: EURe leaves
+  `symbols/0`, `evm_tokens/0` and the Xochi settlement grid, where it was
+  listed on Arbitrum. `Xochi.Capabilities.fallback/0` and the capacity
+  deriver read `evm_tokens/0`, so they drop EURe on 42161 too; only
+  `supported_chain_ids/0` and the stealth chain check are unchanged.
+- Registering them opens no fund-moving path. `ExecuteXochiIntent` and
+  `ExecuteRelayTransfer` refuse a non-USD source, and both refuse a non-USD
+  destination without a positive `min_to_amount`, as `{:unpriced_asset, detail}`
+  (ADR-0040 decision 6), until an FX rate gates the conversion (decision 7).
+  Dollar spend caps would otherwise count them at par. A `min_to_amount` of `0`
+  bounds nothing: Relay and the deposit route read it as absent and Xochi
+  refuses it. x402 refuses a challenge whose asset is a non-USD stablecoin,
+  which the spend gate would otherwise reserve and charge at par. The refusals
+  cover the FX tokens only: WETH and RAXOL sources are still counted at par by
+  the spend cap, as before (ADR-0040 context item 3).
+- `ExecuteRelayTransfer` accepts `min_to_amount` and refuses a quote delivering
+  less before the spend is authorized. It previously had no delivery floor, so
+  a quote could deliver any amount.
+
+- Euro and franc stablecoins can be priced in accounting (ADR-0040 decision 6).
+  `RAXOL_FX_ENABLED=true` with `RAXOL_SLEUTH_API_KEY` and `RPC_BASE` or `RPC_ETH`
+  puts `Raxol.Payments.Prices.FX` in front of `RAXOL_PRICE_SOURCE` in the
+  `RebalanceMonitor` sweep and `mix raxol_earn.rebalance`: EURC, EURe and ZCHF
+  are priced at the Chainlink rate for their peg when Sleuth's market price is
+  within 100 bps of it, and `nil` otherwise. Enabling it without the key, without
+  either RPC URL, or in a build without `raxol_web3` (an optional dependency,
+  dropped under `HEX_BUILD`) refuses and names what is missing. Pricing only: no
+  spend cap or delivery floor reads an FX rate.
+- `SettlementLedger` aggregates carry `unpriced_count`: entries with a leg that
+  neither `usdc_price` nor `price_fn` could price. Such a revenue used to drop out
+  of `usd_revenue` without a trace, so a report with EUR legs read as smaller
+  rather than as partial.
+- Each `RebalanceMonitor` sweep reports margin. It prices
+  `SettlementLedger.report/2` with the same `price_fn` that sizes refuels (FX
+  in front of `RAXOL_PRICE_SOURCE` when enabled), emits the totals as
+  `[:raxol, :payments, :margin]`, which the accounting sidecar logs as
+  `payments.margin`, and keeps the per-corridor report for
+  `RebalanceMonitor.margin_report/1`. Until now nothing in production read the
+  report, so FX pricing reached only the native gas symbols a refuel asks for.
+  The advice and the report fail independently, and an FX snapshot that raises
+  leaves EURC, EURe and ZCHF unpriced, and the rest to `RAXOL_PRICE_SOURCE`,
+  instead of aborting the sweep.
+  `SettlementLedger.report/2` reads the ledger once instead of four times.
+
+### Changed
+
+- In `{:delivery_below_floor, detail}`, `min_to_amount` is the quote's own
+  stated minimum; the caller's floor is `:floor`, and `:lowest` is what was
+  compared. In v0.2.1 `min_to_amount` was the caller's floor. The refusal's
+  message no longer says "refusing to sign", which was wrong on the deposit
+  route.
 
 ### Fixed
 
@@ -30,6 +89,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convert through `Assets.to_decimal/1`, MPP through the integer. The amount
   then reaches the policy and budget gates, which refuse it when a
   `SpendingPolicy` and ledger are configured.
+- `SettlementLedger` aggregates and the `[:raxol, :payments, :margin]` event
+  carry `gas_unpriced_count`: entries whose gas amount is known but whose gas
+  symbol no price answers. Such an entry left the margin without any count
+  saying why; every reason an entry is left out of `usd_margin` is now
+  countable.
+- `ExecuteXochiIntent` signed a re-quote without checking it. When the first
+  execute came back as an expired quote (a 409 the endpoint chooses), the
+  retry fetched a new quote and signed it with neither the delivery floor nor
+  the method check, so a re-quote delivering 1 was signed and executed. The
+  re-quote is now held to both before anything is signed; a refusal releases
+  the reservation and reports the refusal itself.
+- The delivery floor reads the signed `toAmount` only when the message's
+  primary type declares the field, judges a null or missing value as 0, which
+  is what `EIP712` signs, and range-checks it; a whitespace or sign variant
+  fails closed at the floor or the encoder. It used to read only a
+  literal `"toAmount"` key and treat null or missing as absent, so a quote
+  whose signed amount was 0 passed. Every amount, the caller's floor
+  included, must be at most 2^256 - 1, and `EIP712` itself now refuses a
+  `uint256` outside 0..2^256 - 1 instead of signing its low 256 bits (2^256 + 1
+  signed as 1).
+- `ExecuteDepositRoute` returns `to_amount` and `min_to_amount` as strings
+  even when the quote served them as JSON numbers; a numeric `min_to_amount`
+  passed the floor and then failed the tool's output schema, so the payer got
+  no address.
+- `ExecuteXochiIntent`'s 80%-of-par same-asset floor is judged, like any floor,
+  on the lowest amount the quote states, so a `slippage_bps` past about 2000
+  lets an honest quote's own minimum fall under it and is refused. That is the
+  backstop working: a quote that may deliver under 80% of par is what it
+  exists to stop.
+- `SettlementLedger` aggregates and `[:raxol, :payments, :margin]` carry
+  `margin_count`, the number of entries `usd_margin` covers. An entry whose gas
+  symbol no price answers (POL with a price source that only knows ETH) left
+  the margin silently, with no counter to say so; `count - margin_count` now
+  reports every entry left out, for any reason.
+- `SettlementLedger` values USDG at `usdc_price`, as it does the other dollar
+  stablecoins. It was missing from the set, so every USDG leg or fee was
+  unpriced whatever the price source, and `unpriced_count` overstated the
+  FX gap.
+- `unpriced_count` no longer judges the recorded leg of a recording-gap entry,
+  whose revenue is unknowable anyway; only its fee, which is its margin basis.
+  An entry is now in both `unpriced_count` and `recording_gap_count` only when
+  its legs were not recorded and its fee is unpriced.
+- The FX `price_fn` answers EURC, EURe and ZCHF in any casing, as `Assets`
+  does: `"EURE"` or `"eurc"` used to reach the fallback, which could price a
+  euro at par, and a lowercase Sleuth listing could not veto. The degraded
+  `price_fn` `Prices.FX` returns when the snapshot raises or the key is refused
+  folds case the same way.
+- `SettlementLedger`'s `usd_margin` is the sum of per-entry margins: each
+  entry's basis net of its own gas, over entries that have both. It was the
+  total spread (else the total fee) minus the total gas, which mixed
+  populations: an entry whose euro leg was unpriced added its gas but not its
+  revenue, and with no priced spread at all the whole basis switched to fees,
+  so one EURe entry with a $5 fee read +$4 and adding a $0.000001 USDC spread
+  flipped the total to about -$2. A recorded-but-unpriced entry now has no
+  basis; only an entry whose legs were never recorded falls back to its fee.
+- `min_to_amount` is read the same way by `ExecuteXochiIntent`,
+  `ExecuteRelayTransfer` and `ExecuteDepositRoute`, through the new
+  `Raxol.Payments.DeliveryFloor`. A value that is not a non-negative integer of
+  atomic units (`"1e6"`, `"995000.0"`, `"-1"`, `"abc"`) is refused as
+  `{:invalid_min_to_amount, value}`; it used to be read as absent, so a dollar
+  destination got no floor at all. On an EURC, EURe or ZCHF destination a floor
+  below a tenth of the source amount rescaled to the destination's decimals is
+  refused as `{:implausible_min_to_amount, detail}`, which catches a floor
+  written in the source's 6 decimals for 18-decimal EURe. A quote is judged on
+  the lowest amount it states: its `to_amount`, its own `min_to_amount` when it
+  gives one, and on `ExecuteXochiIntent` the `toAmount` of the EIP-712 message
+  the wallet signs, so neither a high stated minimum beside a 1-wei estimate
+  nor a signed amount below the advertised one passes. A floor of more than 78
+  digits is refused rather than parsed.
+- `ExecuteDepositRoute` returned a verified Tron deposit address for an EURC,
+  EURe or ZCHF destination with no delivery floor, so the payer could fund a
+  quote stating any amount. It now takes `min_to_amount`, as
+  `ExecuteRelayTransfer` does: a non-USD destination without a positive one is
+  refused as `{:unpriced_asset, detail}` before any quote is fetched, and a
+  quote stating less than a positive floor, on any destination, returns
+  `{:delivery_below_floor, detail}` instead of a deposit address. This filters
+  the quote before funding; it does not bound delivery, because the deposit
+  attestation does not cover the amount and the floor is not sent to Xochi.
+  The deposit instructions from `Protocols.Xochi.deposit_route_quote/3` now
+  carry the quote's `min_to_amount`.
+- `SettlementLedger`'s `unpriced_count` missed two kinds of entry that dropped
+  out of the totals. A nonzero fee no price answered (an EURe fee) left
+  `usd_fee` silently and now counts as unpriced; an entry still counts once.
+  An entry missing a leg's amount or decimals left `usd_revenue` silently and
+  is now counted in the new `recording_gap_count`, which is a recording
+  problem, not a pricing one. `[:raxol, :payments, :margin]` carries it.
+- `Prices.FX` no longer raises `MatchError` when `Raxol.Web3.FX.Sleuth.new/1`
+  refuses the configured key (one with a CR, LF or space inside it). It logs
+  the refusal, which names the argument and never the key, and leaves EURC,
+  EURe and ZCHF unpriced for the sweep to count.
+- The FX `price_fn` no longer lets Sleuth choose what it reprices. It answers
+  exactly the symbols in the new `Assets.fx_pegs/0`, at the Chainlink rate for
+  the peg registered there, and hands every other symbol to the fallback. A
+  snapshot listing `ETH` with `pegCurrency: "EUR"` used to price ETH at the EUR
+  rate (1.13 instead of 2500), and ZCHF relabelled `EUR` was priced at the EUR
+  rate. A listing whose peg disagrees with the registered one, a symbol listed
+  twice with any listing not `:ok`, a symbol missing from the snapshot, and a
+  failed snapshot all leave the symbol `nil`, never the fallback.
+
 - Unknown chains and tokens now fail closed on the Xochi path instead of
   being treated as EVM or 6-decimal (#1149). `ExecuteXochiIntent` refuses,
   before quoting, a source or destination token without registered decimals
@@ -46,6 +204,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An explicit `min_to_amount` on a same-asset Xochi corridor can only raise
   the automatic 80%-of-par delivery floor. It previously replaced it, so
   `min_to_amount: "1"` switched the theft backstop off.
+- `EIP712.hash/3` refuses a `uint256` string longer than 78 bytes as
+  `{:invalid_uint256, value}` before parsing it. A quote message with a
+  5-million-digit amount raised `SystemLimitError` out of the wallet.
+- A raise inside `Xochi.execute` (on the first execute or the re-quote retry)
+  left `ExecuteXochiIntent`'s spend reservation held and its checkpoint in
+  place. It is now a definite failure: the reservation is released, the
+  checkpoint deleted, and the action returns an error.
+- A re-quote `ExecuteXochiIntent` refuses after an expired execute releases
+  the reservation with `reason: :requote_refused` in the ledger entry's
+  metadata. It was recorded as `:execute_failed`, though nothing was executed.
+- `ExecuteDepositRoute` also returns an integral JSON-float `to_amount` or
+  `min_to_amount` (`960000.0`) as its integer string; it failed the output
+  schema. A fractional float, or one above 2^53 that may not be the integer
+  the quote wrote, is refused as `{:invalid_quote_amount, detail}` instead of
+  being reformatted.
 
 ### Security
 

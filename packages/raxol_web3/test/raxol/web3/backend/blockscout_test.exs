@@ -131,6 +131,13 @@ defmodule Raxol.Web3.Backend.BlockscoutTest do
       assert {:error, {:unsupported_chain, "eip155:999999"}} = Blockscout.new("eip155:999999")
       assert {:error, {:unsupported_chain, "solana:mainnet"}} = Blockscout.new("solana:mainnet")
     end
+
+    test "a keyed rpc_url does not render when the handle is inspected" do
+      {:ok, handle} = Blockscout.new("eip155:1", rpc_url: "https://eth.example/v2/key-not-real")
+
+      refute inspect(handle, limit: :infinity) =~ "key-not-real"
+      assert elem(handle, 1).rpc_url =~ "key-not-real"
+    end
   end
 
   describe "capabilities" do

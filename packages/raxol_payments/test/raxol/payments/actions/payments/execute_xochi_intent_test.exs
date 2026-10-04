@@ -20,6 +20,22 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     def sign_hash(_), do: {:ok, <<7::size(520)>>}
   end
 
+  # Wallet that hashes through the real EIP-712 encoder before "signing", so a
+  # malformed quote message reaches the encoder exactly as in production.
+  defmodule EncodingWallet do
+    @moduledoc false
+    def address, do: "0x1111111111111111111111111111111111111111"
+    def chain_id, do: 8453
+
+    def sign_typed_data(domain, types, message) do
+      with {:ok, _hash} <- Raxol.Payments.EIP712.hash(domain, types, message),
+           do: {:ok, <<7::size(520)>>}
+    end
+
+    def sign_message(_), do: {:ok, <<7::size(520)>>}
+    def sign_hash(_), do: {:ok, <<7::size(520)>>}
+  end
+
   @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   @usdc_arb "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
   @usdt_tron "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
@@ -430,6 +446,117 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       totals = Ledger.get_totals(ledger, "a1", policy())
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
+
+    test "the re-quote is held to the floor before it is signed" do
+      # The first quote clears the automatic same-asset floor; after a 409 the
+      # endpoint's re-quote delivers 1.
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            n = Process.get(:quote_calls, 0)
+            Process.put(:quote_calls, n + 1)
+
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_#{n}",
+              "canSolve" => true,
+              "toAmount" => if(n == 0, do: "499000", else: "1"),
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1"
+      }
+
+      assert {:error, %Failure{reason: :delivery_below_floor, detail: {_, %{lowest: 1}}}} =
+               ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+      # Only the first quote was signed; the reservation is released.
+      assert_received :wallet_signed
+      refute_received :wallet_signed
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "a re-quote with a mismatched method is refused before it is signed" do
+      # WETH on Base is not USDC: the first quote names no method, the re-quote
+      # after a 409 asks for ERC-3009, which signs against the USDC contract.
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            n = Process.get(:quote_calls, 0)
+            Process.put(:quote_calls, n + 1)
+
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_#{n}",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "paymentMethod" => if(n == 0, do: nil, else: "erc3009"),
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      params = base_params(%{from_token: "0x4200000000000000000000000000000000000006"})
+
+      assert {:error, %Failure{reason: :method_mismatch}} = ExecuteXochiIntent.run(params, ctx)
+
+      # Only the first quote was signed.
+      assert_received :wallet_signed
+      refute_received :wallet_signed
+      assert :error = Checkpoint.fetch(store, "pay-1")
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+
+      assert [%{reason: :requote_refused}] =
+               for(
+                 %{metadata: %{type: :release} = meta} <- Ledger.get_history(ledger, "a1"),
+                 do: meta
+               )
+    end
   end
 
   describe "ExecuteXochiIntent spend gate" do
@@ -502,6 +629,21 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               %Failure{
                 reason: :route_unsupported,
                 detail: {:unknown_asset, %{side: :source, chain_id: @unknown_chain}}
+              }} = ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
+
+      refute_received :wallet_signed
+    end
+
+    # ADR-0040 decision 6: a registered non-USD stablecoin scales correctly but
+    # has no FX rate for the dollar spend cap, so it is refused as a source.
+    test "a non-USD stablecoin source is refused before quoting or signing" do
+      eurc_base = "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42"
+      params = base_params(%{from_token: eurc_base, settlement: "public"})
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :source, chain_id: 8453, peg: "EUR"}}
               }} = ExecuteXochiIntent.run(params, %{wallet: SpyWallet, xochi_config: config()})
 
       refute_received :wallet_signed
@@ -862,6 +1004,48 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       totals = Ledger.get_totals(ledger, "a1", policy())
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
+
+    @tag timeout: 300_000
+    test "a quote whose signing fails releases and drops the checkpoint" do
+      huge = String.duplicate("9", 5_000_000)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => huge}
+              }
+            })
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: EncodingWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert :error = Checkpoint.fetch(store, "pay-1")
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
   end
 
   describe "PollXochiStatus" do
@@ -1205,6 +1389,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   # automatic 80%-of-par floor for same-asset corridors.
   describe "ExecuteXochiIntent delivery floor" do
     @weth_arb "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+    @eure_arb "0x0c06cCF38114ddfc35e07427B9424adcca9F44F8"
 
     defp floor_ctx do
       %{
@@ -1218,22 +1403,35 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
     # Base USDC -> Arbitrum USDC: a same-asset corridor, so the automatic floor
     # applies. toAmount is configurable to model a punitive quote.
-    defp stub_floor_quote(to_amount) do
+    @amount_only [%{"name" => "amount", "type" => "uint256"}]
+
+    defp stub_floor_quote(
+           to_amount,
+           extra \\ %{},
+           message \\ %{"amount" => 1_000_000},
+           fields \\ @amount_only
+         ) do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
           "/api/intent/quote" ->
-            Req.Test.json(conn, %{
-              "intentId" => "int_1",
-              "quoteId" => "q_1",
-              "canSolve" => true,
-              "toAmount" => to_amount,
-              "xochiFee" => "1000",
-              "eip712Data" => %{
-                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-                "message" => %{"amount" => 1_000_000}
-              }
-            })
+            Req.Test.json(
+              conn,
+              Map.merge(
+                %{
+                  "intentId" => "int_1",
+                  "quoteId" => "q_1",
+                  "canSolve" => true,
+                  "toAmount" => to_amount,
+                  "xochiFee" => "1000",
+                  "eip712Data" => %{
+                    "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                    "types" => %{"XochiIntent" => fields},
+                    "message" => message
+                  }
+                },
+                extra
+              )
+            )
 
           "/api/intent/execute" ->
             Req.Test.json(conn, %{
@@ -1316,8 +1514,48 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert {:error,
               %Failure{
                 reason: :delivery_below_floor,
-                detail: {:delivery_below_floor, %{min_to_amount: 800_000}}
+                detail: {:delivery_below_floor, %{floor: 800_000}}
               }} = ExecuteXochiIntent.run(floor_params(%{min_to_amount: "1"}), floor_ctx())
+
+      refute_received :wallet_signed
+    end
+
+    @with_to_amount [
+      %{"name" => "amount", "type" => "uint256"},
+      %{"name" => "toAmount", "type" => "uint256"}
+    ]
+
+    test "a quote is judged on the toAmount the wallet would sign, read as the encoder reads it" do
+      # Each served toAmount clears the floor; the signed field does not. Null
+      # and missing are encoded as 0, and 2^256 + 1 would sign as its low
+      # 256 bits, i.e. 1.
+      context = floor_ctx()
+
+      for message <- [
+            %{"amount" => 1_000_000, "toAmount" => "1"},
+            %{"amount" => 1_000_000, "toAmount" => nil},
+            %{"amount" => 1_000_000},
+            %{"amount" => 1_000_000, "toAmount" => Integer.to_string(Integer.pow(2, 256) + 1)}
+          ] do
+        stub_floor_quote("960000", %{}, message, @with_to_amount)
+
+        assert {:error, %Failure{reason: :delivery_below_floor}} =
+                 ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), context)
+
+        refute_received :wallet_signed
+      end
+
+      # A toAmount the signed struct does not declare is never signed, so it
+      # is not judged.
+      stub_floor_quote("960000", %{}, %{"amount" => 1_000_000, "toAmount" => "1"})
+      assert {:ok, _} = ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), context)
+    end
+
+    test "a high stated minimum does not hide a low toAmount" do
+      stub_floor_quote("1", %{"minToAmount" => "960000"})
+
+      assert {:error, %Failure{reason: :delivery_below_floor}} =
+               ExecuteXochiIntent.run(floor_params(%{min_to_amount: "950000"}), floor_ctx())
 
       refute_received :wallet_signed
     end
@@ -1343,6 +1581,71 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
                 %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, ^bad}}} =
                  ExecuteXochiIntent.run(floor_params(%{min_to_amount: bad}), ctx)
       end
+
+      refute_received :wallet_signed
+    end
+
+    test "a non-USD destination with no min_to_amount is refused before signing" do
+      # USDC -> EURe is cross-asset AND cross-currency: without an FX rate there
+      # is no floor to derive, so a punitive toAmount must not be trusted.
+      stub_floor_quote("1")
+
+      assert {:error,
+              %Failure{
+                reason: :invalid_request,
+                detail: {:unpriced_asset, %{side: :destination, chain_id: 42_161, peg: "EUR"}}
+              }} = ExecuteXochiIntent.run(floor_params(%{to_token: @eure_arb}), floor_ctx())
+
+      refute_received :wallet_signed
+    end
+
+    test "a zero min_to_amount bounds nothing, so a non-USD destination is still refused" do
+      stub_floor_quote("1")
+
+      assert {:error, %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, " 0 "}}} =
+               ExecuteXochiIntent.run(
+                 floor_params(%{to_token: @eure_arb, min_to_amount: " 0 "}),
+                 floor_ctx()
+               )
+
+      refute_received :wallet_signed
+    end
+
+    test "a non-USD destination is allowed once min_to_amount bounds it" do
+      stub_floor_quote("960000000000000000")
+
+      assert {:ok, _} =
+               ExecuteXochiIntent.run(
+                 floor_params(%{to_token: @eure_arb, min_to_amount: "950000000000000000"}),
+                 floor_ctx()
+               )
+
+      assert_received :wallet_signed
+    end
+
+    test "a min_to_amount that is not an integer of atomic units is refused, not ignored" do
+      # A garbled floor used to read as absent: the 80% auto floor here, and no
+      # floor at all on a cross-asset corridor. It is the caller's bound.
+      stub_floor_quote("960000")
+      context = floor_ctx()
+
+      for floor <- ["1e6", "950000.0", "-1", "abc"] do
+        assert {:error,
+                %Failure{reason: :invalid_request, detail: {:invalid_min_to_amount, ^floor}}} =
+                 ExecuteXochiIntent.run(floor_params(%{min_to_amount: floor}), context)
+      end
+
+      refute_received :wallet_signed
+    end
+
+    test "a floor in the source's units on a non-USD destination is refused before signing" do
+      stub_floor_quote("960000000000000000")
+
+      assert {:error, %Failure{detail: {:implausible_min_to_amount, _}}} =
+               ExecuteXochiIntent.run(
+                 floor_params(%{to_token: @eure_arb, min_to_amount: "950000"}),
+                 floor_ctx()
+               )
 
       refute_received :wallet_signed
     end
