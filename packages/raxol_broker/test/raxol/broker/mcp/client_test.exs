@@ -268,53 +268,113 @@ defmodule Raxol.Broker.MCP.ClientTest do
   end
 
   describe "throttling" do
-    defp start_against_fake(ctx, fake, backoff) do
-      seed(ctx)
-
-      opts = [
-        store: ctx.store,
-        auth: [http_fn: AuthServer.http_fn(ctx.auth)],
-        mcp: Fake.mcp_opts(fake),
-        connect_timeout: 5_000,
-        backoff: backoff
-      ]
-
-      start_supervised!({Client, opts})
-    end
+    defp start_against_fake(fake, backoff),
+      do: start_supervised!({Client, Fake.client_opts(fake, backoff: backoff)})
 
     defp statuses(fake, tool),
       do: for({"tools/call", ^tool, status} <- Fake.requests(fake), do: status)
 
-    test "a 429 is retried with backoff until it answers", ctx do
+    test "a 429 is retried with backoff until it answers" do
       fake =
         Fake.start(
           quotes: %{"AAPL" => "125"},
           faults: [{"get_equity_quotes", {:http, 429}, 2}]
         )
 
-      broker = start_against_fake(ctx, fake, base_ms: 1)
+      broker = start_against_fake(fake, base_ms: 1)
 
       assert {:ok, %{is_error: false}} =
                Client.call(broker, "get_equity_quotes", %{"symbols" => ["AAPL"]})
 
       assert statuses(fake, "get_equity_quotes") == [429, 429, 200]
-      assert AuthServer.refresh_count(ctx.auth) == 0
     end
 
-    test "after :retries the throttle status is returned", ctx do
+    test "after :retries the throttle status is returned" do
       fake = Fake.start(faults: [{"get_accounts", {:http, 503}, 10}])
-      broker = start_against_fake(ctx, fake, base_ms: 1, retries: 2)
+      broker = start_against_fake(fake, base_ms: 1, retries: 2)
 
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
       assert statuses(fake, "get_accounts") == [503, 503, 503]
     end
 
-    test "a status that is not throttling is not retried", ctx do
+    test "a status that is not throttling is not retried" do
       fake = Fake.start(faults: [{"get_accounts", {:http, 500}}])
-      broker = start_against_fake(ctx, fake, base_ms: 1)
+      broker = start_against_fake(fake, base_ms: 1)
 
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 500}}
       assert statuses(fake, "get_accounts") == [500]
+    end
+
+    test "a retry that would pass the caller's timeout is not sent" do
+      fake = Fake.start(faults: [{"get_accounts", {:http, 429}, 5}])
+      broker = start_against_fake(fake, base_ms: 60_000, max_ms: 60_000)
+
+      assert Client.call(broker, "get_accounts", %{}, 5_000) == {:error, {:http, 429}}
+      assert statuses(fake, "get_accounts") == [429]
+    end
+
+    test "retries never open the breaker; a throttled call answers its status" do
+      fake = Fake.start(faults: [{"get_accounts", {:http, 429}, 8}])
+      broker = start_against_fake(fake, base_ms: 1, retries: 10)
+
+      # Four failures leave one before the threshold of five: no fifth retry.
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 429}}
+      assert statuses(fake, "get_accounts") == [429, 429, 429, 429]
+
+      # The next call's own failure opens it; the call still answers its status.
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 429}}
+      assert Client.call(broker, "get_accounts", %{}) == {:error, :breaker_open}
+      assert statuses(fake, "get_accounts") == [429, 429, 429, 429, 429]
+    end
+
+    test "a throttle on the post-refresh retry still locks out on the next 401", ctx do
+      seed(ctx)
+      r1 = ctx.refreshed
+      r2 = %{r1 | "refresh_token" => "fake-refresh-token-rt-2", "access_token" => "fake-at-2"}
+      r3 = %{r1 | "refresh_token" => "fake-refresh-token-rt-3", "access_token" => "fake-at-3"}
+      auth = AuthServer.start(refreshes: [r1, r2, r3])
+      AuthServer.issue_refresh(auth, ctx.token["refresh_token"])
+
+      fake =
+        Fake.start(
+          faults: [
+            {"get_accounts", {:http, 401}},
+            {"get_accounts", {:http, 429}},
+            {"get_accounts", {:http, 401}},
+            {"get_accounts", {:http, 429}},
+            {"get_accounts", {:http, 401}}
+          ]
+        )
+
+      broker =
+        start_supervised!(
+          {Client,
+           store: ctx.store,
+           auth: [http_fn: AuthServer.http_fn(auth)],
+           mcp: Fake.mcp_opts(fake),
+           connect_timeout: 5_000,
+           backoff: [base_ms: 1]}
+        )
+
+      assert Client.call(broker, "get_accounts", %{}) == {:error, :unauthorized}
+      assert AuthServer.refresh_count(auth) == 1
+      assert statuses(fake, "get_accounts") == [401, 429, 401]
+    end
+
+    test "invalid :backoff values stop the session at start" do
+      fake = Fake.start()
+
+      for backoff <- [
+            [retries: :infinity],
+            [base_ms: 1.5],
+            [max_ms: 4_294_967_296],
+            [jitter: 1],
+            :fast
+          ] do
+        assert {:error, {{:invalid_backoff, ^backoff}, _child}} =
+                 start_supervised({Client, Fake.client_opts(fake, backoff: backoff)}),
+               inspect(backoff)
+      end
     end
   end
 end

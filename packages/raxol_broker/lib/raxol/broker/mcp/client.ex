@@ -45,11 +45,23 @@ defmodule Raxol.Broker.MCP.Client do
 
   Every call this session makes is read-only, so a `429`, `502`, `503` or
   `504` is retried after a delay doubling from `:backoff`'s `:base_ms`
-  (default 500) up to `:max_ms` (default 8000), at most `:retries` times
-  (default 3); then the status is returned as `{:error, {:http, status}}`.
-  The delay does not read `Retry-After`: the transport answers a non-2xx
-  status without its headers. Order tools never take this path (see
-  `Raxol.Broker.Executor.Port`), so a throttled order is never resent.
+  (default 500, with jitter of up to half the delay) up to `:max_ms`
+  (default 8000), at most `:retries` times (default 3). The throttle status
+  comes back as `{:error, {:http, status}}` when the retries run out, when the
+  next delay would pass the caller's `call/4` timeout, or when one more
+  failure would open the session's circuit breaker.
+
+  Throttled answers are real failures on that breaker (5 in a row, by
+  default, open it for 30 s), so a retry is only sent if it cannot open the
+  breaker itself; sustained throttling across calls still opens it, and calls
+  then answer `{:error, :breaker_open}` without a request until it recovers.
+  A retry keeps the request's one post-refresh retry: a 401 after a throttle
+  still locks the session out rather than refreshing again. The delay does
+  not read `Retry-After`: the transport answers a non-2xx status without its
+  headers. A caller that has exited is not retried for. Order tools never
+  take this path (see `Raxol.Broker.Executor.Port`), so a throttled order is
+  never resent. Invalid `:backoff` values stop `start_link/1` with
+  `{:invalid_backoff, value}`.
 
   ## Options
 
@@ -73,12 +85,15 @@ defmodule Raxol.Broker.MCP.Client do
   alias Raxol.Broker.CredentialStore
   alias Raxol.MCP.CircuitBreaker
   alias Raxol.MCP.Client, as: Upstream
+  alias Raxol.MCP.Client.Era
   alias Raxol.MCP.Client.Reservation
 
   @default_url "https://agent.robinhood.com/mcp/trading"
   @default_skew 300
   @default_connect_timeout 30_000
   @default_call_timeout 60_000
+  @default_backoff %{base_ms: 500, max_ms: 8_000, retries: 3}
+  @throttle_statuses [429, 502, 503, 504]
   # Observed 2026-10-03: the endpoint speaks 2025-06-18 (initialize +
   # Mcp-Session-Id) and refuses `server/discover` with a plain-text 400, which
   # the transport's probe correctly does not read as era evidence. Pinned, so
@@ -152,7 +167,7 @@ defmodule Raxol.Broker.MCP.Client do
   @doc "The allowed (read-only) tools, from the list fetched at connect."
   @spec list_tools(GenServer.server(), timeout()) :: {:ok, [map()]} | {:error, term()}
   def list_tools(server, timeout \\ @default_call_timeout) do
-    GenServer.call(server, :list_tools, timeout)
+    GenServer.call(server, {:list_tools, timeout}, timeout)
   end
 
   @doc """
@@ -164,7 +179,7 @@ defmodule Raxol.Broker.MCP.Client do
   def call(server, tool_name, args, timeout \\ @default_call_timeout)
       when is_binary(tool_name) and is_map(args) do
     with :ok <- authorize_tool(tool_name) do
-      GenServer.call(server, {:call, tool_name, args}, timeout)
+      GenServer.call(server, {:call, tool_name, args, timeout}, timeout)
     end
   end
 
@@ -186,15 +201,19 @@ defmodule Raxol.Broker.MCP.Client do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    with {:ok, credential} <- initial_credential(opts) do
+    with {:ok, credential} <- initial_credential(opts),
+         {:ok, backoff} <- backoff_config(Keyword.get(opts, :backoff, [])) do
+      url = Keyword.get(opts, :url, @default_url)
+
       config = %{
-        url: Keyword.get(opts, :url, @default_url),
+        url: url,
+        origin: {:origin, Era.origin(URI.parse(url))},
         store: Keyword.get(opts, :store, []),
         auth: Keyword.get(opts, :auth, []),
         mcp: Keyword.get(opts, :mcp, []),
         skew: Keyword.get(opts, :refresh_skew, @default_skew),
         connect_timeout: Keyword.get(opts, :connect_timeout, @default_connect_timeout),
-        backoff: backoff_config(Keyword.get(opts, :backoff, []))
+        backoff: backoff
       }
 
       state = %State{
@@ -230,18 +249,19 @@ defmodule Raxol.Broker.MCP.Client do
   end
 
   @impl GenServer
-  def handle_call(:list_tools, _from, %State{status: :unauthorized} = state),
+  def handle_call({:list_tools, _timeout}, _from, %State{status: :unauthorized} = state),
     do: {:reply, {:error, :unauthorized}, state}
 
-  def handle_call(:list_tools, _from, %State{tools: tools} = state) when is_list(tools),
-    do: {:reply, {:ok, tools}, state}
+  def handle_call({:list_tools, _timeout}, _from, %State{tools: tools} = state)
+      when is_list(tools),
+      do: {:reply, {:ok, tools}, state}
 
-  def handle_call(:list_tools, from, state),
-    do: {:noreply, admit(state, from, :list_tools, :first)}
+  def handle_call({:list_tools, timeout}, from, state),
+    do: {:noreply, admit(state, from, :list_tools, attempt(timeout))}
 
-  def handle_call({:call, name, args}, from, state) do
+  def handle_call({:call, name, args, timeout}, from, state) do
     case authorize_tool(name) do
-      :ok -> {:noreply, admit(state, from, {:call, name, args}, :first)}
+      :ok -> {:noreply, admit(state, from, {:call, name, args}, attempt(timeout))}
       denied -> {:reply, denied, state}
     end
   end
@@ -287,8 +307,11 @@ defmodule Raxol.Broker.MCP.Client do
     {:noreply, %{state | inner: nil, tables: nil, tools: nil}}
   end
 
-  def handle_info({:backoff_retry, from, request, attempt}, state),
-    do: {:noreply, admit(state, from, request, attempt)}
+  def handle_info({:backoff_retry, {pid, _tag} = from, request, attempt}, state) do
+    if caller_gone?(pid),
+      do: {:noreply, state},
+      else: {:noreply, admit(state, from, request, attempt)}
+  end
 
   def handle_info(_other, state), do: {:noreply, state}
 
@@ -387,28 +410,32 @@ defmodule Raxol.Broker.MCP.Client do
     state
   end
 
-  defp act(:retry_now, state, {from, request, _attempt, _generation}, _result),
-    do: admit(state, from, request, :retry)
+  defp act(:retry_now, state, {from, request, attempt, _generation}, _result),
+    do: admit(state, from, request, %{attempt | retried: true})
 
-  defp act(:retry_after_refresh, state, {from, request, _attempt, _generation}, _result),
-    do: enqueue(state, from, request, :retry)
+  defp act(:retry_after_refresh, state, {from, request, attempt, _generation}, _result),
+    do: enqueue(state, from, request, %{attempt | retried: true})
 
-  defp act(:reply, state, {from, request, _attempt, generation}, result) do
-    GenServer.reply(from, shape(request, result))
+  defp act(:reply, state, {from, request, attempt, generation}, result) do
+    GenServer.reply(from, reply(request, attempt, result))
     mark_verified(state, generation, request, result)
   end
 
   defp act(:lock_out, state, {from, request, attempt, _generation}, _result),
     do: state |> enqueue(from, request, attempt) |> lock_out()
 
-  defp act(:refresh, state, {from, request, _attempt, _generation}, _result),
-    do: state |> start_refresh() |> enqueue(from, request, :retry)
+  defp act(:refresh, state, {from, request, attempt, _generation}, _result),
+    do: state |> start_refresh() |> enqueue(from, request, %{attempt | retried: true})
 
-  defp act(:backoff, state, {from, request, attempt, _generation}, _result) do
-    n = throttled_count(attempt)
-    %{base_ms: base, max_ms: max} = state.config.backoff
-    delay = min(base * Integer.pow(2, n), max)
-    Process.send_after(self(), {:backoff_retry, from, request, {:throttled, n + 1}}, delay)
+  defp act(:backoff, state, {from, request, attempt, _generation}, result) do
+    attempt = %{attempt | throttled: attempt.throttled + 1, last: result}
+
+    Process.send_after(
+      self(),
+      {:backoff_retry, from, request, attempt},
+      backoff_delay(state, attempt)
+    )
+
     state
   end
 
@@ -423,7 +450,7 @@ defmodule Raxol.Broker.MCP.Client do
       awaiting_refresh?(state, result) -> :retry_after_refresh
       throttled?(state, attempt, result) -> :backoff
       not unauthorized?(result) -> :reply
-      attempt == :retry or state.fresh -> :lock_out
+      attempt.retried or state.fresh -> :lock_out
       true -> :refresh
     end
   end
@@ -441,23 +468,72 @@ defmodule Raxol.Broker.MCP.Client do
   defp retryable?({:error, :breaker_open}), do: true
   defp retryable?(result), do: unauthorized?(result)
 
-  @throttle_statuses [429, 502, 503, 504]
+  # What a request carries through the queue and its retries: whether it was
+  # already retried after a refresh (a second 401 then locks out), how often
+  # it was throttled and the last throttle answer, and the caller's deadline.
+  defp attempt(timeout) do
+    deadline = if timeout == :infinity, do: :infinity, else: now_ms() + timeout
+    %{retried: false, throttled: 0, last: nil, deadline: deadline}
+  end
 
-  defp throttled?(state, attempt, {:error, {:http, status}}) when status in @throttle_statuses,
-    do: throttled_count(attempt) < state.config.backoff.retries
+  # A throttle status is retried while retries remain, the next delay ends
+  # before the caller's deadline, and one more failure cannot open the breaker.
+  defp throttled?(state, attempt, {:error, {:http, status}}) when status in @throttle_statuses do
+    attempt.throttled < state.config.backoff.retries and
+      within_deadline?(attempt, max_delay(state, attempt)) and
+      breaker_headroom?(state)
+  end
 
   defp throttled?(_state, _attempt, _result), do: false
 
-  defp throttled_count({:throttled, n}), do: n
-  defp throttled_count(_attempt), do: 0
+  defp max_delay(state, attempt) do
+    %{base_ms: base, max_ms: max} = state.config.backoff
+    min(base * Integer.pow(2, attempt.throttled), max)
+  end
+
+  # Between half the doubled delay and all of it, so callers throttled
+  # together do not retry together.
+  defp backoff_delay(state, attempt) do
+    delay = max_delay(state, %{attempt | throttled: attempt.throttled - 1})
+    half = div(delay, 2)
+    half + :rand.uniform(delay - half + 1) - 1
+  end
+
+  defp within_deadline?(%{deadline: :infinity}, _delay), do: true
+  defp within_deadline?(%{deadline: deadline}, delay), do: now_ms() + delay < deadline
+
+  defp breaker_headroom?(%State{tables: %{breakers: breakers}, config: config}) do
+    %{failures: failures} = CircuitBreaker.status(breakers, config.origin)
+    failures + 1 < CircuitBreaker.failure_threshold()
+  end
+
+  defp breaker_headroom?(_state), do: false
+
+  # A throttled request whose retry found the breaker open answers with the
+  # throttle status it was retrying, not with the breaker.
+  defp reply(_request, %{last: {:error, _} = last}, {:error, :breaker_open}), do: last
+  defp reply(request, _attempt, result), do: shape(request, result)
+
+  defp caller_gone?(pid) when node(pid) == node(), do: not Process.alive?(pid)
+  defp caller_gone?(_remote), do: false
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp backoff_config(opts) do
-    %{
-      base_ms: Keyword.get(opts, :base_ms, 500),
-      max_ms: Keyword.get(opts, :max_ms, 8_000),
-      retries: Keyword.get(opts, :retries, 3)
-    }
+    with true <- Keyword.keyword?(opts),
+         %{base_ms: base, max_ms: max, retries: retries} = backoff when map_size(backoff) == 3 <-
+           Map.merge(@default_backoff, Map.new(opts)),
+         true <- valid_backoff?(base, max, retries) do
+      {:ok, backoff}
+    else
+      _invalid -> {:stop, {:invalid_backoff, opts}}
+    end
   end
+
+  defp valid_backoff?(base, max, retries),
+    do:
+      is_integer(base) and base >= 0 and is_integer(max) and max >= base and
+        max <= @max_timer_ms and is_integer(retries) and retries >= 0
 
   defp shape(:list_tools, {:ok, tools}), do: {:ok, allowed(tools)}
   defp shape(_request, result), do: result

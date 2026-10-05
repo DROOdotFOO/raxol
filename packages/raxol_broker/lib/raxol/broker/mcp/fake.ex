@@ -8,7 +8,10 @@ defmodule Raxol.Broker.MCP.Fake do
   `initialize`, `Mcp-Session-Id`, real JSON-RPC) reached through the HTTP
   transport's `:exchange` seam, so the client's whole pre-socket pipeline runs
   for real. `session/1` is a `Raxol.Broker.Executor.Port.MCP` spec (marked
-  sandbox); `mcp_opts/1` is the `:mcp` option for `Raxol.Broker.MCP.Client`.
+  sandbox); `client_opts/2` is a complete, isolated option list for
+  `Raxol.Broker.MCP.Client` (a synthetic credential that can never refresh,
+  so the user's stored credential and Robinhood's token endpoint are never
+  touched); `mcp_opts/1` is only its `:mcp` part.
 
   ## Tools
 
@@ -46,18 +49,26 @@ defmodule Raxol.Broker.MCP.Fake do
   first entry matching a request is consumed; a faulted request never reaches
   the scenario, so it places nothing and is not in `calls/1`.
 
-    * `{:http, status}` or `{:http, status, retry_after_seconds}` - an HTTP
-      error (429, 5xx), with `Retry-After` when given.
-    * `:malformed` - a 200 whose body is not JSON.
+    * `{:http, status}` - an HTTP error (429, 5xx). The client sees only the
+      status: the transport drops a non-2xx response's headers.
+    * `:malformed` - a 200 whose body is not JSON. The client finds no reply
+      in it, so the call gets no answer and ends at its call timeout.
     * `{:slow, ms}` - answers normally after `ms`.
-    * `:closed` - a transport failure: no response at all.
+    * `:closed` - a transport failure with no response,
+      `{:error, {:transport, :closed}}` as the real exchange reports it.
 
-  Every exchange is in `requests/1` with its status; every `tools/call` that
-  reached the scenario is in `calls/1` with its arguments.
+  Every exchange is in `requests/1` from the moment it arrives (status
+  `:pending` until it answers); every `tools/call` that reached the scenario
+  is in `calls/1` with its arguments.
   """
 
+  alias Raxol.Agent.Auth.Credential
   alias Raxol.MCP.Client.ReferenceServer
   alias Raxol.MCP.Client.ReferenceServer.Legacy
+
+  # A reserved `.test` host: nothing real answers it, so a spec that lost its
+  # `:exchange` cannot reach a brokerage either.
+  @url "https://fake.broker.test/mcp"
 
   @tools_path Path.expand("../../../../priv/robinhood/tools_list.json", __DIR__)
   @external_resource @tools_path
@@ -73,12 +84,7 @@ defmodule Raxol.Broker.MCP.Fake do
 
   @keys [:account, :quotes, :positions, :alerts, :warnings, :reject, :order_states, :faults]
 
-  @type fault ::
-          {:http, pos_integer()}
-          | {:http, pos_integer(), non_neg_integer()}
-          | :malformed
-          | {:slow, non_neg_integer()}
-          | :closed
+  @type fault :: {:http, 400..599} | :malformed | {:slow, non_neg_integer()} | :closed
   @type scenario :: %{atom() => term()}
 
   @doc "The tool list recorded from Robinhood on 2026-10-02 (sanitized)."
@@ -170,13 +176,21 @@ defmodule Raxol.Broker.MCP.Fake do
     do: for({name, _args} <- calls(fake), String.starts_with?(name, prefix), do: name)
 
   @doc """
-  Each exchange, oldest first: `{method, tool, status}`; `tool` is nil outside
-  `tools/call` and `status` is nil for a `:closed` fault.
+  Each exchange, oldest first: `{method, tool, status}`. `tool` is nil outside
+  `tools/call`; `status` is `:pending` while the exchange has not answered and
+  nil for a `:closed` fault.
   """
-  @spec requests(pid()) :: [{String.t() | nil, String.t() | nil, non_neg_integer() | nil}]
-  def requests(fake), do: fake |> Agent.get(& &1.requests) |> Enum.reverse()
+  @spec requests(pid()) :: [
+          {String.t() | nil, String.t() | nil, non_neg_integer() | :pending | nil}
+        ]
+  def requests(fake) do
+    fake
+    |> Agent.get(& &1.requests)
+    |> Enum.reverse()
+    |> Enum.map(fn {_ref, method, tool, status} -> {method, tool, status} end)
+  end
 
-  @doc "How many HTTP exchanges reached the Fake, of any method."
+  @doc "How many HTTP exchanges reached the Fake, of any method, answered or not."
   @spec exchanges(pid()) :: non_neg_integer()
   def exchanges(fake), do: Agent.get(fake, &length(&1.requests))
 
@@ -193,11 +207,14 @@ defmodule Raxol.Broker.MCP.Fake do
   @doc "A sandbox `Raxol.Broker.Executor.Port.MCP.start/2` spec reaching this Fake."
   @spec session(pid()) :: keyword()
   def session(fake) do
-    [name: :broker_fake, sandbox: true, url: "https://fake.broker.test/mcp", era: :legacy] ++
-      mcp_opts(fake)
+    [name: :broker_fake, sandbox: true, url: @url, era: :legacy] ++ mcp_opts(fake)
   end
 
-  @doc "The `:mcp` option `Raxol.Broker.MCP.Client` needs to reach this Fake."
+  @doc """
+  The `:mcp` option `Raxol.Broker.MCP.Client` needs to reach this Fake. Not
+  isolated on its own: a client given only this still reads the stored
+  credential and refreshes against Robinhood. Use `client_opts/2`.
+  """
   @spec mcp_opts(pid()) :: keyword()
   def mcp_opts(fake) do
     [
@@ -209,15 +226,47 @@ defmodule Raxol.Broker.MCP.Fake do
     ]
   end
 
+  @doc """
+  Complete `Raxol.Broker.MCP.Client.start_link/1` options for a session to
+  this Fake that touches nothing real. The credential is synthetic, with no
+  refresh token and no expiry: no refresh is ever scheduled, and a 401 locks
+  the session out (`{:error, :unauthorized}`) instead of refreshing. The token
+  endpoint refuses, and the stored credential is never read. `overrides` are
+  merged last.
+  """
+  @spec client_opts(pid(), keyword()) :: keyword()
+  def client_opts(fake, overrides \\ []) do
+    Keyword.merge(
+      [
+        credential: %Credential{
+          provider: :robinhood,
+          issuer: @url,
+          client_id: "fake-client",
+          access_token: "fake-access-token",
+          refresh_token: nil,
+          expires_at: nil
+        },
+        auth: [http_fn: fn _url, _body, _opts -> {:error, :fake_has_no_token_endpoint} end],
+        url: @url,
+        mcp: mcp_opts(fake)
+      ],
+      overrides
+    )
+  end
+
   # -- the wire ---------------------------------------------------------------
 
+  # Recorded on arrival, so an exchange that never answers (a `:hang` hook, a
+  # `{:slow, ms}` fault, a task the transport killed) is still counted.
   defp exchange(fake, vetted, request, opts) do
     {method, tool} = describe(request)
+    ref = make_ref()
 
     {fault, seam} =
       Agent.get_and_update(fake, fn state ->
         {fault, faults} = take_fault(state.faults, method, tool)
-        {{fault, state.seam}, %{state | faults: faults}}
+        arrived = [{ref, method, tool, :pending} | state.requests]
+        {{fault, state.seam}, %{state | faults: faults, requests: arrived}}
       end)
 
     response = respond_with(fault, fn -> seam.(vetted, request, opts) end)
@@ -228,7 +277,16 @@ defmodule Raxol.Broker.MCP.Fake do
         _no_response -> nil
       end
 
-    Agent.update(fake, &%{&1 | requests: [{method, tool, status} | &1.requests]})
+    Agent.update(fake, fn state ->
+      requests =
+        Enum.map(state.requests, fn
+          {^ref, method, tool, :pending} -> {ref, method, tool, status}
+          other -> other
+        end)
+
+      %{state | requests: requests}
+    end)
+
     response
   end
 
@@ -261,10 +319,9 @@ defmodule Raxol.Broker.MCP.Fake do
   defp matches?(match, method, tool), do: match == tool or match == method
 
   defp respond_with(nil, answer), do: answer.()
-  defp respond_with({:http, status}, _answer), do: http_error(status, [])
 
-  defp respond_with({:http, status, retry_after}, _answer),
-    do: http_error(status, [{"retry-after", Integer.to_string(retry_after)}])
+  defp respond_with({:http, status}, _answer),
+    do: {:ok, %{status: status, headers: [{"content-type", "text/plain"}], body: "fake fault"}}
 
   defp respond_with(:malformed, _answer),
     do:
@@ -280,12 +337,7 @@ defmodule Raxol.Broker.MCP.Fake do
     answer.()
   end
 
-  defp respond_with(:closed, _answer), do: {:error, :closed}
-
-  defp http_error(status, headers),
-    do:
-      {:ok,
-       %{status: status, headers: [{"content-type", "text/plain"} | headers], body: "fake fault"}}
+  defp respond_with(:closed, _answer), do: {:error, {:transport, :closed}}
 
   # -- tools/call -------------------------------------------------------------
 
@@ -386,7 +438,10 @@ defmodule Raxol.Broker.MCP.Fake do
     end
   end
 
-  defp tool(_name, _args, state), do: ok(%{"ok" => true}, state)
+  # Every served tool has a clause above. One added to the capture without an
+  # answer here fails the call loudly rather than answering a made-up shape.
+  defp tool(name, _args, state),
+    do: {{:error, {-32_603, "the Fake has no answer for #{name}"}}, state}
 
   defp advance(%{state: "cancelled"} = order, _states), do: order
 
@@ -477,9 +532,6 @@ defmodule Raxol.Broker.MCP.Fake do
       )
 
   defp valid_fault?({:http, status}) when status in 400..599, do: true
-
-  defp valid_fault?({:http, status, after_s})
-       when status in 400..599 and is_integer(after_s) and after_s >= 0, do: true
 
   defp valid_fault?({:slow, ms}) when is_integer(ms) and ms >= 0, do: true
   defp valid_fault?(fault), do: fault in [:malformed, :closed]

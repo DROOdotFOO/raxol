@@ -604,7 +604,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
     test "a 429 on place is :unknown, stays counted, and is never re-sent", ctx do
       executor = start_executor!(ctx)
-      Fake.inject(ctx.server, [{"place_equity_order", {:http, 429, 1}}])
+      Fake.inject(ctx.server, [{"place_equity_order", {:http, 429}}])
 
       intent = limit("throttled")
       assert {:ok, %{group_id: gid, status: :unknown}} = Executor.run(executor, intent, context())

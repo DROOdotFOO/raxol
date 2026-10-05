@@ -89,7 +89,7 @@ defmodule Raxol.Broker.MCP.FakeTest do
   end
 
   test "an HTTP fault is consumed in order and never reaches the scenario" do
-    fake = Fake.start(faults: [{"place_equity_order", {:http, 429, 2}}])
+    fake = Fake.start(faults: [{"place_equity_order", {:http, 429}}])
     port = port!(fake)
 
     assert {:error, _reason} = place(port, "AAPL", "r-5")
@@ -111,6 +111,36 @@ defmodule Raxol.Broker.MCP.FakeTest do
     assert {false, %{"accounts" => [_]}} = body!(Port.call(port, "get_accounts", %{}, 5_000))
   end
 
+  test "an exchange is recorded when it arrives, so one that never answers is seen" do
+    fake = Fake.start()
+    Fake.on_call(fake, "get_accounts", fn _args -> :hang end)
+    port = port!(fake, call_timeout: 200)
+
+    assert {:error, _reason} = Port.call(port, "get_accounts", %{}, 5_000)
+    assert {"tools/call", "get_accounts", :pending} in Fake.requests(fake)
+    assert Fake.exchanges(fake) == length(Fake.requests(fake))
+  end
+
+  test "a closed connection reports the real transport's error shape" do
+    fake = Fake.start(faults: [{"get_accounts", :closed}])
+    port = port!(fake)
+
+    assert Port.call(port, "get_accounts", %{}, 5_000) == {:error, {:transport, :closed}}
+    assert {"tools/call", "get_accounts", nil} in Fake.requests(fake)
+    assert Fake.calls(fake) == []
+  end
+
+  test "client_opts sessions never refresh: a 401 locks out" do
+    fake = Fake.start(faults: [{"get_accounts", {:http, 401}}])
+    client = start_supervised!({Raxol.Broker.MCP.Client, Fake.client_opts(fake)})
+
+    assert Raxol.Broker.MCP.Client.call(client, "get_accounts", %{}) == {:error, :unauthorized}
+    assert Raxol.Broker.MCP.Client.call(client, "get_accounts", %{}) == {:error, :unauthorized}
+
+    assert [{"tools/call", "get_accounts", 401}] =
+             for({"tools/call", _, _} = r <- Fake.requests(fake), do: r)
+  end
+
   test "a scenario with an unknown key or a bad fault is refused" do
     assert_raise ArgumentError, ~r/unknown Fake scenario keys/, fn ->
       Fake.scenario(quote: %{})
@@ -118,6 +148,11 @@ defmodule Raxol.Broker.MCP.FakeTest do
 
     assert_raise ArgumentError, ~r/unknown Fake fault/, fn ->
       Fake.scenario(faults: [{:any, {:http, 200}}])
+    end
+
+    # The count is the entry's third element, never the fault's.
+    assert_raise ArgumentError, ~r/unknown Fake fault/, fn ->
+      Fake.scenario(faults: [{"get_accounts", {:http, 429, 2}}])
     end
   end
 end

@@ -126,6 +126,13 @@ defmodule Raxol.MCP.CircuitBreaker do
     end
   end
 
+  @doc """
+  The failure count that opens a circuit: `opts[:failure_threshold]`, then
+  app config, then the default (5). What `record_failure/3` applies.
+  """
+  @spec failure_threshold(keyword()) :: pos_integer()
+  def failure_threshold(opts \\ []), do: get_opt(opts, :failure_threshold)
+
   defp claim_recovery_probe(table, key, failures, opened_at, opts) do
     replaced =
       :ets.select_replace(table, [

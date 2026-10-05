@@ -413,13 +413,18 @@ children = [
 ]
 
 Raxol.Broker.MCP.Fake.calls(fake)     # tools/call that reached it, with arguments
-Raxol.Broker.MCP.Fake.requests(fake)  # every exchange with its HTTP status
+Raxol.Broker.MCP.Fake.requests(fake)  # every exchange, :pending until it answers
 Raxol.Broker.MCP.Fake.orders(fake)
+
+{:ok, session} = Raxol.Broker.MCP.Client.start_link(Raxol.Broker.MCP.Fake.client_opts(fake))
 ```
 
-The read-only session takes it as `mcp: Raxol.Broker.MCP.Fake.mcp_opts(fake)`.
-That session retries a `429`, `502`, `503` or `504` with doubling backoff
-(`:backoff` option); the executor's order port never retries.
+`client_opts/2` gives the read-only session a synthetic credential that can
+never refresh, so a dry run never reads your stored credential or reaches
+Robinhood's token endpoint (`mcp_opts/1` alone does not isolate it). That
+session retries a `429`, `502`, `503` or `504` with jittered doubling backoff
+(`:backoff` option), within the caller's timeout and never far enough to open
+its circuit breaker; the executor's order port never retries.
 
 ## Robinhood sign-in
 
