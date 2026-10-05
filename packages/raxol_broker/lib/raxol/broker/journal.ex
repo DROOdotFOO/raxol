@@ -66,8 +66,9 @@ defmodule Raxol.Broker.Journal do
   records, so the journal never answers `{:error, _}` for it: it kills the
   Writer, waits for it to die, and stops with `{:writer_stalled, ms}`. Every
   caller waiting on the journal exits, and the Executor, which monitors the
-  journal, stops too. Nothing lands after the kill, so on restart the disk is
-  the truth: a `placing` that reached disk is closed as
+  journal, stops too. The kill does not guarantee nothing lands: a dirty IO
+  NIF already running may still complete the write after it. Recovery reads
+  the disk, not the journal's memory, so on restart the disk is the truth: a `placing` that reached disk is closed as
   `crash_outcome_unknown` and keeps counting, and one that did not leaves
   its group closed as `crash_before_verdict`.
 
@@ -182,7 +183,7 @@ defmodule Raxol.Broker.Journal do
   # -- Lifecycle ----------------------------------------------------------------
 
   @doc """
-  Start the journal. Options: `:name` (default `#{inspect(__MODULE__)}`, also
+  Start the journal. Options: `:name` (default `#{inspect(__MODULE__, structs: false)}`, also
   the ETS table name), `:path`, `:clock`, a zero-arity function returning
   the UTC `DateTime` stamped on records (default `DateTime.utc_now/0`), and
   `:write_deadline`, the milliseconds each Writer call may take before the
@@ -518,10 +519,19 @@ defmodule Raxol.Broker.Journal do
   # Inspect implementation must not run here.
   def handle_info(message, state) do
     Logger.warning(
-      "#{inspect(__MODULE__)} ignored an unexpected message: " <>
+      "#{inspect(__MODULE__, structs: false)} ignored an unexpected message: " <>
         inspect(message, structs: false)
     )
 
+    {:noreply, state}
+  end
+
+  # The journal takes no casts. Overriding the `use GenServer` default keeps
+  # it from raising, which would make the crash report inspect the cast term
+  # with structs on inside this process.
+  @impl GenServer
+  def handle_cast(_message, state) do
+    Logger.warning("#{inspect(__MODULE__, structs: false)} ignored an unexpected cast")
     {:noreply, state}
   end
 

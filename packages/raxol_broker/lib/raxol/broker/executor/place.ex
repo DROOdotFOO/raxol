@@ -130,15 +130,23 @@ defmodule Raxol.Broker.Executor.Place do
 
   def classify({:error, reason}, tool) do
     if not_sent?(reason),
-      do: {:failed, %{"tool" => tool, "not_sent" => true, "error" => inspect(reason)}},
-      else: {:unknown, %{"tool" => tool, "error" => inspect(reason)}}
+      do: {:failed, %{"tool" => tool, "not_sent" => true, "error" => text(reason)}},
+      else: {:unknown, %{"tool" => tool, "error" => text(reason)}}
   end
 
-  def classify(other, tool), do: {:unknown, %{"tool" => tool, "error" => inspect(other)}}
+  def classify(other, tool), do: {:unknown, %{"tool" => tool, "error" => text(other)}}
+
+  # The reason can hold any term the client or the network produced; a
+  # struct's Inspect implementation must not run in the executor.
+  defp text(term), do: inspect(term, structs: false)
 
   # Refusals `Raxol.MCP.Client` and its HTTP transport return before a
   # request is written: the client not ready or never connected, a full
   # queue, the spend gate, the breaker, the target policy, a bad spec.
+  # `{:noproc, _}`: the client was already gone when the call was made
+  # (`GenServer.call/3` exits `{:noproc, {GenServer, :call, _}}`), so no
+  # request was written.
+  defp not_sent?({:port_down, {:noproc, _call}}), do: true
   defp not_sent?({:not_ready, _status}), do: true
   defp not_sent?({:connect_failed, _reason}), do: true
   defp not_sent?({:blocked, _reason}), do: true

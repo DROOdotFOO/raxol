@@ -1,6 +1,7 @@
 defmodule Raxol.Broker.PlainTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.Broker.Journal.Codec
   alias Raxol.Broker.Plain
   alias Raxol.Broker.Test.Hostile
 
@@ -20,6 +21,16 @@ defmodule Raxol.Broker.PlainTest do
 
       assert {:ok, ^value} = Plain.normalize(value)
       assert :ok = Plain.check(value)
+    end
+
+    test "decimals at the size bounds, which the journal Codec can encode" do
+      max_coef = Integer.pow(10, 40) - 1
+
+      for exp <- [-40, 0, 40], sign <- [1, -1] do
+        value = %Decimal{sign: sign, coef: max_coef, exp: exp}
+        assert {:ok, ^value} = Plain.normalize(value)
+        assert Codec.term(value) == Decimal.to_string(value)
+      end
     end
   end
 
@@ -50,6 +61,13 @@ defmodule Raxol.Broker.PlainTest do
       assert {:error, {:not_plain, []}} = Plain.check(%Decimal{sign: 0, coef: 1, exp: 0})
       assert {:error, {:not_plain, []}} = Plain.check(Decimal.new("Infinity"))
       refute_hostile_ran()
+    end
+
+    test "decimals past the size bounds" do
+      over_coef = %Decimal{sign: 1, coef: Integer.pow(10, 40), exp: 0}
+      assert {:error, {:not_plain, []}} = Plain.check(over_coef)
+      assert {:error, {:not_plain, [:q]}} = Plain.check(%{q: %Decimal{sign: 1, coef: 1, exp: 41}})
+      assert {:error, {:not_plain, [0]}} = Plain.check([%Decimal{sign: -1, coef: 1, exp: -41}])
     end
 
     test "a forged decimal loses extra fields when rebuilt" do

@@ -799,13 +799,18 @@ defmodule Raxol.Broker.ExecutorTest do
                {:error, {:invalid_clock, clock}}
     end
 
-    test "child_spec/1 waits out a review and a place call on shutdown" do
-      assert %{shutdown: 65_000, id: Executor} = Executor.child_spec([])
+    test "child_spec/1 waits out a place call on shutdown; :shutdown overrides" do
+      assert %{shutdown: 35_000, id: Executor} = Executor.child_spec([])
 
-      assert %{shutdown: 8_000} =
+      assert %{shutdown: 7_000} =
                Executor.child_spec(review_timeout: 1_000, place_timeout: 2_000)
 
-      assert %{shutdown: 65_000} = Executor.child_spec(review_timeout: :bogus)
+      assert %{shutdown: 35_000} = Executor.child_spec(place_timeout: :bogus)
+      assert %{shutdown: 120_000} = Executor.child_spec(place_timeout: 2_000, shutdown: 120_000)
+
+      for bad <- [0, -1, :infinity, 1.5, "60000"] do
+        assert_raise ArgumentError, fn -> Executor.child_spec(shutdown: bad) end
+      end
     end
 
     test "a session that reaches Robinhood, or is not marked sandbox, is refused", ctx do
@@ -998,6 +1003,143 @@ defmodule Raxol.Broker.ExecutorTest do
                      5_000
 
       assert OrderServer.calls(ctx.server) == []
+    end
+  end
+
+  describe "round 5" do
+    test "a hostile message is ignored without running its protocols", ctx do
+      executor = start_executor!(ctx)
+      GenServer.cast(executor, Hostile.new())
+      GenServer.cast(executor, {:unexpected, Hostile.new()})
+      before = records(ctx.path)
+
+      send(executor, Hostile.new())
+      send(executor, {:unexpected, Hostile.new()})
+      send(executor, {Hostile.new(), :tag})
+      send(executor, [Hostile.new()])
+      _ = :sys.get_state(executor)
+
+      refute_received {:hostile, _callback}
+      assert Process.alive?(executor)
+      assert records(ctx.path) == before
+      assert OrderServer.calls(ctx.server) == []
+    end
+
+    test "a port client stopped with a struct reason runs no protocol and reconnects", ctx do
+      executor = start_executor!(ctx, reconnect_ms: 10)
+      %{port: {PortMCP, %{pid: client}}} = :sys.get_state(executor)
+
+      stop_and_wait(client, {:shutdown, Hostile.new()})
+      _ = :sys.get_state(executor)
+
+      refute_received {:hostile, _callback}
+      assert :ok = Executor.await_port(executor, 5_000)
+      assert %{port: {PortMCP, %{pid: new_client}}} = :sys.get_state(executor)
+      assert new_client != client
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("struct-exit"), context())
+    end
+
+    test "a clock DateTime in another calendar is a context error; nothing opens", ctx do
+      {:ok, clocks} = Agent.start_link(fn -> fn -> @t0 end end)
+      executor = start_executor!(ctx, clock: fn -> Agent.get(clocks, & &1).() end)
+
+      bad = [
+        %{@t0 | calendar: __MODULE__.NotACalendar},
+        %{@t0 | utc_offset: 3_600},
+        %{@t0 | month: 13},
+        %{@t0 | microsecond: {0, 9}}
+      ]
+
+      for now <- bad do
+        Agent.update(clocks, fn _ -> fn -> now end end)
+
+        assert {:error, {:context, {:invalid_clock, _}}} =
+                 Executor.run(executor, limit("odd-calendar"), context())
+      end
+
+      assert Process.alive?(executor)
+      assert groups_for(ctx.path, "odd-calendar") == []
+      assert OrderServer.calls(ctx.server) == []
+    end
+
+    test "a stale :drain during a review is ignored; the queued run completes", ctx do
+      executor = start_executor!(ctx)
+      test_pid = self()
+
+      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+        send(test_pid, {:reviewing, self()})
+
+        receive do
+          :go -> :answer
+        end
+      end)
+
+      held = Task.async(fn -> Executor.run(executor, limit("stale-held"), context()) end)
+      assert_receive {:reviewing, hook}, 5_000
+      OrderServer.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
+
+      # Suspended, the executor takes the queued call and the stale :drain
+      # in this order once resumed, while the held review keeps it busy.
+      :ok = :sys.suspend(executor)
+      ref = Process.monitor(executor)
+      send(executor, {:"$gen_call", {self(), ref}, {:run, limit("stale-queued"), context()}})
+      send(executor, :drain)
+      :ok = :sys.resume(executor)
+
+      assert %{busy: %{}, queue: queue} = :sys.get_state(executor)
+      assert :queue.len(queue) == 1
+      assert Process.alive?(executor)
+
+      send(hook, :go)
+      assert {:ok, %{status: :placed}} = Task.await(held)
+      assert_receive {^ref, {:ok, %{status: :placed}}}, 5_000
+      refute_received {:DOWN, ^ref, :process, _, _}
+
+      assert OrderServer.calls(ctx.server, "place_") == [
+               "place_equity_order",
+               "place_equity_order"
+             ]
+    end
+
+    test "a port gone before the place call is :failed, not_sent; a re-run places", ctx do
+      executor = start_executor!(ctx, reconnect_ms: 10)
+      %{port: {PortMCP, %{pid: client}}} = :sys.get_state(executor)
+      test_pid = self()
+
+      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+        send(test_pid, {:reviewing, self()})
+
+        receive do
+          :go -> :answer
+        end
+      end)
+
+      intent = limit("noproc")
+      run = Task.async(fn -> Executor.run(executor, intent, context()) end)
+      assert_receive {:reviewing, hook}, 5_000
+
+      # The review result reaches the executor's mailbox while it is
+      # suspended; the client then dies, so its EXIT queues behind the
+      # result and the place call meets a dead pid.
+      %{busy: %{pid: review}} = :sys.get_state(executor)
+      :ok = :sys.suspend(executor)
+      review_ref = Process.monitor(review)
+      send(hook, :go)
+      assert_receive {:DOWN, ^review_ref, :process, ^review, _}, 5_000
+      client_ref = Process.monitor(client)
+      Process.exit(client, :kill)
+      assert_receive {:DOWN, ^client_ref, :process, ^client, _}, 5_000
+      :ok = :sys.resume(executor)
+
+      assert {:ok, %{status: :failed, response: %{"not_sent" => true}, journaled: true}} =
+               Task.await(run)
+
+      assert OrderServer.calls(ctx.server, "place_") == []
+
+      OrderServer.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
+      assert :ok = Executor.await_port(executor, 5_000)
+      assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
+      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
     end
   end
 end

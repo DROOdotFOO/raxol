@@ -548,6 +548,24 @@ defmodule Raxol.Broker.JournalTest do
       assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
     end
 
+    test "refuses an over-large decimal cleanly and stays alive", %{opts: opts} do
+      name = opts[:name]
+      journal = start!(opts)
+      intent = limit("2")
+      huge = %Decimal{sign: 1, coef: Integer.pow(10, 40), exp: 0}
+
+      assert {:error, {:invalid_context, {:not_plain, [:quotes, "AAPL"]}}} =
+               Journal.open_group(intent, context(quotes: %{"AAPL" => huge}), name)
+
+      assert {:error, {:invalid_intent, {:not_plain, [:qty]}}} =
+               Journal.open_group(%{intent | qty: %{huge | coef: 1, exp: 41}}, context(), name)
+
+      assert Process.alive?(journal)
+      assert Journal.open_groups(name) == {:ok, []}
+      assert {:ok, id} = Journal.open_group(intent, context(), name)
+      assert Journal.open_groups(name) == {:ok, [id]}
+    end
+
     test "a float in an order response is recorded as a string and the order counts",
          %{opts: opts, path: path} do
       name = opts[:name]

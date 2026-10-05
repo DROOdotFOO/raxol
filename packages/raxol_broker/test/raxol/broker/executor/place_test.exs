@@ -15,7 +15,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.{Intent, Journal, PolicyFile}
   alias Raxol.Broker.Policy.Context
-  alias Raxol.Broker.Test.{ExecutorIdentity, OrderServer}
+  alias Raxol.Broker.Test.{ExecutorIdentity, Hostile, OrderServer}
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -212,13 +212,49 @@ defmodule Raxol.Broker.Executor.PlaceTest do
                ctx.port |> Port.call(@tool, %{}, 1) |> Place.classify(@tool)
     end
 
-    test "a stopped port is unknown", ctx do
+    test "a stopped port is failed and not_sent: the call never reached a process", ctx do
       :ok = Port.stop(ctx.port)
 
-      assert {:unknown, %{"error" => error}} =
+      assert {:failed, %{"not_sent" => true, "error" => error}} =
                ctx.port |> Port.call(@tool, %{}, 5_000) |> Place.classify(@tool)
 
-      assert error =~ "port_down"
+      assert error =~ "noproc"
+      assert OrderServer.calls(ctx.server, "place_") == []
+    end
+
+    test "a port that dies during the call is unknown", ctx do
+      Process.flag(:trap_exit, true)
+      test_pid = self()
+
+      OrderServer.on_call(ctx.server, @tool, fn _ ->
+        send(test_pid, :in_call)
+        :hang
+      end)
+
+      call = Task.async(fn -> Port.call(ctx.port, @tool, %{}, 5_000) end)
+      assert_receive :in_call, 5_000
+      {PortMCP, %PortMCP{pid: client}} = ctx.port
+      Process.exit(client, :kill)
+
+      assert {:unknown, %{"error" => error} = result} =
+               call |> Task.await() |> Place.classify(@tool)
+
+      assert error =~ "port_down" and error =~ "killed"
+      refute Map.has_key?(result, "not_sent")
+    end
+
+    test "a struct in an error reason is never inspected through its protocol" do
+      for reason <- [
+            {:port_down, Hostile.new()},
+            Hostile.new(),
+            {:port_down, {:noproc, Hostile.new()}}
+          ] do
+        assert {_status, %{"error" => error}} = Place.classify({:error, reason}, @tool)
+        assert error =~ "Raxol.Broker.Test.Hostile"
+      end
+
+      assert {:unknown, _} = Place.classify(Hostile.new(), @tool)
+      refute_received {:hostile, _callback}
     end
 
     test "a refusal the client makes before sending is failed and not_sent", ctx do

@@ -28,6 +28,11 @@ defmodule Raxol.Broker.Executor.StructureTest do
       can build a raw `GenServer.call(client, {:call_tool, ...})`. Atoms
       spelling an order tool (`place_..._order` and the like) appear only
       in `Place`.
+    * The executor and journal processes never run a protocol on a term
+      another process chose: in `Raxol.Broker.Executor`, every
+      `Raxol.Broker.Executor.*` module and `Raxol.Broker.Journal`, a call
+      or capture of `Kernel.inspect/1`, or an `inspect/2` whose options are
+      not a literal list holding `structs: false`, fails the build.
     * The string scan over the source (order-writing tool names outside
       `executor/place.ex`) is best-effort: a name assembled at runtime from
       fragments passes it. The guarantees are the call-graph rules above and
@@ -166,13 +171,19 @@ defmodule Raxol.Broker.Executor.StructureTest do
       :beam_lib.chunks(beam, [:debug_info])
 
     {:ok, forms} = backend.debug_info(:erlang_v1, module, data, [])
-    acc = walk(forms, %{refs: [], dynamic: [], atoms: []})
+    acc = walk(forms, %{refs: [], dynamic: [], atoms: [], inspects: []})
+
+    # `__struct__/1` is compiler-generated and runs in whoever builds the
+    # struct; its `inspect` of the struct's own key names is not ours.
+    own = Enum.reject(forms, &match?({:function, _, :__struct__, 1, _}, &1))
+    inspects = walk(own, %{refs: [], dynamic: [], atoms: [], inspects: []}).inspects
 
     %{
       module: module,
       refs: Enum.uniq(acc.refs),
       dynamic: Enum.uniq(acc.dynamic ++ banned_refs(acc.refs)),
-      atoms: Enum.uniq(acc.atoms)
+      atoms: Enum.uniq(acc.atoms),
+      inspects: Enum.uniq(inspects)
     }
   end
 
@@ -187,6 +198,7 @@ defmodule Raxol.Broker.Executor.StructureTest do
     |> add(:refs, {m, f, length(args)})
     |> mfa_taker(m, f, args)
     |> no_parens(m, f, args)
+    |> inspect_call(m, f, args)
     |> then(&walk(Tuple.to_list(node), &1))
   end
 
@@ -200,8 +212,10 @@ defmodule Raxol.Broker.Executor.StructureTest do
   defp walk({:call, _, {:atom, _, :apply}, args} = node, acc),
     do: walk(Tuple.to_list(node), add(acc, :dynamic, {:local_apply, length(args)}))
 
-  defp walk({:fun, _, {:function, {:atom, _, m}, {:atom, _, f}, {:integer, _, a}}}, acc),
-    do: acc |> add(:refs, {m, f, a}) |> add(:atoms, m) |> add(:atoms, f)
+  defp walk({:fun, _, {:function, {:atom, _, m}, {:atom, _, f}, {:integer, _, a}}}, acc) do
+    acc = acc |> add(:refs, {m, f, a}) |> add(:atoms, m) |> add(:atoms, f)
+    if {m, f} == {Kernel, :inspect}, do: add(acc, :inspects, {:capture, a}), else: acc
+  end
 
   defp walk({:fun, _, {:function, m, f, a}} = node, acc)
        when is_tuple(m) or is_tuple(f) or is_tuple(a),
@@ -249,6 +263,21 @@ defmodule Raxol.Broker.Executor.StructureTest do
 
   defp no_parens(acc, _m, _f, _args), do: acc
 
+  # `inspect/2` is safe only with a literal option list holding
+  # `structs: false`; anything else may dispatch Inspect on a struct.
+  defp inspect_call(acc, Kernel, :inspect, [_term, opts]) do
+    if structs_false?(opts), do: acc, else: add(acc, :inspects, {:call, 2})
+  end
+
+  defp inspect_call(acc, Kernel, :inspect, args), do: add(acc, :inspects, {:call, length(args)})
+  defp inspect_call(acc, _m, _f, _args), do: acc
+
+  defp structs_false?({:cons, _, {:tuple, _, [{:atom, _, :structs}, {:atom, _, false}]}, _tail}),
+    do: true
+
+  defp structs_false?({:cons, _, _head, tail}), do: structs_false?(tail)
+  defp structs_false?(_other), do: false
+
   defp add(acc, key, value), do: Map.update!(acc, key, &[value | &1])
 
   defp kind({:atom, _, atom}), do: atom
@@ -292,6 +321,18 @@ defmodule Raxol.Broker.Executor.StructureTest do
         atom <- atoms,
         Regex.match?(@order_atom, Atom.to_string(atom)),
         do: {module, atom}
+  end
+
+  defp inspect_scope?(module) do
+    module == Journal or module == @executor or
+      String.starts_with?(Atom.to_string(module), Atom.to_string(@executor) <> ".")
+  end
+
+  defp inspect_violations(facts) do
+    for %{module: module, inspects: inspects} <- facts,
+        inspect_scope?(module),
+        finding <- inspects,
+        do: {module, finding}
   end
 
   # -- The app ----------------------------------------------------------------
@@ -340,6 +381,11 @@ defmodule Raxol.Broker.Executor.StructureTest do
 
   test "no atom spells an order tool outside Place", %{facts: facts} do
     assert order_atom_violations(facts) == []
+  end
+
+  test "the executor and journal never inspect a term with structs enabled", %{facts: facts} do
+    assert Enum.any?(facts, &(&1.module == Place))
+    assert inspect_violations(facts) == []
   end
 
   # -- The rules catch their cases -------------------------------------------
@@ -434,6 +480,30 @@ defmodule Raxol.Broker.Executor.StructureTest do
     assert dynamic_violations(facts) == []
     assert call_tool_atom_violations(facts) == []
     assert order_atom_violations(facts) == []
+    assert inspect_violations(facts) == []
+  end
+
+  test "an inspect that could run a struct's Inspect is caught" do
+    for body <- [
+          "def f(x), do: inspect(x)",
+          ~S'def f(x), do: "got #{inspect(x)}"',
+          "def f(x), do: Kernel.inspect(x)",
+          "def f(x), do: inspect(x, [])",
+          "def f(x), do: inspect(x, pretty: true)",
+          "def f(x), do: inspect(x, structs: true)",
+          "def f(x, o), do: inspect(x, o)",
+          "def f, do: &inspect/1",
+          "def f, do: &inspect/2"
+        ] do
+      assert [_ | _] = inspect_violations([probe(body)]), body
+    end
+
+    for body <- [
+          "def f(x), do: inspect(x, structs: false)",
+          "def f(x), do: inspect(x, limit: 5, structs: false)"
+        ] do
+      assert inspect_violations([probe(body)]) == [], body
+    end
   end
 
   # -- Best-effort source scan ------------------------------------------------

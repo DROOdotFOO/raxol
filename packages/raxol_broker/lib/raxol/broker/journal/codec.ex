@@ -308,7 +308,7 @@ defmodule Raxol.Broker.Journal.Codec do
   def term(binary) when is_binary(binary),
     do: if(String.valid?(binary), do: binary, else: inspect(binary))
 
-  def term(other), do: inspect(other)
+  def term(other), do: inspect(other, structs: false)
 
   defp term_key(key) when is_binary(key), do: key
   defp term_key(key) when is_atom(key), do: Atom.to_string(key)

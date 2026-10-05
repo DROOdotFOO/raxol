@@ -162,20 +162,27 @@ defmodule Raxol.Broker.Executor do
     * `:mode` - `:dry_run` (default) or `:armed`.
     * `:clock` - zero-arity function returning the UTC `DateTime` used for
       the counters (default `DateTime.utc_now/0`). It runs in a short-lived
-      task, never in this process, with a 5 s budget; anything but a UTC
-      `DateTime` fails the call with `{:error, {:context, reason}}` and
-      nothing is opened or sent.
+      task, never in this process, with a 5 s budget. Its result is rebuilt
+      with `Raxol.Broker.Plain.normalize/1` before any `DateTime` function
+      sees it; anything but a UTC `DateTime` in the ISO calendar fails the
+      call with `{:error, {:context, reason}}` and nothing is opened or sent.
     * `:review_timeout`, `:place_timeout` - per tool call, an integer of
       milliseconds in 1..4_294_000_000 (default 30 s; the cap leaves
       headroom under the VM's timer limit); anything else is
       `{:invalid_timeout, key, value}`.
     * `:reconnect_ms` - the first port reconnect delay, same range
       (default 1 s, doubling to 60 s).
+    * `:shutdown` - the child spec's shutdown bound in milliseconds, a
+      positive integer (default `place_timeout + 5_000`).
     * `:name`.
 
-  `child_spec/1` sets `shutdown: review_timeout + place_timeout + 5_000`,
-  so a supervisor stopping the executor mid-place waits for the order
-  response instead of killing it into `crash_outcome_unknown`.
+  `child_spec/1` sets `shutdown` from `:shutdown`, else `place_timeout +
+  5_000`: a supervisor stopping the executor during a place waits up to
+  that bound for the order call. A stop is handled between callbacks, so
+  a review in flight is never waited for (its task dies with the
+  executor). A journal write stalled past the bound is killed with the
+  executor; the group is then closed as `crash_outcome_unknown` on
+  restart (counted, never re-placed), and recovery reports it as such.
 
   `today_notional` counts a rolling 24 hours back from the clock's now,
   which counts at least as much as any calendar day would. No caller input
@@ -189,7 +196,7 @@ defmodule Raxol.Broker.Executor do
 
   alias Raxol.Broker.Executor.{Place, Port, Review, ReviewReceipt}
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
-  alias Raxol.Broker.{Intent, Journal, Policy, PolicyFile}
+  alias Raxol.Broker.{Intent, Journal, Plain, Policy, PolicyFile}
   alias Raxol.Broker.Policy.Context
 
   @default_timeout 30_000
@@ -270,27 +277,36 @@ defmodule Raxol.Broker.Executor do
     do: GenServer.call(server, {:await_port, timeout}, :infinity)
 
   @doc """
-  A child spec whose `:shutdown` outlasts one review and one place call
-  (`review_timeout + place_timeout + 5_000`, defaults when unset), so a
-  supervisor stopping the executor mid-place waits for the order response.
+  A child spec whose `:shutdown` covers one place call (`place_timeout +
+  5_000`, or the `:shutdown` option), so a supervisor stopping the executor
+  mid-place waits for the order response. A `:shutdown` that is not a
+  positive integer raises `ArgumentError`.
   """
   @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts) do
-    shutdown = shutdown_timeout(opts, :review_timeout) + shutdown_timeout(opts, :place_timeout)
-
     %{
       id: __MODULE__,
       start: {__MODULE__, :start_link, [opts]},
-      shutdown: shutdown + 5_000
+      shutdown: shutdown(opts)
     }
   end
 
-  defp shutdown_timeout(opts, key) do
-    case Keyword.get(opts, key) do
-      ms when is_integer(ms) and ms > 0 and ms <= @max_timeout -> ms
-      _unset_or_refused -> @default_timeout
+  defp shutdown(opts) do
+    case Keyword.fetch(opts, :shutdown) do
+      {:ok, ms} when is_integer(ms) and ms > 0 ->
+        ms
+
+      {:ok, other} ->
+        raise ArgumentError,
+              "invalid :shutdown #{inspect(other, structs: false)}, expected a positive integer"
+
+      :error ->
+        place_shutdown(Keyword.get(opts, :place_timeout))
     end
   end
+
+  defp place_shutdown(ms) when is_integer(ms) and ms > 0 and ms <= @max_timeout, do: ms + 5_000
+  defp place_shutdown(_unset_or_refused), do: @default_timeout + 5_000
 
   # The receipt key lives in the executor's own process dictionary, so it is
   # nil in every other process. `Raxol.Broker.Executor.Place` verifies
@@ -449,7 +465,9 @@ defmodule Raxol.Broker.Executor do
         Enum.each(ids, &close_group(state, &1, :executor_restarted))
 
       {:error, reason} ->
-        Logger.warning("[Broker.Executor] could not list open groups: #{inspect(reason)}")
+        Logger.warning(
+          "[Broker.Executor] could not list open groups: #{inspect(reason, structs: false)}"
+        )
     end
   end
 
@@ -514,7 +532,7 @@ defmodule Raxol.Broker.Executor do
   # Queued callers get an exit from their call; the linked review task dies
   # with this process; the groups left open are closed by the next executor.
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{journal_ref: ref} = state) do
-    Logger.warning("[Broker.Executor] journal went down: #{inspect(reason)}")
+    Logger.warning("[Broker.Executor] journal went down: #{inspect(reason, structs: false)}")
     {:stop, {:journal_down, reason}, state}
   end
 
@@ -538,7 +556,10 @@ defmodule Raxol.Broker.Executor do
 
   def handle_info(:reconnect, %{port: nil} = state), do: {:noreply, connect(state)}
 
-  def handle_info(:drain, state), do: {:noreply, drain(state)}
+  # A `:drain` left over from an earlier turn can arrive while a review is
+  # in flight; `review_done/2` sends a fresh one when it finishes.
+  def handle_info(:drain, %{busy: nil} = state), do: {:noreply, drain(state)}
+  def handle_info(:drain, state), do: {:noreply, state}
 
   def handle_info({:await_port_timeout, from}, state) do
     case Map.pop(state.port_waiters, from) do
@@ -551,10 +572,25 @@ defmodule Raxol.Broker.Executor do
     end
   end
 
+  # Only the shape is logged: the message is any term, and inspecting a
+  # struct would run its Inspect implementation here.
   def handle_info(message, state) do
-    Logger.debug("[Broker.Executor] unexpected message: #{inspect(message)}")
+    Logger.debug("[Broker.Executor] unexpected message: #{shape(message)}")
     {:noreply, state}
   end
+
+  # Nothing is cast to the executor. The default clause would crash it, and
+  # the crash report would inspect the message in this process.
+  @impl GenServer
+  def handle_cast(message, state) do
+    Logger.debug("[Broker.Executor] unexpected cast: #{shape(message)}")
+    {:noreply, state}
+  end
+
+  defp shape(message) when is_tuple(message) and tuple_size(message) > 0,
+    do: "{#{inspect(elem(message, 0), structs: false)}, ...}"
+
+  defp shape(_message), do: "term"
 
   @impl GenServer
   def terminate(_reason, %{port: nil}), do: :ok
@@ -592,7 +628,8 @@ defmodule Raxol.Broker.Executor do
 
   defp port_failed(state, reason) do
     Logger.warning(
-      "[Broker.Executor] port not ready (#{inspect(reason)}); reconnecting in #{state.backoff} ms"
+      "[Broker.Executor] port not ready (#{inspect(reason, structs: false)}); " <>
+        "reconnecting in #{state.backoff} ms"
     )
 
     Process.send_after(self(), :reconnect, state.backoff)
@@ -895,22 +932,45 @@ defmodule Raxol.Broker.Executor do
   end
 
   # The clock is caller code, so it runs in a task: never in this process,
-  # where it would hold the executor's identity and receipt key.
+  # where it would hold the executor's identity and receipt key. Its result
+  # is rebuilt by pattern matching before any Calendar function sees it.
   defp now(clock) do
     task = Task.async(clock)
 
     case Task.yield(task, @clock_timeout) || Task.shutdown(task, :brutal_kill) do
-      {:ok, %DateTime{time_zone: "Etc/UTC"} = now} -> {:ok, now}
+      {:ok, %DateTime{} = now} -> utc(Plain.normalize(now))
       {:ok, other} -> {:error, {:invalid_clock, other}}
       {:exit, reason} -> {:error, {:clock_crashed, reason}}
       nil -> {:error, :clock_timeout}
     end
   end
 
+  # Plain rebuilds an ISO DateTime with integer fields; the offsets and the
+  # field ranges are checked here so no Calendar.ISO function can raise.
+  defp utc(
+         {:ok,
+          %DateTime{
+            time_zone: "Etc/UTC",
+            utc_offset: 0,
+            std_offset: 0,
+            microsecond: {micro, precision}
+          } = now}
+       )
+       when precision in 0..6 do
+    if Calendar.ISO.valid_date?(now.year, now.month, now.day) and
+         Calendar.ISO.valid_time?(now.hour, now.minute, now.second, {micro, precision}),
+       do: {:ok, now},
+       else: {:error, {:invalid_clock, now}}
+  end
+
+  defp utc({:ok, other}), do: {:error, {:invalid_clock, other}}
+  defp utc({:error, reason}), do: {:error, {:invalid_clock, reason}}
+
   defp close_group(state, group_id, reason) do
     with {:error, error} <- append(state, group_id, {:close, reason}) do
       Logger.warning(
-        "[Broker.Executor] could not close group #{group_id} (#{reason}): #{inspect(error)}"
+        "[Broker.Executor] could not close group #{group_id} (#{reason}): " <>
+          inspect(error, structs: false)
       )
 
       {:error, error}

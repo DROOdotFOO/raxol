@@ -5,7 +5,8 @@ defmodule Raxol.Broker.Plain do
   Plain data is: binaries, atoms (booleans and `nil` included), integers,
   proper lists and tuples of plain data, maps that are not structs whose keys
   and values are plain, `%Decimal{}` with an integer sign of 1 or -1, a
-  non-negative integer coefficient and an integer exponent, and `%DateTime{}`
+  non-negative integer coefficient of at most 40 digits and an integer
+  exponent in -40..40, and `%DateTime{}`
   in the ISO calendar with well-typed fields. Floats, pids, references, ports,
   functions, improper lists, any other struct, and nesting deeper than 32
   levels are refused.
@@ -18,6 +19,12 @@ defmodule Raxol.Broker.Plain do
   """
 
   @max_depth 32
+
+  # Decimal bounds: a coefficient of at most 40 digits and an exponent in
+  # -40..40. `Decimal.to_string/1` raises on very large values, so an unbounded
+  # decimal could crash the journal while it encodes a record.
+  @max_coef 10_000_000_000_000_000_000_000_000_000_000_000_000_000 - 1
+  @max_exp 40
 
   @type path :: [term()]
   @type error :: {:error, {:not_plain, path()}}
@@ -46,7 +53,8 @@ defmodule Raxol.Broker.Plain do
        do: {:ok, term}
 
   defp walk(%{__struct__: Decimal, sign: sign, coef: coef, exp: exp}, _path, _depth)
-       when sign in [1, -1] and is_integer(coef) and coef >= 0 and is_integer(exp),
+       when sign in [1, -1] and is_integer(coef) and coef >= 0 and coef <= @max_coef and
+              is_integer(exp) and exp >= -@max_exp and exp <= @max_exp,
        do: {:ok, %Decimal{sign: sign, coef: coef, exp: exp}}
 
   defp walk(%{__struct__: DateTime} = term, path, _depth), do: datetime(term, path)

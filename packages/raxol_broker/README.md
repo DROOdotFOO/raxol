@@ -116,7 +116,8 @@ invalid policy or a context field of the wrong type denies before any rule
 runs. Untrusted provenance always asks. Cancels are always allowed.
 
 Caller data crosses one boundary, `Raxol.Broker.Plain`: binaries, atoms,
-integers, proper lists and tuples, non-struct maps, decimals and
+integers, proper lists and tuples, non-struct maps, decimals (a
+coefficient of at most 40 digits and an exponent in -40..40) and
 `DateTime`s, checked by pattern matching only, so no caller protocol
 implementation (Enumerable, Inspect, String.Chars) ever runs on it.
 `Intent.normalize/1` and `Policy.Context.normalize/1` rebuild each struct
@@ -180,9 +181,13 @@ review but before the place closes the group as `port_not_ready` without
 writing `placing`, and a re-run of the same intent places once the port is
 back.
 
-`Raxol.Broker.Executor.child_spec/1` sets `shutdown` to the review timeout
-plus the place timeout plus 5 s (65 s with the defaults), so stopping the
-supervisor during an order waits for the order response. The executor
+`Raxol.Broker.Executor.child_spec/1` sets `shutdown` to the place timeout
+plus 5 s (35 s with the defaults), or to the `:shutdown` start option, a
+positive integer. A stop during a place waits up to that bound for the
+order call; a review in flight is not waited for. Journal writes have their own bound, `:write_deadline`, so a
+journal stall that outlasts the shutdown bound ends with the executor
+killed; on restart the group closes as `crash_outcome_unknown`, which keeps
+counting and is never placed again. The executor
 dispatches at most one queued run or approval per callback, so no callback
 runs two place calls and the bound covers the place in progress.
 
@@ -221,7 +226,13 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   budget, outside the executor's process; a clock that is not a zero-arity
   fun is `{:invalid_clock, value}` at start, and one that crashes or
   returns anything but a UTC `DateTime` fails the call with
-  `{:error, {:context, reason}}` and sends nothing. The receipt key enters
+  `{:error, {:context, reason}}` and sends nothing. The clock's result
+  passes `Plain.normalize/1` and must be an ISO-calendar `Etc/UTC`
+  `DateTime`, otherwise the call is
+  `{:error, {:context, {:invalid_clock, _}}}` with no group and no order.
+  Terms from other processes (messages, exit reasons, call arguments) are
+  only ever inspected with `structs: false`, which a structure test
+  enforces for the executor and journal modules. The receipt key enters
   the executor's process dictionary only after its claim succeeds.
 * **Bounded timeouts.** `:review_timeout`, `:place_timeout` and
   `:reconnect_ms` must be integers in 1..4_294_000_000 ms, which leaves
@@ -288,8 +299,9 @@ holding the journal's claim, the executor, so callers go through
 Each Writer call has a deadline, `:write_deadline` (default 60 s). A write
 that misses it may still land, so the journal never reports it as an
 error: it kills the Writer and stops with `{:writer_stalled, ms}`, and the
-executor stops with it. Both restart, and recovery reads what reached
-disk: a `placing` that landed closes as `crash_outcome_unknown` and keeps
+executor stops with it. The kill does not promise that nothing lands, since
+a dirty IO NIF already running can finish the write after it. Both
+restart, and recovery reads what reached disk: a `placing` that landed closes as `crash_outcome_unknown` and keeps
 counting, and one that did not leaves its group closed as
 `crash_before_verdict`. A fsync slower than the deadline costs a restart;
 in exchange a dead disk cannot hang every order and cancel behind it.
