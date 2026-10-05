@@ -195,6 +195,24 @@ defmodule Raxol.Agent.Actions.FsTest do
                Fs.FileStat.run(%{path: "escape_file.txt"}, %{})
     end
 
+    # A link whose target does not exist yet is still a link out of the
+    # sandbox: writing through it would create the target outside. Windows
+    # cannot read such a link's target (it resolves the final path, which
+    # does not exist), so containment must fail closed there rather than
+    # treat the link as a not-yet-created file inside cwd.
+    test "a dangling symlink pointing outside the sandbox is rejected, and nothing is written",
+         %{dir: dir, outside: outside} do
+      target = Path.join(outside, "planted.txt")
+      File.ln_s!(target, Path.join(dir, "dangling.txt"))
+
+      assert {:error, :outside_cwd} = Fs.resolve("dangling.txt")
+
+      assert {:error, :outside_cwd} =
+               Raxol.Agent.Actions.Code.Write.run(%{path: "dangling.txt", content: "x"}, %{})
+
+      refute File.exists?(target)
+    end
+
     # Regression trap: on macOS, `System.tmp_dir!/0`'s result (and plain
     # `/tmp`) sits behind a real symlink to `/private/...`. A prefix
     # check that canonicalizes the candidate but not the sandbox root
