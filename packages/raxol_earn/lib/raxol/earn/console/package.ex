@@ -178,6 +178,7 @@ defmodule Raxol.Earn.Console.Package do
   defp read_dir(dir) do
     if File.dir?(dir) do
       dir
+      |> escape_glob()
       |> Path.join("**/*")
       |> Path.wildcard(match_dot: false)
       |> Enum.filter(&regular_file?/1)
@@ -190,6 +191,14 @@ defmodule Raxol.Earn.Console.Package do
     else
       {:error, {:invalid_package, :dir, {:not_a_directory, dir}}}
     end
+  end
+
+  # The directory is data, not pattern: unescaped, a package in `pkg [1]` read
+  # as empty and one in `pk{a,b}` read its siblings' files. Windows separators
+  # become `/` first, since an escaped `\` stops being a separator.
+  defp escape_glob(path) do
+    path = if match?({:win32, _}, :os.type()), do: String.replace(path, "\\", "/"), else: path
+    String.replace(path, ~r/[\\\[\]{}*?]/, "\\\\\\0")
   end
 
   # A regular file that is NOT a symlink. `File.regular?/1` follows symlinks, so a

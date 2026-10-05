@@ -208,7 +208,7 @@ defmodule Raxol.Agent.Code.Inspection do
     %{
       dir: dir,
       exists: File.dir?(dir),
-      skills: length(Path.wildcard(Path.join(dir, "*/SKILL.md")))
+      skills: length(Raxol.Agent.Glob.under(dir, "*/SKILL.md"))
     }
   end
 

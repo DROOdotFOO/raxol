@@ -195,7 +195,7 @@ defmodule Raxol.Config.Loader do
   defp find_files_in_directory(true, directory) do
     @supported_formats
     |> Enum.flat_map(fn ext ->
-      Path.wildcard(Path.join(directory, "*#{ext}"))
+      Raxol.Utils.Glob.under(directory, "*#{ext}")
     end)
     |> Enum.sort()
   end

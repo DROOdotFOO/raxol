@@ -394,7 +394,7 @@ defmodule Raxol.Core.Telemetry.Invariants do
               "empty scan."
     end
 
-    case lib_path |> Path.join("**/*.ex") |> Path.wildcard() |> Enum.sort() do
+    case lib_path |> escape_glob() |> Path.join("**/*.ex") |> Path.wildcard() |> Enum.sort() do
       [] ->
         raise ArgumentError,
               "Raxol.Core.Telemetry.Invariants.scan_lib!/1: no .ex files under " <>
@@ -403,6 +403,14 @@ defmodule Raxol.Core.Telemetry.Invariants do
       files ->
         files |> Enum.flat_map(&scan_file!/1) |> Enum.uniq() |> Enum.sort()
     end
+  end
+
+  # The directory is data, not pattern: unescaped, a checkout in `src [old]`
+  # scans nothing and one in `bk{a,b}` scans its siblings. Windows separators
+  # become `/` first, since an escaped `\` stops being a separator.
+  defp escape_glob(path) do
+    path = if match?({:win32, _}, :os.type()), do: String.replace(path, "\\", "/"), else: path
+    String.replace(path, ~r/[\\\[\]{}*?]/, "\\\\\\0")
   end
 
   defp scan_file!(path) do
