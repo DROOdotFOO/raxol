@@ -124,13 +124,12 @@ order's `review_*` tool, policy again with the review's warnings, then
 ```elixir
 {:ok, policy} = Raxol.Broker.PolicyFile.load("broker.policy.exs")
 
-{:ok, executor} =
-  Raxol.Broker.Executor.start_link(
-    journal: Raxol.Broker.Journal,
-    session: mcp_client_spec,
-    account_number: "...",
-    policy: policy
-  )
+children = [
+  {Raxol.Broker.Supervisor,
+   executor: [session: mcp_client_spec, account_number: "...", policy: policy]}
+]
+
+executor = Raxol.Broker.Executor
 
 {:ok, intent} =
   Raxol.Broker.Intent.limit(:buy, "AAPL", qty, price,
@@ -147,6 +146,10 @@ case Raxol.Broker.Executor.run(executor, intent, context) do
   {:error, reason} -> {:nothing_sent, reason}
 end
 ```
+
+Under `Raxol.Broker.Supervisor` the executor starts after the journal and
+restarts with it (`:rest_for_one`); the new executor closes any group the
+old one left open, including parked ASKs.
 
 A person answers an ASK later with `approve(executor, token, "name")`,
 `decline(executor, token, "name")` or `close(executor, token, reason)`.

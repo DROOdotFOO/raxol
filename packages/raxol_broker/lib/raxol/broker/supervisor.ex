@@ -17,9 +17,15 @@ defmodule Raxol.Broker.Supervisor do
 
     * `:name` - supervisor name, default `#{inspect(__MODULE__)}`
     * `:journal` - options for `Raxol.Broker.Journal.start_link/1`
+    * `:executor` - options for `Raxol.Broker.Executor.start_link/1`. When
+      given, the executor starts after the journal and restarts with it; its
+      `:journal` defaults to this supervisor's journal and its `:name` to
+      `Raxol.Broker.Executor`. Omit it to run the journal alone.
   """
 
   use Supervisor
+
+  alias Raxol.Broker.{Executor, Journal}
 
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
@@ -28,7 +34,23 @@ defmodule Raxol.Broker.Supervisor do
 
   @impl Supervisor
   def init(opts) do
-    children = [{Raxol.Broker.Journal, Keyword.get(opts, :journal, [])}]
-    Supervisor.init(children, strategy: :rest_for_one)
+    journal_opts = Keyword.get(opts, :journal, [])
+    journal = Keyword.get(journal_opts, :name, Journal)
+
+    executor =
+      case Keyword.fetch(opts, :executor) do
+        {:ok, executor_opts} ->
+          executor_opts =
+            executor_opts
+            |> Keyword.put_new(:journal, journal)
+            |> Keyword.put_new(:name, Executor)
+
+          [{Executor, executor_opts}]
+
+        :error ->
+          []
+      end
+
+    Supervisor.init([{Journal, journal_opts} | executor], strategy: :rest_for_one)
   end
 end
