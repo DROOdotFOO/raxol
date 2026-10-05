@@ -225,6 +225,23 @@ defmodule Raxol.Agent.Actions.WorkspaceTest do
       assert {:error, :outside_cwd} = Glob.call(%{pattern: "../*"})
     end
 
+    # The cwd is a literal directory, not part of the pattern: a project in
+    # `app{a,b} [v2]` globbed nothing (and `{a,b}` reached `appa`/`appb`).
+    test "a project directory whose name has glob characters globs itself", %{tmp: tmp} do
+      project = Path.join(tmp, "app{a,b} [v2]")
+      File.mkdir_p!(project)
+      File.write!(Path.join(project, "own.ex"), "")
+
+      for sibling <- ["appa", "appb"] do
+        File.mkdir_p!(Path.join(tmp, sibling))
+        File.write!(Path.join([tmp, sibling, "other.ex"]), "")
+      end
+
+      System.put_env("RAXOL_CLI_CWD", project)
+
+      assert {:ok, %{matches: ["own.ex"]}} = Glob.call(%{pattern: "*.ex"})
+    end
+
     test "a symlinked directory pointing outside the sandbox does not disclose its filenames",
          %{tmp: tmp} do
       outside =

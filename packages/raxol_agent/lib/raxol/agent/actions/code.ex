@@ -446,8 +446,7 @@ defmodule Raxol.Agent.Actions.Code do
 
         all =
           abs_base
-          |> Path.join(pattern)
-          |> Path.wildcard()
+          |> Raxol.Agent.Glob.under(pattern)
           # Containment is decided on realpath, not on the lexical prefix: a
           # wildcard match reached through a symlink still reads as living
           # under cwd, and disclosing the name is already a disclosure.

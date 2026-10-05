@@ -146,9 +146,13 @@ defmodule Raxol.Agent.Actions.Workspace do
       abs_pattern = Path.expand(pattern, cwd)
 
       if abs_pattern == cwd or String.starts_with?(abs_pattern, cwd <> "/") do
+        # Only the pattern is glob syntax: cwd is escaped, so a project in
+        # `app [v2]` or `bk{a,b}` globs itself, not nothing or its siblings.
+        rel = if abs_pattern == cwd, do: "", else: Path.relative_to(abs_pattern, cwd)
+
         all =
-          abs_pattern
-          |> Path.wildcard()
+          cwd
+          |> Raxol.Agent.Glob.under(rel)
           # Second gate: the pattern itself was lexically inside cwd, but
           # `Path.wildcard/1` follows symlinks while expanding `*`/`**`
           # components -- a symlink anywhere along a matched path can still
