@@ -98,31 +98,37 @@ defmodule Raxol.Core.Runtime.DisabledLogLevelTest do
     table = :"cmd_reg_#{System.unique_integer([:positive])}"
     :ets.new(table, [:set, :public, :named_table, read_concurrency: true])
 
-    {:ok, dispatcher} =
-      Dispatcher.start_link(
-        self(),
-        %{
-          app_module: ProbeApp,
-          model: %{probe: InspectProbe.new(:model)},
-          runtime_pid: self(),
-          width: 40,
-          height: 10,
-          focused: true,
-          # The app's debug mode logs every event it dispatches.
-          debug_mode: true,
-          plugin_manager: nil,
-          command_registry_table: table
-        },
-        name: nil
-      )
+    # Supervised, not linked: ExUnit sends :test_finished before the test
+    # process exits and starts on_exit right away, so a linked server can
+    # die between an on_exit's `Process.alive?` and its `GenServer.stop`.
+    # ExUnit stops supervised children before any on_exit runs.
+    dispatcher =
+      start_supervised!(%{
+        id: Dispatcher,
+        start:
+          {Dispatcher, :start_link,
+           [
+             self(),
+             %{
+               app_module: ProbeApp,
+               model: %{probe: InspectProbe.new(:model)},
+               runtime_pid: self(),
+               width: 40,
+               height: 10,
+               focused: true,
+               # The app's debug mode logs every event it dispatches.
+               debug_mode: true,
+               plugin_manager: nil,
+               command_registry_table: table
+             },
+             [name: nil]
+           ]}
+      })
 
     level = Logger.level()
     Logger.configure(level: :emergency)
 
-    on_exit(fn ->
-      Logger.configure(level: level)
-      if Process.alive?(dispatcher), do: GenServer.stop(dispatcher)
-    end)
+    on_exit(fn -> Logger.configure(level: level) end)
 
     %{dispatcher: dispatcher}
   end
@@ -148,17 +154,16 @@ defmodule Raxol.Core.Runtime.DisabledLogLevelTest do
 
   test "rendering a frame dumps nothing while logging is disabled",
        %{dispatcher: dispatcher} do
-    {:ok, engine} =
-      Engine.start_link(
-        name: :"disabled_log_engine_#{System.unique_integer([:positive])}",
-        app_module: ProbeApp,
-        dispatcher_pid: dispatcher,
-        width: 40,
-        height: 10,
-        environment: :agent
+    engine =
+      start_supervised!(
+        {Engine,
+         name: :"disabled_log_engine_#{System.unique_integer([:positive])}",
+         app_module: ProbeApp,
+         dispatcher_pid: dispatcher,
+         width: 40,
+         height: 10,
+         environment: :agent}
       )
-
-    on_exit(fn -> if Process.alive?(engine), do: GenServer.stop(engine) end)
 
     # The frame the runtime draws after every update, then the one
     # `Raxol.Headless` draws for a screenshot. The engine takes the cast
