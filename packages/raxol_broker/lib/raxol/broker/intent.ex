@@ -30,6 +30,8 @@ defmodule Raxol.Broker.Intent do
     * `:id` -- a caller-chosen identifier (string); random when omitted.
   """
 
+  alias Raxol.Broker.Plain
+
   @kinds [
     :buy_usd,
     :buy_shares,
@@ -144,6 +146,87 @@ defmodule Raxol.Broker.Intent do
   @doc "Cancel an open order by its broker order id."
   @spec cancel(String.t(), keyword()) :: {:ok, t()} | {:error, reason()}
   def cancel(order_id, opts), do: build(:cancel, opts, order_id: order_id)
+
+  @doc """
+  Rebuild `term` as an intent from validated plain fields.
+
+  Accepts any term and never raises or dispatches a protocol on it, so it is
+  safe on caller data in the process that will act on the result. Every field
+  passes `Raxol.Broker.Plain` first, then the same checks the constructors
+  apply. Errors never echo the offending value: `{:not_plain, path}` names
+  where non-plain data sits, `{:invalid, field}` names a field of the wrong
+  shape, `:not_an_intent` means `term` is not an `%Intent{}` at all.
+  """
+  @spec normalize(term()) ::
+          {:ok, t()}
+          | {:error, :not_an_intent | {:invalid, atom()} | {:not_plain, Plain.path()}}
+  def normalize(%{__struct__: __MODULE__} = intent) do
+    with {:ok, fields} <- plain_fields(intent),
+         {:ok, intent} <- rebuild(fields) do
+      {:ok, intent}
+    else
+      {:error, {:invalid, field, _value}} -> {:error, {:invalid, field}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def normalize(_term), do: {:error, :not_an_intent}
+
+  defp rebuild(fields) do
+    with {:ok, common} <- common_fields(fields),
+         {:ok, order_fields} <- validate_fields(present_order_fields(fields)) do
+      {:ok, struct!(__MODULE__, common ++ order_fields)}
+    end
+  end
+
+  defp common_fields(%{kind: kind, provenance: provenance, strategy: strategy, id: id} = fields) do
+    with :ok <- check_kind(kind),
+         {:ok, provenance} <- provenance(provenance: provenance),
+         {:ok, strategy} <- strategy(strategy),
+         {:ok, id} <- normalize_id(id),
+         {:ok, params} <- params(kind, :maps.get(:params, fields)) do
+      {:ok, [kind: kind, id: id, provenance: provenance, strategy: strategy, params: params]}
+    end
+  end
+
+  @fields [
+    :id,
+    :kind,
+    :side,
+    :symbol,
+    :qty,
+    :notional,
+    :limit,
+    :stop,
+    :order_id,
+    :provenance,
+    :strategy,
+    :params
+  ]
+  @order_fields [:side, :symbol, :qty, :notional, :limit, :stop, :order_id]
+
+  defp plain_fields(intent), do: plain_fields(@fields, intent, %{})
+
+  defp plain_fields([], _intent, acc), do: {:ok, acc}
+
+  defp plain_fields([field | rest], intent, acc) do
+    value = if is_map_key(intent, field), do: :maps.get(field, intent)
+
+    case Plain.normalize(value) do
+      {:ok, value} -> plain_fields(rest, intent, :maps.put(field, value, acc))
+      {:error, {:not_plain, path}} -> {:error, {:not_plain, [field | path]}}
+    end
+  end
+
+  defp check_kind(kind) when kind in @kinds, do: :ok
+  defp check_kind(_kind), do: {:error, {:invalid, :kind}}
+
+  defp normalize_id(value) when is_binary(value), do: id(value)
+  defp normalize_id(_value), do: {:error, {:invalid, :id}}
+
+  defp present_order_fields(fields) do
+    for key <- @order_fields, :maps.get(key, fields) != nil, do: {key, :maps.get(key, fields)}
+  end
 
   # -- Construction -----------------------------------------------------------
 

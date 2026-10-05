@@ -401,6 +401,65 @@ defmodule Raxol.Agent.JournalTest do
     end
   end
 
+  describe "append_many timeout" do
+    # A Writer stalled past the 5 s default (a slow fsync) is simulated by
+    # suspending it. A trace session on GenServer.call/3 shows the deadline
+    # each call was made with, so nothing here waits for a timer to fire.
+    setup do
+      trace = :trace.session_create(:append_many_timeout, self(), [])
+      on_exit(fn -> :trace.session_destroy(trace) end)
+      1 = :trace.function(trace, {GenServer, :call, 3}, true, [])
+      {:ok, trace: trace}
+    end
+
+    defp traced_append(trace, j, events, timeout) do
+      task = Task.async(fn -> receive do: (:go -> FileStore.append_many(j, events, timeout)) end)
+      1 = :trace.process(trace, task.pid, true, [:call])
+      send(task.pid, :go)
+      task
+    end
+
+    test "with :infinity a call to a stalled Writer waits, then lands",
+         %{base: base, session: session, trace: trace} do
+      {:ok, j} = FileStore.open(session, base_dir: base)
+      writer = j.writer
+      :ok = :sys.suspend(writer)
+
+      task = traced_append(trace, j, [%{"type" => "a"}, %{"type" => "b"}], :infinity)
+
+      assert_receive {:trace, _, :call,
+                      {GenServer, :call, [^writer, {:append_many, [_, _]}, :infinity]}},
+                     1_000
+
+      :ok = :sys.resume(writer)
+      assert Task.await(task, :infinity) == {:ok, [1, 2]}
+      assert {:ok, [%{"type" => "a"}, %{"type" => "b"}]} = FileStore.read(j)
+      FileStore.close(j)
+    end
+
+    test "the default deadline is 5_000 ms; a bounded call gives up, but its events land",
+         %{base: base, session: session, trace: trace} do
+      {:ok, j} = FileStore.open(session, base_dir: base)
+      writer = j.writer
+
+      default = Task.async(fn -> receive do: (:go -> FileStore.append_many(j, [%{"n" => 1}])) end)
+      1 = :trace.process(trace, default.pid, true, [:call])
+      send(default.pid, :go)
+      assert_receive {:trace, _, :call, {GenServer, :call, [^writer, {:append_many, _}, 5_000]}}
+      assert Task.await(default) == {:ok, [1]}
+
+      :ok = :sys.suspend(writer)
+      bounded = traced_append(trace, j, [%{"n" => 2}], 0)
+      assert_receive {:trace, _, :call, {GenServer, :call, [^writer, {:append_many, _}, 0]}}
+      assert Task.await(bounded) == {:error, {:writer_down, :timeout}}
+      :ok = :sys.resume(writer)
+
+      # The caller was told the write failed, yet it was still queued.
+      assert {:ok, [%{"n" => 1}, %{"n" => 2}]} = FileStore.read(j)
+      FileStore.close(j)
+    end
+  end
+
   defp attach_damaged_telemetry do
     ref = "journal-damaged-#{System.unique_integer([:positive])}"
     test_pid = self()

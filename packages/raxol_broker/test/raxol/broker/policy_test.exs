@@ -3,6 +3,7 @@ defmodule Raxol.Broker.PolicyTest do
 
   alias Raxol.Broker.{Intent, Policy, PolicyFile}
   alias Raxol.Broker.Policy.Context
+  alias Raxol.Broker.Test.Hostile
 
   defp d(value), do: Decimal.new(value)
 
@@ -217,7 +218,10 @@ defmodule Raxol.Broker.PolicyTest do
       ctx = context(policy: policy(llm_ask_above: d("100")))
 
       assert {:ask, asks} = Policy.evaluate(buy_usd("99", {:untrusted, :news}), ctx)
-      assert Keyword.has_key?(asks, :untrusted_provenance)
+      assert asks[:untrusted_provenance] == "Intent derived from untrusted input (news)."
+
+      assert {:ask, asks} = Policy.evaluate(buy_usd("99", {:untrusted, "email"}), ctx)
+      assert asks[:untrusted_provenance] == "Intent derived from untrusted input (email)."
     end
 
     test "an llm intent asks above the threshold only" do
@@ -261,8 +265,47 @@ defmodule Raxol.Broker.PolicyTest do
       assert {:deny, {:context, {:invalid, :today_notional}}} =
                Policy.evaluate(buy_usd("1"), context(today_notional: 0))
 
-      assert {:deny, {:context, {:invalid, :quotes}}} =
+      assert {:deny, {:context, {:not_plain, [:quotes, "AAPL"]}}} =
                Policy.evaluate(buy_usd("1"), context(quotes: %{"AAPL" => d("NaN")}))
+    end
+
+    test "caller data with its own protocol implementations denies without running them" do
+      for field <- [:quotes, :positions, :policy, :review_warnings] do
+        assert {:deny, {:context, {:not_plain, [^field]}}} =
+                 Policy.evaluate(buy_usd("1"), context([{field, Hostile.new()}]))
+      end
+
+      assert {:deny, {:context, {:not_plain, [:quotes, "AAPL"]}}} =
+               Policy.evaluate(buy_usd("1"), context(quotes: %{"AAPL" => Hostile.new()}))
+
+      intent = buy_usd("1")
+      {:ok, option} = Intent.option(:buy, "AAPL", d("1"), provenance: :human)
+
+      for hostile_intent <- [
+            %{intent | provenance: {:untrusted, Hostile.new()}},
+            %{intent | symbol: Hostile.new()},
+            %{option | params: %{"leg" => Hostile.new()}}
+          ] do
+        assert {:deny, {:intent, {:not_plain, _path}}} =
+                 Policy.evaluate(hostile_intent, context())
+      end
+
+      assert {:deny, {:intent, :not_an_intent}} = Policy.evaluate(Hostile.new(), context())
+      assert {:deny, {:context, :not_a_context}} = Policy.evaluate(intent, Hostile.new())
+      refute_received {:hostile, _callback}
+    end
+
+    test "forged decimals and floats in the intent deny" do
+      intent = buy_usd("1")
+
+      assert {:deny, {:intent, {:not_plain, [:notional]}}} =
+               Policy.evaluate(
+                 %{intent | notional: %Decimal{sign: 1, coef: :inf, exp: 0}},
+                 context()
+               )
+
+      assert {:deny, {:intent, {:not_plain, [:notional]}}} =
+               Policy.evaluate(%{intent | notional: 1.0}, context())
     end
 
     test "missing today's notional denies" do

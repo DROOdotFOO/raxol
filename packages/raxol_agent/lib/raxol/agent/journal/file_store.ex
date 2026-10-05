@@ -219,10 +219,16 @@ defmodule Raxol.Agent.Journal.FileStore do
   Append `events` as consecutive records in one Writer call: no other append
   can land between them. Returns their offsets in order; nothing is appended
   when any event fails to encode or seal.
+
+  `timeout` bounds the Writer call (default 5_000 ms, `:infinity` to wait as
+  long as the Writer takes). A call that times out returns `{:error,
+  {:writer_down, :timeout}}`, but the request stays queued in the Writer and
+  the events land later: a caller that must not treat a slow fsync as a
+  failure should pass `:infinity`.
   """
-  @spec append_many(t(), [map()]) :: {:ok, [non_neg_integer()]} | {:error, term()}
-  def append_many(%__MODULE__{writer: pid}, events) when is_list(events) do
-    Writer.append_many(pid, events)
+  @spec append_many(t(), [map()], timeout()) :: {:ok, [non_neg_integer()]} | {:error, term()}
+  def append_many(%__MODULE__{writer: pid}, events, timeout \\ 5_000) when is_list(events) do
+    Writer.append_many(pid, events, timeout)
   catch
     :exit, reason -> {:error, {:writer_down, exit_reason(reason)}}
   end
