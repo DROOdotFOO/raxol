@@ -115,6 +115,15 @@ Caps are inclusive. A rule that needs a context field left `nil` denies; an
 invalid policy or a context field of the wrong type denies before any rule
 runs. Untrusted provenance always asks. Cancels are always allowed.
 
+Caller data crosses one boundary, `Raxol.Broker.Plain`: binaries, atoms,
+integers, proper lists and tuples, non-struct maps, decimals and
+`DateTime`s, checked by pattern matching only, so no caller protocol
+implementation (Enumerable, Inspect, String.Chars) ever runs on it.
+`Intent.normalize/1` and `Policy.Context.normalize/1` rebuild each struct
+from plain fields, and the executor, the journal and `Policy.evaluate/2`
+each normalize caller data before using it. `evaluate/2` denies non-plain
+data with `{:intent, reason}` or `{:context, reason}`.
+
 ## Executor
 
 `Raxol.Broker.Executor` is the one path every order takes: policy, the
@@ -160,15 +169,22 @@ left open. The session connects after `init`, without blocking the
 executor. Until it is ready, `run/3` and `approve/3` return
 `{:error, :port_not_ready}` and open nothing;
 `Raxol.Broker.Executor.await_port(executor, timeout \\ 30_000)` returns
-`:ok` once it is. When the connection fails or the session dies, the
+`:ok` once it is; a timeout above 4_294_000_000 ms is
+`{:error, {:invalid_timeout, :await_port, timeout}}`. When the connection
+fails, the session client dies while connecting, or the session dies, the
 executor stays up, logs it and reconnects after a backoff (`:reconnect_ms`,
 default 1 s, doubling to 60 s, reset once ready). A down endpoint therefore
 never restarts the executor and cannot exhaust the supervisor's restart
-budget, and nothing needs restarting by hand.
+budget, and nothing needs restarting by hand. A port that drops after the
+review but before the place closes the group as `port_not_ready` without
+writing `placing`, and a re-run of the same intent places once the port is
+back.
 
 `Raxol.Broker.Executor.child_spec/1` sets `shutdown` to the review timeout
 plus the place timeout plus 5 s (65 s with the defaults), so stopping the
-supervisor during an order waits for the order response.
+supervisor during an order waits for the order response. The executor
+dispatches at most one queued run or approval per callback, so no callback
+runs two place calls and the bound covers the place in progress.
 
 A person answers an ASK later with `approve(executor, token, "name")`,
 `decline(executor, token, "name")` or `close(executor, token, reason)`.
@@ -192,7 +208,13 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   APIs can send an order tool without the executor's review pipeline.
   Every remaining bypass requires impersonating the executor's private
   process-dictionary slots on purpose.
-* **No caller code runs in the executor.** `:journal` must be a
+* **No caller code runs in the executor.** `run/3` rebuilds the intent
+  and context from plain data (`Intent.normalize/1`,
+  `Policy.Context.normalize/1`) in the caller and again inside the
+  executor before anything else; a failure is
+  `{:error, {:invalid_intent, reason}}` or
+  `{:error, {:invalid_context, reason}}`, with nothing journaled or sent.
+  An unrecognised call is `{:error, :unknown_request}`. `:journal` must be a
   registered name (an atom) or a pid; anything else, such as
   `{:via, mod, name}` or `{:global, name}`, is `{:invalid_journal, value}`,
   checked first. The `:clock` fun runs in a short-lived Task with a 5 s
@@ -216,14 +238,18 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   24 hours back from the executor's clock, and no caller input moves it,
   until #1185 adds a trading calendar the executor owns. Queued callers
   are monitored, and a queued run whose caller has died is dropped, never
-  dispatched.
+  dispatched. Queued calls run in order; a new call never jumps ahead.
 * **One executor per journal.** The executor claims the journal at start;
   only a process started as an executor can claim, a second one fails with
   `{:journal_claimed, pid}`, and the journal takes any group record
   (`open_group`, `append_to_group`, `append_group`, every entry type) only
   from the claimant: another process gets `{:error, {:not_claimant, id}}`,
   and with no claim held every group write is `{:error, :unclaimed}`.
-  Nothing is written either way. Fills are not group records. The claim lives in the journal's memory, so the executor
+  Nothing is written either way. The claimant check comes before the
+  journal reads anything the write carries; only then does it rebuild the
+  intent and context from plain data (`{:invalid_intent, reason}` or
+  `{:invalid_context, reason}` otherwise) and encode them. Fills are not
+  group records. The claim lives in the journal's memory, so the executor
   monitors the journal and stops with `{:journal_down, reason}` when it
   goes down; its supervisor restarts it, and the new one claims again.
   Callers waiting on it get an exit. A group left open or parked before an
@@ -257,10 +283,16 @@ journal per install, `~/.raxol/broker/journal` (override with
 `Raxol.Broker.Supervisor` (`:rest_for_one`, journal first), passing journal
 options under `:journal`. Group records are written only by the process
 holding the journal's claim, the executor, so callers go through
-`Raxol.Broker.Executor`; the sequence below is what it writes. Every
-broker write waits as long as the journal takes (`:infinity` on the
-Writer call), so a slow fsync never reports an error for a write that
-lands later.
+`Raxol.Broker.Executor`; the sequence below is what it writes.
+
+Each Writer call has a deadline, `:write_deadline` (default 60 s). A write
+that misses it may still land, so the journal never reports it as an
+error: it kills the Writer and stops with `{:writer_stalled, ms}`, and the
+executor stops with it. Both restart, and recovery reads what reached
+disk: a `placing` that landed closes as `crash_outcome_unknown` and keeps
+counting, and one that did not leaves its group closed as
+`crash_before_verdict`. A fsync slower than the deadline costs a restart;
+in exchange a dead disk cannot hang every order and cancel behind it.
 
 ```elixir
 children = [{Raxol.Broker.Supervisor, journal: []}]

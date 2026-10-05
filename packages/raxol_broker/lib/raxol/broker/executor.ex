@@ -27,6 +27,15 @@ defmodule Raxol.Broker.Executor do
   `quotes`, `positions`, `portfolio_value`, `start_of_day_value`,
   `day_pnl` and `market_session`.
 
+  Trusted means its values, never its code: the intent and the context are
+  rebuilt from plain data with `Raxol.Broker.Intent.normalize/1` and
+  `Raxol.Broker.Policy.Context.normalize/1` in the caller (`run/3`) and
+  again in this process before anything else, by pattern matching only.
+  A struct, float, pid or function anywhere in them is `{:error,
+  {:invalid_intent, reason}}` or `{:error, {:invalid_context, reason}}`
+  and nothing is journaled or sent: no protocol of caller data
+  (Enumerable, Inspect, ...) ever runs in this process.
+
   ## Guards
 
   Everything is re-checked here, whatever the caller did:
@@ -102,7 +111,14 @@ defmodule Raxol.Broker.Executor do
   the queue, never dispatched (a remote caller is judged by its monitor
   alone). The place call runs in this process (the journal only accepts
   `placing` from the claimant), so nothing answers until it returns or
-  `:place_timeout` passes.
+  `:place_timeout` passes. At most one queued request is dispatched per
+  callback; the next waits for a `:drain` message, so one callback never
+  runs two place calls and the shutdown bound covers the one in progress.
+
+  If the port goes down after the review but before the place (its EXIT
+  handled first), the group is closed with `:port_not_ready`, no `placing`
+  is written and nothing is sent; a re-run of the intent places once the
+  port is back.
 
   ## Port
 
@@ -114,12 +130,12 @@ defmodule Raxol.Broker.Executor do
   return `{:error, :port_not_ready}` before opening or journaling
   anything; `await_port/2` waits for readiness.
 
-  Exits are trapped. When the client dies or fails to become ready the
-  executor stays up, logs the failure and starts a new client after a
-  backoff (`:reconnect_ms`, default 1 s, doubling to 60 s, reset once
-  ready); the client itself retries a failed connect on the same schedule.
-  A port that is down never restarts the executor, so an unreachable
-  endpoint cannot exhaust its supervisor's restart budget.
+  Exits are trapped. When the client dies (also mid-connect) or fails to
+  become ready the executor stays up, logs the failure and starts a new
+  client after a backoff (`:reconnect_ms`, default 1 s, doubling to 60 s,
+  reset once ready); the client itself retries a failed connect on the
+  same schedule. A port that is down never restarts the executor, so an
+  unreachable endpoint cannot exhaust its supervisor's restart budget.
 
   ## Mode
 
@@ -208,10 +224,19 @@ defmodule Raxol.Broker.Executor do
     GenServer.start_link(__MODULE__, opts, gen_opts)
   end
 
-  @doc "Run `intent` through the pipeline. See the moduledoc."
+  @doc """
+  Run `intent` through the pipeline. See the moduledoc.
+
+  Both structs are rebuilt from plain data here (`Intent.normalize/1`,
+  `Context.normalize/1`) and again inside the executor; anything else is
+  `{:error, {:invalid_intent, reason}}` or `{:error, {:invalid_context,
+  reason}}` and nothing is sent to the executor.
+  """
   @spec run(GenServer.server(), Intent.t(), Context.t()) :: result()
-  def run(server, %Intent{} = intent, %Context{} = context),
-    do: GenServer.call(server, {:run, intent, context}, :infinity)
+  def run(server, %Intent{} = intent, %Context{} = context) do
+    with {:ok, intent, context} <- Policy.normalize(intent, context),
+         do: GenServer.call(server, {:run, intent, context}, :infinity)
+  end
 
   @doc "Approve a parked ASK; `by` names who approved (non-empty string)."
   @spec approve(GenServer.server(), String.t(), String.t()) :: result()
@@ -236,9 +261,11 @@ defmodule Raxol.Broker.Executor do
   @doc """
   Wait until the port session is ready: `:ok`, or `{:error, :port_not_ready}`
   once `timeout` milliseconds pass first. Answered even while a review is in
-  flight.
+  flight. A timeout above 4_294_000_000 ms is `{:error, {:invalid_timeout,
+  :await_port, timeout}}`.
   """
-  @spec await_port(GenServer.server(), non_neg_integer()) :: :ok | {:error, :port_not_ready}
+  @spec await_port(GenServer.server(), non_neg_integer()) ::
+          :ok | {:error, :port_not_ready | {:invalid_timeout, :await_port, term()}}
   def await_port(server, timeout \\ @default_timeout) when is_integer(timeout) and timeout >= 0,
     do: GenServer.call(server, {:await_port, timeout}, :infinity)
 
@@ -441,21 +468,27 @@ defmodule Raxol.Broker.Executor do
   def handle_call({:await_port, _timeout}, _from, %{port_status: :ready} = state),
     do: {:reply, :ok, state}
 
-  def handle_call({:await_port, timeout}, from, state) do
+  def handle_call({:await_port, timeout}, from, state)
+      when is_integer(timeout) and timeout >= 0 and timeout <= @max_timeout do
     timer = Process.send_after(self(), {:await_port_timeout, from}, timeout)
     {:noreply, %{state | port_waiters: Map.put(state.port_waiters, from, timer)}}
   end
 
-  def handle_call(request, from, %{busy: nil} = state) do
-    case dispatch(request, from, state) do
-      {:reply, reply, state} -> {:reply, reply, state}
-      {:await, state} -> {:noreply, state}
-    end
-  end
+  def handle_call({:await_port, timeout}, _from, state),
+    do: {:reply, {:error, {:invalid_timeout, :await_port, timeout}}, state}
 
+  # Nothing jumps the queue: a request that arrives while earlier ones wait
+  # for their `:drain` turn is queued behind them.
   def handle_call(request, {pid, _tag} = from, state) do
-    entry = {request, from, Process.monitor(pid)}
-    {:noreply, %{state | queue: :queue.in(entry, state.queue)}}
+    if state.busy == nil and :queue.is_empty(state.queue) do
+      case dispatch(request, from, state) do
+        {:reply, reply, state} -> {:reply, reply, state}
+        {:await, state} -> {:noreply, state}
+      end
+    else
+      entry = {request, from, Process.monitor(pid)}
+      {:noreply, %{state | queue: :queue.in(entry, state.queue)}}
+    end
   end
 
   @impl GenServer
@@ -492,14 +525,11 @@ defmodule Raxol.Broker.Executor do
     {:noreply, %{state | queue: :queue.from_list(queue)}}
   end
 
+  # The connect task is shut down for its side effect only; the state is
+  # updated whatever `Task.shutdown/2` returns.
   def handle_info({:EXIT, pid, reason}, %{port: {PortMCP, %PortMCP{pid: pid}}} = state) do
-    state =
-      case state.connect do
-        nil -> state
-        task -> Task.shutdown(task, :brutal_kill) && %{state | connect: nil}
-      end
-
-    {:noreply, port_failed(%{state | port: nil}, {:port_exited, reason})}
+    if state.connect, do: Task.shutdown(state.connect, :brutal_kill)
+    {:noreply, port_failed(%{state | port: nil, connect: nil}, {:port_exited, reason})}
   end
 
   # Review, clock and connect tasks are linked; their exits are handled
@@ -507,6 +537,8 @@ defmodule Raxol.Broker.Executor do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(:reconnect, %{port: nil} = state), do: {:noreply, connect(state)}
+
+  def handle_info(:drain, state), do: {:noreply, drain(state)}
 
   def handle_info({:await_port_timeout, from}, state) do
     case Map.pop(state.port_waiters, from) do
@@ -582,8 +614,12 @@ defmodule Raxol.Broker.Executor do
 
   # -- Dispatch -----------------------------------------------------------------
 
-  defp dispatch({:run, intent, context}, from, state),
-    do: awaiting(run_intent(state, intent, context), from)
+  defp dispatch({:run, intent, context}, from, state) do
+    case Policy.normalize(intent, context) do
+      {:ok, intent, context} -> awaiting(run_intent(state, intent, context), from)
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
 
   defp dispatch({:approve, token, by}, _from, state),
     do: approve_parked(state, token, by)
@@ -594,6 +630,8 @@ defmodule Raxol.Broker.Executor do
   defp dispatch({:close, token, reason}, _from, state),
     do: finish_parked(state, token, {:close, reason})
 
+  defp dispatch(_request, _from, state), do: {:reply, {:error, :unknown_request}, state}
+
   defp awaiting({:await, pending, state}, from),
     do: {:await, %{state | busy: Map.put(pending, :from, from)}}
 
@@ -602,7 +640,7 @@ defmodule Raxol.Broker.Executor do
   defp review_done(%{busy: pending} = state, result) do
     {:reply, reply, state} = reviewed(%{state | busy: nil}, pending, result)
     GenServer.reply(pending.from, reply)
-    {:noreply, drain(state)}
+    {:noreply, drain_later(state)}
   end
 
   defp drain(%{busy: nil} = state) do
@@ -619,12 +657,16 @@ defmodule Raxol.Broker.Executor do
   # placed with nobody to receive the result. Its monitor tells: a DOWN
   # already delivered (but not yet handled) makes the demonitor report
   # false. `Process.alive?/1` is only asked about a local pid.
+  #
+  # At most one request is dispatched per callback, so one callback never
+  # runs more than one place call: the rest wait for a `:drain` message,
+  # and the shutdown bound covers the one in progress.
   defp drain_entry(state, {request, {pid, _tag} = from, ref}) do
     if Process.demonitor(ref, [:flush, :info]) and (node(pid) != node() or Process.alive?(pid)) do
       case dispatch(request, from, state) do
         {:reply, reply, state} ->
           GenServer.reply(from, reply)
-          drain(state)
+          drain_later(state)
 
         {:await, state} ->
           state
@@ -635,8 +677,18 @@ defmodule Raxol.Broker.Executor do
     end
   end
 
+  defp drain_later(state) do
+    unless :queue.is_empty(state.queue), do: send(self(), :drain)
+    state
+  end
+
   defp dropped(request),
-    do: Logger.info("[Broker.Executor] dropped a queued #{elem(request, 0)}: caller is gone")
+    do: Logger.info("[Broker.Executor] dropped a queued #{request_kind(request)}: caller is gone")
+
+  defp request_kind(request) when is_tuple(request) and is_atom(elem(request, 0)),
+    do: elem(request, 0)
+
+  defp request_kind(_request), do: :request
 
   # -- Pipeline -----------------------------------------------------------------
 
@@ -683,7 +735,8 @@ defmodule Raxol.Broker.Executor do
   defp review(state, intent, context, group_id) do
     %{port: port, account: account, review_timeout: timeout} = state
     task = Task.async(fn -> Review.run(port, intent, account, timeout) end)
-    {:await, %{ref: task.ref, intent: intent, context: context, group_id: group_id}, state}
+    pending = %{ref: task.ref, pid: task.pid, intent: intent, context: context}
+    {:await, Map.put(pending, :group_id, group_id), state}
   end
 
   defp reviewed(state, %{group_id: group_id}, {:error, reason}) do
@@ -782,6 +835,14 @@ defmodule Raxol.Broker.Executor do
       {nil, _parked} -> {:reply, {:error, {:not_parked, token}}, state}
       {_group, parked} -> {:reply, append(state, token, entry), %{state | parked: parked}}
     end
+  end
+
+  # The port can go down between review and here (its EXIT handled before
+  # the review result): close the group without `placing`, send nothing.
+  defp place(%{port_status: status, port: port} = state, _intent, group_id, _receipt)
+       when status != :ready or is_nil(port) do
+    _ = close_group(state, group_id, :port_not_ready)
+    {:reply, {:error, :port_not_ready}, state}
   end
 
   defp place(state, intent, group_id, receipt) do

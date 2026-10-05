@@ -27,13 +27,22 @@ defmodule Raxol.Broker.Journal do
   journal; group writes are still refused there.
 
   Every group record (`open_group/4`, `append_to_group/4`, `append_group/3`,
-  any entry type) is written only for the claimant. With no claim held the
-  write is refused with `{:error, :unclaimed}`; with one held, any other
+  any entry type) is written only for the claimant, and the claimant check is
+  the first thing the journal does with a group write: nothing the caller
+  sent is read, built into a record or encoded before it. With no claim held
+  the write is refused with `{:error, :unclaimed}`; with one held, any other
   caller is refused with `{:error, {:not_claimant, id}}` (`id` is nil for a
   group not yet written). Nothing is written in either case, so no other
   process can open a group, forge a review, verdict or approval into the
   executor's open group, close it, or write `placing`. `append_fill/2` is
   not a group write and takes no claim.
+
+  Only then are the intent and context of a new group rebuilt from plain data
+  (`Raxol.Broker.Intent.normalize/1`, `Raxol.Broker.Policy.Context.normalize/1`),
+  before anything is encoded. A struct, function, pid or other non-plain value
+  anywhere inside them is refused with `{:error, {:invalid_intent, reason}}`
+  or `{:error, {:invalid_context, reason}}` and nothing is written, so no
+  protocol implementation from caller data ever runs in the journal.
 
   Threat model: the BEAM cannot stop code that deliberately writes into
   another module's private state, e.g. `Process.put(:"$initial_call", ...)`
@@ -45,16 +54,29 @@ defmodule Raxol.Broker.Journal do
 
   ## Write timeouts
 
-  Every broker write waits as long as the journal takes. `open_group/4`,
+  Callers wait as long as the journal takes: `open_group/4`,
   `append_to_group/4` and `append_group/3` wait `:infinity` by default (pass
-  a timeout to override), and the journal waits `:infinity` on its Writer
-  (`Raxol.Agent.Journal.FileStore.append_many/3`), including for fills and
-  the crash closes written on start. A journal write is a local fsync, so a
-  slow one is still progress, and a caller that gives up does not undo it:
-  the request stays queued and lands later. A timed-out `placing` whose
-  append lands after the caller closed the group would turn an order that
-  was never sent into a counted unknown outcome and make its intent a
-  permanent duplicate.
+  a timeout to override). A caller that gives up does not undo its write: the
+  request stays queued and lands later.
+
+  The journal bounds each call to its Writer
+  (`Raxol.Agent.Journal.FileStore.append_many/3`) with `:write_deadline`
+  (default 60_000 ms), including for fills and the crash closes written on
+  start. A Writer that misses the deadline may still be about to land the
+  records, so the journal never answers `{:error, _}` for it: it kills the
+  Writer, waits for it to die, and stops with `{:writer_stalled, ms}`. Every
+  caller waiting on the journal exits, and the Executor, which monitors the
+  journal, stops too. Nothing lands after the kill, so on restart the disk is
+  the truth: a `placing` that reached disk is closed as
+  `crash_outcome_unknown` and keeps counting, and one that did not leaves
+  its group closed as `crash_before_verdict`.
+
+  The trade-off: a fsync slower than the deadline costs a journal and
+  Executor restart instead of a slow write, and a journal whose Writer cannot
+  write at all stops rather than hanging every order and cancel behind it.
+  Answering `{:error, _}` on a timeout instead would let a `placing` land
+  after the Executor closed its group as refused, turning an order that was
+  never sent into a counted unknown outcome and a permanent duplicate.
 
   ## Placing
 
@@ -135,6 +157,7 @@ defmodule Raxol.Broker.Journal do
   @decisions [:approved, :declined]
   @before_placing [:verdict, :review, :approval, :placing]
   @minute_us 60_000_000
+  @default_write_deadline 60_000
 
   @type server :: atom()
   @type group_id :: String.t()
@@ -160,8 +183,10 @@ defmodule Raxol.Broker.Journal do
 
   @doc """
   Start the journal. Options: `:name` (default `#{inspect(__MODULE__)}`, also
-  the ETS table name), `:path`, and `:clock`, a zero-arity function returning
-  the UTC `DateTime` stamped on records (default `DateTime.utc_now/0`).
+  the ETS table name), `:path`, `:clock`, a zero-arity function returning
+  the UTC `DateTime` stamped on records (default `DateTime.utc_now/0`), and
+  `:write_deadline`, the milliseconds each Writer call may take before the
+  journal kills the Writer and stops (default 60_000, see "Write timeouts").
   """
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -189,7 +214,8 @@ defmodule Raxol.Broker.Journal do
     Process.flag(:trap_exit, true)
     name = Keyword.fetch!(opts, :name)
 
-    with path when is_binary(path) <- path(opts) || {:error, :no_journal_path},
+    with {:ok, deadline} <- write_deadline(opts),
+         path when is_binary(path) <- path(opts) || {:error, :no_journal_path},
          {:ok, handle} <- open_store(path) do
       table = :ets.new(name, [:named_table, :ordered_set, :protected, read_concurrency: true])
 
@@ -197,14 +223,25 @@ defmodule Raxol.Broker.Journal do
         handle: handle,
         table: table,
         clock: Keyword.get(opts, :clock, &DateTime.utc_now/0),
+        write_deadline: deadline,
         open: %{},
         claimant: nil,
         status: :ok
       }
 
-      {:ok, recover(state)}
+      recover(state)
     else
       {:error, reason} -> {:stop, {:journal_open_failed, reason}}
+    end
+  end
+
+  # The largest timeout a receive accepts.
+  @max_deadline 4_294_967_295
+
+  defp write_deadline(opts) do
+    case Keyword.get(opts, :write_deadline, @default_write_deadline) do
+      ms when is_integer(ms) and ms > 0 and ms <= @max_deadline -> {:ok, ms}
+      _other -> {:error, :invalid_write_deadline}
     end
   end
 
@@ -438,17 +475,12 @@ defmodule Raxol.Broker.Journal do
   end
 
   def handle_call({:append_group, intent, context, entries, opts}, {caller, _tag}, state) do
-    id = Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
-    seq = System.unique_integer([:monotonic])
-    group = new_group(intent, context, seq)
-    head = group_head(state, id, intent, context, Keyword.get(opts, :mode))
-
     with :ok <- claimant(state, caller, nil),
-         {:ok, records, group} <- apply_entries(entries, id, group, state),
-         {:ok, _offsets} <- write(state, head ++ records) do
+         {:ok, id, group, records} <- build_group(state, intent, context, entries, opts),
+         {:ok, _offsets} <- write(state, records) do
       {:reply, {:ok, id}, settle(state, id, group, records)}
     else
-      {:error, reason} -> {:reply, {:error, reason}, state_after(state, reason)}
+      {:error, reason} -> refuse(state, reason)
     end
   end
 
@@ -459,7 +491,7 @@ defmodule Raxol.Broker.Journal do
          {:ok, _offsets} <- write(state, records) do
       {:reply, :ok, settle(state, id, group, records)}
     else
-      {:error, reason} -> {:reply, {:error, reason}, state_after(state, reason)}
+      {:error, reason} -> refuse(state, reason)
     end
   end
 
@@ -471,7 +503,7 @@ defmodule Raxol.Broker.Journal do
       :ets.insert(state.table, {{:fill, to_us(at), offset}, fill.realized_pnl})
       {:reply, :ok, state}
     else
-      {:error, reason} -> {:reply, {:error, reason}, state_after(state, reason)}
+      {:error, reason} -> refuse(state, reason)
     end
   end
 
@@ -482,8 +514,14 @@ defmodule Raxol.Broker.Journal do
   def handle_info({:DOWN, ref, :process, pid, _reason}, %{claimant: {pid, ref}} = state),
     do: {:noreply, %{state | claimant: nil}}
 
+  # `structs: false`: a message from any process may hold a struct, and its
+  # Inspect implementation must not run here.
   def handle_info(message, state) do
-    Logger.warning("#{inspect(__MODULE__)} ignored an unexpected message: #{inspect(message)}")
+    Logger.warning(
+      "#{inspect(__MODULE__)} ignored an unexpected message: " <>
+        inspect(message, structs: false)
+    )
+
     {:noreply, state}
   end
 
@@ -523,6 +561,20 @@ defmodule Raxol.Broker.Journal do
   defp claimant(_state, _caller, id), do: {:error, {:not_claimant, id}}
 
   # -- Entries ------------------------------------------------------------------
+
+  # A new group's id, open state and records (intent, context, then
+  # `entries`), built only after the claimant check and only from the
+  # normalized intent and context.
+  defp build_group(state, intent, context, entries, opts) do
+    with {:ok, intent, context} <- Policy.normalize(intent, context) do
+      id = Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+      group = new_group(intent, context, System.unique_integer([:monotonic]))
+      head = group_head(state, id, intent, context, Keyword.get(opts, :mode))
+
+      with {:ok, records, group} <- apply_entries(entries, id, group, state),
+           do: {:ok, id, group, head ++ records}
+    end
+  end
 
   defp group_head(state, id, intent, context, mode) do
     intent_fields = %{"intent" => Codec.encode_intent(intent)}
@@ -732,11 +784,11 @@ defmodule Raxol.Broker.Journal do
   # One scan of the journal: a damaged one is only scanned again to name the
   # offset. Closing a crashed group changes no count (an in-flight group
   # counts before and after its `unknown` close, an open one neither), so the
-  # index is built from the records as read.
+  # index is built from the records as read. Returns the `init/1` result.
   defp recover(state) do
     case FileStore.read(state.handle) do
       {:ok, records} -> recover_records(state, records)
-      {:error, reason} -> set_status(state, damage_or(state, reason))
+      {:error, reason} -> {:ok, set_status(state, damage_or(state, reason))}
     end
   end
 
@@ -747,9 +799,10 @@ defmodule Raxol.Broker.Journal do
          :ok <- index_groups(state.table, Enum.filter(groups, &Groups.counts?/1)),
          :ok <- index_intents(state.table, groups),
          :ok <- index_fills(state.table, fills) do
-      set_status(state, :ok)
+      {:ok, set_status(state, :ok)}
     else
-      {:error, reason} -> set_status(state, damage_or(state, reason))
+      {:error, {:writer_stalled, _ms} = reason} -> {:stop, reason}
+      {:error, reason} -> {:ok, set_status(state, damage_or(state, reason))}
     end
   end
 
@@ -827,11 +880,29 @@ defmodule Raxol.Broker.Journal do
     })
   end
 
-  # Every broker write waits as long as the Writer takes (see "Write
-  # timeouts"): a deadline here would report a failure for a write that is
-  # still queued and lands later.
+  # Each Writer call is bounded by the write deadline (see "Write timeouts").
+  # A call that misses it may still land, so it is never reported as a
+  # failed write: the Writer is killed, and dead before this returns, so
+  # nothing lands after the journal stops.
   defp write(_state, []), do: {:ok, []}
-  defp write(state, records), do: FileStore.append_many(state.handle, records, :infinity)
+
+  defp write(state, records) do
+    case FileStore.append_many(state.handle, records, state.write_deadline) do
+      {:error, {:writer_down, :timeout}} -> stall(state)
+      result -> result
+    end
+  end
+
+  defp stall(%{handle: %{writer: writer}, write_deadline: deadline}) do
+    ref = Process.monitor(writer)
+    Process.exit(writer, :kill)
+    receive do: ({:DOWN, ^ref, :process, ^writer, _reason} -> :ok)
+    {:error, {:writer_stalled, deadline}}
+  end
+
+  # A stalled Writer stops the journal with no reply: every caller exits.
+  defp refuse(state, {:writer_stalled, _ms} = reason), do: {:stop, reason, state}
+  defp refuse(state, reason), do: {:reply, {:error, reason}, state_after(state, reason)}
 
   # A write the Writer refused as damaged means the chain broke under us.
   defp state_after(state, :damaged), do: set_status(state, damage_or(state, :damaged))

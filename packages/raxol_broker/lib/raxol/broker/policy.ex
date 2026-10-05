@@ -82,15 +82,46 @@ defmodule Raxol.Broker.Policy do
   def rule_ids, do: @rule_ids
 
   @doc """
+  Rebuild `intent` and `context` as plain data (`Intent.normalize/1`,
+  `Context.normalize/1`) without running any protocol of the caller's terms.
+  Errors name a field or a path, never the value.
+  """
+  @spec normalize(term(), term()) ::
+          {:ok, Intent.t(), Context.t()}
+          | {:error, {:invalid_intent, term()} | {:invalid_context, term()}}
+  def normalize(intent, context) do
+    with {:intent, {:ok, intent}} <- {:intent, Intent.normalize(intent)},
+         {:context, {:ok, context}} <- {:context, Context.normalize(context)} do
+      {:ok, intent, context}
+    else
+      {:intent, {:error, reason}} -> {:error, {:invalid_intent, reason}}
+      {:context, {:error, reason}} -> {:error, {:invalid_context, reason}}
+    end
+  end
+
+  @doc """
   Evaluate `intent` against `context`.
 
   Returns `{:allow, intent}`, `{:ask, [{rule_id, prompt}]}` listing every rule
   that asked, or `{:deny, {rule_id, detail}}` for the first rule that denied.
+
+  Both arguments are first rebuilt by `Intent.normalize/1` and
+  `Context.normalize/1`, so caller data that is not plain (a struct with its
+  own protocol implementations, a forged decimal, a float) denies with
+  `{:intent, reason}` or `{:context, reason}` before any rule reads it.
   """
   @spec evaluate(Intent.t(), Context.t()) :: result()
-  def evaluate(%Intent{kind: :cancel} = intent, %Context{}), do: {:allow, intent}
+  def evaluate(intent, context) do
+    case {Intent.normalize(intent), Context.normalize(context)} do
+      {{:error, reason}, _context} -> {:deny, {:intent, reason}}
+      {_intent, {:error, reason}} -> {:deny, {:context, reason}}
+      {{:ok, intent}, {:ok, context}} -> evaluate_plain(intent, context)
+    end
+  end
 
-  def evaluate(%Intent{} = intent, %Context{} = context) do
+  defp evaluate_plain(%Intent{kind: :cancel} = intent, %Context{}), do: {:allow, intent}
+
+  defp evaluate_plain(%Intent{} = intent, %Context{} = context) do
     with {:ok, policy} <- validate_policy(context.policy),
          :ok <- validate_context(context) do
       input = %{
@@ -341,8 +372,13 @@ defmodule Raxol.Broker.Policy do
   defp review_warning(%{context: %Context{review_warnings: warnings}}),
     do: Verdict.ask("Order review returned #{length(warnings)} warning(s).")
 
-  defp untrusted_provenance(%{intent: %Intent{provenance: {:untrusted, source}}}),
-    do: Verdict.ask("Intent derived from untrusted input (#{inspect(source)}).")
+  defp untrusted_provenance(%{intent: %Intent{provenance: {:untrusted, source}}})
+       when is_binary(source),
+       do: Verdict.ask("Intent derived from untrusted input (" <> source <> ").")
+
+  defp untrusted_provenance(%{intent: %Intent{provenance: {:untrusted, source}}})
+       when is_atom(source),
+       do: Verdict.ask("Intent derived from untrusted input (" <> Atom.to_string(source) <> ").")
 
   defp untrusted_provenance(_input), do: Verdict.allow()
 

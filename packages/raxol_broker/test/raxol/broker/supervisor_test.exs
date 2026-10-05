@@ -151,6 +151,55 @@ defmodule Raxol.Broker.SupervisorTest do
     assert OrderServer.calls(server, "") == []
   end
 
+  test "a client whose resolver raises leaves the executor and the root up", %{path: path} do
+    journal = :"broker_sup_journal_#{System.unique_integer([:positive])}"
+    executor = :"broker_sup_executor_#{System.unique_integer([:positive])}"
+    server = OrderServer.start()
+    {:ok, policy} = PolicyFile.new(Decimal.new("1000"), Decimal.new("5000"))
+    test_pid = self()
+
+    session =
+      server
+      |> OrderServer.session()
+      |> Keyword.put(:resolver, fn _host, _family ->
+        send(test_pid, :resolving)
+        raise "resolver blew up"
+      end)
+
+    sup =
+      start_supervised!(
+        {Raxol.Broker.Supervisor,
+         name: :"broker_sup_#{System.unique_integer([:positive])}",
+         journal: [name: journal, path: path],
+         executor: [
+           name: executor,
+           session: session,
+           account_number: "ACC-1",
+           policy: policy,
+           reconnect_ms: 60_000
+         ]}
+      )
+
+    sup_ref = Process.monitor(sup)
+    pid = child(sup, Executor)
+    executor_ref = Process.monitor(pid)
+
+    # The client dies mid-connect: its EXIT reaches the executor while the
+    # connect task still waits on it. The long backoff keeps this one death.
+    assert_receive :resolving, 5_000
+    %{connect: %Task{}, port: {_mod, %{pid: client}}} = :sys.get_state(pid)
+    client_ref = Process.monitor(client)
+    Process.exit(client, :kill)
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :killed}
+    assert %{connect: nil, port: nil, port_status: {:down, _}} = :sys.get_state(pid)
+
+    refute_received {:DOWN, ^executor_ref, _, _, _}
+    refute_received {:DOWN, ^sup_ref, _, _, _}
+    assert child(sup, Executor) == pid
+    assert Executor.await_port(executor, 0) == {:error, :port_not_ready}
+    assert OrderServer.calls(server, "") == []
+  end
+
   # Kills the `module` child, waits for it to go down, then reads the restarted
   # child. The supervisor restarts while handling the EXIT, so the call that
   # follows the :DOWN sees the new pid without polling.

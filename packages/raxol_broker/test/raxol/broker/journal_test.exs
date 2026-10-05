@@ -6,7 +6,7 @@ defmodule Raxol.Broker.JournalTest do
   alias Raxol.Broker.{Intent, Journal, Policy, PolicyFile}
   alias Raxol.Broker.Journal.{Codec, Replay}
   alias Raxol.Broker.Policy.Context
-  alias Raxol.Broker.Test.ExecutorIdentity
+  alias Raxol.Broker.Test.{ExecutorIdentity, Hostile}
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -95,9 +95,13 @@ defmodule Raxol.Broker.JournalTest do
     records
   end
 
-  defp kill_writer!(path, journal) do
+  defp writer!(path) do
     {base, session} = Journal.location(path)
-    writer = :global.whereis_name({Writer, Path.join(base, session)})
+    :global.whereis_name({Writer, Path.join(base, session)})
+  end
+
+  defp kill_writer!(path, journal) do
+    writer = writer!(path)
     ref = Process.monitor(journal)
     Process.exit(writer, :kill)
     assert_receive {:DOWN, ^ref, :process, ^journal, {:journal_writer_down, :killed}}, 5_000
@@ -482,6 +486,68 @@ defmodule Raxol.Broker.JournalTest do
       assert Task.await(impostor) == [:ok, :ok, :ok, :ok]
     end
 
+    # The claimant check comes before the journal reads anything the caller
+    # sent: a struct whose Enumerable or Inspect would run on encode is
+    # refused untouched, and the journal stays up.
+    test "a non-claimant's struct context is refused before it is read", %{opts: opts, path: path} do
+      name = opts[:name]
+      journal = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+      hostile = context(quotes: Hostile.new(), positions: Hostile.new())
+      intent = limit("2")
+      group = %{intent: intent, context: hostile, entries: []}
+
+      assert Journal.open_group(intent, hostile, name) == {:error, :unclaimed}
+      assert Journal.append_group(group, name) == {:error, :unclaimed}
+
+      parent = self()
+
+      claimant =
+        spawn(fn ->
+          ExecutorIdentity.assume!(name)
+          send(parent, :claimed)
+          receive do: (:stop -> :ok)
+        end)
+
+      on_exit(fn -> send(claimant, :stop) end)
+      assert_receive :claimed
+
+      assert Journal.open_group(intent, hostile, name) == {:error, {:not_claimant, nil}}
+      assert Journal.append_group(group, name) == {:error, {:not_claimant, nil}}
+
+      assert Process.alive?(journal)
+      assert Journal.open_groups(name) == {:ok, []}
+      refute_received {:hostile, _callback}
+      assert records(path) == []
+    end
+
+    test "a claimant's struct intent or context is refused by normalize, and nothing is written",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      journal = start!(opts)
+      intent = limit("2")
+      ctx = context()
+      hostile_ctx = context(quotes: %{"AAPL" => Hostile.new()})
+      hostile_intent = %{intent | strategy: Hostile.new()}
+
+      assert {:error, {:invalid_context, {:not_plain, [:quotes | _]}}} =
+               Journal.open_group(intent, hostile_ctx, name)
+
+      assert {:error, {:invalid_context, {:not_plain, [:quotes | _]}}} =
+               Journal.append_group(
+                 %{intent: intent, context: hostile_ctx, entries: placed_entries(intent, ctx)},
+                 name
+               )
+
+      assert {:error, {:invalid_intent, {:not_plain, [:strategy | _]}}} =
+               Journal.open_group(hostile_intent, ctx, name)
+
+      assert Process.alive?(journal)
+      refute_received {:hostile, _callback}
+      assert records(path) == []
+      assert Journal.open_groups(name) == {:ok, []}
+      assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
+    end
+
     test "a float in an order response is recorded as a string and the order counts",
          %{opts: opts, path: path} do
       name = opts[:name]
@@ -545,7 +611,8 @@ defmodule Raxol.Broker.JournalTest do
     end
 
     # A claimant that writes a reviewed, allowed group and then writes
-    # `placing` when told to.
+    # `placing` when told to. A journal that stops while `placing` waits
+    # makes the call exit; the placer returns that as `{:exit, reason}`.
     defp placer(name, intent, ctx) do
       parent = self()
 
@@ -559,7 +626,15 @@ defmodule Raxol.Broker.JournalTest do
           |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
 
           send(parent, {:reviewed, id})
-          receive do: (:go -> Journal.append_to_group(id, {:placing}, name))
+
+          receive do
+            :go ->
+              try do
+                Journal.append_to_group(id, {:placing}, name)
+              catch
+                :exit, {reason, {GenServer, :call, _}} -> {:exit, reason}
+              end
+          end
         end)
 
       assert_receive {:reviewed, id}
@@ -587,14 +662,13 @@ defmodule Raxol.Broker.JournalTest do
     end
 
     # F3: the Writer stalls (a slow fsync) past the 5 s FileStore default
-    # while `placing` is appended. With a deadline on the Writer call the
-    # journal would answer `{:writer_down, :timeout}`, the executor would
-    # close the group as refused, and the queued `placing` would land later.
-    test "placing waits on a stalled Writer, and lands", %{opts: opts, path: path, trace: trace} do
+    # while `placing` is appended. The journal waits up to its write deadline
+    # (default 60 s), so a slow write within it lands.
+    test "placing waits on a stalled Writer up to the write deadline, and lands",
+         %{opts: opts, path: path, trace: trace} do
       name = opts[:name]
       journal = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
-      {base, session} = Journal.location(path)
-      writer = :global.whereis_name({Writer, Path.join(base, session)})
+      writer = writer!(path)
       intent = limit("2")
       {placer, id} = placer(name, intent, context())
 
@@ -602,16 +676,68 @@ defmodule Raxol.Broker.JournalTest do
       :ok = :sys.suspend(writer)
       send(placer.pid, :go)
 
-      # The journal calls its suspended Writer with no deadline.
+      # The journal calls its suspended Writer with the default deadline.
       assert_receive {:trace, ^journal, :call,
                       {GenServer, :call,
-                       [^writer, {:append_many, [%{"type" => "placing"}]}, :infinity]}}
+                       [^writer, {:append_many, [%{"type" => "placing"}]}, 60_000]}}
 
       :ok = :sys.resume(writer)
       assert Task.await(placer, :infinity) == :ok
       assert {:ok, ^id} = Journal.placing_for_intent(intent.id, name)
       assert {:ok, [^id]} = Journal.open_groups(name)
       assert %{"type" => "placing", "group_id" => ^id} = List.last(records(path))
+    end
+
+    # Past the deadline the write may still land, so the journal never
+    # answers it with an error: it kills the Writer and stops. The Writer is
+    # suspended, so the killed request was never processed and `placing`
+    # never reached disk; recovery closes the group as no order sent.
+    test "a Writer stalled past the write deadline is killed and the journal stops",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+
+      journal =
+        start_supervised!(
+          Supervisor.child_spec({Journal, Keyword.put(opts, :write_deadline, 200)},
+            restart: :temporary
+          )
+        )
+
+      writer = writer!(path)
+      intent = limit("2")
+      {placer, id} = placer(name, intent, context())
+      journal_ref = Process.monitor(journal)
+      writer_ref = Process.monitor(writer)
+
+      :ok = :sys.suspend(writer)
+      send(placer.pid, :go)
+
+      assert_receive {:DOWN, ^writer_ref, :process, ^writer, :killed}, 5_000
+      assert_receive {:DOWN, ^journal_ref, :process, ^journal, {:writer_stalled, 200}}, 5_000
+      assert Task.await(placer, :infinity) == {:exit, {:writer_stalled, 200}}
+      refute Enum.any?(records(path), &(&1["type"] == "placing"))
+
+      start!(opts)
+      assert Journal.status(name) == :ok
+
+      assert %{
+               "type" => "close",
+               "group_id" => ^id,
+               "reason" => "crash_before_verdict",
+               "outcome" => "deny"
+             } = List.last(records(path))
+
+      assert Journal.placing_for_intent(intent.id, name) == {:ok, nil}
+      assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
+    end
+
+    test "an invalid write deadline refuses to start", %{opts: opts} do
+      Process.flag(:trap_exit, true)
+
+      for deadline <- [0, -1, :infinity, 4_294_967_296] do
+        assert Journal.start_link(Keyword.put(opts, :write_deadline, deadline)) ==
+                 {:error, {:journal_open_failed, :invalid_write_deadline}}
+      end
     end
 
     test "a caller-supplied timeout bounds the call, and the queued write still lands",

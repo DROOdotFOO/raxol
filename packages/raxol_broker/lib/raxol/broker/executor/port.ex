@@ -22,11 +22,14 @@ defmodule Raxol.Broker.Executor.Port do
   @callback stop(handle :: term()) :: :ok
 
   @doc """
-  Call `tool` through `port`. The caller giving up after `timeout` is
-  `{:error, :timeout}`; any other exit of the port is
+  Call `tool` through `port`. A nil port (the session is down) is
+  `{:error, :port_not_ready}` and calls nothing. The caller giving up after
+  `timeout` is `{:error, :timeout}`; any other exit of the port is
   `{:error, {:port_down, reason}}`.
   """
-  @spec call(t(), String.t(), map(), timeout()) :: {:ok, map()} | {:error, term()}
+  @spec call(t() | nil, String.t(), map(), timeout()) :: {:ok, map()} | {:error, term()}
+  def call(nil, _tool, _args, _timeout), do: {:error, :port_not_ready}
+
   def call({module, handle}, tool, args, timeout) do
     module.call(handle, tool, args, timeout)
   catch

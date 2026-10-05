@@ -2,6 +2,7 @@ defmodule Raxol.Broker.IntentTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Broker.Intent
+  alias Raxol.Broker.Test.Hostile
 
   defp d(value), do: Decimal.new(value)
 
@@ -54,5 +55,81 @@ defmodule Raxol.Broker.IntentTest do
 
     assert {:ok, %Intent{id: "intent-7"}} =
              Intent.cancel("order-1", provenance: :human, id: "intent-7")
+  end
+
+  describe "normalize/1" do
+    defp every_kind do
+      p = [provenance: {:untrusted, "email"}, strategy: :momentum]
+
+      for {:ok, intent} <- [
+            Intent.buy_usd("AAPL", d("100"), p),
+            Intent.buy_shares("AAPL", d("2"), provenance: :llm),
+            Intent.sell("AAPL", d("1.5"), provenance: {:untrusted, :rss}),
+            Intent.limit(:buy, "AAPL", d("1"), d("190"), p),
+            Intent.stop_limit(:sell, "AAPL", d("1"), d("180"), d("179"), p),
+            Intent.stop_market(:sell, "AAPL", d("1"), d("180"), p),
+            Intent.option(:buy, "AAPL", d("500"), Keyword.put(p, :params, %{"legs" => [1, 2]})),
+            Intent.advanced(:buy, "AAPL", d("500"), Keyword.put(p, :params, %{"kind" => "oco"})),
+            Intent.cancel("order-1", provenance: :human)
+          ],
+          do: intent
+    end
+
+    test "every constructed kind round-trips unchanged" do
+      intents = every_kind()
+      assert length(intents) == length(Intent.kinds())
+
+      for intent <- intents, do: assert({:ok, ^intent} = Intent.normalize(intent))
+    end
+
+    test "a hostile struct in any field is refused without running its callbacks" do
+      {:ok, intent} = Intent.option(:buy, "AAPL", d("500"), provenance: :llm)
+
+      assert {:error, {:not_plain, [:symbol]}} =
+               Intent.normalize(%{intent | symbol: Hostile.new()})
+
+      assert {:error, {:not_plain, [:params, "legs"]}} =
+               Intent.normalize(%{intent | params: %{"legs" => Hostile.new()}})
+
+      assert {:error, {:not_plain, [:params]}} =
+               Intent.normalize(%{intent | params: Hostile.new()})
+
+      assert {:error, {:not_plain, [:provenance, 1]}} =
+               Intent.normalize(%{intent | provenance: {:untrusted, Hostile.new()}})
+
+      assert {:error, {:not_plain, [:notional]}} =
+               Intent.normalize(%{intent | notional: Hostile.new()})
+
+      assert {:error, :not_an_intent} = Intent.normalize(Hostile.new())
+      refute_received {:hostile, _callback}
+    end
+
+    test "forged decimals, floats, pids and functions are refused" do
+      {:ok, intent} = Intent.buy_shares("AAPL", d("2"), provenance: :human)
+
+      assert {:error, {:not_plain, [:qty]}} =
+               Intent.normalize(%{intent | qty: %Decimal{sign: 1, coef: :inf, exp: 0}})
+
+      assert {:error, {:not_plain, [:qty]}} =
+               Intent.normalize(%{intent | qty: %Decimal{sign: 1, coef: 2.0, exp: 0}})
+
+      assert {:error, {:not_plain, [:qty]}} = Intent.normalize(%{intent | qty: 2.0})
+      assert {:error, {:not_plain, [:strategy]}} = Intent.normalize(%{intent | strategy: self()})
+
+      assert {:error, {:not_plain, [:id]}} =
+               Intent.normalize(%{intent | id: fn -> "intent-1" end})
+    end
+
+    test "plain values that break the constructor rules are refused without echoing them" do
+      {:ok, intent} = Intent.buy_shares("AAPL", d("2"), provenance: :human)
+
+      assert {:error, {:invalid, :qty}} = Intent.normalize(%{intent | qty: d("-1")})
+      assert {:error, {:invalid, :symbol}} = Intent.normalize(%{intent | symbol: "not a ticker"})
+      assert {:error, {:invalid, :kind}} = Intent.normalize(%{intent | kind: :yolo})
+      assert {:error, {:invalid, :provenance}} = Intent.normalize(%{intent | provenance: :model})
+      assert {:error, {:invalid, :params}} = Intent.normalize(%{intent | params: %{"a" => 1}})
+      assert {:error, {:invalid, :id}} = Intent.normalize(%{intent | id: ""})
+      assert {:error, :not_an_intent} = Intent.normalize(%{kind: :buy_shares})
+    end
   end
 end
