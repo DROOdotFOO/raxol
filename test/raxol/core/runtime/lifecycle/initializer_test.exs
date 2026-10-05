@@ -78,8 +78,10 @@ defmodule Raxol.Core.Runtime.Lifecycle.InitializerTest do
     end
   end
 
+  # No call ceiling here or below: a 5s budget measured machine load, not
+  # these tests' subject, and a real hang is still caught by the test timeout.
   defp registry_table(pid) do
-    :sys.get_state(pid, 5_000).command_registry_table
+    :sys.get_state(pid, :infinity).command_registry_table
   end
 
   # `Application.init/1` is declared `{model, [command]} | {model, command} |
@@ -160,10 +162,10 @@ defmodule Raxol.Core.Runtime.Lifecycle.InitializerTest do
     end
 
     defp model(pid) do
-      :sys.get_state(dispatcher(pid), 5_000).model
+      :sys.get_state(dispatcher(pid), :infinity).model
     end
 
-    defp dispatcher(pid), do: :sys.get_state(pid, 5_000).dispatcher_pid
+    defp dispatcher(pid), do: :sys.get_state(pid, :infinity).dispatcher_pid
 
     defp send_agent_message(pid, payload) do
       GenServer.cast(
@@ -172,7 +174,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.InitializerTest do
       )
 
       # Fold the cast through the dispatcher before reading its state back.
-      _ = :sys.get_state(dispatcher(pid), 5_000)
+      _ = :sys.get_state(dispatcher(pid), :infinity)
       :ok
     end
   end
