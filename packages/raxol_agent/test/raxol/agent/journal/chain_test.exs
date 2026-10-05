@@ -20,8 +20,16 @@ defmodule Raxol.Agent.Journal.ChainTest do
     j
   end
 
+  # Listed, not globbed: a pattern built from `base` reads its `\` (Windows
+  # temp dirs) as escapes and matched no segments.
   defp segments(base, session) do
-    base |> Path.join(session) |> Path.join("journal/*.jsonl") |> Path.wildcard() |> Enum.sort()
+    dir = base |> Path.join(session) |> Path.join("journal")
+
+    dir
+    |> File.ls!()
+    |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+    |> Enum.sort()
+    |> Enum.map(&Path.join(dir, &1))
   end
 
   defp head(base, session),
