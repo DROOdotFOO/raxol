@@ -19,6 +19,15 @@ defmodule Raxol.Broker.ExecutorTest do
   @day ~U[2026-10-02 00:00:00.000000Z]
   @account "ACC-1"
 
+  # Resolving a `{:via, __MODULE__, name}` would run this in the caller.
+  defmodule EvilRegistry do
+    @moduledoc false
+    def whereis_name(pid) do
+      send(pid, {:evil_registry, self()})
+      :undefined
+    end
+  end
+
   setup_all do
     unless Code.ensure_loaded?(Raxol.MCP.Client.ReferenceServer.Legacy) and
              Code.ensure_loaded?(Raxol.MCP.Client.Transport.Http) do
@@ -74,9 +83,13 @@ defmodule Raxol.Broker.ExecutorTest do
   defp start_executor!(ctx, extra \\ []) do
     id = {Executor, System.unique_integer([:positive])}
 
-    start_supervised!(
-      Supervisor.child_spec({Executor, executor_opts(ctx, extra)}, id: id, restart: :temporary)
-    )
+    executor =
+      start_supervised!(
+        Supervisor.child_spec({Executor, executor_opts(ctx, extra)}, id: id, restart: :temporary)
+      )
+
+    :ok = Executor.await_port(executor, 5_000)
+    executor
   end
 
   # The policy here is deliberately loose: the executor's `:policy` wins.
@@ -330,12 +343,41 @@ defmodule Raxol.Broker.ExecutorTest do
       assert OrderServer.calls(ctx.server, "review_") == ["review_equity_order"]
       assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
     end
+
+    test "a queued caller that dies is dropped from the queue at once", ctx do
+      executor = start_executor!(ctx)
+      test_pid = self()
+
+      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+        send(test_pid, {:reviewing, self()})
+
+        receive do
+          :go -> :answer
+        end
+      end)
+
+      first = Task.async(fn -> Executor.run(executor, limit("d-first"), context()) end)
+      assert_receive {:reviewing, hook}, 5_000
+
+      caller = spawn(fn -> Executor.run(executor, limit("d-orphan"), context()) end)
+      wait_queued(executor, 1)
+      stop_and_wait(caller)
+      wait_drained(executor)
+
+      send(hook, :go)
+      assert {:ok, %{status: :placed}} = Task.await(first)
+      assert groups_for(ctx.path, "d-orphan") == []
+    end
   end
 
   # The executor answers `:sys` requests while a review is in flight, so this
   # spins on real state, not on time.
   defp wait_queued(executor, n) do
     if :queue.len(:sys.get_state(executor).queue) < n, do: wait_queued(executor, n)
+  end
+
+  defp wait_drained(executor) do
+    if :queue.len(:sys.get_state(executor).queue) > 0, do: wait_drained(executor)
   end
 
   describe "approve re-checks" do
@@ -561,16 +603,73 @@ defmodule Raxol.Broker.ExecutorTest do
   end
 
   describe "port" do
-    test "a port client crash leaves the executor up and later runs refuse", ctx do
-      executor = start_executor!(ctx)
+    test "a killed port client reconnects and the executor places again", ctx do
+      executor = start_executor!(ctx, reconnect_ms: 10)
       %{port: {PortMCP, %{pid: client}}} = :sys.get_state(executor)
 
       stop_and_wait(client)
-
       assert Process.alive?(executor)
 
-      assert {:error, {:port_down, _}} = Executor.run(executor, limit("down"), context())
-      assert groups_for(ctx.path, "down") == []
+      assert :ok = Executor.await_port(executor, 5_000)
+      assert %{port: {PortMCP, %{pid: new_client}}} = :sys.get_state(executor)
+      assert new_client != client
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("back"), context())
+    end
+
+    test "an unreachable session starts, refuses until ready, then places", ctx do
+      {:ok, dns} = Agent.start_link(fn -> {:error, :nxdomain} end)
+
+      session =
+        Keyword.put(OrderServer.session(ctx.server), :resolver, fn host, family ->
+          case Agent.get(dns, & &1) do
+            {:error, reason} -> {:error, reason}
+            :ok -> OrderServer.session(ctx.server)[:resolver].(host, family)
+          end
+        end)
+
+      {:ok, executor} =
+        Executor.start_link(executor_opts(ctx, session: session, reconnect_ms: 10))
+
+      OrderServer.warnings(ctx.server, ["halted"])
+      assert Executor.run(executor, limit("early"), context()) == {:error, :port_not_ready}
+      assert Executor.await_port(executor, 0) == {:error, :port_not_ready}
+      assert groups_for(ctx.path, "early") == []
+      assert Journal.open_groups(ctx.journal) == {:ok, []}
+      assert OrderServer.exchanges(ctx.server) == 0
+
+      Agent.update(dns, fn _ -> :ok end)
+      assert :ok = Executor.await_port(executor, 5_000)
+
+      OrderServer.warnings(ctx.server, [])
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("later"), context())
+    end
+  end
+
+  describe "clock" do
+    test "runs outside the executor: no claim, no receipt key", ctx do
+      test_pid = self()
+      journal = ctx.journal
+
+      clock = fn ->
+        send(test_pid, {:clock, Journal.claim(journal), Executor.receipt_key()})
+        @t0
+      end
+
+      executor = start_executor!(ctx, clock: clock)
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("clock"), context())
+      assert_received {:clock, {:error, :not_an_executor}, nil}
+    end
+
+    test "a clock that returns something other than a UTC DateTime places nothing", ctx do
+      {:ok, clocks} = Agent.start_link(fn -> fn -> @t0 end end)
+      executor = start_executor!(ctx, clock: fn -> Agent.get(clocks, & &1).() end)
+
+      for bad <- [fn -> :now end, fn -> raise "boom" end, fn -> ~N[2026-10-02 14:30:00] end] do
+        Agent.update(clocks, fn _ -> bad end)
+        assert {:error, {:context, _}} = Executor.run(executor, limit("bad-clock"), context())
+      end
+
+      assert groups_for(ctx.path, "bad-clock") == []
       assert OrderServer.calls(ctx.server) == []
     end
   end
@@ -665,8 +764,15 @@ defmodule Raxol.Broker.ExecutorTest do
                Executor.start_link(executor_opts(ctx, policy: [bogus: 1]))
     end
 
-    test "a timeout that is not a positive integer is refused", ctx do
-      for {key, bad} <- [review_timeout: :infinity, place_timeout: 0, review_timeout: "5"] do
+    test "a timeout that is not an integer in 1..4_294_000_000 is refused", ctx do
+      for {key, bad} <- [
+            review_timeout: :infinity,
+            place_timeout: 0,
+            review_timeout: "5",
+            place_timeout: 4_294_967_296,
+            review_timeout: 4_294_000_001,
+            reconnect_ms: 0
+          ] do
         assert Executor.start_link(executor_opts(ctx, [{key, bad}])) ==
                  {:error, {:invalid_timeout, key, bad}}
       end
@@ -675,6 +781,31 @@ defmodule Raxol.Broker.ExecutorTest do
     test "a journal that is not running is refused", ctx do
       assert Executor.start_link(executor_opts(ctx, journal: :no_such_journal)) ==
                {:error, :journal_not_running}
+    end
+
+    test "a journal that is not an atom or pid is refused before any of its code runs", ctx do
+      for journal <- [{:via, __MODULE__.EvilRegistry, self()}, {:global, self()}, "x", nil] do
+        assert Executor.start_link(executor_opts(ctx, journal: journal)) ==
+                 {:error, {:invalid_journal, journal}}
+      end
+
+      refute_received {:evil_registry, _pid}
+    end
+
+    test "a clock that is not a zero-arity function is refused", ctx do
+      clock = fn _ -> @t0 end
+
+      assert Executor.start_link(executor_opts(ctx, clock: clock)) ==
+               {:error, {:invalid_clock, clock}}
+    end
+
+    test "child_spec/1 waits out a review and a place call on shutdown" do
+      assert %{shutdown: 65_000, id: Executor} = Executor.child_spec([])
+
+      assert %{shutdown: 8_000} =
+               Executor.child_spec(review_timeout: 1_000, place_timeout: 2_000)
+
+      assert %{shutdown: 65_000} = Executor.child_spec(review_timeout: :bogus)
     end
 
     test "a session that reaches Robinhood, or is not marked sandbox, is refused", ctx do

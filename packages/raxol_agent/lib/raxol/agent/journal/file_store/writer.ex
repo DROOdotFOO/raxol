@@ -132,10 +132,13 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   Append `events` as consecutive records in ONE Writer call, so no other
   append can land between them. Returns their offsets in order. Nothing is
   appended when any event fails to encode (or, on a chained journal, to seal).
+
+  `timeout` bounds the call (default 5_000 ms). A caller that times out does
+  not withdraw the request: it stays queued and the events land later.
   """
-  @spec append_many(pid(), [map()]) :: {:ok, [non_neg_integer()]} | {:error, term()}
-  def append_many(pid, events) when is_list(events),
-    do: GenServer.call(pid, {:append_many, events})
+  @spec append_many(pid(), [map()], timeout()) :: {:ok, [non_neg_integer()]} | {:error, term()}
+  def append_many(pid, events, timeout \\ 5_000) when is_list(events),
+    do: GenServer.call(pid, {:append_many, events}, timeout)
 
   @doc """
   Atomic check-and-append: run `check` against the freshest on-disk records

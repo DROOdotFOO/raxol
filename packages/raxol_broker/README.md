@@ -149,7 +149,26 @@ end
 
 Under `Raxol.Broker.Supervisor` the executor starts after the journal and
 restarts with it (`:rest_for_one`); the new executor closes any group the
-old one left open, including parked ASKs.
+old one left open, including parked ASKs. The supervisor always binds the
+executor to its own journal: an `:executor` `:journal` naming another one
+makes `start_link/1` return `{:error, {:journal_mismatch, given}}`.
+
+The executor's `init` touches only the journal: it validates its options,
+prepares the MCP session without connecting (a live session still fails
+start), resolves and monitors the journal, claims it, and closes the groups
+left open. The session connects after `init`, without blocking the
+executor. Until it is ready, `run/3` and `approve/3` return
+`{:error, :port_not_ready}` and open nothing;
+`Raxol.Broker.Executor.await_port(executor, timeout \\ 30_000)` returns
+`:ok` once it is. When the connection fails or the session dies, the
+executor stays up, logs it and reconnects after a backoff (`:reconnect_ms`,
+default 1 s, doubling to 60 s, reset once ready). A down endpoint therefore
+never restarts the executor and cannot exhaust the supervisor's restart
+budget, and nothing needs restarting by hand.
+
+`Raxol.Broker.Executor.child_spec/1` sets `shutdown` to the review timeout
+plus the place timeout plus 5 s (65 s with the defaults), so stopping the
+supervisor during an order waits for the order response.
 
 A person answers an ASK later with `approve(executor, token, "name")`,
 `decline(executor, token, "name")` or `close(executor, token, reason)`.
@@ -173,6 +192,19 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   APIs can send an order tool without the executor's review pipeline.
   Every remaining bypass requires impersonating the executor's private
   process-dictionary slots on purpose.
+* **No caller code runs in the executor.** `:journal` must be a
+  registered name (an atom) or a pid; anything else, such as
+  `{:via, mod, name}` or `{:global, name}`, is `{:invalid_journal, value}`,
+  checked first. The `:clock` fun runs in a short-lived Task with a 5 s
+  budget, outside the executor's process; a clock that is not a zero-arity
+  fun is `{:invalid_clock, value}` at start, and one that crashes or
+  returns anything but a UTC `DateTime` fails the call with
+  `{:error, {:context, reason}}` and sends nothing. The receipt key enters
+  the executor's process dictionary only after its claim succeeds.
+* **Bounded timeouts.** `:review_timeout`, `:place_timeout` and
+  `:reconnect_ms` must be integers in 1..4_294_000_000 ms, which leaves
+  headroom under the VM's timer limit; anything else refuses start with
+  `{:invalid_timeout, key, value}`.
 * **Any review warning asks.** A warning turns ALLOW into ASK
   (`:review_warning`); a review response that cannot be read counts as one.
   `approve/3` reads the counters again, journals the approval and re-runs
@@ -182,12 +214,16 @@ A person answers an ASK later with `approve(executor, token, "name")`,
 * **Counters come from the journal.** Decisions are serialized, so two
   callers cannot both pass the daily cap. The daily window is a rolling
   24 hours back from the executor's clock, and no caller input moves it,
-  until #1185 adds a trading calendar the executor owns. A queued run
-  whose caller has died is dropped, never dispatched.
+  until #1185 adds a trading calendar the executor owns. Queued callers
+  are monitored, and a queued run whose caller has died is dropped, never
+  dispatched.
 * **One executor per journal.** The executor claims the journal at start;
   only a process started as an executor can claim, a second one fails with
-  `{:journal_claimed, pid}`, and the journal takes `placing` only from the
-  claimant. The claim lives in the journal's memory, so the executor
+  `{:journal_claimed, pid}`, and the journal takes any group record
+  (`open_group`, `append_to_group`, `append_group`, every entry type) only
+  from the claimant: another process gets `{:error, {:not_claimant, id}}`,
+  and with no claim held every group write is `{:error, :unclaimed}`.
+  Nothing is written either way. Fills are not group records. The claim lives in the journal's memory, so the executor
   monitors the journal and stops with `{:journal_down, reason}` when it
   goes down; its supervisor restarts it, and the new one claims again.
   Callers waiting on it get an exit. A group left open or parked before an
@@ -201,8 +237,9 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   unsupported order kind means no order. Once the order call is made the
   result is `{:ok, _}`: a place call that times out is journaled
   `:unknown` and keeps counting, and an order response the journal could
-  not record comes back with `journaled: false`. If the port's client dies
-  the executor stays up and refuses with `{:port_down, reason}`.
+  not record comes back with `journaled: false`. While the port is not
+  connected the executor stays up and refuses with
+  `{:error, :port_not_ready}` until it reconnects.
 * **Dry run only for now.** Only `mode: :dry_run` runs. The session must
   be marked `sandbox: true` and its URL must not be on `robinhood.com`,
   otherwise it is refused as live before connecting. `mode: :armed` is
@@ -218,7 +255,12 @@ advanced orders are refused with `{:error, {:no_adapter, kind}}`.
 journal per install, `~/.raxol/broker/journal` (override with
 `$RAXOL_BROKER_JOURNAL` or the `:path` option). Start it through
 `Raxol.Broker.Supervisor` (`:rest_for_one`, journal first), passing journal
-options under `:journal`:
+options under `:journal`. Group records are written only by the process
+holding the journal's claim, the executor, so callers go through
+`Raxol.Broker.Executor`; the sequence below is what it writes. Every
+broker write waits as long as the journal takes (`:infinity` on the
+Writer call), so a slow fsync never reports an error for a write that
+lands later.
 
 ```elixir
 children = [{Raxol.Broker.Supervisor, journal: []}]

@@ -39,15 +39,40 @@ defmodule Raxol.Broker.Executor.Port.MCP do
 
   @doc """
   Start the session and wait until it is ready. Options: `:mode`
-  (`:dry_run` or `:armed`, required) and `:call_timeout`, put into the
-  client spec so the client's own timer matches the executor's.
+  (`:dry_run` or `:armed`, required), `:call_timeout`, put into the client
+  spec so the client's own timer matches the executor's, and
+  `:reconnect_ms`, the client's first connect-retry delay.
   """
   @spec start(keyword(), keyword()) :: {:ok, Raxol.Broker.Executor.Port.t()} | {:error, term()}
   def start(spec, opts) when is_list(spec) and is_list(opts) do
     with {:ok, client_spec} <- prepare(spec, opts),
-         {:ok, pid} <- Upstream.start_link(client_spec),
-         {:ok, _info} <- ready(pid) do
+         {:ok, port} <- start_client(client_spec),
+         :ok <- await_ready(port) do
+      {:ok, port}
+    end
+  end
+
+  @doc """
+  Start the client for a spec `prepare/2` returned, linked to the caller,
+  without waiting for it to connect: the client connects on its own and
+  retries a failed connect with backoff. Pair with `await_ready/2`.
+  """
+  @spec start_client(keyword()) :: {:ok, Raxol.Broker.Executor.Port.t()} | {:error, term()}
+  def start_client(client_spec) when is_list(client_spec) do
+    with {:ok, pid} <- Upstream.start_link(client_spec) do
       {:ok, {__MODULE__, %__MODULE__{pid: pid}}}
+    end
+  end
+
+  @doc """
+  Block until the port's session is ready (`:ok`) or `timeout` passes
+  (`{:error, reason}`). Exits if the client is gone.
+  """
+  @spec await_ready(Raxol.Broker.Executor.Port.t(), timeout()) :: :ok | {:error, term()}
+  def await_ready({__MODULE__, %__MODULE__{pid: pid}}, timeout \\ @ready_timeout) do
+    case Upstream.await_ready(pid, timeout) do
+      {:ok, _info} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -78,17 +103,16 @@ defmodule Raxol.Broker.Executor.Port.MCP do
     do: if(live_spec?(normalized), do: {:error, :live_port_in_dry_run}, else: :ok)
 
   defp client_spec(spec, opts) do
-    spec =
-      spec
-      |> Keyword.delete(:registry)
-      |> Keyword.delete(:sandbox)
-      |> Keyword.put_new(:name, :broker_executor)
-
-    case Keyword.get(opts, :call_timeout) do
-      nil -> spec
-      ms when is_integer(ms) and ms > 0 -> Keyword.put(spec, :call_timeout, ms)
-    end
+    spec
+    |> Keyword.delete(:registry)
+    |> Keyword.delete(:sandbox)
+    |> Keyword.put_new(:name, :broker_executor)
+    |> put_ms(:call_timeout, Keyword.get(opts, :call_timeout))
+    |> put_ms(:reconnect_ms, Keyword.get(opts, :reconnect_ms))
   end
+
+  defp put_ms(spec, _key, nil), do: spec
+  defp put_ms(spec, key, ms) when is_integer(ms) and ms > 0, do: Keyword.put(spec, key, ms)
 
   @doc "Does `spec` reach a real brokerage? See the moduledoc."
   @spec live_spec?(keyword()) :: boolean()
@@ -120,14 +144,6 @@ defmodule Raxol.Broker.Executor.Port.MCP do
   defp live_host?(nil), do: true
   defp live_host?("robinhood.com"), do: true
   defp live_host?(host), do: String.ends_with?(host, ".robinhood.com")
-
-  defp ready(pid) do
-    case Upstream.list_tools(pid) do
-      {:ok, _tools} -> {:ok, :ready}
-      {:error, {:not_ready, _status}} -> Upstream.await_ready(pid, @ready_timeout)
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   @impl true
   def call(%__MODULE__{pid: pid}, tool, args, timeout),

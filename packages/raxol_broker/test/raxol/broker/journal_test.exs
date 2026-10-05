@@ -240,7 +240,7 @@ defmodule Raxol.Broker.JournalTest do
       assert :ok = Journal.append_to_group(id, {:order, :placed, %{}}, name)
     end
 
-    test "placing is refused for a process that does not hold the claim",
+    test "a process that does not hold the claim can write no group record",
          %{opts: opts, path: path} do
       name = opts[:name]
       start!(opts)
@@ -249,19 +249,44 @@ defmodule Raxol.Broker.JournalTest do
       {:ok, id} = Journal.open_group(intent, ctx, name)
 
       placed_entries(intent, ctx)
-      |> Enum.take(3)
+      |> Enum.take(1)
       |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
 
-      before = length(records(path))
-      other = Task.async(fn -> Journal.append_to_group(id, {:placing}, name) end)
-      assert Task.await(other) == {:error, {:not_claimant, id}}
+      before = records(path)
+
+      # A forged review, a post-review verdict or approval to unlock placing,
+      # a close to end the executor's group, or placing itself: all refused.
+      forged = [
+        {:review, %{"warnings" => []}},
+        {:verdict, :post_review, Policy.evaluate(intent, ctx)},
+        {:approval, :approved, "mallory"},
+        {:close, :forged},
+        {:placing}
+      ]
+
+      other =
+        Task.async(fn ->
+          for entry <- forged, do: Journal.append_to_group(id, entry, name)
+        end)
+
+      assert Task.await(other) == List.duplicate({:error, {:not_claimant, id}}, length(forged))
 
       group = %{intent: limit("2"), context: ctx, entries: placed_entries(limit("2"), ctx)}
-      other = Task.async(fn -> Journal.append_group(group, name) end)
-      assert {:error, {:not_claimant, _}} = Task.await(other)
 
-      assert length(records(path)) == before
-      assert :ok = Journal.append_to_group(id, {:placing}, name)
+      other =
+        Task.async(fn ->
+          {Journal.open_group(limit("2"), ctx, name), Journal.append_group(group, name)}
+        end)
+
+      assert Task.await(other) ==
+               {{:error, {:not_claimant, nil}}, {:error, {:not_claimant, nil}}}
+
+      assert records(path) == before
+      assert Journal.open_groups(name) == {:ok, [id]}
+
+      placed_entries(intent, ctx)
+      |> Enum.slice(1..3)
+      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
     end
 
     test "placing is refused without a review, and on an ASK without approval",
@@ -417,27 +442,21 @@ defmodule Raxol.Broker.JournalTest do
       assert Journal.claim(name) == :ok
     end
 
-    test "a process that is not an Executor cannot claim, so it cannot write placing",
+    test "with no claim held a plain process can neither claim nor write a group",
          %{opts: opts, path: path} do
       name = opts[:name]
       start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
       intent = limit("2")
       ctx = context()
-      {:ok, id} = Journal.open_group(intent, ctx, name)
-
-      placed_entries(intent, ctx)
-      |> Enum.take(3)
-      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
-
-      before = length(records(path))
+      group = %{intent: intent, context: ctx, entries: placed_entries(intent, ctx)}
 
       # The claim is free, and still a plain process is refused it.
       assert Journal.claim(name) == {:error, :not_an_executor}
-      assert Journal.append_to_group(id, {:placing}, name) == {:error, {:not_claimant, id}}
-
-      group = %{intent: limit("2"), context: ctx, entries: placed_entries(limit("2"), ctx)}
-      assert {:error, {:not_claimant, _}} = Journal.append_group(group, name)
-      assert length(records(path)) == before
+      assert Journal.open_group(intent, ctx, name) == {:error, :unclaimed}
+      assert Journal.append_group(group, name) == {:error, :unclaimed}
+      assert Journal.append_to_group("any-group", {:placing}, name) == {:error, :unclaimed}
+      assert records(path) == []
+      assert Journal.open_groups(name) == {:ok, []}
     end
 
     # The threat-model limit: the journal identifies an Executor by its
@@ -448,19 +467,19 @@ defmodule Raxol.Broker.JournalTest do
       start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
       intent = limit("2")
       ctx = context()
-      {:ok, id} = Journal.open_group(intent, ctx, name)
-
-      placed_entries(intent, ctx)
-      |> Enum.take(3)
-      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
 
       impostor =
         Task.async(fn ->
           Process.put(:"$initial_call", {Raxol.Broker.Executor, :init, 1})
-          {Journal.claim(name), Journal.append_to_group(id, {:placing}, name)}
+          :ok = Journal.claim(name)
+          {:ok, id} = Journal.open_group(intent, ctx, name)
+
+          placed_entries(intent, ctx)
+          |> Enum.take(4)
+          |> Enum.map(&Journal.append_to_group(id, &1, name))
         end)
 
-      assert Task.await(impostor) == {:ok, :ok}
+      assert Task.await(impostor) == [:ok, :ok, :ok, :ok]
     end
 
     test "a float in an order response is recorded as a string and the order counts",
@@ -515,33 +534,46 @@ defmodule Raxol.Broker.JournalTest do
   end
 
   describe "write timeouts" do
+    # A stall is simulated with :sys.suspend; a trace session on
+    # GenServer.call/3 shows the deadline each call was made with, so no test
+    # waits for a timer to fire.
     setup do
-      on_exit(fn -> :erlang.trace_pattern({GenServer, :call, 3}, false, []) end)
+      trace = :trace.session_create(:broker_journal_timeouts, self(), [])
+      on_exit(fn -> :trace.session_destroy(trace) end)
+      1 = :trace.function(trace, {GenServer, :call, 3}, true, [])
+      {:ok, trace: trace}
     end
 
-    test "placing waits on a stalled journal by default, and lands", %{opts: opts} do
-      name = opts[:name]
-      journal = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
-      intent = limit("2")
-      ctx = context()
-      {:ok, id} = Journal.open_group(intent, ctx, name)
-
-      placed_entries(intent, ctx)
-      |> Enum.take(3)
-      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
-
+    # A claimant that writes a reviewed, allowed group and then writes
+    # `placing` when told to.
+    defp placer(name, intent, ctx) do
       parent = self()
 
       placer =
         Task.async(fn ->
           ExecutorIdentity.assume!(name)
-          send(parent, :claimed)
+          {:ok, id} = Journal.open_group(intent, ctx, name)
+
+          placed_entries(intent, ctx)
+          |> Enum.take(3)
+          |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
+
+          send(parent, {:reviewed, id})
           receive do: (:go -> Journal.append_to_group(id, {:placing}, name))
         end)
 
-      assert_receive :claimed
-      :erlang.trace_pattern({GenServer, :call, 3}, true, [])
-      1 = :erlang.trace(placer.pid, true, [:call])
+      assert_receive {:reviewed, id}
+      {placer, id}
+    end
+
+    test "placing waits on a stalled journal by default, and lands",
+         %{opts: opts, trace: trace} do
+      name = opts[:name]
+      journal = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+      intent = limit("2")
+      {placer, id} = placer(name, intent, context())
+
+      1 = :trace.process(trace, placer.pid, true, [:call])
       :ok = :sys.suspend(journal)
       send(placer.pid, :go)
 
@@ -552,6 +584,34 @@ defmodule Raxol.Broker.JournalTest do
       :ok = :sys.resume(journal)
       assert Task.await(placer, :infinity) == :ok
       assert {:ok, ^id} = Journal.placing_for_intent(intent.id, name)
+    end
+
+    # F3: the Writer stalls (a slow fsync) past the 5 s FileStore default
+    # while `placing` is appended. With a deadline on the Writer call the
+    # journal would answer `{:writer_down, :timeout}`, the executor would
+    # close the group as refused, and the queued `placing` would land later.
+    test "placing waits on a stalled Writer, and lands", %{opts: opts, path: path, trace: trace} do
+      name = opts[:name]
+      journal = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+      {base, session} = Journal.location(path)
+      writer = :global.whereis_name({Writer, Path.join(base, session)})
+      intent = limit("2")
+      {placer, id} = placer(name, intent, context())
+
+      1 = :trace.process(trace, journal, true, [:call])
+      :ok = :sys.suspend(writer)
+      send(placer.pid, :go)
+
+      # The journal calls its suspended Writer with no deadline.
+      assert_receive {:trace, ^journal, :call,
+                      {GenServer, :call,
+                       [^writer, {:append_many, [%{"type" => "placing"}]}, :infinity]}}
+
+      :ok = :sys.resume(writer)
+      assert Task.await(placer, :infinity) == :ok
+      assert {:ok, ^id} = Journal.placing_for_intent(intent.id, name)
+      assert {:ok, [^id]} = Journal.open_groups(name)
+      assert %{"type" => "placing", "group_id" => ^id} = List.last(records(path))
     end
 
     test "a caller-supplied timeout bounds the call, and the queued write still lands",

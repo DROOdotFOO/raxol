@@ -21,25 +21,37 @@ defmodule Raxol.Broker.Journal do
   the calling process and monitors it; the claim is released when that
   process exits. Only a `Raxol.Broker.Executor` may claim: a caller whose
   proc_lib initial call is not `{Raxol.Broker.Executor, :init, 1}` is
-  refused with `{:error, :not_an_executor}`, so no other process can take a
-  free claim and write `placing` through this public API. The same process
-  may claim again; any other process is refused with
-  `{:error, {:journal_claimed, pid}}` while the claimant lives. A claim is
-  taken even on a damaged journal; `placing` is still refused there.
+  refused with `{:error, :not_an_executor}`. The same process may claim
+  again; any other process is refused with `{:error, {:journal_claimed,
+  pid}}` while the claimant lives. A claim is taken even on a damaged
+  journal; group writes are still refused there.
+
+  Every group record (`open_group/4`, `append_to_group/4`, `append_group/3`,
+  any entry type) is written only for the claimant. With no claim held the
+  write is refused with `{:error, :unclaimed}`; with one held, any other
+  caller is refused with `{:error, {:not_claimant, id}}` (`id` is nil for a
+  group not yet written). Nothing is written in either case, so no other
+  process can open a group, forge a review, verdict or approval into the
+  executor's open group, close it, or write `placing`. `append_fill/2` is
+  not a group write and takes no claim.
 
   Threat model: the BEAM cannot stop code that deliberately writes into
   another module's private state, e.g. `Process.put(:"$initial_call", ...)`
   in its own process or `:sys.replace_state/2` on this one. The guarantee is
-  that no path through public APIs writes `placing` (and so sends an order)
-  without the Executor's review pipeline; every remaining bypass requires
-  impersonating the Executor's private process-dictionary slots on purpose.
+  that no path through public APIs writes a group record (and so sends an
+  order) without the Executor's review pipeline; every remaining bypass
+  requires impersonating the Executor's private process-dictionary slots on
+  purpose.
 
   ## Write timeouts
 
-  `open_group/4`, `append_to_group/4` and `append_group/3` wait `:infinity`
-  by default (pass a timeout to override). A journal write is a local fsync,
-  so a slow one is still progress, and a caller that gives up does not undo
-  it: the request stays queued and lands later. A timed-out `placing` whose
+  Every broker write waits as long as the journal takes. `open_group/4`,
+  `append_to_group/4` and `append_group/3` wait `:infinity` by default (pass
+  a timeout to override), and the journal waits `:infinity` on its Writer
+  (`Raxol.Agent.Journal.FileStore.append_many/3`), including for fills and
+  the crash closes written on start. A journal write is a local fsync, so a
+  slow one is still progress, and a caller that gives up does not undo it:
+  the request stays queued and lands later. A timed-out `placing` whose
   append lands after the caller closed the group would turn an order that
   was never sent into a counted unknown outcome and make its intent a
   permanent duplicate.
@@ -49,7 +61,8 @@ defmodule Raxol.Broker.Journal do
   `{:placing}` is written immediately before the order call, and only when
   all of these hold (otherwise nothing is written):
 
-    * the caller is the claimant (`{:error, {:not_claimant, id}}`);
+    * the caller is the claimant, as for every group write (`{:error,
+      :unclaimed}` or `{:error, {:not_claimant, id}}`, see "Claim");
     * the group has a `review` record and either its latest `:post_review`
       verdict is ALLOW or it has an approved `approval` record
       (`{:error, {:not_reviewed, id}}`);
@@ -226,7 +239,8 @@ defmodule Raxol.Broker.Journal do
 
   @doc """
   Write the intent and its context snapshot, durable before any review or
-  order call. Returns the new group's id.
+  order call. Returns the new group's id. Only the claimant may open a group
+  (`{:error, :unclaimed}` or `{:error, {:not_claimant, nil}}`, see "Claim").
 
   `opts[:mode]` (`:dry_run` or `:armed`) is stored on the intent record and
   shown by replay; it is omitted when not given. `opts[:timeout]` bounds the
@@ -247,16 +261,18 @@ defmodule Raxol.Broker.Journal do
   end
 
   @doc """
-  Add one record to an open group (see `t:entry/0`):
+  Add one record to an open group (see `t:entry/0`). Only the claimant may
+  add any record (`{:error, :unclaimed}` or `{:error, {:not_claimant, id}}`,
+  see "Claim"):
 
     * `{:verdict, phase, result}`: a DENY finishes the group;
     * `{:review, response}`;
     * `{:approval, :approved | :declined, by}`: a human's answer to an ASK; a
       decline finishes the group as DENY;
     * `{:placing}`: written immediately before the order call; refused unless
-      the caller is the claimant (`{:not_claimant, id}`), the group was
-      reviewed and allowed or approved (`{:not_reviewed, id}`), and no other
-      group placed this intent without failing (`{:duplicate_intent, other}`).
+      the group was reviewed and allowed or approved (`{:not_reviewed, id}`),
+      and no other group placed this intent without failing
+      (`{:duplicate_intent, other}`).
       The journal records the order's notional and counts it from here, and
       refuses with `{:unpriced_order, reason}` when a non-cancel intent cannot
       be priced;
@@ -301,11 +317,11 @@ defmodule Raxol.Broker.Journal do
 
   @doc """
   Claim the journal for the calling process, the only one allowed to write
-  `{:placing}`. Only a `Raxol.Broker.Executor` process may claim (proc_lib
-  initial call `{Raxol.Broker.Executor, :init, 1}`); any other caller gets
-  `{:error, :not_an_executor}`. Released when the claimant exits; the
-  claimant may claim again. Returns `{:error, {:journal_claimed, pid}}` while
-  another live process holds the claim.
+  group records (see "Claim"). Only a `Raxol.Broker.Executor` process may
+  claim (proc_lib initial call `{Raxol.Broker.Executor, :init, 1}`); any
+  other caller gets `{:error, :not_an_executor}`. Released when the claimant
+  exits; the claimant may claim again. Returns `{:error, {:journal_claimed,
+  pid}}` while another live process holds the claim.
   """
   @spec claim(server()) :: :ok | {:error, term()}
   def claim(server \\ __MODULE__), do: GenServer.call(server, :claim)
@@ -427,7 +443,8 @@ defmodule Raxol.Broker.Journal do
     group = new_group(intent, context, seq)
     head = group_head(state, id, intent, context, Keyword.get(opts, :mode))
 
-    with {:ok, records, group} <- apply_entries(entries, id, group, gate(state, caller)),
+    with :ok <- claimant(state, caller, nil),
+         {:ok, records, group} <- apply_entries(entries, id, group, state),
          {:ok, _offsets} <- write(state, head ++ records) do
       {:reply, {:ok, id}, settle(state, id, group, records)}
     else
@@ -436,8 +453,9 @@ defmodule Raxol.Broker.Journal do
   end
 
   def handle_call({:append_to_group, id, entry}, {caller, _tag}, state) do
-    with {:ok, group} <- fetch_open(state, id),
-         {:ok, records, group} <- apply_entries([entry], id, group, gate(state, caller)),
+    with :ok <- claimant(state, caller, id),
+         {:ok, group} <- fetch_open(state, id),
+         {:ok, records, group} <- apply_entries([entry], id, group, state),
          {:ok, _offsets} <- write(state, records) do
       {:reply, :ok, settle(state, id, group, records)}
     else
@@ -496,6 +514,14 @@ defmodule Raxol.Broker.Journal do
 
   defp take_claim(state, pid), do: %{state | claimant: {pid, Process.monitor(pid)}}
 
+  # Every group record comes from the claimant: with no claim held nothing
+  # may write a group, and with one held only its holder may. A claimant
+  # that died before its :DOWN arrived still holds the claim here, so every
+  # other caller stays refused until the claim is released.
+  defp claimant(%{claimant: nil}, _caller, _id), do: {:error, :unclaimed}
+  defp claimant(%{claimant: {caller, _ref}}, caller, _id), do: :ok
+  defp claimant(_state, _caller, id), do: {:error, {:not_claimant, id}}
+
   # -- Entries ------------------------------------------------------------------
 
   defp group_head(state, id, intent, context, mode) do
@@ -525,10 +551,6 @@ defmodule Raxol.Broker.Journal do
       approved?: false
     }
   end
-
-  # The state `entry_record/4` sees: whether the calling process holds the claim.
-  defp gate(state, caller),
-    do: Map.put(state, :claimant?, match?({^caller, _ref}, state.claimant))
 
   # Validate entries in order against the group's state and build their
   # records. The group state carries what the rules need: the group's own
@@ -612,8 +634,6 @@ defmodule Raxol.Broker.Journal do
   defp entry_record(entry, _id, _group, _state), do: {:error, {:invalid_entry, entry}}
 
   defp finish_if(group, finished?), do: %{group | finished?: finished?}
-
-  defp placing_allowed(id, _group, %{claimant?: false}), do: {:error, {:not_claimant, id}}
 
   defp placing_allowed(id, %{reviewed?: true} = group, state)
        when group.post_action == "allow" or group.approved? do
@@ -807,8 +827,11 @@ defmodule Raxol.Broker.Journal do
     })
   end
 
+  # Every broker write waits as long as the Writer takes (see "Write
+  # timeouts"): a deadline here would report a failure for a write that is
+  # still queued and lands later.
   defp write(_state, []), do: {:ok, []}
-  defp write(state, records), do: FileStore.append_many(state.handle, records)
+  defp write(state, records), do: FileStore.append_many(state.handle, records, :infinity)
 
   # A write the Writer refused as damaged means the chain broke under us.
   defp state_after(state, :damaged), do: set_status(state, damage_or(state, :damaged))

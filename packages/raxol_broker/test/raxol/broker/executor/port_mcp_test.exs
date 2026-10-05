@@ -175,6 +175,30 @@ defmodule Raxol.Broker.Executor.PortMCPTest do
     end
   end
 
+  describe "start_client/1 and await_ready/2" do
+    test "start_client returns before connecting; await_ready waits for the session" do
+      server = OrderServer.start()
+      {:ok, dns} = Agent.start_link(fn -> {:error, :nxdomain} end)
+      good = OrderServer.session(server)[:resolver]
+
+      session =
+        Keyword.put(OrderServer.session(server), :resolver, fn host, family ->
+          if Agent.get(dns, & &1) == :ok, do: good.(host, family), else: {:error, :nxdomain}
+        end)
+
+      {:ok, spec} = PortMCP.prepare(session, mode: :dry_run, reconnect_ms: 10)
+      assert spec[:reconnect_ms] == 10
+
+      {:ok, port} = PortMCP.start_client(spec)
+      assert {:error, {:not_ready, _}} = PortMCP.await_ready(port, 0)
+      assert OrderServer.exchanges(server) == 0
+
+      Agent.update(dns, fn _ -> :ok end)
+      assert PortMCP.await_ready(port, 5_000) == :ok
+      assert {:ok, %{is_error: false}} = Port.call(port, "review_equity_order", %{}, 5_000)
+    end
+  end
+
   describe "Port.call/4" do
     test "the caller timing out is {:error, :timeout}" do
       server = OrderServer.start()

@@ -141,6 +141,7 @@ defmodule Mix.Tasks.Raxol.Broker.ReplayTest do
     path: path
   } do
     start_supervised!({Journal, opts})
+    ExecutorIdentity.assume!(name)
     {:ok, _} = Journal.open_group(limit("2"), context(), name)
     stop_supervised!(name)
 
