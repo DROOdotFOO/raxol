@@ -216,7 +216,7 @@ defmodule Raxol.Broker.Test.MCPServer do
 
   @spec start(keyword()) :: pid()
   def start(opts \\ []) do
-    tools = Fixtures.load("tools_list")["tools"]
+    tools = Raxol.Broker.MCP.Fake.recorded_tools()
 
     inner =
       ReferenceServer.seam(Legacy, ReferenceServer.state(:legacy, tools: tools, observer: nil))

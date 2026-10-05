@@ -2,7 +2,7 @@ defmodule Raxol.Broker.ExecutorTest do
   @moduledoc """
   The executor end to end against an in-process MCP server speaking real
   JSON-RPC through the HTTP transport's `:exchange` seam
-  (`Raxol.Broker.Test.OrderServer`), with a real hash-chained journal on disk.
+  (`Raxol.Broker.MCP.Fake`), with a real hash-chained journal on disk.
   """
   use ExUnit.Case, async: true
 
@@ -12,7 +12,8 @@ defmodule Raxol.Broker.ExecutorTest do
   alias Raxol.Broker.Executor.{Place, ReviewReceipt}
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.Policy.Context
-  alias Raxol.Broker.Test.{ExecutorIdentity, Hostile, OrderServer}
+  alias Raxol.Broker.MCP.Fake
+  alias Raxol.Broker.Test.{ExecutorIdentity, Hostile}
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -47,7 +48,7 @@ defmodule Raxol.Broker.ExecutorTest do
     journal_opts = [name: name, path: path, clock: fn -> @t0 end]
     start_journal!(journal_opts)
 
-    {:ok, journal: name, journal_opts: journal_opts, path: path, server: OrderServer.start()}
+    {:ok, journal: name, journal_opts: journal_opts, path: path, server: Fake.start()}
   end
 
   defp d(value), do: Decimal.new(value)
@@ -71,7 +72,7 @@ defmodule Raxol.Broker.ExecutorTest do
     Keyword.merge(
       [
         journal: ctx.journal,
-        session: OrderServer.session(ctx.server),
+        session: Fake.session(ctx.server),
         account_number: @account,
         policy: policy(),
         clock: fn -> @t0 end
@@ -161,7 +162,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert intent_record["mode"] == "dry_run"
 
       assert [{"review_equity_order", review}, {"place_equity_order", place}] =
-               OrderServer.calls(ctx.server)
+               Fake.calls(ctx.server)
 
       refute Map.has_key?(review, "ref_id")
       assert place["ref_id"] == Place.ref_id("int-allow")
@@ -176,7 +177,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
       assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
       assert Executor.run(executor, intent, context()) == {:ok, :duplicate}
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
       assert length(groups_for(ctx.path, "int-dup")) == 1
     end
 
@@ -190,7 +191,7 @@ defmodule Raxol.Broker.ExecutorTest do
                Executor.run(executor, limit("cap-2"), lying)
 
       assert types(ctx.path, gid) == ~w(intent context verdict)
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
     end
 
     test "context.policy is ignored in favour of the :policy start option", ctx do
@@ -234,14 +235,14 @@ defmodule Raxol.Broker.ExecutorTest do
 
   describe "review warnings" do
     setup ctx do
-      OrderServer.warnings(ctx.server, ["Pattern day trader check"])
+      Fake.warnings(ctx.server, ["Pattern day trader check"])
       {:ok, executor: start_executor!(ctx)}
     end
 
     test "turn ALLOW into a parked ASK with no place call", ctx do
       assert {:ask, gid, prompts} = Executor.run(ctx.executor, limit("warn-1"), context())
       assert [{:review_warning, _}] = prompts
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
       assert types(ctx.path, gid) == ~w(intent context verdict review verdict)
       assert List.last(group(ctx.path, gid))["result"]["action"] == "ask"
       assert [%{group_id: ^gid}] = Executor.parked(ctx.executor)
@@ -259,7 +260,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert types(ctx.path, gid) ==
                ~w(intent context verdict review verdict approval verdict placing order)
 
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
       assert Executor.parked(ctx.executor) == []
       assert Executor.approve(ctx.executor, gid, "droo") == {:error, {:not_parked, gid}}
     end
@@ -274,7 +275,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert List.last(group(ctx.path, declined))["decision"] == "declined"
       assert List.last(group(ctx.path, closed))["reason"] == "ask_timeout"
       assert Executor.approve(ctx.executor, declined, "droo") == {:error, {:not_parked, declined}}
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
       assert Journal.open_groups(ctx.journal) == {:ok, []}
     end
 
@@ -293,10 +294,10 @@ defmodule Raxol.Broker.ExecutorTest do
 
     test "parked/1 answers while a review is in flight", ctx do
       {:ask, gid, _} = Executor.run(ctx.executor, limit("warn-8"), context())
-      OrderServer.warnings(ctx.server, [])
+      Fake.warnings(ctx.server, [])
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, {:reviewing, self()})
 
         receive do
@@ -319,7 +320,7 @@ defmodule Raxol.Broker.ExecutorTest do
       executor = start_executor!(ctx)
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, {:reviewing, self()})
 
         receive do
@@ -340,15 +341,15 @@ defmodule Raxol.Broker.ExecutorTest do
       assert Executor.parked(executor) == []
 
       assert groups_for(ctx.path, "q-orphan") == []
-      assert OrderServer.calls(ctx.server, "review_") == ["review_equity_order"]
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "review_") == ["review_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
     end
 
     test "a queued caller that dies is dropped from the queue at once", ctx do
       executor = start_executor!(ctx)
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, {:reviewing, self()})
 
         receive do
@@ -382,15 +383,15 @@ defmodule Raxol.Broker.ExecutorTest do
 
   describe "approve re-checks" do
     test "a cap reached while parked denies", ctx do
-      OrderServer.warnings(ctx.server, ["Pattern day trader check"])
+      Fake.warnings(ctx.server, ["Pattern day trader check"])
       executor = start_executor!(ctx, policy: policy("1000", "400"))
       {:ask, gid, _} = Executor.run(executor, limit("warn-3"), context())
 
-      OrderServer.warnings(ctx.server, [])
+      Fake.warnings(ctx.server, [])
       assert {:ok, %{status: :placed}} = Executor.run(executor, limit("other"), context())
 
       assert {:deny, ^gid, {:daily_notional_cap, _}} = Executor.approve(executor, gid, "droo")
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
       assert List.last(types(ctx.path, gid)) == "verdict"
     end
   end
@@ -414,8 +415,8 @@ defmodule Raxol.Broker.ExecutorTest do
       executor = start_executor!(ctx)
 
       assert {:error, _reason} = Executor.run(executor, limit("refused"), context())
-      assert OrderServer.calls(ctx.server, "review_") == ["review_equity_order"]
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "review_") == ["review_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == []
 
       stop_and_wait(executor)
       restart_journal!(ctx)
@@ -426,13 +427,13 @@ defmodule Raxol.Broker.ExecutorTest do
     test "a journal damaged mid-flight refuses the review record; nothing is placed", ctx do
       executor = start_executor!(ctx)
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         flip_byte!(ctx.path)
         {:broken, _} = Journal.verify(ctx.journal)
       end)
 
       assert {:error, {:journal_damaged, _}} = Executor.run(executor, limit("dmg"), context())
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
     end
 
     test "a journal already damaged refuses before any tool call", ctx do
@@ -444,14 +445,14 @@ defmodule Raxol.Broker.ExecutorTest do
       assert {:error, {:journal_damaged, _}} =
                Executor.run(executor, limit("second"), context())
 
-      assert length(OrderServer.calls(ctx.server)) == 2
+      assert length(Fake.calls(ctx.server)) == 2
     end
 
     test "an order the journal cannot record is still :ok, with journaled: false", ctx do
       executor = start_executor!(ctx)
       path = ctx.path
 
-      OrderServer.on_call(ctx.server, "place_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "place_equity_order", fn _args ->
         Process.exit(writer(path), :kill)
         :answer
       end)
@@ -459,7 +460,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert {:ok, %{status: :placed, journaled: false, journal_error: _reason}} =
                Executor.run(executor, limit("unjournaled"), context())
 
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
     end
   end
 
@@ -469,7 +470,7 @@ defmodule Raxol.Broker.ExecutorTest do
       executor = start_executor!(ctx)
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, :reviewing)
         Process.exit(executor, :kill)
         :hang
@@ -485,18 +486,18 @@ defmodule Raxol.Broker.ExecutorTest do
       [first] = groups_for(ctx.path, "restart-1")
       assert List.last(group(ctx.path, first))["reason"] == "crash_before_verdict"
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
+      Fake.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
       executor = start_executor!(ctx)
 
       assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
       assert Executor.run(executor, intent, context()) == {:ok, :duplicate}
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
     end
 
     test "an executor restart alone closes the group it left open", ctx do
       executor = start_executor!(ctx)
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         Process.exit(executor, :kill)
         :hang
       end)
@@ -511,7 +512,7 @@ defmodule Raxol.Broker.ExecutorTest do
     end
 
     test "a parked ASK does not survive a restart", ctx do
-      OrderServer.warnings(ctx.server, ["halted"])
+      Fake.warnings(ctx.server, ["halted"])
       executor = start_executor!(ctx)
       {:ask, gid, _} = Executor.run(executor, limit("parked-restart"), context())
 
@@ -523,11 +524,11 @@ defmodule Raxol.Broker.ExecutorTest do
       assert %{"type" => "close", "reason" => "executor_restarted"} =
                List.last(group(ctx.path, gid))
 
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
     end
 
     test "a second executor on the same journal is refused; the first keeps its ASK", ctx do
-      OrderServer.warnings(ctx.server, ["halted"])
+      Fake.warnings(ctx.server, ["halted"])
       executor = start_executor!(ctx)
       {:ask, gid, _} = Executor.run(executor, limit("claimed"), context())
 
@@ -560,7 +561,7 @@ defmodule Raxol.Broker.ExecutorTest do
       executor = start_executor!(ctx)
       path = ctx.path
 
-      OrderServer.on_call(ctx.server, "place_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "place_equity_order", fn _args ->
         Process.exit(writer(path), :kill)
         Process.exit(executor, :kill)
         :hang
@@ -574,15 +575,15 @@ defmodule Raxol.Broker.ExecutorTest do
       assert List.last(group(ctx.path, gid))["reason"] == "crash_outcome_unknown"
       assert Journal.today_notional(@day, ctx.journal) == {:ok, d("250")}
 
-      OrderServer.on_call(ctx.server, "place_equity_order", fn _args -> :answer end)
+      Fake.on_call(ctx.server, "place_equity_order", fn _args -> :answer end)
       executor = start_executor!(ctx)
       assert Executor.run(executor, intent, context()) == {:ok, :duplicate}
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
     end
 
     test "a place call that times out is journaled :unknown and stays counted", ctx do
       executor = start_executor!(ctx, place_timeout: 100)
-      OrderServer.on_call(ctx.server, "place_equity_order", fn _args -> :hang end)
+      Fake.on_call(ctx.server, "place_equity_order", fn _args -> :hang end)
 
       intent = limit("timeout")
       assert {:ok, %{group_id: gid, status: :unknown}} = Executor.run(executor, intent, context())
@@ -595,12 +596,41 @@ defmodule Raxol.Broker.ExecutorTest do
 
     test "a JSON-RPC rejection is :failed and stops counting", ctx do
       executor = start_executor!(ctx)
-      OrderServer.on_call(ctx.server, "place_equity_order", fn _args -> {:rpc_error, -32_602} end)
+      Fake.on_call(ctx.server, "place_equity_order", fn _args -> {:rpc_error, -32_602} end)
 
       assert {:ok, %{status: :failed}} = Executor.run(executor, limit("rejected"), context())
       assert Journal.today_notional(@day, ctx.journal) == {:ok, d("0")}
     end
+
+    test "a 429 on place is :unknown, stays counted, and is never re-sent", ctx do
+      executor = start_executor!(ctx)
+      Fake.inject(ctx.server, [{"place_equity_order", {:http, 429, 1}}])
+
+      intent = limit("throttled")
+      assert {:ok, %{group_id: gid, status: :unknown}} = Executor.run(executor, intent, context())
+      assert %{"type" => "order", "status" => "unknown"} = List.last(group(ctx.path, gid))
+      assert Journal.today_notional(@day, ctx.journal) == {:ok, d("250")}
+
+      assert Executor.run(executor, intent, context()) == {:ok, :duplicate}
+      assert [{"tools/call", "place_equity_order", 429}] = place_requests(ctx.server)
+      assert Fake.orders(ctx.server) == []
+    end
+
+    test "a 429 on review places nothing and leaves the intent free to retry", ctx do
+      executor = start_executor!(ctx)
+      Fake.inject(ctx.server, [{"review_equity_order", {:http, 429}}])
+
+      intent = limit("review-throttled")
+      assert {:error, _reason} = Executor.run(executor, intent, context())
+      assert place_requests(ctx.server) == []
+
+      assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
+      assert [%{"state" => "queued"}] = Fake.orders(ctx.server)
+    end
   end
+
+  defp place_requests(fake),
+    do: for({"tools/call", "place_" <> _, _status} = request <- Fake.requests(fake), do: request)
 
   describe "port" do
     test "a killed port client reconnects and the executor places again", ctx do
@@ -620,27 +650,27 @@ defmodule Raxol.Broker.ExecutorTest do
       {:ok, dns} = Agent.start_link(fn -> {:error, :nxdomain} end)
 
       session =
-        Keyword.put(OrderServer.session(ctx.server), :resolver, fn host, family ->
+        Keyword.put(Fake.session(ctx.server), :resolver, fn host, family ->
           case Agent.get(dns, & &1) do
             {:error, reason} -> {:error, reason}
-            :ok -> OrderServer.session(ctx.server)[:resolver].(host, family)
+            :ok -> Fake.session(ctx.server)[:resolver].(host, family)
           end
         end)
 
       {:ok, executor} =
         Executor.start_link(executor_opts(ctx, session: session, reconnect_ms: 10))
 
-      OrderServer.warnings(ctx.server, ["halted"])
+      Fake.warnings(ctx.server, ["halted"])
       assert Executor.run(executor, limit("early"), context()) == {:error, :port_not_ready}
       assert Executor.await_port(executor, 0) == {:error, :port_not_ready}
       assert groups_for(ctx.path, "early") == []
       assert Journal.open_groups(ctx.journal) == {:ok, []}
-      assert OrderServer.exchanges(ctx.server) == 0
+      assert Fake.exchanges(ctx.server) == 0
 
       Agent.update(dns, fn _ -> :ok end)
       assert :ok = Executor.await_port(executor, 5_000)
 
-      OrderServer.warnings(ctx.server, [])
+      Fake.warnings(ctx.server, [])
       assert {:ok, %{status: :placed}} = Executor.run(executor, limit("later"), context())
     end
   end
@@ -670,17 +700,17 @@ defmodule Raxol.Broker.ExecutorTest do
       end
 
       assert groups_for(ctx.path, "bad-clock") == []
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
     end
   end
 
   describe "review receipts" do
     setup ctx do
-      OrderServer.warnings(ctx.server, ["halted"])
+      Fake.warnings(ctx.server, ["halted"])
       executor = start_executor!(ctx)
       intent = limit("rcpt")
       {:ask, gid, _} = Executor.run(executor, intent, context())
-      {:ok, port} = PortMCP.start(OrderServer.session(ctx.server), mode: :dry_run)
+      {:ok, port} = PortMCP.start(Fake.session(ctx.server), mode: :dry_run)
       key = :crypto.strong_rand_bytes(32)
 
       env = %{port: port, journal: ctx.journal, account: @account, timeout: 5_000}
@@ -692,7 +722,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert Executor.receipt_key() == nil
 
       assert Place.run(receipt, ctx.intent, ctx.gid, ctx.env) == {:error, :invalid_receipt}
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
       refute "placing" in types(ctx.path, ctx.gid)
     end
 
@@ -717,7 +747,7 @@ defmodule Raxol.Broker.ExecutorTest do
         assert Place.run(receipt, intent, gid, ctx.env) == {:error, :invalid_receipt}
       end
 
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
     end
 
     test "a valid receipt from a process that is not the claimant is refused", ctx do
@@ -727,7 +757,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert Place.run(receipt, ctx.intent, ctx.gid, ctx.env) ==
                {:error, {:not_claimant, ctx.gid}}
 
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
       refute "placing" in types(ctx.path, ctx.gid)
     end
 
@@ -741,7 +771,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
       assert {:error, _refused} = Place.run(receipt, ctx.intent, ctx.gid, ctx.env)
 
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
       assert Enum.count(types(ctx.path, ctx.gid), &(&1 == "placing")) == 1
     end
   end
@@ -814,7 +844,7 @@ defmodule Raxol.Broker.ExecutorTest do
     end
 
     test "a session that reaches Robinhood, or is not marked sandbox, is refused", ctx do
-      session = OrderServer.session(ctx.server)
+      session = Fake.session(ctx.server)
       live = Keyword.put(session, :url, "https://agent.robinhood.com/mcp/trading")
       unmarked = Keyword.delete(session, :sandbox)
 
@@ -823,7 +853,7 @@ defmodule Raxol.Broker.ExecutorTest do
                  {:error, :live_port_in_dry_run}
       end
 
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
     end
   end
 
@@ -849,7 +879,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
       refute_received {:hostile, _callback}
       assert records(ctx.path) == before
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
       assert Process.alive?(executor)
       assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
     end
@@ -859,7 +889,7 @@ defmodule Raxol.Broker.ExecutorTest do
       %{port: {PortMCP, %{pid: client}}} = :sys.get_state(executor)
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, {:reviewing, self()})
 
         receive do
@@ -887,21 +917,21 @@ defmodule Raxol.Broker.ExecutorTest do
       [gid] = groups_for(ctx.path, "port-gone")
       refute "placing" in types(ctx.path, gid)
       assert List.last(group(ctx.path, gid))["reason"] == "port_not_ready"
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
+      Fake.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
       assert :ok = Executor.await_port(executor, 5_000)
       assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
     end
 
     test "a client that dies while connecting leaves the executor up", ctx do
       {:ok, dns} = Agent.start_link(fn -> :raise end)
       test_pid = self()
-      good = OrderServer.session(ctx.server)[:resolver]
+      good = Fake.session(ctx.server)[:resolver]
 
       session =
-        Keyword.put(OrderServer.session(ctx.server), :resolver, fn host, family ->
+        Keyword.put(Fake.session(ctx.server), :resolver, fn host, family ->
           case Agent.get(dns, & &1) do
             :raise ->
               send(test_pid, :resolving)
@@ -930,7 +960,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
     test "await_port refuses a timeout past the timer limit and stays up", ctx do
       session =
-        Keyword.put(OrderServer.session(ctx.server), :resolver, fn _host, _family ->
+        Keyword.put(Fake.session(ctx.server), :resolver, fn _host, _family ->
           {:error, :nxdomain}
         end)
 
@@ -945,13 +975,13 @@ defmodule Raxol.Broker.ExecutorTest do
     end
 
     test "approvals queued behind a review drain one per callback, in order", ctx do
-      OrderServer.warnings(ctx.server, ["halted"])
+      Fake.warnings(ctx.server, ["halted"])
       executor = start_executor!(ctx)
       {:ask, g1, _} = Executor.run(executor, limit("drain-1"), context())
       {:ask, g2, _} = Executor.run(executor, limit("drain-2"), context())
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, {:reviewing, self()})
 
         receive do
@@ -985,7 +1015,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert_receive {:drain, 0}
       assert_receive {:drain, 1}
 
-      refs = for {"place_" <> _, args} <- OrderServer.calls(ctx.server), do: args["ref_id"]
+      refs = for {"place_" <> _, args} <- Fake.calls(ctx.server), do: args["ref_id"]
       assert refs == [Place.ref_id("drain-1"), Place.ref_id("drain-2")]
     end
 
@@ -1002,7 +1032,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert_receive {:DOWN, ^ref, :process, ^executor, {:journal_down, {:writer_stalled, 50}}},
                      5_000
 
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
     end
   end
 
@@ -1022,7 +1052,7 @@ defmodule Raxol.Broker.ExecutorTest do
       refute_received {:hostile, _callback}
       assert Process.alive?(executor)
       assert records(ctx.path) == before
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
     end
 
     test "a port client stopped with a struct reason runs no protocol and reconnects", ctx do
@@ -1059,14 +1089,14 @@ defmodule Raxol.Broker.ExecutorTest do
 
       assert Process.alive?(executor)
       assert groups_for(ctx.path, "odd-calendar") == []
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
     end
 
     test "a stale :drain during a review is ignored; the queued run completes", ctx do
       executor = start_executor!(ctx)
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, {:reviewing, self()})
 
         receive do
@@ -1076,7 +1106,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
       held = Task.async(fn -> Executor.run(executor, limit("stale-held"), context()) end)
       assert_receive {:reviewing, hook}, 5_000
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
+      Fake.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
 
       # Suspended, the executor takes the queued call and the stale :drain
       # in this order once resumed, while the held review keeps it busy.
@@ -1095,7 +1125,7 @@ defmodule Raxol.Broker.ExecutorTest do
       assert_receive {^ref, {:ok, %{status: :placed}}}, 5_000
       refute_received {:DOWN, ^ref, :process, _, _}
 
-      assert OrderServer.calls(ctx.server, "place_") == [
+      assert Fake.calls(ctx.server, "place_") == [
                "place_equity_order",
                "place_equity_order"
              ]
@@ -1106,7 +1136,7 @@ defmodule Raxol.Broker.ExecutorTest do
       %{port: {PortMCP, %{pid: client}}} = :sys.get_state(executor)
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+      Fake.on_call(ctx.server, "review_equity_order", fn _args ->
         send(test_pid, {:reviewing, self()})
 
         receive do
@@ -1134,12 +1164,12 @@ defmodule Raxol.Broker.ExecutorTest do
       assert {:ok, %{status: :failed, response: %{"not_sent" => true}, journaled: true}} =
                Task.await(run)
 
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
 
-      OrderServer.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
+      Fake.on_call(ctx.server, "review_equity_order", fn _args -> :answer end)
       assert :ok = Executor.await_port(executor, 5_000)
       assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
-      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
     end
   end
 end

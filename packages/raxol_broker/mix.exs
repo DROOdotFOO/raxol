@@ -41,6 +41,9 @@ defmodule RaxolBroker.MixProject do
       {:castore, "~> 1.0"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
+      # `Raxol.Broker.MCP.Fake` is built on raxol_mcp's reference server,
+      # which compiles only with plug (optional upstream).
+      {:plug, "~> 1.16"},
       {:stream_data, "~> 1.0", only: [:dev, :test]},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
@@ -63,7 +66,7 @@ defmodule RaxolBroker.MixProject do
   defp package do
     [
       name: "raxol_broker",
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md),
+      files: ~w(lib priv .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

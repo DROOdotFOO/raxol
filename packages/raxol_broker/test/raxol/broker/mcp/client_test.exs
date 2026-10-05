@@ -15,6 +15,7 @@ defmodule Raxol.Broker.MCP.ClientTest do
   alias Raxol.Broker.CredentialStore
   alias Raxol.Broker.Login
   alias Raxol.Broker.MCP.Client
+  alias Raxol.Broker.MCP.Fake
   alias Raxol.Broker.Test.AuthServer
   alias Raxol.Broker.Test.Browser
   alias Raxol.Broker.Test.Fixtures
@@ -264,5 +265,56 @@ defmodule Raxol.Broker.MCP.ClientTest do
     for secret <- ctx.secrets, do: refute(log =~ secret)
     refute log =~ ~r/authorization/i
     refute log =~ "Bearer"
+  end
+
+  describe "throttling" do
+    defp start_against_fake(ctx, fake, backoff) do
+      seed(ctx)
+
+      opts = [
+        store: ctx.store,
+        auth: [http_fn: AuthServer.http_fn(ctx.auth)],
+        mcp: Fake.mcp_opts(fake),
+        connect_timeout: 5_000,
+        backoff: backoff
+      ]
+
+      start_supervised!({Client, opts})
+    end
+
+    defp statuses(fake, tool),
+      do: for({"tools/call", ^tool, status} <- Fake.requests(fake), do: status)
+
+    test "a 429 is retried with backoff until it answers", ctx do
+      fake =
+        Fake.start(
+          quotes: %{"AAPL" => "125"},
+          faults: [{"get_equity_quotes", {:http, 429}, 2}]
+        )
+
+      broker = start_against_fake(ctx, fake, base_ms: 1)
+
+      assert {:ok, %{is_error: false}} =
+               Client.call(broker, "get_equity_quotes", %{"symbols" => ["AAPL"]})
+
+      assert statuses(fake, "get_equity_quotes") == [429, 429, 200]
+      assert AuthServer.refresh_count(ctx.auth) == 0
+    end
+
+    test "after :retries the throttle status is returned", ctx do
+      fake = Fake.start(faults: [{"get_accounts", {:http, 503}, 10}])
+      broker = start_against_fake(ctx, fake, base_ms: 1, retries: 2)
+
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      assert statuses(fake, "get_accounts") == [503, 503, 503]
+    end
+
+    test "a status that is not throttling is not retried", ctx do
+      fake = Fake.start(faults: [{"get_accounts", {:http, 500}}])
+      broker = start_against_fake(ctx, fake, base_ms: 1)
+
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 500}}
+      assert statuses(fake, "get_accounts") == [500]
+    end
   end
 end

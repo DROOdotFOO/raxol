@@ -392,6 +392,35 @@ Control characters in recorded text are printed escaped, never raw. The task
 reads without taking the writer lock, so it works while the broker runs, and
 refuses a journal whose chain does not verify.
 
+## Fake server
+
+`Raxol.Broker.MCP.Fake` stands in for Robinhood's MCP server in tests, dry
+runs and backtests. It needs no account and opens no socket.
+
+```elixir
+fake =
+  Raxol.Broker.MCP.Fake.start(
+    quotes: %{"AAPL" => "125.00"},
+    warnings: [],
+    reject: ["GME"],
+    order_states: ["queued", "confirmed", "filled"],
+    faults: [{"place_equity_order", {:http, 429}}]
+  )
+
+children = [
+  {Raxol.Broker.Supervisor,
+   executor: [session: Raxol.Broker.MCP.Fake.session(fake), account_number: "FAKE-0001", policy: policy]}
+]
+
+Raxol.Broker.MCP.Fake.calls(fake)     # tools/call that reached it, with arguments
+Raxol.Broker.MCP.Fake.requests(fake)  # every exchange with its HTTP status
+Raxol.Broker.MCP.Fake.orders(fake)
+```
+
+The read-only session takes it as `mcp: Raxol.Broker.MCP.Fake.mcp_opts(fake)`.
+That session retries a `429`, `502`, `503` or `504` with doubling backoff
+(`:backoff` option); the executor's order port never retries.
+
 ## Robinhood sign-in
 
 ```elixir

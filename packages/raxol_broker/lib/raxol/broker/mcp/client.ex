@@ -41,13 +41,24 @@ defmodule Raxol.Broker.MCP.Client do
     answers `{:error, {:store_failed, reason}}`, and retries the write on the
     next request.
 
+  ## Throttling
+
+  Every call this session makes is read-only, so a `429`, `502`, `503` or
+  `504` is retried after a delay doubling from `:backoff`'s `:base_ms`
+  (default 500) up to `:max_ms` (default 8000), at most `:retries` times
+  (default 3); then the status is returned as `{:error, {:http, status}}`.
+  The delay does not read `Retry-After`: the transport answers a non-2xx
+  status without its headers. Order tools never take this path (see
+  `Raxol.Broker.Executor.Port`), so a throttled order is never resent.
+
   ## Options
 
   `:credential` (else read from the store), `:store` (options for
   `Raxol.Broker.CredentialStore`), `:url`, `:auth` (options for
   `Raxol.Agent.Auth.Robinhood.refresh/2`, e.g. `:http_fn`), `:mcp` (extra
   `Raxol.MCP.Client` spec keys such as `:resolver` or `:exchange`),
-  `:refresh_skew`, `:connect_timeout`, `:name`.
+  `:refresh_skew`, `:backoff` (`:base_ms`, `:max_ms`, `:retries`),
+  `:connect_timeout`, `:name`.
 
   Neither `Inspect` nor `format_status/1` (what `:sys.get_status/1` and crash
   reports print) shows the credential, and no log line here carries a token.
@@ -182,7 +193,8 @@ defmodule Raxol.Broker.MCP.Client do
         auth: Keyword.get(opts, :auth, []),
         mcp: Keyword.get(opts, :mcp, []),
         skew: Keyword.get(opts, :refresh_skew, @default_skew),
-        connect_timeout: Keyword.get(opts, :connect_timeout, @default_connect_timeout)
+        connect_timeout: Keyword.get(opts, :connect_timeout, @default_connect_timeout),
+        backoff: backoff_config(Keyword.get(opts, :backoff, []))
       }
 
       state = %State{
@@ -274,6 +286,9 @@ defmodule Raxol.Broker.MCP.Client do
     drop_tables(state.tables)
     {:noreply, %{state | inner: nil, tables: nil, tools: nil}}
   end
+
+  def handle_info({:backoff_retry, from, request, attempt}, state),
+    do: {:noreply, admit(state, from, request, attempt)}
 
   def handle_info(_other, state), do: {:noreply, state}
 
@@ -389,6 +404,14 @@ defmodule Raxol.Broker.MCP.Client do
   defp act(:refresh, state, {from, request, _attempt, _generation}, _result),
     do: state |> start_refresh() |> enqueue(from, request, :retry)
 
+  defp act(:backoff, state, {from, request, attempt, _generation}, _result) do
+    n = throttled_count(attempt)
+    %{base_ms: base, max_ms: max} = state.config.backoff
+    delay = min(base * Integer.pow(2, n), max)
+    Process.send_after(self(), {:backoff_retry, from, request, {:throttled, n + 1}}, delay)
+    state
+  end
+
   # A request sent with a token (or on an inner client) that has since been
   # replaced, or answered while that replacement is under way, is retried on
   # the new one rather than spending another refresh on a stale answer. A
@@ -398,6 +421,7 @@ defmodule Raxol.Broker.MCP.Client do
       locked_out?(state, result) -> :unauthorized
       stale?(state, generation, result) -> :retry_now
       awaiting_refresh?(state, result) -> :retry_after_refresh
+      throttled?(state, attempt, result) -> :backoff
       not unauthorized?(result) -> :reply
       attempt == :retry or state.fresh -> :lock_out
       true -> :refresh
@@ -416,6 +440,24 @@ defmodule Raxol.Broker.MCP.Client do
   defp retryable?({:error, :upstream_down}), do: true
   defp retryable?({:error, :breaker_open}), do: true
   defp retryable?(result), do: unauthorized?(result)
+
+  @throttle_statuses [429, 502, 503, 504]
+
+  defp throttled?(state, attempt, {:error, {:http, status}}) when status in @throttle_statuses,
+    do: throttled_count(attempt) < state.config.backoff.retries
+
+  defp throttled?(_state, _attempt, _result), do: false
+
+  defp throttled_count({:throttled, n}), do: n
+  defp throttled_count(_attempt), do: 0
+
+  defp backoff_config(opts) do
+    %{
+      base_ms: Keyword.get(opts, :base_ms, 500),
+      max_ms: Keyword.get(opts, :max_ms, 8_000),
+      retries: Keyword.get(opts, :retries, 3)
+    }
+  end
 
   defp shape(:list_tools, {:ok, tools}), do: {:ok, allowed(tools)}
   defp shape(_request, result), do: result
