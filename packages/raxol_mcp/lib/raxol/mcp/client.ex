@@ -93,7 +93,8 @@ defmodule Raxol.MCP.Client do
   @type tool :: %{
           name: String.t(),
           description: String.t(),
-          input_schema: map()
+          input_schema: map(),
+          annotations: map()
         }
 
   @type call_result :: %{
@@ -1135,7 +1136,8 @@ defmodule Raxol.MCP.Client do
     %{
       name: name,
       description: bounded(Map.get(tool_map, "description")),
-      input_schema: schema(Map.get(tool_map, "inputSchema"))
+      input_schema: schema(Map.get(tool_map, "inputSchema")),
+      annotations: schema(Map.get(tool_map, "annotations"))
     }
   end
 

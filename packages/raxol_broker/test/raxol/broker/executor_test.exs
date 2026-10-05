@@ -14,6 +14,7 @@ defmodule Raxol.Broker.ExecutorTest do
   alias Raxol.Broker.Policy.Context
   alias Raxol.Broker.MCP.Fake
   alias Raxol.Broker.Test.{ExecutorIdentity, Hostile}
+  alias Raxol.Broker.Tools.Catalog
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -713,7 +714,14 @@ defmodule Raxol.Broker.ExecutorTest do
       {:ok, port} = PortMCP.start(Fake.session(ctx.server), mode: :dry_run)
       key = :crypto.strong_rand_bytes(32)
 
-      env = %{port: port, journal: ctx.journal, account: @account, timeout: 5_000}
+      env = %{
+        port: port,
+        catalog: Catalog.static(),
+        journal: ctx.journal,
+        account: @account,
+        timeout: 5_000
+      }
+
       {:ok, executor: executor, intent: intent, gid: gid, key: key, env: env}
     end
 
@@ -1170,6 +1178,51 @@ defmodule Raxol.Broker.ExecutorTest do
       assert :ok = Executor.await_port(executor, 5_000)
       assert {:ok, %{status: :placed}} = Executor.run(executor, intent, context())
       assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
+    end
+  end
+
+  describe "tool catalog" do
+    defp served(name, change) do
+      Catalog.recorded_tools() |> Enum.find(&(&1["name"] == name)) |> change.()
+    end
+
+    defp add_property(tool),
+      do: put_in(tool, ["inputSchema", "properties", "extra"], %{"type" => "string"})
+
+    test "a place tool whose schema changed since the capture is refused; nothing is sent",
+         ctx do
+      fake = Fake.start(tools: [served("place_equity_order", &add_property/1)])
+      executor = start_executor!(ctx, session: Fake.session(fake))
+
+      assert {:error, {:tool_refused, "place_equity_order", :unknown}} =
+               Executor.run(executor, limit("drifted-place"), context())
+
+      assert Fake.calls(fake, "review_") == ["review_equity_order"]
+      assert Fake.calls(fake, "place_") == []
+      assert Journal.open_groups(ctx.journal) == {:ok, []}
+    end
+
+    test "a review tool whose schema changed is refused before the review call", ctx do
+      fake = Fake.start(tools: [served("review_equity_order", &add_property/1)])
+      executor = start_executor!(ctx, session: Fake.session(fake))
+
+      assert {:error, {:tool_refused, "review_equity_order", :unknown}} =
+               Executor.run(executor, limit("drifted-review"), context())
+
+      assert Fake.calls(fake) == []
+    end
+
+    test "a served place tool the capture lacks is :unknown and logged at :error", ctx do
+      foo = %{"name" => "place_foo_order", "inputSchema" => %{"type" => "object"}}
+      fake = Fake.start(tools: [foo])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          start_executor!(ctx, session: Fake.session(fake))
+        end)
+
+      assert Catalog.classify("place_foo_order") == :unknown
+      assert log =~ ~r/\[error\].*place_foo_order is not in the capture/
     end
   end
 end

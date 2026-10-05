@@ -4,10 +4,12 @@ defmodule Raxol.Broker.Executor.Review do
   arguments shared with `Raxol.Broker.Executor.Place`, and the warnings read
   from a review response.
 
-  Until #1174 generates typed adapters, only equity orders have a mapping
-  (`review_equity_order`); options and advanced orders are refused with
-  `{:error, {:no_adapter, kind}}` before anything is journaled. A cancel has
-  no review tool upstream; its review record says so and carries no warnings.
+  Only equity orders have a mapping (`review_equity_order`); options and
+  advanced orders are refused with `{:error, {:no_adapter, kind}}` before
+  anything is journaled. A cancel has no review tool upstream; its review
+  record says so and carries no warnings. The review tool must be `:review`
+  in the session's `Raxol.Broker.Tools.Catalog` classes, else the review is
+  `{:error, {:tool_refused, tool, class}}` and nothing is sent.
 
   ## Warnings, fail closed
 
@@ -31,6 +33,7 @@ defmodule Raxol.Broker.Executor.Review do
 
   alias Raxol.Broker.Executor.Port
   alias Raxol.Broker.Intent
+  alias Raxol.Broker.Tools.Catalog
 
   @equity_kinds [:buy_usd, :buy_shares, :sell, :limit, :stop_limit, :stop_market]
   @unreadable "unreadable review response"
@@ -47,18 +50,21 @@ defmodule Raxol.Broker.Executor.Review do
   def equity?(%Intent{kind: kind}), do: kind in @equity_kinds
 
   @doc """
-  Run the review for `intent`. Returns `{:ok, response, warnings}` where
-  `response` is the string-keyed map journaled as the review record.
+  Run the review for `intent` on `port`, whose tool classes are `catalog`.
+  Returns `{:ok, response, warnings}` where `response` is the string-keyed
+  map journaled as the review record.
   """
-  @spec run(Port.t(), Intent.t(), String.t(), timeout()) ::
+  @spec run(Port.t(), Catalog.session(), Intent.t(), String.t(), timeout()) ::
           {:ok, map(), [String.t()]} | {:error, term()}
-  def run(port, %Intent{} = intent, account, timeout) do
+  def run(port, catalog, %Intent{} = intent, account, timeout) do
     case tool(intent) do
       {:ok, :none} ->
         {:ok, %{"tool" => nil, "note" => "cancel has no review tool"}, []}
 
       {:ok, tool} ->
-        port |> Port.call(tool, order_args(intent, account), timeout) |> read(tool)
+        with :ok <- Catalog.permit(catalog, tool, :review) do
+          port |> Port.call(tool, order_args(intent, account), timeout) |> read(tool)
+        end
 
       {:error, _} = error ->
         error

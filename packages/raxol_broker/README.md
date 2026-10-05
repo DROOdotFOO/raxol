@@ -431,6 +431,34 @@ any other gets the 401 Robinhood answers an invalid token. `forbid_calls/1`
 answers every `tools/call` 403, and `server/discover` always gets
 Robinhood's plain-text 400.
 
+## Tool catalog
+
+Every tool is classified from the frozen capture in
+`priv/robinhood/tools_list.json` (`Raxol.Broker.Tools.Catalog`): `:read`,
+`:review` (`review_*_order`, `preview_*_order`), `:write` (an explicit
+allowlist: `place_*_order`, `cancel_*_order`, `replace_*_order`, alert
+create/update) or `:unknown`. A tool the capture lacks, a write-shaped tool
+outside the allowlist, or a review or write tool whose schema changed on the
+live server is `:unknown`, and the executor and the read-only session refuse
+it. Each connect diffs the live list against the capture and logs the drift.
+
+The read tools are generated as typed functions that validate arguments
+against the captured schema before sending:
+
+```elixir
+{:ok, result} = Raxol.Broker.Tools.MarketData.get_equity_quotes(session, %{"symbols" => ["AAPL"]})
+```
+
+To refresh the capture from a signed-in account, then regenerate:
+
+```sh
+mix raxol.broker.capture_tools
+mix raxol.broker.gen.tools          # --check fails if the checked-in modules are stale
+```
+
+The checked-in capture is sanitized to five tools, so until a full capture
+is committed only `get_accounts` and `get_equity_quotes` are readable and
+only equity orders can be reviewed and placed.
 ## Robinhood sign-in
 
 ```elixir

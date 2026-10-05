@@ -105,10 +105,9 @@ defmodule Raxol.Broker.MCP.ClientTest do
 
     assert {:ok, tools} = Client.list_tools(broker)
     assert tools != []
-    # The Fake serves the recorded five plus its three scenario tools; the
-    # broker keeps only the read-only ones, never place/cancel/review.
-    assert tool_names(tools) ==
-             ~w(get_accounts get_equity_quotes get_equity_positions get_equity_orders get_alert_log)
+    # The Fake also serves three scenario tools the capture lacks; the catalog
+    # classifies those :unknown, and place/cancel/review are never :read.
+    assert tool_names(tools) == ["get_accounts", "get_equity_quotes"]
   end
 
   test "a mid-session 401 refreshes once, persists the rotation, and retries", ctx do

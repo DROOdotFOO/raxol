@@ -1,4 +1,9 @@
 {
+  "provenance": {
+    "source": "https://agent.robinhood.com/mcp/trading tools/list",
+    "captured": "2026-10-02, during the auth spike (#1173)",
+    "note": "Sanitized to five tools; the other tools of the 76 served were not kept. Replace with `mix raxol.broker.capture_tools`, then run `mix raxol.broker.gen.tools`."
+  },
   "tools": [
     {
       "name": "get_accounts",

@@ -10,12 +10,14 @@ defmodule Raxol.Broker.MCP.Client do
 
   ## Read-only, fail closed
 
-  `call/3` admits only the tools the server annotated `readOnlyHint: true`
-  when its tool list was captured (`get_*`, `preview_scan`, `run_scan`,
-  `search`). Everything else -- orders, cancels, reviews, watchlist, alert
-  and scan mutators, and any name not on the list -- is
-  `{:error, {:tool_denied, name}}` before any request is made. `list_tools/1`
-  returns only the allowed tools, so what is offered is what may be called.
+  `call/3` admits only tools `Raxol.Broker.Tools.Catalog` classifies `:read`
+  from the frozen capture. Everything else -- orders, cancels, reviews,
+  watchlist, alert and scan mutators, and any name the capture lacks -- is
+  `{:error, {:tool_denied, name}}` before any request is made. On connect
+  the live tool list is reconciled against the capture (drift is logged);
+  `list_tools/1` returns the tools still `:read` for this session, so what is
+  offered is what may be called. `live_tools/1` returns the whole live list,
+  unfiltered, for `mix raxol.broker.capture_tools`.
 
   ## Tokens
 
@@ -113,6 +115,7 @@ defmodule Raxol.Broker.MCP.Client do
   alias Raxol.Agent.Auth.Credential
   alias Raxol.Agent.Auth.Robinhood
   alias Raxol.Broker.CredentialStore
+  alias Raxol.Broker.Tools.Catalog
   alias Raxol.MCP.CircuitBreaker
   alias Raxol.MCP.Client, as: Upstream
   alias Raxol.MCP.Client.Era
@@ -132,29 +135,6 @@ defmodule Raxol.Broker.MCP.Client do
   # `Process.send_after/3` refuses delays past 2^32 - 1 ms.
   @max_timer_ms 4_294_967_295
 
-  # The tools Robinhood's server annotated `readOnlyHint: true` in the tool
-  # list captured on 2026-10-02 (76 tools). Static and fail-closed on purpose:
-  # an unannotated or unknown tool is denied. #1174 replaces this with the
-  # generated catalog; order tools never go through this session, only through
-  # the executor's own write port (`Raxol.Broker.Executor.Port`).
-  @read_only_tools MapSet.new(~w(
-    get_accounts get_alert_log get_alerts get_crypto_account_onboarding_info
-    get_crypto_orders get_crypto_positions get_crypto_quotes get_currency_pairs
-    get_earnings_calendar get_earnings_results get_equity_analyst_ratings
-    get_equity_fundamentals get_equity_historicals get_equity_orders
-    get_equity_positions get_equity_price_book get_equity_quotes
-    get_equity_tax_lots get_equity_technical_indicators get_equity_tradability
-    get_financials get_index_historicals get_index_quotes get_indexes
-    get_limited_margin_upgrade_info get_option_chains get_option_historicals
-    get_option_instruments get_option_level_upgrade_info get_option_orders
-    get_option_positions get_option_quotes get_option_watchlist
-    get_pnl_trade_history get_politician_trades get_popular_watchlists
-    get_portfolio get_realized_pnl get_scanner_datapoints
-    get_scanner_filter_specs get_scans get_sec_filing get_sec_filing_facts
-    get_sec_filing_facts_catalog get_sec_filing_index get_watchlist_items
-    get_watchlists preview_scan run_scan search
-  ))
-
   defmodule State do
     @moduledoc false
     defstruct [
@@ -163,6 +143,7 @@ defmodule Raxol.Broker.MCP.Client do
       :tables,
       :reservations,
       :tools,
+      :live,
       :task,
       :reconnect_ref,
       :timer,
@@ -206,6 +187,14 @@ defmodule Raxol.Broker.MCP.Client do
   end
 
   @doc """
+  The whole tool list the server served at connect, unfiltered, or
+  `{:error, :not_connected}`. Tool metadata only; nothing here can be called.
+  """
+  @spec live_tools(GenServer.server(), timeout()) :: {:ok, [map()]} | {:error, :not_connected}
+  def live_tools(server, timeout \\ @default_call_timeout),
+    do: GenServer.call(server, :live_tools, timeout)
+
+  @doc """
   Call `tool_name` with `args`. A tool outside the read-only allowlist is
   `{:error, {:tool_denied, tool_name}}` and nothing is sent.
   """
@@ -219,15 +208,13 @@ defmodule Raxol.Broker.MCP.Client do
   end
 
   @doc """
-  The authorization `call/3` applies: `:ok` for a read-only tool,
-  `{:error, {:tool_denied, name}}` for anything else.
+  The authorization `call/3` applies: `:ok` for a tool the capture
+  classifies `:read`, `{:error, {:tool_denied, name}}` for anything else.
   """
-  # The single decision point #1174's Catalog replaces. Order tools have their
-  # own session (`Raxol.Broker.Executor.Port`). Checked again right before the
-  # upstream call.
+  # Checked again right before the upstream call.
   @spec authorize_tool(String.t()) :: :ok | {:error, {:tool_denied, String.t()}}
   def authorize_tool(name) when is_binary(name) do
-    if MapSet.member?(@read_only_tools, name), do: :ok, else: {:error, {:tool_denied, name}}
+    if Catalog.classify(name) == :read, do: :ok, else: {:error, {:tool_denied, name}}
   end
 
   # -- GenServer --------------------------------------------------------------
@@ -286,6 +273,11 @@ defmodule Raxol.Broker.MCP.Client do
   end
 
   @impl GenServer
+  def handle_call(:live_tools, _from, %State{live: live} = state) when is_list(live),
+    do: {:reply, {:ok, live}, state}
+
+  def handle_call(:live_tools, _from, state), do: {:reply, {:error, :not_connected}, state}
+
   def handle_call({:list_tools, _timeout}, _from, %State{status: :unauthorized} = state),
     do: {:reply, {:error, :unauthorized}, state}
 
@@ -755,7 +747,9 @@ defmodule Raxol.Broker.MCP.Client do
 
   defp settled(state, {:ok, tools}) do
     state = %{state | failed_runs: 0, cooldown: nil}
-    flush_queue(%{state | status: :ready, tools: allowed(tools), fresh: false})
+    session = Catalog.reconcile(tools)
+    read = Enum.filter(tools, &(Catalog.class(session, tool_name(&1)) == :read))
+    flush_queue(%{state | status: :ready, tools: read, live: tools, fresh: false})
   end
 
   defp settled(state, result) do

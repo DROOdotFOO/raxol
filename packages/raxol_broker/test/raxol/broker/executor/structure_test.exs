@@ -134,6 +134,10 @@ defmodule Raxol.Broker.Executor.StructureTest do
     {Mix.Tasks.Raxol.Broker.Init, {:remote_call, :var, :prompt, 1}} =>
       "Mix.shell().prompt/1: Mix's own shell indirection",
     {Mix.Tasks.Raxol.Broker.Replay, {:remote_call, :var, :info, 1}} =>
+      "Mix.shell().info/1: Mix's own shell indirection",
+    {Mix.Tasks.Raxol.Broker.Gen.Tools, {:remote_call, :var, :info, 1}} =>
+      "Mix.shell().info/1: Mix's own shell indirection",
+    {Mix.Tasks.Raxol.Broker.CaptureTools, {:remote_call, :var, :info, 1}} =>
       "Mix.shell().info/1: Mix's own shell indirection"
   }
 
@@ -517,12 +521,16 @@ defmodule Raxol.Broker.Executor.StructureTest do
     # holds no client, so it can send nothing. The call-graph rules above
     # still cover it.
     fake = Path.join(lib, "raxol/broker/mcp/fake.ex")
+    # Classifies tool names by shape (`place_*_order` is :write) and holds no
+    # port or client, so it can send nothing either.
+    catalog = Path.join(lib, "raxol/broker/tools/catalog.ex")
     files = Path.wildcard(Path.join(lib, "**/*.ex"))
     assert place in files
     assert fake in files
+    assert catalog in files
 
     offenders =
-      for file <- files -- [place, fake],
+      for file <- files -- [place, fake, catalog],
           {line, number} <- file |> File.read!() |> String.split("\n") |> Enum.with_index(1),
           Regex.match?(@order_literal, line),
           do: "#{Path.relative_to(file, lib)}:#{number}: #{String.trim(line)}"

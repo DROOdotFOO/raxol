@@ -9,6 +9,7 @@ defmodule Raxol.Broker.Executor.ReviewTest do
   alias Raxol.Broker.Executor.Review
   alias Raxol.Broker.Intent
   alias Raxol.Broker.MCP.Fake
+  alias Raxol.Broker.Tools.Catalog
 
   @moduletag :capture_log
   @unreadable "unreadable review response"
@@ -30,29 +31,35 @@ defmodule Raxol.Broker.Executor.ReviewTest do
 
   test "a quote with no alerts has no warnings", ctx do
     assert {:ok, %{"tool" => "review_equity_order"}, []} =
-             Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "alerts become warnings", ctx do
     Fake.warnings(ctx.server, ["pattern day trader"])
 
     assert {:ok, _response, ["pattern day trader"]} =
-             Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "empty content is one unreadable warning", ctx do
     answer(ctx.server, %{"content" => [], "isError" => false})
-    assert {:ok, _response, [@unreadable]} = Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+
+    assert {:ok, _response, [@unreadable]} =
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "a JSON object with none of the known keys is unreadable", ctx do
     answer(ctx.server, %{"content" => [text(%{"notice" => "margin call"})], "isError" => false})
-    assert {:ok, _response, [@unreadable]} = Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+
+    assert {:ok, _response, [@unreadable]} =
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "text that is not a JSON object is unreadable", ctx do
     answer(ctx.server, %{"content" => [%{"type" => "text", "text" => "ok"}], "isError" => false})
-    assert {:ok, _response, [@unreadable]} = Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+
+    assert {:ok, _response, [@unreadable]} =
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   for body <- [
@@ -66,7 +73,9 @@ defmodule Raxol.Broker.Executor.ReviewTest do
     @body body
     test "#{Jason.encode!(body)} is unreadable", ctx do
       answer(ctx.server, %{"content" => [text(@body)], "isError" => false})
-      assert {:ok, _response, [@unreadable]} = Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+
+      assert {:ok, _response, [@unreadable]} =
+               Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
     end
   end
 
@@ -75,12 +84,14 @@ defmodule Raxol.Broker.Executor.ReviewTest do
     answer(ctx.server, %{"content" => [text(body)], "isError" => false})
 
     assert {:ok, _response, ["pattern day trader", @unreadable]} =
-             Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "an empty warnings list with no alerts key is readable and clean", ctx do
     answer(ctx.server, %{"content" => [text(%{"warnings" => []})], "isError" => false})
-    assert {:ok, _response, []} = Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+
+    assert {:ok, _response, []} =
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "a quote with errors and no alerts is unreadable plus each error", ctx do
@@ -88,7 +99,7 @@ defmodule Raxol.Broker.Executor.ReviewTest do
     answer(ctx.server, %{"content" => [text(body)], "isError" => false})
 
     assert {:ok, _response, [@unreadable, "insufficient buying power", "halted"]} =
-             Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "errors beside a readable alerts list are each a warning", ctx do
@@ -96,19 +107,21 @@ defmodule Raxol.Broker.Executor.ReviewTest do
     answer(ctx.server, %{"content" => [text(body)], "isError" => false})
 
     assert {:ok, _response, ["insufficient buying power"]} =
-             Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "a null errors key is unreadable", ctx do
     body = %{"alerts" => [], "errors" => nil}
     answer(ctx.server, %{"content" => [text(body)], "isError" => false})
-    assert {:ok, _response, [@unreadable]} = Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)
+
+    assert {:ok, _response, [@unreadable]} =
+             Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
   end
 
   test "isError fails the review", ctx do
     answer(ctx.server, %{"content" => [text(%{"quote" => %{}})], "isError" => true})
 
-    assert Review.run(ctx.port, ctx.intent, "ACC-1", 5_000) ==
+    assert Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000) ==
              {:error, {:review_failed, "review_equity_order", :is_error}}
   end
 

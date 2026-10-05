@@ -15,8 +15,8 @@ defmodule Raxol.Broker.MCP.Fake do
 
   ## Tools
 
-  The tool list Robinhood served on 2026-10-02 (`priv/robinhood/tools_list.json`,
-  sanitized to five tools), plus three read-only tools the scenario answers
+  The captured tool list (`Raxol.Broker.Tools.Catalog.recorded_tools/0`, see
+  the capture's provenance), plus three read-only tools the scenario answers
   that the sanitized capture omits: `get_equity_positions`,
   `get_equity_orders` and `get_alert_log`. Their schemas are not recorded
   (`{"type": "object"}`); their answers are this module's shapes, not
@@ -39,6 +39,9 @@ defmodule Raxol.Broker.MCP.Fake do
       order to `"cancelled"`.
     * `:accept` - the access tokens the Fake accepts (see Authorization and
       refusals; default unset: every token).
+    * `:tools` - tool definitions (wire form) served in addition to the
+      default list; one with a default tool's name replaces it. This is how a
+      test serves a tool the capture lacks, or a changed schema.
     * `:faults` - see below.
 
   `place_*` is idempotent on `ref_id`, as Robinhood documents it: the same
@@ -89,6 +92,7 @@ defmodule Raxol.Broker.MCP.Fake do
   """
 
   alias Raxol.Agent.Auth.Credential
+  alias Raxol.Broker.Tools.Catalog
   alias Raxol.MCP.Client.ReferenceServer
   alias Raxol.MCP.Client.ReferenceServer.Legacy
 
@@ -97,10 +101,6 @@ defmodule Raxol.Broker.MCP.Fake do
   @url "https://fake.broker.test/mcp"
 
   @recordings Path.expand("../../../../priv/robinhood", __DIR__)
-
-  @tools_path Path.join(@recordings, "tools_list.json")
-  @external_resource @tools_path
-  @recorded_tools @tools_path |> File.read!() |> Jason.decode!() |> Map.fetch!("tools")
 
   @invalid_token_path Path.join(@recordings, "invalid_token_401.json")
   @external_resource @invalid_token_path
@@ -127,6 +127,7 @@ defmodule Raxol.Broker.MCP.Fake do
     :reject,
     :order_states,
     :accept,
+    :tools,
     :faults
   ]
 
@@ -139,20 +140,21 @@ defmodule Raxol.Broker.MCP.Fake do
           | {:error, term()}
   @type scenario :: %{atom() => term()}
 
-  @doc "The tool list recorded from Robinhood on 2026-10-02 (sanitized)."
+  @doc "The captured tool list (`Raxol.Broker.Tools.Catalog.recorded_tools/0`)."
   @spec recorded_tools() :: [map()]
-  def recorded_tools, do: @recorded_tools
+  def recorded_tools, do: Catalog.recorded_tools()
 
-  @doc "Every tool the Fake serves: the recorded list plus the scenario tools."
+  @doc "The default tools the Fake serves: the captured list plus the scenario tools."
   @spec tools() :: [map()]
-  def tools, do: @recorded_tools ++ @scenario_tools
+  def tools, do: Catalog.recorded_tools() ++ @scenario_tools
 
   @doc "Validate a scenario. Raises `ArgumentError` on an unknown key or bad value."
   @spec scenario(keyword()) :: scenario()
   def scenario(opts) when is_list(opts) do
     known_keys!(opts)
 
-    lists = Map.new([:positions, :alerts, :warnings, :reject, :faults], &{&1, list!(opts, &1)})
+    lists =
+      Map.new([:positions, :alerts, :warnings, :reject, :tools, :faults], &{&1, list!(opts, &1)})
 
     %{
       account: string!(Keyword.get(opts, :account, "FAKE-0001"), :account),
@@ -163,6 +165,7 @@ defmodule Raxol.Broker.MCP.Fake do
     |> Map.merge(lists)
     |> Map.update!(:reject, &MapSet.new/1)
     |> Map.update!(:faults, &faults!/1)
+    |> Map.update!(:tools, &served_tools/1)
   end
 
   @doc "Start a Fake linked to the caller, from a `scenario/1` or its options."
@@ -178,7 +181,7 @@ defmodule Raxol.Broker.MCP.Fake do
 
         state =
           ReferenceServer.state(:legacy,
-            tools: tools(),
+            tools: scenario.tools,
             observer: nil,
             result: &answer(fake, &1, &2)
           )
@@ -493,7 +496,7 @@ defmodule Raxol.Broker.MCP.Fake do
   defp hooked({:result, result}, _fake, _name, _args), do: {:ok, result}
 
   defp hooked(_answer, fake, name, args) do
-    if Enum.any?(tools(), &(&1["name"] == name)),
+    if Agent.get(fake, fn state -> Enum.any?(state.tools, &(&1["name"] == name)) end),
       do: Agent.get_and_update(fake, &tool(name, args, &1)),
       else: {:error, {-32_602, "Unknown tool: #{name}"}}
   end
@@ -666,6 +669,16 @@ defmodule Raxol.Broker.MCP.Fake do
     do: raise(ArgumentError, "accept must be a list of tokens or nil, got #{inspect(other)}")
 
   defp faults!(faults), do: Enum.map(faults, &fault!/1)
+
+  defp served_tools(extra) do
+    Enum.each(extra, fn
+      %{"name" => name} when is_binary(name) -> :ok
+      other -> raise ArgumentError, "a tool needs a \"name\", got #{inspect(other)}"
+    end)
+
+    names = MapSet.new(extra, & &1["name"])
+    Enum.reject(tools(), &MapSet.member?(names, &1["name"])) ++ extra
+  end
 
   defp fault!({match, fault}), do: fault!({match, fault, 1})
 
