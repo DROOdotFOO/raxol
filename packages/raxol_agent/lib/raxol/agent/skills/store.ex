@@ -279,8 +279,7 @@ defmodule Raxol.Agent.Skills.Store do
 
   defp scan_root(root, source) do
     root
-    |> Path.join("**/SKILL.md")
-    |> Path.wildcard()
+    |> Raxol.Agent.Glob.under("**/SKILL.md")
     |> Enum.flat_map(fn file ->
       case Skill.from_file(file) do
         {:ok, skill} -> [{skill.name, %{skill: skill, dir: Path.dirname(file), source: source}}]

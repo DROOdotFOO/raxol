@@ -59,7 +59,7 @@ defmodule Raxol.Headless.DocsResource do
 
       cond do
         File.dir?(path) ->
-          path |> Path.join("*.md") |> Path.wildcard() |> Enum.sort()
+          path |> Raxol.Utils.Glob.under("*.md") |> Enum.sort()
 
         File.regular?(path) ->
           [path]

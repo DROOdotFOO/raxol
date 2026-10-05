@@ -260,7 +260,7 @@ defmodule Raxol.Benchmark.Storage do
     suite_dir = Path.join(@storage_path, suite_name)
 
     case File.dir?(suite_dir) do
-      true -> Path.wildcard(Path.join(suite_dir, "*.benchee"))
+      true -> Raxol.Utils.Glob.under(suite_dir, "*.benchee")
       false -> []
     end
   end
