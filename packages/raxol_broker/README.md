@@ -157,25 +157,38 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   replaced too. Quotes, positions, portfolio values and `market_session`
   are still taken from the caller until #1185 sources them.
 * **Review is mandatory.** `Raxol.Broker.Executor.Place` is the only module
-  that names an order tool, and it refuses without a `ReviewReceipt` issued
-  by the review stage for the same intent and group (an HMAC over the whole
-  intent under a key the executor generates at start). The journal also
-  refuses `placing` for a group without a review followed by an ALLOW or an
-  approval. A test greps the package for order tool names outside `Place`.
+  that names an order tool, and it refuses without a `ReviewReceipt` for
+  the same intent and group (an HMAC over the whole intent), verified under
+  a key the executor generates at start and keeps in its own process
+  dictionary; in any other process there is no key and every receipt is
+  refused. The journal also refuses `placing` for a group without a review
+  followed by an ALLOW or an approval. A test checks the compiled code for
+  order tool calls outside `Place`.
+* **Threat model.** The BEAM cannot stop code that deliberately writes
+  into another module's private state, e.g. `Process.put` into its slots
+  or `:sys.replace_state`. The guarantee is that no path through public
+  APIs can send an order tool without the executor's review pipeline.
+  Every remaining bypass requires impersonating the executor's private
+  process-dictionary slots on purpose.
 * **Any review warning asks.** A warning turns ALLOW into ASK
   (`:review_warning`); a review response that cannot be read counts as one.
-  `approve/4` reads the counters again, journals the approval and re-runs
+  `approve/3` reads the counters again, journals the approval and re-runs
   the policy: a cap reached while the ASK waited still denies. `decline/3`
   and `close/3` end the group. A bad approver name raises in the caller
   and leaves the group parked.
 * **Counters come from the journal.** Decisions are serialized, so two
-  callers cannot both pass the daily cap. The daily window defaults to
-  the last 24 hours; `:day_start` may narrow it to a `DateTime` within
-  that window and anything else is refused before a group opens.
+  callers cannot both pass the daily cap. The daily window is a rolling
+  24 hours back from the executor's clock, and no caller input moves it,
+  until #1185 adds a trading calendar the executor owns. A queued run
+  whose caller has died is dropped, never dispatched.
 * **One executor per journal.** The executor claims the journal at start;
-  a second one fails with `{:journal_claimed, pid}`, and the journal takes
-  `placing` only from the claimant. A group parked before an executor
-  restart is closed with `executor_restarted`.
+  only a process started as an executor can claim, a second one fails with
+  `{:journal_claimed, pid}`, and the journal takes `placing` only from the
+  claimant. The claim lives in the journal's memory, so the executor
+  monitors the journal and stops with `{:journal_down, reason}` when it
+  goes down; its supervisor restarts it, and the new one claims again.
+  Callers waiting on it get an exit. A group left open or parked before an
+  executor restart is closed with `executor_restarted`.
 * **Idempotent.** An intent id with a `placing` whose outcome is not
   `:failed` returns `{:ok, :duplicate}` and sends nothing, across
   restarts. Each place carries a `ref_id` derived from the intent id,

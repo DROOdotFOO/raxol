@@ -3,6 +3,7 @@ defmodule Mix.Tasks.Raxol.Broker.ReplayTest do
 
   alias Raxol.Broker.{Intent, Journal, Policy, PolicyFile}
   alias Raxol.Broker.Policy.Context
+  alias Raxol.Broker.Test.ExecutorIdentity
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -58,7 +59,7 @@ defmodule Mix.Tasks.Raxol.Broker.ReplayTest do
   test "prints each group's intent, per-rule verdicts, review, order and outcome in journal order",
        %{opts: opts, name: name, path: path, clock: clock} do
     start_supervised!({Journal, opts})
-    :ok = Journal.claim(name)
+    ExecutorIdentity.assume!(name)
     ctx = context()
 
     placed = limit("2")

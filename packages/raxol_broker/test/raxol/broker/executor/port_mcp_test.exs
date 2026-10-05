@@ -46,6 +46,30 @@ defmodule Raxol.Broker.Executor.PortMCPTest do
     test "a url with no host is live" do
       assert PortMCP.live_spec?(sandbox: true, url: "not a url")
     end
+
+    test "a repeated url, sandbox or command is live, whichever value comes last" do
+      fake = "https://orders.test/mcp"
+      robinhood = "https://api.robinhood.com/mcp"
+
+      for spec <- [
+            [sandbox: true, url: fake, url: robinhood],
+            [sandbox: true, url: robinhood, url: fake],
+            [sandbox: true, url: fake, url: fake],
+            [sandbox: true, sandbox: false, url: fake],
+            [sandbox: false, sandbox: true, url: fake],
+            [sandbox: true, url: fake, command: "a", command: "b"]
+          ] do
+        assert PortMCP.live_spec?(spec), inspect(spec)
+      end
+    end
+
+    test "a command beside a sandbox url is live" do
+      assert PortMCP.live_spec?(sandbox: true, url: "https://orders.test/mcp", command: "x")
+    end
+
+    test "a list that is not a keyword list is live" do
+      assert PortMCP.live_spec?([{"url", "https://orders.test/mcp"}, {:sandbox, true}])
+    end
   end
 
   describe "start/2" do
@@ -75,6 +99,67 @@ defmodule Raxol.Broker.Executor.PortMCPTest do
       server = OrderServer.start()
       assert PortMCP.start(OrderServer.session(server), []) == {:error, {:invalid_mode, nil}}
       assert OrderServer.exchanges(server) == 0
+    end
+
+    test "a duplicate url is refused with Robinhood last, sending nothing" do
+      server = OrderServer.start()
+
+      spec =
+        List.insert_at(OrderServer.session(server), -1, {:url, "https://api.robinhood.com/mcp"})
+
+      assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
+      assert OrderServer.exchanges(server) == 0
+    end
+
+    test "a duplicate url is refused with Robinhood first, sending nothing" do
+      server = OrderServer.start()
+      spec = [url: "https://api.robinhood.com/mcp"] ++ OrderServer.session(server)
+
+      assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
+      assert OrderServer.exchanges(server) == 0
+    end
+
+    test "a duplicate sandbox (true, then false) is refused, sending nothing" do
+      server = OrderServer.start()
+      spec = List.insert_at(OrderServer.session(server), -1, {:sandbox, false})
+
+      assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
+      assert OrderServer.exchanges(server) == 0
+    end
+
+    test "the list that connects is the normalized list that was checked" do
+      server = OrderServer.start()
+      spec = OrderServer.session(server)
+
+      assert {:ok, client_spec} = PortMCP.prepare(spec, mode: :dry_run, call_timeout: 7_000)
+      keys = Keyword.keys(client_spec)
+      assert keys == Enum.uniq(keys)
+      refute Keyword.has_key?(client_spec, :sandbox)
+
+      expected =
+        spec
+        |> Map.new()
+        |> Map.delete(:sandbox)
+        |> Map.put(:call_timeout, 7_000)
+
+      assert Map.new(client_spec) == expected
+      assert client_spec[:url] == spec[:url]
+    end
+
+    test "a repeated unchecked key connects with its last value, as the client reads it" do
+      first = OrderServer.start()
+      last = OrderServer.start()
+      exchange = OrderServer.session(last)[:exchange]
+      spec = List.insert_at(OrderServer.session(first), -1, {:exchange, exchange})
+
+      assert {:ok, client_spec} = PortMCP.prepare(spec, mode: :dry_run)
+      assert client_spec[:exchange] == exchange
+      assert Keyword.get_values(client_spec, :exchange) == [exchange]
+
+      assert {:ok, port} = PortMCP.start(spec, mode: :dry_run)
+      assert OrderServer.exchanges(first) == 0
+      assert OrderServer.exchanges(last) > 0
+      assert Port.stop(port) == :ok
     end
 
     test "a sandbox spec connects in dry run" do

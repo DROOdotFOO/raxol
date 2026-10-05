@@ -19,9 +19,30 @@ defmodule Raxol.Broker.Journal do
 
   One executor writes orders per journal. `claim/1` claims the journal for
   the calling process and monitors it; the claim is released when that
-  process exits. The same process may claim again; any other process is
-  refused with `{:error, {:journal_claimed, pid}}` while the claimant lives.
-  A claim is taken even on a damaged journal; `placing` is still refused there.
+  process exits. Only a `Raxol.Broker.Executor` may claim: a caller whose
+  proc_lib initial call is not `{Raxol.Broker.Executor, :init, 1}` is
+  refused with `{:error, :not_an_executor}`, so no other process can take a
+  free claim and write `placing` through this public API. The same process
+  may claim again; any other process is refused with
+  `{:error, {:journal_claimed, pid}}` while the claimant lives. A claim is
+  taken even on a damaged journal; `placing` is still refused there.
+
+  Threat model: the BEAM cannot stop code that deliberately writes into
+  another module's private state, e.g. `Process.put(:"$initial_call", ...)`
+  in its own process or `:sys.replace_state/2` on this one. The guarantee is
+  that no path through public APIs writes `placing` (and so sends an order)
+  without the Executor's review pipeline; every remaining bypass requires
+  impersonating the Executor's private process-dictionary slots on purpose.
+
+  ## Write timeouts
+
+  `open_group/4`, `append_to_group/4` and `append_group/3` wait `:infinity`
+  by default (pass a timeout to override). A journal write is a local fsync,
+  so a slow one is still progress, and a caller that gives up does not undo
+  it: the request stays queued and lands later. A timed-out `placing` whose
+  append lands after the caller closed the group would turn an order that
+  was never sent into a counted unknown outcome and make its intent a
+  permanent duplicate.
 
   ## Placing
 
@@ -208,14 +229,17 @@ defmodule Raxol.Broker.Journal do
   order call. Returns the new group's id.
 
   `opts[:mode]` (`:dry_run` or `:armed`) is stored on the intent record and
-  shown by replay; it is omitted when not given.
+  shown by replay; it is omitted when not given. `opts[:timeout]` bounds the
+  call (default `:infinity`, see "Write timeouts").
   """
   @spec open_group(Intent.t(), Context.t(), server(), keyword()) ::
           {:ok, group_id()} | {:error, term()}
   def open_group(%Intent{} = intent, %Context{} = context, server \\ __MODULE__, opts \\ []) do
+    {timeout, opts} = Keyword.pop(opts, :timeout, :infinity)
+
     case Keyword.get(opts, :mode) do
       mode when mode in [nil, :dry_run, :armed] ->
-        GenServer.call(server, {:append_group, intent, context, [], opts})
+        GenServer.call(server, {:append_group, intent, context, [], opts}, timeout)
 
       mode ->
         {:error, {:invalid_mode, mode}}
@@ -244,27 +268,32 @@ defmodule Raxol.Broker.Journal do
 
   Only an order response or a close may follow `{:placing}`
   (`{:already_placing, id}` otherwise).
+
+  `timeout` bounds the call (default `:infinity`, see "Write timeouts").
   """
-  @spec append_to_group(group_id(), entry(), server()) :: :ok | {:error, term()}
-  def append_to_group(group_id, entry, server \\ __MODULE__) when is_binary(group_id),
-    do: GenServer.call(server, {:append_to_group, group_id, entry})
+  @spec append_to_group(group_id(), entry(), server(), timeout()) :: :ok | {:error, term()}
+  def append_to_group(group_id, entry, server \\ __MODULE__, timeout \\ :infinity)
+      when is_binary(group_id),
+      do: GenServer.call(server, {:append_to_group, group_id, entry}, timeout)
 
   @doc """
   Write a whole group (intent, context, then `entries` in order) as one
   contiguous run of records, with the same rules as `append_to_group/2`.
-  Returns the group's id.
+  Returns the group's id. `timeout` bounds the call (default `:infinity`,
+  see "Write timeouts").
   """
-  @spec append_group(group(), server()) :: {:ok, group_id()} | {:error, term()}
-  def append_group(group, server \\ __MODULE__)
+  @spec append_group(group(), server(), timeout()) :: {:ok, group_id()} | {:error, term()}
+  def append_group(group, server \\ __MODULE__, timeout \\ :infinity)
 
   def append_group(
         %{intent: %Intent{} = intent, context: %Context{} = context, entries: entries},
-        server
+        server,
+        timeout
       )
       when is_list(entries),
-      do: GenServer.call(server, {:append_group, intent, context, entries, []})
+      do: GenServer.call(server, {:append_group, intent, context, entries, []}, timeout)
 
-  def append_group(other, _server), do: {:error, {:invalid_group, other}}
+  def append_group(other, _server, _timeout), do: {:error, {:invalid_group, other}}
 
   @doc "Record a fill with the realized P&L the broker reported for it."
   @spec append_fill(fill(), server()) :: :ok | {:error, term()}
@@ -272,9 +301,11 @@ defmodule Raxol.Broker.Journal do
 
   @doc """
   Claim the journal for the calling process, the only one allowed to write
-  `{:placing}`. Released when the claimant exits; the claimant may claim
-  again. Returns `{:error, {:journal_claimed, pid}}` while another live
-  process holds the claim.
+  `{:placing}`. Only a `Raxol.Broker.Executor` process may claim (proc_lib
+  initial call `{Raxol.Broker.Executor, :init, 1}`); any other caller gets
+  `{:error, :not_an_executor}`. Released when the claimant exits; the
+  claimant may claim again. Returns `{:error, {:journal_claimed, pid}}` while
+  another live process holds the claim.
   """
   @spec claim(server()) :: :ok | {:error, term()}
   def claim(server \\ __MODULE__), do: GenServer.call(server, :claim)
@@ -367,20 +398,18 @@ defmodule Raxol.Broker.Journal do
   end
 
   def handle_call(:claim, {pid, _tag}, state) do
-    case state.claimant do
-      nil ->
-        {:reply, :ok, %{state | claimant: {pid, Process.monitor(pid)}}}
+    cond do
+      not executor?(pid) ->
+        {:reply, {:error, :not_an_executor}, state}
 
-      {^pid, _ref} ->
+      match?({^pid, _ref}, state.claimant) ->
         {:reply, :ok, state}
 
-      {other, ref} ->
-        if Process.alive?(other) do
-          {:reply, {:error, {:journal_claimed, other}}, state}
-        else
-          Process.demonitor(ref, [:flush])
-          {:reply, :ok, %{state | claimant: {pid, Process.monitor(pid)}}}
-        end
+      claimed_by_other?(state.claimant) ->
+        {:reply, {:error, {:journal_claimed, elem(state.claimant, 0)}}, state}
+
+      true ->
+        {:reply, :ok, take_claim(state, pid)}
     end
   end
 
@@ -439,6 +468,33 @@ defmodule Raxol.Broker.Journal do
     Logger.warning("#{inspect(__MODULE__)} ignored an unexpected message: #{inspect(message)}")
     {:noreply, state}
   end
+
+  # -- Claim --------------------------------------------------------------------
+
+  # The claim goes only to a process started as `Raxol.Broker.Executor`
+  # (proc_lib records its initial call). Reading another process's dictionary
+  # is how the BEAM exposes that; a dead caller has none and is refused.
+  defp executor?(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dictionary} ->
+        List.keyfind(dictionary, :"$initial_call", 0) ==
+          {:"$initial_call", {Raxol.Broker.Executor, :init, 1}}
+
+      nil ->
+        false
+    end
+  end
+
+  defp claimed_by_other?(nil), do: false
+  defp claimed_by_other?({other, _ref}), do: Process.alive?(other)
+
+  # A dead claimant's :DOWN may still be queued; drop it with the old monitor.
+  defp take_claim(%{claimant: {_other, ref}} = state, pid) do
+    Process.demonitor(ref, [:flush])
+    take_claim(%{state | claimant: nil}, pid)
+  end
+
+  defp take_claim(state, pid), do: %{state | claimant: {pid, Process.monitor(pid)}}
 
   # -- Entries ------------------------------------------------------------------
 

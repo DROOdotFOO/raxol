@@ -12,7 +12,7 @@ defmodule Raxol.Broker.ExecutorTest do
   alias Raxol.Broker.Executor.{Place, ReviewReceipt}
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.Policy.Context
-  alias Raxol.Broker.Test.OrderServer
+  alias Raxol.Broker.Test.{ExecutorIdentity, OrderServer}
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -196,35 +196,26 @@ defmodule Raxol.Broker.ExecutorTest do
   end
 
   describe "day window" do
-    test "the default rolling window counts an order from 23 hours ago", ctx do
-      {:ok, now} = Agent.start_link(fn -> DateTime.add(@t0, -23 * 3600, :second) end)
+    test "is a rolling 24 hours from the executor's clock, with no caller input", ctx do
+      refute function_exported?(Executor, :run, 4)
+      refute function_exported?(Executor, :approve, 4)
+
+      {:ok, now} = Agent.start_link(fn -> DateTime.add(@t0, -23, :hour) end)
       clock = fn -> Agent.get(now, & &1) end
       restart_journal!(ctx, clock: clock)
       executor = start_executor!(ctx, policy: policy("1000", "400"), clock: clock)
 
       assert {:ok, %{status: :placed}} = Executor.run(executor, limit("day-1"), context())
+
+      # 23 hours later the first order still counts...
       Agent.update(now, fn _ -> @t0 end)
 
       assert {:deny, _gid, {:daily_notional_cap, _}} =
                Executor.run(executor, limit("day-2"), context())
 
-      # A calendar day starting at UTC midnight would not have seen it.
-      assert {:ok, %{status: :placed}} =
-               Executor.run(executor, limit("day-3"), context(), day_start: @day)
-    end
-
-    test "a day_start outside [now - 24h, now] is refused with no group", ctx do
-      executor = start_executor!(ctx)
-      future = DateTime.add(@t0, 1, :second)
-      stale = DateTime.add(@t0, -25 * 3600, :second)
-
-      for bad <- [future, stale, ~D[2026-10-02], "today"] do
-        assert Executor.run(executor, limit("ds"), context(), day_start: bad) ==
-                 {:error, {:context, {:invalid_day_start, bad}}}
-      end
-
-      assert groups_for(ctx.path, "ds") == []
-      assert OrderServer.calls(ctx.server) == []
+      # ...and 25 hours later it no longer does.
+      Agent.update(now, fn _ -> DateTime.add(@t0, 2, :hour) end)
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("day-3"), context())
     end
   end
 
@@ -287,17 +278,6 @@ defmodule Raxol.Broker.ExecutorTest do
       assert types(ctx.path, gid) == ~w(intent context verdict review verdict)
     end
 
-    test "a bad day_start on approve leaves the group parked", ctx do
-      {:ask, gid, _} = Executor.run(ctx.executor, limit("warn-7"), context())
-      future = DateTime.add(@t0, 60, :second)
-
-      assert Executor.approve(ctx.executor, gid, "droo", day_start: future) ==
-               {:error, {:context, {:invalid_day_start, future}}}
-
-      assert [%{group_id: ^gid}] = Executor.parked(ctx.executor)
-      assert {:ok, %{status: :placed}} = Executor.approve(ctx.executor, gid, "droo")
-    end
-
     test "parked/1 answers while a review is in flight", ctx do
       {:ask, gid, _} = Executor.run(ctx.executor, limit("warn-8"), context())
       OrderServer.warnings(ctx.server, [])
@@ -319,6 +299,43 @@ defmodule Raxol.Broker.ExecutorTest do
       send(hook, :go)
       assert {:ok, %{status: :placed}} = Task.await(run)
     end
+  end
+
+  describe "queue" do
+    test "a queued run whose caller died is never dispatched", ctx do
+      executor = start_executor!(ctx)
+      test_pid = self()
+
+      OrderServer.on_call(ctx.server, "review_equity_order", fn _args ->
+        send(test_pid, {:reviewing, self()})
+
+        receive do
+          :go -> :answer
+        end
+      end)
+
+      first = Task.async(fn -> Executor.run(executor, limit("q-first"), context()) end)
+      assert_receive {:reviewing, hook}, 5_000
+
+      caller = spawn(fn -> Executor.run(executor, limit("q-orphan"), context()) end)
+      wait_queued(executor, 1)
+      stop_and_wait(caller)
+
+      send(hook, :go)
+      assert {:ok, %{status: :placed}} = Task.await(first)
+      # Served after the drain that followed the first reply.
+      assert Executor.parked(executor) == []
+
+      assert groups_for(ctx.path, "q-orphan") == []
+      assert OrderServer.calls(ctx.server, "review_") == ["review_equity_order"]
+      assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
+    end
+  end
+
+  # The executor answers `:sys` requests while a review is in flight, so this
+  # spins on real state, not on time.
+  defp wait_queued(executor, n) do
+    if :queue.len(:sys.get_state(executor).queue) < n, do: wait_queued(executor, n)
   end
 
   describe "approve re-checks" do
@@ -482,6 +499,21 @@ defmodule Raxol.Broker.ExecutorTest do
       assert {:ok, %{status: :placed}} = Executor.approve(executor, gid, "droo")
     end
 
+    test "a journal restart stops the executor; a fresh one claims and places", ctx do
+      executor = start_executor!(ctx)
+      ref = Process.monitor(executor)
+
+      restart_journal!(ctx)
+      assert_receive {:DOWN, ^ref, :process, ^executor, {:journal_down, _}}, 5_000
+
+      executor = start_executor!(ctx)
+      assert {:ok, %{status: :placed}} = Executor.run(executor, limit("rejoin"), context())
+    end
+
+    test "only an executor process can claim the journal", ctx do
+      assert Journal.claim(ctx.journal) == {:error, :not_an_executor}
+    end
+
     test "a crash after placing is crash_outcome_unknown, counted, and never re-placed", ctx do
       executor = start_executor!(ctx)
       path = ctx.path
@@ -552,38 +584,45 @@ defmodule Raxol.Broker.ExecutorTest do
       {:ok, port} = PortMCP.start(OrderServer.session(ctx.server), mode: :dry_run)
       key = :crypto.strong_rand_bytes(32)
 
-      env = %{key: key, port: port, journal: ctx.journal, account: @account, timeout: 5_000}
+      env = %{port: port, journal: ctx.journal, account: @account, timeout: 5_000}
       {:ok, executor: executor, intent: intent, gid: gid, key: key, env: env}
     end
 
-    test "a receipt from another key, or not a receipt, is refused; nothing is sent", ctx do
-      forged = ReviewReceipt.issue(:crypto.strong_rand_bytes(32), ctx.intent, ctx.gid)
+    test "a receipt verified outside the executor process is refused; nothing is sent", ctx do
+      receipt = ReviewReceipt.issue(ctx.key, ctx.intent, ctx.gid)
+      assert Executor.receipt_key() == nil
 
-      assert Place.run(forged, ctx.intent, ctx.gid, ctx.env) == {:error, :invalid_receipt}
-      assert Place.run(%{mac: "x"}, ctx.intent, ctx.gid, ctx.env) == {:error, :invalid_receipt}
+      assert Place.run(receipt, ctx.intent, ctx.gid, ctx.env) == {:error, :invalid_receipt}
       assert OrderServer.calls(ctx.server, "place_") == []
       refute "placing" in types(ctx.path, ctx.gid)
     end
 
+    # The tests below write the executor's private key slot on purpose: the
+    # deliberate-subversion path the threat model excludes. They show the
+    # receipt binding and the claimant check still hold behind it.
     test "a receipt is bound to the whole intent, its group and the key", ctx do
+      Process.put({Executor, :receipt_key}, ctx.key)
       receipt = ReviewReceipt.issue(ctx.key, ctx.intent, ctx.gid)
+      foreign = ReviewReceipt.issue(:crypto.strong_rand_bytes(32), ctx.intent, ctx.gid)
 
       {:ok, bigger} =
         Intent.limit(:buy, "AAPL", d("20"), d("125"), provenance: :strategy, id: "rcpt")
 
-      for {intent, gid, env} <- [
-            {limit("someone-else"), ctx.gid, ctx.env},
-            {bigger, ctx.gid, ctx.env},
-            {ctx.intent, "other-group", ctx.env},
-            {ctx.intent, ctx.gid, %{ctx.env | key: :crypto.strong_rand_bytes(32)}}
+      for {receipt, intent, gid} <- [
+            {receipt, limit("someone-else"), ctx.gid},
+            {receipt, bigger, ctx.gid},
+            {receipt, ctx.intent, "other-group"},
+            {foreign, ctx.intent, ctx.gid},
+            {%{mac: "x"}, ctx.intent, ctx.gid}
           ] do
-        assert Place.run(receipt, intent, gid, env) == {:error, :invalid_receipt}
+        assert Place.run(receipt, intent, gid, ctx.env) == {:error, :invalid_receipt}
       end
 
       assert OrderServer.calls(ctx.server, "place_") == []
     end
 
     test "a valid receipt from a process that is not the claimant is refused", ctx do
+      Process.put({Executor, :receipt_key}, ctx.key)
       receipt = ReviewReceipt.issue(ctx.key, ctx.intent, ctx.gid)
 
       assert Place.run(receipt, ctx.intent, ctx.gid, ctx.env) ==
@@ -599,10 +638,9 @@ defmodule Raxol.Broker.ExecutorTest do
       assert {:ok, %{status: :placed}} = Executor.approve(ctx.executor, ctx.gid, "droo")
 
       stop_and_wait(ctx.executor)
-      assert Journal.claim(ctx.journal) == :ok
+      ExecutorIdentity.assume!(ctx.journal, key: state.key)
 
-      assert {:error, _refused} =
-               Place.run(receipt, ctx.intent, ctx.gid, %{ctx.env | key: state.key})
+      assert {:error, _refused} = Place.run(receipt, ctx.intent, ctx.gid, ctx.env)
 
       assert OrderServer.calls(ctx.server, "place_") == ["place_equity_order"]
       assert Enum.count(types(ctx.path, ctx.gid), &(&1 == "placing")) == 1
@@ -625,6 +663,18 @@ defmodule Raxol.Broker.ExecutorTest do
 
       assert {:error, {:invalid_policy, _}} =
                Executor.start_link(executor_opts(ctx, policy: [bogus: 1]))
+    end
+
+    test "a timeout that is not a positive integer is refused", ctx do
+      for {key, bad} <- [review_timeout: :infinity, place_timeout: 0, review_timeout: "5"] do
+        assert Executor.start_link(executor_opts(ctx, [{key, bad}])) ==
+                 {:error, {:invalid_timeout, key, bad}}
+      end
+    end
+
+    test "a journal that is not running is refused", ctx do
+      assert Executor.start_link(executor_opts(ctx, journal: :no_such_journal)) ==
+               {:error, :journal_not_running}
     end
 
     test "a session that reaches Robinhood, or is not marked sandbox, is refused", ctx do

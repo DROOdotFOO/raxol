@@ -2,14 +2,20 @@ defmodule Raxol.Broker.Executor.PlaceTest do
   @moduledoc """
   `Raxol.Broker.Executor.Place` and its receipt against
   `Raxol.Broker.Test.OrderServer` through a real port and a real journal.
+
+  The test process impersonates the executor with
+  `Raxol.Broker.Test.ExecutorIdentity` (its journal claim and receipt key):
+  the deliberate-subversion path the threat model excludes, used here only
+  to drive `Place.run/4` directly.
   """
   use ExUnit.Case, async: true
 
+  alias Raxol.Agent.Journal.FileStore
   alias Raxol.Broker.Executor.{Place, Port, ReviewReceipt}
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.{Intent, Journal, PolicyFile}
   alias Raxol.Broker.Policy.Context
-  alias Raxol.Broker.Test.OrderServer
+  alias Raxol.Broker.Test.{ExecutorIdentity, OrderServer}
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -22,22 +28,23 @@ defmodule Raxol.Broker.Executor.PlaceTest do
     on_exit(fn -> File.rm_rf!(base) end)
 
     name = :"broker_place_journal_#{System.unique_integer([:positive])}"
-    opts = [name: name, path: Path.join(base, "journal"), clock: fn -> @t0 end]
+    path = Path.join(base, "journal")
+    opts = [name: name, path: path, clock: fn -> @t0 end]
     start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
-    :ok = Journal.claim(name)
+    key = :crypto.strong_rand_bytes(32)
+    :ok = ExecutorIdentity.assume!(name, key: key)
 
     server = OrderServer.start()
     {:ok, port} = PortMCP.start(OrderServer.session(server), mode: :dry_run)
 
-    env = %{
-      key: :crypto.strong_rand_bytes(32),
-      port: port,
-      journal: name,
-      account: @account,
-      timeout: 5_000
-    }
+    env = %{port: port, journal: name, account: @account, timeout: 5_000}
+    {:ok, server: server, port: port, env: env, journal: name, key: key, path: path}
+  end
 
-    {:ok, server: server, port: port, env: env, journal: name}
+  defp records(path) do
+    {base, session} = Journal.location(path)
+    {:ok, records} = FileStore.read_records(session, base_dir: base)
+    records
   end
 
   defp d(value), do: Decimal.new(value)
@@ -99,7 +106,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
          ctx do
       reviewed = intent("int-qty")
       group = reviewed_group(reviewed, ctx.journal)
-      receipt = ReviewReceipt.issue(ctx.env.key, reviewed, group)
+      receipt = ReviewReceipt.issue(ctx.key, reviewed, group)
 
       assert Place.run(receipt, intent("int-qty", "200"), group, ctx.env) ==
                {:error, :invalid_receipt}
@@ -109,11 +116,50 @@ defmodule Raxol.Broker.Executor.PlaceTest do
     end
   end
 
+  describe "receipt key" do
+    test "a receipt minted under a foreign key in a plain process journals and sends nothing",
+         ctx do
+      intent = intent("int-foreign")
+      group = reviewed_group(intent, ctx.journal)
+      before = records(ctx.path)
+
+      task =
+        Task.async(fn ->
+          receipt = ReviewReceipt.issue(:crypto.strong_rand_bytes(32), intent, group)
+          Place.run(receipt, intent, group, ctx.env)
+        end)
+
+      assert Task.await(task) == {:error, :invalid_receipt}
+      assert records(ctx.path) == before
+      assert OrderServer.calls(ctx.server) == []
+      assert Journal.placing_for_intent("int-foreign", ctx.journal) == {:ok, nil}
+    end
+
+    test "holding the journal claim without the executor key slot journals and sends nothing",
+         ctx do
+      intent = intent("int-no-slot")
+      group = reviewed_group(intent, ctx.journal)
+      before = records(ctx.path)
+
+      Process.delete({Raxol.Broker.Executor, :receipt_key})
+      assert Raxol.Broker.Executor.receipt_key() == nil
+
+      for key <- [ctx.key, :crypto.strong_rand_bytes(32)] do
+        receipt = ReviewReceipt.issue(key, intent, group)
+        assert Place.run(receipt, intent, group, ctx.env) == {:error, :invalid_receipt}
+      end
+
+      assert records(ctx.path) == before
+      assert OrderServer.calls(ctx.server) == []
+      assert Journal.placing_for_intent("int-no-slot", ctx.journal) == {:ok, nil}
+    end
+  end
+
   describe "run/4" do
     test "places once with ref_id and journals the response", ctx do
       intent = intent("int-ok")
       group = reviewed_group(intent, ctx.journal)
-      receipt = ReviewReceipt.issue(ctx.env.key, intent, group)
+      receipt = ReviewReceipt.issue(ctx.key, intent, group)
 
       assert {:ok, :placed, %{"tool" => @tool}} = Place.run(receipt, intent, group, ctx.env)
       assert [{@tool, %{"ref_id" => ref_id}}] = OrderServer.calls(ctx.server)
@@ -126,7 +172,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
     test "an unreviewed group is refused by the journal and nothing is sent", ctx do
       intent = intent("int-unreviewed")
       {:ok, group} = Journal.open_group(intent, context(), ctx.journal, mode: :dry_run)
-      receipt = ReviewReceipt.issue(ctx.env.key, intent, group)
+      receipt = ReviewReceipt.issue(ctx.key, intent, group)
 
       assert Place.run(receipt, intent, group, ctx.env) == {:error, {:not_reviewed, group}}
       assert OrderServer.calls(ctx.server, "place_") == []

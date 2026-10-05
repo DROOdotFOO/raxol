@@ -6,6 +6,7 @@ defmodule Raxol.Broker.JournalTest do
   alias Raxol.Broker.{Intent, Journal, Policy, PolicyFile}
   alias Raxol.Broker.Journal.{Codec, Replay}
   alias Raxol.Broker.Policy.Context
+  alias Raxol.Broker.Test.ExecutorIdentity
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -25,10 +26,11 @@ defmodule Raxol.Broker.JournalTest do
   defp d(value), do: Decimal.new(value)
 
   # Start a journal and claim it for the test process, the only writer of
-  # `placing`.
+  # `placing`. The journal only lets an Executor claim, so the test process
+  # impersonates one.
   defp start!(opts) do
     pid = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
-    :ok = Journal.claim(opts[:name])
+    ExecutorIdentity.assume!(opts[:name])
     pid
   end
 
@@ -396,11 +398,13 @@ defmodule Raxol.Broker.JournalTest do
 
       claimant =
         spawn(fn ->
-          send(parent, {:claimed, Journal.claim(name), Journal.claim(name)})
+          ExecutorIdentity.assume!(name)
+          send(parent, {:claimed, Journal.claim(name)})
           receive do: (:stop -> :ok)
         end)
 
-      assert_receive {:claimed, :ok, :ok}
+      assert_receive {:claimed, :ok}
+      Process.put(:"$initial_call", {Raxol.Broker.Executor, :init, 1})
       assert Journal.claim(name) == {:error, {:journal_claimed, claimant}}
 
       ref = Process.monitor(claimant)
@@ -411,6 +415,52 @@ defmodule Raxol.Broker.JournalTest do
       # not yet handled its :DOWN.
       assert Journal.claim(name) == :ok
       assert Journal.claim(name) == :ok
+    end
+
+    test "a process that is not an Executor cannot claim, so it cannot write placing",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+      intent = limit("2")
+      ctx = context()
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+
+      placed_entries(intent, ctx)
+      |> Enum.take(3)
+      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
+
+      before = length(records(path))
+
+      # The claim is free, and still a plain process is refused it.
+      assert Journal.claim(name) == {:error, :not_an_executor}
+      assert Journal.append_to_group(id, {:placing}, name) == {:error, {:not_claimant, id}}
+
+      group = %{intent: limit("2"), context: ctx, entries: placed_entries(limit("2"), ctx)}
+      assert {:error, {:not_claimant, _}} = Journal.append_group(group, name)
+      assert length(records(path)) == before
+    end
+
+    # The threat-model limit: the journal identifies an Executor by its
+    # proc_lib initial call, which a process can forge in its own dictionary.
+    # Doing so is deliberate subversion, not a path through the public API.
+    test "a process impersonating an Executor can claim and write placing", %{opts: opts} do
+      name = opts[:name]
+      start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+      intent = limit("2")
+      ctx = context()
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+
+      placed_entries(intent, ctx)
+      |> Enum.take(3)
+      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
+
+      impostor =
+        Task.async(fn ->
+          Process.put(:"$initial_call", {Raxol.Broker.Executor, :init, 1})
+          {Journal.claim(name), Journal.append_to_group(id, {:placing}, name)}
+        end)
+
+      assert Task.await(impostor) == {:ok, :ok}
     end
 
     test "a float in an order response is recorded as a string and the order counts",
@@ -461,6 +511,64 @@ defmodule Raxol.Broker.JournalTest do
                )
 
       assert counters(name, @t0) == {{:ok, d("0")}, {:ok, 0}}
+    end
+  end
+
+  describe "write timeouts" do
+    setup do
+      on_exit(fn -> :erlang.trace_pattern({GenServer, :call, 3}, false, []) end)
+    end
+
+    test "placing waits on a stalled journal by default, and lands", %{opts: opts} do
+      name = opts[:name]
+      journal = start_supervised!(Supervisor.child_spec({Journal, opts}, restart: :temporary))
+      intent = limit("2")
+      ctx = context()
+      {:ok, id} = Journal.open_group(intent, ctx, name)
+
+      placed_entries(intent, ctx)
+      |> Enum.take(3)
+      |> Enum.each(&(:ok = Journal.append_to_group(id, &1, name)))
+
+      parent = self()
+
+      placer =
+        Task.async(fn ->
+          ExecutorIdentity.assume!(name)
+          send(parent, :claimed)
+          receive do: (:go -> Journal.append_to_group(id, {:placing}, name))
+        end)
+
+      assert_receive :claimed
+      :erlang.trace_pattern({GenServer, :call, 3}, true, [])
+      1 = :erlang.trace(placer.pid, true, [:call])
+      :ok = :sys.suspend(journal)
+      send(placer.pid, :go)
+
+      # The call is made while the journal is suspended, with no deadline.
+      assert_receive {:trace, _, :call,
+                      {GenServer, :call, [^name, {:append_to_group, ^id, {:placing}}, :infinity]}}
+
+      :ok = :sys.resume(journal)
+      assert Task.await(placer, :infinity) == :ok
+      assert {:ok, ^id} = Journal.placing_for_intent(intent.id, name)
+    end
+
+    test "a caller-supplied timeout bounds the call, and the queued write still lands",
+         %{opts: opts, path: path} do
+      name = opts[:name]
+      journal = start!(opts)
+      {:ok, id} = Journal.open_group(limit("2"), context(), name)
+      before = length(records(path))
+
+      :ok = :sys.suspend(journal)
+      assert {:timeout, _} = catch_exit(Journal.append_to_group(id, {:review, %{}}, name, 0))
+      :ok = :sys.resume(journal)
+
+      # This is why the default is :infinity: the caller gave up, but the
+      # journal still wrote the record once it ran.
+      assert {:ok, [^id]} = Journal.open_groups(name)
+      assert length(records(path)) == before + 1
     end
   end
 

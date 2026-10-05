@@ -12,15 +12,21 @@ defmodule Raxol.Broker.Executor.Review do
   ## Warnings, fail closed
 
   A response with `isError` set fails the review (no order). Each text
-  content block is decoded as JSON; the warnings are the non-empty
-  `"alerts"` and `"warnings"` lists in it. Each of these counts as one
-  warning, `"unreadable review response"`, so a response this stage cannot
-  read asks a human instead of allowing:
+  content block is decoded as JSON. A body is readable only through its
+  `"alerts"` and `"warnings"` keys, and each of those that is present must
+  hold a list; every entry of those lists is a warning. A `"quote"` alone
+  says nothing about warnings. Every entry of an `"errors"` list is a
+  warning too. Each of these counts as one warning,
+  `"unreadable review response"`, so a response this stage cannot read asks
+  a human instead of allowing:
 
     * empty content (this also covers a server that answers only in
       `structuredContent`, which the client does not expose);
     * a block that is not text or not a JSON object;
-    * a JSON object with none of `"quote"`, `"alerts"` or `"warnings"`.
+    * a JSON object with neither `"alerts"` nor `"warnings"` (including one
+      with only a `"quote"`);
+    * an `"alerts"`, `"warnings"` or `"errors"` key whose value is `null` or
+      anything else that is not a list.
   """
 
   alias Raxol.Broker.Executor.Port
@@ -73,20 +79,24 @@ defmodule Raxol.Broker.Executor.Review do
 
   defp warnings(%{"type" => "text", "text" => text}) when is_binary(text) do
     case Jason.decode(text) do
-      {:ok, %{} = body}
-      when is_map_key(body, "quote") or is_map_key(body, "alerts") or
-             is_map_key(body, "warnings") ->
-        listed(body["alerts"]) ++ listed(body["warnings"])
-
-      _ ->
-        [@unreadable]
+      {:ok, %{} = body} -> body_warnings(body) ++ error_warnings(body)
+      _ -> [@unreadable]
     end
   end
 
   defp warnings(_block), do: [@unreadable]
 
+  defp body_warnings(body) do
+    case Enum.filter(["alerts", "warnings"], &is_map_key(body, &1)) do
+      [] -> [@unreadable]
+      keys -> Enum.flat_map(keys, &listed(Map.fetch!(body, &1)))
+    end
+  end
+
+  defp error_warnings(%{"errors" => errors}), do: listed(errors)
+  defp error_warnings(_body), do: []
+
   defp listed(list) when is_list(list), do: Enum.map(list, &describe/1)
-  defp listed(nil), do: []
   defp listed(_other), do: [@unreadable]
 
   defp describe(text) when is_binary(text), do: text
