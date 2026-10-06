@@ -387,7 +387,14 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
   describe "batching edge cases" do
     setup do
       batcher_name = :"test_perf_#{System.unique_integer([:positive])}"
-      start_supervised!({RenderBatcher, name: batcher_name})
+      # The default 16ms interval lets the batch timer, or the flush-on-submit
+      # after 2x the interval since the last flush, empty pending updates
+      # before get_stats on a slow runner (#909). 60s puts both past the test
+      # timeout; the size-limit flush the rapid-submission test relies on is
+      # independent of the interval.
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 60_000}
+      )
 
       {:ok, %{batcher: batcher_name}}
     end
