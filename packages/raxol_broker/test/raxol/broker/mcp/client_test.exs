@@ -333,24 +333,70 @@ defmodule Raxol.Broker.MCP.ClientTest do
       assert statuses(fake, "get_accounts") == [429, 429, 429, 429, 429]
     end
 
-    # A slow `initialize` holds the connect open, so the calls queue behind it.
+    test "concurrent throttled callers' retries do not open the breaker" do
+      fake = Fake.start(faults: [{"get_accounts", {:http, 429}, 5}])
+      broker = start_against_fake(fake, base_ms: 1, retries: 3)
+      {:ok, _tools} = Client.list_tools(broker)
+
+      results =
+        1..3
+        |> Enum.map(fn _ -> Task.async(fn -> Client.call(broker, "get_accounts", %{}) end) end)
+        |> Enum.map(&Task.await/1)
+
+      assert Enum.all?(results, &match?({:error, {:http, 429}}, &1))
+
+      # The breaker never saw five failures, so the next call is sent.
+      before = length(statuses(fake, "get_accounts"))
+      refute Client.call(broker, "get_accounts", %{}) == {:error, :breaker_open}
+      assert length(statuses(fake, "get_accounts")) == before + 1
+    end
+
+    # Holds the connect's `initialize` and queues a call behind it. The call is
+    # sent from a task, which then makes a synchronous request of the session:
+    # messages from one sender arrive in order, so once that returns the
+    # session has taken the call.
+    defp queued_call(broker, tool, timeout \\ 60_000) do
+      test = self()
+
+      task =
+        Task.async(fn ->
+          request = :gen_server.send_request(broker, {:call, tool, %{}, timeout})
+          _barrier = :sys.get_state(broker)
+          send(test, {:queued, self()})
+
+          case :gen_server.receive_response(request, timeout + 1_000) do
+            {:reply, reply} -> reply
+            other -> other
+          end
+        end)
+
+      assert_receive {:queued, pid} when pid == task.pid
+      task
+    end
+
+    defp held_fake(faults), do: Fake.start(faults: [{"initialize", :hold} | faults])
+
     test "a 429 on the connect's tool list is retried before the queued call" do
-      fake = Fake.start(faults: [{"initialize", {:slow, 100}}, {"tools/list", {:http, 429}}])
+      fake = held_fake([{"tools/list", {:http, 429}}])
       broker = start_against_fake(fake, base_ms: 1)
 
-      assert {:ok, %{is_error: false}} = Client.call(broker, "get_accounts", %{})
+      call = queued_call(broker, "get_accounts")
+      Fake.release(fake)
+
+      assert {:ok, %{is_error: false}} = Task.await(call)
       assert answers(fake, "tools/list") == [429, 200]
       assert answers(fake, "initialize") == [200, 200]
       assert statuses(fake, "get_accounts") == [200]
     end
 
     test "a connect throttled past :retries answers queued callers and stays up" do
-      fake =
-        Fake.start(faults: [{"initialize", {:slow, 100}}, {"tools/list", {:http, 429}, 3}])
-
+      fake = held_fake([{"tools/list", {:http, 429}, 3}])
       broker = start_against_fake(fake, base_ms: 1, retries: 2)
 
-      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 429}}
+      call = queued_call(broker, "get_accounts")
+      Fake.release(fake)
+
+      assert Task.await(call) == {:error, {:http, 429}}
       assert answers(fake, "tools/list") == [429, 429, 429]
       assert statuses(fake, "get_accounts") == []
 
@@ -358,35 +404,33 @@ defmodule Raxol.Broker.MCP.ClientTest do
       assert statuses(fake, "get_accounts") == [200]
     end
 
-    test "a queued caller the connect's next delay would outlast gets the status" do
-      fake = Fake.start(faults: [{"initialize", {:slow, 100}}, {"tools/list", {:http, 429}}])
-      broker = start_against_fake(fake, base_ms: 2_000, max_ms: 2_000)
+    test "a queued caller that could not outlast the next delay plus a connect gets the status" do
+      fake = held_fake([{"tools/list", {:http, 429}}])
 
-      # Its deadline is the longest first delay away, so any delay passes it.
-      short = Task.async(fn -> Client.call(broker, "get_accounts", %{}, 2_000) end)
-      long = Task.async(fn -> Client.call(broker, "get_accounts", %{}) end)
+      broker =
+        start_supervised!(
+          {Client,
+           Fake.client_opts(fake, backoff: [base_ms: 1, max_ms: 1], connect_timeout: 5_000)}
+        )
+
+      # One second is far more than the next delay, but less than a connect.
+      short = queued_call(broker, "get_accounts", 1_000)
+      long = queued_call(broker, "get_accounts")
+      Fake.release(fake)
 
       assert Task.await(short) == {:error, {:http, 429}}
-      assert {:ok, %{is_error: false}} = Task.await(long, 10_000)
+      assert {:ok, %{is_error: false}} = Task.await(long)
       assert statuses(fake, "get_accounts") == [200]
     end
 
-    test "a throttled handshake is retried and answers the bare status" do
-      fake = Fake.start(faults: [{"initialize", {:http, 503}, 2}])
+    test "a throttled handshake is retried by the broker alone, one initialize per attempt" do
+      fake = Fake.start(faults: [{"initialize", {:http, 503}, 10}])
 
-      # The inner client's own reconnect is pushed past the connect budget, so
-      # every `initialize` after the first is a broker retry.
-      opts =
-        Fake.client_opts(fake,
-          backoff: [base_ms: 1, retries: 1],
-          connect_timeout: 200,
-          mcp: Fake.mcp_opts(fake) ++ [reconnect_ms: 60_000]
-        )
-
-      broker = start_supervised!({Client, opts})
+      # Production connect settings: no inner reconnect or budget overrides.
+      broker = start_against_fake(fake, base_ms: 1, retries: 2)
 
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
-      assert answers(fake, "initialize") == [503, 503]
+      assert answers(fake, "initialize") == [503, 503, 503]
     end
 
     test "a throttle on the post-refresh retry still locks out on the next 401", ctx do

@@ -52,20 +52,24 @@ defmodule Raxol.Broker.MCP.Client do
   failure would open the session's circuit breaker.
 
   A connect throttled at its `initialize` handshake or its `tools/list`,
-  including the reconnect after each refresh, is retried the same way, each
-  time on a new inner client, at most `:retries` times in a row. Queued
-  callers wait for it, except one whose timeout the next delay would pass,
-  which gets `{:error, {:http, status}}` at once; when the retries run out
-  they all get it, and the session stays up for the next call. Unlike a call,
-  a connect is retried without asking the breaker: each inner client starts
-  on fresh breaker tables and a retried one's are dropped with it, so
-  retrying leaves no more failures on the breaker later calls use than a
-  single connect would.
+  including the reconnect after each refresh, is retried the same way, at
+  most `:retries` times in a row, each time on a new inner client. The inner
+  client runs with `fail_fast: true`, so a throttled handshake is seen at
+  once and the client is stopped before its own retry: each broker attempt
+  sends one `initialize`, and a throttled run sends at most `:retries + 1`.
+  Queued callers wait for it, except one whose timeout would pass before the
+  next delay plus a whole `:connect_timeout`, which gets
+  `{:error, {:http, status}}` at once; when the retries run out they all get
+  it, and the session stays up for the next call. A connect retry does not
+  ask the breaker: each inner client starts on fresh breaker tables, and a
+  run is bounded by `:retries` instead.
 
   Throttled answers are real failures on that breaker (5 in a row, by
-  default, open it for 30 s), so a retry is only sent if it cannot open the
-  breaker itself; sustained throttling across calls still opens it, and calls
-  then answer `{:error, :breaker_open}` without a request until it recovers.
+  default, open it for 30 s). A call's retry is only sent if, counting every
+  request in flight and every retry already scheduled as a failure, it still
+  cannot open the breaker; sustained throttling across calls can still open
+  it, and calls then answer `{:error, :breaker_open}` without a request until
+  it recovers.
   A retry keeps the request's one post-refresh retry: a 401 after a throttle
   still locks the session out rather than refreshing again. The delay does
   not read `Retry-After`: the transport answers a non-2xx status without its
@@ -145,11 +149,13 @@ defmodule Raxol.Broker.MCP.Client do
       :reservations,
       :tools,
       :task,
+      :reconnect,
       :timer,
       :unpersisted,
       status: :connecting,
       generation: 0,
       reconnects: 0,
+      scheduled_retries: 0,
       fresh: false,
       queue: [],
       requests: %{},
@@ -320,18 +326,17 @@ defmodule Raxol.Broker.MCP.Client do
   end
 
   def handle_info({:backoff_retry, {pid, _tag} = from, request, attempt}, state) do
+    state = %{state | scheduled_retries: max(state.scheduled_retries - 1, 0)}
+
     if caller_gone?(pid),
       do: {:noreply, state},
       else: {:noreply, admit(state, from, request, attempt)}
   end
 
-  # The wait after a throttled connect. A refresh started meanwhile replaced
-  # `task` and connects when it is done; a lock-out changed the status.
-  def handle_info(
-        {:reconnect, ref},
-        %State{status: :connecting, task: {:reconnect, ref}} = state
-      ),
-      do: {:noreply, connect(%{state | task: nil})}
+  # The wait after a throttled connect. A refresh or a connect started
+  # meanwhile cleared `reconnect`; a lock-out changed the status.
+  def handle_info({:reconnect, ref}, %State{status: :connecting, reconnect: ref} = state),
+    do: {:noreply, connect(%{state | reconnect: nil})}
 
   def handle_info(_other, state), do: {:noreply, state}
 
@@ -456,7 +461,7 @@ defmodule Raxol.Broker.MCP.Client do
       backoff_delay(state, attempt)
     )
 
-    state
+    %{state | scheduled_retries: state.scheduled_retries + 1}
   end
 
   # A request sent with a token (or on an inner client) that has since been
@@ -468,7 +473,7 @@ defmodule Raxol.Broker.MCP.Client do
       locked_out?(state, result) -> :unauthorized
       stale?(state, generation, result) -> :retry_now
       awaiting_refresh?(state, result) -> :retry_after_refresh
-      throttled?(state, attempt, result) -> :backoff
+      retry_throttle?(state, attempt, result) -> :backoff
       not unauthorized?(result) -> :reply
       attempt.retried or state.fresh -> :lock_out
       true -> :refresh
@@ -498,13 +503,14 @@ defmodule Raxol.Broker.MCP.Client do
 
   # A throttle status is retried while retries remain, the next delay ends
   # before the caller's deadline, and one more failure cannot open the breaker.
-  defp throttled?(state, attempt, {:error, {:http, status}}) when status in @throttle_statuses do
+  defp retry_throttle?(state, attempt, {:error, {:http, status}})
+       when status in @throttle_statuses do
     attempt.throttled < state.config.backoff.retries and
       within_deadline?(attempt, max_delay(state, attempt)) and
       breaker_headroom?(state)
   end
 
-  defp throttled?(_state, _attempt, _result), do: false
+  defp retry_throttle?(_state, _attempt, _result), do: false
 
   defp max_delay(state, attempt) do
     %{base_ms: base, max_ms: max} = state.config.backoff
@@ -522,9 +528,12 @@ defmodule Raxol.Broker.MCP.Client do
   defp within_deadline?(%{deadline: :infinity}, _delay), do: true
   defp within_deadline?(%{deadline: deadline}, delay), do: now_ms() + delay < deadline
 
-  defp breaker_headroom?(%State{tables: %{breakers: breakers}, config: config}) do
+  # Every request still in flight and every retry already scheduled may fail
+  # too, so each counts as a failure the breaker has not seen yet.
+  defp breaker_headroom?(%State{tables: %{breakers: breakers}, config: config} = state) do
     %{failures: failures} = CircuitBreaker.status(breakers, config.origin)
-    failures + 1 < CircuitBreaker.failure_threshold()
+    pending = state.scheduled_retries + map_size(state.requests)
+    failures + pending + 1 < CircuitBreaker.failure_threshold()
   end
 
   defp breaker_headroom?(_state), do: false
@@ -603,8 +612,10 @@ defmodule Raxol.Broker.MCP.Client do
         url: state.config.url,
         headers: [{"authorization", Credential.bearer(state.credential)}],
         era: @era,
-        tables: tables
-      ] ++ Keyword.drop(state.config.mcp, [:name, :url, :headers, :tables, :registry])
+        tables: tables,
+        fail_fast: true
+      ] ++
+        Keyword.drop(state.config.mcp, [:name, :url, :headers, :tables, :registry, :fail_fast])
 
     case Upstream.start_link(spec) do
       {:ok, pid} ->
@@ -617,7 +628,8 @@ defmodule Raxol.Broker.MCP.Client do
             tables: tables,
             tools: nil,
             status: :connecting,
-            task: {:connect, task.ref}
+            task: {:connect, task.ref},
+            reconnect: nil
         }
 
       {:error, reason} ->
@@ -628,15 +640,14 @@ defmodule Raxol.Broker.MCP.Client do
   end
 
   # A legacy session handshakes after the probe; `await_ready/2` waits for
-  # that. A probe refused outright (a 401 at connect) is already visible as
-  # `{:connect_failed, _}` and must not be awaited: the client would sit in
-  # its reconnect backoff with the same dead token until the budget ran out.
+  # that. The inner client is fail-fast, so a failed connect or handshake
+  # (a 401, a throttle) answers the wait at once instead of after the budget.
   defp await_tools(pid, timeout) do
     guarded(fn ->
       case Upstream.list_tools(pid) do
         {:error, {:not_ready, _status}} ->
-          _ = Upstream.await_ready(pid, timeout)
-          Upstream.list_tools(pid)
+          with {:ok, _ready} <- Upstream.await_ready(pid, timeout),
+               do: Upstream.list_tools(pid)
 
         other ->
           other
@@ -676,13 +687,12 @@ defmodule Raxol.Broker.MCP.Client do
     do: throttle(result) != nil and state.reconnects < state.config.backoff.retries
 
   # A throttled call's backoff, per connect: the delay doubles with each
-  # throttled connect in the run, and a queued caller whose deadline the next
-  # delay could pass is answered now instead of kept. The retry is a new inner
-  # client (fresh tables, see `new_tables/1`), so the throttled one is stopped
-  # now rather than left on its own reconnect schedule, and no breaker check
-  # applies: its failures go with its tables.
+  # throttled connect in the run. A queued caller whose deadline would pass
+  # before the next delay and a whole connect budget is answered now instead
+  # of kept. The throttled inner client is stopped, which also cancels its own
+  # retry, so the broker's `:retries` bounds the run.
   defp reconnect_later(state, reply) do
-    limit = max_delay(state, %{throttled: state.reconnects})
+    limit = max_delay(state, %{throttled: state.reconnects}) + state.config.connect_timeout
 
     {waiting, expiring} =
       Enum.split_with(state.queue, fn {_from, _request, attempt} ->
@@ -693,7 +703,7 @@ defmodule Raxol.Broker.MCP.Client do
     reconnects = state.reconnects + 1
     ref = make_ref()
     Process.send_after(self(), {:reconnect, ref}, backoff_delay(state, %{throttled: reconnects}))
-    %{state | queue: waiting, reconnects: reconnects, task: {:reconnect, ref}}
+    %{state | queue: waiting, reconnects: reconnects, reconnect: ref}
   end
 
   defp error_reason({:error, reason}), do: reason
@@ -737,7 +747,7 @@ defmodule Raxol.Broker.MCP.Client do
 
   defp start_refresh(state) do
     task = Task.async(refresh_work(state))
-    %{state | status: :refreshing, task: {:refresh, task.ref}}
+    %{state | status: :refreshing, task: {:refresh, task.ref}, reconnect: nil}
   end
 
   # The persist happens inside the task, before the result reaches this

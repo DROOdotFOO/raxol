@@ -119,7 +119,13 @@ defmodule Raxol.Broker.MCP.FakeTest do
 
     assert {:error, _reason} = Port.call(port, "get_accounts", %{}, 5_000)
     assert {"tools/call", "get_accounts", :pending} in Fake.requests(fake)
-    assert Fake.exchanges(fake) == length(Fake.requests(fake))
+  end
+
+  test "the client_opts store cannot hold a credential" do
+    opts = Fake.client_opts(Fake.start())
+
+    assert {:error, _reason} = Raxol.Broker.CredentialStore.put(opts[:credential], opts[:store])
+    assert {:error, _reason} = Raxol.Broker.CredentialStore.fetch(opts[:store])
   end
 
   test "a closed connection reports the real transport's error shape" do

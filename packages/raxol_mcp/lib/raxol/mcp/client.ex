@@ -68,6 +68,12 @@ defmodule Raxol.MCP.Client do
   answers any `await_ready/2` caller at once. The credential's owner replaces
   the client.
 
+  A spec with `fail_fast: true` keeps the retry but stops `await_ready/2`
+  from waiting through it: each failed connect or handshake answers the
+  callers already waiting with `{:error, {:connect_failed, reason}}`. An
+  owner that runs its own retry policy (and stops this client to do so) uses
+  it to see the failure at once instead of at its deadline.
+
   ## Tool Namespacing
 
   Tools are namespaced with the server name prefix: `mcp__<server>__<tool>`.
@@ -115,6 +121,7 @@ defmodule Raxol.MCP.Client do
     call_timeout: 30_000,
     init_timeout: 60_000,
     reconnect_ms: 1_000,
+    fail_fast: false,
     backoff_ms: nil
   ]
 
@@ -146,6 +153,7 @@ defmodule Raxol.MCP.Client do
           call_timeout: pos_integer(),
           init_timeout: pos_integer(),
           reconnect_ms: pos_integer(),
+          fail_fast: boolean(),
           backoff_ms: pos_integer() | nil
         }
 
@@ -229,7 +237,8 @@ defmodule Raxol.MCP.Client do
   `{:ok, status}` once the handshake has round-tripped (immediately, for an
   era that has none), or `{:error, {:not_ready, status}}` when the budget
   passes first. A client that is retrying a failed connect keeps the caller
-  waiting rather than answering for the state it is passing through, which
+  waiting rather than answering for the state it is passing through (unless
+  the spec sets `fail_fast: true`, see Recovery), which
   is the whole point: readiness is an event, and polling `status/1` in a
   sleep loop is a race dressed up as a test helper.
   """
@@ -293,7 +302,8 @@ defmodule Raxol.MCP.Client do
       queue_limit: Map.get(config, :queue_limit, @default_queue_limit),
       call_timeout: Map.get(config, :call_timeout, @default_call_timeout),
       init_timeout: Map.get(config, :init_timeout, @default_init_timeout),
-      reconnect_ms: reconnect_ms(config)
+      reconnect_ms: reconnect_ms(config),
+      fail_fast: Map.get(config, :fail_fast, false) == true
     }
 
     {:ok, state, {:continue, :connect}}
@@ -351,6 +361,17 @@ defmodule Raxol.MCP.Client do
 
   def handle_manager_call({:await_ready, _timeout}, _from, %{status: :ready} = state) do
     {:reply, {:ok, status_info(state)}, state}
+  end
+
+  # A fail-fast client that already failed answers with that failure, rather
+  # than parking the caller until a retry it has asked not to wait through.
+  def handle_manager_call(
+        {:await_ready, _timeout},
+        _from,
+        %{fail_fast: true, status: :closed, error: reason} = state
+      )
+      when not is_nil(reason) do
+    {:reply, {:error, {:connect_failed, reason}}, state}
   end
 
   def handle_manager_call({:await_ready, timeout}, from, state) do
@@ -521,7 +542,11 @@ defmodule Raxol.MCP.Client do
       Logger.debug(fn -> "[MCP.Client] Server #{state.name} retrying connect in #{delay} ms" end)
 
       Process.send_after(self(), :reconnect, delay)
-      %{state | status: :closed, handle: nil, error: reason, backoff_ms: delay}
+      state = %{state | status: :closed, handle: nil, error: reason, backoff_ms: delay}
+
+      if state.fail_fast,
+        do: answer_waiters(state, {:error, {:connect_failed, reason}}),
+        else: state
     end
   end
 

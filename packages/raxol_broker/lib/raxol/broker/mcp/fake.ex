@@ -58,6 +58,8 @@ defmodule Raxol.Broker.MCP.Fake do
     * `{:slow, ms}` - answers normally after `ms`.
     * `:closed` - a transport failure with no response,
       `{:error, {:transport, :closed}}` as the real exchange reports it.
+    * `:hold` - waits until `release/1`, then answers normally. A gate for
+      tests that need callers queued behind a connect, without a sleep.
 
   A fault pre-empts everything below: it is consumed before the request is
   authorized or routed.
@@ -125,7 +127,8 @@ defmodule Raxol.Broker.MCP.Fake do
     :faults
   ]
 
-  @type fault :: {:http, 400..599} | :malformed | {:slow, non_neg_integer()} | :closed
+  @type fault ::
+          {:http, 400..599} | :malformed | {:slow, non_neg_integer()} | :closed | :hold
   @type scenario :: %{atom() => term()}
 
   @doc "The tool list recorded from Robinhood on 2026-10-02 (sanitized)."
@@ -178,6 +181,9 @@ defmodule Raxol.Broker.MCP.Fake do
           orders: %{},
           calls: [],
           requests: [],
+          statuses: %{},
+          released: false,
+          held: [],
           forbid_calls: false
         })
       end)
@@ -238,10 +244,22 @@ defmodule Raxol.Broker.MCP.Fake do
           {String.t() | nil, String.t() | nil, non_neg_integer() | :pending | nil}
         ]
   def requests(fake) do
-    fake
-    |> Agent.get(& &1.requests)
+    {requests, statuses} = Agent.get(fake, &{&1.requests, &1.statuses})
+
+    requests
     |> Enum.reverse()
-    |> Enum.map(fn {_ref, method, tool, status} -> {method, tool, status} end)
+    |> Enum.map(fn {ref, method, tool} -> {method, tool, Map.fetch!(statuses, ref)} end)
+  end
+
+  @doc """
+  Let every exchange held by a `:hold` fault proceed, and every later one
+  pass its `:hold` without waiting. A test gate: hold the handshake, queue
+  callers, then release.
+  """
+  @spec release(pid()) :: :ok
+  def release(fake) do
+    held = Agent.get_and_update(fake, &{&1.held, %{&1 | released: true, held: []}})
+    Enum.each(held, &send(&1, {:fake_release, fake}))
   end
 
   @doc "How many HTTP exchanges reached the Fake, of any method, answered or not."
@@ -285,8 +303,10 @@ defmodule Raxol.Broker.MCP.Fake do
   this Fake that touches nothing real. The credential is synthetic, with no
   refresh token and no expiry: no refresh is ever scheduled, and a 401 locks
   the session out (`{:error, :unauthorized}`) instead of refreshing. The token
-  endpoint refuses, and the stored credential is never read. `overrides` are
-  merged last.
+  endpoint refuses, and the stored credential is never read. The store is
+  unwritable and has no key, so even with an overriding credential that does
+  refresh, the rotated credential is refused (`{:store_failed, _}`) rather
+  than written over the user's. `overrides` are merged last.
   """
   @spec client_opts(pid(), keyword()) :: keyword()
   def client_opts(fake, overrides \\ []) do
@@ -301,6 +321,10 @@ defmodule Raxol.Broker.MCP.Fake do
           expires_at: nil
         },
         auth: [http_fn: fn _url, _body, _opts -> {:error, :fake_has_no_token_endpoint} end],
+        store: [
+          path: "/dev/null/raxol-broker-fake/robinhood.credential",
+          key_provider: {Raxol.Broker.MCP.Fake.NoKeys, []}
+        ],
         url: @url,
         mcp: mcp_opts(fake)
       ],
@@ -317,6 +341,7 @@ defmodule Raxol.Broker.MCP.Fake do
     ref = make_ref()
 
     {fault, server} = arrive(fake, ref, method, tool)
+    fault = if fault == :hold, do: hold(fake), else: fault
 
     response = respond_with(fault, fn -> serve(server, method, vetted, request, opts) end)
 
@@ -326,17 +351,25 @@ defmodule Raxol.Broker.MCP.Fake do
         _no_response -> nil
       end
 
-    Agent.update(fake, fn state ->
-      requests =
-        Enum.map(state.requests, fn
-          {^ref, method, tool, :pending} -> {ref, method, tool, status}
-          other -> other
-        end)
-
-      %{state | requests: requests}
-    end)
-
+    Agent.update(fake, &%{&1 | statuses: Map.put(&1.statuses, ref, status)})
     response
+  end
+
+  # Waits for `release/1` unless it already happened; then answers normally.
+  defp hold(fake) do
+    caller = self()
+
+    waiting =
+      Agent.get_and_update(fake, fn
+        %{released: true} = state -> {false, state}
+        state -> {true, %{state | held: [caller | state.held]}}
+      end)
+
+    if waiting do
+      receive do
+        {:fake_release, ^fake} -> nil
+      end
+    end
   end
 
   # Spends the fault the request matches, records it as `:pending`, and
@@ -344,9 +377,10 @@ defmodule Raxol.Broker.MCP.Fake do
   defp arrive(fake, ref, method, tool) do
     Agent.get_and_update(fake, fn state ->
       {fault, faults} = take_fault(state.faults, method, tool)
-      arrived = [{ref, method, tool, :pending} | state.requests]
+      arrived = [{ref, method, tool} | state.requests]
       server = Map.take(state, [:seam, :accept, :forbid_calls])
-      {{fault, server}, %{state | faults: faults, requests: arrived}}
+      statuses = Map.put(state.statuses, ref, :pending)
+      {{fault, server}, %{state | faults: faults, requests: arrived, statuses: statuses}}
     end)
   end
 
@@ -643,5 +677,20 @@ defmodule Raxol.Broker.MCP.Fake do
   defp valid_fault?({:http, status}) when status in 400..599, do: true
 
   defp valid_fault?({:slow, ms}) when is_integer(ms) and ms >= 0, do: true
-  defp valid_fault?(fault), do: fault in [:malformed, :closed]
+  defp valid_fault?(fault), do: fault in [:malformed, :closed, :hold]
+end
+
+defmodule Raxol.Broker.MCP.Fake.NoKeys do
+  @moduledoc false
+  # The key provider `Raxol.Broker.MCP.Fake.client_opts/2` stores with: it has
+  # no key and makes none, so a Fake session can never encrypt a credential
+  # into a store, let alone the user's.
+
+  @behaviour Raxol.Broker.KeyProvider
+
+  @impl true
+  def load_key(_opts), do: {:error, :fake_has_no_keys}
+
+  @impl true
+  def create_key(_opts), do: {:error, :fake_has_no_keys}
 end
