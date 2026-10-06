@@ -202,13 +202,17 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
           id: make_ref()
         )
 
+      # The two requests always arrive, so these waits are hang guards, not
+      # speed claims: a render can stall past the 1s assert_receive default
+      # on a memory-contended host (#909). The refute below stays short, as
+      # a negative check it can only pass early, never fail falsely.
       GenServer.cast(engine, :render_frame)
-      assert_receive {:render_context_requested, 1}
+      assert_receive {:render_context_requested, 1}, 30_000
 
       for _ <- 1..20, do: GenServer.cast(engine, :render_frame)
       GenServer.cast(dispatcher, {:release, 1})
 
-      assert_receive {:render_context_requested, 2}
+      assert_receive {:render_context_requested, 2}, 30_000
       GenServer.cast(dispatcher, {:release, 2})
 
       refute_receive {:render_context_requested, 3}, 100
@@ -233,7 +237,9 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
 
       GenServer.cast(engine, :render_frame)
 
-      assert %Engine.State{} = GenServer.call(engine, {:get_state}, 500)
+      # Hang guard, not a speed claim (#909): the 25ms dispatcher timeout is
+      # what the test exercises, not how fast the reply comes back.
+      assert %Engine.State{} = GenServer.call(engine, {:get_state}, 30_000)
       assert Process.alive?(engine)
     end
   end

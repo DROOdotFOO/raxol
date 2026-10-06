@@ -58,7 +58,10 @@ defmodule Raxol.Property.ProcessIsolationTest do
     send(pid, {:crash, reason})
   end
 
-  defp await_down(ref, timeout \\ 500) do
+  # A monitored process's :DOWN always arrives, so the only failure this
+  # timeout should catch is a hang. It is a hang guard, not a speed claim:
+  # 500ms was missed on a memory-contended host (#909).
+  defp await_down(ref, timeout \\ 30_000) do
     receive do
       {:DOWN, ^ref, :process, _pid, reason} -> {:ok, reason}
     after
@@ -159,11 +162,9 @@ defmodule Raxol.Property.ProcessIsolationTest do
           crash_child(pid, reason)
         end)
 
-        # Wait for every child's :DOWN message. Use a generous timeout to
-        # absorb scheduler jitter when up to 10 crash reports land in Logger
-        # simultaneously on a loaded CI runner.
+        # Wait for every child's :DOWN message.
         for {_pid, ref} <- children do
-          assert {:ok, _} = await_down(ref, 2_000)
+          assert {:ok, _} = await_down(ref)
         end
 
         # Parent alive, all children dead
