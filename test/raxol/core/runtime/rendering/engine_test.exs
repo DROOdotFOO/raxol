@@ -3,6 +3,10 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
 
   alias Raxol.Core.Runtime.Rendering.Engine
 
+  # How long a wait may take before it counts as hung (#909). It bounds waits
+  # whose message always arrives, so it is not a speed claim.
+  @hang_guard_ms 30_000
+
   defmodule NilViewApp do
     def view(_model), do: nil
   end
@@ -193,30 +197,39 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
 
       engine =
         start_supervised!(
-          {Engine,
-           app_module: NilViewApp,
-           dispatcher_pid: dispatcher,
-           width: 10,
-           height: 3,
-           environment: :agent},
+          {
+            Engine,
+            # The gated requests are released by this test, never by the
+            # engine's call timeout. With the 5s default, a host stall past it
+            # skips frame 1 and the queued casts then draw two more frames.
+            app_module: NilViewApp,
+            dispatcher_pid: dispatcher,
+            dispatcher_timeout: :infinity,
+            width: 10,
+            height: 3,
+            environment: :agent
+          },
           id: make_ref()
         )
 
-      # The two requests always arrive, so these waits are hang guards, not
-      # speed claims: a render can stall past the 1s assert_receive default
-      # on a memory-contended host (#909). The refute below stays short, as
-      # a negative check it can only pass early, never fail falsely.
+      # The requests and the reply always arrive, so these waits are hang
+      # guards, not speed claims: a render can stall past the 1s
+      # assert_receive default on a memory-contended host (#909). The
+      # refute stays short: it can miss a late third request, but it cannot
+      # fail unless one is sent.
       GenServer.cast(engine, :render_frame)
-      assert_receive {:render_context_requested, 1}, 30_000
+      assert_receive {:render_context_requested, 1}, @hang_guard_ms
 
       for _ <- 1..20, do: GenServer.cast(engine, :render_frame)
       GenServer.cast(dispatcher, {:release, 1})
 
-      assert_receive {:render_context_requested, 2}, 30_000
+      assert_receive {:render_context_requested, 2}, @hang_guard_ms
       GenServer.cast(dispatcher, {:release, 2})
 
       refute_receive {:render_context_requested, 3}, 100
-      assert %Engine.State{} = GenServer.call(engine, {:get_state})
+
+      assert %Engine.State{} =
+               GenServer.call(engine, {:get_state}, @hang_guard_ms)
     end
 
     test "a dispatcher timeout skips the frame without terminating the engine" do
@@ -235,11 +248,26 @@ defmodule Raxol.Core.Runtime.Rendering.EngineTest do
           id: make_ref()
         )
 
+      # The engine must wait the configured 25ms, not the 5s default. A trace
+      # of its dispatcher call shows the timeout it passes, so this needs no
+      # time bound. The session keeps the trace off the rest of the node.
+      session = :trace.session_create(:engine_dispatch_timeout, self(), [])
+      on_exit(fn -> :trace.session_destroy(session) end)
+      :trace.function(session, {GenServer, :call, 3}, true, [])
+      :trace.process(session, engine, true, [:call])
+
       GenServer.cast(engine, :render_frame)
 
-      # Hang guard, not a speed claim (#909): the 25ms dispatcher timeout is
-      # what the test exercises, not how fast the reply comes back.
-      assert %Engine.State{} = GenServer.call(engine, {:get_state}, 30_000)
+      assert_receive {:trace, ^engine, :call,
+                      {GenServer, :call,
+                       [^dispatcher, :get_render_context, timeout]}},
+                     @hang_guard_ms
+
+      assert timeout == 25
+
+      assert %Engine.State{} =
+               GenServer.call(engine, {:get_state}, @hang_guard_ms)
+
       assert Process.alive?(engine)
     end
   end
