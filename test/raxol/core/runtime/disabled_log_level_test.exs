@@ -105,6 +105,19 @@ defmodule Raxol.Core.Runtime.DisabledLogLevelTest do
     Logger.configure(level: :emergency)
     on_exit(fn -> Logger.configure(level: level) end)
 
+    initial_state = %{
+      app_module: ProbeApp,
+      model: %{probe: InspectProbe.new(:model)},
+      runtime_pid: self(),
+      width: 40,
+      height: 10,
+      focused: true,
+      # The app's debug mode logs every event it dispatches.
+      debug_mode: true,
+      plugin_manager: nil,
+      command_registry_table: table
+    }
+
     # Servers in this file start with start_link_supervised!, never
     # start_link plus an on_exit GenServer.stop (#909). ExUnit runs on_exit
     # as soon as the test reports, while linked servers may still be dying
@@ -116,24 +129,7 @@ defmodule Raxol.Core.Runtime.DisabledLogLevelTest do
       start_link_supervised!(
         %{
           id: Dispatcher,
-          start:
-            {Dispatcher, :start_link,
-             [
-               self(),
-               %{
-                 app_module: ProbeApp,
-                 model: %{probe: InspectProbe.new(:model)},
-                 runtime_pid: self(),
-                 width: 40,
-                 height: 10,
-                 focused: true,
-                 # The app's debug mode logs every event it dispatches.
-                 debug_mode: true,
-                 plugin_manager: nil,
-                 command_registry_table: table
-               },
-               [name: nil]
-             ]}
+          start: {Dispatcher, :start_link, [self(), initial_state, [name: nil]]}
         },
         restart: :temporary
       )
