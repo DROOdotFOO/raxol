@@ -246,7 +246,7 @@ defmodule Raxol.Broker.MCP.Fake do
   @doc """
   Each exchange, oldest first: `{method, tool, status}`. `tool` is nil outside
   `tools/call`; `status` is `:pending` while the exchange has not answered and
-  nil for a `:closed` fault.
+  nil for a `:closed` or `{:error, reason}` fault.
   """
   @spec requests(pid()) :: [
           {String.t() | nil, String.t() | nil, non_neg_integer() | :pending | nil}

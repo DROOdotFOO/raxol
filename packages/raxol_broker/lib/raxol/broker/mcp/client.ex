@@ -62,15 +62,19 @@ defmodule Raxol.Broker.MCP.Client do
   and the broker stops it, which cancels its own retry: every connect attempt
   is the broker's, one `initialize` each, at most `:retries + 1` in a run.
   Queued callers wait for a retry, except one whose timeout would pass before
-  the next delay plus a whole `:connect_timeout`, which is answered at once;
-  when the retries run out they all get the failure (`{:error, {:http,
-  status}}` for an HTTP status). The last inner client is stopped, and the
-  session then answers every call with that failure, without a request,
-  until a cooldown ends: the next backoff delay, doubling with each failed
-  run up to `:max_ms`. The first call after it starts a new run; a connect
-  that succeeds clears it. A connect retry does not ask the breaker: each
-  inner client starts on fresh breaker tables, and a run is bounded by
-  `:retries` instead. A 401 at connect refreshes or locks out as before.
+  the next delay plus a whole `:connect_timeout` (one attempt, tool lists
+  included, never takes longer), which is answered at once; when the retries
+  run out they all get the failure (`{:error, {:http, status}}` for an HTTP
+  status). When a run ends without connecting, whatever ended it, the last
+  inner client is stopped and the session answers every call with that
+  failure, without a connect, until a cooldown ends: `:base_ms * 2^(retries
+  + failed runs - 1)`, capped at `:max_ms`, so it doubles with each failed
+  run. The first call after it starts a new run; a connect that succeeds
+  resets it. One exception: a call that finds the credential expired still
+  refreshes, and a successful refresh connects at once. A connect retry does
+  not ask the breaker: each inner client starts on fresh breaker tables, and a
+  run is bounded by `:retries` instead. A 401 at connect refreshes or locks
+  out as before.
 
   Throttled answers are real failures on that breaker (5 in a row, by
   default, open it for 30 s). A call's retry is only sent if, counting every
@@ -94,7 +98,9 @@ defmodule Raxol.Broker.MCP.Client do
   `Raxol.Agent.Auth.Robinhood.refresh/2`, e.g. `:http_fn`), `:mcp` (extra
   `Raxol.MCP.Client` spec keys such as `:resolver` or `:exchange`),
   `:refresh_skew`, `:backoff` (`:base_ms`, `:max_ms`, `:retries`),
-  `:connect_timeout`, `:name`.
+  `:connect_timeout`, `:clock` (a zero-arity function returning monotonic
+  milliseconds, read only for the connect cooldown; default
+  `System.monotonic_time(:millisecond)`), `:name`.
 
   Neither `Inspect` nor `format_status/1` (what `:sys.get_status/1` and crash
   reports print) shows the credential, and no log line here carries a token.
@@ -231,7 +237,8 @@ defmodule Raxol.Broker.MCP.Client do
     Process.flag(:trap_exit, true)
 
     with {:ok, credential} <- initial_credential(opts),
-         {:ok, backoff} <- backoff_config(Keyword.get(opts, :backoff, [])) do
+         {:ok, backoff} <- backoff_config(Keyword.get(opts, :backoff, [])),
+         {:ok, clock} <- clock(Keyword.get(opts, :clock)) do
       url = Keyword.get(opts, :url, @default_url)
 
       config = %{
@@ -242,7 +249,8 @@ defmodule Raxol.Broker.MCP.Client do
         mcp: Keyword.get(opts, :mcp, []),
         skew: Keyword.get(opts, :refresh_skew, @default_skew),
         connect_timeout: Keyword.get(opts, :connect_timeout, @default_connect_timeout),
-        backoff: backoff
+        backoff: backoff,
+        clock: clock
       }
 
       state = %State{
@@ -413,7 +421,7 @@ defmodule Raxol.Broker.MCP.Client do
   # After a connect run failed, calls are answered with its failure until the
   # cooldown ends, so a caller polling an origin that keeps failing cannot
   # start a new run per call.
-  defp cooling?(%State{cooldown: %{until: until}}), do: now_ms() < until
+  defp cooling?(%State{cooldown: %{until: until}} = state), do: state.config.clock.() < until
   defp cooling?(_state), do: false
 
   defp answer(state, from, reply) do
@@ -608,6 +616,10 @@ defmodule Raxol.Broker.MCP.Client do
       is_integer(base) and base >= 0 and is_integer(max) and max >= base and
         max <= @max_timer_ms and is_integer(retries) and retries >= 0
 
+  defp clock(nil), do: {:ok, fn -> System.monotonic_time(:millisecond) end}
+  defp clock(clock) when is_function(clock, 0), do: {:ok, clock}
+  defp clock(other), do: {:stop, {:invalid_clock, other}}
+
   defp shape(:list_tools, {:ok, tools}), do: {:ok, allowed(tools)}
   defp shape(_request, result), do: result
 
@@ -707,18 +719,31 @@ defmodule Raxol.Broker.MCP.Client do
   # A legacy session handshakes after the probe; `await_ready/2` waits for
   # that. The inner client is fail-fast, so a failed connect or handshake
   # (a 401, a throttle) answers the wait at once instead of after the budget.
+  # The whole attempt, both tool lists included, shares one `timeout` budget,
+  # which is what the queued-caller guard in `reconnect_later/2` counts on; a
+  # tool list that outlasts what is left of it is `{:error, :timeout}`.
   defp await_tools(pid, timeout) do
+    deadline = now_ms() + timeout
+
     guarded(fn ->
-      case Upstream.list_tools(pid) do
+      case bounded_list_tools(pid, deadline) do
         {:error, {:not_ready, _status}} ->
-          with {:ok, _ready} <- Upstream.await_ready(pid, timeout),
-               do: Upstream.list_tools(pid)
+          with {:ok, _ready} <- Upstream.await_ready(pid, remaining(deadline)),
+               do: bounded_list_tools(pid, deadline)
 
         other ->
           other
       end
     end)
   end
+
+  defp bounded_list_tools(pid, deadline) do
+    Upstream.list_tools(pid, timeout: remaining(deadline))
+  catch
+    :exit, {:timeout, _call} -> {:error, :timeout}
+  end
+
+  defp remaining(deadline), do: max(deadline - now_ms(), 0)
 
   # A connect that failed transiently is retried while `:retries` remain in
   # this run; any other outcome ends the run.
@@ -760,7 +785,8 @@ defmodule Raxol.Broker.MCP.Client do
     failed_runs = state.failed_runs + 1
     retries = state.config.backoff.retries
     delay = max_delay(state, %{throttled: retries + failed_runs - 1})
-    %{state | failed_runs: failed_runs, cooldown: %{until: now_ms() + delay, reason: reason}}
+    until = state.config.clock.() + delay
+    %{state | failed_runs: failed_runs, cooldown: %{until: until, reason: reason}}
   end
 
   defp reconnect?(state, result),

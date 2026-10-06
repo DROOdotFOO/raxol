@@ -430,7 +430,9 @@ defmodule Raxol.Broker.MCP.ClientTest do
     test "a throttled handshake is retried by the broker alone, one initialize per attempt" do
       fake = Fake.start(faults: [{"initialize", {:http, 503}, 10}])
 
-      # Production connect settings: no inner reconnect or budget overrides.
+      # The inner client runs as in production (no reconnect or budget
+      # overrides). Zero delays make the cooldown after a failed run zero, so
+      # the second call starts a new run.
       broker = start_against_fake(fake, base_ms: 0, max_ms: 0, retries: 2)
 
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
@@ -442,14 +444,64 @@ defmodule Raxol.Broker.MCP.ClientTest do
       assert answers(fake, "initialize") == [503, 503, 503, 503, 503, 503]
     end
 
-    test "after a failed connect run, calls are answered locally until the cooldown ends" do
-      fake = Fake.start(faults: [{"initialize", {:http, 503}, 10}])
-      broker = start_against_fake(fake, base_ms: 60_000, max_ms: 60_000, retries: 0)
+    test "a failed run's cooldown answers locally, ends, and doubles with each failed run" do
+      {:ok, now} = Agent.start_link(fn -> 0 end)
+      at = fn ms -> Agent.update(now, fn _ -> ms end) end
+      fake = Fake.start(faults: [{"initialize", {:http, 503}, 3}])
 
+      broker =
+        start_supervised!(
+          {Client,
+           Fake.client_opts(fake,
+             backoff: [base_ms: 1_000, max_ms: 60_000, retries: 0],
+             clock: fn -> Agent.get(now, & &1) end
+           )}
+        )
+
+      # Run 1 fails; its cooldown is 1 s (base * 2^0).
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      at.(999)
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
       assert Client.list_tools(broker) == {:error, {:http, 503}}
       assert answers(fake, "initialize") == [503]
+
+      # It ends at 1 s; run 2 fails and its cooldown doubles to 2 s.
+      at.(1_000)
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      assert answers(fake, "initialize") == [503, 503]
+      at.(2_999)
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      assert answers(fake, "initialize") == [503, 503]
+
+      # Run 3 fails (cooldown 4 s); after it, run 4 connects.
+      at.(3_000)
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      at.(7_000)
+      assert {:ok, %{is_error: false}} = Client.call(broker, "get_accounts", %{})
+      assert answers(fake, "initialize") == [503, 503, 503, 200]
+    end
+
+    test "a queued caller the guard keeps is never outlasted by a slow tool list" do
+      # Attempt 2's handshake takes most of the 300 ms budget and its tool list
+      # would take 800 ms more: the tool list gets only what is left, so the
+      # caller (1 s) is answered rather than timed out.
+      fake =
+        Fake.start(
+          faults: [
+            {"initialize", {:slow, 0}},
+            {"initialize", {:slow, 250}},
+            {"tools/list", {:error, {:timeout, :deadline}}},
+            {"tools/list", {:slow, 800}}
+          ]
+        )
+
+      broker =
+        start_supervised!(
+          {Client, Fake.client_opts(fake, backoff: [base_ms: 1, max_ms: 1], connect_timeout: 300)}
+        )
+
+      assert {status, _} = Client.call(broker, "get_accounts", %{}, 1_000)
+      assert status in [:ok, :error]
     end
 
     for {fault, label} <- [
