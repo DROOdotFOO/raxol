@@ -98,31 +98,41 @@ defmodule Raxol.Core.Runtime.DisabledLogLevelTest do
     table = :"cmd_reg_#{System.unique_integer([:positive])}"
     :ets.new(table, [:set, :public, :named_table, read_concurrency: true])
 
-    {:ok, dispatcher} =
-      Dispatcher.start_link(
-        self(),
-        %{
-          app_module: ProbeApp,
-          model: %{probe: InspectProbe.new(:model)},
-          runtime_pid: self(),
-          width: 40,
-          height: 10,
-          focused: true,
-          # The app's debug mode logs every event it dispatches.
-          debug_mode: true,
-          plugin_manager: nil,
-          command_registry_table: table
-        },
-        name: nil
-      )
-
+    # Lowered before the dispatcher starts: the supervisor's progress report
+    # carries its start args, probe included, and a SASL-enabled Logger would
+    # inspect them.
     level = Logger.level()
     Logger.configure(level: :emergency)
+    on_exit(fn -> Logger.configure(level: level) end)
 
-    on_exit(fn ->
-      Logger.configure(level: level)
-      if Process.alive?(dispatcher), do: GenServer.stop(dispatcher)
-    end)
+    initial_state = %{
+      app_module: ProbeApp,
+      model: %{probe: InspectProbe.new(:model)},
+      runtime_pid: self(),
+      width: 40,
+      height: 10,
+      focused: true,
+      # The app's debug mode logs every event it dispatches.
+      debug_mode: true,
+      plugin_manager: nil,
+      command_registry_table: table
+    }
+
+    # Servers in this file start with start_link_supervised!, never
+    # start_link plus an on_exit GenServer.stop (#909). ExUnit runs on_exit
+    # as soon as the test reports, while linked servers may still be dying
+    # from the test process's exit, so that stop can exit :noproc; the test
+    # supervisor's children are gone before any on_exit runs. The link and
+    # restart: :temporary keep a server crash failing the test instead of
+    # being restarted silently while Logger is at :emergency.
+    dispatcher =
+      start_link_supervised!(
+        %{
+          id: Dispatcher,
+          start: {Dispatcher, :start_link, [self(), initial_state, [name: nil]]}
+        },
+        restart: :temporary
+      )
 
     %{dispatcher: dispatcher}
   end
@@ -148,17 +158,17 @@ defmodule Raxol.Core.Runtime.DisabledLogLevelTest do
 
   test "rendering a frame dumps nothing while logging is disabled",
        %{dispatcher: dispatcher} do
-    {:ok, engine} =
-      Engine.start_link(
-        name: :"disabled_log_engine_#{System.unique_integer([:positive])}",
-        app_module: ProbeApp,
-        dispatcher_pid: dispatcher,
-        width: 40,
-        height: 10,
-        environment: :agent
+    engine =
+      start_link_supervised!(
+        {Engine,
+         name: :"disabled_log_engine_#{System.unique_integer([:positive])}",
+         app_module: ProbeApp,
+         dispatcher_pid: dispatcher,
+         width: 40,
+         height: 10,
+         environment: :agent},
+        restart: :temporary
       )
-
-    on_exit(fn -> if Process.alive?(engine), do: GenServer.stop(engine) end)
 
     # The frame the runtime draws after every update, then the one
     # `Raxol.Headless` draws for a screenshot. The engine takes the cast
