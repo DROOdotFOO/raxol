@@ -51,6 +51,17 @@ defmodule Raxol.Broker.MCP.Client do
   next delay would pass the caller's `call/4` timeout, or when one more
   failure would open the session's circuit breaker.
 
+  A connect throttled at its `initialize` handshake or its `tools/list`,
+  including the reconnect after each refresh, is retried the same way, each
+  time on a new inner client, at most `:retries` times in a row. Queued
+  callers wait for it, except one whose timeout the next delay would pass,
+  which gets `{:error, {:http, status}}` at once; when the retries run out
+  they all get it, and the session stays up for the next call. Unlike a call,
+  a connect is retried without asking the breaker: each inner client starts
+  on fresh breaker tables and a retried one's are dropped with it, so
+  retrying leaves no more failures on the breaker later calls use than a
+  single connect would.
+
   Throttled answers are real failures on that breaker (5 in a row, by
   default, open it for 30 s), so a retry is only sent if it cannot open the
   breaker itself; sustained throttling across calls still opens it, and calls
@@ -138,6 +149,7 @@ defmodule Raxol.Broker.MCP.Client do
       :unpersisted,
       status: :connecting,
       generation: 0,
+      reconnects: 0,
       fresh: false,
       queue: [],
       requests: %{},
@@ -312,6 +324,14 @@ defmodule Raxol.Broker.MCP.Client do
       do: {:noreply, state},
       else: {:noreply, admit(state, from, request, attempt)}
   end
+
+  # The wait after a throttled connect. A refresh started meanwhile replaced
+  # `task` and connects when it is done; a lock-out changed the status.
+  def handle_info(
+        {:reconnect, ref},
+        %State{status: :connecting, task: {:reconnect, ref}} = state
+      ),
+      do: {:noreply, connect(%{state | task: nil})}
 
   def handle_info(_other, state), do: {:noreply, state}
 
@@ -552,13 +572,24 @@ defmodule Raxol.Broker.MCP.Client do
   defp tool_name(%{name: name}) when is_binary(name), do: name
   defp tool_name(_tool), do: ""
 
-  defp unauthorized?({:error, {:http, 401}}), do: true
-  defp unauthorized?({:error, {:connect_failed, {:http, 401}}}), do: true
+  # The status a request or connect failed with. A connect's is wrapped in
+  # `{:connect_failed, _}`, and a handshake's in `{:initialization_failed, _}`
+  # inside that.
+  defp http_status({:error, {:http, status}}), do: status
+  defp http_status({:error, {:connect_failed, {:http, status}}}), do: status
 
-  defp unauthorized?({:error, {:connect_failed, {:initialization_failed, {:http, 401}}}}),
-    do: true
+  defp http_status({:error, {:connect_failed, {:initialization_failed, {:http, status}}}}),
+    do: status
 
-  defp unauthorized?(_result), do: false
+  defp http_status(_result), do: nil
+
+  defp unauthorized?(result), do: http_status(result) == 401
+
+  # A throttle status as a throttled call answers it, unwrapped; else nil.
+  defp throttle(result) do
+    status = http_status(result)
+    if status in @throttle_statuses, do: {:http, status}
+  end
 
   # -- connecting -------------------------------------------------------------
 
@@ -613,11 +644,20 @@ defmodule Raxol.Broker.MCP.Client do
     end)
   end
 
-  defp connected(state, {:ok, tools}) do
+  # A connect throttled at its handshake or its tool list is retried while
+  # `:retries` remain in this run of throttled connects; any other outcome
+  # ends the run.
+  defp connected(state, result) do
+    if reconnect?(state, result),
+      do: reconnect_later(state, {:error, throttle(result)}),
+      else: settled(%{state | reconnects: 0}, result)
+  end
+
+  defp settled(state, {:ok, tools}) do
     flush_queue(%{state | status: :ready, tools: allowed(tools), fresh: false})
   end
 
-  defp connected(state, result) do
+  defp settled(state, result) do
     cond do
       unauthorized?(result) and state.fresh ->
         lock_out(state)
@@ -626,10 +666,34 @@ defmodule Raxol.Broker.MCP.Client do
         start_refresh(state)
 
       true ->
-        reason = error_reason(result)
+        reason = throttle(result) || error_reason(result)
         log_failure("could not connect", reason)
         fail_queue(%{state | status: :ready}, {:error, reason})
     end
+  end
+
+  defp reconnect?(state, result),
+    do: throttle(result) != nil and state.reconnects < state.config.backoff.retries
+
+  # A throttled call's backoff, per connect: the delay doubles with each
+  # throttled connect in the run, and a queued caller whose deadline the next
+  # delay could pass is answered now instead of kept. The retry is a new inner
+  # client (fresh tables, see `new_tables/1`), so the throttled one is stopped
+  # now rather than left on its own reconnect schedule, and no breaker check
+  # applies: its failures go with its tables.
+  defp reconnect_later(state, reply) do
+    limit = max_delay(state, %{throttled: state.reconnects})
+
+    {waiting, expiring} =
+      Enum.split_with(state.queue, fn {_from, _request, attempt} ->
+        within_deadline?(attempt, limit)
+      end)
+
+    state = stop_inner(fail_queue(%{state | queue: expiring}, reply))
+    reconnects = state.reconnects + 1
+    ref = make_ref()
+    Process.send_after(self(), {:reconnect, ref}, backoff_delay(state, %{throttled: reconnects}))
+    %{state | queue: waiting, reconnects: reconnects, task: {:reconnect, ref}}
   end
 
   defp error_reason({:error, reason}), do: reason
