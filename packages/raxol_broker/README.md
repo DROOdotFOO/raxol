@@ -392,6 +392,45 @@ Control characters in recorded text are printed escaped, never raw. The task
 reads without taking the writer lock, so it works while the broker runs, and
 refuses a journal whose chain does not verify.
 
+## Fake server
+
+`Raxol.Broker.MCP.Fake` stands in for Robinhood's MCP server in tests, dry
+runs and backtests. It needs no account and opens no socket.
+
+```elixir
+fake =
+  Raxol.Broker.MCP.Fake.start(
+    quotes: %{"AAPL" => "125.00"},
+    warnings: [],
+    reject: ["GME"],
+    order_states: ["queued", "confirmed", "filled"],
+    faults: [{"place_equity_order", {:http, 429}}]
+  )
+
+children = [
+  {Raxol.Broker.Supervisor,
+   executor: [session: Raxol.Broker.MCP.Fake.session(fake), account_number: "FAKE-0001", policy: policy]}
+]
+
+Raxol.Broker.MCP.Fake.calls(fake)     # tools/call that reached it, with arguments
+Raxol.Broker.MCP.Fake.requests(fake)  # every exchange, :pending until it answers
+Raxol.Broker.MCP.Fake.orders(fake)
+
+{:ok, session} = Raxol.Broker.MCP.Client.start_link(Raxol.Broker.MCP.Fake.client_opts(fake))
+```
+
+`client_opts/2` gives the read-only session a synthetic credential that can
+never refresh, so a dry run never reads your stored credential or reaches
+Robinhood's token endpoint (`mcp_opts/1` alone does not isolate it). That
+session retries a `429`, `502`, `503` or `504` with jittered doubling backoff
+(`:backoff` option), within the caller's timeout and never far enough to open
+its circuit breaker; the executor's order port never retries.
+
+`:accept` (or `Fake.accept/2`) limits the bearer tokens the Fake answers;
+any other gets the 401 Robinhood answers an invalid token. `forbid_calls/1`
+answers every `tools/call` 403, and `server/discover` always gets
+Robinhood's plain-text 400.
+
 ## Robinhood sign-in
 
 ```elixir

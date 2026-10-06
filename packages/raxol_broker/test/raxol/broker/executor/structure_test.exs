@@ -513,11 +513,16 @@ defmodule Raxol.Broker.Executor.StructureTest do
   test "no order-writing tool name is spelled as a string outside executor/place.ex" do
     lib = Path.expand("../../../../lib", __DIR__)
     place = Path.join(lib, "raxol/broker/executor/place.ex")
+    # The server end: it reads order tool names off requests it receives and
+    # holds no client, so it can send nothing. The call-graph rules above
+    # still cover it.
+    fake = Path.join(lib, "raxol/broker/mcp/fake.ex")
     files = Path.wildcard(Path.join(lib, "**/*.ex"))
     assert place in files
+    assert fake in files
 
     offenders =
-      for file <- files -- [place],
+      for file <- files -- [place, fake],
           {line, number} <- file |> File.read!() |> String.split("\n") |> Enum.with_index(1),
           Regex.match?(@order_literal, line),
           do: "#{Path.relative_to(file, lib)}:#{number}: #{String.trim(line)}"

@@ -1,13 +1,13 @@
 defmodule Raxol.Broker.Executor.PortMCPTest do
   @moduledoc """
   `Raxol.Broker.Executor.Port.MCP` and `Raxol.Broker.Executor.Port` against
-  `Raxol.Broker.Test.OrderServer`, a real in-process MCP server.
+  `Raxol.Broker.MCP.Fake`, a real in-process MCP server.
   """
   use ExUnit.Case, async: true
 
   alias Raxol.Broker.Executor.Port
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
-  alias Raxol.Broker.Test.OrderServer
+  alias Raxol.Broker.MCP.Fake
 
   @moduletag :capture_log
 
@@ -74,62 +74,62 @@ defmodule Raxol.Broker.Executor.PortMCPTest do
 
   describe "start/2" do
     test "dry run refuses a live spec before connecting" do
-      server = OrderServer.start()
-      spec = Keyword.delete(OrderServer.session(server), :sandbox)
+      server = Fake.start()
+      spec = Keyword.delete(Fake.session(server), :sandbox)
 
       assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
-      assert OrderServer.exchanges(server) == 0
+      assert Fake.exchanges(server) == 0
     end
 
     test "a live Robinhood url is refused in dry run even with sandbox" do
-      server = OrderServer.start()
-      spec = Keyword.put(OrderServer.session(server), :url, "https://Agent.Robinhood.com./mcp")
+      server = Fake.start()
+      spec = Keyword.put(Fake.session(server), :url, "https://Agent.Robinhood.com./mcp")
 
       assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
-      assert OrderServer.exchanges(server) == 0
+      assert Fake.exchanges(server) == 0
     end
 
     test "armed is refused until arming exists" do
-      server = OrderServer.start()
-      assert PortMCP.start(OrderServer.session(server), mode: :armed) == {:error, :not_armed}
-      assert OrderServer.exchanges(server) == 0
+      server = Fake.start()
+      assert PortMCP.start(Fake.session(server), mode: :armed) == {:error, :not_armed}
+      assert Fake.exchanges(server) == 0
     end
 
     test "a missing or unknown mode is refused" do
-      server = OrderServer.start()
-      assert PortMCP.start(OrderServer.session(server), []) == {:error, {:invalid_mode, nil}}
-      assert OrderServer.exchanges(server) == 0
+      server = Fake.start()
+      assert PortMCP.start(Fake.session(server), []) == {:error, {:invalid_mode, nil}}
+      assert Fake.exchanges(server) == 0
     end
 
     test "a duplicate url is refused with Robinhood last, sending nothing" do
-      server = OrderServer.start()
+      server = Fake.start()
 
       spec =
-        List.insert_at(OrderServer.session(server), -1, {:url, "https://api.robinhood.com/mcp"})
+        List.insert_at(Fake.session(server), -1, {:url, "https://api.robinhood.com/mcp"})
 
       assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
-      assert OrderServer.exchanges(server) == 0
+      assert Fake.exchanges(server) == 0
     end
 
     test "a duplicate url is refused with Robinhood first, sending nothing" do
-      server = OrderServer.start()
-      spec = [url: "https://api.robinhood.com/mcp"] ++ OrderServer.session(server)
+      server = Fake.start()
+      spec = [url: "https://api.robinhood.com/mcp"] ++ Fake.session(server)
 
       assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
-      assert OrderServer.exchanges(server) == 0
+      assert Fake.exchanges(server) == 0
     end
 
     test "a duplicate sandbox (true, then false) is refused, sending nothing" do
-      server = OrderServer.start()
-      spec = List.insert_at(OrderServer.session(server), -1, {:sandbox, false})
+      server = Fake.start()
+      spec = List.insert_at(Fake.session(server), -1, {:sandbox, false})
 
       assert PortMCP.start(spec, mode: :dry_run) == {:error, :live_port_in_dry_run}
-      assert OrderServer.exchanges(server) == 0
+      assert Fake.exchanges(server) == 0
     end
 
     test "the list that connects is the normalized list that was checked" do
-      server = OrderServer.start()
-      spec = OrderServer.session(server)
+      server = Fake.start()
+      spec = Fake.session(server)
 
       assert {:ok, client_spec} = PortMCP.prepare(spec, mode: :dry_run, call_timeout: 7_000)
       keys = Keyword.keys(client_spec)
@@ -147,42 +147,42 @@ defmodule Raxol.Broker.Executor.PortMCPTest do
     end
 
     test "a repeated unchecked key connects with its last value, as the client reads it" do
-      first = OrderServer.start()
-      last = OrderServer.start()
-      exchange = OrderServer.session(last)[:exchange]
-      spec = List.insert_at(OrderServer.session(first), -1, {:exchange, exchange})
+      first = Fake.start()
+      last = Fake.start()
+      exchange = Fake.session(last)[:exchange]
+      spec = List.insert_at(Fake.session(first), -1, {:exchange, exchange})
 
       assert {:ok, client_spec} = PortMCP.prepare(spec, mode: :dry_run)
       assert client_spec[:exchange] == exchange
       assert Keyword.get_values(client_spec, :exchange) == [exchange]
 
       assert {:ok, port} = PortMCP.start(spec, mode: :dry_run)
-      assert OrderServer.exchanges(first) == 0
-      assert OrderServer.exchanges(last) > 0
+      assert Fake.exchanges(first) == 0
+      assert Fake.exchanges(last) > 0
       assert Port.stop(port) == :ok
     end
 
     test "a sandbox spec connects in dry run" do
-      server = OrderServer.start()
-      assert {:ok, port} = PortMCP.start(OrderServer.session(server), mode: :dry_run)
-      assert OrderServer.exchanges(server) > 0
+      server = Fake.start()
+      assert {:ok, port} = PortMCP.start(Fake.session(server), mode: :dry_run)
+      assert Fake.exchanges(server) > 0
 
       assert {:ok, %{is_error: false}} =
                Port.call(port, "review_equity_order", %{"symbol" => "AAPL"}, 5_000)
 
-      assert OrderServer.calls(server, "review_") == ["review_equity_order"]
+      assert Fake.calls(server, "review_") == ["review_equity_order"]
       assert Port.stop(port) == :ok
     end
   end
 
   describe "start_client/1 and await_ready/2" do
     test "start_client returns before connecting; await_ready waits for the session" do
-      server = OrderServer.start()
+      server = Fake.start()
       {:ok, dns} = Agent.start_link(fn -> {:error, :nxdomain} end)
-      good = OrderServer.session(server)[:resolver]
+      good = Fake.session(server)[:resolver]
 
       session =
-        Keyword.put(OrderServer.session(server), :resolver, fn host, family ->
+        Keyword.put(Fake.session(server), :resolver, fn host, family ->
           if Agent.get(dns, & &1) == :ok, do: good.(host, family), else: {:error, :nxdomain}
         end)
 
@@ -191,7 +191,7 @@ defmodule Raxol.Broker.Executor.PortMCPTest do
 
       {:ok, port} = PortMCP.start_client(spec)
       assert {:error, {:not_ready, _}} = PortMCP.await_ready(port, 0)
-      assert OrderServer.exchanges(server) == 0
+      assert Fake.exchanges(server) == 0
 
       Agent.update(dns, fn _ -> :ok end)
       assert PortMCP.await_ready(port, 5_000) == :ok
@@ -201,18 +201,18 @@ defmodule Raxol.Broker.Executor.PortMCPTest do
 
   describe "Port.call/4" do
     test "the caller timing out is {:error, :timeout}" do
-      server = OrderServer.start()
-      OrderServer.on_call(server, "review_equity_order", fn _args -> :hang end)
+      server = Fake.start()
+      Fake.on_call(server, "review_equity_order", fn _args -> :hang end)
 
       {:ok, port} =
-        PortMCP.start(OrderServer.session(server), mode: :dry_run, call_timeout: 60_000)
+        PortMCP.start(Fake.session(server), mode: :dry_run, call_timeout: 60_000)
 
       assert Port.call(port, "review_equity_order", %{}, 1) == {:error, :timeout}
     end
 
     test "a stopped port is {:error, {:port_down, _}}" do
-      server = OrderServer.start()
-      {:ok, port} = PortMCP.start(OrderServer.session(server), mode: :dry_run)
+      server = Fake.start()
+      {:ok, port} = PortMCP.start(Fake.session(server), mode: :dry_run)
       :ok = Port.stop(port)
 
       assert {:error, {:port_down, _reason}} = Port.call(port, "review_equity_order", %{}, 5_000)

@@ -375,6 +375,56 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       assert {:error, {:connect_failed, _}} = Client.list_tools(client)
     end
 
+    test "fail_fast answers a throttled handshake at once and still retries" do
+      inner = legacy()
+      throttles = :counters.new(1, [])
+      test = self()
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "initialize", do: send(test, :initialize)
+
+        if request_method(request) == "initialize" and :counters.get(throttles, 1) == 0 do
+          :counters.add(throttles, 1, 1)
+          {:ok, %{status: 503, headers: [], body: "busy"}}
+        else
+          inner.(vetted, request, opts)
+        end
+      end
+
+      client =
+        start_client!(spec(seam, tables(), era: :legacy, fail_fast: true, reconnect_ms: 1_000))
+
+      assert_receive :initialize, 5_000
+
+      # Answered with the failure, whether the waiter arrived before it or after.
+      assert {:error, {:connect_failed, {:initialization_failed, {:http, 503}}}} =
+               Client.await_ready(client, 30_000)
+
+      # The retry still runs, and it succeeds.
+      assert_receive :initialize, 5_000
+      assert {:ok, %{status: :ready}} = Client.await_ready(client, 30_000)
+      assert :counters.get(throttles, 1) == 1
+    end
+
+    test "without fail_fast a throttled handshake is waited through" do
+      inner = legacy()
+      throttles = :counters.new(1, [])
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "initialize" and :counters.get(throttles, 1) == 0 do
+          :counters.add(throttles, 1, 1)
+          {:ok, %{status: 503, headers: [], body: "busy"}}
+        else
+          inner.(vetted, request, opts)
+        end
+      end
+
+      client = start_client!(spec(seam, tables(), era: :legacy, reconnect_ms: 10))
+
+      assert {:ok, %{status: :ready}} = Client.await_ready(client, 30_000)
+      assert :counters.get(throttles, 1) == 1
+    end
+
     test "a client whose first connect failed serves a later request" do
       # The connect ran once. On failure the client sat in `:closed` forever,
       # and a live process is one its supervisor will not restart, so a DNS

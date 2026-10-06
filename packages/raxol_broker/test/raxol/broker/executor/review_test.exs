@@ -1,6 +1,6 @@
 defmodule Raxol.Broker.Executor.ReviewTest do
   @moduledoc """
-  The review stage reading responses from `Raxol.Broker.Test.OrderServer`
+  The review stage reading responses from `Raxol.Broker.MCP.Fake`
   through a real port: anything it cannot read is a warning.
   """
   use ExUnit.Case, async: true
@@ -8,14 +8,14 @@ defmodule Raxol.Broker.Executor.ReviewTest do
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.Executor.Review
   alias Raxol.Broker.Intent
-  alias Raxol.Broker.Test.OrderServer
+  alias Raxol.Broker.MCP.Fake
 
   @moduletag :capture_log
   @unreadable "unreadable review response"
 
   setup do
-    server = OrderServer.start()
-    {:ok, port} = PortMCP.start(OrderServer.session(server), mode: :dry_run)
+    server = Fake.start()
+    {:ok, port} = PortMCP.start(Fake.session(server), mode: :dry_run)
 
     {:ok, intent} =
       Intent.limit(:buy, "AAPL", Decimal.new("2"), Decimal.new("125"), provenance: :strategy)
@@ -24,7 +24,7 @@ defmodule Raxol.Broker.Executor.ReviewTest do
   end
 
   defp answer(server, result),
-    do: OrderServer.on_call(server, "review_equity_order", fn _args -> {:result, result} end)
+    do: Fake.on_call(server, "review_equity_order", fn _args -> {:result, result} end)
 
   defp text(body), do: %{"type" => "text", "text" => Jason.encode!(body)}
 
@@ -34,7 +34,7 @@ defmodule Raxol.Broker.Executor.ReviewTest do
   end
 
   test "alerts become warnings", ctx do
-    OrderServer.warnings(ctx.server, ["pattern day trader"])
+    Fake.warnings(ctx.server, ["pattern day trader"])
 
     assert {:ok, _response, ["pattern day trader"]} =
              Review.run(ctx.port, ctx.intent, "ACC-1", 5_000)

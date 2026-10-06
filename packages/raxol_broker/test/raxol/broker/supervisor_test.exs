@@ -3,7 +3,7 @@ defmodule Raxol.Broker.SupervisorTest do
 
   alias Raxol.Broker.{Executor, Intent, Journal, PolicyFile}
   alias Raxol.Broker.Policy.Context
-  alias Raxol.Broker.Test.OrderServer
+  alias Raxol.Broker.MCP.Fake
 
   @moduletag :capture_log
 
@@ -34,8 +34,8 @@ defmodule Raxol.Broker.SupervisorTest do
        %{path: path} do
     journal = :"broker_sup_journal_#{System.unique_integer([:positive])}"
     executor = :"broker_sup_executor_#{System.unique_integer([:positive])}"
-    server = OrderServer.start()
-    OrderServer.warnings(server, ["halted"])
+    server = Fake.start()
+    Fake.warnings(server, ["halted"])
     {:ok, policy} = PolicyFile.new(Decimal.new("1000"), Decimal.new("5000"))
 
     sup =
@@ -45,7 +45,7 @@ defmodule Raxol.Broker.SupervisorTest do
          journal: [name: journal, path: path],
          executor: [
            name: executor,
-           session: OrderServer.session(server),
+           session: Fake.session(server),
            account_number: "ACC-1",
            policy: policy
          ]}
@@ -80,7 +80,7 @@ defmodule Raxol.Broker.SupervisorTest do
     assert :ok = Executor.await_port(executor)
     assert Executor.parked(executor) == []
     assert Journal.open_groups(journal) == {:ok, []}
-    assert OrderServer.calls(server, "place_") == []
+    assert Fake.calls(server, "place_") == []
   end
 
   test "an executor bound to another journal is refused", %{path: path} do
@@ -110,12 +110,12 @@ defmodule Raxol.Broker.SupervisorTest do
   test "an unreachable endpoint survives a journal crash and refuses runs", %{path: path} do
     journal = :"broker_sup_journal_#{System.unique_integer([:positive])}"
     executor = :"broker_sup_executor_#{System.unique_integer([:positive])}"
-    server = OrderServer.start()
+    server = Fake.start()
     {:ok, policy} = PolicyFile.new(Decimal.new("1000"), Decimal.new("5000"))
 
     session =
       server
-      |> OrderServer.session()
+      |> Fake.session()
       |> Keyword.put(:resolver, fn _host, _family -> {:error, :nxdomain} end)
 
     sup =
@@ -148,19 +148,19 @@ defmodule Raxol.Broker.SupervisorTest do
 
     assert {:error, :port_not_ready} = Executor.run(executor, intent, %Context{policy: policy})
     assert Journal.open_groups(journal) == {:ok, []}
-    assert OrderServer.calls(server, "") == []
+    assert Fake.calls(server, "") == []
   end
 
   test "a client whose resolver raises leaves the executor and the root up", %{path: path} do
     journal = :"broker_sup_journal_#{System.unique_integer([:positive])}"
     executor = :"broker_sup_executor_#{System.unique_integer([:positive])}"
-    server = OrderServer.start()
+    server = Fake.start()
     {:ok, policy} = PolicyFile.new(Decimal.new("1000"), Decimal.new("5000"))
     test_pid = self()
 
     session =
       server
-      |> OrderServer.session()
+      |> Fake.session()
       |> Keyword.put(:resolver, fn _host, _family ->
         send(test_pid, :resolving)
         raise "resolver blew up"
@@ -197,7 +197,7 @@ defmodule Raxol.Broker.SupervisorTest do
     refute_received {:DOWN, ^sup_ref, _, _, _}
     assert child(sup, Executor) == pid
     assert Executor.await_port(executor, 0) == {:error, :port_not_ready}
-    assert OrderServer.calls(server, "") == []
+    assert Fake.calls(server, "") == []
   end
 
   # Kills the `module` child, waits for it to go down, then reads the restarted

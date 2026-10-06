@@ -1,7 +1,7 @@
 defmodule Raxol.Broker.Executor.PlaceTest do
   @moduledoc """
   `Raxol.Broker.Executor.Place` and its receipt against
-  `Raxol.Broker.Test.OrderServer` through a real port and a real journal.
+  `Raxol.Broker.MCP.Fake` through a real port and a real journal.
 
   The test process impersonates the executor with
   `Raxol.Broker.Test.ExecutorIdentity` (its journal claim and receipt key):
@@ -15,7 +15,8 @@ defmodule Raxol.Broker.Executor.PlaceTest do
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.{Intent, Journal, PolicyFile}
   alias Raxol.Broker.Policy.Context
-  alias Raxol.Broker.Test.{ExecutorIdentity, Hostile, OrderServer}
+  alias Raxol.Broker.MCP.Fake
+  alias Raxol.Broker.Test.{ExecutorIdentity, Hostile}
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -34,8 +35,8 @@ defmodule Raxol.Broker.Executor.PlaceTest do
     key = :crypto.strong_rand_bytes(32)
     :ok = ExecutorIdentity.assume!(name, key: key)
 
-    server = OrderServer.start()
-    {:ok, port} = PortMCP.start(OrderServer.session(server), mode: :dry_run)
+    server = Fake.start()
+    {:ok, port} = PortMCP.start(Fake.session(server), mode: :dry_run)
 
     env = %{port: port, journal: name, account: @account, timeout: 5_000}
     {:ok, server: server, port: port, env: env, journal: name, key: key, path: path}
@@ -76,7 +77,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
   end
 
   defp call_and_classify(ctx, hook) do
-    OrderServer.on_call(ctx.server, @tool, hook)
+    Fake.on_call(ctx.server, @tool, hook)
     ctx.port |> Port.call(@tool, %{}, 5_000) |> Place.classify(@tool)
   end
 
@@ -111,7 +112,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
       assert Place.run(receipt, intent("int-qty", "200"), group, ctx.env) ==
                {:error, :invalid_receipt}
 
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
       assert Journal.placing_for_intent("int-qty", ctx.journal) == {:ok, nil}
     end
   end
@@ -131,7 +132,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
 
       assert Task.await(task) == {:error, :invalid_receipt}
       assert records(ctx.path) == before
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
       assert Journal.placing_for_intent("int-foreign", ctx.journal) == {:ok, nil}
     end
 
@@ -150,7 +151,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
       end
 
       assert records(ctx.path) == before
-      assert OrderServer.calls(ctx.server) == []
+      assert Fake.calls(ctx.server) == []
       assert Journal.placing_for_intent("int-no-slot", ctx.journal) == {:ok, nil}
     end
   end
@@ -162,11 +163,11 @@ defmodule Raxol.Broker.Executor.PlaceTest do
       receipt = ReviewReceipt.issue(ctx.key, intent, group)
 
       assert {:ok, :placed, %{"tool" => @tool}} = Place.run(receipt, intent, group, ctx.env)
-      assert [{@tool, %{"ref_id" => ref_id}}] = OrderServer.calls(ctx.server)
+      assert [{@tool, %{"ref_id" => ref_id}}] = Fake.calls(ctx.server)
       assert ref_id == Place.ref_id("int-ok")
 
       assert {:error, _already} = Place.run(receipt, intent, group, ctx.env)
-      assert OrderServer.calls(ctx.server, "place_") == [@tool]
+      assert Fake.calls(ctx.server, "place_") == [@tool]
     end
 
     test "an unreviewed group is refused by the journal and nothing is sent", ctx do
@@ -175,7 +176,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
       receipt = ReviewReceipt.issue(ctx.key, intent, group)
 
       assert Place.run(receipt, intent, group, ctx.env) == {:error, {:not_reviewed, group}}
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
     end
   end
 
@@ -206,7 +207,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
     end
 
     test "a timeout is unknown", ctx do
-      OrderServer.on_call(ctx.server, @tool, fn _ -> :hang end)
+      Fake.on_call(ctx.server, @tool, fn _ -> :hang end)
 
       assert {:unknown, %{"error" => ":timeout"}} =
                ctx.port |> Port.call(@tool, %{}, 1) |> Place.classify(@tool)
@@ -219,14 +220,14 @@ defmodule Raxol.Broker.Executor.PlaceTest do
                ctx.port |> Port.call(@tool, %{}, 5_000) |> Place.classify(@tool)
 
       assert error =~ "noproc"
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
     end
 
     test "a port that dies during the call is unknown", ctx do
       Process.flag(:trap_exit, true)
       test_pid = self()
 
-      OrderServer.on_call(ctx.server, @tool, fn _ ->
+      Fake.on_call(ctx.server, @tool, fn _ ->
         send(test_pid, :in_call)
         :hang
       end)
@@ -258,13 +259,13 @@ defmodule Raxol.Broker.Executor.PlaceTest do
     end
 
     test "a refusal the client makes before sending is failed and not_sent", ctx do
-      spec = Keyword.put(OrderServer.session(ctx.server), :prices, %{@tool => 1})
+      spec = Keyword.put(Fake.session(ctx.server), :prices, %{@tool => 1})
       {:ok, port} = PortMCP.start(spec, mode: :dry_run)
 
       assert {:failed, %{"not_sent" => true, "error" => ":unmetered_call"}} =
                port |> Port.call(@tool, %{}, 5_000) |> Place.classify(@tool)
 
-      assert OrderServer.calls(ctx.server, "place_") == []
+      assert Fake.calls(ctx.server, "place_") == []
     end
   end
 end
