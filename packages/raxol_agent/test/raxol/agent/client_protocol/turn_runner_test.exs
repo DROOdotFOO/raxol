@@ -314,8 +314,10 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
       |> BenchmarkProfile.from_env()
       |> elem(1)
 
-    {:ok, pid} = Budget.start_link(profile)
-    on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
+    # Supervised and linked, not start_link plus an on_exit stop (#909):
+    # on_exit can run while the linked Budget is still dying from the test
+    # process's exit, and the stop then exits with :noproc.
+    start_link_supervised!({Budget, profile}, restart: :temporary)
   end
 
   defp await_os_pid(path, attempts \\ 400)

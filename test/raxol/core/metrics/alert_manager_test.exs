@@ -7,13 +7,19 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
   alias Raxol.Core.Metrics.AlertManager
 
   setup do
-    # Start MetricsCollector for metrics dependency if not already started
-    # MetricsCollector uses BaseManager and requires a name parameter
+    # Supervised and linked, not start_link plus an on_exit stop (#909):
+    # ExUnit runs on_exit while a linked server may still be dying from the
+    # test process's exit, so that stop could exit with :noproc or :shutdown.
+    # The test supervisor's children are gone before any on_exit runs.
+    #
+    # MetricsCollector is the dependency, under its global name. One that is
+    # already running belongs to someone else and is left alone.
     uc_pid =
-      case Raxol.Core.Metrics.MetricsCollector.start_link(
-             name: Raxol.Core.Metrics.MetricsCollector
+      case start_supervised(Raxol.Core.Metrics.MetricsCollector,
+             restart: :temporary
            ) do
         {:ok, pid} ->
+          Process.link(pid)
           pid
 
         {:error, {:already_started, pid}} ->
@@ -28,32 +34,14 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
 
     # Use a unique name for each test to avoid conflicts
     test_name = String.to_atom("alert_manager_test_#{:rand.uniform(1_000_000)}")
-    {:ok, pid} = AlertManager.start_link(name: test_name)
 
-    on_exit(fn ->
-      try do
-        if Process.alive?(pid) do
-          GenServer.stop(pid, :normal, 1000)
-        end
-      catch
-        # Process already dead
-        :exit, {:noproc, _} -> :ok
-        # Timeout is acceptable in cleanup
-        :exit, {:timeout, _} -> :ok
-      end
-
-      # Also stop MetricsCollector if we started it
-      try do
-        if uc_pid && Process.alive?(uc_pid) do
-          GenServer.stop(uc_pid, :normal, 1000)
-        end
-      catch
-        # Process already dead
-        :exit, {:noproc, _} -> :ok
-        # Timeout is acceptable in cleanup
-        :exit, {:timeout, _} -> :ok
-      end
-    end)
+    # Its own child id: tests below start further AlertManagers under the
+    # module's default id.
+    pid =
+      start_link_supervised!({AlertManager, name: test_name},
+        id: test_name,
+        restart: :temporary
+      )
 
     {:ok, test_name: test_name, pid: pid, collector_pid: uc_pid}
   end
