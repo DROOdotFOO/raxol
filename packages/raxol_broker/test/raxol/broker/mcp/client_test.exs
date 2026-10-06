@@ -391,9 +391,11 @@ defmodule Raxol.Broker.MCP.ClientTest do
       assert statuses(fake, "get_accounts") == [200]
     end
 
+    # Zero delays make the cooldown after a failed run zero too, so the next
+    # call deterministically starts a new run.
     test "a connect throttled past :retries answers queued callers and stays up" do
       fake = held_fake([{"tools/list", {:http, 429}, 3}])
-      broker = start_against_fake(fake, base_ms: 1, retries: 2)
+      broker = start_against_fake(fake, base_ms: 0, max_ms: 0, retries: 2)
 
       call = queued_call(broker, "get_accounts")
       Fake.release(fake)
@@ -429,7 +431,7 @@ defmodule Raxol.Broker.MCP.ClientTest do
       fake = Fake.start(faults: [{"initialize", {:http, 503}, 10}])
 
       # Production connect settings: no inner reconnect or budget overrides.
-      broker = start_against_fake(fake, base_ms: 1, retries: 2)
+      broker = start_against_fake(fake, base_ms: 0, max_ms: 0, retries: 2)
 
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
       assert answers(fake, "initialize") == [503, 503, 503]
@@ -440,7 +442,23 @@ defmodule Raxol.Broker.MCP.ClientTest do
       assert answers(fake, "initialize") == [503, 503, 503, 503, 503, 503]
     end
 
-    for {fault, label} <- [{{:http, 500}, "a 500"}, {:closed, "a dropped connection"}] do
+    test "after a failed connect run, calls are answered locally until the cooldown ends" do
+      fake = Fake.start(faults: [{"initialize", {:http, 503}, 10}])
+      broker = start_against_fake(fake, base_ms: 60_000, max_ms: 60_000, retries: 0)
+
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      assert Client.list_tools(broker) == {:error, {:http, 503}}
+      assert answers(fake, "initialize") == [503]
+    end
+
+    for {fault, label} <- [
+          {{:http, 500}, "a 500"},
+          {:closed, "a dropped connection"},
+          {{:error, {:timeout, :connect}}, "a dial timeout"},
+          {{:error, {:timeout, :deadline}}, "a deadline timeout"},
+          {{:error, {:task_down, :killed}}, "a crashed exchange"}
+        ] do
       @fault fault
       test "#{label} at the handshake is retried, and the queued call succeeds" do
         fake = Fake.start(faults: [{"initialize", @fault}])
@@ -450,6 +468,32 @@ defmodule Raxol.Broker.MCP.ClientTest do
         assert length(answers(fake, "initialize")) == 2
         assert statuses(fake, "get_accounts") == [200]
       end
+    end
+
+    test "a DNS failure at connect is retried, and the call succeeds" do
+      fake = Fake.start()
+      lookups = :counters.new(1, [])
+      resolve = Keyword.fetch!(Fake.mcp_opts(fake), :resolver)
+
+      resolver = fn
+        host, :inet ->
+          :counters.add(lookups, 1, 1)
+          if :counters.get(lookups, 1) == 1, do: {:error, :nxdomain}, else: resolve.(host, :inet)
+
+        host, family ->
+          resolve.(host, family)
+      end
+
+      opts =
+        Fake.client_opts(fake,
+          backoff: [base_ms: 1],
+          mcp: Keyword.put(Fake.mcp_opts(fake), :resolver, resolver)
+        )
+
+      broker = start_supervised!({Client, opts})
+
+      assert {:ok, %{is_error: false}} = Client.call(broker, "get_accounts", %{})
+      assert :counters.get(lookups, 1) >= 2
     end
 
     test "a throttle on the post-refresh retry still locks out on the next 401", ctx do

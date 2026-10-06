@@ -60,6 +60,9 @@ defmodule Raxol.Broker.MCP.Fake do
       `{:error, {:transport, :closed}}` as the real exchange reports it.
     * `:hold` - waits until `release/1`, then answers normally. A gate for
       tests that need callers queued behind a connect, without a sleep.
+    * `{:error, reason}` - the exchange fails with `reason` and no response,
+      for the transport's other failures, e.g. `{:timeout, :connect}`,
+      `{:timeout, :deadline}` or `{:task_down, :killed}`.
 
   A fault pre-empts everything below: it is consumed before the request is
   authorized or routed.
@@ -128,7 +131,12 @@ defmodule Raxol.Broker.MCP.Fake do
   ]
 
   @type fault ::
-          {:http, 400..599} | :malformed | {:slow, non_neg_integer()} | :closed | :hold
+          {:http, 400..599}
+          | :malformed
+          | {:slow, non_neg_integer()}
+          | :closed
+          | :hold
+          | {:error, term()}
   @type scenario :: %{atom() => term()}
 
   @doc "The tool list recorded from Robinhood on 2026-10-02 (sanitized)."
@@ -462,6 +470,7 @@ defmodule Raxol.Broker.MCP.Fake do
   end
 
   defp respond_with(:closed, _answer), do: {:error, {:transport, :closed}}
+  defp respond_with({:error, _reason} = error, _answer), do: error
 
   # -- tools/call -------------------------------------------------------------
 
@@ -677,6 +686,7 @@ defmodule Raxol.Broker.MCP.Fake do
   defp valid_fault?({:http, status}) when status in 400..599, do: true
 
   defp valid_fault?({:slow, ms}) when is_integer(ms) and ms >= 0, do: true
+  defp valid_fault?({:error, _reason}), do: true
   defp valid_fault?(fault), do: fault in [:malformed, :closed, :hold]
 end
 
