@@ -6,4 +6,25 @@ defmodule Raxol.Broker.Tools.Account do
   @doc "List the user's brokerage accounts. Each account includes an agentic_allowed field indicating whether it's tradable by you — accounts where it's false are read-only to you. Use this to look up account_number values needed by other tools. Exactly one account is tradable by you; when the user is choosing an account for a trade, use that account directly without asking. Does NOT return reliable buying power — route buying-power questions through get_portfolio.\n\nTakes no arguments."
   @spec get_accounts(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_accounts(client, args \\ %{}), do: Raxol.Broker.Tools.call(client, "get_accounts", args)
+
+  @doc "Check whether a cash account is eligible to upgrade to limited margin and return the links (web and mobile) that start the upgrade flow. Limited margin lets the account trade with unsettled funds — proceeds from a sale can go into a new order before that sale settles — while adding no borrowing or leverage. Call when the user asks about that capability, about trading with unsettled funds, or about enabling limited margin.\n\nArguments (string keys):\n  * `account_number` (required, string)"
+  @spec get_limited_margin_upgrade_info(GenServer.server(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def get_limited_margin_upgrade_info(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_limited_margin_upgrade_info", args)
+
+  @doc "Get a customer's per-trade realized profit & loss — a chronological, paginated list of closed/realizing trades (equities, options, crypto, prediction markets) with symbol, side, quantity, price, and realized gain/loss. This is the same data behind the app's PnL hub (\"Realized profit & loss\"). Read-only. Trades only. Use get_realized_pnl for aggregate/bucketed totals.\n\nArguments (string keys):\n  * `account_number` (required, string)\n  * `cursor` (optional, string)\n  * `span` (optional, string)\n  * `symbol` (optional, string)"
+  @spec get_pnl_trade_history(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_pnl_trade_history(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_pnl_trade_history", args)
+
+  @doc "Get the account's portfolio market value breakdown by asset type and buying power. Use for \"how much is my account worth?\", \"what's my portfolio breakdown?\", \"how much do I have in options?\", and \"how much can I spend / afford?\" questions.\n\nArguments (string keys):\n  * `account_number` (required, string)"
+  @spec get_portfolio(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_portfolio(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_portfolio", args)
+
+  @doc "Get a customer's realized profit & loss for an account over a time window — per-bucket realized gain ($ and %) and the number of closing trades, plus window totals. Read-only. Aggregate, bucketed numbers only (not individual trades). Use for post-trade analysis like \"how did my last 90 days of trades do?\".\n\nArguments (string keys):\n  * `account_number` (required, string)\n  * `asset_classes` (optional, null | array)\n  * `display_currency` (optional, string)\n  * `end_date` (optional, string)\n  * `span` (optional, string)\n  * `start_date` (optional, string)\n  * `timezone` (optional, string)"
+  @spec get_realized_pnl(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_realized_pnl(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_realized_pnl", args)
 end

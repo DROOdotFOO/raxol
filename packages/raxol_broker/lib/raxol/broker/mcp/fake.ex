@@ -16,11 +16,11 @@ defmodule Raxol.Broker.MCP.Fake do
   ## Tools
 
   The captured tool list (`Raxol.Broker.Tools.Catalog.recorded_tools/0`, see
-  the capture's provenance), plus three read-only tools the scenario answers
-  that the sanitized capture omits: `get_equity_positions`,
-  `get_equity_orders` and `get_alert_log`. Their schemas are not recorded
-  (`{"type": "object"}`); their answers are this module's shapes, not
-  Robinhood's.
+  the capture's provenance). The scenario answers `get_accounts`,
+  `get_equity_quotes`, `get_equity_positions`, `get_equity_orders`,
+  `get_alert_log` and the equity, option and crypto `review_*`/`preview_*`,
+  `place_*` and `cancel_*` tools in this module's shapes, not Robinhood's;
+  any other served tool answers a JSON-RPC error.
 
   ## Scenario
 
@@ -110,14 +110,6 @@ defmodule Raxol.Broker.MCP.Fake do
   @external_resource @discover_path
   @discover_refused @discover_path |> File.read!() |> Jason.decode!()
 
-  @scenario_tools for name <- ~w(get_equity_positions get_equity_orders get_alert_log),
-                      do: %{
-                        "name" => name,
-                        "description" => "Fake: answered from the scenario.",
-                        "inputSchema" => %{"type" => "object"},
-                        "annotations" => %{"readOnlyHint" => true}
-                      }
-
   @keys [
     :account,
     :quotes,
@@ -144,9 +136,9 @@ defmodule Raxol.Broker.MCP.Fake do
   @spec recorded_tools() :: [map()]
   def recorded_tools, do: Catalog.recorded_tools()
 
-  @doc "The default tools the Fake serves: the captured list plus the scenario tools."
+  @doc "The tools the Fake serves by default: the captured list."
   @spec tools() :: [map()]
-  def tools, do: Catalog.recorded_tools() ++ @scenario_tools
+  def tools, do: Catalog.recorded_tools()
 
   @doc "Validate a scenario. Raises `ArgumentError` on an unknown key or bad value."
   @spec scenario(keyword()) :: scenario()
@@ -539,6 +531,9 @@ defmodule Raxol.Broker.MCP.Fake do
 
   defp tool("review_" <> _, args, state),
     do: ok(%{"quote" => price_quote(state, args["symbol"]), "alerts" => state.warnings}, state)
+
+  # Crypto's review tool is named `preview_*_order`; `preview_scan` is a read.
+  defp tool("preview_crypto_order", args, state), do: tool("review_crypto_order", args, state)
 
   defp tool("place_" <> _, args, state) do
     ref = args["ref_id"] || "seq-#{map_size(state.orders) + 1}"

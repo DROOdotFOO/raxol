@@ -42,9 +42,10 @@ defmodule Raxol.Broker.ToolsTest do
   end
 
   test "capture_tools writes the live list the catalog and generator read", %{tmp_dir: dir} do
+    # A tool the committed capture lacks, as a server upgrade would add one.
     extra = %{
-      "name" => "get_portfolio",
-      "description" => "Portfolio.",
+      "name" => "get_margin_summary",
+      "description" => "Margin summary.",
       "inputSchema" => %{"type" => "object"},
       "annotations" => %{"readOnlyHint" => true}
     }
@@ -55,15 +56,17 @@ defmodule Raxol.Broker.ToolsTest do
     assert {:ok, count} = CaptureTools.capture(Fake.client_opts(fake), out)
 
     %{"provenance" => provenance, "tools" => tools} = out |> File.read!() |> Jason.decode!()
-    served = Enum.map(Fake.tools(), & &1["name"]) ++ ["get_portfolio"]
+    served = Enum.map(Fake.tools(), & &1["name"]) ++ ["get_margin_summary"]
     assert Enum.map(tools, & &1["name"]) == Enum.sort(served)
     assert count == length(tools)
     assert provenance["source"] =~ "tools/list"
 
-    captured = Enum.find(tools, &(&1["name"] == "get_portfolio"))
+    captured = Enum.find(tools, &(&1["name"] == "get_margin_summary"))
     assert captured == extra
-    assert Catalog.classify("get_portfolio", captured) == :read
-    assert Generator.family("get_portfolio") == "Account"
-    assert Map.has_key?(Generator.render(tools), Path.join(Generator.dir(), "account.ex"))
+    assert Catalog.classify("get_margin_summary") == :unknown
+    assert Catalog.classify("get_margin_summary", captured) == :read
+
+    account = Generator.render(tools)[Path.join(Generator.dir(), "account.ex")]
+    assert account =~ "def get_margin_summary(client"
   end
 end

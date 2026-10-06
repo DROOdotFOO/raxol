@@ -3,8 +3,97 @@
 defmodule Raxol.Broker.Tools.MarketData do
   @moduledoc "Read tools of the MarketData family, generated from the capture."
 
+  @doc "List earnings reports scheduled across the market over a date window (up to 31 days), optionally limited to high-market-cap names. Returns one entry per report event — estimated/actual EPS, report date and timing (am/pm), and company-verification status. Use this for market-wide discovery (\"what large-caps report this week?\"). For a specific known ticker, use get_earnings_results instead. Read-only.\n\nArguments (string keys):\n  * `days` (optional, integer)\n  * `filter` (optional, string)\n  * `start_date` (optional, string)"
+  @spec get_earnings_calendar(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_earnings_calendar(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_earnings_calendar", args)
+
+  @doc "Get recent and upcoming earnings for ONE equity symbol — estimated/actual EPS, report date and timing (am/pm), and company-verification status. Returns the trailing up to 8 quarters. Use this for earnings-timing questions (\"does AAPL report this week?\"), EPS surprise analysis, and screening for upcoming earnings risk on a specific stock. For market-wide earnings calendar queries across many symbols, use get_earnings_calendar. Read-only.\n\nArguments (string keys):\n  * `symbol` (required, string)"
+  @spec get_earnings_results(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_earnings_results(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_earnings_results", args)
+
+  @doc "Get analyst price targets (high, low, average) and the Buy/Hold/Sell ratings breakdown for one or more equity symbols. Use for consensus/sentiment checks and comparing the current price to the analyst target range. Read-only.\n\nArguments (string keys):\n  * `symbols` (required, null | array)"
+  @spec get_equity_analyst_ratings(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_equity_analyst_ratings(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_equity_analyst_ratings", args)
+
+  @doc "Get today's fundamentals for one or more stock symbols — valuation ratios (PE, P/B), capitalization (market cap, shares outstanding, float), today's session OHLCV, trailing volume averages, 52-week range, dividend schedule, and company profile. For real-time quotes use get_equity_quotes; for time-series price history use get_equity_historicals.\n\nArguments (string keys):\n  * `bounds` (optional, string)\n  * `symbols` (required, null | array)"
+  @spec get_equity_fundamentals(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_equity_fundamentals(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_equity_fundamentals", args)
+
+  @doc "Get OHLCV bars for one or more equity symbols across an explicit time range. Use this for charting, \"recent activity\" questions, and backtesting. The server auto-selects an interval when one is not provided. If the bar's interpolated field is true, bar was synthesized to fill a gap and carry no new information.\n\nArguments (string keys):\n  * `adjustment_type` (optional, string)\n  * `bounds` (optional, string)\n  * `end_time` (optional, string)\n  * `interval` (optional, string)\n  * `start_time` (required, string)\n  * `symbols` (required, null | array)"
+  @spec get_equity_historicals(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_equity_historicals(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_equity_historicals", args)
+
+  @doc "Get a real-time bid/ask order book (Level 2) snapshot for one or more equity symbols (max 4), showing the ladder of price levels and resting share size on each side. Use to read supply/demand depth before entering or exiting a position.\n\nArguments (string keys):\n  * `symbols` (required, null | array)"
+  @spec get_equity_price_book(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_equity_price_book(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_equity_price_book", args)
+
   @doc "Get real-time stock quotes and the official last-completed-session close for one or more symbols.\n\nArguments (string keys):\n  * `symbols` (required, null | array)"
   @spec get_equity_quotes(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_equity_quotes(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_equity_quotes", args)
+
+  @doc "Compute a technical indicator (RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, and more) over one equity symbol's OHLCV bars across a time range. For the raw OHLCV bars themselves, use get_equity_historicals.\n\nArguments (string keys):\n  * `adjustment_type` (optional, string)\n  * `bounds` (optional, string)\n  * `end_time` (optional, string)\n  * `fast_period` (optional, null | integer)\n  * `interval` (required, string)\n  * `method` (optional, string)\n  * `multiplier` (optional, null | number)\n  * `num_std` (optional, null | number)\n  * `output` (optional, string)\n  * `period` (optional, null | integer)\n  * `signal_period` (optional, null | integer)\n  * `slow_period` (optional, null | integer)\n  * `start_time` (required, string)\n  * `symbol` (required, string)\n  * `type` (required, string)"
+  @spec get_equity_technical_indicators(GenServer.server(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def get_equity_technical_indicators(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_equity_technical_indicators", args)
+
+  @doc "Check tradability for up to 10 equity symbols on a given account: per-session eligibility and fractional. Call before placing an order to surface restrictions. Exact-ticker match — no name or partial-ticker resolution.\n\nArguments (string keys):\n  * `account_number` (required, string)\n  * `symbols` (required, null | array)"
+  @spec get_equity_tradability(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_equity_tradability(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_equity_tradability", args)
+
+  @doc "Get a company's reported financial metrics over time — revenue, gross profit, net income, and net margin — by fiscal period (annual or quarterly), for one or more symbols. Use this for fundamental analysis like revenue-growth and margin-trend tracking, profitability screens, and period-over-period comparisons. Read-only.\n\nArguments (string keys):\n  * `limit` (optional, integer)\n  * `period` (optional, string)\n  * `symbols` (required, null | array)"
+  @spec get_financials(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_financials(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_financials", args)
+
+  @doc "Get OHLC value bars for one or more market indexes (by instrument UUID) across an explicit time range. Use this for charting an index's history and \"recent movement\" questions. If the bar's interpolated field is true, bar was synthesized to fill a gap and carry no new information.\n\nArguments (string keys):\n  * `end_time` (optional, string)\n  * `instrument_ids` (required, null | array)\n  * `interval` (required, string)\n  * `start_time` (required, string)"
+  @spec get_index_historicals(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_index_historicals(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_index_historicals", args)
+
+  @doc "Get real-time values for one or more market indexes by instrument ID. Returns current index level, state, and timestamps.\n\nArguments (string keys):\n  * `instrument_ids` (required, null | array)"
+  @spec get_index_quotes(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_index_quotes(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_index_quotes", args)
+
+  @doc "Get index data for market indexes by symbol.\nOptionally pass a comma-separated list of symbols (e.g. 'SPX,NDX,DJI') to filter results. Omit symbols to return all available indexes.\n\nArguments (string keys):\n  * `symbols` (optional, string)"
+  @spec get_indexes(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_indexes(client, args \\ %{}), do: Raxol.Broker.Tools.call(client, "get_indexes", args)
+
+  @doc "Get disclosed trading activity of US politicians from Tip Ranks. Use when the user asks about politician/congressional trades - either for a specific stock (\"which politicians traded NVDA?\") or a specific politician. Data comes from public STOCK Act disclosures; amounts are ranges, not exact values, and disclosures lag the actual trade by up to 45 days.\n\nArguments (string keys):\n  * `equity_symbol` (optional, string)\n  * `politician_name` (optional, string)"
+  @spec get_politician_trades(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_politician_trades(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_politician_trades", args)
+
+  @doc "Read an SEC filing's table of contents or a specific section's text. Use get_sec_filing_index to find a filing_id first.\n\nArguments (string keys):\n  * `filing_id` (required, string)\n  * `section` (optional, string)"
+  @spec get_sec_filing(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_sec_filing(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_sec_filing", args)
+
+  @doc "Get reported facts tagged under specific GAAP concept names in one or more SEC filings — financial figures (revenue, net income, assets, debt) and disclosures (e.g. debt schedules, related-party transactions, subsequent events) alike. Use get_sec_filing_index to find filing_ids first.\n\nArguments (string keys):\n  * `concepts` (required, null | array)\n  * `filing_ids` (required, null | array)"
+  @spec get_sec_filing_facts(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_sec_filing_facts(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_sec_filing_facts", args)
+
+  @doc "List the distinct GAAP concept names tagged in an SEC filing, with their reporting periods and dimension breakdowns. Use this only after a direct get_sec_filing_facts guess comes back empty, or for open-ended \"what's unusual/notable\" questions — most common financial questions should guess concept names directly rather than calling this first.\n\nArguments (string keys):\n  * `axis_name_in` (optional, null | array)\n  * `concept_contains` (optional, string)\n  * `filing_id` (required, string)\n  * `offset` (optional, integer)"
+  @spec get_sec_filing_facts_catalog(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_sec_filing_facts_catalog(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_sec_filing_facts_catalog", args)
+
+  @doc "List a company's SEC filings, optionally filtered by form type and date. Use this to find a specific annual report (10-K), quarterly report (10-Q), or material event disclosure (8-K).\n\nArguments (string keys):\n  * `cursor` (optional, string)\n  * `form_type` (optional, null | array)\n  * `since` (optional, string)\n  * `symbol` (required, string)\n  * `until` (optional, string)"
+  @spec get_sec_filing_index(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_sec_filing_index(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_sec_filing_index", args)
+
+  @doc "Resolve a natural-language query to Robinhood instruments (stocks/ETFs), crypto pairs, or market indexes. Use when the user names an asset by name (or partial name) instead of a ticker/pair/index symbol, or when you need an instrument_id / currency-pair UUID / market-index id for a downstream tool. Defaults to instrument search; pass asset_type=\"currency_pair\" for crypto or asset_type=\"market_index\" for indexes (SPX, NDX, DJI, etc.). Instrument results carry symbol + instrument_id (use with get_equity_quotes / get_equity_tradability / place_equity_order or any instrument_id-based tool). Crypto results carry hyphenated symbol (e.g. BTC-USD) + id — the symbol routes to crypto quote/order tools, the id routes to watchlist tools as currency_pair_ids. Market-index results carry symbol + id — pass id to index quote tools for current values, or in the index_ids array of watchlist tools.\n\nArguments (string keys):\n  * `asset_type` (optional, string)\n  * `limit` (optional, integer)\n  * `query` (required, string)"
+  @spec search(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def search(client, args \\ %{}), do: Raxol.Broker.Tools.call(client, "search", args)
 end

@@ -8,23 +8,37 @@ defmodule Raxol.Broker.Tools.CatalogTest do
   @read %{"annotations" => %{"readOnlyHint" => true}}
 
   describe "the capture" do
-    test "classifies every captured tool" do
-      assert Catalog.static() == %{
-               "get_accounts" => :read,
-               "get_equity_quotes" => :read,
-               "review_equity_order" => :review,
-               "place_equity_order" => :write,
-               "cancel_equity_order" => :write
-             }
+    defp named(class),
+      do: for({name, ^class} <- Catalog.static(), do: name) |> Enum.sort()
+
+    test "only the allowlisted order and alert tools are :write" do
+      assert named(:write) ==
+               ~w(cancel_crypto_order cancel_equity_order cancel_option_order create_alert
+                  place_crypto_order place_equity_order place_option_order update_alert)
+    end
+
+    test "the review tools are :review, and every place tool resolves to one" do
+      assert named(:review) == ~w(preview_crypto_order review_equity_order review_option_order)
+
+      assert Catalog.review_for("place_equity_order") == {:ok, "review_equity_order"}
+      assert Catalog.review_for("place_option_order") == {:ok, "review_option_order"}
+      assert Catalog.review_for("place_crypto_order") == {:ok, "preview_crypto_order"}
+    end
+
+    test "no :read tool is write-shaped, and the other mutators are :unknown" do
+      assert Enum.all?(
+               named(:read),
+               &String.match?(&1, ~r/\A(get_|preview_scan\z|run_scan\z|search\z)/)
+             )
+
+      for name <-
+            ~w(exercise_option cancel_option_exercise delete_alert create_watchlist add_to_watchlist),
+          do: assert(Catalog.classify(name) == :unknown, name)
     end
 
     test "a tool absent from the capture is :unknown, whatever its shape" do
       assert Catalog.classify("place_foo_order") == :unknown
       assert Catalog.classify("get_foo") == :unknown
-    end
-
-    test "review_for pairs a captured place tool with its review tool" do
-      assert Catalog.review_for("place_equity_order") == {:ok, "review_equity_order"}
       assert Catalog.review_for("place_foo_order") == {:error, :no_review}
       assert Catalog.review_for("cancel_equity_order") == {:error, :no_review}
     end

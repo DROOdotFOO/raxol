@@ -456,9 +456,11 @@ mix raxol.broker.capture_tools
 mix raxol.broker.gen.tools          # --check fails if the checked-in modules are stale
 ```
 
-The checked-in capture is sanitized to five tools, so until a full capture
-is committed only `get_accounts` and `get_equity_quotes` are readable and
-only equity orders can be reviewed and placed.
+The checked-in capture is Robinhood's live list of 2026-10-06 (76 tools):
+50 are readable, `review_equity_order`, `review_option_order` and
+`preview_crypto_order` are the review tools, and the equity, option and
+crypto `place_*`/`cancel_*` tools plus alert create/update are the writes.
+
 ## Robinhood sign-in
 
 ```elixir
