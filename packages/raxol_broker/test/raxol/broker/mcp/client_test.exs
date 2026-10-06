@@ -2,10 +2,11 @@ defmodule Raxol.Broker.MCP.ClientTest do
   @moduledoc """
   The broker session end to end, against in-process stand-ins for both
   Robinhood servers: the authorization server replays the recorded auth
-  exchange through the `:http_fn` seam, and the MCP server is the legacy-era
-  reference server behind a bearer gate, driven through the transport's
-  `:exchange` seam. The loopback callback socket, the encrypted store, the
-  MCP transport and the refresh logic are all the real ones.
+  exchange through the `:http_fn` seam, and the MCP server is
+  `Raxol.Broker.MCP.Fake` (the legacy-era reference server) behind its bearer
+  gate, driven through the transport's `:exchange` seam. The loopback
+  callback socket, the encrypted store, the MCP transport and the refresh
+  logic are all the real ones.
   """
   use ExUnit.Case, async: true
 
@@ -19,7 +20,6 @@ defmodule Raxol.Broker.MCP.ClientTest do
   alias Raxol.Broker.Test.AuthServer
   alias Raxol.Broker.Test.Browser
   alias Raxol.Broker.Test.Fixtures
-  alias Raxol.Broker.Test.MCPServer
   alias Raxol.Broker.Test.MemoryKeys
 
   @moduletag :tmp_dir
@@ -43,7 +43,7 @@ defmodule Raxol.Broker.MCP.ClientTest do
        key_provider: {MemoryKeys, agent: MemoryKeys.start()}
      ],
      auth: AuthServer.start(),
-     mcp: MCPServer.start(),
+     mcp: Fake.start(accept: []),
      token: token,
      refreshed: refreshed,
      secrets: [
@@ -77,7 +77,7 @@ defmodule Raxol.Broker.MCP.ClientTest do
     opts = [
       store: ctx.store,
       auth: [http_fn: AuthServer.http_fn(ctx.auth)],
-      mcp: MCPServer.mcp_opts(ctx.mcp),
+      mcp: Fake.mcp_opts(ctx.mcp),
       connect_timeout: 5_000
     ]
 
@@ -100,29 +100,32 @@ defmodule Raxol.Broker.MCP.ClientTest do
     raw = File.read!(ctx.store[:path])
     for secret <- ctx.secrets, do: refute(raw =~ secret)
 
-    MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.token["access_token"]])
     broker = start_broker(ctx)
 
     assert {:ok, tools} = Client.list_tools(broker)
     assert tools != []
-    assert tool_names(tools) == ["get_accounts", "get_equity_quotes"]
+    # The Fake serves the recorded five plus its three scenario tools; the
+    # broker keeps only the read-only ones, never place/cancel/review.
+    assert tool_names(tools) ==
+             ~w(get_accounts get_equity_quotes get_equity_positions get_equity_orders get_alert_log)
   end
 
   test "a mid-session 401 refreshes once, persists the rotation, and retries", ctx do
     seed(ctx)
-    MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.token["access_token"]])
     broker = start_broker(ctx)
     assert {:ok, _tools} = Client.list_tools(broker)
 
     # The access token stops working server-side; only the rotated one will.
-    MCPServer.accept(ctx.mcp, [ctx.refreshed["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.refreshed["access_token"]])
 
     assert {:ok, %{content: [_ | _], is_error: false}} =
              Client.call(broker, "get_accounts", %{})
 
     assert AuthServer.refresh_count(ctx.auth) == 1
 
-    calls = for {"tools/call", status} <- MCPServer.requests(ctx.mcp), do: status
+    calls = for {"tools/call", _tool, status} <- Fake.requests(ctx.mcp), do: status
     assert calls == [401, 200]
 
     assert {:ok, stored} = CredentialStore.fetch(ctx.store)
@@ -135,23 +138,23 @@ defmodule Raxol.Broker.MCP.ClientTest do
     # dead token once a second until the shared breaker opened, so the broker
     # saw `:breaker_open` instead of the 401 and never refreshed.
     seed(ctx)
-    MCPServer.accept(ctx.mcp, [ctx.refreshed["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.refreshed["access_token"]])
     broker = start_broker(ctx)
 
     assert {:ok, [_ | _]} = Client.list_tools(broker)
     assert AuthServer.refresh_count(ctx.auth) == 1
 
-    handshakes = for {"initialize", status} <- MCPServer.requests(ctx.mcp), do: status
+    handshakes = for {"initialize", _tool, status} <- Fake.requests(ctx.mcp), do: status
     assert handshakes == [401, 200]
   end
 
   test "a 401 after the refresh is :unauthorized, stays up, and sends nothing more", ctx do
     seed(ctx)
-    MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.token["access_token"]])
     broker = start_broker(ctx)
     assert {:ok, _tools} = Client.list_tools(broker)
 
-    MCPServer.accept(ctx.mcp, [])
+    Fake.accept(ctx.mcp, [])
 
     capture_log(fn ->
       assert {:error, :unauthorized} = Client.call(broker, "get_accounts", %{})
@@ -160,7 +163,7 @@ defmodule Raxol.Broker.MCP.ClientTest do
     assert AuthServer.refresh_count(ctx.auth) == 1
     assert Process.alive?(broker)
 
-    seen = MCPServer.requests(ctx.mcp)
+    seen = Fake.requests(ctx.mcp)
 
     assert {:error, :unauthorized} = Client.call(broker, "get_equity_quotes", %{})
     assert {:error, :unauthorized} = Client.list_tools(broker)
@@ -168,17 +171,17 @@ defmodule Raxol.Broker.MCP.ClientTest do
     # The status call is a round trip through the broker, so anything a
     # reconnect loop would have sent by now has been sent.
     _ = :sys.get_state(broker)
-    assert MCPServer.requests(ctx.mcp) == seen
+    assert Fake.requests(ctx.mcp) == seen
     assert AuthServer.refresh_count(ctx.auth) == 1
   end
 
   test "concurrent callers hitting a 401 share one refresh", ctx do
     seed(ctx)
-    MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.token["access_token"]])
     broker = start_broker(ctx)
     assert {:ok, _tools} = Client.list_tools(broker)
 
-    MCPServer.accept(ctx.mcp, [ctx.refreshed["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.refreshed["access_token"]])
 
     results =
       1..6
@@ -193,7 +196,7 @@ defmodule Raxol.Broker.MCP.ClientTest do
 
   test "an expired credential is refreshed once before concurrent callers use it", ctx do
     seed(ctx, DateTime.add(DateTime.utc_now(), -60, :second))
-    MCPServer.accept(ctx.mcp, [ctx.refreshed["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.refreshed["access_token"]])
     broker = start_broker(ctx)
 
     results =
@@ -207,13 +210,13 @@ defmodule Raxol.Broker.MCP.ClientTest do
     assert AuthServer.refresh_count(ctx.auth) == 1
 
     # The expired token never went on the wire.
-    assert Enum.all?(MCPServer.requests(ctx.mcp), fn {_method, status} -> status != 401 end)
+    assert Enum.all?(Fake.requests(ctx.mcp), fn {_method, _tool, status} -> status != 401 end)
   end
 
   test "a 403 is returned as is and never refreshes", ctx do
     seed(ctx)
-    MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])
-    MCPServer.forbid_calls(ctx.mcp)
+    Fake.accept(ctx.mcp, [ctx.token["access_token"]])
+    Fake.forbid_calls(ctx.mcp)
     broker = start_broker(ctx)
 
     assert {:error, {:http, 403}} = Client.call(broker, "get_accounts", %{})
@@ -222,10 +225,10 @@ defmodule Raxol.Broker.MCP.ClientTest do
 
   test "write-shaped and unknown tools are denied without a request", ctx do
     seed(ctx)
-    MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.token["access_token"]])
     broker = start_broker(ctx)
     assert {:ok, _tools} = Client.list_tools(broker)
-    seen = MCPServer.requests(ctx.mcp)
+    seen = Fake.requests(ctx.mcp)
 
     for name <-
           ~w(place_equity_order cancel_equity_order review_equity_order replace_equity_order
@@ -236,18 +239,18 @@ defmodule Raxol.Broker.MCP.ClientTest do
     end
 
     _ = :sys.get_state(broker)
-    assert MCPServer.requests(ctx.mcp) == seen
+    assert Fake.requests(ctx.mcp) == seen
   end
 
   test "neither logs nor process state carry a token or the account id", ctx do
     seed(ctx)
-    MCPServer.accept(ctx.mcp, [ctx.token["access_token"]])
+    Fake.accept(ctx.mcp, [ctx.token["access_token"]])
 
     log =
       capture_log(fn ->
         broker = start_broker(ctx)
         assert {:ok, _tools} = Client.list_tools(broker)
-        MCPServer.accept(ctx.mcp, [ctx.refreshed["access_token"]])
+        Fake.accept(ctx.mcp, [ctx.refreshed["access_token"]])
         assert {:ok, _result} = Client.call(broker, "get_accounts", %{})
 
         status = inspect(:sys.get_status(broker), limit: :infinity, printable_limit: :infinity)

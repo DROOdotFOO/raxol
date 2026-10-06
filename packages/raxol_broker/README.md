@@ -426,6 +426,11 @@ session retries a `429`, `502`, `503` or `504` with jittered doubling backoff
 (`:backoff` option), within the caller's timeout and never far enough to open
 its circuit breaker; the executor's order port never retries.
 
+`:accept` (or `Fake.accept/2`) limits the bearer tokens the Fake answers;
+any other gets the 401 Robinhood answers an invalid token. `forbid_calls/1`
+answers every `tools/call` 403, and `server/discover` always gets
+Robinhood's plain-text 400.
+
 ## Robinhood sign-in
 
 ```elixir

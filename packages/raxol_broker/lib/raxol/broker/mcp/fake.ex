@@ -37,6 +37,8 @@ defmodule Raxol.Broker.MCP.Fake do
     * `:order_states` - the states a placed order moves through, one step per
       `get_equity_orders` call (default `["queued"]`). `cancel_*` moves an
       order to `"cancelled"`.
+    * `:accept` - the access tokens the Fake accepts (see Authorization and
+      refusals; default unset: every token).
     * `:faults` - see below.
 
   `place_*` is idempotent on `ref_id`, as Robinhood documents it: the same
@@ -57,9 +59,28 @@ defmodule Raxol.Broker.MCP.Fake do
     * `:closed` - a transport failure with no response,
       `{:error, {:transport, :closed}}` as the real exchange reports it.
 
+  A fault pre-empts everything below: it is consumed before the request is
+  authorized or routed.
+
+  ## Authorization and refusals
+
+  With `:accept` set (or after `accept/2`), a request whose
+  `Authorization: Bearer` token is not one of those gets the 401 Robinhood
+  answers an invalid token, `www-authenticate` and body as recorded with the
+  auth exchange on 2026-10-02/03 (`priv/robinhood/invalid_token_401.json`).
+  Unset, every token is accepted, which is what `client_opts/2` relies on.
+  After `forbid_calls/1` every authorized `tools/call` answers 403.
+
+  `server/discover` always gets the plain-text 400 Robinhood serves for it
+  (observed 2026-10-03, `priv/robinhood/discover_400.json`), not a JSON-RPC
+  method-not-found, so a spec that is not pinned to the legacy era fails
+  against the Fake as it would against Robinhood. `session/1` and
+  `client_opts/2` are pinned.
+
   Every exchange is in `requests/1` from the moment it arrives (status
   `:pending` until it answers); every `tools/call` that reached the scenario
-  is in `calls/1` with its arguments.
+  is in `calls/1` with its arguments. Neither records a header, so the bearer
+  token is never kept.
   """
 
   alias Raxol.Agent.Auth.Credential
@@ -70,9 +91,19 @@ defmodule Raxol.Broker.MCP.Fake do
   # `:exchange` cannot reach a brokerage either.
   @url "https://fake.broker.test/mcp"
 
-  @tools_path Path.expand("../../../../priv/robinhood/tools_list.json", __DIR__)
+  @recordings Path.expand("../../../../priv/robinhood", __DIR__)
+
+  @tools_path Path.join(@recordings, "tools_list.json")
   @external_resource @tools_path
   @recorded_tools @tools_path |> File.read!() |> Jason.decode!() |> Map.fetch!("tools")
+
+  @invalid_token_path Path.join(@recordings, "invalid_token_401.json")
+  @external_resource @invalid_token_path
+  @invalid_token @invalid_token_path |> File.read!() |> Jason.decode!()
+
+  @discover_path Path.join(@recordings, "discover_400.json")
+  @external_resource @discover_path
+  @discover_refused @discover_path |> File.read!() |> Jason.decode!()
 
   @scenario_tools for name <- ~w(get_equity_positions get_equity_orders get_alert_log),
                       do: %{
@@ -82,7 +113,17 @@ defmodule Raxol.Broker.MCP.Fake do
                         "annotations" => %{"readOnlyHint" => true}
                       }
 
-  @keys [:account, :quotes, :positions, :alerts, :warnings, :reject, :order_states, :faults]
+  @keys [
+    :account,
+    :quotes,
+    :positions,
+    :alerts,
+    :warnings,
+    :reject,
+    :order_states,
+    :accept,
+    :faults
+  ]
 
   @type fault :: {:http, 400..599} | :malformed | {:slow, non_neg_integer()} | :closed
   @type scenario :: %{atom() => term()}
@@ -98,21 +139,19 @@ defmodule Raxol.Broker.MCP.Fake do
   @doc "Validate a scenario. Raises `ArgumentError` on an unknown key or bad value."
   @spec scenario(keyword()) :: scenario()
   def scenario(opts) when is_list(opts) do
-    case Keyword.keys(opts) -- @keys do
-      [] -> :ok
-      unknown -> raise ArgumentError, "unknown Fake scenario keys: #{inspect(unknown)}"
-    end
+    known_keys!(opts)
 
     lists = Map.new([:positions, :alerts, :warnings, :reject, :faults], &{&1, list!(opts, &1)})
 
     %{
       account: string!(Keyword.get(opts, :account, "FAKE-0001"), :account),
       quotes: quotes!(Keyword.get(opts, :quotes, %{})),
-      order_states: states!(Keyword.get(opts, :order_states, ["queued"]))
+      order_states: states!(Keyword.get(opts, :order_states, ["queued"])),
+      accept: accept!(Keyword.get(opts, :accept))
     }
     |> Map.merge(lists)
     |> Map.update!(:reject, &MapSet.new/1)
-    |> Map.update!(:faults, &Enum.map(&1, fn fault -> fault!(fault) end))
+    |> Map.update!(:faults, &faults!/1)
   end
 
   @doc "Start a Fake linked to the caller, from a `scenario/1` or its options."
@@ -138,7 +177,8 @@ defmodule Raxol.Broker.MCP.Fake do
           hooks: %{},
           orders: %{},
           calls: [],
-          requests: []
+          requests: [],
+          forbid_calls: false
         })
       end)
 
@@ -155,6 +195,20 @@ defmodule Raxol.Broker.MCP.Fake do
     faults = Enum.map(faults, &fault!/1)
     Agent.update(fake, &%{&1 | faults: &1.faults ++ faults})
   end
+
+  @doc """
+  Accept exactly these access tokens from now on; any other bearer gets the
+  recorded 401. `nil` accepts every token again.
+  """
+  @spec accept(pid(), [String.t()] | nil) :: :ok
+  def accept(fake, tokens) do
+    accepted = accept!(tokens)
+    Agent.update(fake, &%{&1 | accept: accepted})
+  end
+
+  @doc "Answer every authorized `tools/call` 403 (authenticated but forbidden) from now on."
+  @spec forbid_calls(pid()) :: :ok
+  def forbid_calls(fake), do: Agent.update(fake, &%{&1 | forbid_calls: true})
 
   @doc """
   Run `fun.(arguments)` in the server before it answers `tool`. Returning
@@ -262,14 +316,9 @@ defmodule Raxol.Broker.MCP.Fake do
     {method, tool} = describe(request)
     ref = make_ref()
 
-    {fault, seam} =
-      Agent.get_and_update(fake, fn state ->
-        {fault, faults} = take_fault(state.faults, method, tool)
-        arrived = [{ref, method, tool, :pending} | state.requests]
-        {{fault, state.seam}, %{state | faults: faults, requests: arrived}}
-      end)
+    {fault, server} = arrive(fake, ref, method, tool)
 
-    response = respond_with(fault, fn -> seam.(vetted, request, opts) end)
+    response = respond_with(fault, fn -> serve(server, method, vetted, request, opts) end)
 
     status =
       case response do
@@ -290,6 +339,17 @@ defmodule Raxol.Broker.MCP.Fake do
     response
   end
 
+  # Spends the fault the request matches, records it as `:pending`, and
+  # snapshots what answers it.
+  defp arrive(fake, ref, method, tool) do
+    Agent.get_and_update(fake, fn state ->
+      {fault, faults} = take_fault(state.faults, method, tool)
+      arrived = [{ref, method, tool, :pending} | state.requests]
+      server = Map.take(state, [:seam, :accept, :forbid_calls])
+      {{fault, server}, %{state | faults: faults, requests: arrived}}
+    end)
+  end
+
   defp describe(request) do
     case request |> Map.get(:body) |> Kernel.||("") |> IO.iodata_to_binary() |> Jason.decode() do
       {:ok, %{"method" => "tools/call" = method, "params" => %{"name" => tool}}} -> {method, tool}
@@ -297,6 +357,36 @@ defmodule Raxol.Broker.MCP.Fake do
       _other -> {nil, nil}
     end
   end
+
+  defp serve(server, method, vetted, request, opts) do
+    with :ok <- authorize(server.accept, request),
+         :ok <- route(method, server.forbid_calls) do
+      server.seam.(vetted, request, opts)
+    end
+  end
+
+  defp authorize(nil, _request), do: :ok
+
+  defp authorize(accepted, request) do
+    if MapSet.member?(accepted, bearer(request)), do: :ok, else: recorded(@invalid_token)
+  end
+
+  defp bearer(request) do
+    Enum.find_value(Map.get(request, :headers, []), fn
+      {name, "Bearer " <> token} -> if String.downcase(name) == "authorization", do: token
+      _other -> nil
+    end)
+  end
+
+  defp route("server/discover", _forbid_calls), do: recorded(@discover_refused)
+
+  defp route("tools/call", true),
+    do: {:ok, %{status: 403, headers: [{"content-type", "text/plain"}], body: "forbidden"}}
+
+  defp route(_method, _forbid_calls), do: :ok
+
+  defp recorded(%{"status" => status, "headers" => headers, "body" => body}),
+    do: {:ok, %{status: status, headers: Map.to_list(headers), body: body}}
 
   # The first fault matching the request, with one use spent.
   defp take_fault([], _method, _tool), do: {nil, []}
@@ -479,6 +569,13 @@ defmodule Raxol.Broker.MCP.Fake do
 
   # -- scenario validation ----------------------------------------------------
 
+  defp known_keys!(opts) do
+    case Keyword.keys(opts) -- @keys do
+      [] -> :ok
+      unknown -> raise ArgumentError, "unknown Fake scenario keys: #{inspect(unknown)}"
+    end
+  end
+
   defp string!(value, _key) when is_binary(value) and value != "", do: value
 
   defp string!(value, key),
@@ -514,6 +611,18 @@ defmodule Raxol.Broker.MCP.Fake do
 
   defp states!(other),
     do: raise(ArgumentError, "order_states must be a non-empty list, got #{inspect(other)}")
+
+  defp accept!(nil), do: nil
+
+  defp accept!(tokens) when is_list(tokens) do
+    Enum.each(tokens, &string!(&1, :accept))
+    MapSet.new(tokens)
+  end
+
+  defp accept!(other),
+    do: raise(ArgumentError, "accept must be a list of tokens or nil, got #{inspect(other)}")
+
+  defp faults!(faults), do: Enum.map(faults, &fault!/1)
 
   defp fault!({match, fault}), do: fault!({match, fault, 1})
 

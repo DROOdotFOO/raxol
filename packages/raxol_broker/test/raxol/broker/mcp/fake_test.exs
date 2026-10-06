@@ -7,6 +7,7 @@ defmodule Raxol.Broker.MCP.FakeTest do
 
   alias Raxol.Broker.Executor.Port
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
+  alias Raxol.Broker.MCP.Client
   alias Raxol.Broker.MCP.Fake
 
   @moduletag :capture_log
@@ -141,6 +142,69 @@ defmodule Raxol.Broker.MCP.FakeTest do
              for({"tools/call", _, _} = r <- Fake.requests(fake), do: r)
   end
 
+  test "only an accepted bearer is answered; any other gets the recorded 401" do
+    refused = Fake.start(accept: ["another-access-token"])
+    client = start_supervised!({Client, Fake.client_opts(refused)}, id: :refused)
+
+    assert Client.call(client, "get_accounts", %{}) == {:error, :unauthorized}
+    assert Fake.requests(refused) == [{"initialize", nil, 401}]
+    assert Fake.calls(refused) == []
+
+    token = Fake.client_opts(refused)[:credential].access_token
+    accepted = Fake.start(accept: [token])
+    client = start_supervised!({Client, Fake.client_opts(accepted)}, id: :accepted)
+
+    assert {:ok, %{is_error: false}} = Client.call(client, "get_accounts", %{})
+    assert Fake.calls(accepted) == [{"get_accounts", %{}}]
+  end
+
+  test "accept/2 changes the accepted tokens mid-session" do
+    fake = Fake.start()
+    opts = Fake.client_opts(fake)
+    client = start_supervised!({Client, opts}, id: :first)
+    assert {:ok, %{is_error: false}} = Client.call(client, "get_accounts", %{})
+
+    Fake.accept(fake, ["rotated-elsewhere"])
+    assert Client.call(client, "get_accounts", %{}) == {:error, :unauthorized}
+
+    Fake.accept(fake, [opts[:credential].access_token])
+    again = start_supervised!({Client, opts}, id: :again)
+    assert {:ok, %{is_error: false}} = Client.call(again, "get_accounts", %{})
+
+    assert for({"tools/call", tool, status} <- Fake.requests(fake), do: {tool, status}) == [
+             {"get_accounts", 200},
+             {"get_accounts", 401},
+             {"get_accounts", 200}
+           ]
+
+    assert Fake.calls(fake, "get_") == ["get_accounts", "get_accounts"]
+  end
+
+  test "forbid_calls answers every tools/call 403 and nothing reaches the scenario" do
+    fake = Fake.start()
+    Fake.forbid_calls(fake)
+    client = start_supervised!({Client, Fake.client_opts(fake)})
+
+    assert {:ok, [_ | _]} = Client.list_tools(client)
+    assert Client.call(client, "get_accounts", %{}) == {:error, {:http, 403}}
+    assert Fake.calls(fake) == []
+
+    assert [{"tools/call", "get_accounts", 403}] =
+             for({"tools/call", _, _} = r <- Fake.requests(fake), do: r)
+  end
+
+  test "server/discover gets Robinhood's plain-text 400, so an unpinned spec never handshakes" do
+    fake = Fake.start()
+    {:ok, spec} = PortMCP.prepare(Keyword.delete(Fake.session(fake), :era), mode: :dry_run)
+    {:ok, port} = PortMCP.start_client(spec)
+    on_exit(fn -> Port.stop(port) end)
+
+    # The probe runs in the client's connect, before it takes any call.
+    assert PortMCP.await_ready(port, 0) == {:error, {:not_ready, :closed}}
+    assert [{"server/discover", nil, 400} | _] = Fake.requests(fake)
+    refute Enum.any?(Fake.requests(fake), &match?({"initialize", _, _}, &1))
+  end
+
   test "a scenario with an unknown key or a bad fault is refused" do
     assert_raise ArgumentError, ~r/unknown Fake scenario keys/, fn ->
       Fake.scenario(quote: %{})
@@ -154,5 +218,8 @@ defmodule Raxol.Broker.MCP.FakeTest do
     assert_raise ArgumentError, ~r/unknown Fake fault/, fn ->
       Fake.scenario(faults: [{"get_accounts", {:http, 429, 2}}])
     end
+
+    assert_raise ArgumentError, ~r/accept must be/, fn -> Fake.scenario(accept: "token") end
+    assert_raise ArgumentError, ~r/accept must be/, fn -> Fake.scenario(accept: [""]) end
   end
 end
