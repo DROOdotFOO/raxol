@@ -20,17 +20,26 @@ end
 ### Starting GenServers in tests
 
 ```elixir
-# BAD - Manual cleanup, name conflicts
+# BAD - name conflicts, and on_exit races the server's exit (#909): ExUnit
+# runs on_exit as soon as the test reports, while a server linked to the
+# test process may still be dying, so the stop exits :noproc or
+# {:shutdown, {:sys, :terminate, _}}
 setup do
   {:ok, pid} = MyServer.start_link(name: MyServer)
   on_exit(fn -> GenServer.stop(pid) end)
   :ok
 end
 
-# GOOD - ExUnit handles cleanup
+# GOOD - ExUnit stops it before any on_exit runs. The link keeps a crash
+# failing the test; restart: :temporary stops the test supervisor from
+# restarting it silently, including during teardown.
 setup do
   test_id = :erlang.unique_integer([:positive])
-  start_supervised!({MyServer, name: :"MyServer_#{test_id}"})
+
+  start_link_supervised!({MyServer, name: :"MyServer_#{test_id}"},
+    restart: :temporary
+  )
+
   :ok
 end
 ```
@@ -85,7 +94,7 @@ When tests pass individually but fail in the suite:
 
 - [ ] Add `Code.ensure_loaded!` before `function_exported?` checks
 - [ ] Use unique process names: `:"ProcessName_#{:erlang.unique_integer([:positive])}"`
-- [ ] Replace manual process management with `start_supervised!`
+- [ ] Replace manual process management with `start_link_supervised!(spec, restart: :temporary)`, never `start_link` plus an `on_exit` stop
 - [ ] Set `async: false` if test uses named processes or global state
 - [ ] Clean up dynamic modules in `on_exit`
 - [ ] Check for shared ETS tables or registries

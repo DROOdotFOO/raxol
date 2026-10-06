@@ -314,9 +314,10 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
       |> BenchmarkProfile.from_env()
       |> elem(1)
 
-    # Supervised and linked, not start_link plus an on_exit stop (#909):
-    # on_exit can run while the linked Budget is still dying from the test
-    # process's exit, and the stop then exits with :noproc.
+    # Supervised, linked and :temporary, never start_link plus an on_exit
+    # stop (#909, docs/testing/QUICK_REFERENCE.md): on_exit can run while a
+    # linked server is still dying, and the stop then exits :noproc or
+    # {:shutdown, {:sys, :terminate, _}}.
     start_link_supervised!({Budget, profile}, restart: :temporary)
   end
 

@@ -6,10 +6,10 @@ defmodule Raxol.UI.RendererPartialRenderTest do
   alias Raxol.UI.Rendering.Renderer
 
   setup do
-    # Supervised and linked, not start_link plus an on_exit stop (#909):
-    # ExUnit runs on_exit while a linked server may still be dying from the
-    # test process's exit, so that stop could exit with :noproc or :shutdown.
-    # The test supervisor's children are gone before any on_exit runs.
+    # Supervised, linked and :temporary, never start_link plus an on_exit
+    # stop (#909, docs/testing/QUICK_REFERENCE.md): on_exit can run while a
+    # linked server is still dying, and the stop then exits :noproc or
+    # {:shutdown, {:sys, :terminate, _}}.
     start_link_supervised!(Renderer, restart: :temporary)
     Renderer.set_test_pid(self())
 

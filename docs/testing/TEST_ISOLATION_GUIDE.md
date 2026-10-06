@@ -21,23 +21,20 @@ setup do
   test_id = :erlang.unique_integer([:positive])
   module_prefix = "TestPlugin#{test_id}"
 
-  {:ok, pid} = PluginServer.start_link(
-    name: :"PluginServer#{test_id}",
-    plugin_paths: [],
-    auto_load: false
-  )
+  plugin_server =
+    start_link_supervised!(
+      {PluginServer,
+       name: :"PluginServer#{test_id}", plugin_paths: [], auto_load: false},
+      restart: :temporary
+    )
 
-  on_exit(fn ->
-    if Process.alive?(pid), do: GenServer.stop(pid)
-  end)
-
-  %{plugin_server: pid, module_prefix: module_prefix}
+  %{plugin_server: plugin_server, module_prefix: module_prefix}
 end
 ```
 
 ### 2. Use `start_supervised!` for process management
 
-Manual start/stop of GenServers causes conflicts between tests. Let ExUnit manage the lifecycle instead.
+Manual start/stop of GenServers causes conflicts between tests. Let ExUnit manage the lifecycle instead. For a server the test talks to, prefer `start_link_supervised!(spec, restart: :temporary)`: a stop in `on_exit` races the exit of a server linked to the test process (#909), the link keeps a crash failing the test, and `:temporary` keeps the supervisor from restarting it silently. See [QUICK_REFERENCE.md](QUICK_REFERENCE.md#starting-genservers-in-tests).
 
 ```elixir
 # Before (problematic)

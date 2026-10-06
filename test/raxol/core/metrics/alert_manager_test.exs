@@ -7,27 +7,26 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
   alias Raxol.Core.Metrics.AlertManager
 
   setup do
-    # Supervised and linked, not start_link plus an on_exit stop (#909):
-    # ExUnit runs on_exit while a linked server may still be dying from the
-    # test process's exit, so that stop could exit with :noproc or :shutdown.
-    # The test supervisor's children are gone before any on_exit runs.
+    # Supervised, linked and :temporary, never start_link plus an on_exit
+    # stop (#909, docs/testing/QUICK_REFERENCE.md): on_exit can run while a
+    # linked server is still dying, and the stop then exits :noproc or
+    # {:shutdown, {:sys, :terminate, _}}.
     #
-    # MetricsCollector is the dependency, under its global name. One that is
-    # already running belongs to someone else and is left alone.
-    uc_pid =
-      case start_supervised(Raxol.Core.Metrics.MetricsCollector,
-             restart: :temporary
-           ) do
-        {:ok, pid} ->
-          Process.link(pid)
-          pid
+    # MetricsCollector is the dependency, under its global name. One already
+    # running is reused rather than stopped; its metrics are still cleared
+    # below.
+    case start_supervised(Raxol.Core.Metrics.MetricsCollector,
+           restart: :temporary
+         ) do
+      {:ok, collector} ->
+        Process.link(collector)
 
-        {:error, {:already_started, pid}} ->
-          pid
+      {:error, {:already_started, _collector}} ->
+        :ok
 
-        {:error, reason} ->
-          raise "Failed to start MetricsCollector: #{inspect(reason)}"
-      end
+      {:error, reason} ->
+        raise "Failed to start MetricsCollector: #{inspect(reason)}"
+    end
 
     # Clear any persisted ETS data from previous runs
     Raxol.Core.Metrics.MetricsCollector.clear_metrics()
@@ -43,7 +42,7 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
         restart: :temporary
       )
 
-    {:ok, test_name: test_name, pid: pid, collector_pid: uc_pid}
+    {:ok, test_name: test_name, pid: pid}
   end
 
   describe "rule management" do
