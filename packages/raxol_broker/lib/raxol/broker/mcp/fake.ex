@@ -304,9 +304,9 @@ defmodule Raxol.Broker.MCP.Fake do
   refresh token and no expiry: no refresh is ever scheduled, and a 401 locks
   the session out (`{:error, :unauthorized}`) instead of refreshing. The token
   endpoint refuses, and the stored credential is never read. The store is
-  unwritable and has no key, so even with an overriding credential that does
-  refresh, the rotated credential is refused (`{:store_failed, _}`) rather
-  than written over the user's. `overrides` are merged last.
+  unwritable and has no key: even with an overriding credential and `:auth`
+  that do refresh, the rotated credential is refused (`{:store_failed, _}`)
+  rather than written over the user's. `overrides` are merged last.
   """
   @spec client_opts(pid(), keyword()) :: keyword()
   def client_opts(fake, overrides \\ []) do

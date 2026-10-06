@@ -70,9 +70,11 @@ defmodule Raxol.MCP.Client do
 
   A spec with `fail_fast: true` keeps the retry but stops `await_ready/2`
   from waiting through it: each failed connect or handshake answers the
-  callers already waiting with `{:error, {:connect_failed, reason}}`. An
-  owner that runs its own retry policy (and stops this client to do so) uses
-  it to see the failure at once instead of at its deadline.
+  callers already waiting with `{:error, {:connect_failed, reason}}`, and a
+  caller that arrives while the client is still `:closed` after that failure
+  gets the same answer at once. An owner that runs its own retry policy (and
+  stops this client to do so) uses it to see the failure at once instead of
+  at its deadline.
 
   ## Tool Namespacing
 

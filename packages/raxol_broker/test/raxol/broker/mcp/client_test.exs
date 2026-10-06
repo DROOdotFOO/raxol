@@ -354,7 +354,9 @@ defmodule Raxol.Broker.MCP.ClientTest do
     # Holds the connect's `initialize` and queues a call behind it. The call is
     # sent from a task, which then makes a synchronous request of the session:
     # messages from one sender arrive in order, so once that returns the
-    # session has taken the call.
+    # session has taken the call. It sends the session's own `{:call, ...}`
+    # message, because `Client.call/4` would block the task before the barrier;
+    # there is no public way to queue a call deterministically.
     defp queued_call(broker, tool, timeout \\ 60_000) do
       test = self()
 
@@ -431,6 +433,23 @@ defmodule Raxol.Broker.MCP.ClientTest do
 
       assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
       assert answers(fake, "initialize") == [503, 503, 503]
+
+      # The run's last inner client was stopped, not left on its own retry: the
+      # next call starts a new run and the count is exactly the broker's.
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 503}}
+      assert answers(fake, "initialize") == [503, 503, 503, 503, 503, 503]
+    end
+
+    for {fault, label} <- [{{:http, 500}, "a 500"}, {:closed, "a dropped connection"}] do
+      @fault fault
+      test "#{label} at the handshake is retried, and the queued call succeeds" do
+        fake = Fake.start(faults: [{"initialize", @fault}])
+        broker = start_against_fake(fake, base_ms: 1)
+
+        assert {:ok, %{is_error: false}} = Client.call(broker, "get_accounts", %{})
+        assert length(answers(fake, "initialize")) == 2
+        assert statuses(fake, "get_accounts") == [200]
+      end
     end
 
     test "a throttle on the post-refresh retry still locks out on the next 401", ctx do
