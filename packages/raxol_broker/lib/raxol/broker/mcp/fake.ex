@@ -145,19 +145,24 @@ defmodule Raxol.Broker.MCP.Fake do
   def scenario(opts) when is_list(opts) do
     known_keys!(opts)
 
-    lists =
-      Map.new([:positions, :alerts, :warnings, :reject, :tools, :faults], &{&1, list!(opts, &1)})
-
     %{
       account: string!(Keyword.get(opts, :account, "FAKE-0001"), :account),
       quotes: quotes!(Keyword.get(opts, :quotes, %{})),
       order_states: states!(Keyword.get(opts, :order_states, ["queued"])),
       accept: accept!(Keyword.get(opts, :accept))
     }
-    |> Map.merge(lists)
-    |> Map.update!(:reject, &MapSet.new/1)
-    |> Map.update!(:faults, &faults!/1)
-    |> Map.update!(:tools, &served_tools/1)
+    |> Map.merge(lists!(opts))
+  end
+
+  defp lists!(opts) do
+    %{
+      positions: list!(opts, :positions),
+      alerts: list!(opts, :alerts),
+      warnings: list!(opts, :warnings),
+      reject: opts |> list!(:reject) |> MapSet.new(),
+      tools: opts |> list!(:tools) |> served_tools(),
+      faults: opts |> list!(:faults) |> faults!()
+    }
   end
 
   @doc "Start a Fake linked to the caller, from a `scenario/1` or its options."

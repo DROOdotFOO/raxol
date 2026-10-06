@@ -27,19 +27,19 @@ defmodule Mix.Tasks.Raxol.Broker.Gen.Tools do
     stale = stale_files(files)
     changed = for {path, contents} <- files, File.read(path) != {:ok, contents}, do: path
 
-    cond do
-      opts[:check] && (changed != [] or stale != []) ->
-        Mix.raise("generated tools are out of date: #{Enum.join(changed ++ stale, ", ")}")
+    if opts[:check], do: check(changed ++ stale), else: write(files, changed, stale)
+  end
 
-      opts[:check] ->
-        Mix.shell().info("generated tools are up to date")
+  defp check([]), do: Mix.shell().info("generated tools are up to date")
 
-      true ->
-        File.mkdir_p!(Generator.dir())
-        Enum.each(stale, &File.rm!/1)
-        Enum.each(changed, &File.write!(&1, files[&1]))
-        Mix.shell().info("#{length(changed)} written, #{length(stale)} removed")
-    end
+  defp check(outdated),
+    do: Mix.raise("generated tools are out of date: #{Enum.join(outdated, ", ")}")
+
+  defp write(files, changed, stale) do
+    File.mkdir_p!(Generator.dir())
+    Enum.each(stale, &File.rm!/1)
+    Enum.each(changed, &File.write!(&1, files[&1]))
+    Mix.shell().info("#{length(changed)} written, #{length(stale)} removed")
   end
 
   defp stale_files(files) do

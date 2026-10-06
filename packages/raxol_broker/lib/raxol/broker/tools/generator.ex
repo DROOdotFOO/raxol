@@ -80,13 +80,17 @@ defmodule Raxol.Broker.Tools.Generator do
     if fun =~ ~r/\A[a-z_]/, do: fun, else: "t_" <> fun
   end
 
+  # A `~S` heredoc: no interpolation or escapes, so text from the server stays
+  # inert. Text containing `"""` would end it early and is quoted instead.
   defp doc(tool) do
     text =
       [description(tool), arguments(tool["inputSchema"] || %{})]
       |> Enum.reject(&(&1 == ""))
       |> Enum.join("\n\n")
 
-    inspect(text, printable_limit: :infinity)
+    if String.contains?(text, ~s(""")),
+      do: inspect(text, printable_limit: :infinity),
+      else: ~s(~S"""\n) <> text <> ~s(\n""")
   end
 
   defp description(tool) do
@@ -105,14 +109,14 @@ defmodule Raxol.Broker.Tools.Generator do
         "Takes no arguments."
 
       properties ->
-        lines =
-          Enum.map(properties, fn {key, sub} ->
-            flag = if key in required, do: "required", else: "optional"
-            "  * `#{key}` (#{flag}, #{type(sub)})"
-          end)
-
+        lines = Enum.map(properties, &argument_line(&1, required))
         Enum.join(["Arguments (string keys):" | lines], "\n")
     end
+  end
+
+  defp argument_line({key, sub}, required) do
+    flag = if key in required, do: "required", else: "optional"
+    "  * `#{key}` (#{flag}, #{type(sub)})"
   end
 
   defp type(%{"type" => "array", "items" => items}), do: "array of #{type(items)}"

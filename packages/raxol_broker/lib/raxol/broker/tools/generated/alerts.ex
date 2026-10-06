@@ -3,12 +3,27 @@
 defmodule Raxol.Broker.Tools.Alerts do
   @moduledoc "Read tools of the Alerts family, generated from the capture."
 
-  @doc "Read the log of fired alerts — what fired, when, and at what price or indicator value — with read/unread state. Poll this to learn whether any alert has fired; alert events are not pushed to the agent.\n\nArguments (string keys):\n  * `asset_class` (optional, string)\n  * `cursor` (optional, string)\n  * `limit` (optional, integer)\n  * `since` (optional, string)"
+  @doc ~S"""
+  Read the log of fired alerts — what fired, when, and at what price or indicator value — with read/unread state. Poll this to learn whether any alert has fired; alert events are not pushed to the agent.
+
+  Arguments (string keys):
+    * `asset_class` (optional, string)
+    * `cursor` (optional, string)
+    * `limit` (optional, integer)
+    * `since` (optional, string)
+  """
   @spec get_alert_log(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_alert_log(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_alert_log", args)
 
-  @doc "List the price/indicator alerts the user currently has configured (equities and crypto only), optionally filtered to one symbol. Use to look up alert_id values for update_alert/delete_alert, or to check what's currently being watched.\n\nArguments (string keys):\n  * `asset_class` (optional, string)\n  * `cursor` (optional, string)\n  * `symbol` (optional, string)"
+  @doc ~S"""
+  List the price/indicator alerts the user currently has configured (equities and crypto only), optionally filtered to one symbol. Use to look up alert_id values for update_alert/delete_alert, or to check what's currently being watched.
+
+  Arguments (string keys):
+    * `asset_class` (optional, string)
+    * `cursor` (optional, string)
+    * `symbol` (optional, string)
+  """
   @spec get_alerts(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_alerts(client, args \\ %{}), do: Raxol.Broker.Tools.call(client, "get_alerts", args)
 end

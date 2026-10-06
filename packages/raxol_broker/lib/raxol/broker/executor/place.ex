@@ -89,8 +89,7 @@ defmodule Raxol.Broker.Executor.Place do
   @spec run(ReviewReceipt.t(), Intent.t(), String.t(), env()) :: outcome()
   def run(receipt, %Intent{} = intent, group_id, env) do
     with :ok <- ReviewReceipt.verify(receipt, Executor.receipt_key(), intent, group_id),
-         {:ok, tool, args} <- call_for(intent, env.account),
-         :ok <- Catalog.permit(env.catalog, tool, :write),
+         {:ok, tool, args} <- permitted_call(intent, env),
          :ok <- journal(group_id, {:placing}, env.journal) do
       {status, response} = env.port |> Port.call(tool, args, env.timeout) |> classify(tool)
 
@@ -99,6 +98,13 @@ defmodule Raxol.Broker.Executor.Place do
         {:error, reason} -> {:error, {:order_unjournaled, status, response, reason}}
       end
     end
+  end
+
+  # The order tool for `intent`, only if it is `:write` for this session.
+  defp permitted_call(intent, env) do
+    with {:ok, tool, _args} = call <- call_for(intent, env.account),
+         :ok <- Catalog.permit(env.catalog, tool, :write),
+         do: call
   end
 
   defp call_for(%Intent{kind: :cancel} = intent, account),

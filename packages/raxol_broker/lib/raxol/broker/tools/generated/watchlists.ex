@@ -3,17 +3,30 @@
 defmodule Raxol.Broker.Tools.Watchlists do
   @moduledoc "Read tools of the Watchlists family, generated from the capture."
 
-  @doc "Discover Robinhood-curated lists the user can follow (e.g. '100 Most Popular', 'Daily Movers'). Use to find a list_id, then pass it to follow_watchlist.\n\nTakes no arguments."
+  @doc ~S"""
+  Discover Robinhood-curated lists the user can follow (e.g. '100 Most Popular', 'Daily Movers'). Use to find a list_id, then pass it to follow_watchlist.
+
+  Takes no arguments.
+  """
   @spec get_popular_watchlists(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_popular_watchlists(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_popular_watchlists", args)
 
-  @doc "List the items in a watchlist. Items may be stocks/ETFs, crypto pairs, futures, indexes — distinguished by object_type. For the options watchlist, use get_option_watchlist instead — this tool returns a generic shape that drops the strategy-specific fields and the upstream rejects it with 400 anyway. Does not return live prices; call get_quotes with the symbol(s) for that.\n\nArguments (string keys):\n  * `list_id` (required, string)"
+  @doc ~S"""
+  List the items in a watchlist. Items may be stocks/ETFs, crypto pairs, futures, indexes — distinguished by object_type. For the options watchlist, use get_option_watchlist instead — this tool returns a generic shape that drops the strategy-specific fields and the upstream rejects it with 400 anyway. Does not return live prices; call get_quotes with the symbol(s) for that.
+
+  Arguments (string keys):
+    * `list_id` (required, string)
+  """
   @spec get_watchlist_items(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_watchlist_items(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_watchlist_items", args)
 
-  @doc "List the user's watchlists, including both user-created custom lists and Robinhood-curated lists the user follows. Use to look up list_id values for other watchlist tools.\n\nTakes no arguments."
+  @doc ~S"""
+  List the user's watchlists, including both user-created custom lists and Robinhood-curated lists the user follows. Use to look up list_id values for other watchlist tools.
+
+  Takes no arguments.
+  """
   @spec get_watchlists(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_watchlists(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_watchlists", args)

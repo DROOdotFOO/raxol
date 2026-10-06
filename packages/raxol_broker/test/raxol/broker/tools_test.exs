@@ -56,7 +56,7 @@ defmodule Raxol.Broker.ToolsTest do
     assert {:ok, count} = CaptureTools.capture(Fake.client_opts(fake), out)
 
     %{"provenance" => provenance, "tools" => tools} = out |> File.read!() |> Jason.decode!()
-    served = Enum.map(Fake.tools(), & &1["name"]) ++ ["get_margin_summary"]
+    served = ["get_margin_summary" | Enum.map(Fake.tools(), & &1["name"])]
     assert Enum.map(tools, & &1["name"]) == Enum.sort(served)
     assert count == length(tools)
     assert provenance["source"] =~ "tools/list"

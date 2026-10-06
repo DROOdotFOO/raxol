@@ -3,17 +3,41 @@
 defmodule Raxol.Broker.Tools.Equities do
   @moduledoc "Read tools of the Equities family, generated from the capture."
 
-  @doc "Fetch equity orders for an account — list mode (newest first; open and closed, including fills, cancellations, rejections) or single-order mode by passing order_id. When the user asks broadly for \"orders\" or \"my orders\" without naming an asset class or order type, call get_equity_orders, get_option_orders, get_crypto_orders, and get_advanced_orders in parallel so OCO groups are not omitted.\n\nArguments (string keys):\n  * `account_number` (required, string)\n  * `created_at_gte` (optional, string)\n  * `cursor` (optional, string)\n  * `order_id` (optional, string)\n  * `placed_agent` (optional, string)\n  * `state` (optional, string)\n  * `symbol` (optional, string)"
+  @doc ~S"""
+  Fetch equity orders for an account — list mode (newest first; open and closed, including fills, cancellations, rejections) or single-order mode by passing order_id. When the user asks broadly for "orders" or "my orders" without naming an asset class or order type, call get_equity_orders, get_option_orders, get_crypto_orders, and get_advanced_orders in parallel so OCO groups are not omitted.
+
+  Arguments (string keys):
+    * `account_number` (required, string)
+    * `created_at_gte` (optional, string)
+    * `cursor` (optional, string)
+    * `order_id` (optional, string)
+    * `placed_agent` (optional, string)
+    * `state` (optional, string)
+    * `symbol` (optional, string)
+  """
   @spec get_equity_orders(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_equity_orders(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_equity_orders", args)
 
-  @doc "List open equity positions for a specific brokerage account. Returns symbol, quantity, average cost, and per-position hold breakdowns.\n\nArguments (string keys):\n  * `account_number` (required, string)\n  * `cursor` (optional, string)"
+  @doc ~S"""
+  List open equity positions for a specific brokerage account. Returns symbol, quantity, average cost, and per-position hold breakdowns.
+
+  Arguments (string keys):
+    * `account_number` (required, string)
+    * `cursor` (optional, string)
+  """
   @spec get_equity_positions(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_equity_positions(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_equity_positions", args)
 
-  @doc "List the open tax lots for one equity holding in an account — each lot is a separate acquisition with its own quantity, cost basis, acquisition date, and long/short-term status. Requires a symbol (tax lots are tracked per instrument). Use it for cost-basis, holding-period, or which-lots-would-sell questions.\n\nArguments (string keys):\n  * `account_number` (required, string)\n  * `cursor` (optional, string)\n  * `symbol` (required, string)"
+  @doc ~S"""
+  List the open tax lots for one equity holding in an account — each lot is a separate acquisition with its own quantity, cost basis, acquisition date, and long/short-term status. Requires a symbol (tax lots are tracked per instrument). Use it for cost-basis, holding-period, or which-lots-would-sell questions.
+
+  Arguments (string keys):
+    * `account_number` (required, string)
+    * `cursor` (optional, string)
+    * `symbol` (required, string)
+  """
   @spec get_equity_tax_lots(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_equity_tax_lots(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_equity_tax_lots", args)
