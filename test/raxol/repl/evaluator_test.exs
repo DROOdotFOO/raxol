@@ -397,6 +397,15 @@ defmodule Raxol.REPL.EvaluatorTest do
 
       assert_receive {:capture, capture}
 
+      # The monitor goes up BEFORE the `contents/1` call, not after it. A
+      # monitor is a signal, and Erlang orders signals only per sender:
+      # monitoring after the call and then killing the owner let the
+      # owner's `:DOWN` reach the capture ahead of this process's monitor
+      # request, so the server stopped first and the monitor answered
+      # `:noproc` (macos-latest, PR #1226). The call below is from this
+      # process too, so its reply proves the monitor is in place.
+      ref = Process.monitor(capture)
+
       # The write is answered rather than hanging, and it is refused: the
       # unexpanded text is not in the buffer, and the capture says so.
       assert_receive {:io_reply, :ok}
@@ -404,7 +413,6 @@ defmodule Raxol.REPL.EvaluatorTest do
 
       # And the server is still a server: it answers, and it still goes when
       # its owner does.
-      ref = Process.monitor(capture)
       Process.exit(owner, :brutal_kill)
       assert_receive {:DOWN, ^ref, :process, ^capture, :normal}, 10_000
       assert capture_server_count() == before
