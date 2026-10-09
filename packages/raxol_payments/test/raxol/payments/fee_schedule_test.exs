@@ -11,11 +11,10 @@ defmodule Raxol.Payments.FeeScheduleTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.FeeSchedule
+  alias Raxol.Payments.Test.RiddlerSpec
 
-  @oracle "fee-oracle/schedule.json"
-          |> then(&Path.join(:code.priv_dir(:raxol_payments), &1))
-          |> File.read!()
-          |> Jason.decode!()
+  @oracle_path Path.join(:code.priv_dir(:raxol_payments), "fee-oracle/schedule.json")
+  @oracle @oracle_path |> File.read!() |> Jason.decode!()
 
   defp tier_atom(name), do: String.to_existing_atom(name)
 
@@ -68,6 +67,35 @@ defmodule Raxol.Payments.FeeScheduleTest do
       # module has would still match.
       assert MapSet.new(FeeSchedule.tiers()) ==
                @oracle["venue_bps"] |> Map.keys() |> Enum.map(&tier_atom/1) |> MapSet.new()
+    end
+  end
+
+  # The oracle is a vendored copy, so the parity above only proves this module
+  # agrees with the copy. This proves the copy is the pinned release's bytes.
+  describe "vendored oracle vs the pinned @riddler/spec" do
+    if is_nil(RiddlerSpec.dir()) and not RiddlerSpec.ci?() do
+      @tag skip: "RIDDLER_SPEC_DIR unset (the unpacked @riddler/spec tarball root)"
+    end
+
+    test "priv/fee-oracle/schedule.json is byte-identical to fee/schedule.json" do
+      version = RiddlerSpec.pinned_version()
+
+      dir =
+        RiddlerSpec.dir() ||
+          flunk(
+            "RIDDLER_SPEC_DIR is unset under CI. Unpack npm pack " <>
+              "@riddler/spec@#{version} and set it to the tarball's package/ directory."
+          )
+
+      manifest = dir |> Path.join("package.json") |> File.read!() |> Jason.decode!()
+
+      assert {manifest["name"], manifest["version"]} == {"@riddler/spec", version},
+             "RIDDLER_SPEC_DIR=#{dir} is not @riddler/spec@#{version} " <>
+               "(test/fixtures/RIDDLER_SPEC_VERSION)"
+
+      assert File.read!(Path.join([dir, "fee", "schedule.json"])) == File.read!(@oracle_path),
+             "priv/fee-oracle/schedule.json drifted from @riddler/spec@#{version} " <>
+               "fee/schedule.json; copy the release's file over it"
     end
   end
 
