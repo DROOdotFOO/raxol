@@ -553,18 +553,23 @@ defmodule Raxol.REPL.SandboxTest do
             ~S|String.replace_leading(s, "a", r)|,
             ~S|String.replace_trailing(s, "a", r)|,
             ~S|Regex.replace(~r/./, s, fn m -> m end)|,
-            ~S|f = &String.replace/3; f.(s, "a", r)|
+            ~S|f = &String.replace/3; f.(s, "a", r)|,
+            # Inserts the match once per listed position.
+            ~S|String.replace(s, s, "", insert_replaced: List.duplicate(0, 64))|,
+            ~S|String.replace(s, "a", "b", opts)|
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
     end
 
-    test "collecting is allowed into a literal list or map, not a string" do
+    test "collecting is decided by the target, never the source" do
       for code <- [
             "Enum.into(l, %{})",
             "l |> Enum.into([])",
-            ~S|Enum.into([a: 1], m)|,
+            "Enum.into(l, MapSet.new())",
+            "l |> Enum.into(%{}, fn x -> {x, x} end)",
             "for x <- l, into: %{}, do: {x, x}",
+            "for x <- l, into: MapSet.new(), do: x",
             "for x <- l, do: x"
           ] do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
@@ -573,6 +578,9 @@ defmodule Raxol.REPL.SandboxTest do
       for code <- [
             ~S|Enum.into(l, "")|,
             ~S|acc = ""; Enum.into(l, acc)|,
+            # A literal SOURCE list can still hold references to big binaries.
+            ~S|Enum.into([b, b, b], "")|,
+            ~S<Enum.into(["" | l], "")>,
             ~S{l |> Stream.into("") |> Stream.run()},
             ~S|for x <- l, into: "", do: x|
           ] do
@@ -583,8 +591,13 @@ defmodule Raxol.REPL.SandboxTest do
     test "other flatteners are refused" do
       for code <- [
             "IO.binwrite(l)",
+            "List.to_string(l)",
+            "IO.chardata_to_string(l)",
             ~S|Calendar.strftime(d, "%A", day_of_week_names: f)|,
-            ~S|fmt = "%Y"; Calendar.strftime(d, fmt)|
+            ~S|fmt = "%Y"; Calendar.strftime(d, fmt)|,
+            # `%Z` copies the input map's `:zone_abbr`, any binary.
+            ~S|Calendar.strftime(%{zone_abbr: z}, "%Z%Z%Z")|,
+            ~S|Calendar.strftime(d, "%-10Z")|
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
@@ -617,47 +630,16 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
 
-    test "one construction holds at most eight computed binary parts" do
-      parts = fn n, sep -> Enum.map_join(1..n, sep, fn _ -> "b" end) end
-
-      assert :ok = Sandbox.check(parts.(8, " <> "), :strict)
-
-      assert :ok =
-               Sandbox.check(
-                 ~s|"#{parts.(8, "")}"| |> String.replace("b", "\#{b}"),
-                 :strict
-               )
+    # erl_eval appends segments one at a time, so the cap sees these grow.
+    test "interpolation and <> chains are not limited by part count" do
+      many = Enum.map_join(1..20, "", fn _ -> "\#{b}" end)
+      assert :ok = Sandbox.check(~s|"#{many}"|, :strict)
 
       assert :ok =
                Sandbox.check(
-                 ~S|"a" <> "b" <> "c" <> "d" <> "e" <> "f" <> "g" <> "h" <> "i"|,
+                 Enum.map_join(1..20, " <> ", fn _ -> "b" end),
                  :strict
                )
-
-      assert {:error, _} = Sandbox.check(parts.(9, " <> "), :strict)
-
-      assert {:error, _} =
-               Sandbox.check(
-                 ~s|"#{parts.(9, "")}"| |> String.replace("b", "\#{b}"),
-                 :strict
-               )
-
-      assert {:error, _} =
-               Sandbox.check(
-                 "<<" <> parts.(9, "::binary, ") <> "::binary>>",
-                 :strict
-               )
-    end
-
-    test "the chunked builders stay available" do
-      for code <- [
-            "List.to_string(l)",
-            "IO.chardata_to_string(l)",
-            ~S|"#{l}"|,
-            "inspect(l)"
-          ] do
-        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
-      end
     end
 
     test ":standard is unaffected" do

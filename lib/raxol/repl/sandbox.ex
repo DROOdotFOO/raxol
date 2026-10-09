@@ -172,9 +172,15 @@ defmodule Raxol.REPL.Sandbox do
   #   * `String.replace/3` with a held 1 MB replacement and 100 matches:
   #     192 MB, as much as `Enum.join` over the same list
   #   * `Tuple.duplicate/2` at the 16M maximum arity: ~230 MB
+  #   * `List.to_string/1` and `IO.chardata_to_string/1` reserve the result's
+  #     worst-case UTF-8 size (8x the bytes) in one block: 258 MB for 32 MB
+  #   * `Calendar.strftime/2` with `%Z`, which copies the input's
+  #     `:zone_abbr` once per directive and flattens the lot
   #
-  # `List.to_string/1`, `IO.chardata_to_string/1` and `inspect/2` build their
-  # output in chunks the cap does see, so they stay allowed.
+  # NOT covered, because the checker cannot see the argument's type:
+  # `"#{list}"` and `to_string(list)` reach `List.to_string/1` through
+  # `String.Chars`, and `String.split/2` sizes its whole result list (~57x
+  # the subject) in one block. Only #1231 closes those.
   #
   # Each rule sizes a call from its LITERAL arguments, by position. A pipe
   # (`|>` or `Kernel.|>/2`) or a capture removes arguments from the call node,
@@ -190,7 +196,9 @@ defmodule Raxol.REPL.Sandbox do
     {Enum, :join},
     {Enum, :map_join},
     {Jason, :encode},
-    {Jason, :encode!}
+    {Jason, :encode!},
+    {List, :to_string},
+    {IO, :chardata_to_string}
   ]
 
   @strict_size_rules %{
@@ -214,11 +222,6 @@ defmodule Raxol.REPL.Sandbox do
   # A replacement is copied once per match, so its size is the amplification
   # factor over the subject the evaluation already holds (and the cap counts).
   @max_strict_replacement_bytes 8
-
-  # Unsized binary segments in one `<<>>`, interpolation or `<>` chain. Each
-  # is something the evaluation already holds, so the construction is bounded
-  # by this many times the cap.
-  @max_strict_unsized_segments 8
 
   @doc """
   Checks code for safety violations at the given strictness level.
@@ -427,23 +430,13 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   # `<<0::size(n)>>` allocates `n` bits in one step: 8 billion reached a
-  # ~2.1 GB footprint under an 8 MB cap, and a construction with many
-  # unsized `::binary` segments (what interpolation expands to) is sized and
-  # allocated whole before it is filled. Match patterns share the shape and
-  # are refused with construction: this walk checks one node at a time and
-  # does not track whether it is under a pattern.
+  # ~2.1 GB footprint under an 8 MB cap. Unsized segments need no limit:
+  # the evaluator runs `erl_eval`, which appends one segment at a time, so
+  # the cap sees a many-part interpolation or `<>` chain grow. Match patterns
+  # share the shape and are refused with construction: this walk checks one
+  # node at a time and does not track whether it is under a pattern.
   defp check_node({:<<>>, _, segments}, :strict) when is_list(segments) do
-    unsized = Enum.count(segments, &unsized_binary_segment?/1)
-
-    Enum.flat_map(segments, &check_segment_size/1) ++
-      too_many_segments(unsized, "<<>> or interpolation")
-  end
-
-  # `a <> b <> ...` expands into a single `<<>>` after this check runs, so its
-  # operands are counted here, at the top of the chain.
-  defp check_node({:<>, _, [_left, _right]} = chain, :strict) do
-    unsized = chain |> concat_operands() |> Enum.count(&(not is_binary(&1)))
-    too_many_segments(unsized, "<> chain")
+    Enum.flat_map(segments, &check_segment_size/1)
   end
 
   # `for x <- l, into: ""` collects through the same `IO.iodata_to_binary` as
@@ -453,7 +446,7 @@ defmodule Raxol.REPL.Sandbox do
     |> Enum.filter(&Keyword.keyword?/1)
     |> Enum.flat_map(fn opts ->
       case Keyword.fetch(opts, :into) do
-        {:ok, target} -> check_collect_target([target], "for ... into:")
+        {:ok, target} -> check_collect_target(target, "for ... into:")
         :error -> []
       end
     end)
@@ -514,9 +507,9 @@ defmodule Raxol.REPL.Sandbox do
         [
           "#{inspect(module)}.#{func} is not allowed at :strict (it flattens " <>
             "its whole input in one allocation the heap cap only sees " <>
-            "afterwards). Build text in chunks instead: " <>
-            "`l |> Enum.map(&to_string/1) |> Enum.intersperse(sep) |> List.to_string()`, " <>
-            "or `Jason.encode_to_iodata!/1` for JSON"
+            "afterwards). Keep the text as iodata and print it, e.g. " <>
+            "`IO.write(Enum.intersperse(l, sep))`, which the capture sizes " <>
+            "before flattening"
         ]
 
       rule = Map.get(@strict_size_rules, {module, func}) ->
@@ -565,15 +558,20 @@ defmodule Raxol.REPL.Sandbox do
 
   # The replacement lands in the result once per match, so its size is the
   # amplification over the subject. It is the last argument that is not an
-  # options list, in the direct form and the piped one alike.
+  # options list, in the direct form and the piped one alike. Options may
+  # only be `global:`: `insert_replaced:` inserts the match once per listed
+  # position, a factor the caller computes.
   defp check_size_rule(:replace, name, args) when length(args) >= 2 do
-    case args |> Enum.reject(&Keyword.keyword?/1) |> List.last() do
-      replacement
-      when is_binary(replacement) and
-             byte_size(replacement) <= @max_strict_replacement_bytes ->
+    {options, positional} = Enum.split_with(args, &options_list?/1)
+
+    cond do
+      not Enum.all?(options, &(Keyword.keys(&1) -- [:global] == [])) ->
+        ["#{name} is not allowed at :strict with options other than :global"]
+
+      replacement_ok?(List.last(positional)) ->
         []
 
-      _other ->
+      true ->
         [
           "#{name} is not allowed at :strict unless its replacement is a " <>
             "string literal of at most #{@max_strict_replacement_bytes} bytes " <>
@@ -585,16 +583,25 @@ defmodule Raxol.REPL.Sandbox do
   defp check_size_rule(:replace, name, _args),
     do: needs_literals(name, "its replacement")
 
-  defp check_size_rule(:into, name, args), do: check_collect_target(args, name)
+  defp check_size_rule(:into, name, args) do
+    case into_target(args) do
+      {:ok, target} -> check_collect_target(target, name)
+      :capture -> needs_literals(name, "its target")
+    end
+  end
 
-  # The format is literal and directive-sized; what can grow is the output
-  # of formatter functions passed as options, so only the two-argument form
-  # (format last, direct or piped) is allowed.
+  # A literal format bounds the number of directives, and every directive is
+  # bounded except `%Z`, which copies the input's `:zone_abbr` -- any binary,
+  # since `strftime/2` accepts any map. Options carry formatter functions
+  # whose output is unbounded, so only the two-argument form (format last,
+  # direct or piped) is allowed.
   defp check_size_rule(:strftime, name, args) do
-    if args != [] and is_binary(List.last(args)) do
+    format = List.last(args)
+
+    if is_binary(format) and not Regex.match?(~r/%[-_0-9]*Z/, format) do
       []
     else
-      needs_literals(name, "its format (and no options)")
+      needs_literals(name, "its format (without %Z or options)")
     end
   end
 
@@ -624,57 +631,51 @@ defmodule Raxol.REPL.Sandbox do
     ]
   end
 
-  # Collecting into a binary flattens at the end; into a list or a map it
-  # does not. Either the target is a literal list or map, or the literal
-  # list or map is the (source-bounded) enumerable -- both are safe, and
-  # piping cannot make a binary target look like either.
-  defp check_collect_target(args, name) do
-    if Enum.any?(args, &literal_collection?/1) do
+  defp options_list?([_ | _] = list), do: Keyword.keyword?(list)
+  defp options_list?(_term), do: false
+
+  defp replacement_ok?(replacement),
+    do:
+      is_binary(replacement) and
+        byte_size(replacement) <= @max_strict_replacement_bytes
+
+  # The collectable's position: `into(enum, target)`, `into(enum, target,
+  # fun)`, piped `into(target)` and piped `into(target, fun)`. With two
+  # arguments a function in second place means the piped three-argument form.
+  defp into_target([_enum, target, _fun]), do: {:ok, target}
+
+  defp into_target([target, {kind, _, _}]) when kind in [:fn, :&],
+    do: {:ok, target}
+
+  defp into_target([_enum, target]), do: {:ok, target}
+  defp into_target([target]), do: {:ok, target}
+  defp into_target(_capture), do: :capture
+
+  # Collecting into a binary flattens at the end; into a list, map or set it
+  # does not. Only the TARGET decides: a literal source list can still hold
+  # any number of references to a large binary.
+  defp check_collect_target(target, name) do
+    if non_binary_collectable?(target) do
       []
     else
       [
         "#{name} is not allowed at :strict unless it collects into a literal " <>
-          "list or map (collecting into a string flattens in one allocation)"
+          "list or map, or MapSet.new()/Map.new() (collecting into a string " <>
+          "flattens in one allocation)"
       ]
     end
   end
 
-  defp literal_collection?(list) when is_list(list), do: true
-  defp literal_collection?({:%{}, _, _pairs}), do: true
-  defp literal_collection?(_term), do: false
+  defp non_binary_collectable?(list) when is_list(list), do: true
+  defp non_binary_collectable?({:%{}, _, _pairs}), do: true
 
-  defp too_many_segments(count, _what)
-       when count <= @max_strict_unsized_segments,
-       do: []
-
-  defp too_many_segments(count, what) do
-    [
-      "#{what} with #{count} computed binary parts is not allowed at :strict " <>
-        "(at most #{@max_strict_unsized_segments}; it is allocated whole before " <>
-        "it is filled)"
-    ]
-  end
-
-  defp unsized_binary_segment?({:"::", _, [value, spec]}) do
-    not is_binary(value) and binary_spec?(spec) and
-      match?({nil, _}, collect_segment_size(spec, {nil, nil}))
-  end
-
-  defp unsized_binary_segment?(_segment), do: false
-
-  defp binary_spec?({:-, _, [left, right]}),
-    do: binary_spec?(left) or binary_spec?(right)
-
-  defp binary_spec?({type, _, ctx})
-       when type in [:binary, :bytes, :bitstring, :bits] and is_atom(ctx),
+  defp non_binary_collectable?(
+         {{:., _, [{:__aliases__, _, [mod]}, :new]}, _, []}
+       )
+       when mod in [:MapSet, :Map],
        do: true
 
-  defp binary_spec?(_spec), do: false
-
-  defp concat_operands({:<>, _, [left, right]}),
-    do: concat_operands(left) ++ concat_operands(right)
-
-  defp concat_operands(operand), do: [operand]
+  defp non_binary_collectable?(_target), do: false
 
   defp check_segment_size({:"::", _, [_value, spec]}) do
     case collect_segment_size(spec, {nil, nil}) do
