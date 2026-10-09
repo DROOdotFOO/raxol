@@ -337,22 +337,25 @@ defmodule Raxol.Broker.MCP.ClientTest do
       assert statuses(fake, "get_accounts") == [429, 429, 429, 429, 429]
     end
 
+    # The headroom counts only what is in flight or scheduled when a retry is
+    # decided. Bare `Task.async` callers can arrive late, and a first attempt
+    # sent after the others' retries can open the breaker, as the moduledoc
+    # allows. Queued behind a held connect, all three go out at once.
     test "concurrent throttled callers' retries do not open the breaker" do
-      fake = Fake.start(faults: [{"get_accounts", {:http, 429}, 5}])
+      fake = held_fake([{"get_accounts", {:http, 429}, 5}])
       broker = start_against_fake(fake, base_ms: 1, retries: 3)
-      {:ok, _tools} = Client.list_tools(broker)
 
-      results =
-        1..3
-        |> Enum.map(fn _ -> Task.async(fn -> Client.call(broker, "get_accounts", %{}) end) end)
-        |> Enum.map(&Task.await/1)
+      calls = for _ <- 1..3, do: queued_call(broker, "get_accounts")
+      Fake.release(fake)
 
-      assert Enum.all?(results, &match?({:error, {:http, 429}}, &1))
+      assert Enum.map(calls, &Task.await/1) == List.duplicate({:error, {:http, 429}}, 3)
+
+      # Three first attempts and the one retry there was room for.
+      assert statuses(fake, "get_accounts") == [429, 429, 429, 429]
 
       # The breaker never saw five failures, so the next call is sent.
-      before = length(statuses(fake, "get_accounts"))
-      refute Client.call(broker, "get_accounts", %{}) == {:error, :breaker_open}
-      assert length(statuses(fake, "get_accounts")) == before + 1
+      assert Client.call(broker, "get_accounts", %{}) == {:error, {:http, 429}}
+      assert statuses(fake, "get_accounts") == [429, 429, 429, 429, 429]
     end
 
     # Holds the connect's `initialize` and queues a call behind it. The call is
@@ -376,7 +379,7 @@ defmodule Raxol.Broker.MCP.ClientTest do
           end
         end)
 
-      assert_receive {:queued, pid} when pid == task.pid
+      assert_receive {:queued, pid} when pid == task.pid, 5_000
       task
     end
 
