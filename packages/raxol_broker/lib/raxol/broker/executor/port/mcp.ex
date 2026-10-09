@@ -76,6 +76,11 @@ defmodule Raxol.Broker.Executor.Port.MCP do
     end
   end
 
+  @doc "The tools the server lists on this session (`Raxol.MCP.Client` tool maps)."
+  @spec list_tools(Raxol.Broker.Executor.Port.t(), timeout()) :: {:ok, [map()]} | {:error, term()}
+  def list_tools({__MODULE__, %__MODULE__{pid: pid}}, timeout \\ @ready_timeout),
+    do: Upstream.list_tools(pid, timeout: timeout)
+
   @doc false
   # The exact list `start/2` passes to `Raxol.MCP.Client.start_link/1`, or
   # the refusal. Public so the tests can see what was checked is what

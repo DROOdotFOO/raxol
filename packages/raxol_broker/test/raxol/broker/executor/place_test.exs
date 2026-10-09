@@ -17,6 +17,7 @@ defmodule Raxol.Broker.Executor.PlaceTest do
   alias Raxol.Broker.Policy.Context
   alias Raxol.Broker.MCP.Fake
   alias Raxol.Broker.Test.{ExecutorIdentity, Hostile}
+  alias Raxol.Broker.Tools.Catalog
 
   @moduletag :capture_log
   @t0 ~U[2026-10-02 14:30:00.000000Z]
@@ -38,7 +39,14 @@ defmodule Raxol.Broker.Executor.PlaceTest do
     server = Fake.start()
     {:ok, port} = PortMCP.start(Fake.session(server), mode: :dry_run)
 
-    env = %{port: port, journal: name, account: @account, timeout: 5_000}
+    env = %{
+      port: port,
+      catalog: Catalog.static(),
+      journal: name,
+      account: @account,
+      timeout: 5_000
+    }
+
     {:ok, server: server, port: port, env: env, journal: name, key: key, path: path}
   end
 

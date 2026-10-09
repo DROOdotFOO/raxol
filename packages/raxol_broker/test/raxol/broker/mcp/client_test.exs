@@ -104,11 +104,15 @@ defmodule Raxol.Broker.MCP.ClientTest do
     broker = start_broker(ctx)
 
     assert {:ok, tools} = Client.list_tools(broker)
-    assert tools != []
-    # The Fake serves the recorded five plus its three scenario tools; the
-    # broker keeps only the read-only ones, never place/cancel/review.
-    assert tool_names(tools) ==
-             ~w(get_accounts get_equity_quotes get_equity_positions get_equity_orders get_alert_log)
+    # The session offers exactly the captured tools the catalog classifies
+    # :read; review, order and other mutating tools are never offered.
+    read = for {name, :read} <- Raxol.Broker.Tools.Catalog.static(), do: name
+    assert Enum.sort(tool_names(tools)) == Enum.sort(read)
+
+    refute Enum.any?(
+             tool_names(tools),
+             &String.match?(&1, ~r/\A(place|cancel|review|preview)_\w+_order\z/)
+           )
   end
 
   test "a mid-session 401 refreshes once, persists the rotation, and retries", ctx do

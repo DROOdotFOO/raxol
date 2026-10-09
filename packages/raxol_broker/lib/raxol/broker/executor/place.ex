@@ -16,7 +16,10 @@ defmodule Raxol.Broker.Executor.Place do
        executor process (which puts it there in `init/1`) can spend a
        receipt; in any other process the key is nil and the receipt is
        refused before anything is journaled or sent;
-    2. the intent has an order tool (equity orders and cancels until #1174);
+    2. the intent has an order tool (equity orders and cancels), and that
+       tool is `:write` in the session's `Raxol.Broker.Tools.Catalog`
+       classes (`env.catalog`), so a tool the capture lacks or one whose
+       schema changed is refused with `{:error, {:tool_refused, tool, class}}`;
     3. `{:placing}` is journaled. The journal refuses it unless this process
        holds the journal's claim (which only an executor process can take),
        the group was reviewed and allowed (or approved), and no other live
@@ -53,11 +56,13 @@ defmodule Raxol.Broker.Executor.Place do
 
   alias Raxol.Broker.{Executor, Intent, Journal}
   alias Raxol.Broker.Executor.{Port, Review, ReviewReceipt}
+  alias Raxol.Broker.Tools.Catalog
 
   @failed_codes [-32_700, -32_600, -32_601, -32_602]
 
   @type env :: %{
           port: Port.t(),
+          catalog: Catalog.session(),
           journal: Journal.server(),
           account: String.t(),
           timeout: timeout()
@@ -84,7 +89,7 @@ defmodule Raxol.Broker.Executor.Place do
   @spec run(ReviewReceipt.t(), Intent.t(), String.t(), env()) :: outcome()
   def run(receipt, %Intent{} = intent, group_id, env) do
     with :ok <- ReviewReceipt.verify(receipt, Executor.receipt_key(), intent, group_id),
-         {:ok, tool, args} <- call_for(intent, env.account),
+         {:ok, tool, args} <- permitted_call(intent, env),
          :ok <- journal(group_id, {:placing}, env.journal) do
       {status, response} = env.port |> Port.call(tool, args, env.timeout) |> classify(tool)
 
@@ -93,6 +98,13 @@ defmodule Raxol.Broker.Executor.Place do
         {:error, reason} -> {:error, {:order_unjournaled, status, response, reason}}
       end
     end
+  end
+
+  # The order tool for `intent`, only if it is `:write` for this session.
+  defp permitted_call(intent, env) do
+    with {:ok, tool, _args} = call <- call_for(intent, env.account),
+         :ok <- Catalog.permit(env.catalog, tool, :write),
+         do: call
   end
 
   defp call_for(%Intent{kind: :cancel} = intent, account),

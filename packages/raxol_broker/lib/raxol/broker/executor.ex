@@ -198,6 +198,7 @@ defmodule Raxol.Broker.Executor do
   alias Raxol.Broker.Executor.Port.MCP, as: PortMCP
   alias Raxol.Broker.{Intent, Journal, Plain, Policy, PolicyFile}
   alias Raxol.Broker.Policy.Context
+  alias Raxol.Broker.Tools.Catalog
 
   @default_timeout 30_000
   @default_reconnect_ms 1_000
@@ -423,6 +424,7 @@ defmodule Raxol.Broker.Executor do
       port: nil,
       port_status: :connecting,
       connect: nil,
+      catalog: %{},
       reconnect_ms: config.reconnect_ms,
       backoff: config.reconnect_ms,
       port_waiters: %{},
@@ -604,7 +606,7 @@ defmodule Raxol.Broker.Executor do
   defp connect(state) do
     case PortMCP.start_client(state.client_spec) do
       {:ok, port} ->
-        task = Task.async(fn -> PortMCP.await_ready(port) end)
+        task = Task.async(fn -> await_catalog(port) end)
         %{state | port: port, port_status: :connecting, connect: task}
 
       {:error, reason} ->
@@ -612,13 +614,29 @@ defmodule Raxol.Broker.Executor do
     end
   end
 
-  defp connected(state, :ok) do
+  # The session's tool classes: the live list reconciled against the frozen
+  # capture (`Raxol.Broker.Tools.Catalog`). A port whose list cannot be read
+  # never becomes ready, so no tool is ever called unclassified.
+  defp await_catalog(port) do
+    with :ok <- PortMCP.await_ready(port),
+         {:ok, tools} <- PortMCP.list_tools(port) do
+      {:ok, Catalog.reconcile(tools)}
+    end
+  end
+
+  defp connected(state, {:ok, catalog}) do
     Enum.each(state.port_waiters, fn {from, timer} ->
       Process.cancel_timer(timer)
       GenServer.reply(from, :ok)
     end)
 
-    %{state | port_status: :ready, backoff: state.reconnect_ms, port_waiters: %{}}
+    %{
+      state
+      | port_status: :ready,
+        catalog: catalog,
+        backoff: state.reconnect_ms,
+        port_waiters: %{}
+    }
   end
 
   defp connected(%{port: port} = state, {:error, reason}) do
@@ -770,8 +788,8 @@ defmodule Raxol.Broker.Executor do
   end
 
   defp review(state, intent, context, group_id) do
-    %{port: port, account: account, review_timeout: timeout} = state
-    task = Task.async(fn -> Review.run(port, intent, account, timeout) end)
+    %{port: port, catalog: catalog, account: account, review_timeout: timeout} = state
+    task = Task.async(fn -> Review.run(port, catalog, intent, account, timeout) end)
     pending = %{ref: task.ref, pid: task.pid, intent: intent, context: context}
     {:await, Map.put(pending, :group_id, group_id), state}
   end
@@ -885,6 +903,7 @@ defmodule Raxol.Broker.Executor do
   defp place(state, intent, group_id, receipt) do
     env = %{
       port: state.port,
+      catalog: state.catalog,
       journal: state.journal,
       account: state.account,
       timeout: state.place_timeout
