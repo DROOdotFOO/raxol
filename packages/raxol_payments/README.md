@@ -5,16 +5,16 @@ Agent payment protocols for Elixir. Autonomous agents that can pay for things: x
 ## Install
 
 ```elixir
-{:raxol_payments, "~> 0.2"}
+{:raxol_payments, "~> 0.3"}
 ```
 
 ## Features
 
-- **Protocol behaviour**: five pluggable payment protocols (x402, MPP, Xochi, Permit2, Riddler). Riddler is deprecated and delegates to Xochi.
+- **Protocol behaviour**: four pluggable payment protocols (x402, MPP, Xochi, Permit2).
 - **Wallet behaviour**: `Wallets.Env` (env var, refuses to load in production without opt-in) and `Wallets.Op` (1Password via GenServer, key cached and signed with locally)
 - **AutoPay**: Req response step handling HTTP 402 transparently
 - **Xochi**: cross-chain intent settlement (quote -> sign -> execute -> poll)
-- **Permit2**: `PermitWitnessTransferFrom` signing for Riddler `/order` origin pulls (most ERC-20 tokens; x402 covers USDC via ERC-3009)
+- **Permit2**: `PermitWitnessTransferFrom` signing for Xochi origin pulls (most ERC-20 tokens; x402 covers USDC via ERC-3009)
 - **Stealth**: ERC-5564/ERC-6538 stealth addresses (~300 LOC, secp256k1)
 - **ZKSAR**: zero-knowledge attestation verification (6 proof types)
 - **TrustScore**: diminishing-returns trust aggregation (0-100)

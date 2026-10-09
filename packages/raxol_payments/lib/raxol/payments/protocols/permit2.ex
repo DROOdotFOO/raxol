@@ -1,7 +1,7 @@
 defmodule Raxol.Payments.Protocols.Permit2 do
   @moduledoc """
-  Permit2 `PermitWitnessTransferFrom` signing for Riddler's `/order`
-  endpoint.
+  Permit2 `PermitWitnessTransferFrom` signing for Xochi
+  origin pulls.
 
   Like Xochi, Permit2 is direct-API (not HTTP 402). Riddler returns a
   quote with `gasless.orderId`; the client signs a
@@ -17,8 +17,8 @@ defmodule Raxol.Payments.Protocols.Permit2 do
   ## Signed-object encoding
 
   `signed_object` is the ABI-encoded tuple
-  `tuple(tuple(address,uint256),address,uint256,uint256)` that Riddler's
-  `/order` endpoint consumes. Because every field is static, the encoding
+  `tuple(tuple(address,uint256),address,uint256,uint256)` that the solver
+  consumes for the origin pull. Because every field is static, the encoding
   is just the concatenation of left-padded 32-byte values for
   `token`, `amount`, `spender`, `nonce`, and `deadline`.
 

@@ -10,7 +10,6 @@ defmodule Raxol.Payments do
   - **x402** (Coinbase): EIP-712 signed ERC-3009 transfers, auto-pay on HTTP 402
   - **MPP** (Stripe/Tempo): multi-method (Stripe fiat, Tempo stablecoins, EVM)
   - **Xochi**: cross-chain intents via dark pool (default for agents, cash-positive)
-  - **Riddler**: direct solver access (B2B/internal, not default)
 
   ## Agent Path (cross-chain)
 
