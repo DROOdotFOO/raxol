@@ -162,44 +162,63 @@ defmodule Raxol.REPL.Sandbox do
   # check the evaluation's `:max_heap_size`, so that cap only fires after the
   # allocation has landed -- and an allocation the allocator cannot satisfy
   # aborts the node, not the evaluation. Measured under ReplDemo's 8 MB cap,
-  # each one `:ok` here before this list existed:
+  # each one `:ok` here before these rules existed:
   #
   #   * `String.duplicate/2`, `String.pad_leading/2,3` with a count of 10^15:
   #     VM abort, `binary_alloc: Cannot allocate`
   #   * `IO.iodata_to_binary/1`, `Enum.join/1,2`, `Enum.map_join/2,3`,
-  #     `Jason.encode!/1` over 500 references to one 2 MB binary: ~1.1 GB
+  #     `Jason.encode!/1` over 500 references to one 2 MB binary: ~1.1 GB;
+  #     `Enum.into(l, "")` and `for x <- l, into: ""` over 300: ~700 MB
+  #   * `String.replace/3` with a held 1 MB replacement and 100 matches:
+  #     192 MB, as much as `Enum.join` over the same list
   #   * `Tuple.duplicate/2` at the 16M maximum arity: ~230 MB
   #
-  # `List.to_string/1`, `IO.chardata_to_string/1`, string interpolation and
-  # `inspect/2` build the same output in chunks the cap does see, so they
-  # stay allowed and the flatteners' messages point at them.
+  # `List.to_string/1`, `IO.chardata_to_string/1` and `inspect/2` build their
+  # output in chunks the cap does see, so they stay allowed.
   #
-  # This is a denylist of what has been MEASURED, so it narrows the abort path
-  # rather than closing it; issue #1231 moves served evaluation into an
-  # OS-limited peer node, which closes the class.
+  # Each rule sizes a call from its LITERAL arguments, by position. A pipe
+  # (`|>` or `Kernel.|>/2`) or a capture removes arguments from the call node,
+  # so a call with fewer arguments than a rule needs is refused rather than
+  # guessed at.
+  #
+  # This is a denylist of what has been measured or read in the stdlib, so it
+  # narrows the abort path rather than closing it; issue #1231 moves served
+  # evaluation into an OS-limited peer node, which closes the class.
   @strict_flatteners [
     {IO, :iodata_to_binary},
+    {IO, :binwrite},
     {Enum, :join},
     {Enum, :map_join},
     {Jason, :encode},
     {Jason, :encode!}
   ]
 
-  # Size comes from a count argument, so these stay allowed when every
-  # argument is a literal and the result is provably small (`String.duplicate
-  # ("-", 20)` is ordinary REPL code). Anything the checker cannot size --
-  # a variable, an expression, a capture, a pipe that hides the subject --
-  # is refused.
-  @strict_repeaters [
-    {String, :duplicate},
-    {String, :pad_leading},
-    {String, :pad_trailing},
-    {Tuple, :duplicate}
-  ]
+  @strict_size_rules %{
+    {String, :duplicate} => :duplicate,
+    {String, :pad_leading} => :pad,
+    {String, :pad_trailing} => :pad,
+    {Tuple, :duplicate} => :tuple_duplicate,
+    {String, :replace} => :replace,
+    {String, :replace_leading} => :replace,
+    {String, :replace_trailing} => :replace,
+    {Regex, :replace} => :replace,
+    {Enum, :into} => :into,
+    {Stream, :into} => :into,
+    {Calendar, :strftime} => :strftime
+  }
 
   # Largest result a literal repeater or bitstring segment may build: far
   # under any served heap cap, far over what REPL code writes by hand.
   @max_strict_literal_bytes 1_048_576
+
+  # A replacement is copied once per match, so its size is the amplification
+  # factor over the subject the evaluation already holds (and the cap counts).
+  @max_strict_replacement_bytes 8
+
+  # Unsized binary segments in one `<<>>`, interpolation or `<>` chain. Each
+  # is something the evaluation already holds, so the construction is bounded
+  # by this many times the cap.
+  @max_strict_unsized_segments 8
 
   @doc """
   Checks code for safety violations at the given strictness level.
@@ -407,31 +426,37 @@ defmodule Raxol.REPL.Sandbox do
     ["#{kind} is not allowed (runtime module definition)"]
   end
 
-  # A pipe moves the subject OUT of the call's arguments, so the repeater
-  # check would size `big |> String.duplicate(1_000)` without its subject --
-  # and the subject can be anything the evaluation holds. The call node is
-  # still walked on its own; this clause adds only what the pipe hides.
-  defp check_node(
-         {:|>, _, [_subject, {{:., _, [mod, func]}, _, _args}]},
-         :strict
-       ) do
-    with {:ok, module} <- remote_module(mod),
-         true <- {module, func} in @strict_repeaters do
-      [
-        "piping into #{inspect(module)}.#{func} is not allowed at :strict " <>
-          "(the subject cannot be sized; pass literal arguments directly)"
-      ]
-    else
-      _ -> []
-    end
+  # `<<0::size(n)>>` allocates `n` bits in one step: 8 billion reached a
+  # ~2.1 GB footprint under an 8 MB cap, and a construction with many
+  # unsized `::binary` segments (what interpolation expands to) is sized and
+  # allocated whole before it is filled. Match patterns share the shape and
+  # are refused with construction: this walk checks one node at a time and
+  # does not track whether it is under a pattern.
+  defp check_node({:<<>>, _, segments}, :strict) when is_list(segments) do
+    unsized = Enum.count(segments, &unsized_binary_segment?/1)
+
+    Enum.flat_map(segments, &check_segment_size/1) ++
+      too_many_segments(unsized, "<<>> or interpolation")
   end
 
-  # `<<0::size(n)>>` allocates `n` bits in one step: 8 billion reached a
-  # ~2.1 GB footprint under an 8 MB cap. Match patterns have the same shape
-  # and are refused with construction, since the checker cannot tell a
-  # pattern from a value without the surrounding expression.
-  defp check_node({:<<>>, _, segments}, :strict) when is_list(segments) do
-    Enum.flat_map(segments, &check_segment_size/1)
+  # `a <> b <> ...` expands into a single `<<>>` after this check runs, so its
+  # operands are counted here, at the top of the chain.
+  defp check_node({:<>, _, [_left, _right]} = chain, :strict) do
+    unsized = chain |> concat_operands() |> Enum.count(&(not is_binary(&1)))
+    too_many_segments(unsized, "<> chain")
+  end
+
+  # `for x <- l, into: ""` collects through the same `IO.iodata_to_binary` as
+  # `Enum.into(l, "")`.
+  defp check_node({:for, _, args}, :strict) when is_list(args) do
+    args
+    |> Enum.filter(&Keyword.keyword?/1)
+    |> Enum.flat_map(fn opts ->
+      case Keyword.fetch(opts, :into) do
+        {:ok, target} -> check_collect_target([target], "for ... into:")
+        :error -> []
+      end
+    end)
   end
 
   defp check_node({kind, _, args}, level)
@@ -483,80 +508,173 @@ defmodule Raxol.REPL.Sandbox do
     end)
   end
 
-  defp remote_module({:__aliases__, _, mod_parts}) do
-    case resolve_alias(mod_parts) do
-      {:ok, module} -> {:ok, module}
-      {:unknown, _name} -> :error
-    end
-  end
-
-  defp remote_module(mod) when is_atom(mod), do: {:ok, mod}
-  defp remote_module(_mod), do: :error
-
   defp check_strict_size(module, func, args) do
     cond do
       {module, func} in @strict_flatteners ->
         [
           "#{inspect(module)}.#{func} is not allowed at :strict (it flattens " <>
             "its whole input in one allocation the heap cap only sees " <>
-            "afterwards; List.to_string/1 builds the same text in checked chunks)"
+            "afterwards). Build text in chunks instead: " <>
+            "`l |> Enum.map(&to_string/1) |> Enum.intersperse(sep) |> List.to_string()`, " <>
+            "or `Jason.encode_to_iodata!/1` for JSON"
         ]
 
-      {module, func} in @strict_repeaters ->
-        check_literal_repeat(module, func, args)
+      rule = Map.get(@strict_size_rules, {module, func}) ->
+        check_size_rule(rule, "#{inspect(module)}.#{func}", args)
 
       true ->
         []
     end
   end
 
-  defp check_literal_repeat(module, func, args) do
-    case literal_result_bytes(args) do
-      {:ok, bytes} when bytes <= @max_strict_literal_bytes ->
+  # `String.duplicate(s, n)` is the one repeater that multiplies its subject,
+  # so both must be literal; a pipe leaves one argument and is refused.
+  defp check_size_rule(:duplicate, name, [subject, count])
+       when is_binary(subject) and is_integer(count),
+       do: within_literal_bound(name, byte_size(subject) * count)
+
+  defp check_size_rule(:duplicate, name, _args),
+    do: needs_literals(name, "its string and count")
+
+  # Padding copies the subject once and repeats only the padding, so the
+  # subject may be anything; the count and padding must be literal. The
+  # forms are `pad(s, n)`, `pad(s, n, p)`, piped `pad(n)` and `pad(n, p)`.
+  defp check_size_rule(:pad, name, args) do
+    case pad_count_and_padding(args) do
+      {count, padding} when is_integer(count) and is_binary(padding) ->
+        within_literal_bound(name, count * max(byte_size(padding), 1))
+
+      _unsized ->
+        needs_literals(name, "its count and padding")
+    end
+  end
+
+  # The data is shared, not copied: only the count sizes the tuple.
+  defp check_size_rule(:tuple_duplicate, name, args) do
+    case args do
+      [_data, count] when is_integer(count) ->
+        within_literal_bound(name, 8 * count)
+
+      [count] when is_integer(count) ->
+        within_literal_bound(name, 8 * count)
+
+      _other ->
+        needs_literals(name, "its count")
+    end
+  end
+
+  # The replacement lands in the result once per match, so its size is the
+  # amplification over the subject. It is the last argument that is not an
+  # options list, in the direct form and the piped one alike.
+  defp check_size_rule(:replace, name, args) when length(args) >= 2 do
+    case args |> Enum.reject(&Keyword.keyword?/1) |> List.last() do
+      replacement
+      when is_binary(replacement) and
+             byte_size(replacement) <= @max_strict_replacement_bytes ->
         []
 
-      {:ok, _bytes} ->
+      _other ->
         [
-          "#{inspect(module)}.#{func} is not allowed at :strict beyond " <>
-            "#{@max_strict_literal_bytes} bytes of result"
-        ]
-
-      :error ->
-        [
-          "#{inspect(module)}.#{func} is not allowed at :strict unless every " <>
-            "argument is a literal (its result must be sized before it runs)"
+          "#{name} is not allowed at :strict unless its replacement is a " <>
+            "string literal of at most #{@max_strict_replacement_bytes} bytes " <>
+            "written in the call"
         ]
     end
   end
 
-  # An upper bound from literal arguments: the count times
-  # the widest literal, at least 8 bytes (one tuple slot). No arguments is
-  # the capture form, `&String.duplicate/2`, which can be called with any.
-  defp literal_result_bytes([]), do: :error
+  defp check_size_rule(:replace, name, _args),
+    do: needs_literals(name, "its replacement")
 
-  defp literal_result_bytes(args) do
-    if Enum.all?(args, &literal?/1) do
-      # Each repeater takes exactly one count; the other integer, if any, is
-      # data (`Tuple.duplicate(0, n)`), so the largest is the count.
-      count = args |> Enum.filter(&is_integer/1) |> Enum.max(fn -> 1 end)
-      width = args |> Enum.map(&literal_width/1) |> Enum.max()
-      {:ok, count * max(width, 8)}
+  defp check_size_rule(:into, name, args), do: check_collect_target(args, name)
+
+  # The format is literal and directive-sized; what can grow is the output
+  # of formatter functions passed as options, so only the two-argument form
+  # (format last, direct or piped) is allowed.
+  defp check_size_rule(:strftime, name, args) do
+    if args != [] and is_binary(List.last(args)) do
+      []
     else
-      :error
+      needs_literals(name, "its format (and no options)")
     end
   end
 
-  defp literal?(term)
-       when is_integer(term) or is_float(term) or is_binary(term) or
-              is_atom(term),
+  defp pad_count_and_padding([_subject, count, padding]), do: {count, padding}
+
+  defp pad_count_and_padding([_subject, count]) when is_integer(count),
+    do: {count, " "}
+
+  defp pad_count_and_padding([count, padding]), do: {count, padding}
+  defp pad_count_and_padding([count]), do: {count, " "}
+  defp pad_count_and_padding(_capture), do: :capture
+
+  defp within_literal_bound(_name, bytes)
+       when bytes <= @max_strict_literal_bytes,
+       do: []
+
+  defp within_literal_bound(name, _bytes) do
+    [
+      "#{name} is not allowed at :strict beyond #{@max_strict_literal_bytes} bytes of result"
+    ]
+  end
+
+  defp needs_literals(name, what) do
+    [
+      "#{name} is not allowed at :strict unless #{what} are literals written " <>
+        "in the call (a variable, expression, pipe or capture cannot be sized)"
+    ]
+  end
+
+  # Collecting into a binary flattens at the end; into a list or a map it
+  # does not. Either the target is a literal list or map, or the literal
+  # list or map is the (source-bounded) enumerable -- both are safe, and
+  # piping cannot make a binary target look like either.
+  defp check_collect_target(args, name) do
+    if Enum.any?(args, &literal_collection?/1) do
+      []
+    else
+      [
+        "#{name} is not allowed at :strict unless it collects into a literal " <>
+          "list or map (collecting into a string flattens in one allocation)"
+      ]
+    end
+  end
+
+  defp literal_collection?(list) when is_list(list), do: true
+  defp literal_collection?({:%{}, _, _pairs}), do: true
+  defp literal_collection?(_term), do: false
+
+  defp too_many_segments(count, _what)
+       when count <= @max_strict_unsized_segments,
+       do: []
+
+  defp too_many_segments(count, what) do
+    [
+      "#{what} with #{count} computed binary parts is not allowed at :strict " <>
+        "(at most #{@max_strict_unsized_segments}; it is allocated whole before " <>
+        "it is filled)"
+    ]
+  end
+
+  defp unsized_binary_segment?({:"::", _, [value, spec]}) do
+    not is_binary(value) and binary_spec?(spec) and
+      match?({nil, _}, collect_segment_size(spec, {nil, nil}))
+  end
+
+  defp unsized_binary_segment?(_segment), do: false
+
+  defp binary_spec?({:-, _, [left, right]}),
+    do: binary_spec?(left) or binary_spec?(right)
+
+  defp binary_spec?({type, _, ctx})
+       when type in [:binary, :bytes, :bitstring, :bits] and is_atom(ctx),
        do: true
 
-  defp literal?(term) when is_list(term), do: Enum.all?(term, &is_integer/1)
-  defp literal?(_term), do: false
+  defp binary_spec?(_spec), do: false
 
-  defp literal_width(term) when is_binary(term), do: byte_size(term)
-  defp literal_width(term) when is_list(term), do: length(term) * 4
-  defp literal_width(_term), do: 8
+  defp concat_operands({:<>, _, [left, right]}),
+    do: concat_operands(left) ++ concat_operands(right)
+
+  defp concat_operands(operand), do: [operand]
 
   defp check_segment_size({:"::", _, [_value, spec]}) do
     case collect_segment_size(spec, {nil, nil}) do
@@ -587,19 +705,30 @@ defmodule Raxol.REPL.Sandbox do
   defp check_segment_size(_segment), do: []
 
   # A segment spec is a `-` chain of types and modifiers: `binary-size(n)`,
-  # `size(4)-unit(8)`, or a bare integer, which is shorthand for `size/1`.
+  # `size(4)-unit(8)`, a bare integer (shorthand for `size/1`), or
+  # `size*unit` shorthand. A unit with no size is harmless (nothing to
+  # multiply), so only a size makes a segment checkable; any call-shaped
+  # spec this does not recognise fails closed.
   defp collect_segment_size({:-, _, [left, right]}, acc),
     do: collect_segment_size(right, collect_segment_size(left, acc))
 
   defp collect_segment_size(n, {_size, unit}) when is_integer(n), do: {n, unit}
 
+  defp collect_segment_size({:*, _, [size, unit]}, _acc),
+    do: {literal_or_computed(size), literal_or_computed(unit)}
+
   defp collect_segment_size({:size, _, [n]}, {_size, unit}),
-    do: {if(is_integer(n), do: n, else: :computed), unit}
+    do: {literal_or_computed(n), unit}
 
   defp collect_segment_size({:unit, _, [u]}, {size, _unit}),
-    do: {size, if(is_integer(u), do: u, else: :computed)}
+    do: {size, literal_or_computed(u)}
 
-  defp collect_segment_size(_type, acc), do: acc
+  # Types (`binary`, `integer`, `big`, `utf8`, ...) parse as variables.
+  defp collect_segment_size({_type, _, ctx}, acc) when is_atom(ctx), do: acc
+  defp collect_segment_size(_unknown, {_size, unit}), do: {:computed, unit}
+
+  defp literal_or_computed(n) when is_integer(n), do: n
+  defp literal_or_computed(_n), do: :computed
 
   defp check_denied_call(module, func) do
     case Map.fetch(@denied_process_modules, module) do

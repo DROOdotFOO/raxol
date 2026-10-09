@@ -302,9 +302,14 @@ defmodule Raxol.REPL.CaptureIO do
   # a single wedged `:io.format/2` blinds the capture for the rest of the
   # evaluation. That is why `put_mfa/4` refuses to wait once the latch is
   # set: after the first one there is nothing left to capture anyway.
+  #
+  # The size is taken with `:erlang.iolist_size/1` BEFORE anything is
+  # flattened: this server has no heap cap, and an iolist holding a thousand
+  # references to one held binary is small to send and enormous to flatten.
+  # Measuring it walks the list without allocating, so an over-limit write is
+  # refused without ever being built.
   defp put(chars, state) do
-    data = IO.iodata_to_binary(chars)
-    size = byte_size(data)
+    size = :erlang.iolist_size(chars)
 
     cond do
       state.truncated? ->
@@ -314,6 +319,7 @@ defmodule Raxol.REPL.CaptureIO do
         {:ok, %{state | truncated?: true}}
 
       true ->
+        data = IO.iodata_to_binary(chars)
         {:ok, %{state | buffer: [data | state.buffer], size: state.size + size}}
     end
   rescue

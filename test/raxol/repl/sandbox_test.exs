@@ -497,12 +497,20 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
 
-    test "repeaters pass only with small literal arguments" do
+    test "repeaters pass only when what they multiply is literal and small" do
       for code <- [
             ~S|String.duplicate("-", 20)|,
             ~S|String.pad_leading("42", 5, "0")|,
             ~S|String.pad_trailing("a", 3)|,
-            "Tuple.duplicate(0, 4)"
+            "Tuple.duplicate(0, 4)",
+            # Padding and tuples do not multiply their subject or data, so
+            # those may be computed, and the piped forms stay available.
+            ~S|String.pad_leading(Integer.to_string(7), 3, "0")|,
+            ~S|name = "ab"; String.pad_trailing(name, 10)|,
+            ~S{Integer.to_string(5) |> String.pad_leading(3, "0")},
+            "x = :a; Tuple.duplicate(x, 4)",
+            # 200 KB of one-byte string is under the 1 MiB bound.
+            ~S|String.duplicate("-", 200_000)|
           ] do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
       end
@@ -516,12 +524,72 @@ defmodule Raxol.REPL.SandboxTest do
             ~S|n = 5; String.duplicate("x", n)|,
             ~S|s = "x"; String.duplicate(s, 5)|,
             ~S|String.duplicate("x", 2 * 5)|,
+            ~S|n = 5; String.pad_leading("x", n)|,
+            ~S|p = "0"; String.pad_leading("x", 5, p)|,
+            # Both pipe forms leave the multiplied subject out of the call.
             ~S{s = "x"; s |> String.duplicate(5)},
+            ~S{s = "x"; Kernel.|>(s, String.duplicate(5))},
             ~S|f = &String.duplicate/2; f.("x", 5)|,
             ~S|Enum.map([5], &String.duplicate("x", &1))|
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
+    end
+
+    test "replacements must be short literals" do
+      for code <- [
+            ~S|String.replace(s, " ", "_")|,
+            ~S{s |> String.replace("\n", "<br>")},
+            ~S|String.replace(s, "a", "b", global: false)|,
+            ~S|Regex.replace(~r/\s+/, s, " ")|,
+            ~S|String.replace_leading(s, "0", "")|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            ~S|String.replace(s, "a", r)|,
+            ~S|String.replace(s, "a", "123456789")|,
+            ~S|String.replace_leading(s, "a", r)|,
+            ~S|String.replace_trailing(s, "a", r)|,
+            ~S|Regex.replace(~r/./, s, fn m -> m end)|,
+            ~S|f = &String.replace/3; f.(s, "a", r)|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "collecting is allowed into a literal list or map, not a string" do
+      for code <- [
+            "Enum.into(l, %{})",
+            "l |> Enum.into([])",
+            ~S|Enum.into([a: 1], m)|,
+            "for x <- l, into: %{}, do: {x, x}",
+            "for x <- l, do: x"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            ~S|Enum.into(l, "")|,
+            ~S|acc = ""; Enum.into(l, acc)|,
+            ~S{l |> Stream.into("") |> Stream.run()},
+            ~S|for x <- l, into: "", do: x|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "other flatteners are refused" do
+      for code <- [
+            "IO.binwrite(l)",
+            ~S|Calendar.strftime(d, "%A", day_of_week_names: f)|,
+            ~S|fmt = "%Y"; Calendar.strftime(d, fmt)|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      assert :ok = Sandbox.check(~S|Calendar.strftime(d, "%Y-%m-%d")|, :strict)
     end
 
     test "bitstring segments must be literal and bounded" do
@@ -540,10 +608,45 @@ defmodule Raxol.REPL.SandboxTest do
             "<<0::size(8_000_000_000)>>",
             "<<0::size(100_000)-unit(256)>>",
             "u = 8; <<0::size(1)-unit(u)>>",
-            "<<0::8_000_000_000>>"
+            "<<0::8_000_000_000>>",
+            # `size*unit` shorthand.
+            "<<0::1_000_000_000*256>>",
+            "n = 8; <<0::n*8>>"
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
+    end
+
+    test "one construction holds at most eight computed binary parts" do
+      parts = fn n, sep -> Enum.map_join(1..n, sep, fn _ -> "b" end) end
+
+      assert :ok = Sandbox.check(parts.(8, " <> "), :strict)
+
+      assert :ok =
+               Sandbox.check(
+                 ~s|"#{parts.(8, "")}"| |> String.replace("b", "\#{b}"),
+                 :strict
+               )
+
+      assert :ok =
+               Sandbox.check(
+                 ~S|"a" <> "b" <> "c" <> "d" <> "e" <> "f" <> "g" <> "h" <> "i"|,
+                 :strict
+               )
+
+      assert {:error, _} = Sandbox.check(parts.(9, " <> "), :strict)
+
+      assert {:error, _} =
+               Sandbox.check(
+                 ~s|"#{parts.(9, "")}"| |> String.replace("b", "\#{b}"),
+                 :strict
+               )
+
+      assert {:error, _} =
+               Sandbox.check(
+                 "<<" <> parts.(9, "::binary, ") <> "::binary>>",
+                 :strict
+               )
     end
 
     test "the chunked builders stay available" do
