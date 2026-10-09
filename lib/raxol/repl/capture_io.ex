@@ -306,8 +306,9 @@ defmodule Raxol.REPL.CaptureIO do
   # The size is taken with `:erlang.iolist_size/1` BEFORE anything is
   # flattened: this server has no heap cap, and an iolist holding a thousand
   # references to one held binary is small to send and enormous to flatten.
-  # Measuring it walks the list without allocating, so an over-limit write is
-  # refused without ever being built.
+  # `:io` converts a list in the CALLER before sending, so this guards a
+  # request sent with the IO protocol directly, which any process holding
+  # this pid (it is the group leader) can do.
   defp put(chars, state) do
     size = :erlang.iolist_size(chars)
 

@@ -179,8 +179,10 @@ defmodule Raxol.REPL.Sandbox do
   #
   # NOT covered, because the checker cannot see the argument's type:
   # `"#{list}"` and `to_string(list)` reach `List.to_string/1` through
-  # `String.Chars`, and `String.split/2` sizes its whole result list (~57x
-  # the subject) in one block. Only #1231 closes those.
+  # `String.Chars`, `IO.write(list)`/`IO.puts(list)` run the same conversion
+  # in the caller before the capture sees it, and `String.split/2` sizes its
+  # whole result list (~57x the subject) in one block. Only #1231 closes
+  # those.
   #
   # Each rule sizes a call from its LITERAL arguments, by position. A pipe
   # (`|>` or `Kernel.|>/2`) or a capture removes arguments from the call node,
@@ -503,13 +505,13 @@ defmodule Raxol.REPL.Sandbox do
 
   defp check_strict_size(module, func, args) do
     cond do
-      {module, func} in @strict_flatteners ->
+      {module, func} in @strict_flatteners and
+          not source_literal_call?({module, func}, args) ->
         [
           "#{inspect(module)}.#{func} is not allowed at :strict (it flattens " <>
             "its whole input in one allocation the heap cap only sees " <>
-            "afterwards). Keep the text as iodata and print it, e.g. " <>
-            "`IO.write(Enum.intersperse(l, sep))`, which the capture sizes " <>
-            "before flattening"
+            "afterwards). Print the parts one at a time instead, e.g. " <>
+            "`l |> Enum.map(&to_string/1) |> Enum.intersperse(sep) |> Enum.each(&IO.write/1)`"
         ]
 
       rule = Map.get(@strict_size_rules, {module, func}) ->
@@ -583,10 +585,26 @@ defmodule Raxol.REPL.Sandbox do
   defp check_size_rule(:replace, name, _args),
     do: needs_literals(name, "its replacement")
 
+  # A map literal that is not plain (a `__struct__` key, or a `%{m | ...}`
+  # update that can carry one in) dispatches to another module's
+  # `Collectable` -- `File.Stream`'s writes a file -- so it is refused before
+  # size is considered at all.
   defp check_size_rule(:into, name, args) do
     case into_target(args) do
-      {:ok, target} -> check_collect_target(target, name)
-      :capture -> needs_literals(name, "its target")
+      {:ok, {:%{}, _, _} = target} ->
+        if non_binary_collectable?(target),
+          do: [],
+          else: [
+            "#{name} is not allowed at :strict into a map with a struct key or update"
+          ]
+
+      {:ok, target} ->
+        if source_bounded_into?(args),
+          do: [],
+          else: check_collect_target(target, name)
+
+      :capture ->
+        needs_literals(name, "its target")
     end
   end
 
@@ -598,11 +616,18 @@ defmodule Raxol.REPL.Sandbox do
   defp check_size_rule(:strftime, name, args) do
     format = List.last(args)
 
-    if is_binary(format) and not Regex.match?(~r/%[-_0-9]*Z/, format) do
+    if is_binary(format) and not zone_directive?(format) do
       []
     else
       needs_literals(name, "its format (without %Z or options)")
     end
+  end
+
+  # `%%` is an escaped percent, so `"%%Z"` prints the text "%Z".
+  defp zone_directive?(format) do
+    ~r/%%|%[-_0-9]*Z/
+    |> Regex.scan(format)
+    |> Enum.any?(&(&1 != ["%%"]))
   end
 
   defp pad_count_and_padding([_subject, count, padding]), do: {count, padding}
@@ -631,7 +656,7 @@ defmodule Raxol.REPL.Sandbox do
     ]
   end
 
-  defp options_list?([_ | _] = list), do: Keyword.keyword?(list)
+  defp options_list?(list) when is_list(list), do: Keyword.keyword?(list)
   defp options_list?(_term), do: false
 
   defp replacement_ok?(replacement),
@@ -641,8 +666,12 @@ defmodule Raxol.REPL.Sandbox do
 
   # The collectable's position: `into(enum, target)`, `into(enum, target,
   # fun)`, piped `into(target)` and piped `into(target, fun)`. With two
-  # arguments a function in second place means the piped three-argument form.
+  # arguments a function in second place means the piped three-argument form;
+  # a capture placeholder (`&1`) is a value, never that function.
   defp into_target([_enum, target, _fun]), do: {:ok, target}
+
+  defp into_target([_enum, {:&, _, [n]} = target]) when is_integer(n),
+    do: {:ok, target}
 
   defp into_target([target, {kind, _, _}]) when kind in [:fn, :&],
     do: {:ok, target}
@@ -667,15 +696,61 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp non_binary_collectable?(list) when is_list(list), do: true
-  defp non_binary_collectable?({:%{}, _, _pairs}), do: true
+
+  # Only a plain map: a `__struct__` key makes the map dispatch to that
+  # module's `Collectable`, and a `%{base | ...}` update can carry one in.
+  defp non_binary_collectable?({:%{}, _, pairs}),
+    do: Enum.all?(pairs, &plain_map_pair?/1)
 
   defp non_binary_collectable?(
-         {{:., _, [{:__aliases__, _, [mod]}, :new]}, _, []}
+         {{:., _, [{:__aliases__, _, [mod]}, :new]}, _, _args}
        )
        when mod in [:MapSet, :Map],
        do: true
 
   defp non_binary_collectable?(_target), do: false
+
+  # A flattener whose input is written out in the source (`~c"abc"`,
+  # `["a", ?b]`) is bounded by the source's own size. Only the forms whose
+  # input is the FIRST argument and that do not multiply it qualify: a pipe
+  # leaves no first argument (or a separator in its place, which is not a
+  # list), and `map_join`'s mapper or `encode`'s options could grow it.
+  defp source_literal_call?({mod, func}, [input])
+       when {mod, func} in [
+              {List, :to_string},
+              {IO, :chardata_to_string},
+              {IO, :iodata_to_binary}
+            ],
+       do: source_literal?(input)
+
+  defp source_literal_call?({Enum, :join}, [list | separator])
+       when is_list(list) and length(separator) <= 1,
+       do: Enum.all?([list | separator], &source_literal?/1)
+
+  defp source_literal_call?(_mfa, _args), do: false
+
+  defp source_literal?({:sigil_c, _, [{:<<>>, _, parts}, _mods]}),
+    do: Enum.all?(parts, &is_binary/1)
+
+  defp source_literal?(term), do: Macro.quoted_literal?(term)
+
+  # Only the direct two-argument form names its source, first: a fully
+  # literal source, as in `Enum.into([a: 1], m)`, is bounded by the source
+  # text. A transform (`into(src, target, fun)`) can grow every element, and
+  # the piped `into(target, fun)` has no source to look at.
+  defp source_bounded_into?([_target, {:fn, _, _}]), do: false
+
+  defp source_bounded_into?([_target, {:&, _, [body]}])
+       when not is_integer(body),
+       do: false
+
+  defp source_bounded_into?([source, _target]), do: source_literal?(source)
+  defp source_bounded_into?(_piped), do: false
+
+  defp plain_map_pair?({key, _value}),
+    do: key != :__struct__ and Macro.quoted_literal?(key)
+
+  defp plain_map_pair?(_update), do: false
 
   defp check_segment_size({:"::", _, [_value, spec]}) do
     case collect_segment_size(spec, {nil, nil}) do

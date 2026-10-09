@@ -542,7 +542,9 @@ defmodule Raxol.REPL.SandboxTest do
             ~S{s |> String.replace("\n", "<br>")},
             ~S|String.replace(s, "a", "b", global: false)|,
             ~S|Regex.replace(~r/\s+/, s, " ")|,
-            ~S|String.replace_leading(s, "0", "")|
+            ~S|String.replace_leading(s, "0", "")|,
+            ~S|String.replace(s, "a", "b", [])|,
+            ~S|Regex.replace(~r/a/, s, "x", [])|
           ] do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
       end
@@ -554,12 +556,19 @@ defmodule Raxol.REPL.SandboxTest do
             ~S|String.replace_trailing(s, "a", r)|,
             ~S|Regex.replace(~r/./, s, fn m -> m end)|,
             ~S|f = &String.replace/3; f.(s, "a", r)|,
-            # Inserts the match once per listed position.
-            ~S|String.replace(s, s, "", insert_replaced: List.duplicate(0, 64))|,
             ~S|String.replace(s, "a", "b", opts)|
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
+
+      # `insert_replaced:` inserts the match once per listed position.
+      assert {:error, [message]} =
+               Sandbox.check(
+                 ~S|String.replace(s, s, "", insert_replaced: List.duplicate(0, 64))|,
+                 :strict
+               )
+
+      assert message =~ "options other than :global"
     end
 
     test "collecting is decided by the target, never the source" do
@@ -567,10 +576,13 @@ defmodule Raxol.REPL.SandboxTest do
             "Enum.into(l, %{})",
             "l |> Enum.into([])",
             "Enum.into(l, MapSet.new())",
+            "Enum.into(l, MapSet.new([1]))",
             "l |> Enum.into(%{}, fn x -> {x, x} end)",
             "for x <- l, into: %{}, do: {x, x}",
             "for x <- l, into: MapSet.new(), do: x",
-            "for x <- l, do: x"
+            "for x <- l, do: x",
+            # A source written out in full is bounded by the source text.
+            ~S|Enum.into([a: 1], m)|
           ] do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
       end
@@ -581,18 +593,28 @@ defmodule Raxol.REPL.SandboxTest do
             # A literal SOURCE list can still hold references to big binaries.
             ~S|Enum.into([b, b, b], "")|,
             ~S<Enum.into(["" | l], "")>,
+            # A placeholder is a value, not the piped form's transform.
+            ~S|f = &Enum.into([b, b, b], &1); f.("")|,
+            # A transform grows each element of even a literal source.
+            ~S|Enum.into([1, 2], "", fn _ -> b end)|,
+            ~S{l |> Enum.into("", fn x -> x end)},
             ~S{l |> Stream.into("") |> Stream.run()},
-            ~S|for x <- l, into: "", do: x|
+            ~S|for x <- l, into: "", do: x|,
+            # A map with a `__struct__` key dispatches to that module's impl.
+            ~S|Enum.into(["x"], %{__struct__: File.Stream, path: "p"})|,
+            ~S<Enum.into(["x"], %{m | a: 1})>
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
     end
 
-    test "other flatteners are refused" do
+    test "other flatteners are refused unless their input is written out" do
       for code <- [
             "IO.binwrite(l)",
             "List.to_string(l)",
             "IO.chardata_to_string(l)",
+            ~S{l |> Enum.join(", ")},
+            ~S|Enum.map_join(["a"], ",", fn _ -> b end)|,
             ~S|Calendar.strftime(d, "%A", day_of_week_names: f)|,
             ~S|fmt = "%Y"; Calendar.strftime(d, fmt)|,
             # `%Z` copies the input map's `:zone_abbr`, any binary.
@@ -602,7 +624,17 @@ defmodule Raxol.REPL.SandboxTest do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
 
-      assert :ok = Sandbox.check(~S|Calendar.strftime(d, "%Y-%m-%d")|, :strict)
+      for code <- [
+            ~S|List.to_string(~c"abc")|,
+            ~S|List.to_string(["a", ?b])|,
+            ~S|IO.chardata_to_string(["a", ?b])|,
+            ~S|Enum.join(["a", "b"], ", ")|,
+            ~S|Calendar.strftime(d, "%Y-%m-%d")|,
+            # `%%` is an escaped percent: this prints the text "100%Z".
+            ~S|Calendar.strftime(d, "100%%Z")|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
     end
 
     test "bitstring segments must be literal and bounded" do
