@@ -249,7 +249,15 @@ defmodule Raxol.REPL.CaptureIO do
 
         send(parent, {ref, result})
       end,
-      [:monitor, max_heap_size: %{size: words, kill: true, error_logger: false}]
+      [
+        :monitor,
+        max_heap_size: %{
+          size: words,
+          kill: true,
+          error_logger: false,
+          include_shared_binaries: true
+        }
+      ]
     )
   end
 

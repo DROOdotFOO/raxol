@@ -24,7 +24,9 @@ defmodule Raxol.REPL.Evaluator do
 
     * `:timeout` -- how long the single evaluation process may run
     * `:max_heap_bytes` -- that process's heap, via `:max_heap_size` with
-      `kill: true`
+      `kill: true` and `include_shared_binaries: true`, so off-heap (refc)
+      binaries count too: without it `String.duplicate("x", 200_000_000)`
+      built 200 MB under an 8 MB cap
     * `:max_result_bytes` -- the value plus bindings plus output it may hand
       back (refused when over), and the error message (truncated when over)
     * `Raxol.REPL.CaptureIO`'s limit -- bytes of captured output retained, and
@@ -147,7 +149,13 @@ defmodule Raxol.REPL.Evaluator do
         end,
         [
           :monitor,
-          {:max_heap_size, %{size: heap_words, kill: true, error_logger: false}}
+          {:max_heap_size,
+           %{
+             size: heap_words,
+             kill: true,
+             error_logger: false,
+             include_shared_binaries: true
+           }}
         ]
       )
 

@@ -96,6 +96,22 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert reason =~ "memory limit"
     end
 
+    # A binary over 64 bytes lives off-heap (refc), and `:max_heap_size`
+    # ignores those unless `include_shared_binaries` is set: this built a
+    # 50 MB binary under an 8 MB cap and returned it.
+    test "counts off-heap binaries against the heap budget" do
+      eval = Evaluator.new()
+
+      assert {:error, reason, ^eval} =
+               Evaluator.eval(
+                 eval,
+                 ~S|byte_size(String.duplicate("x", 50_000_000))|,
+                 max_heap_bytes: 8 * 1024 * 1024
+               )
+
+      assert reason =~ "memory limit"
+    end
+
     test "rejects oversized results before copying them to the owner" do
       eval = Evaluator.new()
 
