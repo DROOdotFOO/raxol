@@ -3,7 +3,7 @@ defmodule Raxol.Payments.FeeScheduleTest do
   Parity against the canonical schedule, plus the arithmetic on top of it.
 
   The oracle in `priv/fee-oracle/schedule.json` is the generated projection of
-  `Riddler.Integrations.Xochi.FeePolicy` -- the same artifact `@riddler/sdk-taker`
+  `Riddler.Integrations.Xochi.FeePolicy` -- the same artifact `@xochi/reference`
   checks its TypeScript mirror against. Pinning to it is what makes this module
   a mirror rather than a second opinion: if Riddler reprices, these fail instead
   of raxol.io quietly advertising a rate nobody charges.
@@ -11,7 +11,7 @@ defmodule Raxol.Payments.FeeScheduleTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.FeeSchedule
-  alias Raxol.Payments.Test.RiddlerSpec
+  alias Raxol.Payments.Test.XochiSpec
 
   @oracle_path Path.join(:code.priv_dir(:raxol_payments), "fee-oracle/schedule.json")
   @oracle @oracle_path |> File.read!() |> Jason.decode!()
@@ -72,29 +72,29 @@ defmodule Raxol.Payments.FeeScheduleTest do
 
   # The oracle is a vendored copy, so the parity above only proves this module
   # agrees with the copy. This proves the copy is the pinned release's bytes.
-  describe "vendored oracle vs the pinned @riddler/spec" do
-    if is_nil(RiddlerSpec.dir()) and not RiddlerSpec.ci?() do
-      @tag skip: "RIDDLER_SPEC_DIR unset (the unpacked @riddler/spec tarball root)"
+  describe "vendored oracle vs the pinned @xochi/spec" do
+    if is_nil(XochiSpec.dir()) and not XochiSpec.ci?() do
+      @tag skip: "XOCHI_SPEC_DIR unset (the unpacked @xochi/spec tarball root)"
     end
 
     test "priv/fee-oracle/schedule.json is byte-identical to fee/schedule.json" do
-      version = RiddlerSpec.pinned_version()
+      version = XochiSpec.pinned_version()
 
       dir =
-        RiddlerSpec.dir() ||
+        XochiSpec.dir() ||
           flunk(
-            "RIDDLER_SPEC_DIR is unset under CI. Unpack npm pack " <>
-              "@riddler/spec@#{version} and set it to the tarball's package/ directory."
+            "XOCHI_SPEC_DIR is unset under CI. Unpack npm pack " <>
+              "@xochi/spec@#{version} and set it to the tarball's package/ directory."
           )
 
       manifest = dir |> Path.join("package.json") |> File.read!() |> Jason.decode!()
 
-      assert {manifest["name"], manifest["version"]} == {"@riddler/spec", version},
-             "RIDDLER_SPEC_DIR=#{dir} is not @riddler/spec@#{version} " <>
-               "(test/fixtures/RIDDLER_SPEC_VERSION)"
+      assert {manifest["name"], manifest["version"]} == {"@xochi/spec", version},
+             "XOCHI_SPEC_DIR=#{dir} is not @xochi/spec@#{version} " <>
+               "(test/fixtures/XOCHI_SPEC_VERSION)"
 
       assert File.read!(Path.join([dir, "fee", "schedule.json"])) == File.read!(@oracle_path),
-             "priv/fee-oracle/schedule.json drifted from @riddler/spec@#{version} " <>
+             "priv/fee-oracle/schedule.json drifted from @xochi/spec@#{version} " <>
                "fee/schedule.json; copy the release's file over it"
     end
   end
