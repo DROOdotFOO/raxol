@@ -7,55 +7,42 @@ defmodule Raxol.Core.Metrics.AlertManagerTest do
   alias Raxol.Core.Metrics.AlertManager
 
   setup do
-    # Start MetricsCollector for metrics dependency if not already started
-    # MetricsCollector uses BaseManager and requires a name parameter
-    uc_pid =
-      case Raxol.Core.Metrics.MetricsCollector.start_link(
-             name: Raxol.Core.Metrics.MetricsCollector
-           ) do
-        {:ok, pid} ->
-          pid
+    # Supervised, linked and :temporary, never start_link plus an on_exit
+    # stop (#909, docs/testing/QUICK_REFERENCE.md): on_exit can run while a
+    # linked server is still dying, and the stop then exits :noproc or
+    # {:shutdown, {:sys, :terminate, _}}.
+    #
+    # MetricsCollector is the dependency, under its global name. One already
+    # running is reused rather than stopped; its metrics are still cleared
+    # below.
+    case start_supervised(Raxol.Core.Metrics.MetricsCollector,
+           restart: :temporary
+         ) do
+      {:ok, collector} ->
+        Process.link(collector)
 
-        {:error, {:already_started, pid}} ->
-          pid
+      {:error, {:already_started, _collector}} ->
+        :ok
 
-        {:error, reason} ->
-          raise "Failed to start MetricsCollector: #{inspect(reason)}"
-      end
+      {:error, reason} ->
+        raise "Failed to start MetricsCollector: #{inspect(reason)}"
+    end
 
     # Clear any persisted ETS data from previous runs
     Raxol.Core.Metrics.MetricsCollector.clear_metrics()
 
     # Use a unique name for each test to avoid conflicts
     test_name = String.to_atom("alert_manager_test_#{:rand.uniform(1_000_000)}")
-    {:ok, pid} = AlertManager.start_link(name: test_name)
 
-    on_exit(fn ->
-      try do
-        if Process.alive?(pid) do
-          GenServer.stop(pid, :normal, 1000)
-        end
-      catch
-        # Process already dead
-        :exit, {:noproc, _} -> :ok
-        # Timeout is acceptable in cleanup
-        :exit, {:timeout, _} -> :ok
-      end
+    # Its own child id: tests below start further AlertManagers under the
+    # module's default id.
+    pid =
+      start_link_supervised!({AlertManager, name: test_name},
+        id: test_name,
+        restart: :temporary
+      )
 
-      # Also stop MetricsCollector if we started it
-      try do
-        if uc_pid && Process.alive?(uc_pid) do
-          GenServer.stop(uc_pid, :normal, 1000)
-        end
-      catch
-        # Process already dead
-        :exit, {:noproc, _} -> :ok
-        # Timeout is acceptable in cleanup
-        :exit, {:timeout, _} -> :ok
-      end
-    end)
-
-    {:ok, test_name: test_name, pid: pid, collector_pid: uc_pid}
+    {:ok, test_name: test_name, pid: pid}
   end
 
   describe "rule management" do

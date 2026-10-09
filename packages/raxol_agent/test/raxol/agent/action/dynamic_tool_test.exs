@@ -245,8 +245,11 @@ defmodule Raxol.Agent.Action.DynamicToolTest do
   describe "end-to-end in the ReAct loop" do
     test "the loop offers a dynamic tool, the LLM calls it, invoke runs, result feeds back" do
       pid = self()
-      {:ok, counter} = Agent.start_link(fn -> 0 end)
-      on_exit(fn -> if Process.alive?(counter), do: Agent.stop(counter) end)
+      # Supervised, linked and :temporary, never start_link plus an on_exit
+      # stop (#909, docs/testing/QUICK_REFERENCE.md): on_exit can run while a
+      # linked server is still dying, and the stop then exits :noproc or
+      # {:shutdown, {:sys, :terminate, _}}.
+      counter = start_link_supervised!({Agent, fn -> 0 end}, restart: :temporary)
 
       # Round 1: emit a tool call for the dynamic tool. Round 2+: normal completion.
       tool_calls_fn = fn ->

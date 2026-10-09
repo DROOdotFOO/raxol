@@ -6,25 +6,12 @@ defmodule Raxol.UI.RendererPartialRenderTest do
   alias Raxol.UI.Rendering.Renderer
 
   setup do
-    # Start the Renderer GenServer with a global name so API calls work
-    {:ok, _pid} = Renderer.start_link(name: Raxol.UI.Rendering.Renderer)
+    # Supervised, linked and :temporary, never start_link plus an on_exit
+    # stop (#909, docs/testing/QUICK_REFERENCE.md): on_exit can run while a
+    # linked server is still dying, and the stop then exits :noproc or
+    # {:shutdown, {:sys, :terminate, _}}.
+    start_link_supervised!(Renderer, restart: :temporary)
     Renderer.set_test_pid(self())
-
-    on_exit(fn ->
-      # Stop the globally named GenServer after the test, but only if it's alive.
-      try do
-        case Process.whereis(Raxol.UI.Rendering.Renderer) do
-          nil -> :ok
-          pid when is_pid(pid) ->
-            if Process.alive?(pid) do
-              GenServer.stop(pid, :normal, 1000)
-            end
-        end
-      catch
-        :exit, {:noproc, _} -> :ok  # Process already dead
-        :exit, {:timeout, _} -> :ok  # Timeout is acceptable in cleanup
-      end
-    end)
 
     :ok
   end
