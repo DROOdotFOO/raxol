@@ -58,11 +58,20 @@ defmodule Raxol.Property.ProcessIsolationTest do
     send(pid, {:crash, reason})
   end
 
-  defp await_down(ref, timeout \\ 500) do
+  # A monitored process's :DOWN always arrives, so the only failure this
+  # timeout should catch is a hang. It is a hang guard, not a speed claim:
+  # 500ms was missed on a memory-contended host (#909).
+  #
+  # It exits rather than returning :timeout. `check all` shrinks on
+  # exceptions only, so an exit fails the property once, naming the crash
+  # reason. A returned :timeout failed an assertion instead, and every shrink
+  # step waited the full bound again until ExUnit's 60s test timeout replaced
+  # the counterexample.
+  defp await_down(ref, crash_reason) do
     receive do
-      {:DOWN, ^ref, :process, _pid, reason} -> {:ok, reason}
+      {:DOWN, ^ref, :process, _pid, reason} -> reason
     after
-      timeout -> :timeout
+      30_000 -> exit({:no_down_within_ms, 30_000, crash_reason})
     end
   end
 
@@ -102,8 +111,7 @@ defmodule Raxol.Property.ProcessIsolationTest do
         crash_child(pid, reason)
 
         # Wait for child to die
-        assert {:ok, _} = await_down(ref),
-               "child should exit for reason #{inspect(reason)}"
+        await_down(ref, reason)
 
         # The whole point: parent is still alive
         assert Process.alive?(self()),
@@ -116,7 +124,7 @@ defmodule Raxol.Property.ProcessIsolationTest do
         {pid, ref} = start_isolated_child()
         crash_child(pid, reason)
 
-        {:ok, down_reason} = await_down(ref)
+        down_reason = await_down(ref, reason)
 
         case reason do
           :kill ->
@@ -159,11 +167,9 @@ defmodule Raxol.Property.ProcessIsolationTest do
           crash_child(pid, reason)
         end)
 
-        # Wait for every child's :DOWN message. Use a generous timeout to
-        # absorb scheduler jitter when up to 10 crash reports land in Logger
-        # simultaneously on a loaded CI runner.
-        for {_pid, ref} <- children do
-          assert {:ok, _} = await_down(ref, 2_000)
+        # Wait for every child's :DOWN message.
+        for {{_pid, ref}, reason} <- Enum.zip(children, reasons) do
+          await_down(ref, reason)
         end
 
         # Parent alive, all children dead
