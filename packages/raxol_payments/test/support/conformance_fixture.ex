@@ -3,10 +3,10 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
   Loader for the shared EIP-712 conformance fixture.
 
   The fixture is `conformance/conformance.json` in the published
-  `@riddler/spec` package (axol-io/riddler-sdk `packages/spec`), the
+  `@xochi/spec` package (xochi-fi/xochi-sdk `packages/spec`), the
   byte-equality contract between the Node SDK and `raxol_payments`. It is read
-  from the release pinned in `test/fixtures/RIDDLER_SPEC_VERSION` (see
-  `Raxol.Payments.Test.RiddlerSpec`), located by exactly one variable:
+  from the release pinned in `test/fixtures/XOCHI_SPEC_VERSION` (see
+  `Raxol.Payments.Test.XochiSpec`), located by exactly one variable:
 
       CONFORMANCE_FIXTURE_PATH=<unpacked tarball>/package/conformance/conformance.json
 
@@ -18,7 +18,7 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
   raises, because zero vectors there is a missing download, not coverage.
   """
 
-  alias Raxol.Payments.Test.RiddlerSpec
+  alias Raxol.Payments.Test.XochiSpec
 
   @env "CONFORMANCE_FIXTURE_PATH"
 
@@ -42,19 +42,19 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
   single test runs, which is why a local run without the fixture warns instead.
 
   Under CI that compile-time raise is the point: CI fetches the pinned
-  `@riddler/spec` tarball, so an absent fixture means the fetch or the export
+  `@xochi/spec` tarball, so an absent fixture means the fetch or the export
   broke, and passing with 0 vectors would report coverage that never ran.
   """
   @spec by_protocol(String.t()) :: [map()]
   def by_protocol(protocol) do
     case do_locate() do
       nil ->
-        if RiddlerSpec.ci?(), do: raise(not_found_message())
+        if XochiSpec.ci?(), do: raise(not_found_message())
 
         IO.puts(
           :stderr,
           "[conformance] fixture absent -- 0 #{protocol} vectors generated. " <>
-            "Set #{@env} to the pinned @riddler/spec conformance.json to run them."
+            "Set #{@env} to the pinned @xochi/spec conformance.json to run them."
         )
 
         []
@@ -105,16 +105,16 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
         else
           raise "#{@env}=#{inspect(path)} does not name a file. Point it at " <>
                   "conformance/conformance.json in the unpacked " <>
-                  "@riddler/spec@#{RiddlerSpec.pinned_version()} tarball."
+                  "@xochi/spec@#{XochiSpec.pinned_version()} tarball."
         end
     end
   end
 
   defp not_found_message do
-    version = RiddlerSpec.pinned_version()
+    version = XochiSpec.pinned_version()
 
     "Conformance fixture not found: #{@env} is unset. Fetch the pinned release " <>
-      "(npm pack @riddler/spec@#{version} && tar xzf riddler-spec-#{version}.tgz) " <>
+      "(npm pack @xochi/spec@#{version} && tar xzf xochi-spec-#{version}.tgz) " <>
       "and set #{@env}=$PWD/package/conformance/conformance.json."
   end
 end

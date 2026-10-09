@@ -10,7 +10,7 @@
 #     (off-chain intent signature + captured on-chain write).
 #   :live_parity -- re-checks the live Xochi quote shape against the committed
 #     fixture. Read-only, no funds, but it does call out to the network.
-#   :cli_signer -- spawns the riddler-client CLI; auto-enabled when
+#   :cli_signer -- spawns Riddler's e2e-signer CLI; auto-enabled when
 #     RIDDLER_CLI_DIR is set.
 #
 # A single ExUnit.start sets the full list; a second ExUnit.configure(exclude:)

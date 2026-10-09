@@ -15,8 +15,8 @@ live_exclude = [:live_xochi, :live_relay, :live_property]
 # Each entry excludes a tag by default unless its enabling env var is set.
 # These read fixtures or spawn a local CLI; none of them move funds.
 #
-#   :cli_signer -- spawn the riddler-sdk CLI from a checkout (RIDDLER_CLI_DIR).
-#   :conformance -- read the pinned @riddler/spec EIP-712 fixture
+#   :cli_signer -- spawn Riddler's e2e-signer CLI (RIDDLER_CLI_DIR, local-only).
+#   :conformance -- read the pinned @xochi/spec EIP-712 fixture
 #     (CONFORMANCE_FIXTURE_PATH; required under CI, see ConformanceFixture).
 #   :stealth_conformance -- match the stealth scheme against a reference SDK
 #     fixture (STEALTH_VECTORS_PATH).
