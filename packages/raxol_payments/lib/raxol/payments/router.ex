@@ -7,14 +7,12 @@ defmodule Raxol.Payments.Router do
       Same-chain + HTTP 402 detected -> x402 or MPP (auto-pay plugin)
       Cross-chain transfer          -> Xochi (agent-facing, cash-positive)
       Explicit privacy request      -> Xochi with stealth/shielded settlement
-      Direct solver access          -> Riddler (internal, not default)
 
   When a trust score is provided, the router also determines the
   settlement target (public/stealth/shielded) via `PrivacyTier`.
 
   Xochi is the default for cross-chain because it's the revenue-positive
-  path with tier-based fees. Riddler Commerce is B2B (Coinbase/Shopify)
-  and not intended for agent use.
+  path with tier-based fees.
   """
 
   alias Raxol.Payments.PrivacyTier
@@ -26,7 +24,7 @@ defmodule Raxol.Payments.Router do
   @doc """
   Select the best protocol for a payment.
 
-  Returns a protocol atom: `:x402`, `:mpp`, `:xochi`, or `:riddler`.
+  Returns a protocol atom: `:x402`, `:mpp`, `:xochi`, or `:relay`.
 
   ## Options
 

@@ -68,10 +68,6 @@ The Xochi Cross-Chain Transfer ACP offering (in `raxol_earn`, see [ACP](ACP.md))
 
 Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design: the protocol takes a fee, the agent pays it, done.
 
-### Riddler (direct solver, B2B only)
-
-Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics. The `Protocols.Riddler` module itself is deprecated and now delegates to Xochi internally; prefer `Protocols.Xochi` directly.
-
 ## Trust and compliance (ZKSAR)
 
 ZKSAR (Zero-Knowledge Sanctions/AML Reporting) lets an agent prove compliance facts without
