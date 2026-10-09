@@ -4,7 +4,7 @@ defmodule Raxol.Payments.FeeSchedule do
 
   Authoritative source is `Riddler.Integrations.Xochi.FeePolicy`. This module
   is its in-code mirror on the raxol side, exactly as
-  `@riddler/sdk-taker`'s `fee.ts` is on the TypeScript side, and it is pinned
+  `@xochi/reference`'s `fee.ts` is on the TypeScript side, and it is pinned
   against the same generated projection both of those are checked against
   (`priv/fee-oracle/schedule.json`). `fee_schedule_test.exs` fails when the two
   drift, so a fee rate cannot quietly go stale here while the solver charges

@@ -6,44 +6,19 @@ defmodule Raxol.Payments.Test.CliSignerTest do
   @moduletag :cli_signer
 
   setup do
-    # The CLI repo is axol-io/riddler-sdk (formerly riddler-client), a sibling of
-    # the raxol monorepo. The previous expansion was one level short and landed
-    # on <raxol>/riddler-client, inside this repo, so the fallback never resolved
-    # under either name and these tests only ran with RIDDLER_CLI_DIR set.
-    cwd =
-      System.get_env("RIDDLER_CLI_DIR") ||
-        Enum.find(
-          [
-            Path.expand("../../../../../riddler-sdk", __DIR__),
-            Path.expand("../../../../../riddler-client", __DIR__)
-          ],
-          &File.dir?/1
-        ) ||
-        Path.expand("../../../../../riddler-sdk", __DIR__)
-
-    cli_available? =
-      File.dir?(cwd) and
-        File.exists?(Path.join([cwd, "packages", "sdk-taker", "src", "cli.ts"]))
-
-    if cli_available? do
-      # Check whether the CLI on disk has the sign-only/acp-buyer-auth
-      # subcommands we depend on (acp.ts in the riddler-sdk package).
-      has_subcommands? =
-        File.exists?(Path.join([cwd, "packages", "sdk-taker", "src", "acp.ts"]))
-
-      {:ok, cli_dir: cwd, cli_available?: cli_available? and has_subcommands?}
-    else
-      {:ok, cli_dir: cwd, cli_available?: false}
-    end
+    cwd = CliSigner.locate()
+    {:ok, cli_dir: cwd, cli_available?: not is_nil(cwd)}
   end
 
   describe "run/3 against a real CLI" do
-    test "invokes `npx tsx packages/sdk-taker/src/cli.ts help` and exits 0", %{
+    test "invokes `node packages/e2e-signer/dist/cli.js help` and exits 0", %{
       cli_dir: cwd,
       cli_available?: cli_available?
     } do
       unless cli_available? do
-        flunk("CLI not available; set RIDDLER_CLI_DIR or run with --exclude cli_signer")
+        flunk(
+          "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+        )
       end
 
       assert {:ok, %{exit_code: 0, stdout: stdout}} =
@@ -63,7 +38,9 @@ defmodule Raxol.Payments.Test.CliSignerTest do
       cli_available?: cli_available?
     } do
       unless cli_available? do
-        flunk("CLI not available; set RIDDLER_CLI_DIR or run with --exclude cli_signer")
+        flunk(
+          "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+        )
       end
 
       flags = [
@@ -96,7 +73,9 @@ defmodule Raxol.Payments.Test.CliSignerTest do
       cli_available?: cli_available?
     } do
       unless cli_available? do
-        flunk("CLI not available; set RIDDLER_CLI_DIR or run with --exclude cli_signer")
+        flunk(
+          "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+        )
       end
 
       # Force a failure: invoke acp-buyer-auth with missing required flags.
@@ -131,9 +110,11 @@ defmodule Raxol.Payments.Test.CliSignerTest do
 
   describe "CliNotFoundError" do
     test "raises with a clear message when the CLI repo can't be found" do
-      assert_raise CliSigner.CliNotFoundError, ~r/Could not locate riddler-client/, fn ->
-        CliSigner.run("help", [], cwd: "/definitely/does/not/exist")
-      end
+      assert_raise CliSigner.CliNotFoundError,
+                   ~r/Could not locate the Riddler e2e-signer CLI/,
+                   fn ->
+                     CliSigner.run("help", [], cwd: "/definitely/does/not/exist")
+                   end
     end
   end
 end

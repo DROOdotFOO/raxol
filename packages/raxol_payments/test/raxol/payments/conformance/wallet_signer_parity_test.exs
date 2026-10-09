@@ -1,7 +1,7 @@
 defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   @moduledoc """
   Byte-for-byte parity between the wallet signer and the reference signer
-  (ethers, via the riddler-client CLI).
+  (ethers, via Riddler's `packages/e2e-signer` CLI).
 
   Both sign the same EIP-712 digest with the same key using deterministic
   (RFC 6979, low-s) ECDSA, so `r`, `s`, and the recovery byte `v` must be
@@ -10,8 +10,9 @@ defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   `ecrecover` (ERC-3009 origin pull / Permit2 / x402) rejects. Regression guard
   for the `v` normalization in `Raxol.Payments.EIP712.pack_signature/1`.
 
-  Tagged `:cli_signer` (excluded by default): needs node and the CLI checkout.
-  Set `RIDDLER_CLI_DIR`, or check the CLI out beside the raxol repo.
+  Tagged `:cli_signer` (excluded by default): needs node and a Riddler
+  checkout with `packages/e2e-signer` built. Set `RIDDLER_CLI_DIR` to it, or
+  check Riddler out beside the raxol repo.
   """
   use ExUnit.Case, async: true
 
@@ -28,12 +29,14 @@ defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   setup do
     System.put_env(@env_var, @key)
     on_exit(fn -> System.delete_env(@env_var) end)
-    {:ok, cli_dir: locate_cli()}
+    {:ok, cli_dir: CliSigner.locate()}
   end
 
   test "Env wallet signs an ERC-3009 digest identically to the reference CLI", %{cli_dir: cwd} do
     unless cwd do
-      flunk("CLI not available; set RIDDLER_CLI_DIR or run with --exclude cli_signer")
+      flunk(
+        "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+      )
     end
 
     # acp-buyer-auth signs an ERC-3009 ReceiveWithAuthorization digest with
@@ -64,27 +67,6 @@ defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
 
     # The recovery byte is the on-chain-canonical 27/28, never the raw 0/1.
     assert :binary.last(sig) in [27, 28]
-  end
-
-  # Resolve the CLI checkout: explicit env var, then the two common dev layouts
-  # (beside the raxol repo under a shared parent, or inside it). Returns nil when
-  # absent so the test flunks with a clear message under `--only cli_signer`.
-  # The CLI repo (axol-io/riddler-sdk, formerly riddler-client) became a
-  # monorepo and its entry point moved to packages/sdk-taker/src/cli.ts.
-  # Probing for the retired src/index.js + src/acp.js answered nil even with
-  # RIDDLER_CLI_DIR set correctly, which silently retired this oracle: the test
-  # is :cli_signer-tagged and excluded by default, so the flunk below was never
-  # reached. Probe the entry point CliSigner actually spawns.
-  defp locate_cli do
-    [
-      System.get_env("RIDDLER_CLI_DIR"),
-      Path.expand("../../../../../../../riddler-sdk", __DIR__),
-      Path.expand("../../../../../../riddler-sdk", __DIR__),
-      Path.expand("../../../../../../../riddler-client", __DIR__),
-      Path.expand("../../../../../../riddler-client", __DIR__)
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.find(&File.exists?(Path.join([&1, "packages", "sdk-taker", "src", "cli.ts"])))
   end
 
   defp decode_hex("0x" <> hex), do: Base.decode16(hex, case: :mixed)

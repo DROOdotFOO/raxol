@@ -552,6 +552,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tmux
 
+      # raxol_payments' EIP-712 conformance vectors and its vendored fee oracle
+      # (priv/fee-oracle/schedule.json) are held to ONE published @xochi/spec
+      # release, pinned in test/fixtures/XOCHI_SPEC_VERSION -- never a sibling
+      # checkout. Under CI both suites fail when these variables are unset, so a
+      # broken fetch is a red cell rather than a green run over zero vectors.
+      - name: Set up Node (pinned @xochi/spec)
+        if: matrix.package == 'raxol_payments'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Fetch pinned @xochi/spec
+        if: matrix.package == 'raxol_payments'
+        working-directory: packages/raxol_payments
+        run: |
+          version="$(cat test/fixtures/XOCHI_SPEC_VERSION)"
+          dest="$RUNNER_TEMP/xochi-spec"
+          mkdir -p "$dest"
+          npm pack "@xochi/spec@${version}" --pack-destination "$dest"
+          tar -xzf "$dest/xochi-spec-${version}.tgz" -C "$dest"
+          test -f "$dest/package/conformance/conformance.json"
+          test -f "$dest/package/fee/schedule.json"
+          echo "XOCHI_SPEC_DIR=$dest/package" >> "$GITHUB_ENV"
+          echo "CONFORMANCE_FIXTURE_PATH=$dest/package/conformance/conformance.json" >> "$GITHUB_ENV"
+
       # `--check-locked` rather than a bare `deps.get`: a plain fetch REWRITES
       # a stale mix.lock in place and carries on, so a package whose committed
       # lock does not match what resolution produces builds green in CI and
