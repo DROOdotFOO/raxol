@@ -316,8 +316,9 @@ defmodule Raxol.REPL.SandboxTest do
 
       assert {:error, _} = Sandbox.check(~s|Jason.decode(j)|, :strict)
 
-      # Encoding creates no atoms and stays available.
-      assert :ok = Sandbox.check(~s|Jason.encode!(%{a: 1})|, :strict)
+      # Encoding creates no atoms and stays available as iodata. `encode!`
+      # itself is refused at :strict for its size, not its atoms (below).
+      assert :ok = Sandbox.check(~s|Jason.encode_to_iodata!(%{a: 1})|, :strict)
     end
   end
 
@@ -474,6 +475,208 @@ defmodule Raxol.REPL.SandboxTest do
 
     test "none still allows the capture form" do
       assert :ok = Sandbox.check("(&apply/3).(:os, :cmd, [~c\"id\"])", :none)
+    end
+  end
+
+  # `:max_heap_size` is checked at GC, so a builtin that sizes its whole
+  # result up front allocates before the kill, and one the allocator cannot
+  # satisfy aborts the node (`String.duplicate("x", 10**15)` did, through
+  # the served evaluator). #1231 is the real fix; these pin the denylist.
+  describe ":strict refuses single-allocation amplifiers" do
+    test "flatteners are refused in every form" do
+      for code <- [
+            "IO.iodata_to_binary(l)",
+            "Enum.join(l, \",\")",
+            "Enum.map_join(l, \",\", & &1)",
+            "Jason.encode!(l)",
+            "Jason.encode(l)",
+            "l |> Enum.join()",
+            "Enum.map([l], &IO.iodata_to_binary/1)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "repeaters pass only when what they multiply is literal and small" do
+      for code <- [
+            ~S|String.duplicate("-", 20)|,
+            ~S|String.pad_leading("42", 5, "0")|,
+            ~S|String.pad_trailing("a", 3)|,
+            "Tuple.duplicate(0, 4)",
+            # Padding and tuples do not multiply their subject or data, so
+            # those may be computed, and the piped forms stay available.
+            ~S|String.pad_leading(Integer.to_string(7), 3, "0")|,
+            ~S|name = "ab"; String.pad_trailing(name, 10)|,
+            ~S{Integer.to_string(5) |> String.pad_leading(3, "0")},
+            "x = :a; Tuple.duplicate(x, 4)",
+            # 200 KB of one-byte string is under the 1 MiB bound.
+            ~S|String.duplicate("-", 200_000)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            ~S|String.duplicate("x", 1_000_000_000_000_000)|,
+            ~S|String.pad_leading("", 1_000_000_000_000_000)|,
+            "Tuple.duplicate(0, 16_000_000)",
+            # 2 KB x 1 000 is over the bound even though each part is small.
+            "String.duplicate(\"#{String.duplicate("x", 2048)}\", 1_000)",
+            ~S|n = 5; String.duplicate("x", n)|,
+            ~S|s = "x"; String.duplicate(s, 5)|,
+            ~S|String.duplicate("x", 2 * 5)|,
+            ~S|n = 5; String.pad_leading("x", n)|,
+            ~S|p = "0"; String.pad_leading("x", 5, p)|,
+            # Both pipe forms leave the multiplied subject out of the call.
+            ~S{s = "x"; s |> String.duplicate(5)},
+            ~S{s = "x"; Kernel.|>(s, String.duplicate(5))},
+            ~S|f = &String.duplicate/2; f.("x", 5)|,
+            ~S|Enum.map([5], &String.duplicate("x", &1))|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "replacements must be short literals" do
+      for code <- [
+            ~S|String.replace(s, " ", "_")|,
+            ~S{s |> String.replace("\n", "<br>")},
+            ~S|String.replace(s, "a", "b", global: false)|,
+            ~S|Regex.replace(~r/\s+/, s, " ")|,
+            ~S|String.replace_leading(s, "0", "")|,
+            ~S|String.replace(s, "a", "b", [])|,
+            ~S|Regex.replace(~r/a/, s, "x", [])|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            ~S|String.replace(s, "a", r)|,
+            ~S|String.replace(s, "a", "123456789")|,
+            ~S|String.replace_leading(s, "a", r)|,
+            ~S|String.replace_trailing(s, "a", r)|,
+            ~S|Regex.replace(~r/./, s, fn m -> m end)|,
+            ~S|f = &String.replace/3; f.(s, "a", r)|,
+            ~S|String.replace(s, "a", "b", opts)|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      # `insert_replaced:` inserts the match once per listed position.
+      assert {:error, [message]} =
+               Sandbox.check(
+                 ~S|String.replace(s, s, "", insert_replaced: List.duplicate(0, 64))|,
+                 :strict
+               )
+
+      assert message =~ "options other than :global"
+    end
+
+    test "collecting is decided by the target, never the source" do
+      for code <- [
+            "Enum.into(l, %{})",
+            "l |> Enum.into([])",
+            "Enum.into(l, MapSet.new())",
+            "Enum.into(l, MapSet.new([1]))",
+            "l |> Enum.into(%{}, fn x -> {x, x} end)",
+            "for x <- l, into: %{}, do: {x, x}",
+            "for x <- l, into: MapSet.new(), do: x",
+            "for x <- l, do: x",
+            # A source written out in full is bounded by the source text.
+            ~S|Enum.into([a: 1], m)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            ~S|Enum.into(l, "")|,
+            ~S|acc = ""; Enum.into(l, acc)|,
+            # A literal SOURCE list can still hold references to big binaries.
+            ~S|Enum.into([b, b, b], "")|,
+            ~S<Enum.into(["" | l], "")>,
+            # A placeholder is a value, not the piped form's transform.
+            ~S|f = &Enum.into([b, b, b], &1); f.("")|,
+            # A transform grows each element of even a literal source.
+            ~S|Enum.into([1, 2], "", fn _ -> b end)|,
+            ~S{l |> Enum.into("", fn x -> x end)},
+            ~S{l |> Stream.into("") |> Stream.run()},
+            ~S|for x <- l, into: "", do: x|,
+            # A map with a `__struct__` key dispatches to that module's impl.
+            ~S|Enum.into(["x"], %{__struct__: File.Stream, path: "p"})|,
+            ~S<Enum.into(["x"], %{m | a: 1})>
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "other flatteners are refused unless their input is written out" do
+      for code <- [
+            "IO.binwrite(l)",
+            "List.to_string(l)",
+            "IO.chardata_to_string(l)",
+            ~S{l |> Enum.join(", ")},
+            ~S|Enum.map_join(["a"], ",", fn _ -> b end)|,
+            ~S|Calendar.strftime(d, "%A", day_of_week_names: f)|,
+            ~S|fmt = "%Y"; Calendar.strftime(d, fmt)|,
+            # `%Z` copies the input map's `:zone_abbr`, any binary.
+            ~S|Calendar.strftime(%{zone_abbr: z}, "%Z%Z%Z")|,
+            ~S|Calendar.strftime(d, "%-10Z")|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      for code <- [
+            ~S|List.to_string(~c"abc")|,
+            ~S|List.to_string(["a", ?b])|,
+            ~S|IO.chardata_to_string(["a", ?b])|,
+            ~S|Enum.join(["a", "b"], ", ")|,
+            ~S|Calendar.strftime(d, "%Y-%m-%d")|,
+            # `%%` is an escaped percent: this prints the text "100%Z".
+            ~S|Calendar.strftime(d, "100%%Z")|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "bitstring segments must be literal and bounded" do
+      for code <- [
+            "<<1, 2, 3>>",
+            "<<0::size(8)>>",
+            "<<0::16>>",
+            "<<\"ab\"::binary-size(2)>>",
+            "s = \"ab\"; <<s::binary, \"c\">>"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            "n = 8; <<0::size(n)>>",
+            "<<0::size(8_000_000_000)>>",
+            "<<0::size(100_000)-unit(256)>>",
+            "u = 8; <<0::size(1)-unit(u)>>",
+            "<<0::8_000_000_000>>",
+            # `size*unit` shorthand.
+            "<<0::1_000_000_000*256>>",
+            "n = 8; <<0::n*8>>"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    # erl_eval appends segments one at a time, so the cap sees these grow.
+    test "interpolation and <> chains are not limited by part count" do
+      many = Enum.map_join(1..20, "", fn _ -> "\#{b}" end)
+      assert :ok = Sandbox.check(~s|"#{many}"|, :strict)
+
+      assert :ok =
+               Sandbox.check(
+                 Enum.map_join(1..20, " <> ", fn _ -> "b" end),
+                 :strict
+               )
+    end
+
+    test ":standard is unaffected" do
+      assert :ok = Sandbox.check("Enum.join(l, \",\")", :standard)
+      assert :ok = Sandbox.check(~S|n = 5; String.duplicate("x", n)|, :standard)
     end
   end
 end

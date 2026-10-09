@@ -96,6 +96,42 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert reason =~ "memory limit"
     end
 
+    # A binary over 64 bytes lives off-heap (refc), and `:max_heap_size`
+    # ignores those unless `include_shared_binaries` is set: without it this
+    # built a 50 MB binary under an 8 MB cap and returned `{:ok, 50000000}`.
+    test "counts off-heap binaries against the heap budget" do
+      eval = Evaluator.new()
+
+      assert {:error, reason, ^eval} =
+               Evaluator.eval(
+                 eval,
+                 ~S|byte_size(String.duplicate("x", 50_000_000))|,
+                 max_heap_bytes: 8 * 1024 * 1024
+               )
+
+      assert reason =~ "memory limit"
+    end
+
+    # Past results live in the evaluator's history. If the evaluation closure
+    # captures them, counting shared binaries charges every earlier result to
+    # each new eval: 33 results of 250 KB locked an 8 MB session out of even
+    # `1 + 1`. 60 results is 15 MB, well past the cap if they were charged.
+    test "past results in history do not count against the next eval" do
+      eval =
+        Enum.reduce(1..60, Evaluator.new(), fn _, eval ->
+          assert {:ok, _result, eval} =
+                   Evaluator.eval(eval, ~S|String.duplicate("x", 250_000)|,
+                     max_heap_bytes: 8 * 1024 * 1024,
+                     max_result_bytes: 1_000_000
+                   )
+
+          eval
+        end)
+
+      assert {:ok, %{value: 2}, _eval} =
+               Evaluator.eval(eval, "1 + 1", max_heap_bytes: 8 * 1024 * 1024)
+    end
+
     test "rejects oversized results before copying them to the owner" do
       eval = Evaluator.new()
 

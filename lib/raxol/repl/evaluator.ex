@@ -24,7 +24,15 @@ defmodule Raxol.REPL.Evaluator do
 
     * `:timeout` -- how long the single evaluation process may run
     * `:max_heap_bytes` -- that process's heap, via `:max_heap_size` with
-      `kill: true`
+      `kill: true` and `include_shared_binaries: true`, so off-heap (refc)
+      binaries count too (without it `String.duplicate("x", 200_000_000)`
+      returned under ReplDemo's 8 MB cap). The VM checks this cap at garbage
+      collection, so it bounds what the process HOLDS, not one allocation:
+      a builtin that allocates its whole result first
+      (`IO.iodata_to_binary/1` over a large iolist, `Tuple.duplicate/2`)
+      builds it before the kill, and one the allocator cannot satisfy
+      aborts the node. `Raxol.REPL.Sandbox` refuses the ones measured so
+      far at `:strict`; only OS-level limits close the class (issue #1231)
     * `:max_result_bytes` -- the value plus bindings plus output it may hand
       back (refused when over), and the error message (truncated when over)
     * `Raxol.REPL.CaptureIO`'s limit -- bytes of captured output retained, and
@@ -128,14 +136,20 @@ defmodule Raxol.REPL.Evaluator do
     # attributing one expression's output to another.
     tag = make_ref()
 
+    # Pulled out before the spawn so the closure copies only what the
+    # evaluation needs. Capturing `evaluator` copied its whole `history` into
+    # the capped process, and with shared binaries counted, a session's past
+    # results ate its heap budget until every eval, even `1 + 1`, was killed.
+    %{bindings: bindings, env: env} = evaluator
+
     {pid, ref} =
       :erlang.spawn_opt(
         fn ->
           result =
             eval_with_capture(
               full_code,
-              evaluator.bindings,
-              evaluator.env,
+              bindings,
+              env,
               max_result_bytes,
               timeout
             )
@@ -147,7 +161,13 @@ defmodule Raxol.REPL.Evaluator do
         end,
         [
           :monitor,
-          {:max_heap_size, %{size: heap_words, kill: true, error_logger: false}}
+          {:max_heap_size,
+           %{
+             size: heap_words,
+             kill: true,
+             error_logger: false,
+             include_shared_binaries: true
+           }}
         ]
       )
 
@@ -180,7 +200,8 @@ defmodule Raxol.REPL.Evaluator do
   # value would be a wrong answer, but a truncated `Exception.format/3` string
   # is still the error, and its useful part (kind, message head) is at the
   # front. Without this clause `raise String.duplicate("x", 20_000_000)` hands
-  # back a payload 76x the cap -- a refc binary, so `:max_heap_size` misses it.
+  # back a payload 76x the cap: 20 MB sits under the default 64 MB heap cap,
+  # so nothing kills it before it is copied to the owner.
   defp bound_result({:error, message}, max_result_bytes)
        when is_binary(message) and byte_size(message) > max_result_bytes do
     {:error,
