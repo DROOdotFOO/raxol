@@ -31,7 +31,8 @@ defmodule Raxol.REPL.Evaluator do
       a builtin that allocates its whole result first
       (`IO.iodata_to_binary/1` over a large iolist, `Tuple.duplicate/2`)
       builds it before the kill, and one the allocator cannot satisfy
-      aborts the node. Only OS-level limits bound that (issue #1033)
+      aborts the node. `Raxol.REPL.Sandbox` refuses the ones measured so
+      far at `:strict`; only OS-level limits close the class (issue #1231)
     * `:max_result_bytes` -- the value plus bindings plus output it may hand
       back (refused when over), and the error message (truncated when over)
     * `Raxol.REPL.CaptureIO`'s limit -- bytes of captured output retained, and

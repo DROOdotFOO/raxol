@@ -316,8 +316,9 @@ defmodule Raxol.REPL.SandboxTest do
 
       assert {:error, _} = Sandbox.check(~s|Jason.decode(j)|, :strict)
 
-      # Encoding creates no atoms and stays available.
-      assert :ok = Sandbox.check(~s|Jason.encode!(%{a: 1})|, :strict)
+      # Encoding creates no atoms and stays available as iodata. `encode!`
+      # itself is refused at :strict for its size, not its atoms (below).
+      assert :ok = Sandbox.check(~s|Jason.encode_to_iodata!(%{a: 1})|, :strict)
     end
   end
 
@@ -474,6 +475,91 @@ defmodule Raxol.REPL.SandboxTest do
 
     test "none still allows the capture form" do
       assert :ok = Sandbox.check("(&apply/3).(:os, :cmd, [~c\"id\"])", :none)
+    end
+  end
+
+  # `:max_heap_size` is checked at GC, so a builtin that sizes its whole
+  # result up front allocates before the kill, and one the allocator cannot
+  # satisfy aborts the node (`String.duplicate("x", 10**15)` did, through
+  # the served evaluator). #1231 is the real fix; these pin the denylist.
+  describe ":strict refuses single-allocation amplifiers" do
+    test "flatteners are refused in every form" do
+      for code <- [
+            "IO.iodata_to_binary(l)",
+            "Enum.join(l, \",\")",
+            "Enum.map_join(l, \",\", & &1)",
+            "Jason.encode!(l)",
+            "Jason.encode(l)",
+            "l |> Enum.join()",
+            "Enum.map([l], &IO.iodata_to_binary/1)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "repeaters pass only with small literal arguments" do
+      for code <- [
+            ~S|String.duplicate("-", 20)|,
+            ~S|String.pad_leading("42", 5, "0")|,
+            ~S|String.pad_trailing("a", 3)|,
+            "Tuple.duplicate(0, 4)"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            ~S|String.duplicate("x", 1_000_000_000_000_000)|,
+            ~S|String.pad_leading("", 1_000_000_000_000_000)|,
+            "Tuple.duplicate(0, 16_000_000)",
+            # 2 KB x 1 000 is over the bound even though each part is small.
+            "String.duplicate(\"#{String.duplicate("x", 2048)}\", 1_000)",
+            ~S|n = 5; String.duplicate("x", n)|,
+            ~S|s = "x"; String.duplicate(s, 5)|,
+            ~S|String.duplicate("x", 2 * 5)|,
+            ~S{s = "x"; s |> String.duplicate(5)},
+            ~S|f = &String.duplicate/2; f.("x", 5)|,
+            ~S|Enum.map([5], &String.duplicate("x", &1))|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "bitstring segments must be literal and bounded" do
+      for code <- [
+            "<<1, 2, 3>>",
+            "<<0::size(8)>>",
+            "<<0::16>>",
+            "<<\"ab\"::binary-size(2)>>",
+            "s = \"ab\"; <<s::binary, \"c\">>"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      for code <- [
+            "n = 8; <<0::size(n)>>",
+            "<<0::size(8_000_000_000)>>",
+            "<<0::size(100_000)-unit(256)>>",
+            "u = 8; <<0::size(1)-unit(u)>>",
+            "<<0::8_000_000_000>>"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "the chunked builders stay available" do
+      for code <- [
+            "List.to_string(l)",
+            "IO.chardata_to_string(l)",
+            ~S|"#{l}"|,
+            "inspect(l)"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test ":standard is unaffected" do
+      assert :ok = Sandbox.check("Enum.join(l, \",\")", :standard)
+      assert :ok = Sandbox.check(~S|n = 5; String.duplicate("x", n)|, :standard)
     end
   end
 end

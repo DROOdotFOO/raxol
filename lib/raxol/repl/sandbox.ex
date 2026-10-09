@@ -158,6 +158,49 @@ defmodule Raxol.REPL.Sandbox do
 
   @denied_erlang_modules [:file, :net_adm, :gen_tcp, :gen_udp, :httpc, :ssl]
 
+  # Builtins that size their WHOLE result before a garbage collection can
+  # check the evaluation's `:max_heap_size`, so that cap only fires after the
+  # allocation has landed -- and an allocation the allocator cannot satisfy
+  # aborts the node, not the evaluation. Measured under ReplDemo's 8 MB cap,
+  # each one `:ok` here before this list existed:
+  #
+  #   * `String.duplicate/2`, `String.pad_leading/2,3` with a count of 10^15:
+  #     VM abort, `binary_alloc: Cannot allocate`
+  #   * `IO.iodata_to_binary/1`, `Enum.join/1,2`, `Enum.map_join/2,3`,
+  #     `Jason.encode!/1` over 500 references to one 2 MB binary: ~1.1 GB
+  #   * `Tuple.duplicate/2` at the 16M maximum arity: ~230 MB
+  #
+  # `List.to_string/1`, `IO.chardata_to_string/1`, string interpolation and
+  # `inspect/2` build the same output in chunks the cap does see, so they
+  # stay allowed and the flatteners' messages point at them.
+  #
+  # This is a denylist of what has been MEASURED, so it narrows the abort path
+  # rather than closing it; issue #1231 moves served evaluation into an
+  # OS-limited peer node, which closes the class.
+  @strict_flatteners [
+    {IO, :iodata_to_binary},
+    {Enum, :join},
+    {Enum, :map_join},
+    {Jason, :encode},
+    {Jason, :encode!}
+  ]
+
+  # Size comes from a count argument, so these stay allowed when every
+  # argument is a literal and the result is provably small (`String.duplicate
+  # ("-", 20)` is ordinary REPL code). Anything the checker cannot size --
+  # a variable, an expression, a capture, a pipe that hides the subject --
+  # is refused.
+  @strict_repeaters [
+    {String, :duplicate},
+    {String, :pad_leading},
+    {String, :pad_trailing},
+    {Tuple, :duplicate}
+  ]
+
+  # Largest result a literal repeater or bitstring segment may build: far
+  # under any served heap cap, far over what REPL code writes by hand.
+  @max_strict_literal_bytes 1_048_576
+
   @doc """
   Checks code for safety violations at the given strictness level.
 
@@ -210,7 +253,7 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_node(
-         {{:., _, [{:__aliases__, _, mod_parts}, func]}, _, _args},
+         {{:., _, [{:__aliases__, _, mod_parts}, func]}, _, args},
          :strict
        ) do
     case resolve_alias(mod_parts) do
@@ -219,7 +262,8 @@ defmodule Raxol.REPL.Sandbox do
 
       {:ok, module} ->
         if module in @allowed_strict_modules do
-          check_denied_call(module, func)
+          check_denied_call(module, func) ++
+            check_strict_size(module, func, args)
         else
           [
             "#{inspect(module)}.#{func} is not allowed (module not in whitelist)"
@@ -228,10 +272,10 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  defp check_node({{:., _, [mod, func]}, _, _args}, :strict)
+  defp check_node({{:., _, [mod, func]}, _, args}, :strict)
        when is_atom(mod) do
     if mod in @allowed_strict_modules do
-      check_denied_call(mod, func)
+      check_denied_call(mod, func) ++ check_strict_size(mod, func, args)
     else
       ["#{inspect(mod)}.#{func} is not allowed (module not in whitelist)"]
     end
@@ -363,6 +407,33 @@ defmodule Raxol.REPL.Sandbox do
     ["#{kind} is not allowed (runtime module definition)"]
   end
 
+  # A pipe moves the subject OUT of the call's arguments, so the repeater
+  # check would size `big |> String.duplicate(1_000)` without its subject --
+  # and the subject can be anything the evaluation holds. The call node is
+  # still walked on its own; this clause adds only what the pipe hides.
+  defp check_node(
+         {:|>, _, [_subject, {{:., _, [mod, func]}, _, _args}]},
+         :strict
+       ) do
+    with {:ok, module} <- remote_module(mod),
+         true <- {module, func} in @strict_repeaters do
+      [
+        "piping into #{inspect(module)}.#{func} is not allowed at :strict " <>
+          "(the subject cannot be sized; pass literal arguments directly)"
+      ]
+    else
+      _ -> []
+    end
+  end
+
+  # `<<0::size(n)>>` allocates `n` bits in one step: 8 billion reached a
+  # ~2.1 GB footprint under an 8 MB cap. Match patterns have the same shape
+  # and are refused with construction, since the checker cannot tell a
+  # pattern from a value without the surrounding expression.
+  defp check_node({:<<>>, _, segments}, :strict) when is_list(segments) do
+    Enum.flat_map(segments, &check_segment_size/1)
+  end
+
   defp check_node({kind, _, args}, level)
        when level in [:standard, :strict] and is_atom(kind) and is_list(args) do
     if spawn_function?(kind) do
@@ -411,6 +482,124 @@ defmodule Raxol.REPL.Sandbox do
       _dynamic -> "_"
     end)
   end
+
+  defp remote_module({:__aliases__, _, mod_parts}) do
+    case resolve_alias(mod_parts) do
+      {:ok, module} -> {:ok, module}
+      {:unknown, _name} -> :error
+    end
+  end
+
+  defp remote_module(mod) when is_atom(mod), do: {:ok, mod}
+  defp remote_module(_mod), do: :error
+
+  defp check_strict_size(module, func, args) do
+    cond do
+      {module, func} in @strict_flatteners ->
+        [
+          "#{inspect(module)}.#{func} is not allowed at :strict (it flattens " <>
+            "its whole input in one allocation the heap cap only sees " <>
+            "afterwards; List.to_string/1 builds the same text in checked chunks)"
+        ]
+
+      {module, func} in @strict_repeaters ->
+        check_literal_repeat(module, func, args)
+
+      true ->
+        []
+    end
+  end
+
+  defp check_literal_repeat(module, func, args) do
+    case literal_result_bytes(args) do
+      {:ok, bytes} when bytes <= @max_strict_literal_bytes ->
+        []
+
+      {:ok, _bytes} ->
+        [
+          "#{inspect(module)}.#{func} is not allowed at :strict beyond " <>
+            "#{@max_strict_literal_bytes} bytes of result"
+        ]
+
+      :error ->
+        [
+          "#{inspect(module)}.#{func} is not allowed at :strict unless every " <>
+            "argument is a literal (its result must be sized before it runs)"
+        ]
+    end
+  end
+
+  # An upper bound from literal arguments: the count times
+  # the widest literal, at least 8 bytes (one tuple slot). No arguments is
+  # the capture form, `&String.duplicate/2`, which can be called with any.
+  defp literal_result_bytes([]), do: :error
+
+  defp literal_result_bytes(args) do
+    if Enum.all?(args, &literal?/1) do
+      # Each repeater takes exactly one count; the other integer, if any, is
+      # data (`Tuple.duplicate(0, n)`), so the largest is the count.
+      count = args |> Enum.filter(&is_integer/1) |> Enum.max(fn -> 1 end)
+      width = args |> Enum.map(&literal_width/1) |> Enum.max()
+      {:ok, count * max(width, 8)}
+    else
+      :error
+    end
+  end
+
+  defp literal?(term)
+       when is_integer(term) or is_float(term) or is_binary(term) or
+              is_atom(term),
+       do: true
+
+  defp literal?(term) when is_list(term), do: Enum.all?(term, &is_integer/1)
+  defp literal?(_term), do: false
+
+  defp literal_width(term) when is_binary(term), do: byte_size(term)
+  defp literal_width(term) when is_list(term), do: length(term) * 4
+  defp literal_width(_term), do: 8
+
+  defp check_segment_size({:"::", _, [_value, spec]}) do
+    case collect_segment_size(spec, {nil, nil}) do
+      {nil, _unit} ->
+        []
+
+      {size, unit}
+      when is_integer(size) and (is_integer(unit) or is_nil(unit)) ->
+        # Without an explicit unit, assume `binary`'s 8: an overestimate for
+        # integer and bits segments, never an underestimate.
+        if size * (unit || 8) <= @max_strict_literal_bytes * 8 do
+          []
+        else
+          [
+            "bitstring segment over #{@max_strict_literal_bytes} bytes " <>
+              "is not allowed at :strict"
+          ]
+        end
+
+      _computed ->
+        [
+          "bitstring segment with a computed size or unit is not allowed " <>
+            "at :strict (it cannot be sized before it runs)"
+        ]
+    end
+  end
+
+  defp check_segment_size(_segment), do: []
+
+  # A segment spec is a `-` chain of types and modifiers: `binary-size(n)`,
+  # `size(4)-unit(8)`, or a bare integer, which is shorthand for `size/1`.
+  defp collect_segment_size({:-, _, [left, right]}, acc),
+    do: collect_segment_size(right, collect_segment_size(left, acc))
+
+  defp collect_segment_size(n, {_size, unit}) when is_integer(n), do: {n, unit}
+
+  defp collect_segment_size({:size, _, [n]}, {_size, unit}),
+    do: {if(is_integer(n), do: n, else: :computed), unit}
+
+  defp collect_segment_size({:unit, _, [u]}, {size, _unit}),
+    do: {size, if(is_integer(u), do: u, else: :computed)}
+
+  defp collect_segment_size(_type, acc), do: acc
 
   defp check_denied_call(module, func) do
     case Map.fetch(@denied_process_modules, module) do
