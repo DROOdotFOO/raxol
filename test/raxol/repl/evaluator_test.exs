@@ -362,14 +362,11 @@ defmodule Raxol.REPL.EvaluatorTest do
     # Driven through `CaptureIO` directly with the IO protocol, because no
     # Elixir expression makes `io_lib` hang: the wedge is a property of the
     # expander, and the request shape is what `:io.format/2` sends.
-    # The `:DOWN` below is a scheduling event, so the window is a hang
-    # detector rather than a deadline: `@tag timeout:` is what fails a real
-    # wedge, and a loaded runner that takes two seconds to deliver a monitor
-    # message is not the bug under test (it failed at the suite's 1s default
-    # on macos-latest in run 35517528499).
+    # Every wait below is a hang detector, not a deadline: `@tag timeout:`
+    # is what fails a real wedge, so each window is generous enough that a
+    # loaded runner cannot trip it.
     @tag timeout: 30_000
     test "an expander that never answers does not wedge the capture server" do
-      before = capture_server_count()
       test_pid = self()
 
       owner =
@@ -381,7 +378,7 @@ defmodule Raxol.REPL.EvaluatorTest do
           send(
             capture,
             {:io_request, self(), reply_as,
-             {:put_chars, :unicode, __MODULE__, :never_answers, [:x]}}
+             {:put_chars, :unicode, __MODULE__, :never_answers, [test_pid]}}
           )
 
           receive do
@@ -395,19 +392,44 @@ defmodule Raxol.REPL.EvaluatorTest do
           end
         end)
 
-      assert_receive {:capture, capture}
+      # Unlinked, so a failed assertion would otherwise leave the owner and
+      # its wedged capture alive for the rest of the run.
+      on_exit(fn -> Process.exit(owner, :kill) end)
+
+      assert_receive {:capture, capture}, 10_000
+
+      # The monitor goes up BEFORE the `contents/1` call. ERTS does not send
+      # a monitor request at once: it holds it until this process next
+      # signals the same pid or is scheduled out. Taken after `contents/1`,
+      # it was still held when `Process.exit/2` went to the owner (a
+      # different pid, so sent at once); the owner's `:DOWN` stopped the
+      # capture first and the monitor answered `:noproc` (runs 35517528499
+      # and 37517253199). `contents/1` is a call to the capture, which sends
+      # the held request ahead of it, so its reply proves the monitor is in.
+      ref = Process.monitor(capture)
+
+      # The expander is killed at `:mfa_timeout`, not left blocked. It may
+      # already be dead when the monitor lands; `:noproc` proves that too.
+      assert_receive {:expander, expander}, 10_000
+      expander_ref = Process.monitor(expander)
+
+      assert_receive {:DOWN, ^expander_ref, :process, ^expander,
+                      expander_reason},
+                     10_000
+
+      assert expander_reason in [:killed, :noproc]
 
       # The write is answered rather than hanging, and it is refused: the
       # unexpanded text is not in the buffer, and the capture says so.
-      assert_receive {:io_reply, :ok}
+      assert_receive {:io_reply, :ok}, 10_000
       assert CaptureIO.contents(capture) == {"", true}
 
       # And the server is still a server: it answers, and it still goes when
-      # its owner does.
-      ref = Process.monitor(capture)
-      Process.exit(owner, :brutal_kill)
-      assert_receive {:DOWN, ^ref, :process, ^capture, :normal}, 10_000
-      assert capture_server_count() == before
+      # its owner does. Any reason is matched so a wrong one fails at once
+      # and shows itself, rather than waiting out the window.
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^capture, reason}, 10_000
+      assert reason == :normal
     end
 
     # Bounding ONE wedge is not enough. Evaluated code can read the capture
@@ -426,7 +448,7 @@ defmodule Raxol.REPL.EvaluatorTest do
         send(
           capture,
           {:io_request, self(), reply_as,
-           {:put_chars, :unicode, __MODULE__, :never_answers, [:x]}}
+           {:put_chars, :unicode, __MODULE__, :never_answers, [self()]}}
         )
 
         {us, :ok} =
@@ -485,7 +507,10 @@ defmodule Raxol.REPL.EvaluatorTest do
     end
 
     # Public because the capture applies it by module/function/arguments.
-    def never_answers(_arg) do
+    # Reports its own pid first, so a test can watch the capture kill it.
+    def never_answers(report_to) do
+      send(report_to, {:expander, self()})
+
       receive do
         :never -> :never
       end
