@@ -879,11 +879,15 @@ jobs:
           name: coverage-integration
           path: cover/integration.coverdata
 
+  # The main job runs everything except `:property` (see test-unit), so this
+  # job is the only place root-suite properties run. It is not gated on
+  # `should-run-heavy`: that is set only for mix.exs, mix.lock and lib/
+  # changes, so a pull request that edited a property test alone skipped the
+  # one job that runs it (#1224). It takes about a minute.
   test-property:
     name: Property Tests
     needs: [setup, compile]
     runs-on: ubuntu-latest
-    if: needs.setup.outputs.should-run-heavy == 'true'
     
     steps:
       - uses: actions/checkout@v7
@@ -911,12 +915,18 @@ jobs:
 
       - name: Run property tests
         run: |
-          # Run test/property by path, but still honor skip_on_ci: some
-          # properties are wall-clock timing assertions (e.g. parser
-          # sub-quadratic scaling) tagged skip_on_ci precisely because they
-          # flake on shared CI runners. By path alone they would run and
-          # flake; exclude them like every other CI lane.
-          mix test test/property --exclude skip_on_ci
+          # Every property in the root suite, wherever its file lives: by
+          # path (`test/property`) it missed the ~70 defined elsewhere (#908).
+          # Selected by exclusion only. An include filter (`--only property`)
+          # beats every exclude in ExUnit, so it would also run properties
+          # tagged skip_on_ci -- wall-clock assertions (e.g. parser
+          # sub-quadratic scaling) that flake on shared runners -- and
+          # integration ones, which belong to the integration job.
+          mix test \
+            --exclude test_type:test \
+            --exclude test_type:doctest \
+            --exclude integration \
+            --exclude skip_on_ci
         env:
           MIX_TEST_PARTITION: 3
       
@@ -1337,6 +1347,7 @@ jobs:
         release-check,
         compile,
         test-unit,
+        test-property,
         package-tests,
         input-canary,
         buffer-gate,
@@ -1390,6 +1401,14 @@ jobs:
 
           if [ "${{ needs.test-unit.result }}" != "success" ]; then
             echo "❌ Unit tests failed"
+            exit 1
+          fi
+
+          # Properties run only in test-property (test-unit excludes them),
+          # so a red property job must fail this check like a red unit job.
+          if [ "${{ needs.test-property.result }}" != "success" ]; then
+            echo "❌ Property tests failed"
+            echo "   Reproduce: mix test --exclude test_type:test --exclude test_type:doctest --exclude integration --exclude skip_on_ci"
             exit 1
           fi
 
