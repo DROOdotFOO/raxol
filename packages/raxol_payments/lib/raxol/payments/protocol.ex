@@ -11,8 +11,7 @@ defmodule Raxol.Payments.Protocol do
   - `Raxol.Payments.Protocols.X402` -- Coinbase x402 (ERC-3009)
   - `Raxol.Payments.Protocols.MPP` -- Stripe/Tempo Machine Payments Protocol
   - `Raxol.Payments.Protocols.Xochi` -- cross-chain private payments (agent-facing)
-  - `Raxol.Payments.Protocols.Permit2` -- Permit2 `PermitWitnessTransferFrom` signing for Riddler's `/order`
-  - `Raxol.Payments.Protocols.Riddler` -- cross-chain intents (deprecated, delegates to Xochi)
+  - `Raxol.Payments.Protocols.Permit2` -- Permit2 `PermitWitnessTransferFrom` signing for Xochi origin pulls
   """
 
   @type headers :: [{String.t(), String.t()}]
@@ -74,7 +73,6 @@ defmodule Raxol.Payments.Protocol do
   @spec resolve(atom()) :: module()
   def resolve(:x402), do: Raxol.Payments.Protocols.X402
   def resolve(:mpp), do: Raxol.Payments.Protocols.MPP
-  def resolve(:riddler), do: Raxol.Payments.Protocols.Riddler
   def resolve(:xochi), do: Raxol.Payments.Protocols.Xochi
   def resolve(:permit2), do: Raxol.Payments.Protocols.Permit2
 
