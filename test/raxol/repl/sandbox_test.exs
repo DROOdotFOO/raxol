@@ -770,6 +770,65 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
 
+    test "every one-key writer refuses a computed key, direct, piped and captured" do
+      writers = [
+        {"Map.put", 3},
+        {"Map.put_new", 3},
+        {"Map.put_new_lazy", 3},
+        {"Map.replace", 3},
+        {"Map.replace!", 3},
+        {"Map.replace_lazy", 3},
+        {"Map.update", 4},
+        {"Map.update!", 3},
+        {"Map.get_and_update", 3},
+        {"Map.get_and_update!", 3},
+        {"Access.get_and_update", 3}
+      ]
+
+      for {name, arity} <- writers,
+          rest = Enum.map_join(3..arity//1, "", fn _ -> ", v" end),
+          code <- [
+            "#{name}(m, k#{rest})",
+            "m |> #{name}(k#{rest})",
+            "&#{name}/#{arity}"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "a bare name piped into struct/struct! is checked as the call" do
+      # `Kernel.|>` expands `x |> struct` to `struct(x)`.
+      for code <- [
+            ~S"File.Stream |> struct",
+            ~S"File.Stream |> struct!",
+            ~S"Kernel.|>(File.Stream, struct!)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      assert :ok = Sandbox.check(~S"URI |> struct", :strict)
+    end
+
+    test "Access.values and Access.key are refused outside a path too" do
+      # A `__struct__` key planted with a harmless value can be rewritten.
+      for code <- [
+            ~S|Access.values().(:get_and_update, Enum.frequencies(l), g)|,
+            ~S|f = Access.values(); f.(:get_and_update, m, g)|,
+            ~S|&Access.values/0|,
+            ~S|Access.key(k).(:get_and_update, m, g)|,
+            ~S|&Access.key/1|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "a refused computed struct literal does not echo its expression" do
+      code = Enum.reduce(1..50, "%x{}", fn _, acc -> "%f(#{acc}){}" end)
+
+      assert {:error, messages} = Sandbox.check(code, :strict)
+      refute Enum.any?(messages, &(&1 =~ "%f("))
+    end
+
     test "access paths must be literal keys or list selectors" do
       for code <- [
             ~S|put_in(%{}, [:__struct__], File.Stream)|,

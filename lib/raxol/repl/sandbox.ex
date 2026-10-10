@@ -583,7 +583,7 @@ defmodule Raxol.REPL.Sandbox do
       []
     else
       [
-        "%#{Macro.to_string(module)}{} is not allowed at :strict (only " <>
+        "#{struct_literal_name(module)} is not allowed at :strict (only " <>
           "#{Enum.map_join(@strict_struct_modules, ", ", &inspect/1)} structs " <>
           "may be built; a struct dispatches to its module's protocol impls)"
       ]
@@ -908,6 +908,15 @@ defmodule Raxol.REPL.Sandbox do
 
   defp plain_key?(_computed), do: false
 
+  # Only an alias is named in the refusal. Rendering any other module
+  # expression put the whole subtree into the message, and a nested
+  # `%f(%f(...){}){}` repeats that per level: 9.6 KB of input made 2.7 GB.
+  defp struct_literal_name({:__aliases__, _, parts}),
+    do: "%#{alias_name(parts)}{}"
+
+  defp struct_literal_name(_computed),
+    do: "a struct literal of a computed module"
+
   defp struct_module?({:__aliases__, _, parts}) do
     case resolve_alias(parts) do
       {:ok, module} -> module in @strict_struct_modules
@@ -947,6 +956,13 @@ defmodule Raxol.REPL.Sandbox do
 
   defp forge_rule(Kernel, :|>, [lhs, {call, meta, args}]) when is_list(args),
     do: forge_violations({call, meta, [lhs | args]})
+
+  # A bare name on the right is a call too: `Kernel.|>` expands
+  # `File.Stream |> struct` to `struct(File.Stream)`, though the node parses
+  # like a variable (`args` is a context atom).
+  defp forge_rule(Kernel, :|>, [lhs, {call, meta, ctx}])
+       when is_atom(call) and is_atom(ctx),
+       do: forge_violations({call, meta, [lhs]})
 
   # `struct/2` drops a `__struct__` field and `struct!/2` raises on one, so
   # only the module argument can forge.
@@ -1005,6 +1021,13 @@ defmodule Raxol.REPL.Sandbox do
         forge_refusal(module, func, "its key cannot be seen")
     end
   end
+
+  # `Access.values/0` rewrites every value of a map, so a `__struct__` key
+  # planted with a harmless value (`Enum.frequencies([:__struct__])`) can be
+  # set to any module. Outside a path it is called directly, as an access
+  # fun, so the call itself is refused.
+  defp forge_rule(Access, :values, _args),
+    do: forge_refusal(Access, :values, "it rewrites every value of a map")
 
   defp forge_rule(Access, func, args) when func in [:key, :key!] do
     case args do
@@ -1119,7 +1142,8 @@ defmodule Raxol.REPL.Sandbox do
   defp forge_capture?(module, :into, _arity) when module in [Enum, Stream],
     do: true
 
-  defp forge_capture?(Access, func, _arity) when func in [:key, :key!], do: true
+  defp forge_capture?(Access, func, _arity) when func in [:key, :key!, :values],
+    do: true
 
   defp forge_capture?(module, func, _arity),
     do: is_map_key(@struct_key_writers, {module, func})
