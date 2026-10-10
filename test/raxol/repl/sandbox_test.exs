@@ -1146,4 +1146,36 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
   end
+
+  describe "runtime atom creation through syntax is refused" do
+    test "interpolated ~w with the a modifier and computed aliases are refused" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|~w(#{x})a|,
+            ~S|~w"a #{x}"a|,
+            ~S|x.Foo|,
+            ~S|%{x.Foo => 1}|,
+            ~S|Integer.to_string(i).Foo|,
+            ~S|__MODULE__.Foo|
+          ] do
+        assert {:error, _} = Sandbox.check(code, level),
+               "#{code} passed #{level}"
+      end
+    end
+
+    test "literal word lists and literal aliases are unaffected" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|~w(a b)a|,
+            ~S|~w(#{x})|,
+            ~S|~w(#{x})c|,
+            ~S|Foo.Bar|,
+            ~S|%{Foo => 1}|,
+            ~S|Enum.map([1], & &1)|
+          ] do
+        assert :ok = Sandbox.check(code, level),
+               "#{code} was refused at #{level}"
+      end
+    end
+  end
 end
