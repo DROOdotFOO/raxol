@@ -120,6 +120,11 @@ defmodule Raxol.REPL.Sandbox do
     {:global, :whereis_name, "process lookup"}
   ]
 
+  # Every module here is part of the forged-struct guarantee (see the
+  # `%{}` clause of `check_node/2`): none may build a map whose `__struct__`
+  # key holds an atom chosen at runtime. Before adding a module, audit every
+  # function it exports for maps built from runtime keys and values, and add
+  # any such function to the forge rules.
   @allowed_strict_modules [
     Enum,
     Stream,
@@ -884,7 +889,24 @@ defmodule Raxol.REPL.Sandbox do
   defp plain_pair?({key, _value}), do: plain_key?(key)
   defp plain_pair?(_other), do: false
 
-  defp plain_key?(key), do: key != :__struct__ and Macro.quoted_literal?(key)
+  # Only the atom `:__struct__` forges, so the key's top-level form decides:
+  # a literal atom other than it, a number, or a container (string, list,
+  # tuple, map, struct, binary) can never evaluate to that atom, whatever it
+  # holds. Looking no deeper keeps the walk linear: recursing into the key
+  # made nested map keys quadratic, since each nested map rechecks its own.
+  defp plain_key?(:__struct__), do: false
+
+  defp plain_key?(key)
+       when is_atom(key) or is_number(key) or is_binary(key) or is_list(key),
+       do: true
+
+  defp plain_key?({_left, _right}), do: true
+
+  defp plain_key?({form, _, args})
+       when form in [:{}, :%{}, :%, :<<>>, :__aliases__] and is_list(args),
+       do: true
+
+  defp plain_key?(_computed), do: false
 
   defp struct_module?({:__aliases__, _, parts}) do
     case resolve_alias(parts) do

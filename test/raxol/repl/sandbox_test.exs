@@ -802,6 +802,9 @@ defmodule Raxol.REPL.SandboxTest do
     test "plain maps with literal keys are unaffected" do
       for code <- [
             ~S|%{"a" => 1, {1, 2} => 3, b: 2}|,
+            # A container key can never evaluate to `:__struct__`.
+            ~S|%{"#{x}" => 1, {a, b} => 2, [k] => 3}|,
+            ~S|Map.put(m, "#{k}", 1)|,
             ~S|%{} = x = %{a: 1}|,
             ~S'%{state | count: 1}',
             ~S|Map.merge(%{}, %{"x" => 1})|,
