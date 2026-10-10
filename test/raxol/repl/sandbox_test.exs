@@ -1146,4 +1146,96 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
   end
+
+  describe "check/2 input handling and runtime-module sorters" do
+    test "parser warnings on submitted source never reach stderr" do
+      for code <- [~S|Map."put"(m, :a, 1)|, ~S|Map.'put'(m, :a, 1)|] do
+        stderr =
+          ExUnit.CaptureIO.capture_io(:stderr, fn ->
+            for level <- [:standard, :strict], do: Sandbox.check(code, level)
+          end)
+
+        assert stderr == "", "#{code} wrote to stderr: #{inspect(stderr)}"
+      end
+    end
+
+    test "an unknown level raises instead of checking nothing" do
+      for level <- [:Strict, :bogus, "strict", nil] do
+        assert_raise ArgumentError, fn ->
+          Sandbox.check(~S|System.cmd("id", [])|, level)
+        end
+      end
+    end
+
+    test "module directives are still refused at both levels" do
+      for code <- [
+            "import System",
+            "alias :os, as: Enum",
+            "require Logger",
+            "use GenServer"
+          ],
+          level <- [:standard, :strict] do
+        assert {:error, _} = Sandbox.check(code, level),
+               "#{code} passed #{level}"
+      end
+    end
+
+    test "a sorter that could name a runtime module is refused at :strict" do
+      for code <- [
+            ~S|Enum.sort(l, m)|,
+            ~S|Enum.sort(l, {:asc, m})|,
+            ~S|Enum.sort(l, File)|,
+            ~S|Enum.sort(l, {:desc, File})|,
+            ~S|Enum.sort_by(l, &elem(&1, 0), m)|,
+            ~S|Enum.max(l, m)|,
+            ~S|Enum.max(l, m, fn -> nil end)|,
+            ~S|Enum.min(l, m, fn -> nil end)|,
+            ~S|Enum.min_max(l, m)|,
+            ~S|Enum.max_by(l, &elem(&1, 0), m)|,
+            ~S|Enum.min_by(l, &elem(&1, 0), m, fn -> nil end)|,
+            ~S|Enum.min_max_by(l, &elem(&1, 0), m)|,
+            ~S|List.keysort(l, 0, m)|,
+            ~S'l |> Enum.sort(m)',
+            ~S'l |> Enum.max(m, fn -> nil end)',
+            ~S'l |> List.keysort(0, m)',
+            ~S'Kernel.|>(l, Enum.sort(m))',
+            ~S|:"Elixir.Enum".sort(l, m)|,
+            ~S|:"Elixir.List".keysort(l, 0, m)|,
+            ~S|&Enum.sort(&1, m)|,
+            ~S|&Enum.sort(&1, &2)|,
+            ~S|&Enum.sort/2|,
+            ~S|&Enum.sort_by/3|,
+            ~S|&Enum.max/3|,
+            ~S|&List.keysort/3|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict),
+               "#{code} passed :strict"
+      end
+    end
+
+    test "function, direction and whitelisted-module sorters stay allowed" do
+      for code <- [
+            ~S|Enum.sort(l)|,
+            ~S|Enum.sort(l, :desc)|,
+            ~S|Enum.sort(l, &(&1 > &2))|,
+            ~S|Enum.sort(l, fn a, b -> a > b end)|,
+            ~S|Enum.sort(dates, Date)|,
+            ~S|Enum.sort(dates, {:desc, Date})|,
+            ~S|Enum.max(l)|,
+            ~S|Enum.max(l, fn -> 0 end)|,
+            ~S|Enum.max(dates, Date, fn -> nil end)|,
+            ~S|Enum.sort_by(l, & &1[:x], :desc)|,
+            ~S|Enum.max_by(l, &elem(&1, 0), fn -> nil end)|,
+            ~S|List.keysort(l, 0)|,
+            ~S|List.keysort(l, 0, :desc)|,
+            ~S'l |> Enum.sort(:desc)',
+            ~S'l |> Enum.sort_by(&elem(&1, 0), Date)',
+            ~S'l |> Enum.max(fn -> 0 end)',
+            ~S|&Enum.sort/1|,
+            ~S|&Enum.sort_by/2|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+  end
 end
