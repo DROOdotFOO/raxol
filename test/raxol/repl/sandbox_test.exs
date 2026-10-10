@@ -573,12 +573,9 @@ defmodule Raxol.REPL.SandboxTest do
 
     test "collecting is decided by the target, never the source" do
       for code <- [
-            "Enum.into(l, %{})",
             "l |> Enum.into([])",
             "Enum.into(l, MapSet.new())",
             "Enum.into(l, MapSet.new([1]))",
-            "l |> Enum.into(%{}, fn x -> {x, x} end)",
-            "for x <- l, into: %{}, do: {x, x}",
             "for x <- l, into: MapSet.new(), do: x",
             "for x <- l, do: x",
             # A source written out in full is bounded by the source text.
@@ -599,10 +596,7 @@ defmodule Raxol.REPL.SandboxTest do
             ~S|Enum.into([1, 2], "", fn _ -> b end)|,
             ~S{l |> Enum.into("", fn x -> x end)},
             ~S{l |> Stream.into("") |> Stream.run()},
-            ~S|for x <- l, into: "", do: x|,
-            # A map with a `__struct__` key dispatches to that module's impl.
-            ~S|Enum.into(["x"], %{__struct__: File.Stream, path: "p"})|,
-            ~S<Enum.into(["x"], %{m | a: 1})>
+            ~S|for x <- l, into: "", do: x|
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
@@ -677,6 +671,479 @@ defmodule Raxol.REPL.SandboxTest do
     test ":standard is unaffected" do
       assert :ok = Sandbox.check("Enum.join(l, \",\")", :standard)
       assert :ok = Sandbox.check(~S|n = 5; String.duplicate("x", n)|, :standard)
+    end
+  end
+
+  # A map whose `__struct__` key names a module dispatches to that module's
+  # protocol impls, so building one reaches code no call in the source names.
+  describe ":strict refuses forged structs where the map is built" do
+    @file_stream ~S<%{__struct__: File.Stream, path: "/tmp/raxol_probe", modes: [], raw: true, line_or_bytes: :line, node: node()}>
+
+    test "a forged File.Stream bound to a variable is refused (regression)" do
+      # `Enum.into/2` saw only the literal source `["hi"]` and the variable,
+      # so this passed `:strict` and wrote the file.
+      code = "m = #{@file_stream}; Enum.into([\"hi\"], m)"
+
+      assert {:error, [message]} = Sandbox.check(code, :strict)
+      assert message =~ "map key"
+    end
+
+    test "literal and computed __struct__ keys are refused" do
+      for code <- [
+            "Enum.into([\"hi\"], #{@file_stream})",
+            "m = #{@file_stream}; [\"hi\"] |> Enum.into(m)",
+            "m = #{@file_stream}; for x <- [\"hi\"], into: m, do: x",
+            "Enum.count(#{@file_stream})",
+            ~S|"#{%{__struct__: URI, host: "x"}}"|,
+            ~S|k = :__struct__; %{k => File.Stream}|,
+            ~S|k = String.to_existing_atom("__struct__"); %{k => File.Stream}|,
+            ~S'%{u | __struct__: File.Stream}',
+            ~S'%{u | k => 1}',
+            # Patterns share the shape and fail closed.
+            ~S|%{__struct__: s} = %{__struct__: 1}|,
+            ~S|%{^k => v} = m|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "struct literals and struct/2 may only name allowlisted modules" do
+      for code <- [
+            ~S|%File.Stream{path: "/tmp/x"}|,
+            ~S|%Regex{}|,
+            ~S|%mod{} = x|,
+            ~S|struct(File.Stream, path: "/tmp/x")|,
+            ~S|Kernel.struct!(File.Stream, path: "/tmp/x")|,
+            ~S|mod = String.to_existing_atom("Elixir.File.Stream"); struct(mod, [])|,
+            ~S|&struct/2|,
+            ~S|&Kernel.struct!/2|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      for code <- [
+            ~S|%URI{host: "x"}|,
+            ~S'%URI{u | host: "x"}',
+            ~S|%Date{year: 2020, month: 1, day: 1}|,
+            ~S|%MapSet{} = s|,
+            ~S|struct(URI, host: "x")|,
+            # `struct/2` drops a `__struct__` field, so the fields may be computed.
+            ~S|struct(URI, fields)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "calls that write a key from runtime data are refused" do
+      for code <- [
+            ~S|Map.put(%{path: "/tmp/x"}, :__struct__, File.Stream)|,
+            ~S'%{} |> Map.put(:__struct__, File.Stream)',
+            ~S|Map.put(%{}, k, File.Stream)|,
+            ~S|Map.update!(u, :__struct__, fn _ -> File.Stream end)|,
+            ~S|Map.replace(u, :__struct__, File.Stream)|,
+            ~S|Map.get_and_update(%{}, k, f)|,
+            ~S|Access.get_and_update(%{}, :__struct__, f)|,
+            ~S|Map.new([{:__struct__, File.Stream}])|,
+            ~S|Map.new([{k, File.Stream}])|,
+            ~S|Map.new(pairs)|,
+            ~S'pairs |> Map.new()',
+            ~S'Kernel.|>(pairs, Map.new())',
+            ~S|Map.new(l, fn x -> {x, x} end)|,
+            ~S|Map.from_keys(keys, File.Stream)|,
+            # Both maps can be real structs; the resolver picks the value.
+            ~S|Map.merge(%URI{}, %URI{}, fn _, _, _ -> File.Stream end)|,
+            ~S'f = fn _, _, _ -> File.Stream end; u |> Map.merge(u, f)',
+            ~S|Map.intersect(u, u, f)|,
+            ~S|Map.map(u, f)|,
+            ~S|Enum.into([__struct__: File.Stream], %{})|,
+            ~S|Enum.into(pairs, %{})|,
+            ~S|Enum.into(pairs, Map.new())|,
+            ~S|Enum.into([x], %{})|,
+            ~S'l |> Enum.into(%{}, fn x -> {x, x} end)',
+            ~S|Stream.into(pairs, %{})|,
+            ~S|for x <- l, into: %{}, do: {x, x}|,
+            ~S|Enum.reduce(l, %{}, fn {k, v}, acc -> Map.put(acc, k, v) end)|,
+            ~S|&Map.put/3|,
+            ~S|Enum.map(l, &Map.new/1)|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "every one-key writer refuses a computed key, direct, piped and captured" do
+      writers = [
+        {"Map.put", 3},
+        {"Map.put_new", 3},
+        {"Map.put_new_lazy", 3},
+        {"Map.replace", 3},
+        {"Map.replace!", 3},
+        {"Map.replace_lazy", 3},
+        {"Map.update", 4},
+        {"Map.update!", 3},
+        {"Map.get_and_update", 3},
+        {"Map.get_and_update!", 3},
+        {"Access.get_and_update", 3}
+      ]
+
+      for {name, arity} <- writers,
+          rest = Enum.map_join(3..arity//1, "", fn _ -> ", v" end),
+          code <- [
+            "#{name}(m, k#{rest})",
+            "m |> #{name}(k#{rest})",
+            "&#{name}/#{arity}"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "a bare name piped into struct/struct! is checked as the call" do
+      # `Kernel.|>` expands `x |> struct` to `struct(x)`.
+      for code <- [
+            ~S"File.Stream |> struct",
+            ~S"File.Stream |> struct!",
+            ~S"Kernel.|>(File.Stream, struct!)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      assert :ok = Sandbox.check(~S"URI |> struct", :strict)
+    end
+
+    test "Access.values and Access.key are refused outside a path too" do
+      # A `__struct__` key planted with a harmless value can be rewritten.
+      for code <- [
+            ~S|Access.values().(:get_and_update, Enum.frequencies(l), g)|,
+            ~S|f = Access.values(); f.(:get_and_update, m, g)|,
+            ~S|&Access.values/0|,
+            ~S|Access.key(k).(:get_and_update, m, g)|,
+            ~S|&Access.key/1|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "a refused computed struct literal does not echo its expression" do
+      code = Enum.reduce(1..50, "%x{}", fn _, acc -> "%f(#{acc}){}" end)
+
+      assert {:error, messages} = Sandbox.check(code, :strict)
+      refute Enum.any?(messages, &(&1 =~ "%f("))
+    end
+
+    test "access paths must be literal keys or list selectors" do
+      for code <- [
+            ~S|put_in(%{}, [:__struct__], File.Stream)|,
+            ~S|put_in(%{}, [k], File.Stream)|,
+            ~S|put_in(%{}, path, File.Stream)|,
+            ~S'%{} |> put_in([k], File.Stream)',
+            ~S|put_in(m[k], File.Stream)|,
+            ~S|put_in(m[:a][:__struct__], File.Stream)|,
+            # Rewrites every value, including a `__struct__` one.
+            ~S|update_in(m, [Access.values()], fn _ -> File.Stream end)|,
+            ~S|update_in(m, [Access.key(:__struct__)], fn _ -> File.Stream end)|,
+            ~S|get_and_update_in(m, [k], f)|,
+            ~S|&put_in/3|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      for code <- [
+            ~S|put_in(m, [:a, :b], 1)|,
+            ~S|put_in(m[:a]["b"], 1)|,
+            ~S|update_in(m, [:a, Access.all(), :b], &(&1 + 1))|,
+            ~S|update_in(m, [Access.key(:a, %{})], fn x -> x end)|,
+            ~S|get_in(m, [k])|,
+            ~S|pop_in(m, [k])|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "plain maps with literal keys are unaffected" do
+      for code <- [
+            ~S|%{"a" => 1, {1, 2} => 3, b: 2}|,
+            # A container key can never evaluate to `:__struct__`.
+            ~S|%{"#{x}" => 1, {a, b} => 2, [k] => 3}|,
+            ~S|Map.put(m, "#{k}", 1)|,
+            ~S|%{} = x = %{a: 1}|,
+            ~S'%{state | count: 1}',
+            ~S|Map.merge(%{}, %{"x" => 1})|,
+            ~S'a |> Map.merge(b)',
+            ~S|Map.from_struct(%{a: 1})|,
+            ~S|Map.put(m, :a, 1)|,
+            ~S'm |> Map.put("a", 1)',
+            ~S|Map.update(m, :count, 0, &(&1 + 1))|,
+            ~S|Map.get(m, k)|,
+            ~S|Map.delete(m, k)|,
+            ~S|Map.new()|,
+            ~S|Map.new(a: 1, b: x)|,
+            ~S|Map.from_keys([:a, :b], 0)|,
+            ~S|Enum.into([a: x], %{})|,
+            ~S|Enum.frequencies(l)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+  end
+
+  describe ":strict refuses generated and internal functions of allowlisted modules" do
+    test "every __-prefixed function and macro is refused in every call form" do
+      for mod <- Sandbox.strict_modules(),
+          {name, arity} <- mod.__info__(:functions) ++ mod.__info__(:macros),
+          String.starts_with?(Atom.to_string(name), "__") do
+        m = inspect(mod)
+        args = Enum.map_join(1..arity//1, ", ", &"a#{&1}")
+
+        rest =
+          if arity > 1,
+            do: Enum.map_join(2..arity//1, ", ", &"a#{&1}"),
+            else: ""
+
+        forms = [
+          "#{m}.#{name}(#{args})",
+          ~s|:"Elixir.#{m}".#{name}(#{args})|,
+          "&#{m}.#{name}/#{arity}"
+        ]
+
+        forms =
+          if arity >= 1,
+            do:
+              forms ++
+                [
+                  "a1 |> #{m}.#{name}(#{rest})",
+                  "&#{m}.#{name}(&1#{if rest != "", do: ", " <> rest})"
+                ],
+            else: forms
+
+        for code <- forms do
+          assert {:error, _} = Sandbox.check(code, :strict),
+                 "#{code} passed :strict"
+        end
+      end
+    end
+
+    test "__struct__/1 regressions" do
+      for code <- [
+            "URI.__struct__(kv)",
+            "MapSet.__struct__(kv)",
+            "kv |> URI.__struct__()",
+            "Kernel.|>(kv, URI.__struct__())",
+            ~S|:"Elixir.URI".__struct__(kv)|,
+            "&URI.__struct__/1",
+            "&URI.__struct__(&1)",
+            "Regex.__import_pattern__(p)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict),
+               "#{code} passed :strict"
+      end
+    end
+
+    test "ordinary allowlisted calls still pass" do
+      for code <- [
+            ~S|URI.parse("http://x")|,
+            ~S|%URI{host: "x"}|,
+            ~S|struct(URI, host: "x")|,
+            "MapSet.new(l)"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+  end
+
+  # One row per rule entry, in every call form, so deleting an entry (or a
+  # call form slipping past one) fails a row of its own instead of hiding
+  # behind another node of the same input that refuses it. `update_in(m,
+  # [Access.values()], f)` above, for instance, is refused by the inner
+  # `Access.values()` whether or not `update_in` is a forge call.
+  describe ":strict forge rules hold for every entry and call form" do
+    # {name, first argument, remaining arguments, arity}: the computed
+    # argument (module or path) is the only thing that can refuse each row.
+    @kernel_forge_calls [
+      {"struct", "mod", "[]", 2},
+      {"struct!", "mod", "[]", 2},
+      {"put_in", "m", "[k], v", 3},
+      {"update_in", "m", "[k], f", 3},
+      {"get_and_update_in", "m", "[k], f", 3}
+    ]
+
+    # {module, function, first argument, remaining arguments or nil, arity}
+    @forge_rule_calls [
+      {"Map", "new", "pairs", nil, 1},
+      {"Map", "new", "l", "f", 2},
+      {"Map", "from_keys", "keys", "v", 2},
+      {"Map", "merge", "a", "b, f", 3},
+      {"Map", "intersect", "a", "b, f", 3},
+      {"Map", "map", "m", "f", 2},
+      {"Enum", "into", "pairs", "%{}", 2},
+      {"Stream", "into", "pairs", "%{}", 2},
+      {"Access", "key", "k", nil, 1},
+      # Piped, the node alone reads the default as the key; only the pipe
+      # rebuild sees `k`.
+      {"Access", "key", "k", "%{}", 2},
+      {"Access", "key!", "k", nil, 1},
+      {"Access", "key!", "k", "%{}", 2}
+    ]
+
+    defp call_args(first, nil), do: first
+    defp call_args(first, rest), do: "#{first}, #{rest}"
+
+    defp kernel_forms(name, first, rest) do
+      [
+        "#{name}(#{first}, #{rest})",
+        "Kernel.#{name}(#{first}, #{rest})",
+        ~s|:"Elixir.Kernel".#{name}(#{first}, #{rest})|
+      ]
+    end
+
+    defp kernel_pipe_forms(name, first, rest) do
+      [
+        "#{first} |> #{name}(#{rest})",
+        "#{first} |> Kernel.#{name}(#{rest})",
+        "Kernel.|>(#{first}, #{name}(#{rest}))"
+      ]
+    end
+
+    test "each Kernel forge call refuses a computed module or path in every form" do
+      for {name, first, rest, arity} <- @kernel_forge_calls,
+          code <-
+            kernel_forms(name, first, rest) ++
+              kernel_pipe_forms(name, first, rest) ++
+              [
+                "&#{name}/#{arity}",
+                "&Kernel.#{name}/#{arity}",
+                "&#{name}(&1, #{rest})",
+                "&Kernel.#{name}(&1, #{rest})"
+              ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "each Kernel forge call allows a literal module or path" do
+      rows = [
+        {"struct", "URI", "[]"},
+        {"struct!", "URI", "[]"},
+        {"put_in", "m", "[:a], v"},
+        {"update_in", "m", "[:a], f"},
+        {"get_and_update_in", "m", "[:a], f"}
+      ]
+
+      # A piped struct/2 is refused whatever it names: the node alone has
+      # its fields where the module goes. A bare piped name is checked as the
+      # call (see above).
+      for {name, first, rest} <- rows,
+          code <-
+            kernel_forms(name, first, rest) ++
+              if(name in ["struct", "struct!"],
+                do: [],
+                else: kernel_pipe_forms(name, first, rest)
+              ) do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "each forge_rule clause refuses in direct, piped, atom-module and captured forms" do
+      for {mod, fun, first, rest, arity} <- @forge_rule_calls,
+          atom_mod = ~s|:"Elixir.#{mod}"|,
+          code <- [
+            "#{mod}.#{fun}(#{call_args(first, rest)})",
+            "#{first} |> #{mod}.#{fun}(#{rest})",
+            "Kernel.|>(#{first}, #{mod}.#{fun}(#{rest}))",
+            "#{atom_mod}.#{fun}(#{call_args(first, rest)})",
+            "#{first} |> #{atom_mod}.#{fun}(#{rest})",
+            "&#{mod}.#{fun}/#{arity}",
+            "&#{atom_mod}.#{fun}/#{arity}",
+            "&#{mod}.#{fun}(#{call_args("&1", rest)})"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      for code <- [
+            "Access.values()",
+            "x |> Access.values()",
+            "Kernel.|>(x, Access.values())",
+            ~S|:"Elixir.Access".values()|,
+            "&Access.values/0",
+            ~S|&:"Elixir.Access".values/0|,
+            "&Access.values(&1)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "the same calls with literal keys and entries are allowed" do
+      for code <- [
+            "Map.new([a: 1])",
+            "[a: 1] |> Map.new()",
+            "Map.from_keys([:a, \"b\"], 0)",
+            "Enum.into([a: 1], %{})",
+            "Stream.into([a: 1], %{})",
+            "Access.key(:a)",
+            # The node alone reads `%{}` as the key, the rebuilt call `:a`.
+            ":a |> Access.key(%{})",
+            "Kernel.|>(:a, Access.key!(%{}))"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "every allowlisted struct module may be built, as a literal and in struct/2" do
+      for module <- ~w(URI Date Time DateTime NaiveDateTime Range MapSet),
+          code <- [
+            "%#{module}{}",
+            "struct(#{module}, [])",
+            "Kernel.struct!(#{module}, [])",
+            "#{module} |> struct"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "every Access list selector may appear in a path" do
+      for selector <-
+            ~w[all() at(0) at!(0) elem(0) filter(g) find(g) slice(0..1)],
+          code <- [
+            "update_in(m, [Access.#{selector}], f)",
+            "put_in(m, [:a, Access.#{selector}], v)",
+            "m |> get_and_update_in([Access.#{selector}, :b], f)"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "an alias is a plain map key" do
+      for code <- [
+            ~S|%{Foo => 1}|,
+            ~S|%{URI => 1, Foo.Bar => 2}|,
+            ~S'%{m | Foo => 1}',
+            ~S|Map.put(m, Foo, 1)|,
+            ~S|put_in(m, [Foo], 1)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    # The computed-key refusals name these forms as the way out, so each must
+    # stay allowed for the messages to stay true.
+    test "the alternatives the refusals name are allowed" do
+      for code <- [
+            ~S|%{"#{k}" => v}|,
+            ~S|%{{k} => v}|,
+            ~S|Map.put(m, "#{k}", v)|,
+            ~S|Map.put_new(m, {k}, v)|,
+            ~S|put_in(m, ["#{k}"], v)|,
+            ~S|Access.key("#{k}")|,
+            ~S|Enum.reduce(l, %{}, fn x, acc -> Map.put(acc, "#{x}", x) end)|,
+            ~S|Enum.reduce(l, %{}, fn x, acc -> Map.put(acc, {x}, x) end)|,
+            ~S|Enum.frequencies(l)|,
+            ~S|Enum.group_by(l, f)|,
+            ~S|Enum.group_by(l, f, g)|,
+            ~S|Enum.into(l, [])|,
+            ~S|Enum.into(l, MapSet.new())|,
+            ~S|Stream.into(l, [])|,
+            ~S|for x <- l, into: [], do: x|,
+            ~S|for x <- l, into: MapSet.new(), do: x|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
     end
   end
 end
