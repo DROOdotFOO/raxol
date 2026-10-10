@@ -336,12 +336,48 @@ defmodule Raxol.REPL.Sandbox do
   defp scan(ast, level) do
     {_ast, violations} =
       Macro.prewalk(ast, [], fn node, acc ->
-        new_violations = check_node(node, level)
+        new_violations = atom_syntax_violations(node) ++ check_node(node, level)
         {node, new_violations ++ acc}
       end)
 
     Enum.reverse(violations)
   end
+
+  # The `@denied_standard` atom entries cover the NAMED primitives; two syntax
+  # forms mint atoms from runtime data without any of those call nodes in the
+  # submitted AST, so both levels refuse them here:
+  #
+  # - `~w(#{x})a`: with interpolation `Kernel.sigil_w/2` expands to
+  #   `:lists.map(&String.to_atom/1, String.split(...))` at RUNTIME. With only
+  #   binary pieces it splits at compile time from source text, which is
+  #   bounded like the tokenizer, so `~w(a b)a` stays allowed.
+  # - `expr.Foo`: an alias with a non-atom head concatenates into a new
+  #   `Elixir.`-prefixed atom at runtime. `__MODULE__.Foo` is refused too even
+  #   though it expands to a constant: it has no use in a REPL, and failing
+  #   closed keeps the rule simple -- every alias head is a literal atom.
+  #
+  # Interpolated atoms `:"#{x}"` need no rule here: the parser emits an explicit
+  # `:erlang.binary_to_atom/2` call, already denied. The other `String.to_atom`
+  # uses in kernel.ex run at compile time on source text: `defmodule` alias
+  # expansion and the calendar suffix of `~D/~T/~N/~U` sigils.
+  defp atom_syntax_violations({:sigil_w, _, [{:<<>>, _, pieces}, mods]})
+       when is_list(pieces) and is_list(mods) do
+    if ?a in mods and not Enum.all?(pieces, &is_binary/1) do
+      [
+        "~w with interpolation and the a modifier is not allowed (dynamic atom creation)"
+      ]
+    else
+      []
+    end
+  end
+
+  defp atom_syntax_violations({:__aliases__, _, [head | _]})
+       when not is_atom(head),
+       do: [
+         "a computed alias (expr.Alias) is not allowed (dynamic atom creation)"
+       ]
+
+  defp atom_syntax_violations(_node), do: []
 
   defp check_node(
          {{:., _, [{:__aliases__, _, mod_parts}, func]}, _, _args},
