@@ -30,7 +30,10 @@ defmodule Raxol.REPL.Sandbox do
   where a map is built: a `:__struct__` or computed map key, a struct literal
   outside a short allowlist, and the calls that write keys or values from
   runtime data (`Map.put/3` with a computed key, `Map.new/1` or `Enum.into/2`
-  into a map from a computed input, `put_in/3` with a computed path, ...).
+  into a map from a computed input, `put_in/3` with a computed path, ...). It
+  also refuses every `__`-prefixed function or macro of an allowlisted module,
+  called or captured: the generated `URI.__struct__/1` writes a caller's
+  `:__struct__` pair as readily as a map literal does.
   That closes what the source shows, not what runtime data can hide: a form
   this list does not name reaches the same implementations, and only the
   OS-isolated peer node of #1231 closes the class.
@@ -123,8 +126,11 @@ defmodule Raxol.REPL.Sandbox do
   # Every module here is part of the forged-struct guarantee (see the
   # `%{}` clause of `check_node/2`): none may build a map whose `__struct__`
   # key holds an atom chosen at runtime. Before adding a module, audit every
-  # function it exports for maps built from runtime keys and values, and add
-  # any such function to the forge rules.
+  # function and macro it exports -- including `@doc false` and generated ones,
+  # enumerate them with `mod.__info__(:functions) ++ mod.__info__(:macros)` --
+  # for maps built from runtime keys and values, and add any such function to
+  # the forge rules. `__`-prefixed names (`__struct__/1` forges outright) are
+  # refused wholesale by `internal_call/2`.
   @allowed_strict_modules [
     Enum,
     Stream,
@@ -247,7 +253,9 @@ defmodule Raxol.REPL.Sandbox do
 
   # Struct literals `:strict` lets the source name: each module's own
   # whitelisted functions already build its struct, so a literal reaches no
-  # protocol impl those functions do not.
+  # protocol impl those functions do not. That holds only because the
+  # generated `__struct__/1`, which writes any key including `:__struct__`, is
+  # refused with every other `__`-prefixed name.
   @strict_struct_modules [
     URI,
     Date,
@@ -351,7 +359,8 @@ defmodule Raxol.REPL.Sandbox do
 
       {:ok, module} ->
         if module in @allowed_strict_modules do
-          check_denied_call(module, func) ++
+          internal_call(module, func) ++
+            check_denied_call(module, func) ++
             check_strict_size(module, func, args) ++
             forge_rule(module, func, args)
         else
@@ -365,7 +374,8 @@ defmodule Raxol.REPL.Sandbox do
   defp check_node({{:., _, [mod, func]}, _, args}, :strict)
        when is_atom(mod) do
     if mod in @allowed_strict_modules do
-      check_denied_call(mod, func) ++
+      internal_call(mod, func) ++
+        check_denied_call(mod, func) ++
         check_strict_size(mod, func, args) ++ forge_rule(mod, func, args)
     else
       ["#{inspect(mod)}.#{func} is not allowed (module not in whitelist)"]
@@ -469,7 +479,7 @@ defmodule Raxol.REPL.Sandbox do
        )
        when is_atom(func) and is_integer(arity) do
     with {:ok, module} <- strict_module(module),
-         true <- forge_capture?(module, func, arity) do
+         true <- internal_name?(func) or forge_capture?(module, func, arity) do
       [
         "&#{inspect(module)}.#{func}/#{arity} is not allowed at :strict " <>
           "(its arguments cannot be checked for a forged struct)"
@@ -604,6 +614,38 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_node(_node, _level), do: []
+
+  # Names starting with `__` are generated or internal API, never the
+  # documented surface the allowlist was audited for. Every allowlisted struct
+  # module exports the defstruct-generated `__struct__/1`, which reduces its
+  # keyword argument into the struct with `%{map | key => val}` and so writes a
+  # caller-supplied `:__struct__` pair verbatim: `URI.__struct__(kv)` forges a
+  # struct exactly as a `:__struct__` map key does (`Kernel.struct!/2`
+  # re-validates its result for that reason). Remote MACROS ride the same name
+  # space -- `Regex.__import_pattern__/1` expands to `:re.import/1`,
+  # `Inspect.__deriving__/2` to a `defimpl` -- and are refused here rather
+  # than left to the evaluator's env happening not to `require` their module.
+  # The rule is by prefix, not by list, so a name a future Elixir adds is
+  # refused before anyone audits it. `:standard` keeps them: a forged struct
+  # reaches nothing there that a direct call cannot (see its forge comment).
+  # Exposed so the test suite can iterate the real allowlist when asserting
+  # every module's `__`-prefixed names are refused; a copied list would drift.
+  @doc false
+  def strict_modules, do: @allowed_strict_modules
+
+  defp internal_call(module, func) do
+    if internal_name?(func) do
+      [
+        "#{inspect(module)}.#{func} is not allowed at :strict " <>
+          "(generated or internal function)"
+      ]
+    else
+      []
+    end
+  end
+
+  defp internal_name?(func),
+    do: is_atom(func) and String.starts_with?(Atom.to_string(func), "__")
 
   # `Module.concat/1` MINTS an atom, and atoms are never collected. Resolving
   # aliases with it made the CHECKER the very primitive `{Module, :concat}` is
