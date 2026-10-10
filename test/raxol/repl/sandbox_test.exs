@@ -573,12 +573,9 @@ defmodule Raxol.REPL.SandboxTest do
 
     test "collecting is decided by the target, never the source" do
       for code <- [
-            "Enum.into(l, %{})",
             "l |> Enum.into([])",
             "Enum.into(l, MapSet.new())",
             "Enum.into(l, MapSet.new([1]))",
-            "l |> Enum.into(%{}, fn x -> {x, x} end)",
-            "for x <- l, into: %{}, do: {x, x}",
             "for x <- l, into: MapSet.new(), do: x",
             "for x <- l, do: x",
             # A source written out in full is bounded by the source text.
@@ -599,10 +596,7 @@ defmodule Raxol.REPL.SandboxTest do
             ~S|Enum.into([1, 2], "", fn _ -> b end)|,
             ~S{l |> Enum.into("", fn x -> x end)},
             ~S{l |> Stream.into("") |> Stream.run()},
-            ~S|for x <- l, into: "", do: x|,
-            # A map with a `__struct__` key dispatches to that module's impl.
-            ~S|Enum.into(["x"], %{__struct__: File.Stream, path: "p"})|,
-            ~S<Enum.into(["x"], %{m | a: 1})>
+            ~S|for x <- l, into: "", do: x|
           ] do
         assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
       end
@@ -677,6 +671,155 @@ defmodule Raxol.REPL.SandboxTest do
     test ":standard is unaffected" do
       assert :ok = Sandbox.check("Enum.join(l, \",\")", :standard)
       assert :ok = Sandbox.check(~S|n = 5; String.duplicate("x", n)|, :standard)
+    end
+  end
+
+  # A map whose `__struct__` key names a module dispatches to that module's
+  # protocol impls, so building one reaches code no call in the source names.
+  describe ":strict refuses forged structs where the map is built" do
+    @file_stream ~S<%{__struct__: File.Stream, path: "/tmp/raxol_probe", modes: [], raw: true, line_or_bytes: :line, node: node()}>
+
+    test "a forged File.Stream bound to a variable is refused (regression)" do
+      # `Enum.into/2` saw only the literal source `["hi"]` and the variable,
+      # so this passed `:strict` and wrote the file.
+      code = "m = #{@file_stream}; Enum.into([\"hi\"], m)"
+
+      assert {:error, [message]} = Sandbox.check(code, :strict)
+      assert message =~ "map key"
+    end
+
+    test "literal and computed __struct__ keys are refused" do
+      for code <- [
+            "Enum.into([\"hi\"], #{@file_stream})",
+            "m = #{@file_stream}; [\"hi\"] |> Enum.into(m)",
+            "m = #{@file_stream}; for x <- [\"hi\"], into: m, do: x",
+            "Enum.count(#{@file_stream})",
+            ~S|"#{%{__struct__: URI, host: "x"}}"|,
+            ~S|k = :__struct__; %{k => File.Stream}|,
+            ~S|k = String.to_existing_atom("__struct__"); %{k => File.Stream}|,
+            ~S'%{u | __struct__: File.Stream}',
+            ~S'%{u | k => 1}',
+            # Patterns share the shape and fail closed.
+            ~S|%{__struct__: s} = %{__struct__: 1}|,
+            ~S|%{^k => v} = m|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "struct literals and struct/2 may only name allowlisted modules" do
+      for code <- [
+            ~S|%File.Stream{path: "/tmp/x"}|,
+            ~S|%Regex{}|,
+            ~S|%mod{} = x|,
+            ~S|struct(File.Stream, path: "/tmp/x")|,
+            ~S|Kernel.struct!(File.Stream, path: "/tmp/x")|,
+            ~S|mod = String.to_existing_atom("Elixir.File.Stream"); struct(mod, [])|,
+            ~S|&struct/2|,
+            ~S|&Kernel.struct!/2|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      for code <- [
+            ~S|%URI{host: "x"}|,
+            ~S'%URI{u | host: "x"}',
+            ~S|%Date{year: 2020, month: 1, day: 1}|,
+            ~S|%MapSet{} = s|,
+            ~S|struct(URI, host: "x")|,
+            # `struct/2` drops a `__struct__` field, so the fields may be computed.
+            ~S|struct(URI, fields)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "calls that write a key from runtime data are refused" do
+      for code <- [
+            ~S|Map.put(%{path: "/tmp/x"}, :__struct__, File.Stream)|,
+            ~S'%{} |> Map.put(:__struct__, File.Stream)',
+            ~S|Map.put(%{}, k, File.Stream)|,
+            ~S|Map.update!(u, :__struct__, fn _ -> File.Stream end)|,
+            ~S|Map.replace(u, :__struct__, File.Stream)|,
+            ~S|Map.get_and_update(%{}, k, f)|,
+            ~S|Access.get_and_update(%{}, :__struct__, f)|,
+            ~S|Map.new([{:__struct__, File.Stream}])|,
+            ~S|Map.new([{k, File.Stream}])|,
+            ~S|Map.new(pairs)|,
+            ~S'pairs |> Map.new()',
+            ~S'Kernel.|>(pairs, Map.new())',
+            ~S|Map.new(l, fn x -> {x, x} end)|,
+            ~S|Map.from_keys(keys, File.Stream)|,
+            # Both maps can be real structs; the resolver picks the value.
+            ~S|Map.merge(%URI{}, %URI{}, fn _, _, _ -> File.Stream end)|,
+            ~S'f = fn _, _, _ -> File.Stream end; u |> Map.merge(u, f)',
+            ~S|Map.intersect(u, u, f)|,
+            ~S|Map.map(u, f)|,
+            ~S|Enum.into([__struct__: File.Stream], %{})|,
+            ~S|Enum.into(pairs, %{})|,
+            ~S|Enum.into(pairs, Map.new())|,
+            ~S|Enum.into([x], %{})|,
+            ~S'l |> Enum.into(%{}, fn x -> {x, x} end)',
+            ~S|Stream.into(pairs, %{})|,
+            ~S|for x <- l, into: %{}, do: {x, x}|,
+            ~S|Enum.reduce(l, %{}, fn {k, v}, acc -> Map.put(acc, k, v) end)|,
+            ~S|&Map.put/3|,
+            ~S|Enum.map(l, &Map.new/1)|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "access paths must be literal keys or list selectors" do
+      for code <- [
+            ~S|put_in(%{}, [:__struct__], File.Stream)|,
+            ~S|put_in(%{}, [k], File.Stream)|,
+            ~S|put_in(%{}, path, File.Stream)|,
+            ~S'%{} |> put_in([k], File.Stream)',
+            ~S|put_in(m[k], File.Stream)|,
+            ~S|put_in(m[:a][:__struct__], File.Stream)|,
+            # Rewrites every value, including a `__struct__` one.
+            ~S|update_in(m, [Access.values()], fn _ -> File.Stream end)|,
+            ~S|update_in(m, [Access.key(:__struct__)], fn _ -> File.Stream end)|,
+            ~S|get_and_update_in(m, [k], f)|,
+            ~S|&put_in/3|
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      for code <- [
+            ~S|put_in(m, [:a, :b], 1)|,
+            ~S|put_in(m[:a]["b"], 1)|,
+            ~S|update_in(m, [:a, Access.all(), :b], &(&1 + 1))|,
+            ~S|update_in(m, [Access.key(:a, %{})], fn x -> x end)|,
+            ~S|get_in(m, [k])|,
+            ~S|pop_in(m, [k])|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "plain maps with literal keys are unaffected" do
+      for code <- [
+            ~S|%{"a" => 1, {1, 2} => 3, b: 2}|,
+            ~S|%{} = x = %{a: 1}|,
+            ~S'%{state | count: 1}',
+            ~S|Map.merge(%{}, %{"x" => 1})|,
+            ~S'a |> Map.merge(b)',
+            ~S|Map.from_struct(%{a: 1})|,
+            ~S|Map.put(m, :a, 1)|,
+            ~S'm |> Map.put("a", 1)',
+            ~S|Map.update(m, :count, 0, &(&1 + 1))|,
+            ~S|Map.get(m, k)|,
+            ~S|Map.delete(m, k)|,
+            ~S|Map.new()|,
+            ~S|Map.new(a: 1, b: x)|,
+            ~S|Map.from_keys([:a, :b], 0)|,
+            ~S|Enum.into([a: x], %{})|,
+            ~S|Enum.frequencies(l)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
     end
   end
 end

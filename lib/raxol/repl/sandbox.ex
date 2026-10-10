@@ -17,8 +17,23 @@ defmodule Raxol.REPL.Sandbox do
   rather than resolved (#1045). Each such form found so far has been a
   CVE-class hole on an anonymous surface, and the checker's own history is the
   argument against trusting it: computed receivers, `Module.concat/1`
-  alias resolution, and the bare-name capture forms of `apply` and `spawn` were
-  each `:ok` at `:strict` until they were not.
+  alias resolution, the bare-name capture forms of `apply` and `spawn`, and
+  maps forged with a `__struct__` key were each `:ok` at `:strict` until they
+  were not.
+
+  A forged struct is the same hole reached through data rather than a name. A
+  map whose `__struct__` key names a module is protocol-dispatched
+  (`Collectable`, `Enumerable`, `String.Chars`, `Inspect`, `Access`) to that
+  module's implementations, so collecting into
+  `%{__struct__: File.Stream, ...}` writes a file without `File` ever
+  appearing in a call. `:strict` refuses every form it knows can set that key
+  where a map is built: a `:__struct__` or computed map key, a struct literal
+  outside a short allowlist, and the calls that write keys or values from
+  runtime data (`Map.put/3` with a computed key, `Map.new/1` or `Enum.into/2`
+  into a map from a computed input, `put_in/3` with a computed path, ...).
+  That closes what the source shows, not what runtime data can hide: a form
+  this list does not name reaches the same implementations, and only the
+  OS-isolated peer node of #1231 closes the class.
 
   What actually keeps an untrusted caller away from the evaluator is the
   deployment flag, `Raxol.Core.Boundary.Evaluation.exposed?/0`. A node with that
@@ -225,6 +240,51 @@ defmodule Raxol.REPL.Sandbox do
   # factor over the subject the evaluation already holds (and the cap counts).
   @max_strict_replacement_bytes 8
 
+  # Struct literals `:strict` lets the source name: each module's own
+  # whitelisted functions already build its struct, so a literal reaches no
+  # protocol impl those functions do not.
+  @strict_struct_modules [
+    URI,
+    Date,
+    Time,
+    DateTime,
+    NaiveDateTime,
+    Range,
+    MapSet
+  ]
+
+  # Kernel calls that can put a runtime-chosen module under `__struct__`:
+  # `struct/2` names it directly, the `*_in` family writes whatever key its
+  # path names.
+  @kernel_forge_calls [
+    :struct,
+    :struct!,
+    :put_in,
+    :update_in,
+    :get_and_update_in
+  ]
+
+  # Calls that write ONE map key, by their full arity; the key is the second
+  # argument, or the first when a pipe has removed the map.
+  @struct_key_writers %{
+    {Map, :put} => 3,
+    {Map, :put_new} => 3,
+    {Map, :put_new_lazy} => 3,
+    {Map, :replace} => 3,
+    {Map, :replace!} => 3,
+    {Map, :replace_lazy} => 3,
+    {Map, :update} => 4,
+    {Map, :update!} => 3,
+    {Map, :get_and_update} => 3,
+    {Map, :get_and_update!} => 3,
+    {Access, :get_and_update} => 3
+  }
+
+  # Path selectors that only walk lists and tuples, so never add a map key.
+  # `Access.values/0` is not one: it rewrites every value of a map, including
+  # a `__struct__` key that `Enum.frequencies([:__struct__])` put there.
+  @access_list_selectors [:all, :at, :at!, :elem, :filter, :find, :slice]
+
   @doc """
   Checks code for safety violations at the given strictness level.
 
@@ -287,7 +347,8 @@ defmodule Raxol.REPL.Sandbox do
       {:ok, module} ->
         if module in @allowed_strict_modules do
           check_denied_call(module, func) ++
-            check_strict_size(module, func, args)
+            check_strict_size(module, func, args) ++
+            forge_rule(module, func, args)
         else
           [
             "#{inspect(module)}.#{func} is not allowed (module not in whitelist)"
@@ -299,7 +360,8 @@ defmodule Raxol.REPL.Sandbox do
   defp check_node({{:., _, [mod, func]}, _, args}, :strict)
        when is_atom(mod) do
     if mod in @allowed_strict_modules do
-      check_denied_call(mod, func) ++ check_strict_size(mod, func, args)
+      check_denied_call(mod, func) ++
+        check_strict_size(mod, func, args) ++ forge_rule(mod, func, args)
     else
       ["#{inspect(mod)}.#{func} is not allowed (module not in whitelist)"]
     end
@@ -368,7 +430,7 @@ defmodule Raxol.REPL.Sandbox do
   # harmless. Qualified captures (`&:os.cmd/1`, `&File.read!/1`) already fail
   # the module clauses above, because their inner node is a dot call whose
   # `args` IS a list.
-  defp check_node({:&, _, [{:/, _, [{name, _, _ctx}, arity]}]}, _level)
+  defp check_node({:&, _, [{:/, _, [{name, _, _ctx}, arity]}]}, level)
        when is_atom(name) and is_integer(arity) do
     cond do
       name == :apply ->
@@ -382,8 +444,33 @@ defmodule Raxol.REPL.Sandbox do
       spawn_function?(name) ->
         ["&#{name}/#{arity} is not allowed (process spawning)"]
 
+      level == :strict and name in @kernel_forge_calls ->
+        [
+          "&#{name}/#{arity} is not allowed at :strict " <>
+            "(its arguments cannot be checked for a forged struct)"
+        ]
+
       true ->
         []
+    end
+  end
+
+  # A qualified capture removes every argument, so a function that can write a
+  # `__struct__` key from runtime data is refused captured: `&Map.put/3`
+  # applied to a computed key forges as well as the call does.
+  defp check_node(
+         {:&, _, [{:/, _, [{{:., _, [module, func]}, _, _}, arity]}]},
+         :strict
+       )
+       when is_atom(func) and is_integer(arity) do
+    with {:ok, module} <- strict_module(module),
+         true <- forge_capture?(module, func, arity) do
+      [
+        "&#{inspect(module)}.#{func}/#{arity} is not allowed at :strict " <>
+          "(its arguments cannot be checked for a forged struct)"
+      ]
+    else
+      _ -> []
     end
   end
 
@@ -448,11 +535,59 @@ defmodule Raxol.REPL.Sandbox do
     |> Enum.filter(&Keyword.keyword?/1)
     |> Enum.flat_map(fn opts ->
       case Keyword.fetch(opts, :into) do
-        {:ok, target} -> check_collect_target(target, "for ... into:")
-        :error -> []
+        {:ok, target} ->
+          check_collect_target(target, "for ... into:") ++
+            check_for_into_forge(target)
+
+        :error ->
+          []
       end
     end)
   end
+
+  # A map whose `__struct__` key names a module is dispatched to that module's
+  # protocol impls (`Collectable`, `Enumerable`, `String.Chars`, `Inspect`,
+  # `Access`), so the code they run is reached without its module name ever
+  # appearing in a call. `m = %{__struct__: File.Stream, path: p, ...};
+  # Enum.into(["hi"], m)` wrote a file at `:strict`. The key is refused where a
+  # map is BUILT, not where it is used: the uses include string interpolation
+  # and the REPL printing its result, which no AST walk can enumerate.
+  #
+  # Every key must be a literal other than `:__struct__`; a computed key is
+  # refused because atoms are free at runtime (`String.to_existing_atom/1`).
+  # An update `%{m | a: 1}` only replaces keys `m` already has, so it forges
+  # nothing its own keys do not name. Patterns share the shape, so
+  # `%{__struct__: mod} = x` is refused too: this walk does not track whether
+  # a node is under a pattern, and fails closed as the `<<>>` clause does.
+  #
+  # `:standard` is untouched: it is a denylist that already allows
+  # `File.stream!/1` and `File.open/2` by name, so a forged struct reaches
+  # nothing there that a direct call does not.
+  defp check_node({:%{}, _, [{:|, _, [_base, pairs]}]}, :strict)
+       when is_list(pairs),
+       do: check_map_keys(pairs)
+
+  defp check_node({:%{}, _, pairs}, :strict) when is_list(pairs),
+    do: check_map_keys(pairs)
+
+  # `%Mod{}` builds a struct of the module it names. Only modules whose own
+  # whitelisted functions already build that struct may be named, so a
+  # literal reaches no impl the functions do not.
+  defp check_node({:%, _, [module, _fields]}, :strict) do
+    if struct_module?(module) do
+      []
+    else
+      [
+        "%#{Macro.to_string(module)}{} is not allowed at :strict (only " <>
+          "#{Enum.map_join(@strict_struct_modules, ", ", &inspect/1)} structs " <>
+          "may be built; a struct dispatches to its module's protocol impls)"
+      ]
+    end
+  end
+
+  defp check_node({name, _, args}, :strict)
+       when name in [:|> | @kernel_forge_calls] and is_list(args),
+       do: forge_rule(Kernel, name, args)
 
   defp check_node({kind, _, args}, level)
        when level in [:standard, :strict] and is_atom(kind) and is_list(args) do
@@ -585,19 +720,8 @@ defmodule Raxol.REPL.Sandbox do
   defp check_size_rule(:replace, name, _args),
     do: needs_literals(name, "its replacement")
 
-  # A map literal that is not plain (a `__struct__` key, or a `%{m | ...}`
-  # update that can carry one in) dispatches to another module's
-  # `Collectable` -- `File.Stream`'s writes a file -- so it is refused before
-  # size is considered at all.
   defp check_size_rule(:into, name, args) do
     case into_target(args) do
-      {:ok, {:%{}, _, _} = target} ->
-        if non_binary_collectable?(target),
-          do: [],
-          else: [
-            "#{name} is not allowed at :strict into a map with a struct key or update"
-          ]
-
       {:ok, target} ->
         if source_bounded_into?(args),
           do: [],
@@ -697,10 +821,8 @@ defmodule Raxol.REPL.Sandbox do
 
   defp non_binary_collectable?(list) when is_list(list), do: true
 
-  # Only a plain map: a `__struct__` key makes the map dispatch to that
-  # module's `Collectable`, and a `%{base | ...}` update can carry one in.
-  defp non_binary_collectable?({:%{}, _, pairs}),
-    do: Enum.all?(pairs, &plain_map_pair?/1)
+  # A map literal's keys are checked where it is built (`check_map_keys/1`).
+  defp non_binary_collectable?({:%{}, _, _pairs}), do: true
 
   defp non_binary_collectable?(
          {{:., _, [{:__aliases__, _, [mod]}, :new]}, _, _args}
@@ -747,10 +869,327 @@ defmodule Raxol.REPL.Sandbox do
   defp source_bounded_into?([source, _target]), do: source_literal?(source)
   defp source_bounded_into?(_piped), do: false
 
-  defp plain_map_pair?({key, _value}),
-    do: key != :__struct__ and Macro.quoted_literal?(key)
+  defp check_map_keys(pairs) do
+    if Enum.all?(pairs, &plain_pair?/1) do
+      []
+    else
+      [
+        "a map key that is :__struct__ or computed is not allowed at :strict " <>
+          "(it can forge a struct, which dispatches to another module's " <>
+          "protocol impls); write each key as a literal"
+      ]
+    end
+  end
 
-  defp plain_map_pair?(_update), do: false
+  defp plain_pair?({key, _value}), do: plain_key?(key)
+  defp plain_pair?(_other), do: false
+
+  defp plain_key?(key), do: key != :__struct__ and Macro.quoted_literal?(key)
+
+  defp struct_module?({:__aliases__, _, parts}) do
+    case resolve_alias(parts) do
+      {:ok, module} -> module in @strict_struct_modules
+      {:unknown, _name} -> false
+    end
+  end
+
+  defp struct_module?(_computed), do: false
+
+  defp strict_module({:__aliases__, _, parts}) do
+    case resolve_alias(parts) do
+      {:ok, module} -> {:ok, module}
+      {:unknown, _name} -> :unknown
+    end
+  end
+
+  defp strict_module(module) when is_atom(module), do: {:ok, module}
+  defp strict_module(_computed), do: :unknown
+
+  # The forge rules for one call, local or remote. Only a pipe rebuilds a
+  # call: the right-hand side's arguments are short by the piped value, which
+  # can be the very input a rule must see (`pairs |> Map.new()` is the same
+  # node as `Map.new()` otherwise). The call node is also checked on its own,
+  # so the pipe can only add refusals.
+  defp forge_violations({{:., _, [module, func]}, _, args})
+       when is_atom(func) and is_list(args) do
+    case strict_module(module) do
+      {:ok, module} -> forge_rule(module, func, args)
+      :unknown -> []
+    end
+  end
+
+  defp forge_violations({name, _, args}) when is_atom(name) and is_list(args),
+    do: forge_rule(Kernel, name, args)
+
+  defp forge_violations(_node), do: []
+
+  defp forge_rule(Kernel, :|>, [lhs, {call, meta, args}]) when is_list(args),
+    do: forge_violations({call, meta, [lhs | args]})
+
+  # `struct/2` drops a `__struct__` field and `struct!/2` raises on one, so
+  # only the module argument can forge.
+  defp forge_rule(Kernel, func, args) when func in [:struct, :struct!] do
+    case args do
+      [module | _fields] ->
+        if struct_module?(module),
+          do: [],
+          else:
+            forge_refusal(
+              func,
+              "only #{Enum.map_join(@strict_struct_modules, ", ", &inspect/1)} " <>
+                "may be named, as a literal"
+            )
+
+      [] ->
+        forge_refusal(func, "its module cannot be seen")
+    end
+  end
+
+  defp forge_rule(Kernel, func, args)
+       when func in [:put_in, :update_in, :get_and_update_in] do
+    if access_path_ok?(args),
+      do: [],
+      else:
+        forge_refusal(
+          func,
+          "its path must be written out from literal keys other than " <>
+            ":__struct__, anonymous functions and Access list selectors"
+        )
+  end
+
+  defp forge_rule(module, func, args)
+       when is_map_key(@struct_key_writers, {module, func}) do
+    arity = Map.fetch!(@struct_key_writers, {module, func})
+
+    key =
+      case length(args) do
+        ^arity -> {:ok, Enum.at(args, 1)}
+        piped when piped == arity - 1 -> {:ok, hd(args)}
+        _capture -> :error
+      end
+
+    case key do
+      {:ok, key} ->
+        if plain_key?(key),
+          do: [],
+          else:
+            forge_refusal(
+              module,
+              func,
+              "its key must be a literal other than :__struct__"
+            )
+
+      :error ->
+        forge_refusal(module, func, "its key cannot be seen")
+    end
+  end
+
+  defp forge_rule(Access, func, args) when func in [:key, :key!] do
+    case args do
+      [key | _default] ->
+        if plain_key?(key),
+          do: [],
+          else:
+            forge_refusal(
+              Access,
+              func,
+              "its key must be a literal other than :__struct__"
+            )
+
+      [] ->
+        forge_refusal(Access, func, "its key cannot be seen")
+    end
+  end
+
+  # `Map.new()` and the piped `l |> Map.new()` are the same node; the pipe
+  # clause above sees the second with its input.
+  defp forge_rule(Map, :new, []), do: []
+
+  defp forge_rule(Map, :new, [source]) do
+    if forge_free_entries?(source) or match?({:%{}, _, _}, source),
+      do: [],
+      else: forge_refusal(Map, :new, entries_reason())
+  end
+
+  defp forge_rule(Map, :new, _with_transform),
+    do: forge_refusal(Map, :new, "its transform computes every key")
+
+  defp forge_rule(Map, :from_keys, [keys, _value]) do
+    if is_list(keys) and Enum.all?(keys, &plain_key?/1),
+      do: [],
+      else:
+        forge_refusal(
+          Map,
+          :from_keys,
+          "its keys must be written out as literals other than :__struct__"
+        )
+  end
+
+  defp forge_rule(Map, :from_keys, _piped),
+    do: forge_refusal(Map, :from_keys, "its keys cannot be seen")
+
+  # Both maps can be real structs, and the resolver picks the `__struct__`
+  # value: `Map.merge(%URI{}, %URI{}, fn _, _, _ -> File.Stream end)`.
+  defp forge_rule(Map, func, args) when func in [:merge, :intersect] do
+    case args do
+      [_left, _right, _resolver] ->
+        forge_refusal(Map, func, resolver_reason())
+
+      [_right, resolver] ->
+        if function_literal?(resolver),
+          do: forge_refusal(Map, func, resolver_reason()),
+          else: []
+
+      _other ->
+        []
+    end
+  end
+
+  defp forge_rule(Map, :map, _args),
+    do:
+      forge_refusal(
+        Map,
+        :map,
+        "its function rewrites every value, a `__struct__` one included"
+      )
+
+  # Collecting into a list, a binary or a `MapSet` builds no map a caller can
+  # reach; any other target may be a map, so its entries must be written out.
+  defp forge_rule(module, :into, args) when module in [Enum, Stream] do
+    case into_target(args) do
+      {:ok, target} ->
+        if forge_free_target?(target) or forge_free_into_source?(args),
+          do: [],
+          else:
+            forge_refusal(
+              module,
+              :into,
+              entries_reason() <> " unless it collects into a list or MapSet"
+            )
+
+      :capture ->
+        forge_refusal(module, :into, "its target cannot be seen")
+    end
+  end
+
+  defp forge_rule(_module, _func, _args), do: []
+
+  # A `for` body computes every entry, so only the target can make it safe.
+  defp check_for_into_forge(target) do
+    if forge_free_target?(target),
+      do: [],
+      else: [
+        "for ... into: is not allowed at :strict unless it collects into a " <>
+          "list or MapSet (its body computes every key, which can forge a struct)"
+      ]
+  end
+
+  defp forge_capture?(Kernel, func, _arity), do: func in @kernel_forge_calls
+
+  defp forge_capture?(Map, func, arity) when func in [:merge, :intersect],
+    do: arity == 3
+
+  defp forge_capture?(Map, :new, arity), do: arity >= 1
+
+  defp forge_capture?(Map, func, _arity) when func in [:from_keys, :map],
+    do: true
+
+  defp forge_capture?(module, :into, _arity) when module in [Enum, Stream],
+    do: true
+
+  defp forge_capture?(Access, func, _arity) when func in [:key, :key!], do: true
+
+  defp forge_capture?(module, func, _arity),
+    do: is_map_key(@struct_key_writers, {module, func})
+
+  defp forge_refusal(Kernel, func, why), do: forge_refusal(func, why)
+
+  defp forge_refusal(module, func, why),
+    do: forge_refusal("#{inspect(module)}.#{func}", why)
+
+  defp forge_refusal(name, why) do
+    [
+      "#{name} is not allowed at :strict here (#{why}; a map with a " <>
+        "`__struct__` key dispatches to that module's protocol impls)"
+    ]
+  end
+
+  defp entries_reason,
+    do:
+      "its entries must be written out with literal keys other than :__struct__"
+
+  defp resolver_reason,
+    do: "its function can rewrite a struct's `__struct__` value"
+
+  defp function_literal?({:fn, _, _}), do: true
+  defp function_literal?({:&, _, [body]}) when not is_integer(body), do: true
+  defp function_literal?(_value), do: false
+
+  defp forge_free_target?(target) when is_list(target) or is_binary(target),
+    do: true
+
+  defp forge_free_target?(
+         {{:., _, [{:__aliases__, _, [:MapSet]}, :new]}, _, _args}
+       ),
+       do: true
+
+  defp forge_free_target?(_target), do: false
+
+  # Only the direct two-argument form names its source (see
+  # `source_bounded_into?/1`); the piped `into(target, fun)` has none.
+  defp forge_free_into_source?([source, target]),
+    do: not function_literal?(target) and forge_free_entries?(source)
+
+  defp forge_free_into_source?(_args), do: false
+
+  # Every entry is a pair whose key is a plain literal, or a literal that is
+  # no pair at all (which a map refuses at runtime rather than storing).
+  defp forge_free_entries?(entries) when is_list(entries),
+    do: Enum.all?(entries, &forge_free_entry?/1)
+
+  defp forge_free_entries?(_computed), do: false
+
+  defp forge_free_entry?({key, _value}), do: plain_key?(key)
+  defp forge_free_entry?(entry), do: Macro.quoted_literal?(entry)
+
+  defp access_path_ok?([_data, path, _value]), do: literal_path?(path)
+
+  defp access_path_ok?([path, _value]) when is_list(path),
+    do: literal_path?(path)
+
+  defp access_path_ok?([access, _value]), do: access_chain?(access)
+  defp access_path_ok?(_args), do: false
+
+  defp literal_path?(path) when is_list(path),
+    do: Enum.all?(path, &path_element?/1)
+
+  defp literal_path?(_computed), do: false
+
+  # An anonymous function in a path builds its own data; anything it forges
+  # is a node this walk checks like any other.
+  defp path_element?({:fn, _, _}), do: true
+
+  defp path_element?({{:., _, [{:__aliases__, _, [:Access]}, func]}, _, args})
+       when is_list(args) do
+    cond do
+      func in @access_list_selectors -> true
+      func in [:key, :key!] -> match?([_ | _], args) and plain_key?(hd(args))
+      true -> false
+    end
+  end
+
+  defp path_element?(key), do: plain_key?(key)
+
+  # The `put_in/2` form: `m[:a][:b]` is a chain of `Access.get/2` calls.
+  defp access_chain?({{:., _, [Access, :get]}, _, [inner, key]}),
+    do: plain_key?(key) and access_base?(inner)
+
+  defp access_chain?(_other), do: false
+
+  defp access_base?({{:., _, [Access, :get]}, _, [_data, _key]} = inner),
+    do: access_chain?(inner)
+
+  defp access_base?(_data), do: true
 
   defp check_segment_size({:"::", _, [_value, spec]}) do
     case collect_segment_size(spec, {nil, nil}) do
