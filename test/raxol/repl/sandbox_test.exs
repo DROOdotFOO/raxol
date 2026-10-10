@@ -948,4 +948,202 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
   end
+
+  # One row per rule entry, in every call form, so deleting an entry (or a
+  # call form slipping past one) fails a row of its own instead of hiding
+  # behind another node of the same input that refuses it. `update_in(m,
+  # [Access.values()], f)` above, for instance, is refused by the inner
+  # `Access.values()` whether or not `update_in` is a forge call.
+  describe ":strict forge rules hold for every entry and call form" do
+    # {name, first argument, remaining arguments, arity}: the computed
+    # argument (module or path) is the only thing that can refuse each row.
+    @kernel_forge_calls [
+      {"struct", "mod", "[]", 2},
+      {"struct!", "mod", "[]", 2},
+      {"put_in", "m", "[k], v", 3},
+      {"update_in", "m", "[k], f", 3},
+      {"get_and_update_in", "m", "[k], f", 3}
+    ]
+
+    # {module, function, first argument, remaining arguments or nil, arity}
+    @forge_rule_calls [
+      {"Map", "new", "pairs", nil, 1},
+      {"Map", "new", "l", "f", 2},
+      {"Map", "from_keys", "keys", "v", 2},
+      {"Map", "merge", "a", "b, f", 3},
+      {"Map", "intersect", "a", "b, f", 3},
+      {"Map", "map", "m", "f", 2},
+      {"Enum", "into", "pairs", "%{}", 2},
+      {"Stream", "into", "pairs", "%{}", 2},
+      {"Access", "key", "k", nil, 1},
+      # Piped, the node alone reads the default as the key; only the pipe
+      # rebuild sees `k`.
+      {"Access", "key", "k", "%{}", 2},
+      {"Access", "key!", "k", nil, 1},
+      {"Access", "key!", "k", "%{}", 2}
+    ]
+
+    defp call_args(first, nil), do: first
+    defp call_args(first, rest), do: "#{first}, #{rest}"
+
+    defp kernel_forms(name, first, rest) do
+      [
+        "#{name}(#{first}, #{rest})",
+        "Kernel.#{name}(#{first}, #{rest})",
+        ~s|:"Elixir.Kernel".#{name}(#{first}, #{rest})|
+      ]
+    end
+
+    defp kernel_pipe_forms(name, first, rest) do
+      [
+        "#{first} |> #{name}(#{rest})",
+        "#{first} |> Kernel.#{name}(#{rest})",
+        "Kernel.|>(#{first}, #{name}(#{rest}))"
+      ]
+    end
+
+    test "each Kernel forge call refuses a computed module or path in every form" do
+      for {name, first, rest, arity} <- @kernel_forge_calls,
+          code <-
+            kernel_forms(name, first, rest) ++
+              kernel_pipe_forms(name, first, rest) ++
+              [
+                "&#{name}/#{arity}",
+                "&Kernel.#{name}/#{arity}",
+                "&#{name}(&1, #{rest})",
+                "&Kernel.#{name}(&1, #{rest})"
+              ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "each Kernel forge call allows a literal module or path" do
+      rows = [
+        {"struct", "URI", "[]"},
+        {"struct!", "URI", "[]"},
+        {"put_in", "m", "[:a], v"},
+        {"update_in", "m", "[:a], f"},
+        {"get_and_update_in", "m", "[:a], f"}
+      ]
+
+      # A piped struct/2 is refused whatever it names: the node alone has
+      # its fields where the module goes. A bare piped name is checked as the
+      # call (see above).
+      for {name, first, rest} <- rows,
+          code <-
+            kernel_forms(name, first, rest) ++
+              if(name in ["struct", "struct!"],
+                do: [],
+                else: kernel_pipe_forms(name, first, rest)
+              ) do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "each forge_rule clause refuses in direct, piped, atom-module and captured forms" do
+      for {mod, fun, first, rest, arity} <- @forge_rule_calls,
+          atom_mod = ~s|:"Elixir.#{mod}"|,
+          code <- [
+            "#{mod}.#{fun}(#{call_args(first, rest)})",
+            "#{first} |> #{mod}.#{fun}(#{rest})",
+            "Kernel.|>(#{first}, #{mod}.#{fun}(#{rest}))",
+            "#{atom_mod}.#{fun}(#{call_args(first, rest)})",
+            "#{first} |> #{atom_mod}.#{fun}(#{rest})",
+            "&#{mod}.#{fun}/#{arity}",
+            "&#{atom_mod}.#{fun}/#{arity}",
+            "&#{mod}.#{fun}(#{call_args("&1", rest)})"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+
+      for code <- [
+            "Access.values()",
+            "x |> Access.values()",
+            "Kernel.|>(x, Access.values())",
+            ~S|:"Elixir.Access".values()|,
+            "&Access.values/0",
+            ~S|&:"Elixir.Access".values/0|,
+            "&Access.values(&1)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "the same calls with literal keys and entries are allowed" do
+      for code <- [
+            "Map.new([a: 1])",
+            "[a: 1] |> Map.new()",
+            "Map.from_keys([:a, \"b\"], 0)",
+            "Enum.into([a: 1], %{})",
+            "Stream.into([a: 1], %{})",
+            "Access.key(:a)",
+            # The node alone reads `%{}` as the key, the rebuilt call `:a`.
+            ":a |> Access.key(%{})",
+            "Kernel.|>(:a, Access.key!(%{}))"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "every allowlisted struct module may be built, as a literal and in struct/2" do
+      for module <- ~w(URI Date Time DateTime NaiveDateTime Range MapSet),
+          code <- [
+            "%#{module}{}",
+            "struct(#{module}, [])",
+            "Kernel.struct!(#{module}, [])",
+            "#{module} |> struct"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "every Access list selector may appear in a path" do
+      for selector <-
+            ~w[all() at(0) at!(0) elem(0) filter(g) find(g) slice(0..1)],
+          code <- [
+            "update_in(m, [Access.#{selector}], f)",
+            "put_in(m, [:a, Access.#{selector}], v)",
+            "m |> get_and_update_in([Access.#{selector}, :b], f)"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "an alias is a plain map key" do
+      for code <- [
+            ~S|%{Foo => 1}|,
+            ~S|%{URI => 1, Foo.Bar => 2}|,
+            ~S'%{m | Foo => 1}',
+            ~S|Map.put(m, Foo, 1)|,
+            ~S|put_in(m, [Foo], 1)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    # The computed-key refusals name these forms as the way out, so each must
+    # stay allowed for the messages to stay true.
+    test "the alternatives the refusals name are allowed" do
+      for code <- [
+            ~S|%{"#{k}" => v}|,
+            ~S|%{{k} => v}|,
+            ~S|Map.put(m, "#{k}", v)|,
+            ~S|Map.put_new(m, {k}, v)|,
+            ~S|put_in(m, ["#{k}"], v)|,
+            ~S|Access.key("#{k}")|,
+            ~S|Enum.reduce(l, %{}, fn x, acc -> Map.put(acc, "#{x}", x) end)|,
+            ~S|Enum.reduce(l, %{}, fn x, acc -> Map.put(acc, {x}, x) end)|,
+            ~S|Enum.frequencies(l)|,
+            ~S|Enum.group_by(l, f)|,
+            ~S|Enum.group_by(l, f, g)|,
+            ~S|Enum.into(l, [])|,
+            ~S|Enum.into(l, MapSet.new())|,
+            ~S|Stream.into(l, [])|,
+            ~S|for x <- l, into: [], do: x|,
+            ~S|for x <- l, into: MapSet.new(), do: x|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+  end
 end

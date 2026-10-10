@@ -298,6 +298,21 @@ defmodule Raxol.REPL.Sandbox do
   # a `__struct__` key that `Enum.frequencies([:__struct__])` put there.
   @access_list_selectors [:all, :at, :at!, :elem, :filter, :find, :slice]
 
+  # What still builds a map from computed data at `:strict`, named in each
+  # refusal of a computed key so the user has somewhere to go. A key is judged
+  # by its top-level form (`plain_key?/1`), so a string or tuple around a
+  # computed value can never be the atom `:__struct__`. `Enum.frequencies/1`
+  # and `Enum.group_by/2,3` compute keys but store only counts and lists, never
+  # an atom, so a `__struct__` key they plant names no module (and every call
+  # that could rewrite it is refused by `forge_rule/3`). A list or `MapSet`
+  # has no key to plant. Each form named here is `:ok` in the tests, so a
+  # rule that starts refusing one fails there before the message lies.
+  @computed_key_hint ~S|A computed key passes wrapped in a string or tuple: "#{k}" or {k}.|
+
+  @computed_entries_hint ~S|To build a map from computed data, use Enum.frequencies/1 or | <>
+                           ~S|Enum.group_by/2,3, collect into a list or MapSet, or Map.put/3 | <>
+                           ~S|each entry under a string or tuple key ("#{k}" or {k}).|
+
   @doc """
   Checks code for safety violations at the given strictness level.
 
@@ -568,8 +583,9 @@ defmodule Raxol.REPL.Sandbox do
   # map is BUILT, not where it is used: the uses include string interpolation
   # and the REPL printing its result, which no AST walk can enumerate.
   #
-  # Every key must be a literal other than `:__struct__`; a computed key is
-  # refused because atoms are free at runtime (`String.to_existing_atom/1`).
+  # Every key must be a literal other than `:__struct__` or a container
+  # (`plain_key?/1`); a bare computed key is refused because atoms are free
+  # at runtime (`String.to_existing_atom/1`).
   # An update `%{m | a: 1}` only replaces keys `m` already has, so it forges
   # nothing its own keys do not name. Patterns share the shape, so
   # `%{__struct__: mod} = x` is refused too: this walk does not track whether
@@ -923,7 +939,7 @@ defmodule Raxol.REPL.Sandbox do
       [
         "a map key that is :__struct__ or computed is not allowed at :strict " <>
           "(it can forge a struct, which dispatches to another module's " <>
-          "protocol impls); write each key as a literal"
+          "protocol impls); write each key as a literal. " <> @computed_key_hint
       ]
     end
   end
@@ -1053,11 +1069,12 @@ defmodule Raxol.REPL.Sandbox do
         if plain_key?(key),
           do: [],
           else:
-            forge_refusal(
-              module,
+            module
+            |> forge_refusal(
               func,
               "its key must be a literal other than :__struct__"
             )
+            |> with_hint(@computed_key_hint)
 
       :error ->
         forge_refusal(module, func, "its key cannot be seen")
@@ -1071,17 +1088,24 @@ defmodule Raxol.REPL.Sandbox do
   defp forge_rule(Access, :values, _args),
     do: forge_refusal(Access, :values, "it rewrites every value of a map")
 
+  # The piped `k |> Access.key(default)` is checked here twice: alone, where
+  # `default` sits in the key's place and is what this reads, and rebuilt by
+  # the `|>` clause of `forge_rule/3` as `Access.key(k, default)`, which reads
+  # `k`. Only the rebuilt check is sound for that form, so the refusal of a
+  # computed piped key depends on the pipe rebuild; the alone check is never
+  # the one that refuses it.
   defp forge_rule(Access, func, args) when func in [:key, :key!] do
     case args do
       [key | _default] ->
         if plain_key?(key),
           do: [],
           else:
-            forge_refusal(
-              Access,
+            Access
+            |> forge_refusal(
               func,
               "its key must be a literal other than :__struct__"
             )
+            |> with_hint(@computed_key_hint)
 
       [] ->
         forge_refusal(Access, func, "its key cannot be seen")
@@ -1095,11 +1119,17 @@ defmodule Raxol.REPL.Sandbox do
   defp forge_rule(Map, :new, [source]) do
     if forge_free_entries?(source) or match?({:%{}, _, _}, source),
       do: [],
-      else: forge_refusal(Map, :new, entries_reason())
+      else:
+        Map
+        |> forge_refusal(:new, entries_reason())
+        |> with_hint(@computed_entries_hint)
   end
 
   defp forge_rule(Map, :new, _with_transform),
-    do: forge_refusal(Map, :new, "its transform computes every key")
+    do:
+      Map
+      |> forge_refusal(:new, "its transform computes every key")
+      |> with_hint(@computed_entries_hint)
 
   defp forge_rule(Map, :from_keys, [keys, _value]) do
     if is_list(keys) and Enum.all?(keys, &plain_key?/1),
@@ -1117,6 +1147,15 @@ defmodule Raxol.REPL.Sandbox do
 
   # Both maps can be real structs, and the resolver picks the `__struct__`
   # value: `Map.merge(%URI{}, %URI{}, fn _, _, _ -> File.Stream end)`.
+  #
+  # Two arguments are `merge/3` only on the right of a pipe, and the `|>`
+  # clause above already rebuilds `a |> Map.merge(b, f)` into the three-
+  # argument call and refuses it, whatever `f` is. This branch is defense for
+  # a pipe-like shape that reaches the node without that rebuild; none is
+  # known. It refuses only a function LITERAL in second place, because a
+  # variable there is indistinguishable from the second map of a plain
+  # `Map.merge(a, b)`. Written directly, `Map.merge(b, fn ... end)` passes a
+  # function as a map and raises, so refusing it costs nothing.
   defp forge_rule(Map, func, args) when func in [:merge, :intersect] do
     case args do
       [_left, _right, _resolver] ->
@@ -1148,11 +1187,12 @@ defmodule Raxol.REPL.Sandbox do
         if forge_free_target?(target) or forge_free_into_source?(args),
           do: [],
           else:
-            forge_refusal(
-              module,
+            module
+            |> forge_refusal(
               :into,
               entries_reason() <> " unless it collects into a list or MapSet"
             )
+            |> with_hint(@computed_entries_hint)
 
       :capture ->
         forge_refusal(module, :into, "its target cannot be seen")
@@ -1167,7 +1207,8 @@ defmodule Raxol.REPL.Sandbox do
       do: [],
       else: [
         "for ... into: is not allowed at :strict unless it collects into a " <>
-          "list or MapSet (its body computes every key, which can forge a struct)"
+          "list or MapSet (its body computes every key, which can forge a " <>
+          "struct). " <> @computed_entries_hint
       ]
   end
 
@@ -1201,6 +1242,8 @@ defmodule Raxol.REPL.Sandbox do
         "`__struct__` key dispatches to that module's protocol impls)"
     ]
   end
+
+  defp with_hint([message], hint), do: [message <> ". " <> hint]
 
   defp entries_reason,
     do:
