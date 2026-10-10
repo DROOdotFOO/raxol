@@ -1146,4 +1146,85 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
   end
+
+  # `IO` hands any atom, pid or tuple device to `:io`, which sends an io
+  # request to that process: `IO.write(Raxol.Payments.Wallets.Op, "x")`
+  # messaged the process `Kernel.send/2` is refused for, and bypassed the
+  # evaluator's output capture on the way. `:stderr` and `IO.warn` bypass
+  # the capture too, onto the node's real stderr.
+  describe ":strict IO calls may only name the standard devices" do
+    test "a named, computed or piped device is refused in every call form" do
+      for code <- [
+            ~S{IO.write(:some_name, "x")},
+            ~S{IO.write(Raxol.Payments.Wallets.Op, "x")},
+            ~S{IO.puts(:logger, "x")},
+            ~S{IO.read(:code_server, :line)},
+            ~S{IO.binread(:code_server, :line)},
+            ~S{IO.gets(:user, "p")},
+            ~S{IO.getn(:n, "p")},
+            ~S{IO.getn(dev, p)},
+            ~S{IO.getn(:n, "p", 1)},
+            ~S{IO.inspect(:n, x, [])},
+            ~S{IO.stream(dev, :line)},
+            ~S{IO.binstream(dev, :line)},
+            ~S{IO.write(self(), "x")},
+            ~S{:some_name |> IO.write("x")},
+            ~S{:n |> IO.inspect(x, [])},
+            ~S{Kernel.|>(:n, IO.puts("x"))},
+            ~S{:"Elixir.IO".write(:n, "x")},
+            ~S{&IO.write/2},
+            ~S{&IO.inspect/3},
+            ~S{&IO.write(&1, "x")},
+            ~S{Enum.into(["x"], IO.stream(:n, :line))},
+            ~S{IO.write(:stderr, "x")},
+            ~S{IO.puts(:standard_error, "x")},
+            ~S{:stderr |> IO.write("x")},
+            ~S{IO.inspect(:stderr, x, [])}
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "IO.warn writes to the node's stderr and is refused in every form" do
+      for code <- [
+            ~S{IO.warn("x")},
+            ~S{IO.warn("x", [])},
+            ~S{IO.warn("x", file: "/etc/passwd", line: 1)},
+            ~S{"x" |> IO.warn()},
+            ~S{Kernel.|>("x", IO.warn([]))},
+            ~S{:"Elixir.IO".warn("x")},
+            ~S{&IO.warn/1},
+            ~S{&IO.warn/2},
+            ~S{Enum.each(l, &IO.warn/1)},
+            ~S{&IO.warn(&1, [])},
+            ~S{IO.warn_once(:k, "x", 0)}
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict), "#{code} passed"
+      end
+    end
+
+    test "the standard devices and the default-device arities are allowed" do
+      for code <- [
+            ~S{IO.puts("x")},
+            ~S{IO.puts(:stdio, "x")},
+            ~S{IO.write(:standard_io, "x")},
+            ~S{IO.gets(:standard_io, "p")},
+            ~S{:standard_io |> IO.puts("x")},
+            ~S{"x" |> IO.puts()},
+            ~S{:stdio |> IO.write("x")},
+            ~S{IO.inspect(x, label: "a")},
+            ~S{x |> IO.inspect()},
+            ~S{x |> IO.inspect(label: "a")},
+            ~S{IO.inspect(:stdio, x, [])},
+            ~S{IO.getn("p", 3)},
+            ~S{IO.getn("p", :eof)},
+            ~S{IO.write("x")},
+            ~S{&IO.puts/1},
+            ~S{&IO.write(:stdio, &1)},
+            ~S{Enum.each(l, &IO.puts/1)}
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+  end
 end
