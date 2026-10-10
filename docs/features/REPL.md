@@ -67,7 +67,7 @@ Sandbox.check("System.cmd(\"rm\", [\"-rf\", \"/\"])", :standard)  # => {:error, 
 | `:standard` | Blocks known-dangerous calls | Explicit opt-in for trusted local use |
 | `:strict` | Whitelist-only | The level every served launch gets, and the minimum for SSH, web, or untrusted input |
 
-Sandbox option values are exact and case-sensitive. Unknown values fail before the terminal starts instead of silently selecting another level. Timeouts must be positive integers.
+Sandbox option values are exact and case-sensitive. Unknown values fail before the terminal starts instead of silently selecting another level, and `Sandbox.check/2` itself raises `ArgumentError` for any level other than `:none`, `:standard` or `:strict`. Timeouts must be positive integers.
 
 **Standard** blocks destructive system, file, network, and dynamic-code calls. It also denies process creation and delayed scheduling through the `Task`, `Task.Supervisor`, `Agent`, `GenServer`, `Supervisor`, `DynamicSupervisor`, `PartitionSupervisor`, `Registry`, `:proc_lib`, `:gen`, `:gen_server`, `:gen_event`, `:gen_statem`, `:supervisor`, `:supervisor_bridge`, and `:timer` APIs; every `spawn*` form exposed by `Kernel`, `Node`, or `:erlang`; and module directives that could alias or import those APIs.
 
@@ -80,6 +80,8 @@ A key is judged by its top-level form alone. A literal other than `:__struct__` 
 Strict `IO` calls may only name the evaluation's own output as a device, written as a literal: `:stdio` or `:standard_io`. Any other device (a registered name, a pid, a variable) is a process `IO` sends an io request to, so `IO.write(Raxol.Payments.Wallets.Op, "x")` messaged the process `Kernel.send/2` is refused for, and its output skipped the capture. `:stderr`/`:standard_error` and `IO.warn/1,2` are refused as well: they write to the node's real stderr, which the capture never sees. The default-device forms (`IO.puts(x)`, `IO.inspect(x, label: "a")`, `x |> IO.inspect()`) are unaffected; `dev |> IO.write("x")`, `&IO.write/2` and `IO.stream(dev, :line)` are refused, as is `IO.getn(a, b)` unless `b` is a literal count or `:eof` (the prompt form) or `a` is `:stdio`/`:standard_io`.
 
 Both `:standard` and `:strict` refuse syntax that creates atoms from runtime data, since atoms are never collected and persist across evaluations: `~w(#{x})a` (an interpolated word list with the `a` modifier, which calls `String.to_atom/1` at runtime) and computed aliases such as `x.Foo` or `Integer.to_string(i).Foo` (including `__MODULE__.Foo`). `~w(a b)a`, `~w(#{x})` and literal aliases like `Foo.Bar` remain allowed.
+
+Strict also refuses a sorter that could name a module chosen at runtime. `Enum.sort/2`, `Enum.sort_by/3`, `Enum.max`/`min`/`min_max` and their `_by` forms, and `List.keysort/3` call `module.compare/2` when the sorter is a module, so `Enum.sort(l, m)` dispatches to whatever `m` holds. The sorter must be written out as a function or capture, `:asc`/`:desc`, a whitelisted module (`Enum.sort(dates, Date)`) or a direction tuple of those (`{:desc, Date}`); a variable is refused even when it would hold a function, and captures such as `&Enum.sort/2` that hide the sorter are refused.
 
 ## Over SSH, and on any served surface
 

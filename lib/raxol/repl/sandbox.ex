@@ -17,9 +17,10 @@ defmodule Raxol.REPL.Sandbox do
   rather than resolved (#1045). Each such form found so far has been a
   CVE-class hole on an anonymous surface, and the checker's own history is the
   argument against trusting it: computed receivers, `Module.concat/1`
-  alias resolution, the bare-name capture forms of `apply` and `spawn`, and
-  maps forged with a `__struct__` key were each `:ok` at `:strict` until they
-  were not.
+  alias resolution, the bare-name capture forms of `apply` and `spawn`,
+  maps forged with a `__struct__` key, and sorters naming a runtime module
+  (`Enum.sort(l, m)` calls `m.compare/2`) were each `:ok` at `:strict` until
+  they were not.
 
   A forged struct is the same hole reached through data rather than a name. A
   map whose `__struct__` key names a module is protocol-dispatched
@@ -354,20 +355,53 @@ defmodule Raxol.REPL.Sandbox do
     each_stream: 2,
     each_binstream: 2
   ]
+  # Calls that turn a sorter argument naming a MODULE into a call of that
+  # module's `compare/2`, by the sorter's position in the full call (0-based).
+  # `Enum.max/2` and `Enum.max_by/3` take a sorter OR an empty fallback in
+  # that slot; both are written as a function, so one rule covers either.
+  @sorter_positions %{
+    {Enum, :sort} => 1,
+    {Enum, :sort_by} => 2,
+    {Enum, :max} => 1,
+    {Enum, :min} => 1,
+    {Enum, :min_max} => 1,
+    {Enum, :max_by} => 2,
+    {Enum, :min_by} => 2,
+    {Enum, :min_max_by} => 2,
+    {List, :keysort} => 2
+  }
   @doc """
   Checks code for safety violations at the given strictness level.
 
   Returns `:ok` if safe, or `{:error, [violation_message]}` if violations found.
+  Raises `ArgumentError` for a level other than `:none`, `:standard` or
+  `:strict`.
   """
   @spec check(String.t(), level()) :: :ok | {:error, [String.t()]}
   def check(code, level \\ :standard)
   def check(_code, :none), do: :ok
 
-  def check(code, level) do
-    # The parser raises on invalid UTF-8 rather than returning an error.
+  # The parser's own warnings (`Map."put"()` warns that the quotes are
+  # unnecessary) go to `:standard_error` before any clause here runs, so with
+  # the default `emit_warnings: true` submitted source chose what the node
+  # logged: 12 KB of `Map.'put'();` wrote 328 KB to stderr, and `ReplDemo`
+  # does not cap input length. The checker never reports a warning, so
+  # nothing is lost by not emitting one. The parser raises on invalid UTF-8
+  # rather than returning an error, so that is answered first.
+  def check(code, level) when level in [:standard, :strict] do
     if String.valid?(code),
-      do: check_parsed(Code.string_to_quoted(code), level),
+      do:
+        check_parsed(Code.string_to_quoted(code, emit_warnings: false), level),
       else: {:error, ["Syntax error: the code is not valid UTF-8"]}
+  end
+
+  # Most clauses below guard on `level in [:standard, :strict]` and fall
+  # through to `[]` otherwise, so an unknown level (`:Strict`, a typo, a
+  # value read from config) checked nothing and returned `:ok`. Refusing it
+  # loudly keeps a caller's mistake from silently becoming `:none`.
+  def check(_code, level) do
+    raise ArgumentError,
+          "unknown sandbox level #{inspect(level)}; expected :none, :standard or :strict"
   end
 
   defp check_parsed({:ok, ast}, level) do
@@ -418,9 +452,9 @@ defmodule Raxol.REPL.Sandbox do
   # rebuild is what judges ITS right-hand side.
   #
   # The call inside a qualified capture (`&Map.put/3`) has no arguments at
-  # all. The capture clause of `check_node/2` judges both its forge rule and
-  # its `__`-prefix rule from the name and arity, so the inner node skips
-  # those two and keeps only its whitelist check.
+  # all. The capture clause of `check_node/2` judges its forge, sorter and
+  # `__`-prefix rules from the name and arity, so the inner node skips those
+  # and keeps its whitelist and size checks.
   #
   # Each such child is marked here, before the walk descends into it. The
   # marker is a meta key, and meta comes only from the parser, so submitted
@@ -464,10 +498,12 @@ defmodule Raxol.REPL.Sandbox do
 
   defp judged_by(meta), do: Keyword.get(meta, @judged_by_meta)
 
-  defp standalone_forge_rule(module, func, args, meta) do
+  # The forge and sorter rules: both read arguments by position, so both
+  # skip a node its parent judges.
+  defp standalone_call_rules(module, func, args, meta) do
     if func != :|> and judged_by(meta) in [:pipe, :capture],
       do: [],
-      else: forge_rule(module, func, args)
+      else: forge_rule(module, func, args) ++ sorter_rule(module, func, args)
   end
 
   defp standalone_internal_call(module, func, meta) do
@@ -542,29 +578,13 @@ defmodule Raxol.REPL.Sandbox do
         ["#{name}.#{func} is not allowed (module not in whitelist)"]
 
       {:ok, module} ->
-        if module in @allowed_strict_modules do
-          standalone_internal_call(module, func, meta) ++
-            check_denied_call(module, func) ++
-            check_strict_size(module, func, args) ++
-            standalone_forge_rule(module, func, args, meta)
-        else
-          [
-            "#{inspect(module)}.#{func} is not allowed (module not in whitelist)"
-          ]
-        end
+        strict_call(module, func, args, meta)
     end
   end
 
   defp check_node({{:., _, [mod, func]}, meta, args}, :strict)
        when is_atom(mod) do
-    if mod in @allowed_strict_modules do
-      standalone_internal_call(mod, func, meta) ++
-        check_denied_call(mod, func) ++
-        check_strict_size(mod, func, args) ++
-        standalone_forge_rule(mod, func, args, meta)
-    else
-      ["#{inspect(mod)}.#{func} is not allowed (module not in whitelist)"]
-    end
+    strict_call(mod, func, args, meta)
   end
 
   # A dot-CALL whose module is neither a literal alias nor a literal atom --
@@ -658,7 +678,8 @@ defmodule Raxol.REPL.Sandbox do
   # A qualified capture removes every argument, so a function that can write a
   # `__struct__` key from runtime data is refused captured: `&Map.put/3`
   # applied to a computed key forges as well as the call does. A captured
-  # device arity of `IO` takes its device from the caller the same way.
+  # device arity of `IO` takes its device from the caller the same way, and a
+  # sorter capture (`&Enum.sort/2`) hides its sorter the same way.
   defp check_node(
          {:&, _, [{:/, _, [{{:., _, [module, func]}, _, _}, arity]}]},
          :strict
@@ -670,26 +691,14 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  # Module directives can rename or import a denied API before calling it:
-  # `alias Task, as: T; T.async(...)` and `import Task; async(...)` otherwise
-  # bypass a checker that sees only the submitted AST, not the expanded code.
-  defp check_node({directive, _, _args}, level)
-       when level in [:standard, :strict] and
-              directive in [:alias, :import, :require, :use] do
-    ["#{directive} is not allowed (module indirection cannot be checked)"]
-  end
-
-  defp check_node({:receive, _, _}, _level) do
-    ["receive is not allowed (message interception)"]
-  end
-
   # `import`, `alias`, `require` and `use` decide WHICH module a name reaches,
   # and every clause above decides safety FROM that name, so these four forms
   # sit underneath the whole check rather than inside it. `import System` turns
   # the following `cmd("id", [])` into a bare local call that matches no clause
   # at all; `alias :os, as: Enum` rebinds a whitelisted name onto a denied
   # module, so the checker approves a call the runtime then dispatches to
-  # `:os.cmd/1`. Both returned `:ok` at `:strict` -- the level documented as
+  # `:os.cmd/1`; `alias Task, as: T; T.async(...)` reaches a denied API the
+  # same way. These returned `:ok` at `:strict` -- the level documented as
   # safe for anonymous exposure -- which is CVE-class on a network surface
   # (#1045).
   #
@@ -700,13 +709,16 @@ defmodule Raxol.REPL.Sandbox do
   # in full module names, and full module names still work.
   #
   # `:none` -- the local-terminal level -- never reaches any clause here;
-  # `check/2` returns `:ok` for it before the walk starts.
-  defp check_node({kind, _, args}, _level)
-       when kind in [:import, :alias, :require, :use] and is_list(args) do
-    [
-      "#{kind} is not allowed " <>
-        "(it rebinds the module names this checker resolves statically)"
-    ]
+  # `check/2` returns `:ok` for it before the walk starts, and raises for any
+  # level it does not know.
+  defp check_node({directive, _, _args}, level)
+       when level in [:standard, :strict] and
+              directive in [:alias, :import, :require, :use] do
+    ["#{directive} is not allowed (module indirection cannot be checked)"]
+  end
+
+  defp check_node({:receive, _, _}, _level) do
+    ["receive is not allowed (message interception)"]
   end
 
   defp check_node({kind, _, _}, _level)
@@ -783,7 +795,7 @@ defmodule Raxol.REPL.Sandbox do
 
   defp check_node({name, meta, args}, :strict)
        when name in [:|> | @kernel_forge_calls] and is_list(args),
-       do: standalone_forge_rule(Kernel, name, args, meta)
+       do: standalone_call_rules(Kernel, name, args, meta)
 
   defp check_node({kind, _, args}, level)
        when level in [:standard, :strict] and is_atom(kind) and is_list(args) do
@@ -849,8 +861,24 @@ defmodule Raxol.REPL.Sandbox do
       forge_capture?(module, func, arity) ->
         capture_forge_refusal(module, func, arity)
 
+      sorter_capture?(module, func, arity) ->
+        sorter_refusal("&#{inspect(module)}.#{func}/#{arity}")
+
       true ->
         []
+    end
+  end
+
+  # Every `:strict` call names its module as an alias or as an atom; both
+  # forms resolve here so one rule chain sees them alike.
+  defp strict_call(module, func, args, meta) do
+    if module in @allowed_strict_modules do
+      standalone_internal_call(module, func, meta) ++
+        check_denied_call(module, func) ++
+        check_strict_size(module, func, args) ++
+        standalone_call_rules(module, func, args, meta)
+    else
+      ["#{inspect(module)}.#{func} is not allowed (module not in whitelist)"]
     end
   end
 
@@ -1202,19 +1230,23 @@ defmodule Raxol.REPL.Sandbox do
   defp strict_module(module) when is_atom(module), do: {:ok, module}
   defp strict_module(_computed), do: :unknown
 
-  # The rules for one call, local or remote: the forge rules, and `IO`'s
-  # device rule. Only a pipe rebuilds a call: the right-hand side's arguments
-  # are short by the piped value, which can be the very input a rule must see
-  # (`pairs |> Map.new()` is the same node as `Map.new()` otherwise, and
-  # `dev |> IO.write("x")` the same as `IO.write("x")`). The right-hand node
-  # is marked by `mark_judged_children/1` and not judged alone, so every rule
-  # below sees a call with all its arguments, or fewer only when a capture
-  # has removed them.
+  # The rules for one call, local or remote: the forge rules, `IO`'s device
+  # rule and the sorter rule. Only a pipe rebuilds a call: the right-hand
+  # side's arguments are short by the piped value, which can be the very
+  # input a rule must see (`pairs |> Map.new()` is the same node as
+  # `Map.new()` otherwise, `dev |> IO.write("x")` the same as
+  # `IO.write("x")`, `l |> Enum.sort(m)` the same as `Enum.sort(m)`). The
+  # right-hand node is marked by `mark_judged_children/1` and not judged
+  # alone, so every rule below sees a call with all its arguments, or fewer
+  # only when a capture has removed them.
   defp forge_violations({{:., _, [module, func]}, _, args})
        when is_atom(func) and is_list(args) do
     case strict_module(module) do
-      {:ok, module} -> forge_rule(module, func, args)
-      :unknown -> []
+      {:ok, module} ->
+        forge_rule(module, func, args) ++ sorter_rule(module, func, args)
+
+      :unknown ->
+        []
     end
   end
 
@@ -1413,6 +1445,68 @@ defmodule Raxol.REPL.Sandbox do
     [
       "IO.#{func} is not allowed at :strict (it writes to the node's " <>
         ":standard_error, past the evaluator's output capture); use IO.puts/1"
+    ]
+  end
+
+  # A sorter that names a module is called as `module.compare/2` (#1238 is
+  # the same class: a module chosen at runtime, reached through an argument
+  # rather than a dot). `m = File; Enum.sort(l, m)`, `{:asc, m}`,
+  # `Enum.max(l, m, fn -> nil end)` and `List.keysort(l, 0, m)` each passed
+  # `:strict` and dispatched to whatever `m` held. So at `:strict` the sorter
+  # must be visibly harmless in the source: a function literal or capture,
+  # `:asc`/`:desc`, a literal whitelisted module (`Enum.sort(dates, Date)`),
+  # or a direction tuple of those. A variable or any computed value is
+  # refused, even where it would hold a function or an empty fallback.
+  #
+  # Arguments are read by their position in the full call. A pipe's
+  # right-hand side is judged only as the call the pipe rebuilds, so a call
+  # missing its sorter slot is the short form, which takes no sorter.
+  defp sorter_rule(module, func, args)
+       when is_map_key(@sorter_positions, {module, func}) do
+    case Enum.drop(args, Map.fetch!(@sorter_positions, {module, func})) do
+      [sorter | _rest] ->
+        if sorter_ok?(sorter),
+          do: [],
+          else: sorter_refusal("#{inspect(module)}.#{func}")
+
+      [] ->
+        []
+    end
+  end
+
+  defp sorter_rule(_module, _func, _args), do: []
+
+  defp sorter_capture?(module, func, arity) do
+    case Map.fetch(@sorter_positions, {module, func}) do
+      {:ok, position} -> arity > position
+      :error -> false
+    end
+  end
+
+  defp sorter_ok?(direction) when direction in [:asc, :desc], do: true
+
+  defp sorter_ok?({direction, module}) when direction in [:asc, :desc],
+    do: sorter_module?(module)
+
+  defp sorter_ok?(sorter),
+    do: function_literal?(sorter) or sorter_module?(sorter)
+
+  defp function_literal?({:fn, _, _}), do: true
+  defp function_literal?({:&, _, [body]}) when not is_integer(body), do: true
+  defp function_literal?(_value), do: false
+
+  defp sorter_module?(module) do
+    case strict_module(module) do
+      {:ok, module} -> module in @allowed_strict_modules
+      :unknown -> false
+    end
+  end
+
+  defp sorter_refusal(name) do
+    [
+      "#{name} is not allowed at :strict here (its sorter must be a function, " <>
+        ":asc, :desc or a whitelisted module written out; a module sorter " <>
+        "is called as module.compare/2)"
     ]
   end
 
