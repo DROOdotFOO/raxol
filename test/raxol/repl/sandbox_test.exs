@@ -884,4 +884,68 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
   end
+
+  describe ":strict refuses generated and internal functions of allowlisted modules" do
+    test "every __-prefixed function and macro is refused in every call form" do
+      for mod <- Sandbox.strict_modules(),
+          {name, arity} <- mod.__info__(:functions) ++ mod.__info__(:macros),
+          String.starts_with?(Atom.to_string(name), "__") do
+        m = inspect(mod)
+        args = Enum.map_join(1..arity//1, ", ", &"a#{&1}")
+
+        rest =
+          if arity > 1,
+            do: Enum.map_join(2..arity//1, ", ", &"a#{&1}"),
+            else: ""
+
+        forms = [
+          "#{m}.#{name}(#{args})",
+          ~s|:"Elixir.#{m}".#{name}(#{args})|,
+          "&#{m}.#{name}/#{arity}"
+        ]
+
+        forms =
+          if arity >= 1,
+            do:
+              forms ++
+                [
+                  "a1 |> #{m}.#{name}(#{rest})",
+                  "&#{m}.#{name}(&1#{if rest != "", do: ", " <> rest})"
+                ],
+            else: forms
+
+        for code <- forms do
+          assert {:error, _} = Sandbox.check(code, :strict),
+                 "#{code} passed :strict"
+        end
+      end
+    end
+
+    test "__struct__/1 regressions" do
+      for code <- [
+            "URI.__struct__(kv)",
+            "MapSet.__struct__(kv)",
+            "kv |> URI.__struct__()",
+            "Kernel.|>(kv, URI.__struct__())",
+            ~S|:"Elixir.URI".__struct__(kv)|,
+            "&URI.__struct__/1",
+            "&URI.__struct__(&1)",
+            "Regex.__import_pattern__(p)"
+          ] do
+        assert {:error, _} = Sandbox.check(code, :strict),
+               "#{code} passed :strict"
+      end
+    end
+
+    test "ordinary allowlisted calls still pass" do
+      for code <- [
+            ~S|URI.parse("http://x")|,
+            ~S|%URI{host: "x"}|,
+            ~S|struct(URI, host: "x")|,
+            "MapSet.new(l)"
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+  end
 end
