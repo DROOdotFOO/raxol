@@ -313,6 +313,49 @@ defmodule Raxol.REPL.Sandbox do
                            ~S|Enum.group_by/2,3, collect into a list or MapSet, or Map.put/3 | <>
                            ~S|each entry under a string or tuple key ("#{k}" or {k}).|
 
+  # `IO` is whitelisted for printing, and printing at `:strict` goes to the
+  # evaluator's capture: it swaps the evaluation's group leader, which is
+  # where `:stdio` sends. Every function below also takes a DEVICE, though,
+  # and `IO` hands any atom, pid or tuple straight to `:io` (`map_dev/1`),
+  # which sends an io request to whatever process that name reaches and, for
+  # a read, waits on its reply. `IO.write(Raxol.Payments.Wallets.Op, "x")`
+  # and `IO.read(:code_server, :line)` were `:ok` at `:strict` while
+  # `Kernel.send(Raxol.Payments.Wallets.Op, :x)` was refused: a message to
+  # the same process, with the output capture bypassed besides.
+  #
+  # So a device must be the group leader, written as a literal. `:stderr` is
+  # NOT one: it names the node's `:standard_error` process, which the capture
+  # never sees, so anonymous input could fill the node's real stderr at no
+  # cost to its own output limit. `IO.warn/1,2` writes there too (through
+  # `:elixir_errors`), and its `file:` form prints a snippet of whatever file
+  # it names, so it is refused in every form (`warn_once/3` is its
+  # undocumented twin).
+  #
+  # The entries are each function's full arity, whose first argument is the
+  # device; the default-device arities (`IO.puts(x)`, `IO.inspect(x, opts)`)
+  # name none. `getn/2` is both `getn(prompt, count)` and
+  # `getn(device, prompt)`: only a literal count makes it the first. A pipe
+  # supplies the device by position (`dev |> IO.write("x")`), so the rule
+  # also runs on the call the pipe rebuilds (`forge_violations/1`).
+  @standard_io_devices [:stdio, :standard_io]
+
+  @io_stderr_writers [:warn, :warn_once]
+
+  @io_device_calls [
+    read: 2,
+    binread: 2,
+    gets: 2,
+    getn: 2,
+    getn: 3,
+    write: 2,
+    binwrite: 2,
+    puts: 2,
+    inspect: 3,
+    stream: 2,
+    binstream: 2,
+    each_stream: 2,
+    each_binstream: 2
+  ]
   @doc """
   Checks code for safety violations at the given strictness level.
 
@@ -487,20 +530,16 @@ defmodule Raxol.REPL.Sandbox do
 
   # A qualified capture removes every argument, so a function that can write a
   # `__struct__` key from runtime data is refused captured: `&Map.put/3`
-  # applied to a computed key forges as well as the call does.
+  # applied to a computed key forges as well as the call does. A captured
+  # device arity of `IO` takes its device from the caller the same way.
   defp check_node(
          {:&, _, [{:/, _, [{{:., _, [module, func]}, _, _}, arity]}]},
          :strict
        )
        when is_atom(func) and is_integer(arity) do
-    with {:ok, module} <- strict_module(module),
-         true <- internal_name?(func) or forge_capture?(module, func, arity) do
-      [
-        "&#{inspect(module)}.#{func}/#{arity} is not allowed at :strict " <>
-          "(its arguments cannot be checked for a forged struct)"
-      ]
-    else
-      _ -> []
+    case strict_module(module) do
+      {:ok, module} -> qualified_capture_refusal(module, func, arity)
+      :unknown -> []
     end
   end
 
@@ -662,6 +701,32 @@ defmodule Raxol.REPL.Sandbox do
 
   defp internal_name?(func),
     do: is_atom(func) and String.starts_with?(Atom.to_string(func), "__")
+
+  defp capture_forge_refusal(module, func, arity) do
+    [
+      "&#{inspect(module)}.#{func}/#{arity} is not allowed at :strict " <>
+        "(its arguments cannot be checked for a forged struct)"
+    ]
+  end
+
+  defp qualified_capture_refusal(module, func, arity) do
+    cond do
+      internal_name?(func) ->
+        capture_forge_refusal(module, func, arity)
+
+      module == IO and func in @io_stderr_writers ->
+        io_stderr_refusal(func)
+
+      module == IO and {func, arity} in @io_device_calls ->
+        io_device_refusal(func, arity)
+
+      forge_capture?(module, func, arity) ->
+        capture_forge_refusal(module, func, arity)
+
+      true ->
+        []
+    end
+  end
 
   # `Module.concat/1` MINTS an atom, and atoms are never collected. Resolving
   # aliases with it made the CHECKER the very primitive `{Module, :concat}` is
@@ -994,11 +1059,12 @@ defmodule Raxol.REPL.Sandbox do
   defp strict_module(module) when is_atom(module), do: {:ok, module}
   defp strict_module(_computed), do: :unknown
 
-  # The forge rules for one call, local or remote. Only a pipe rebuilds a
-  # call: the right-hand side's arguments are short by the piped value, which
-  # can be the very input a rule must see (`pairs |> Map.new()` is the same
-  # node as `Map.new()` otherwise). The call node is also checked on its own,
-  # so the pipe can only add refusals.
+  # The rules for one call, local or remote: the forge rules, and `IO`'s
+  # device rule. Only a pipe rebuilds a call: the right-hand side's arguments
+  # are short by the piped value, which can be the very input a rule must see
+  # (`pairs |> Map.new()` is the same node as `Map.new()` otherwise, and
+  # `dev |> IO.write("x")` the same as `IO.write("x")`). The call node is also
+  # checked on its own, so the pipe can only add refusals.
   defp forge_violations({{:., _, [module, func]}, _, args})
        when is_atom(func) and is_list(args) do
     case strict_module(module) do
@@ -1199,6 +1265,8 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
+  defp forge_rule(IO, func, args), do: io_rule(func, args)
+
   defp forge_rule(_module, _func, _args), do: []
 
   # A `for` body computes every entry, so only the target can make it safe.
@@ -1210,6 +1278,45 @@ defmodule Raxol.REPL.Sandbox do
           "list or MapSet (its body computes every key, which can forge a " <>
           "struct). " <> @computed_entries_hint
       ]
+  end
+
+  # See `@io_device_calls`. `IO.warn` is refused whatever its arguments. A
+  # literal count makes `getn/2` the prompt form; a standard device in first
+  # place is fine whether or not the arity takes one. Anything else at a
+  # device arity -- a name, a variable, a pipe's left-hand side -- is refused.
+  defp io_rule(func, _args) when func in @io_stderr_writers,
+    do: io_stderr_refusal(func)
+
+  defp io_rule(:getn, [_prompt, count])
+       when (is_integer(count) and count > 0) or count == :eof,
+       do: []
+
+  defp io_rule(_func, [device | _rest])
+       when device in @standard_io_devices,
+       do: []
+
+  defp io_rule(func, args) do
+    arity = length(args)
+
+    if {func, arity} in @io_device_calls,
+      do: io_device_refusal(func, arity),
+      else: []
+  end
+
+  defp io_device_refusal(func, arity) do
+    [
+      "IO.#{func}/#{arity} is not allowed at :strict unless its device is " <>
+        "written as #{Enum.map_join(@standard_io_devices, " or ", &inspect/1)} " <>
+        "(any other device is a process the request is sent to, past the " <>
+        "evaluator's output capture)"
+    ]
+  end
+
+  defp io_stderr_refusal(func) do
+    [
+      "IO.#{func} is not allowed at :strict (it writes to the node's " <>
+        ":standard_error, past the evaluator's output capture); use IO.puts/1"
+    ]
   end
 
   defp forge_capture?(Kernel, func, _arity), do: func in @kernel_forge_calls
