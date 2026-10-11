@@ -157,9 +157,11 @@ defmodule Raxol.Core.CircuitBreakerTest do
       assert CircuitBreaker.state(name) == :open
 
       CircuitBreaker.reset(name)
-      # Cast is async, give it a moment
-      Process.sleep(10)
+      assert CircuitBreaker.state(name) == :closed
 
+      # The half-open timeout armed when the breaker opened must not fire
+      # into the closed state.
+      Process.sleep(150)
       assert CircuitBreaker.state(name) == :closed
     end
   end

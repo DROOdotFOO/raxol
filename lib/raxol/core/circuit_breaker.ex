@@ -63,7 +63,10 @@ defmodule Raxol.Core.CircuitBreaker do
     :last_failure_time,
     :metrics,
     :fallback_fn,
-    :on_state_change
+    :on_state_change,
+    # Token of the current open period; the half-open timeout armed by an
+    # earlier period (since reset or half-opened by a call) carries a stale one.
+    :open_token
   ]
 
   @type state :: :closed | :open | :half_open
@@ -208,10 +211,17 @@ defmodule Raxol.Core.CircuitBreaker do
   end
 
   @impl true
-  def handle_manager_info({:timeout, :half_open}, state) do
+  def handle_manager_info(
+        {:timeout, :half_open, token},
+        %{open_token: token} = state
+      )
+      when is_reference(token) do
     new_state = transition_to_half_open(state)
     {:noreply, new_state}
   end
+
+  def handle_manager_info({:timeout, :half_open, _stale}, state),
+    do: {:noreply, state}
 
   @impl true
   def handle_manager_info({:timeout, :reset}, state) do
@@ -365,10 +375,21 @@ defmodule Raxol.Core.CircuitBreaker do
     Log.info("Circuit breaker #{state.name} transitioning to OPEN")
     state.on_state_change.(state.state, :open)
 
-    # Schedule transition to half-open
-    Process.send_after(self(), {:timeout, :half_open}, state.open_timeout)
+    # Schedule transition to half-open, for this open period only
+    token = make_ref()
 
-    %{state | state: :open, metrics: add_state_change(state.metrics, :open)}
+    Process.send_after(
+      self(),
+      {:timeout, :half_open, token},
+      state.open_timeout
+    )
+
+    %{
+      state
+      | state: :open,
+        open_token: token,
+        metrics: add_state_change(state.metrics, :open)
+    }
   end
 
   defp transition_to_half_open(state) do
@@ -380,6 +401,7 @@ defmodule Raxol.Core.CircuitBreaker do
       | state: :half_open,
         success_count: 0,
         failure_count: 0,
+        open_token: nil,
         metrics: add_state_change(state.metrics, :half_open)
     }
   end
@@ -394,6 +416,7 @@ defmodule Raxol.Core.CircuitBreaker do
         success_count: 0,
         failure_count: 0,
         last_failure_time: nil,
+        open_token: nil,
         metrics: add_state_change(state.metrics, :closed)
     }
   end
