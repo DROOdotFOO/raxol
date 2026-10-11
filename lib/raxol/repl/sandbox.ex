@@ -238,8 +238,6 @@ defmodule Raxol.REPL.Sandbox do
     {String, :replace_leading} => :replace,
     {String, :replace_trailing} => :replace,
     {Regex, :replace} => :replace,
-    {Enum, :into} => :into,
-    {Stream, :into} => :into,
     {Calendar, :strftime} => :strftime
   }
 
@@ -278,7 +276,7 @@ defmodule Raxol.REPL.Sandbox do
   ]
 
   # Calls that write ONE map key, by their full arity; the key is the second
-  # argument, or the first when a pipe has removed the map.
+  # argument (a pipe is judged rebuilt, so the map is always there).
   @struct_key_writers %{
     {Map, :put} => 3,
     {Map, :put_new} => 3,
@@ -323,24 +321,116 @@ defmodule Raxol.REPL.Sandbox do
   def check(_code, :none), do: :ok
 
   def check(code, level) do
-    case Code.string_to_quoted(code) do
-      {:ok, ast} ->
-        violations = scan(ast, level)
-        if violations == [], do: :ok, else: {:error, Enum.uniq(violations)}
+    # The parser raises on invalid UTF-8 rather than returning an error.
+    if String.valid?(code),
+      do: check_parsed(Code.string_to_quoted(code), level),
+      else: {:error, ["Syntax error: the code is not valid UTF-8"]}
+  end
 
-      {:error, {_meta, message, _token}} ->
-        {:error, ["Syntax error: #{message}"]}
+  defp check_parsed({:ok, ast}, level) do
+    case scan(ast, level) do
+      [] -> :ok
+      violations -> {:error, Enum.uniq(violations)}
     end
   end
+
+  defp check_parsed({:error, {_meta, message, token}}, _level),
+    do: {:error, ["Syntax error: " <> syntax_message(message, token)]}
+
+  # The parser returns the message and the offending token apart, and splits
+  # some messages around it (`{"unexpected reserved word: ", ""}` for a stray
+  # `end`, which `"#{message}"` raised on). Elixir prints them as prefix,
+  # token, suffix, or message then token.
+  defp syntax_message({prefix, suffix}, token)
+       when is_binary(prefix) and is_binary(suffix),
+       do: prefix <> to_string(token) <> suffix
+
+  defp syntax_message(message, token) when is_binary(message),
+    do: message <> to_string(token)
+
+  defp syntax_message(message, _token), do: inspect(message)
 
   defp scan(ast, level) do
     {_ast, violations} =
       Macro.prewalk(ast, [], fn node, acc ->
+        node = mark_judged_children(node)
         new_violations = check_node(node, level)
         {node, new_violations ++ acc}
       end)
 
     Enum.reverse(violations)
+  end
+
+  # Some calls are judged by their PARENT node, and reading them alone gives
+  # a second, wrong answer.
+  #
+  # The call on the right of a pipe is short its first argument, so a call
+  # rule reading that node alone sees every argument one place off: `URI |>
+  # struct(host: "x")` read the keyword list as the module, and `[a: 1] |>
+  # Enum.into(%{})` had no source. The pipe's own clause judges the REBUILT
+  # call (`forge_rule(Kernel, :|>, ...)`). Only the forge rules skip a piped
+  # node: its whitelist, `__`-prefix and size checks still run, since those
+  # are written for the piped shape and the rebuild does not repeat them. A
+  # pipe on the right is never skipped (`a |> (b |> Map.new())`): its own
+  # rebuild is what judges ITS right-hand side.
+  #
+  # The call inside a qualified capture (`&Map.put/3`) has no arguments at
+  # all. The capture clause of `check_node/2` judges both its forge rule and
+  # its `__`-prefix rule from the name and arity, so the inner node skips
+  # those two and keeps only its whitelist check.
+  #
+  # Each such child is marked here, before the walk descends into it. The
+  # marker is a meta key, and meta comes only from the parser, so submitted
+  # code cannot set it.
+  @judged_by_meta :raxol_sandbox_judged_by
+
+  defp mark_judged_children({:|>, meta, [lhs, rhs]}),
+    do: {:|>, meta, [lhs, mark_piped(rhs)]}
+
+  defp mark_judged_children(
+         {{:., _, [module, :|>]} = dot, meta, [lhs, rhs]} = node
+       ) do
+    if strict_module(module) == {:ok, Kernel},
+      do: {dot, meta, [lhs, mark_piped(rhs)]},
+      else: node
+  end
+
+  defp mark_judged_children(
+         {:&, meta,
+          [{:/, slash_meta, [{{:., _, _} = dot, call_meta, args}, arity]}]}
+       )
+       when is_list(call_meta) and is_list(args) and is_integer(arity) do
+    call = {dot, [{@judged_by_meta, :capture} | call_meta], args}
+    {:&, meta, [{:/, slash_meta, [call, arity]}]}
+  end
+
+  defp mark_judged_children(node), do: node
+
+  defp mark_piped({call, meta, args} = node)
+       when is_list(meta) and is_list(args) do
+    if pipe_call?(call),
+      do: node,
+      else: {call, [{@judged_by_meta, :pipe} | meta], args}
+  end
+
+  defp mark_piped(node), do: node
+
+  defp pipe_call?(:|>), do: true
+  defp pipe_call?({:., _, [_module, :|>]}), do: true
+  defp pipe_call?(_call), do: false
+
+  defp judged_by(meta), do: Keyword.get(meta, @judged_by_meta)
+
+  defp standalone_forge_rule(module, func, args, meta) do
+    if func != :|> and judged_by(meta) in [:pipe, :capture],
+      do: [],
+      else: forge_rule(module, func, args)
+  end
+
+  defp standalone_internal_call(module, func, meta) do
+    if judged_by(meta) == :capture,
+      do: [],
+      else: internal_call(module, func)
   end
 
   defp check_node(
@@ -365,7 +455,7 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_node(
-         {{:., _, [{:__aliases__, _, mod_parts}, func]}, _, args},
+         {{:., _, [{:__aliases__, _, mod_parts}, func]}, meta, args},
          :strict
        ) do
     case resolve_alias(mod_parts) do
@@ -374,10 +464,10 @@ defmodule Raxol.REPL.Sandbox do
 
       {:ok, module} ->
         if module in @allowed_strict_modules do
-          internal_call(module, func) ++
+          standalone_internal_call(module, func, meta) ++
             check_denied_call(module, func) ++
             check_strict_size(module, func, args) ++
-            forge_rule(module, func, args)
+            standalone_forge_rule(module, func, args, meta)
         else
           [
             "#{inspect(module)}.#{func} is not allowed (module not in whitelist)"
@@ -386,12 +476,13 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  defp check_node({{:., _, [mod, func]}, _, args}, :strict)
+  defp check_node({{:., _, [mod, func]}, meta, args}, :strict)
        when is_atom(mod) do
     if mod in @allowed_strict_modules do
-      internal_call(mod, func) ++
+      standalone_internal_call(mod, func, meta) ++
         check_denied_call(mod, func) ++
-        check_strict_size(mod, func, args) ++ forge_rule(mod, func, args)
+        check_strict_size(mod, func, args) ++
+        standalone_forge_rule(mod, func, args, meta)
     else
       ["#{inspect(mod)}.#{func} is not allowed (module not in whitelist)"]
     end
@@ -566,8 +657,7 @@ defmodule Raxol.REPL.Sandbox do
     |> Enum.flat_map(fn opts ->
       case Keyword.fetch(opts, :into) do
         {:ok, target} ->
-          check_collect_target(target, "for ... into:") ++
-            check_for_into_forge(target)
+          check_collect("for ... into:", target, :none)
 
         :error ->
           []
@@ -616,9 +706,9 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  defp check_node({name, _, args}, :strict)
+  defp check_node({name, meta, args}, :strict)
        when name in [:|> | @kernel_forge_calls] and is_list(args),
-       do: forge_rule(Kernel, name, args)
+       do: standalone_forge_rule(Kernel, name, args, meta)
 
   defp check_node({kind, _, args}, level)
        when level in [:standard, :strict] and is_atom(kind) and is_list(args) do
@@ -783,18 +873,6 @@ defmodule Raxol.REPL.Sandbox do
   defp check_size_rule(:replace, name, _args),
     do: needs_literals(name, "its replacement")
 
-  defp check_size_rule(:into, name, args) do
-    case into_target(args) do
-      {:ok, target} ->
-        if source_bounded_into?(args),
-          do: [],
-          else: check_collect_target(target, name)
-
-      :capture ->
-        needs_literals(name, "its target")
-    end
-  end
-
   # A literal format bounds the number of directives, and every directive is
   # bounded except `%Z`, which copies the input's `:zone_abbr` -- any binary,
   # since `strftime/2` accepts any map. Options carry formatter functions
@@ -851,49 +929,91 @@ defmodule Raxol.REPL.Sandbox do
       is_binary(replacement) and
         byte_size(replacement) <= @max_strict_replacement_bytes
 
-  # The collectable's position: `into(enum, target)`, `into(enum, target,
-  # fun)`, piped `into(target)` and piped `into(target, fun)`. With two
-  # arguments a function in second place means the piped three-argument form;
-  # a capture placeholder (`&1`) is a value, never that function.
-  defp into_target([_enum, target, _fun]), do: {:ok, target}
-
-  defp into_target([_enum, {:&, _, [n]} = target]) when is_integer(n),
-    do: {:ok, target}
-
-  defp into_target([target, {kind, _, _}]) when kind in [:fn, :&],
-    do: {:ok, target}
-
+  # The collectable's position in a call with all its arguments: the direct
+  # `into(enum, target)` and `into(enum, target, fun)`, or the same rebuilt
+  # from a pipe. Fewer arguments is a capture, which hides the target.
   defp into_target([_enum, target]), do: {:ok, target}
-  defp into_target([target]), do: {:ok, target}
+  defp into_target([_enum, target, _fun]), do: {:ok, target}
   defp into_target(_capture), do: :capture
 
-  # Collecting into a binary flattens at the end; into a list, map or set it
-  # does not. Only the TARGET decides: a literal source list can still hold
-  # any number of references to a large binary.
-  defp check_collect_target(target, name) do
-    if non_binary_collectable?(target) do
-      []
-    else
-      [
-        "#{name} is not allowed at :strict unless it collects into a literal " <>
-          "list or map, or MapSet.new()/Map.new() (collecting into a string " <>
-          "flattens in one allocation)"
-      ]
-    end
+  # Only the two-argument form names a source that is all its output: a
+  # transform (`into(src, target, fun)`) computes every entry.
+  defp into_source([source, _target]), do: {:ok, source}
+  defp into_source(_with_transform), do: :none
+
+  # One judgement per collect site (`Enum.into/2,3`, `Stream.into/2,3`,
+  # `for ... into:`), for both ways a target can go wrong. Into a binary it
+  # flattens the whole input in one allocation the heap cap only sees
+  # afterwards. Into a map, a computed entry can plant a `__struct__` key.
+  # A target the source does not show can be either. A source written out in
+  # the call answers each: a fully literal one is bounded by the source text
+  # (though a literal list can still hold references to a large binary, so
+  # `[b, b]` is not literal), and one whose pairs all have plain keys can
+  # plant none. A `for` body computes every entry, so it has no such source.
+  defp check_collect(name, target, source) do
+    kind = collect_target_kind(target)
+    flattens? = kind in [:binary, :unknown] and not literal_source?(source)
+    forges? = kind in [:map, :unknown] and not forge_free_source?(source)
+    collect_refusal(name, flattens?, forges?, source)
   end
 
-  defp non_binary_collectable?(list) when is_list(list), do: true
+  defp collect_target_kind(target) when is_list(target), do: :list
+  defp collect_target_kind(target) when is_binary(target), do: :binary
 
-  # A map literal's keys are checked where it is built (`check_map_keys/1`).
-  defp non_binary_collectable?({:%{}, _, _pairs}), do: true
+  # A map literal's keys are checked where it is built (`check_map_keys/1`);
+  # what this judges is what collecting adds to it.
+  defp collect_target_kind({:%{}, _, _pairs}), do: :map
 
-  defp non_binary_collectable?(
-         {{:., _, [{:__aliases__, _, [mod]}, :new]}, _, _args}
-       )
-       when mod in [:MapSet, :Map],
-       do: true
+  defp collect_target_kind(
+         {{:., _, [{:__aliases__, _, [:MapSet]}, :new]}, _, _}
+       ),
+       do: :mapset
 
-  defp non_binary_collectable?(_target), do: false
+  defp collect_target_kind({{:., _, [{:__aliases__, _, [:Map]}, :new]}, _, _}),
+    do: :map
+
+  defp collect_target_kind(_computed), do: :unknown
+
+  defp literal_source?({:ok, source}), do: source_literal?(source)
+  defp literal_source?(:none), do: false
+
+  defp forge_free_source?({:ok, source}), do: forge_free_entries?(source)
+  defp forge_free_source?(:none), do: false
+
+  # A single message per site, naming the targets that pass whatever the
+  # source is, so following it never lands on another refusal.
+  defp collect_refusal(_name, false, false, _source), do: []
+
+  defp collect_refusal(name, flattens?, forges?, source) do
+    reasons =
+      Enum.filter(
+        [
+          flattens? and
+            "into a string it flattens its whole input in one allocation",
+          forges? and map_entries_reason(source)
+        ],
+        &is_binary/1
+      )
+
+    message =
+      "#{name} is not allowed at :strict unless it collects into a literal " <>
+        "list or MapSet.new() (#{Enum.join(reasons, "; ")})"
+
+    if forges?,
+      do: [message <> ". " <> @computed_entries_hint],
+      else: [message]
+  end
+
+  defp map_entries_reason({:ok, _source}),
+    do:
+      "into a map, its entries must be written out with literal keys other " <>
+        "than :__struct__, since a `__struct__` key dispatches to that " <>
+        "module's protocol impls"
+
+  defp map_entries_reason(:none),
+    do:
+      "into a map, every key is computed, and a `__struct__` key dispatches " <>
+        "to that module's protocol impls"
 
   # A flattener whose input is written out in the source (`~c"abc"`,
   # `["a", ?b]`) is bounded by the source's own size. Only the forms whose
@@ -918,19 +1038,6 @@ defmodule Raxol.REPL.Sandbox do
     do: Enum.all?(parts, &is_binary/1)
 
   defp source_literal?(term), do: Macro.quoted_literal?(term)
-
-  # Only the direct two-argument form names its source, first: a fully
-  # literal source, as in `Enum.into([a: 1], m)`, is bounded by the source
-  # text. A transform (`into(src, target, fun)`) can grow every element, and
-  # the piped `into(target, fun)` has no source to look at.
-  defp source_bounded_into?([_target, {:fn, _, _}]), do: false
-
-  defp source_bounded_into?([_target, {:&, _, [body]}])
-       when not is_integer(body),
-       do: false
-
-  defp source_bounded_into?([source, _target]), do: source_literal?(source)
-  defp source_bounded_into?(_piped), do: false
 
   defp check_map_keys(pairs) do
     if Enum.all?(pairs, &plain_pair?/1) do
@@ -997,8 +1104,9 @@ defmodule Raxol.REPL.Sandbox do
   # The forge rules for one call, local or remote. Only a pipe rebuilds a
   # call: the right-hand side's arguments are short by the piped value, which
   # can be the very input a rule must see (`pairs |> Map.new()` is the same
-  # node as `Map.new()` otherwise). The call node is also checked on its own,
-  # so the pipe can only add refusals.
+  # node as `Map.new()` otherwise). The right-hand node is marked by
+  # `mark_pipe_rhs/1` and not judged alone, so every rule below sees a call
+  # with all its arguments, or fewer only when a capture has removed them.
   defp forge_violations({{:., _, [module, func]}, _, args})
        when is_atom(func) and is_list(args) do
     case strict_module(module) do
@@ -1057,12 +1165,7 @@ defmodule Raxol.REPL.Sandbox do
        when is_map_key(@struct_key_writers, {module, func}) do
     arity = Map.fetch!(@struct_key_writers, {module, func})
 
-    key =
-      case length(args) do
-        ^arity -> {:ok, Enum.at(args, 1)}
-        piped when piped == arity - 1 -> {:ok, hd(args)}
-        _capture -> :error
-      end
+    key = if length(args) == arity, do: {:ok, Enum.at(args, 1)}, else: :error
 
     case key do
       {:ok, key} ->
@@ -1088,12 +1191,8 @@ defmodule Raxol.REPL.Sandbox do
   defp forge_rule(Access, :values, _args),
     do: forge_refusal(Access, :values, "it rewrites every value of a map")
 
-  # The piped `k |> Access.key(default)` is checked here twice: alone, where
-  # `default` sits in the key's place and is what this reads, and rebuilt by
-  # the `|>` clause of `forge_rule/3` as `Access.key(k, default)`, which reads
-  # `k`. Only the rebuilt check is sound for that form, so the refusal of a
-  # computed piped key depends on the pipe rebuild; the alone check is never
-  # the one that refuses it.
+  # A piped `k |> Access.key(default)` reaches here only rebuilt, as
+  # `Access.key(k, default)`, so the first argument is always the key.
   defp forge_rule(Access, func, args) when func in [:key, :key!] do
     case args do
       [key | _default] ->
@@ -1112,8 +1211,7 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  # `Map.new()` and the piped `l |> Map.new()` are the same node; the pipe
-  # clause above sees the second with its input.
+  # `Map.new()` builds an empty map.
   defp forge_rule(Map, :new, []), do: []
 
   defp forge_rule(Map, :new, [source]) do
@@ -1142,34 +1240,15 @@ defmodule Raxol.REPL.Sandbox do
         )
   end
 
-  defp forge_rule(Map, :from_keys, _piped),
+  defp forge_rule(Map, :from_keys, _capture),
     do: forge_refusal(Map, :from_keys, "its keys cannot be seen")
 
   # Both maps can be real structs, and the resolver picks the `__struct__`
-  # value: `Map.merge(%URI{}, %URI{}, fn _, _, _ -> File.Stream end)`.
-  #
-  # Two arguments are `merge/3` only on the right of a pipe, and the `|>`
-  # clause above already rebuilds `a |> Map.merge(b, f)` into the three-
-  # argument call and refuses it, whatever `f` is. This branch is defense for
-  # a pipe-like shape that reaches the node without that rebuild; none is
-  # known. It refuses only a function LITERAL in second place, because a
-  # variable there is indistinguishable from the second map of a plain
-  # `Map.merge(a, b)`. Written directly, `Map.merge(b, fn ... end)` passes a
-  # function as a map and raises, so refusing it costs nothing.
-  defp forge_rule(Map, func, args) when func in [:merge, :intersect] do
-    case args do
-      [_left, _right, _resolver] ->
-        forge_refusal(Map, func, resolver_reason())
-
-      [_right, resolver] ->
-        if function_literal?(resolver),
-          do: forge_refusal(Map, func, resolver_reason()),
-          else: []
-
-      _other ->
-        []
-    end
-  end
+  # value: `Map.merge(%URI{}, %URI{}, fn _, _, _ -> File.Stream end)`. A
+  # piped `a |> Map.merge(b, f)` reaches here rebuilt, with all three.
+  defp forge_rule(Map, func, [_left, _right, _resolver])
+       when func in [:merge, :intersect],
+       do: forge_refusal(Map, func, resolver_reason())
 
   defp forge_rule(Map, :map, _args),
     do:
@@ -1179,20 +1258,12 @@ defmodule Raxol.REPL.Sandbox do
         "its function rewrites every value, a `__struct__` one included"
       )
 
-  # Collecting into a list, a binary or a `MapSet` builds no map a caller can
-  # reach; any other target may be a map, so its entries must be written out.
+  # The size rule and the forge rule judge the same target, so both live in
+  # `check_collect/3` and a site gets one answer.
   defp forge_rule(module, :into, args) when module in [Enum, Stream] do
     case into_target(args) do
       {:ok, target} ->
-        if forge_free_target?(target) or forge_free_into_source?(args),
-          do: [],
-          else:
-            module
-            |> forge_refusal(
-              :into,
-              entries_reason() <> " unless it collects into a list or MapSet"
-            )
-            |> with_hint(@computed_entries_hint)
+        check_collect("#{inspect(module)}.into", target, into_source(args))
 
       :capture ->
         forge_refusal(module, :into, "its target cannot be seen")
@@ -1200,17 +1271,6 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp forge_rule(_module, _func, _args), do: []
-
-  # A `for` body computes every entry, so only the target can make it safe.
-  defp check_for_into_forge(target) do
-    if forge_free_target?(target),
-      do: [],
-      else: [
-        "for ... into: is not allowed at :strict unless it collects into a " <>
-          "list or MapSet (its body computes every key, which can forge a " <>
-          "struct). " <> @computed_entries_hint
-      ]
-  end
 
   defp forge_capture?(Kernel, func, _arity), do: func in @kernel_forge_calls
 
@@ -1251,27 +1311,6 @@ defmodule Raxol.REPL.Sandbox do
 
   defp resolver_reason,
     do: "its function can rewrite a struct's `__struct__` value"
-
-  defp function_literal?({:fn, _, _}), do: true
-  defp function_literal?({:&, _, [body]}) when not is_integer(body), do: true
-  defp function_literal?(_value), do: false
-
-  defp forge_free_target?(target) when is_list(target) or is_binary(target),
-    do: true
-
-  defp forge_free_target?(
-         {{:., _, [{:__aliases__, _, [:MapSet]}, :new]}, _, _args}
-       ),
-       do: true
-
-  defp forge_free_target?(_target), do: false
-
-  # Only the direct two-argument form names its source (see
-  # `source_bounded_into?/1`); the piped `into(target, fun)` has none.
-  defp forge_free_into_source?([source, target]),
-    do: not function_literal?(target) and forge_free_entries?(source)
-
-  defp forge_free_into_source?(_args), do: false
 
   # Every entry is a pair whose key is a plain literal, or a literal that is
   # no pair at all (which a map refuses at runtime rather than storing).

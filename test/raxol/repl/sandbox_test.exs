@@ -129,6 +129,16 @@ defmodule Raxol.REPL.SandboxTest do
       assert Enum.any?(violations, &String.contains?(&1, "Syntax error"))
     end
 
+    test "returns a syntax error rather than raising for a stray end or invalid UTF-8" do
+      # The parser splits a stray `end`'s message around the token, and
+      # raises outright on invalid UTF-8; both used to raise out of check/2.
+      for code <- ["end", "x end", "fn x -> x end end", <<255, 254>>],
+          level <- [:standard, :strict] do
+        assert {:error, _} = Sandbox.check(code, level),
+               "#{inspect(code)} at #{level}"
+      end
+    end
+
     test "detects multiple violations" do
       code = """
       System.cmd("ls", [])
@@ -976,8 +986,7 @@ defmodule Raxol.REPL.SandboxTest do
       {"Enum", "into", "pairs", "%{}", 2},
       {"Stream", "into", "pairs", "%{}", 2},
       {"Access", "key", "k", nil, 1},
-      # Piped, the node alone reads the default as the key; only the pipe
-      # rebuild sees `k`.
+      # Piped, only the rebuilt call is judged, so `k` is read as the key.
       {"Access", "key", "k", "%{}", 2},
       {"Access", "key!", "k", nil, 1},
       {"Access", "key!", "k", "%{}", 2}
@@ -1026,16 +1035,12 @@ defmodule Raxol.REPL.SandboxTest do
         {"get_and_update_in", "m", "[:a], f"}
       ]
 
-      # A piped struct/2 is refused whatever it names: the node alone has
-      # its fields where the module goes. A bare piped name is checked as the
-      # call (see above).
+      # Piped, the rebuilt call is judged, so a literal module passes there
+      # too. A bare piped name is checked as the call (see above).
       for {name, first, rest} <- rows,
           code <-
             kernel_forms(name, first, rest) ++
-              if(name in ["struct", "struct!"],
-                do: [],
-                else: kernel_pipe_forms(name, first, rest)
-              ) do
+              kernel_pipe_forms(name, first, rest) do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
       end
     end
@@ -1077,9 +1082,17 @@ defmodule Raxol.REPL.SandboxTest do
             "Enum.into([a: 1], %{})",
             "Stream.into([a: 1], %{})",
             "Access.key(:a)",
-            # The node alone reads `%{}` as the key, the rebuilt call `:a`.
             ":a |> Access.key(%{})",
-            "Kernel.|>(:a, Access.key!(%{}))"
+            "Kernel.|>(:a, Access.key!(%{}))",
+            # Piped forms are judged as the call they rebuild, so each passes
+            # exactly when its direct form does.
+            ":a |> Access.key(d)",
+            "[a: 1] |> Enum.into(%{})",
+            "[a: 1] |> Stream.into(%{})",
+            "Kernel.|>([a: 1], Enum.into(%{}))",
+            "[:a, :b] |> Map.from_keys(0)",
+            ~S'["a", "b"] |> Enum.into("")',
+            ~S'URI |> struct(host: "x")'
           ] do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
       end
