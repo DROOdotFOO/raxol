@@ -73,7 +73,8 @@ defmodule RaxolWeb3.MixProject do
       # ADR-0040 decision 3: FX figures are parsed with `floats: :decimals`, so
       # a float never reaches a money path. Declared rather than inherited
       # through jason, where it is optional.
-      {:decimal, "~> 3.0"},
+      # Floor: CVE-2026-97853 (`Decimal.round/3`), fixed in 3.1.2.
+      {:decimal, "~> 3.1 and >= 3.1.2"},
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
