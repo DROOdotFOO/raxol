@@ -103,6 +103,11 @@ defmodule Raxol.Broker.JournalTest do
   defp kill_writer!(path, journal) do
     writer = writer!(path)
     ref = Process.monitor(journal)
+    # Erlang orders signals per sender/receiver pair only, so the writer's exit
+    # (writer -> journal) can overtake the monitor request (test -> journal) and
+    # turn the :DOWN into :noproc. A call returns only after the journal has
+    # processed the monitor request ahead of it.
+    _ = :sys.get_state(journal)
     Process.exit(writer, :kill)
     assert_receive {:DOWN, ^ref, :process, ^journal, {:journal_writer_down, :killed}}, 5_000
   end

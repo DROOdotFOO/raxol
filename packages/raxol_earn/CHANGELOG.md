@@ -97,6 +97,8 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
 
 ### Security
 
+- Requires `decimal >= 3.1.2` (was `~> 3.0`) for CVE-2026-97853: below 3.1.2,
+  `Decimal.round/3` allocates in proportion to its `places` argument.
 - Requires `decimal ~> 3.0` (was `~> 2.0`) for EEF-CVE-2026-32686 (unbounded
   exponent DoS). Decimal 3 defaults to the decimal128 context: precision 34
   (was 28), `emax: 6_144` / `emin: -6_143` with over/underflow signalled, and

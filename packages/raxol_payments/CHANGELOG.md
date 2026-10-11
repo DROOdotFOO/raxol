@@ -86,6 +86,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Protocols.Riddler.submit_order/4` takes the Xochi `QuoteRequest` as its
   fourth argument, so the intent it signs is checked against the request.
 
+### Security
+
+- Requires `decimal >= 3.1.2` (was `~> 3.0`) for CVE-2026-97853: below 3.1.2,
+  `Decimal.round/3` allocates in proportion to its `places` argument.
+
 ### Removed
 
 - `Protocols.Xochi.execute/3` and `Protocols.Xochi.sign_intent/2`. Use

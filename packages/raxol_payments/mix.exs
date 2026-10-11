@@ -48,7 +48,8 @@ defmodule RaxolPayments.MixProject do
       {:ex_secp256k1, "~> 0.8"},
       {:ex_keccak, "~> 0.7"},
       {:jason, "~> 1.4"},
-      {:decimal, "~> 3.0"},
+      # Floor: CVE-2026-97853 (`Decimal.round/3`), fixed in 3.1.2.
+      {:decimal, "~> 3.1 and >= 3.1.2"},
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},

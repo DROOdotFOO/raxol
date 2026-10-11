@@ -64,7 +64,8 @@ defmodule RaxolEarn.MixProject do
       {:req, "~> 0.5"},
       {:ex_keccak, "~> 0.7"},
       {:jason, "~> 1.4"},
-      {:decimal, "~> 3.0"},
+      # Floor: CVE-2026-97853 (`Decimal.round/3`), fixed in 3.1.2.
+      {:decimal, "~> 3.1 and >= 3.1.2"},
       {:mint_web_socket, "~> 1.0"},
       {:cowboy, "~> 2.10"},
       {:stream_data, "~> 1.0", only: :test},

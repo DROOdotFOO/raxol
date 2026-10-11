@@ -33,7 +33,9 @@ defmodule RaxolBroker.MixProject do
     [
       raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent", []),
       raxol_dep(:raxol_mcp, "~> 2.7", "../raxol_mcp", []),
-      {:decimal, "~> 3.0"},
+      # Floor: below 3.1.2, `Decimal.round/3` allocates in proportion to
+      # `places` (CVE-2026-97853).
+      {:decimal, "~> 3.1 and >= 3.1.2"},
       # The Robinhood MCP endpoint is remote: `Raxol.MCP.Client.Transport.Http`
       # compiles only with mint, and the OAuth discovery, registration and
       # token calls default to Req. Both are optional upstream.
