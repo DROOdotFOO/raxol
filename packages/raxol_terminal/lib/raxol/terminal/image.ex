@@ -79,8 +79,23 @@ defmodule Raxol.Terminal.Image do
   """
   @spec display(binary(), display_opts()) :: {:ok, binary()} | {:error, term()}
   def display(source, opts \\ []) do
-    protocol = Keyword.get(opts, :protocol) || detect_protocol()
+    case Keyword.get(opts, :protocol) || detect_protocol() do
+      protocol when protocol in [:kitty, :iterm2, :sixel] ->
+        cached_encode(source, protocol, opts)
 
+      # Decided before any work: the resize shells out to ImageMagick, and a
+      # terminal (or headless/agent session) that cannot show the result paid
+      # for it on every first render. On Windows CI that spawn took over 5 s
+      # inside the rendering engine, past `Raxol.Headless`'s call timeout.
+      :unsupported ->
+        {:error, :unsupported_protocol}
+
+      protocol ->
+        {:error, {:unknown_protocol, protocol}}
+    end
+  end
+
+  defp cached_encode(source, protocol, opts) do
     cache_opts = %{
       protocol: protocol,
       width: opts[:width],
@@ -217,13 +232,5 @@ defmodule Raxol.Terminal.Image do
         attributes: %{width: img.width, height: img.height}
       })
     end
-  end
-
-  defp encode(_data, :unsupported, _opts) do
-    {:error, :unsupported_protocol}
-  end
-
-  defp encode(_data, protocol, _opts) do
-    {:error, {:unknown_protocol, protocol}}
   end
 end
