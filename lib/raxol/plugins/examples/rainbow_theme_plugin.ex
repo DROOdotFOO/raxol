@@ -223,10 +223,18 @@ defmodule Raxol.Plugins.Examples.RainbowThemePlugin do
     end
   end
 
-  def handle_event({:timer, :rotate}, state) do
+  # Only the rotation the plugin last scheduled may rotate and reschedule. The
+  # handler used to reschedule without keeping the new timer, so after the
+  # first tick `stop_animation/1` cancelled a timer that had already fired and
+  # rotation never stopped; a rotation already queued when the animation was
+  # stopped or restarted also started a second chain. A stale token falls
+  # through to the catch-all below and does neither.
+  def handle_event(
+        {:timer, :rotate, token},
+        %{animation_timer: {token, _}} = state
+      ) do
     state = rotate_color(state)
-    schedule_next_rotation(state)
-    {:ok, state}
+    {:ok, %{state | animation_timer: schedule_next_rotation(state)}}
   end
 
   def handle_event(_event, state) do
@@ -364,14 +372,13 @@ defmodule Raxol.Plugins.Examples.RainbowThemePlugin do
     # Ensure no duplicate timers
     state = stop_animation(state)
 
-    timer_ref = schedule_next_rotation(state)
-    %{state | animation_timer: timer_ref}
+    %{state | animation_timer: schedule_next_rotation(state)}
   end
 
   defp stop_animation(state) do
     _ =
-      if state.animation_timer do
-        Process.cancel_timer(state.animation_timer)
+      with {_token, timer_ref} <- state.animation_timer do
+        Process.cancel_timer(timer_ref)
       end
 
     %{state | animation_timer: nil}
@@ -383,8 +390,19 @@ defmodule Raxol.Plugins.Examples.RainbowThemePlugin do
     |> start_animation()
   end
 
+  # `animation_timer` holds `{token, timer_ref}`: the token tells the live
+  # rotation from a stale one, the ref cancels it.
   defp schedule_next_rotation(state) do
-    Process.send_after(self(), {:timer, :rotate}, state.config.animation_speed)
+    token = make_ref()
+
+    timer_ref =
+      Process.send_after(
+        self(),
+        {:timer, :rotate, token},
+        state.config.animation_speed
+      )
+
+    {token, timer_ref}
   end
 
   defp rotate_color(state) do

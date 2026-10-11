@@ -2,6 +2,7 @@ defmodule Raxol.Plugins.Examples.BundledPluginTimerTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Core.Runtime.Plugins.{
+    PluginInstanceSupervisor,
     PluginLifecycle,
     PluginRuntime,
     PluginSupervisor
@@ -13,6 +14,12 @@ defmodule Raxol.Plugins.Examples.BundledPluginTimerTest do
     StatusLinePlugin
   }
 
+  # The rotation is observed as the plugin's own `handle_event/2` call on the
+  # runtime process, not by sampling `current_index`: with a two-colour
+  # palette and a 1 ms timer the index flips 0/1 every tick, and on Windows'
+  # ~15.6 ms clock a fixed-interval poll can phase-lock with the flips and
+  # read 0 every time. A hang (no rotation ever) ends at the tag's timeout.
+  @tag timeout: 10_000
   test "rainbow rotation timer returns to its stable runtime" do
     start_supervised!(PluginSupervisor)
     start_supervised!(PluginLifecycle)
@@ -31,13 +38,26 @@ defmodule Raxol.Plugins.Examples.BundledPluginTimerTest do
                config
              )
 
-    assert {:ok, _state} = PluginRuntime.invoke(:rainbow_timer_test, :on_load)
+    runtime = PluginInstanceSupervisor.runtime_pid(:rainbow_timer_test)
+    assert is_pid(runtime)
 
-    assert_eventually(fn ->
-      {:ok, state} = PluginLifecycle.get_state(:rainbow_timer_test)
-      state.current_index > 0
+    :erlang.trace_pattern({RainbowThemePlugin, :handle_event, 2}, true, [])
+
+    on_exit(fn ->
+      :erlang.trace_pattern({RainbowThemePlugin, :handle_event, 2}, false, [])
     end)
 
+    :erlang.trace(runtime, true, [:call])
+
+    assert {:ok, _state} = PluginRuntime.invoke(:rainbow_timer_test, :on_load)
+
+    receive do
+      {:trace, ^runtime, :call,
+       {RainbowThemePlugin, :handle_event, [{:timer, :rotate, _}, _]}} ->
+        :ok
+    end
+
+    :erlang.trace(runtime, false, [:call])
     assert {:ok, _state} = PluginRuntime.invoke(:rainbow_timer_test, :on_unload)
     assert :ok = PluginLifecycle.unload(:rainbow_timer_test)
   end

@@ -63,6 +63,48 @@ defmodule Raxol.Plugins.Examples.RainbowThemePluginTest do
     assert theme.component_styles == base.component_styles
   end
 
+  # The tick handler used to reschedule without keeping the new timer, so
+  # `stop` cancelled the first (already fired) timer and rotation ran on.
+  test "stop cancels the rotation the last tick scheduled", %{state: state} do
+    {:ok, _, state} = RainbowThemePlugin.on_command("rainbow", ["start"], state)
+    {first, _ref} = state.animation_timer
+
+    {:ok, state} =
+      RainbowThemePlugin.handle_event({:timer, :rotate, first}, state)
+
+    assert state.current_index == 1
+    {next, next_ref} = state.animation_timer
+    assert next != first
+
+    {:ok, _, state} = RainbowThemePlugin.on_command("rainbow", ["stop"], state)
+    assert state.animation_timer == nil
+    assert Process.read_timer(next_ref) == false
+
+    # A tick already queued when the animation stopped neither rotates nor
+    # reschedules.
+    assert {:ok, ^state} =
+             RainbowThemePlugin.handle_event({:timer, :rotate, next}, state)
+  end
+
+  test "a restart ignores the tick queued before it", %{state: state} do
+    {:ok, _, state} = RainbowThemePlugin.on_command("rainbow", ["start"], state)
+    {old, _ref} = state.animation_timer
+
+    {:ok, _, state} =
+      RainbowThemePlugin.on_command("rainbow", ["speed", "50"], state)
+
+    {live, _ref} = state.animation_timer
+    assert live != old
+
+    assert {:ok, ^state} =
+             RainbowThemePlugin.handle_event({:timer, :rotate, old}, state)
+
+    {:ok, state} =
+      RainbowThemePlugin.handle_event({:timer, :rotate, live}, state)
+
+    assert state.current_index == 1
+  end
+
   defp assert_theme_colour(colour) do
     colors = Theme.current().colors
     assert colors.foreground == colour
