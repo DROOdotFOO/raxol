@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
+### Removed
+
+- **Breaking.** The Riddler Commerce API client is gone: Riddler removed
+  `/commerce/*` server-side. Deleted `Raxol.Payments.Riddler.Client`,
+  `Raxol.Payments.Riddler.Schemas` (and its `QuoteRequest`/`QuoteResponse`/
+  `OrderRequest`/`OrderStatus`/... structs), `Raxol.Payments.Protocols.Riddler`,
+  and the `:riddler` atom in `Raxol.Payments.Protocol.resolve/1`. Use
+  `Raxol.Payments.Protocols.Xochi` (which `Protocols.Riddler` already
+  delegated to) for cross-chain intents. `Raxol.Payments.Relay.Client` is
+  unaffected.
+
 ### Added
 
 - Registered RAXOL on Robinhood Chain (`0xf447...53af`, 18 decimals) in

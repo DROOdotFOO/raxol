@@ -594,6 +594,44 @@ Options: `wrap` (`:none`, `:char`, `:word`), `on_change`, `on_submit`.
 
 Features: cursor movement, shift-select, undo/redo history, line wrapping.
 
+### scrubber
+
+Transport control for anything with an ordered position: a track, a playhead, optional tick marks, a clock, and play/pause. Raxol's recordings, time-travel snapshots, and prerecorded web frames all project onto it.
+
+```elixir
+scrubber(
+  id: "replay",
+  min: 0,
+  max: 47,
+  position: 12,
+  marks: [0, 18, 33],
+  playing?: true,
+  elapsed_ms: 1_100,
+  duration_ms: 4_300
+)
+```
+
+Renders `>   00:01 / 00:04  ┃━━━━━●──┃──────┃───────`. The clock reads `mm:ss / mm:ss` when `duration_ms` is given and `position/max` otherwise.
+
+Options: `min`, `max`, `position`, `playing?`, `speed`, `marks`, `width`, `elapsed_ms`, `duration_ms`, `label`, `on_seek`, `on_play`, `on_pause`, `disabled`, `aria_label`, `tooltip`.
+
+`min`/`max` is the inclusive addressable range and need not start at zero: a wrapped time-travel ring addresses `first..last`. `position` is always clamped into it, and a step already at an end fires no callback.
+
+`on_seek`, `on_play`, and `on_pause` fire from `Scrubber.handle_event/3`, so they apply when you hold the component state yourself. A node emitted from `view/1` is driven instead by the `{:scrubber_seek, id, position}`, `{:scrubber_play, id}`, and `{:scrubber_pause, id}` messages the MCP tools dispatch to your `update/2`.
+
+Keyboard: Space (play/pause), Left/`h`/`,`/`<` (back one), Right/`l`/`.`/`>` (forward one), Home/End, `[`/`]` (previous/next mark), 0-9 (jump to 0%-90%), `+`/`=` and `-` (speed ladder `0.25` to `8.0`).
+
+The renderers are pure functions on a plain keyword list, so a caller writing straight to a TTY gets the same output with no component tree:
+
+```elixir
+alias Raxol.UI.Components.Input.Scrubber
+
+Scrubber.track(width: 8, min: 0, max: 7, position: 3)     # "━━━●────"
+Scrubber.clock(position: 12, min: 0, max: 47)             # "12/47"
+Scrubber.transport(playing?: true)                        # "> "
+Scrubber.line(min: 0, max: 47, position: 12, speed: 2.0)  # "||  12/47  ━━━━━━●─────────────────  2x"
+```
+
 ---
 
 ## Overlay
@@ -859,6 +897,7 @@ All component modules follow the same pattern: `init/1` -> `handle_event/3` -> `
 | select        | `select/1`        | `Input.SelectList`     | Yes          |
 | tabs          | `tabs/1`          | `Input.Tabs`           | Yes          |
 | menu          | --                | `Input.Menu`           | Yes          |
+| scrubber      | `scrubber/1`      | `Input.Scrubber`       | Yes          |
 | modal         | `modal/1`         | `Modal`                | Yes          |
 | sparkline     | `sparkline/1`     | --                     | No           |
 | line_chart    | `line_chart/1`    | --                     | No           |
@@ -1198,7 +1237,7 @@ Or add to an existing project:
 ```elixir
 # mix.exs
 def deps do
-  [{:raxol, "~> 2.6"}]
+  [{:raxol, "~> 2.7"}]
 end
 ```
 
@@ -1764,37 +1803,39 @@ product. Concretely:
 
 # Packages
 
-Raxol ships as a main package plus 17 focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
+Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
 
 ## Main
 
 | Package                                            | Hex                       | What                                  |
 | -------------------------------------------------- | ------------------------- | ------------------------------------- |
-| [`raxol`](https://hex.pm/packages/raxol)           | `{:raxol, "~> 2.6"}`      | Full framework: runtime, UI, examples |
+| [`raxol`](https://hex.pm/packages/raxol)           | `{:raxol, "~> 2.7"}`      | Full framework: runtime, UI, examples |
 
 ## Core
 
 | Package                                                    | Hex                           | What                                       |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------ |
-| [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.6"}`     | Behaviours, events, config, plugins        |
-| [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.6"}` | Terminal emulation, termbox2 NIF           |
-| [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.6"}`      | MCP server, client, registry, test harness |
-| [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.6"}` | Phoenix LiveView bridge, themes, CSS       |
-| [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.6"}`   | Plugin SDK, testing, generator             |
-| [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.6"}`   | Sensor fusion (zero deps)                  |
+| [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.7"}`     | Behaviours, events, config, plugins        |
+| [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.7"}` | Terminal emulation, termbox2 NIF           |
+| [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.7"}`      | MCP server, client, registry, test harness |
+| [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |
+| [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.7"}`   | Plugin SDK, testing, generator             |
+| [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.7"}`   | Sensor fusion (zero deps)                  |
 
 ## Agents
 
 | Package                                                    | Hex                           | What                                        |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
-| [`raxol_agent`](https://hex.pm/packages/raxol_agent)       | `{:raxol_agent, "~> 2.6"}`    | AI agent framework                          |
+| [`raxol_agent`](https://hex.pm/packages/raxol_agent)       | `{:raxol_agent, "~> 2.7"}`    | AI agent framework                          |
 | [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.2"}` | Agent payments, Xochi cross-chain, stealth  |
 | `raxol_earn` (pre-alpha)                                    | `path: "packages/raxol_earn"`  | Virtuals Agent Commerce Protocol (seller)   |
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
-| `raxol_symphony` (0.2.0, pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
+| `raxol_symphony` (pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
 | `raxol_gateway` (pre-alpha)                                | `path: "packages/raxol_gateway"`  | Unified messaging gateway (multi-platform) |
 | `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command (`code`, `p`, `acp`, `agent`, `playground`, `new`), packaged as a self-contained Burrito binary |
 | `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
+| `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
+| `raxol_broker` (pre-alpha)                                 | `path: "packages/raxol_broker"`   | Fail-closed brokerage policy parsing and initialization |
 
 The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (the event/command contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`) -> the product surfaces `mix raxol.code` (interactive TUI, also over SSH), `mix raxol.p` (headless one-shot), and `mix raxol.acp` (ACP on stdio, for editors), all three in `raxol_agent` -> `raxol_symphony`, which orchestrates many agent runs above them. The Harness is the engine; the `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
@@ -1817,13 +1858,15 @@ raxol_mcp      --> raxol_core
 raxol_liveview --> raxol_core (+ phoenix_live_view optional)
 raxol_plugin   --> raxol_core
 
-raxol_agent    --> raxol + raxol_mcp
+raxol_agent    --> raxol + raxol_mcp (+ raxol_web3 optional, for the `web3` tool)
 raxol_payments --> raxol_agent (compile-time only)
 raxol_earn      --> raxol_payments (runtime), raxol_mcp + raxol_agent (compile-time only)
 raxol_agent_client_protocol --> (none; jason only, zero raxol deps)
 raxol_symphony --> raxol_core, raxol_agent, raxol_mcp (all optional)
 raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp`)
 raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
+raxol_web3     --> raxol_core, raxol_mcp (+ mint, castore)
+raxol_broker   --> raxol_agent (+ decimal)
 
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core (+ raxol/telegex/raxol_gateway optional)
@@ -1834,11 +1877,18 @@ raxol_core     --> telemetry (only external dep)
 raxol_sensor   --> (none)
 ```
 
-The main `raxol` package does not depend on `raxol_agent`, `raxol_earn`, `raxol_agent_client_protocol`, `raxol_gateway`, or any of the surface packages. You opt into those.
+The main `raxol` package does not depend on `raxol_agent`, `raxol_broker`, `raxol_earn`, `raxol_agent_client_protocol`, `raxol_gateway`, or any of the surface packages. You opt into those.
 
 ## Publishing
 
 See [Hex Publishing](https://github.com/DROOdotFOO/raxol/blob/master/CLAUDE.md#hex-publishing) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.
+
+Run `mix raxol.release.check` before publishing anything. It walks the public train in dependency order and, per package, validates the metadata, confirms every file the tarball would carry is tracked by git, and runs `mix hex.build --unpack` without publishing. `--metadata-only` skips the builds; `mix raxol.check` runs that faster half for you.
+
+Two failures are worth recognising on sight:
+
+- `packaged file X is not tracked by git`: `mix hex.build` packages the working tree, not the commit, so an untracked file under a packaged directory really would ship. Dotfiles count: `.env`, `.env.*` and `.secrets` are gitignored, which makes them untracked by construction and exactly what this catches. Commit it, ignore it via `:exclude_patterns`, or narrow the `:files` entry. `--allow-untracked` downgrades this to a warning, which is what `mix raxol.check` passes so an unstaged new module does not fail the interactive gate; CI runs without it.
+- `release dependency X is dropped from the published tarball`: a `HEX_BUILD` conditional in that package's `mix.exs` removed a dependency. Intended for pre-alpha packages that are not on the train yet, and reported as a warning so the choice stays visible rather than silent.
 
 
 <!-- docs/features/README.md -->
@@ -1864,7 +1914,7 @@ Use this page to find a feature; each linked page owns its details.
 | Runtime | [Adaptive UI](ADAPTIVE_UI.md) | Behavior-driven layout recommendations |
 | Developer tools | [Recording and replay](RECORDING_REPLAY.md) | Asciinema capture and playback |
 | Developer tools | [Time-travel debugging](TIME_TRAVEL_DEBUGGING.md) | Snapshot, step, and restore |
-| Developer tools | [REPL](REPL.md) | Sandboxed Elixir evaluation |
+| Developer tools | [REPL](REPL.md) | AST-checked Elixir evaluation |
 | Developer tools | [Virtual filesystem](FILESYSTEM.md) | Pure in-memory filesystem and agent actions |
 | Surfaces | [Gateway](GATEWAY.md) | Shared adapter for messaging platforms (pre-alpha) |
 | Surfaces | [Telegram](TELEGRAM.md) | TEA apps as Telegram bots |
@@ -2197,21 +2247,17 @@ The fee has three additive layers rather than a single tier percentage: a solver
 
 The quote will carry an optional `fee_breakdown`: the per-layer split (solver, venue, routing), price impact, gas floor, total, and `surplus_share_pct` (the solver keeps 15% of positive-slippage surplus, the user keeps 85%). The routing line is raxol's own cut, worth surfacing to agents. It stays absent until Riddler emits it and the worker forwards it, and the `QuoteResponse` schema does not parse it yet, so treat it as a forthcoming field rather than something to read today.
 
-Flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712 intent) -> `poll_status/3`.
+Flow: `get_quote/2` -> `execute/4` (wallet signs EIP-712 intent) -> `poll_status/3`. Before signing, raxol checks the quote's EIP-712 intent against the `QuoteRequest` it sent (wallet, recipient, chains, tokens, amounts, settlement preference, deadline) and refuses a mismatch as `{:intent_mismatch, field}`.
 
 For a storefront that settles on a buyer's behalf, the signing and the submission split into a buyer-side half and a relay-side half:
 
-- `sign_intent/2,3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting**: the buyer hands this to the storefront.
+- `sign_intent/3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting**: the buyer hands this to the storefront.
 - `execute_signed/2` (relay side) posts a pre-signed bundle to Xochi **without re-signing**, so the relay never holds the buyer's key.
 - `execute/4` is the two composed: `sign_intent` then `execute_signed`.
 
 The Xochi Cross-Chain Transfer ACP offering (in `raxol_earn`, see [ACP](ACP.md)) is built on this split: the buyer signs, raxol relays. `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow.
 
 Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design: the protocol takes a fee, the agent pays it, done.
-
-### Riddler (direct solver, B2B only)
-
-Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics. The `Protocols.Riddler` module itself is deprecated and now delegates to Xochi internally; prefer `Protocols.Xochi` directly.
 
 ## Trust and compliance (ZKSAR)
 
@@ -2557,7 +2603,7 @@ When `view/1` returns `nil` (the default), no rendering happens. The agent is a 
 # {:error, "message"}
 ```
 
-Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, OpenRouter, and Meituan's LongCat.
+Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, OpenRouter, Meituan's LongCat, and DeepSeek.
 Provider is auto-detected from `:base_url` or set via `:provider`.
 
 Without an explicit `:provider`, detection matches the `:base_url`: `anthropic` picks Anthropic, `ollama` (or the default Ollama port) picks Ollama, `moonshot` picks Kimi, and anything else is treated as OpenAI-compatible. The `FREE_AI=true` / `AI_API_KEY` backend switch is a convention of the example agents under `examples/agents/`, not the `Backend.HTTP` layer.
@@ -2565,6 +2611,8 @@ Without an explicit `:provider`, detection matches the `:base_url`: `anthropic` 
 The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI-compatible aggregator. It attaches app-attribution headers (HTTP-Referer, X-OpenRouter-Title, X-OpenRouter-Categories) so Raxol's usage appears on openrouter.ai/rankings. Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
 
 The `:longcat` harness targets Meituan's LongCat (`https://api.longcat.chat/openai`, model `LongCat-2.0`), also OpenAI-compatible. It rides the `:openai` request/SSE path, which already handles LongCat's non-standard frames (a full `message` chunk instead of `delta`, the `reasoning_content` channel, and the underscore-less `finishreason` key). Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
+
+The `:deepseek` harness targets DeepSeek's OpenAI-compatible endpoint (`https://api.deepseek.com`, default model `deepseek-v4-flash`, key from `DEEPSEEK_API_KEY`). Its usage frames carry `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, and `Raxol.Agent.LlmPrices` prices them exactly through its backend-scoped table (cache tier and UTC peak clock, ADR-0035); the rows are keyed to this harness, so the same model name via OpenRouter or LLM7 stays unpriced rather than borrowing the direct rate.
 
 ## Turn driver
 
@@ -2607,18 +2655,23 @@ atom to a backend:
 
 | Harness | Backend |
 |---------|---------|
-| `:anthropic`, `:openai`, `:kimi`, `:ollama`, `:lm_studio`, `:llm7`, `:longcat`, `:openrouter` | `Backend.HTTP` |
+| `:anthropic`, `:openai`, `:kimi`, `:ollama`, `:lm_studio`, `:llm7`, `:longcat`, `:deepseek`, `:openrouter` | `Backend.HTTP` |
 | `:lumo` | `Backend.Lumo` |
 | `:claude_native` | `Backend.ClaudeCode` |
+| `:grok_native` | `Backend.GrokBuild` |
 | `:cursor` | `Backend.Cursor` |
 | `:mock` | `Backend.Mock` |
+
+`Raxol.Agent.Backend.Catalog` is the single declaration this table, the resolver's provider
+registry and `ExecutorConfig.backend()` are all derived from (`Catalog.ids/0` lists every
+backend); see ADR-0034.
 
 A native backend reports `handles_tools_internally?/0` as `true`, which tells the framework
 not to drive the reasoning loop: the CLI runs its own loop and calls Raxol's tools through an
 injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-config`). The
 `:codex` harness is reserved (it speaks a stateful app-server protocol served by
 `Raxol.Symphony.Runners.Codex`, not an agent backend), so `select/1` returns
-`{:error, {:harness_not_implemented, :codex}}` for it.
+`{:error, {:backend_not_implemented, :codex}}` for it.
 
 ## Authorization (ALLOW/ASK/DENY)
 
@@ -2772,8 +2825,15 @@ Stored references live in `~/.raxol/providers.json` (override with
 models, and base URLs, never raw keys. Zero-config env usage still works: set
 `ANTHROPIC_API_KEY` (or another provider var) and launch.
 
-Supported providers: `anthropic`, `openai`, `kimi`, `openrouter`, `longcat`,
-`lumo`, `ollama`, `lm_studio`, `llm7`, `mock`.
+Supported providers: `claude_native`, `grok_native`, `anthropic`, `openai`,
+`kimi`, `openrouter`, `longcat`, `deepseek`, `lumo`, `ollama`, `lm_studio`,
+`llm7`, `mock`, `cursor`. These are the runnable entries of
+`Raxol.Agent.Backend.Catalog`, which every backend registry derives from
+(ADR-0034); `Catalog.ids/0` adds the reserved `codex`, served by Symphony
+rather than by a backend here. The three vendor-CLI backends
+(`claude_native`, `grok_native`, `cursor`) need no key: the installed CLI
+holds the subscription. `cursor` is nameable but never auto-detected, so
+selecting it is always explicit.
 
 A repo can also pin its default provider and model in `.raxol/config.json`
 (read from the working directory, references only, raw keys deliberately
@@ -2857,7 +2917,7 @@ Typing, Enter, plan-mode toggles, and backspace are accepted only when the agent
 | `/find <text>` | Case-insensitive search over the transcript blocks (first 8 matches) |
 | `/logout [provider]` | Disconnect the session's provider; with a name, also forget its stored credential reference |
 | `/share` | Mint a read-only share link for this session |
-| `/mcp` | List MCP servers configured in `.mcp.json` |
+| `/mcp` | List MCP servers configured in `.mcp.json`, including the entries the bridge cannot run and why |
 | `/hooks` | Show pre/post/stop hook counts |
 | `/inspect` | Show every config source in use: provider resolution and why, the repo pin, hook rules, MCP servers, skills roots, session store (same output as `mix raxol.inspect`) |
 
@@ -2873,12 +2933,12 @@ sub-agent. Read-only tools run without a prompt; sensitive tools gate through ap
 
 | Tool | Sensitive? | Notes |
 |------|:---:|-------|
-| `list_dir`, `read_file`, `file_stat` | No | `read_file` supports `offset`/`limit` line ranges, caps at 256KB |
+| `list_dir`, `read_file`, `file_stat` | No | `read_file` anchors every line, supports `offset`/`limit` line ranges, caps at 256KB |
 | `grep`, `glob` | No | `grep` uses ripgrep when available, else a bounded pure-Elixir walk; `glob` is cwd-relative |
 | `write_file` | Yes | Refuses to clobber unless `overwrite: true`; returns a diff-shaped result |
-| `edit_file` | Yes | `old_string` must match once unless `replace_all` |
+| `edit_file` | Yes | Addresses lines by anchor (`from`/`to`), or `old_string` as a fallback |
 | `bash` | Yes | `/bin/sh -c`, combined stdout+stderr, output truncated past 64KB |
-| `task` | (delegating) | Delegates to a fresh read-only sub-agent that cannot write, run bash, or recurse |
+| `task` | (delegating) | Delegates to fresh read-only sub-agents that cannot write, run bash, or recurse; `prompts` fans out concurrently |
 | `lsp` | No | Language-server queries: diagnostics, symbols, definition, references, hover |
 | `lsp_rename` | Yes | Renames a symbol through the language server and writes the edits |
 
@@ -2963,6 +3023,73 @@ this the same refusal hooks and MCP servers already get.
 
 Diagnostics are surfaced when the model asks for them, not automatically after every write.
 Post-write diagnostics are tracked in the parity epic.
+
+### Delegating to sub-agents
+
+`task` runs a fresh sub-agent with a clean context and a read-only toolset. It inherits the
+parent's model and its jail root, and nothing else: no authorizer, no hooks, no write or
+shell tools, and not `task` itself, so a delegation can neither mutate the workspace nor
+recurse without bound.
+
+`prompt` delegates one subtask. `prompts` takes a list and runs them concurrently, up to
+four in flight, returning one entry per prompt in the order given:
+
+```json
+{"prompts": ["find every caller of resolve/2",
+             "list the modules that define an Action",
+             "summarise the journal format"]}
+```
+
+Independent investigations then finish in the time of the slowest rather than the sum.
+More than eight prompts is refused outright rather than trimmed, so a fan-out either runs
+every prompt it was given or says it ran none.
+
+Each delegation is an unlinked process under `Raxol.Agent.TaskSupervisor`, so one that
+crashes or exceeds its five-minute ceiling comes back as a failed entry beside its
+siblings' results, and the parent turn continues. Every sub-agent round reports its usage
+to the parent's ledger as it lands, so a fan-out cannot outrun a spending cap.
+
+### Editing by anchor
+
+`read_file` prefixes every line it returns with `LINE:HASH|`, where `HASH` is the first
+six hex digits of the SHA-256 of that line's exact bytes:
+
+```
+1:4d1a7c|defmodule Hello do
+2:106b08|  :world
+3:9f2ee1|end
+```
+
+`edit_file` takes those prefixes back in `from` and `to` and replaces the range with
+`new_string`:
+
+```json
+{"path": "hello.ex", "from": "2:106b08", "new_string": "  :earth"}
+```
+
+`to` is optional and defaults to `from`, so a single-line edit needs one anchor. An empty
+`new_string` deletes the range. A trailing newline in `new_string` is ignored, since the
+replacement is spliced as lines; whether the file ends with a newline is preserved from
+the original either way.
+
+Two things follow from this. The model never retypes the text it is replacing, which is
+where exact-match edit formats lose turns and tokens to whitespace and indentation drift.
+And the hash is proof the model is pointing at bytes it actually read: if the file changed
+underneath, the anchor no longer matches and the edit is refused rather than applied to
+content the model never saw.
+
+An anchor pair verifies both endpoints of the range exactly. Lines strictly between them
+are not hashed, because an anchor has to be reproducible from what the model read and it cannot
+hash a range itself. Endpoint drift catches the realistic case; a change confined to the
+interior of an addressed range does not.
+
+`old_string` remains as a fallback for callers that have not read the file with anchors.
+It must still match byte for byte, and be unique unless `replace_all` is set.
+
+Every failure mode answers with what to do next rather than a bare error. A mismatched
+anchor reports the line, the hash that was sent, and the hash now there, so the model can
+re-read and retry in one turn instead of guessing. `anchors: false` on `read_file` returns
+the raw bytes for when the exact content is what is wanted.
 
 Every path expands relative to the working directory: the tool context's `:cwd`
 when the surface sets one (an ACP session root, a tenant jail), else
@@ -3085,6 +3212,48 @@ and the eyes carry state. `--ascii` swaps the gills for `=`.
 Contract events drive the face: a started turn is `:thinking`, a running tool is
 `:working`, a finished turn is `:done`, and a failure is `:error`.
 
+## Workspace instructions
+
+The agent reads `AGENTS.md` and `CLAUDE.md` and appends them to its system prompt, so a
+repository's own conventions reach the model without being retyped every session.
+
+Discovery walks up from the working directory, one `AGENTS.md` then one `CLAUDE.md` per
+directory, and stops at the directory holding a `.git` (that directory is included). A
+directory with no `.git` above it contributes only itself: climbing to the filesystem root
+would read files that were never associated with this workspace. A user-global
+`~/.raxol/AGENTS.md` is read ahead of everything.
+
+Files are ordered outermost first, so the one nearest the working directory is read last
+and the most specific instructions win. The plan-mode directive is appended after all of
+them, so a repository file cannot talk the model out of read-only mode.
+
+Content is capped at 32KB per file and 64KB in total; a file over its share is truncated
+and marked as truncated in the prompt. Only regular files of valid UTF-8 text are read.
+
+`/inspect` (and `mix raxol.inspect`) lists which files were found and how large they are,
+never their content. The boot status line names them, e.g. `instructions: AGENTS.md`.
+
+The three surfaces differ where their working directory does:
+
+- **TUI**: discovers at boot from the session `cwd`.
+- **ACP**: discovers per session from the root the editor names in `session/new`, so two
+  sessions on one server get their own instructions.
+- **Headless (`raxol -p`)**: discovers from the process working directory, except under
+  `RAXOL_PROFILE=benchmark`, which withholds them for the reason it withholds skills: an
+  attempt must depend on the task, not on what the checkout happens to carry. The profile's
+  announce line reports `"instructions":"off"`.
+
+A jailed (multi-tenant) session still reads its own workspace, since these files are read
+rather than executed, unlike hooks and MCP servers. What it does not get is anything above
+the jail: the walk is bounded to it, and the host's user-global file is skipped.
+
+It also does not get operator authority. In a jail the workspace is tenant-written, which
+is exactly why hooks and MCP servers are refused there, so the same bytes are introduced to
+the model as the workspace's request about coding conventions rather than as instructions
+from the operator, and it is told to ignore anything in them claiming to change its tools,
+permissions, or limits. Outside a jail the workspace is the operator's own and the files
+are presented as such.
+
 ## Hooks and MCP config
 
 Two optional per-project files, both read from `<cwd>/`:
@@ -3094,22 +3263,70 @@ Two optional per-project files, both read from `<cwd>/`:
   `"*"`) plus `stop` commands. A pre-hook that exits non-zero vetoes the tool (30-second
   timeout, `RAXOL_TOOL_NAME` in the environment); post-hooks are advisory; stop commands
   run at turn end.
-- `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format.
+- `.mcp.json` uses the standard `{"mcpServers": {name: {...}}}` format, in both of its
+  forms: `{command, args, env}` starts a local subprocess, and
+  `{url, headers, metered, prices, concurrency}` connects to a hosted HTTP server. An entry
+  carrying both `command` and `url`, or neither, is refused by name rather than dropped.
   Configured servers are started (supervised, off the boot path) and their tools join the
   live toolset as `mcp__<server>__<tool>`, sensitive by default: each call is
   approval-gated like any mutating tool, and plan mode denies them outright since an
   external tool's effects are unknown. `/mcp` shows per-server connection state
-  (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
-  a note, never fatal. At most 16 servers load per config, and server names are held to
+  (`●` connected, `✗` started and failed with its reason, `…` loading); a server that
+  fails to start is skipped with a note, never fatal. An entry the bridge never tries
+  gets `⊘` and the reason: a `url` server (`"type": "http"` or `"sse"`, which the
+  format allows but only stdio commands start here), an entry with no `command`, a
+  `command` that is not a string, or an entry that is not an object. At most 16
+  servers load per config, and server names are held to
   `[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}` (each one interns an atom and spawns a subprocess);
-  refusals show up in `/mcp` alongside connection failures.
+  refusals show up in `/mcp` alongside connection failures, and the `⊘` rows are
+  capped at the same 16 with an `… and N more skipped` line.
 
-Both files name a command to execute, so both are read only when the session owns its
+### Remote servers, credentials and provenance
+
+A remote entry's `headers` values may be literals, or references: `${env:VAR}`,
+`${op://item/field}`, or a bare `op://...` path, resolved at connect time through the same
+`op read` path the provider credential store uses. A literal is accepted and warned about
+once per server, because refusing it would only push operators to a worse workaround.
+
+Whether a reference resolves depends on which file it came from, and this asymmetry is
+deliberate:
+
+- `~/.raxol/mcp.json` (override with `$RAXOL_MCP_CONFIG`) is the operator's own file, read
+  in the same format. Its references resolve.
+- `<cwd>/.mcp.json` is repository content, a file a clone can carry. Its references do NOT
+  resolve: the server is skipped with a named reason. Otherwise a cloned repository would
+  be an instruction to read a named environment variable, or a named 1Password item, and
+  POST it to a host the repository chose. The outbound target rules do not help, because
+  the destination is a legitimate public address.
+- `~/.raxol/mcp_headers.json` (override with `$RAXOL_MCP_HEADER_ALLOWLIST`) is the operator
+  opt-out, held outside every workspace: `{"Authorization": ["${env:INTEL_TOKEN}"]}` lets a
+  workspace entry resolve exactly that reference for exactly that header. A missing or
+  malformed file permits nothing.
+
+Servers are merged user-level first, so a workspace entry cannot shadow one of the
+operator's own by reusing its name; the duplicate is refused.
+
+A resolved header value goes to the server and nowhere else: not a log line, not an error
+term, not `/mcp` or `/inspect`, which show header names only.
+
+### Per-call priced tools
+
+A remote server that bills per call declares `"metered": true` and, per tool,
+`"prices": {"lookup": 150}` in the unit the run budget counts. A priced tool is
+`sensitive: true` whatever the spec says, and every call reserves against the session's
+spend gate before the request is built: a refused reservation issues no request. A tool on
+a metered origin whose price is unknown is denied by default, naming the tool and the
+origin, and a priced tool is denied while no budget seam is configured. The transport
+refuses a priced call that arrives without a reservation handle, which is what covers a
+native harness driving its own tool loop past the hook chain.
+
+Both workspace files name something to run, so both are read only when the session owns its
 workspace. A jailed session (multi-tenant SSH, see below) loads NEITHER: its workspace is
 writable by a tenant whose own `write_file` can author these files, and running them would
 be arbitrary execution as the server uid: around the cwd jail, the `:jail` shell gate,
-and the approval chain alike. `/mcp` and the status line say so rather than reporting an
-empty config.
+and the approval chain alike. A jailed session also loads no `~/.raxol/mcp.json`, whose
+servers hold the host operator's credentials rather than the tenant's. `/mcp` and the
+status line say so rather than reporting an empty config.
 
 ## Editors over ACP
 
@@ -3118,8 +3335,10 @@ empty config.
 ACP-speaking editor (Zed and its ecosystem) can spawn and drive it: each
 `session/new` gets a real `Raxol.AgentClientProtocol.Session` running
 `Raxol.Agent.ClientProtocol.TurnRunner` over the same provider resolution
-as every other entrypoint. Turns are read-only on this surface until ACP's
-permission flow is bridged to the authorization engine. Each session's file
+as every other entrypoint. Turns run the full toolset: every sensitive call is
+gated on a `session/request_permission` round trip, and the gate is fail-closed
+on the decision, so a client that refuses, times out, or never implements the
+method denies the write and keeps reading. Each session's file
 tools scope to the `cwd` the editor names in `session/new`, so one server
 handles projects in different directories and every tool call is contained
 under its own session root. Point
@@ -3555,7 +3774,7 @@ libcluster is optional. If it's not there:
 The Agent Client Protocol is to agentic coding what LSP is to language tooling: a JSON-RPC
 2.0 protocol between a **client** (an editor or CLI host such as Zed) and an **agent** (the
 AI coding process), spoken over a byte stream, almost always the agent's stdio. Raxol's
-implementation (`raxol_agent_client_protocol`, pre-alpha `0.1.0-rc.0`) has zero raxol
+implementation (`raxol_agent_client_protocol`, pre-alpha) has zero raxol
 dependencies (only `jason`) and implements both roles.
 
 ## The protocol shape
@@ -3683,7 +3902,7 @@ to the wire before a frame, which a strict NDJSON client would reject.
 a path dependency of `raxol_agent`, so a Hex install of `raxol_agent` is
 compiled without `Raxol.Agent.ClientProtocol.StdioAgent` and has no ACP surface
 at all; adding the dependency downstream does not retroactively enable it. The
-packaged CLI (npm, Homebrew, the install script) is built from source and does
+packaged CLI (npm or the install script) is built from source and does
 have it. `raxol doctor` reports which you have.
 
 **Native-CLI backends bypass all of the above.** With `--backend claude_native`
@@ -3861,7 +4080,7 @@ adapter that owns only its own I/O and translation; routing, per-chat sessions, 
 authorization, and history all live in the gateway. A chat becomes an OTP process, so
 platform fan-out is supervision rather than a single-process message queue.
 
-The package (`raxol_gateway`, pre-alpha `0.1.0`) depends on `raxol_core`, with `raxol_agent`
+The package (`raxol_gateway`, pre-alpha) depends on `raxol_core`, with `raxol_agent`
 optional (used only to record turns to a durable conversation log). It has no auto-started
 tree: you wire the supervisor yourself.
 
@@ -4269,6 +4488,7 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 | `Modal`      | `confirm`, `dismiss`                           |
 | `Table`      | `select_row`, `sort`, `get_rows`              |
 | `Tree`       | `expand`, `collapse`, `select_node`           |
+| `Scrubber`   | `seek`, `play`, `pause`, `get_position`       |
 
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
@@ -4342,6 +4562,77 @@ The harness goes through the same MCP transport as a real client, so what your t
 - Pending notifications
 
 The tree is streamed as diffs over the MCP connection, so agents track changes incrementally rather than polling.
+
+## Authorization
+
+`Raxol.MCP.Server` evaluates an authorizer before running a tool. It is a 3-arity fun returning `:allow`, `{:ask, prompt}`, or `{:deny, reason}`, and `Raxol.Application` supplies it explicitly:
+
+```elixir
+config :raxol,
+  mcp_authorizer: fn tool, _args, _ctx ->
+    if String.starts_with?(tool, "raxol_"), do: :allow, else: {:deny, :not_mine}
+  end,
+  # Guards resources/read, tools/list, prompts/get and the other read surfaces.
+  # Receives the METHOD name in the tool-name position.
+  mcp_read_authorizer: fn _method, _args, _ctx -> :allow end
+```
+
+A value that is not a 3-arity fun raises at boot rather than being ignored, so a deployment cannot believe it configured a policy while running without one.
+
+The third argument is the authorization context: `%{conn_id: term(), transport: :stdio | :sse | :unknown}`, both server-derived. `conn_id` is the connection the request arrived on (`:default` for stdio and direct callers, a per-session value for SSE); `transport` is what the embedder declared the server fronts, via `transport:` on `Raxol.MCP.Server.start_link/1` or `Raxol.MCP.Supervisor`, and reads `:unknown` when nobody declared one. Nothing the client asserts is in there, and nothing should be added: a policy keyed on a client-declared name or version is bypassed by declaring a different one.
+
+**In a release, the fun form only works from `config/runtime.exs`.** `config/config.exs` is evaluated at build time and its result is written to `sys.config`, which holds serializable terms only; an anonymous function is not one. Name the function instead, which survives into `sys.config`:
+
+```elixir
+# config/config.exs, or runtime.exs: either works for this form.
+config :raxol, mcp_authorizer: {MyApp.McpPolicy, :authorize}
+```
+
+The module and its 3-arity function are checked when the authorizer is resolved, so a typo is a boot failure naming the module rather than a tool that denies for a reason nobody can see.
+
+### Defaults
+
+Configuration binds in every environment. `mcp_allowed_tools` restricts the tools in dev exactly as it does in production; the environment decides only what happens when nothing is configured.
+
+Unconfigured outside production resolves to `Raxol.MCP.Authorizer.allow_all/0`: what the implicit `nil` already did, now visible at the call site so `mix mcp.server` keeps working.
+
+Unconfigured in production resolves to a deny-by-default allowlist:
+
+```elixir
+config :raxol,
+  mcp_allowed_tools: ["raxol_screenshot"],
+  # Defaults to the three LISTING methods. prompts/get returns prompt content
+  # rather than names, and completion/complete is an enumeration primitive, so
+  # neither is a default; resources/read and the subscribe pair stream live
+  # model state and are likewise absent.
+  mcp_allowed_read_methods: ~w(tools/list resources/list prompts/list)
+```
+
+Empty is the default for tools, so nothing runs until a deployment names it. That is tighter than the `nil` it replaced, not merely more explicit: `Authorizer.decide/4` treats `nil` as allow, so a production server previously ran any tool nobody had annotated sensitive.
+
+The default must not be `allow_all` in production, and a non-nil default must not by itself open the network. `Raxol.MCP.Server.authorization_configured?/1` is therefore **not** `authorizer != nil`; it is `authorizer != nil and authorizer_source == :configured`, and the SSE boot gate (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads that.
+
+`:authorizer_source` is what separates a policy an operator wrote from a fallback raxol picked. **Naming `:mcp_authorizer` or `:mcp_allowed_tools` is what makes a network transport bootable**, including `mcp_allowed_tools: []`, since exposing a transport that serves nothing is a coherent choice and it is the operator's to make. The two READ keys deliberately do not count, because this gate is about running tools; the read seam has its own boot gate instead (see below). A framework fallback never counts, however strict it is: otherwise the gate stops being a forcing function, which is the whole reason it exists.
+
+Embedding `Raxol.MCP.Server` or `Raxol.MCP.Supervisor` directly? `:authorizer_source` defaults to `:default`, so forgetting the option leaves the gate shut rather than satisfying it by omission. Pass `authorizer_source: :configured` when your own configuration decided the policy.
+
+Reads cannot take the same empty default: `tools/list` is a read, so denying every read would leave an allowlisted tool undiscoverable and the server unusable rather than closed. The split is by what a method discloses. Listing methods reveal names the server already advertises, while `resources/read` streams state.
+
+`tools/list` is filtered per entry as well as gated as a method. Each tool goes through the same authorizer `tools/call` would consult, and only `:allow` is advertised; `{:ask, _}` hides exactly like `{:deny, _}`, since an entry needing an approval the caller has not got is not callable, and a policy that raises costs that tool its listing rather than failing the whole listing. A nil authorizer advertises everything.
+
+The read seam itself still answers `:allow` when no read authorizer is configured, which is what stdio embedders have always had, so the fail-closed pressure sits at boot instead: `Raxol.MCP.Deployment.enforce_read_authorization!/2` refuses to mount the SSE transport without a `:read_authorizer`, naming `:mcp_read_authorizer` in the refusal, and a server started with `transport: :sse` runs the same check at its own boot. Satisfying the tool gate alone used to be enough to serve live model state, through `resources/read`, to any client that connected.
+
+### Annotations
+
+A tool annotated `destructiveHint: true` or `sensitive: true` never runs without an authorizer, enforced twice: the server refuses to boot when such a tool is already registered, and refuses the call itself for one registered afterwards. The runtime half needs the tool registry to be reachable to classify a tool, and fails closed when it is not, so a call during a registry restart is refused rather than treated as non-sensitive. Of the headless tools, `raxol_start`, `raxol_send_key`, and `raxol_stop` carry the annotation; the three read tools do not.
+
+### Transports
+
+stdio is exempt by design, since it already inherits the OS process boundary.
+
+`Raxol.Headless.McpTools.inject_into_tidewave/1` is not exempt. Tidewave dispatches out of its own ETS map, so a raw callback written there would never reach `Raxol.MCP.Server`; what gets injected is a closure that re-enters through `tools/call` on the server named by `:server`. Both halves of the record are substituted (the dispatch map AND the advertised tool entries' own `:callback`), so a consumer reaching for `tool.callback` cannot bypass the authorizer either. A server that is down denies rather than falling back to the raw callback, and the wait is bounded so one slow tool cannot hold the surface open indefinitely.
+
+That gates Raxol's tools, not Tidewave's. Tidewave ships its own, and nothing here constrains them: `project_eval` evaluates Elixir in the running node. Whether that endpoint may be reached at all is an endpoint-level decision: authentication and bind address, not tool policy.
 
 ## Property tests
 
@@ -4706,15 +4997,15 @@ On crash, the current session is saved automatically. No explicit stop needed fo
 
 # REPL
 
-Interactive Elixir REPL with AST-based sandboxing. Three safety levels: wide open for local use, locked down for SSH. Bindings persist between evaluations, IO gets captured, and runaway code hits a timeout.
+Interactive Elixir REPL with an AST-based safety check in front of it. Three levels range from an explicit trusted-local escape hatch to the launcher-default whitelist. Bindings persist between evaluations, IO gets captured, and runaway code hits a timeout. The check is the only thing standing between typed code and the node, so read [Trust boundary](#trust-boundary) before exposing any of this.
 
 ## Quick start
 
 ```bash
-mix raxol.repl
-mix raxol.repl --sandbox standard
-mix raxol.repl --sandbox strict
-mix raxol.repl --timeout 10000
+mix raxol.repl                         # strict (default)
+mix raxol.repl --sandbox standard      # opt in to the blocklist
+mix raxol.repl --sandbox none          # explicit trusted-local escape hatch
+mix raxol.repl --timeout 10000         # positive milliseconds only
 ```
 
 ## Evaluator
@@ -4740,7 +5031,7 @@ result.value      # => 30
 result.output     # => "hello\n"
 
 # Runaway code times out (default 5000ms)
-{:error, "Evaluation timed out", evaluator} =
+{:error, "Evaluation timed out after 1000ms", evaluator} =
   Evaluator.eval(evaluator, "Process.sleep(:infinity)", timeout: 1000)
 
 Evaluator.bindings(evaluator)  # => [x: 3]
@@ -4749,6 +5040,12 @@ Evaluator.history(evaluator)   # => [{"x * 10", result}, ...]
 evaluator = Evaluator.reset_bindings(evaluator)  # clears bindings, keeps history
 evaluator = Evaluator.clear_history(evaluator)    # clears history, keeps bindings
 ```
+
+### Trust boundary
+
+`Evaluator` applies no restriction of its own. `Code.eval_string/3` gets an unrestricted `Macro.Env`, no AST is inspected, and `File`, `:os.cmd/1`, ports, `Node.connect/1` and `:erlang.halt/0` are all reachable from typed code. The caps (`:timeout`, `:max_heap_bytes`, `:max_result_bytes`, and the capture's output limit) bound the one evaluation process: the timeout kill uses `:kill`, which `Process.flag(:trap_exit, true)` cannot intercept, so an evaluation cannot outlive its own timeout. They bound nothing it spawns, though, and on timeout only that one pid is signalled. Code evaluated here runs with the full authority of the node's OS user.
+
+`Sandbox.check/2` is a separate call the caller makes first. `Evaluator` does not call it for you, and it is a mitigation rather than a boundary: every clause resolves a module NAME, so anything that rebinds a name (`import`, `alias`, `require`, `use`, and until #1045 the bare-name capture forms of `apply` and `spawn`) sits underneath the check rather than inside it. What actually keeps an untrusted caller away from the evaluator is the deployment flag, `Raxol.Core.Boundary.Evaluation.exposed?/0`. Real confinement between untrusted principals wants separate OS uids or containers: this is one BEAM, one uid. Tracked in [#1033](https://github.com/DROOdotFOO/raxol/issues/1033).
 
 ## Sandbox levels
 
@@ -4763,27 +5060,29 @@ Sandbox.check("System.cmd(\"rm\", [\"-rf\", \"/\"])", :standard)  # => {:error, 
 
 | Level | What it does | When to use it |
 |-------|-------------|----------------|
-| `:none` | Allows everything | Local terminal, you trust the user |
-| `:standard` | Blocks known-dangerous calls | Default for interactive use |
-| `:strict` | Whitelist-only | SSH, web, untrusted input |
+| `:none` | Allows everything | Explicit opt-in on a local terminal whose user you trust |
+| `:standard` | Blocks known-dangerous calls | Explicit opt-in for trusted local use |
+| `:strict` | Whitelist-only | The level every served launch gets, and the minimum for SSH, web, or untrusted input |
 
-**Standard** blocks: `System.cmd`, `System.shell`, `File.rm`, `File.rm_rf`, `File.write`, `Port.open`, `Code.eval_string`, `Code.eval_quoted`, `:os.cmd`, and friends.
+Sandbox option values are exact and case-sensitive. Unknown values fail before the terminal starts instead of silently selecting another level. Timeouts must be positive integers.
+
+**Standard** blocks destructive system, file, network, and dynamic-code calls. It also denies process creation and delayed scheduling through the `Task`, `Task.Supervisor`, `Agent`, `GenServer`, `Supervisor`, `DynamicSupervisor`, `PartitionSupervisor`, `Registry`, `:proc_lib`, `:gen`, `:gen_server`, `:gen_event`, `:gen_statem`, `:supervisor`, `:supervisor_bridge`, and `:timer` APIs; every `spawn*` form exposed by `Kernel`, `Node`, or `:erlang`; and module directives that could alias or import those APIs.
 
 **Strict** only allows: `Enum`, `Stream`, `Map`, `Keyword`, `List`, `Tuple`, `MapSet`, `String`, `Integer`, `Float`, `Atom`, `IO`, `Kernel`, `Range`, `Regex`, `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Calendar`, `Access`, `Base`, `URI`, `Jason`, `Inspect`. Everything else gets rejected.
 
-## Over SSH
+## Over SSH, and on any served surface
 
-The playground serves a REPL demo over SSH:
+A served launch evaluates nothing unless the deployment opted in. `Raxol.Playground.Demos.ReplDemo` consults `Raxol.Core.Boundary.Evaluation.exposed?/0` (`RAXOL_REPL_EXPOSED=true`, or `config :raxol_core, :repl_exposed, true`) once, at launch; with the flag unset the demo still renders and Enter reports the flag instead of running the input. The same flag makes `Raxol.Payments.Deployment.assert_signing_isolated!/0` refuse to boot a node that holds signing keys, so the two halves of that rule cannot disagree.
 
 ```bash
 mix raxol.playground --ssh
 ```
 
-Use `:strict` sandbox for anything exposed to the network.
+With the flag set, the level is `:strict`, and `:strict` is a mitigation rather than a boundary: a gap in the allowlist reaches the node's OS user. A served launch cannot lower it or raise the evaluation timeout, because `--sandbox` and `--timeout` are honoured only for a launch that passed `local_operator: true`, which the demo accepts only at `environment: :terminal`. `Raxol.SSH.Session` places `environment: :ssh` ahead of a served app's `:app_opts` and `:tenant_opts` precisely so a served app cannot claim otherwise. Prefer not evaluating untrusted code on a network surface at all.
 
 ## Playground demo
 
-The REPL is one of the playground demos (`mix raxol.playground` -> REPL). It has input history (up/down), formatted output, a bindings panel, and shows the active sandbox level.
+The REPL is one of the playground demos (`mix raxol.playground` -> REPL). It has input history (up/down), formatted output, and a bindings panel. Every launcher uses `:strict`; only `mix raxol.repl`, which passes `local_operator: true` from the operator's own terminal, can choose another level with an exact, explicit `--sandbox standard` or `--sandbox none`.
 
 
 <!-- docs/features/SELF_IMPROVEMENT.md -->
@@ -6966,12 +7265,14 @@ Two consequences worth knowing:
 
 ## Region prominence
 
-> **Proposed (not yet implemented).** This section describes an intended
-> design. None of the modules or functions named below
-> (`Raxol.UI.ColorResolver`, `Raxol.UI.ColorIntent`,
-> `Raxol.UI.RegionPolicy.region_prominence/4`,
-> `Raxol.UI.Layout.Engine.stamp_region_prominence/2`, `@region_gamma`) exist in
-> the codebase yet. Do not treat it as a reference to shipped behavior.
+> **Partly built, not yet wired.** `Raxol.UI.ColorResolver`,
+> `Raxol.UI.ColorIntent`, and the `@region_gamma` solve exist and have their
+> own tests. The policy and engine halves do not:
+> `Raxol.UI.RegionPolicy.region_prominence/4` and
+> `Raxol.UI.Layout.Engine.stamp_region_prominence/2` are absent, so nothing
+> stamps the per-element prominence the resolver knows how to read, and no
+> render path calls the resolver yet. Read the bullets below as intended
+> design, not as a description of what a frame does today.
 
 Intent colors resolve to literals exactly once, at the render choke point:
 `Raxol.UI.ColorResolver` is the single whole-list pass that turns
@@ -7106,8 +7407,7 @@ allowlist below.
 
 | Module | Path |
 |--------|------|
-| `Raxol.Core.CoreSupervisor` | `lib/raxol/core/core_supervisor.ex` |
-| `Raxol.Core.Runtime.RuntimeSupervisor` | `lib/raxol/core/runtime/runtime_supervisor.ex` |
+| `Raxol.Core.Runtime.Supervisor` | `lib/raxol/core/runtime/runtime_supervisor.ex` |
 | `Raxol.DynamicSupervisor` | `lib/raxol/dynamic_supervisor.ex` |
 | `Raxol.Terminal.Supervisor` | `packages/raxol_terminal/lib/raxol/terminal/terminal_supervisor.ex` |
 | `Raxol.Core.Runtime.Plugins.PluginSupervisor` | `packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_supervisor.ex` |
@@ -7124,7 +7424,7 @@ allowlist below.
 | `Raxol.RBAC` | One role/permission set per node |
 | `Raxol.Dev.CodeReloader` | One reloader watches the VM in dev |
 | `Raxol.Core.Runtime.ProcessStore` | Explicit Process-dictionary replacement; VM-wide by design |
-| `Raxol.Core.Config.ConfigStore` | VM-wide config |
+| `Raxol.Core.Config.Store` | VM-wide config |
 | `Raxol.Core.Accessibility.Announcements` | One global accessibility queue |
 | `Raxol.Core.Runtime.Plugins.PluginLifecycle` | Plugins shared across Lifecycles; ETS-backed Registry, plugin_id-namespaced state. Confirmed by #229. |
 | `Raxol.Core.Runtime.Plugins.ResourceBudget` | One budget shared across plugins |
@@ -7138,6 +7438,7 @@ allowlist below.
 | `Raxol.Watch.DeviceRegistry` | ETS-backed device list |
 | `Raxol.Watch.Push.Noop` | Test stub |
 | `Raxol.Symphony.Runners.Noop` | Test stub |
+| `Raxol.MCP.Client.Tables` | Owns the dual-era verdict table and the client-side origin breaker table (ADR-0037 decision 2). The verdict is per upstream ORIGIN, and an `:ets` table belongs to the process that created it, so a table created per client would cache nothing shared and one created by a transient process raises in whoever still holds the reference. `[name: nil]` would reintroduce exactly that. |
 
 ### Questionable (re-evaluate when next touched)
 
@@ -9071,6 +9372,10 @@ SSH Client  --->  :ssh.daemon (Erlang)
 
 Each connection is isolated. One user's crash doesn't affect others.
 
+A client's window size (its pty-req and every window change) is clamped to the server's `:max_terminal_size`, by default the remote ceiling in `Raxol.Core.Defaults`: 512 columns and 256 rows (131,072 cells). A larger window renders at that size and the session carries on; a 0 column or row count takes the default 80x24.
+
+The size is paid for per frame, not by the buffer a session keeps: every keystroke and every resize draws a full frame at the session's size. Measured on one full frame: the playground app took 9 ms and wrote 15 KB at 200x60, and 29 ms and 140 KB at 512x256; a styled full-screen app (every cell coloured) took 44 ms of CPU and a transient +33 MB of VM memory at 200x60, and 0.9 s and +247 MB at 512x256. The cost grows faster than the cell count, fastest in width: the same styled app at the 4096x256 the local ceiling allows took 220 s and +1.4 GB for one frame. Clients typing at once draw their frames concurrently, so size `max_connections` and `max_per_ip` against the VM's memory and the app you serve, and raise `max_terminal_size: {columns, rows}` only with that in mind. It may not exceed the local ceiling (4096 columns, 4096 rows, 1,048,576 cells).
+
 ## Configuration
 
 ### Authentication
@@ -9525,6 +9830,13 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
 | [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed | 2026-08-26 |
 | [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
+| [0034](0034-foreign-coding-agent-seams.md) | Foreign coding-agent integration seams | Implemented (driver pending) | 2026-09-04 |
+| [0035](0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Implemented | 2026-09-04 |
+| [0036](0036-agent-telemetry-coverage-and-shape.md) | Agent telemetry coverage and shape | Proposed | 2026-09-05 |
+| [0037](0037-remote-mcp-client-transport.md) | Remote transport for the MCP client | Implemented | 2026-09-14 |
+| [0038](0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |
+| [0039](0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
+| [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
 
 ## Template
 
@@ -9600,6 +9912,10 @@ They preserve context for why decisions were made, help new contributors underst
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
 - [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
 - [0033: Indexer-agnostic web3 data surface (raxol_web3)](0033-web3-data-surface.md)
+- [0037: Remote transport for the MCP client](0037-remote-mcp-client-transport.md)
+- [0038: The guarded outbound client and the EVM REST backend](0038-guarded-outbound-client-evm-rest-backend.md)
+- [0039: The required callback set, and what a partial source is](0039-required-callback-set-partial-sources.md)
+- [0040: FX market data and rate sources](0040-fx-market-data-and-rate-sources.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
@@ -9621,8 +9937,11 @@ They preserve context for why decisions were made, help new contributors underst
 - [0028: Auxiliary-model routing](0028-auxiliary-model-routing.md)
 - [0031: Raxol as a Virtuals ACP Console runtime](0031-console-runtime-integration.md)
 - [0032: Multi-root filesystem grants for agent sessions](0032-agent-filesystem-grants.md)
+- [0034: Foreign coding-agent integration seams](0034-foreign-coding-agent-seams.md)
+- [0035: Cost metering for multi-rate providers](0035-multi-rate-cost-metering.md)
+- [0036: Agent telemetry coverage and shape](0036-agent-telemetry-coverage-and-shape.md)
 
 ## Coverage
 
-31 authored ADRs (29 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, and the indexer-agnostic web3 data surface. (Numbers 0004 and 0006 are withdrawn placeholders.)
+38 authored ADRs (36 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, the indexer-agnostic web3 data surface, foreign coding-agent integration seams, cost metering for multi-rate providers, agent telemetry coverage and shape, the remote MCP client transport, the guarded outbound client with its EVM REST backend, and FX market data with its rate sources. (Numbers 0004 and 0006 are withdrawn placeholders.)
 

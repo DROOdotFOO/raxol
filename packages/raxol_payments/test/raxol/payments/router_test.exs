@@ -93,7 +93,7 @@ defmodule Raxol.Payments.RouterTest do
 
     test "forced protocol overrides routing" do
       assert Router.select(protocol: :mpp) == :mpp
-      assert Router.select(protocol: :riddler, cross_chain: true) == :riddler
+      assert Router.select(protocol: :xochi, cross_chain: true) == :xochi
     end
 
     test "routes a Tron destination to the relay rail" do

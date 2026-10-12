@@ -24,7 +24,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | Package                                                    | Hex                           | What                                        |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
 | [`raxol_agent`](https://hex.pm/packages/raxol_agent)       | `{:raxol_agent, "~> 2.7"}`    | AI agent framework                          |
-| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.2"}` | Agent payments, Xochi cross-chain, stealth  |
+| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.3"}` | Agent payments, Xochi cross-chain, stealth  |
 | `raxol_earn` (pre-alpha)                                    | `path: "packages/raxol_earn"`  | Virtuals Agent Commerce Protocol (seller)   |
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
 | `raxol_symphony` (pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |

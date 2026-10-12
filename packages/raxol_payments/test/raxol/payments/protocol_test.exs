@@ -12,10 +12,6 @@ defmodule Raxol.Payments.ProtocolTest do
       assert Protocol.resolve(:mpp) == Raxol.Payments.Protocols.MPP
     end
 
-    test ":riddler returns Riddler module" do
-      assert Protocol.resolve(:riddler) == Raxol.Payments.Protocols.Riddler
-    end
-
     test ":xochi returns Xochi module" do
       assert Protocol.resolve(:xochi) == Raxol.Payments.Protocols.Xochi
     end
