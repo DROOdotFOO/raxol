@@ -1082,7 +1082,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
         matrix: @live_matrix
       )
 
-    assert payments =~ "0.2"
+    assert payments =~ "Payments package: 0.3"
     assert payments =~ "HTTP 402 invoices"
     assert payments =~ "Stablecoin fees run 10-22 bps"
     refute payments =~ "2026-06-28"
