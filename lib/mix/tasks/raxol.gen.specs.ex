@@ -86,7 +86,7 @@ defmodule Mix.Tasks.Raxol.Gen.Specs do
   end
 
   defp find_ex_files(dir) do
-    Path.wildcard(Path.join(dir, "**/*.ex"))
+    Raxol.Utils.Glob.under(dir, "**/*.ex")
   end
 
   defp process_file(file_path, opts) do

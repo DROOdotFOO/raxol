@@ -804,8 +804,7 @@ defmodule Raxol.Release.PackageCheck do
   # exist in this VM yet.
   defp discover_package_names(root) do
     root
-    |> Path.join("packages/*/mix.exs")
-    |> Path.wildcard()
+    |> Raxol.Utils.Glob.under("packages/*/mix.exs")
     |> Enum.reduce({MapSet.new(), []}, fn mix_exs, {names, unreadable} ->
       case read_app_name(mix_exs) do
         {:ok, name} ->
@@ -1239,11 +1238,13 @@ defmodule Raxol.Release.PackageCheck do
     path = Path.expand(file, package_path)
 
     cond do
+      # `file` is the mix.exs `files:` glob; the package path is not, so a
+      # checkout in `src [old]` still sees its files (and its dotfiles).
       wildcard?(file) ->
-        Path.wildcard(path, match_dot: true)
+        Raxol.Utils.Glob.under(Path.expand(package_path), file, match_dot: true)
 
       File.dir?(path) ->
-        [path | Path.wildcard(Path.join(path, "**/*"), match_dot: true)]
+        [path | Raxol.Utils.Glob.under(path, "**/*", match_dot: true)]
 
       File.exists?(path) ->
         [path]

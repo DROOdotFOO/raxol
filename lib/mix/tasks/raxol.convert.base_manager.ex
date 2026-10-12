@@ -44,7 +44,7 @@ defmodule Mix.Tasks.Raxol.Convert.BaseManager do
   defp find_genserver_files(path) do
     case File.dir?(path) do
       true ->
-        Path.wildcard(Path.join(path, "**/*.ex"))
+        Raxol.Utils.Glob.under(path, "**/*.ex")
         |> Enum.filter(&uses_genserver?/1)
 
       false ->
