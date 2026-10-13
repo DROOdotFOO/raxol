@@ -4,7 +4,7 @@ defmodule Mix.Tasks.Raxol.Harness.Fixtures.Bless do
   @moduledoc """
   Runs a projector over every golden harness fixture session and writes
   `<name>.blocks.json` beside it — the regenerable snapshot half of the
-  fixture toolchain (06-projection §1.2).
+  fixture toolchain (the recorded `.jsonl` session is the source half).
 
       mix raxol.harness.fixtures.bless
       mix raxol.harness.fixtures.bless --check

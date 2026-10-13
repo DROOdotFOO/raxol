@@ -1,8 +1,8 @@
 defmodule Raxol.Harness.Fixture.Upcast do
   @moduledoc """
   Upcast-on-read: fills absent newer fields with declared defaults, never
-  mutates the bytes on disk (06-projection §1.2, methodology R6
-  "contract-only-grows"). Operates purely on the already-decoded struct.
+  mutates the bytes on disk (the fixture contract only grows). Operates
+  purely on the already-decoded struct.
 
   One clause per version bump is the intended shape as the contract grows;
   today only `envelope_v = 1` exists, so `to_current/2` is the identity
@@ -22,8 +22,8 @@ defmodule Raxol.Harness.Fixture.Upcast do
   require cross-envelope item correlation; upcast is a pure per-envelope
   function, so that tracking belongs to the projection layer, not here.)
 
-  Documented deviation from `harness-spec-protocol.md` §3: `source` is a
-  `String.t()` on the wire and in the decoded struct (the spec sketches
+  Documented deviation from the harness protocol: `source` is a
+  `String.t()` on the wire and in the decoded struct (the protocol sketches
   `source: atom()`) — deliberate, so fixture decode never mints atoms
   from disk bytes.
 

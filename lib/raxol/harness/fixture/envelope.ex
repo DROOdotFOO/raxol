@@ -1,11 +1,11 @@
 defmodule Raxol.Harness.Fixture.Envelope do
   @moduledoc """
-  One decoded fixture line beyond the header — the `%Envelope{}` wire shape
-  from `harness-spec-protocol.md` §2, with `body` decoded into a
+  One decoded fixture line beyond the header — the harness protocol's
+  `%Envelope{}` wire shape, with `body` decoded into a
   `Raxol.Harness.Fixture.Event`.
 
-  `offset` is the 1-based line number in the source file; per the fixture
-  design ("offset = line number", 06-projection §1.1) this is what
+  `offset` is the 1-based line number in the source file; the fixture
+  design fixes offset = line number, so this is what
   `attach{from_offset}` / `seek{to_offset}` replay-from-offset tests key
   off. It is set by the loader, never present in the JSON on disk.
   """

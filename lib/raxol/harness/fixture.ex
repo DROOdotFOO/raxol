@@ -36,7 +36,7 @@ defmodule Raxol.Harness.Fixture do
   @scopes %{"session" => :session, "global" => :global}
   @trusts %{"trusted" => :trusted, "tainted" => :tainted}
 
-  # family :loop vocabulary, harness-spec-protocol.md §3
+  # family :loop vocabulary
   @loop_types %{
     "turn_started" => :turn_started,
     "item_started" => :item_started,
@@ -49,7 +49,7 @@ defmodule Raxol.Harness.Fixture do
     "idle" => :idle
   }
 
-  # family :meta vocabulary (the probe population), harness-spec-protocol.md §3
+  # family :meta vocabulary (the probe population)
   @meta_types %{
     "gate_decision" => :gate_decision,
     "extract" => :extract,
@@ -70,8 +70,8 @@ defmodule Raxol.Harness.Fixture do
   version mismatch — a loud error per protocol §6). Vocabulary *within* a
   known event (e.g. an unrecognized `item_type` inside a payload) is
   deliberately NOT validated here — that is a projection-level, graceful-
-  opaque-render concern (06-projection §4.6, N-FWD), out of scope for the
-  decode seam.
+  opaque-render concern (unknown vocabulary renders as an opaque block),
+  out of scope for the decode seam.
   """
   @spec decode(String.t()) :: {:ok, decoded()} | {:error, DecodeError.t()}
   def decode(line) when is_binary(line) do
