@@ -4,9 +4,8 @@
 Puts the controlling tty (stdin) into raw mode, reads whatever bytes arrive
 within a fixed window, restores the tty, and prints the captured bytes as
 lowercase hex (no separators) — the exact `reply_hex` shape the capability
-capture schema (docs/proposals/in-flight/harness-ui-testing/04-capability.md
-§2) expects. Used by probes that emit a query (e.g. DECRQM `CSI ? 2026 $ p`)
-and need the raw reply for T1's fixture bank; also usable standalone by a
+capture schema expects. Used by probes that emit a query (e.g. DECRQM `CSI ? 2026 $ p`)
+and need the raw reply for the fixture bank; also usable standalone by a
 human running Ring B on a real terminal.
 
 Usage: read_reply.py TIMEOUT_SECONDS [MAX_BYTES]

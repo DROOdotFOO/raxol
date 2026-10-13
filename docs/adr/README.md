@@ -25,7 +25,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Superseded (v1->v2) | 2026-06-16 |
 | [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
 | [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/3`) | Accepted | 2026-06-16 |
-| [0020](0020-agent-sandbox-thread-policies.md) | Phase 26: Agent Sandbox, Thread log, declarative Policies | Accepted | 2026-06-16 |
+| [0020](0020-agent-sandbox-thread-policies.md) | Agent Sandbox, Thread log, declarative Policies | Accepted | 2026-06-16 |
 | [0021](0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Accepted | 2026-06-17 |
 | [0022](0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Accepted | 2026-06-17 |
 | [0023](0023-unified-messaging-gateway.md) | Unified messaging gateway (`raxol_gateway`) | Accepted | 2026-06-17 |
@@ -46,6 +46,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0038](0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |
 | [0039](0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
 | [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
+| [0041](0041-agent-client-protocol-package.md) | raxol_agent_client_protocol: port origin, layering, and license discipline | Accepted | 2026-10-13 |
 
 ## Template
 
@@ -125,6 +126,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0038: The guarded outbound client and the EVM REST backend](0038-guarded-outbound-client-evm-rest-backend.md)
 - [0039: The required callback set, and what a partial source is](0039-required-callback-set-partial-sources.md)
 - [0040: FX market data and rate sources](0040-fx-market-data-and-rate-sources.md)
+- [0041: raxol_agent_client_protocol: port origin, layering, and license discipline](0041-agent-client-protocol-package.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
@@ -135,7 +137,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0019: Workflow concurrency (joins + channels)](0019-workflow-concurrency.md)
 
 ### Agent stack
-- [0020: Phase 26 - Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
+- [0020: Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
 - [0021: Self-improving agents: runtime skills + background curation](0021-self-improving-agents-skills-curation.md)
 - [0022: Memory provider stack, full-text recall, dialectic user modeling](0022-memory-providers-fulltext-dialectic.md)
 - [0023: Unified messaging gateway (raxol_gateway)](0023-unified-messaging-gateway.md)

@@ -183,3 +183,9 @@ packages/raxol_earn/xochi-offering.json
 .idea/
 .ai/
 mise.local.toml
+
+# Local planning documents and deliverables; never part of the public tree
+/deliverables/
+/plans/
+/*Integration Plan*.md
+/raxol-distribution-and-benchmarking-plan.md

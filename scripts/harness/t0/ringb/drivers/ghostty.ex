@@ -23,7 +23,7 @@ defmodule T0.RingB.Drivers.Ghostty do
   requirement for a DEFINITIVE D-PA cannot be satisfied by automation
   alone: Ghostty legitimately reaches ground truth only via `human_eye`
   (screenshot + manual scrollback check), same conclusion the sandboxed
-  T0 run already documented in `t0-verdict-schema.md` §4.1.
+  T0 run already documented in `T0_VERDICT_SCHEMA.md` §4.1.
   """
 
   @behaviour T0.RingB.Driver

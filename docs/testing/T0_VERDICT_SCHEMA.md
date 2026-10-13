@@ -1,7 +1,7 @@
 # T0 verdict schema (`t0-verdict.json`)
 
 Date: 2026-07-15 · Status: **v1, matches the first real run**. Companion to
-the actual file `scripts/harness/t0/t0-verdict.json` produces, and to `t0-runbook.md` (how a human adds rows).
+the actual file `scripts/harness/t0/t0-verdict.json` produces, and to `docs/testing/T0_RUNBOOK.md` (how a human adds rows).
 
 ---
 
@@ -106,7 +106,7 @@ a lost/fail signal.
 
 - **13 real rows, terminal `tmux`**: every claim except C4 (resize was not
   exercised this pass; the tmux cell driver has the plumbing, see
-  `t0-runbook.md` §4 for the follow-up command). All produced by actually
+  `docs/testing/T0_RUNBOOK.md` §4 for the follow-up command). All produced by actually
   running `scripts/harness/t0/probes/*.sh` inside a real detached tmux 3.7b
   session and reading back `tmux capture-pane`/`display-message`, not
   guessed.
@@ -116,7 +116,7 @@ a lost/fail signal.
   keyframe-clear fixture, no false positive on the clean stream).
 - **224 planned rows**: the full 7-terminal × {plain,tmux} ×
   {local,ssh} × 8-claim grid, `verdict: null`, `automation: "human"`,
-  waiting on `t0-runbook.md`'s Ring B commands.
+  waiting on `docs/testing/T0_RUNBOOK.md`'s Ring B commands.
 
 **D-PA is `"pending"`** (`verdict_resolver.exs`'s honest output): zero of
 the four tier-1 terminals (kitty/iTerm2/WezTerm/Ghostty) have been measured

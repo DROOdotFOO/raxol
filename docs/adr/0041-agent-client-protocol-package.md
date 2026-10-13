@@ -1,4 +1,4 @@
-# ADR: `raxol_agent_client_protocol`: port origin, layering, and license discipline
+# ADR-0041: `raxol_agent_client_protocol`: port origin, layering, and license discipline
 
 ## Status
 

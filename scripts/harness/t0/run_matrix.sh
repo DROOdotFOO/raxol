@@ -11,11 +11,11 @@
 #
 # Then it appends PLANNED rows for every real-terminal cell this sandboxed
 # environment cannot run (kitty, iTerm2, WezTerm, Ghostty, Alacritty, VTE,
-# Apple Terminal x {plain,tmux} x {local,ssh}) -- see t0-runbook.md for the
+# Apple Terminal x {plain,tmux} x {local,ssh}) -- see docs/testing/T0_RUNBOOK.md for the
 # exact human commands that fill these in. A planned row is NOT a guess:
 # verdict is `null` and automation is "human"/"scripted-pending".
 #
-# Output: scripts/harness/t0/t0-verdict.json (schema: t0-verdict-schema.md,
+# Output: scripts/harness/t0/t0-verdict.json (schema: docs/testing/T0_VERDICT_SCHEMA.md,
 # mirrors 01-t0-matrix.md §7). Idempotent and re-runnable.
 #
 # Usage: run_matrix.sh [--skip-tmux] [--skip-emu]
@@ -83,7 +83,7 @@ for term in "${REAL_TERMINALS[@]}"; do
           terminal: $t, context: $c, transport: $tr, claim: $cl,
           observable: null, capture: "planned", automation: "human",
           evidence: "n/a", verdict: null,
-          notes: "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
+          notes: "Ring B not yet run in this environment -- see docs/testing/T0_RUNBOOK.md for the exact command"
         }' >> "$ROWS_FILE"
       done
     done

@@ -6,6 +6,7 @@ Also in this directory:
 - [Test Isolation Guide](TEST_ISOLATION_GUIDE.md): the six fixes for suite-order failures, and what is still undone
 - [RATE Bench](RATE_BENCH.md): the cross-platform bench on self-hosted runners
 - [RATE Runner Hardening](RATE_RUNNER_HARDENING.md): locking down those runners
+- [T0 Runbook](T0_RUNBOOK.md) and [T0 Verdict Schema](T0_VERDICT_SCHEMA.md): the terminal-matrix measurement harness
 
 ## Running tests
 

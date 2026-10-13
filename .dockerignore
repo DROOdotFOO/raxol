@@ -91,3 +91,14 @@ doc/
 **/burrito_out/
 **/vendor/
 **/node_modules/
+
+# Mirror of the .gitignore security and local-planning blocks: the web image
+# builds from `COPY . .`, so anything git ignores must be ignored here too.
+.env
+.env.*
+.secrets
+*.key
+*.pem
+priv/data/
+deliverables/
+plans/
