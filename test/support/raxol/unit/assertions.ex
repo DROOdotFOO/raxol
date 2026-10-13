@@ -117,24 +117,6 @@ defmodule Raxol.Test.Unit.Assertions do
   end
 
   @doc """
-  Asserts that a component emitted specific commands in sequence.
-
-  ## Example
-
-      assert_command_sequence component, [
-        {:update, :text},
-        {:notify, :changed},
-        {:submit}
-      ]
-  """
-  def assert_command_sequence(_component, expected_commands)
-      when is_list(expected_commands) do
-    # Placeholder: Need to integrate with command history or mocking framework
-    # Always passes for now
-    assert true
-  end
-
-  @doc """
   Asserts that a component properly handles an error condition.
 
   ## Example

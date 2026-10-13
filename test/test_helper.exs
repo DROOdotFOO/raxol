@@ -233,10 +233,6 @@ if Code.ensure_loaded?(Mox) do
     for: Raxol.Terminal.Config.EnvironmentAdapterBehaviour
   )
 
-  Mox.defmock(Raxol.Core.ClipboardMock,
-    for: Raxol.Core.Clipboard.Behaviour
-  )
-
   # Accessibility and UX mocks
   Mox.defmock(Raxol.Mocks.AccessibilityMock,
     for: Raxol.Core.Accessibility.Behaviour

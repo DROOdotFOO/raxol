@@ -11,8 +11,6 @@ defmodule Raxol.Core.UXRefinementKeyboardTest do
   # alias Raxol.Core.KeyboardShortcuts, as: KeyboardShortcuts # Removed
   alias Raxol.Core.UXRefinement, as: UXRefinement, as: UXRefinement
 
-  # alias Raxol.Core.UserPreferences # Not directly used in :meck refactor, keep if other tests need
-
   # Define the mock for KeyboardShortcutsBehaviour (already present)
   # Mox.defmock(Raxol.Mocks.KeyboardShortcutsMock,
   #   for: Raxol.Core.KeyboardShortcutsRefactoredBehaviour)

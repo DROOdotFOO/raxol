@@ -70,25 +70,16 @@ config :raxol, :mocks, %{
     :"Raxol.Core.Runtime.Plugins.LoaderMock",
   :"Raxol.Core.Runtime.Plugins.LifecycleHelper" =>
     :"Raxol.Core.Runtime.Plugins.LifecycleHelperMock",
-  :"Raxol.Core.Runtime.Plugins.EdgeCasesLifecycleHelper" =>
-    :"Raxol.Core.Runtime.Plugins.EdgeCasesLifecycleHelperMock",
   :"Raxol.Core.Runtime.Plugins.PluginEventFilter" =>
     :"Raxol.Core.Runtime.Plugins.PluginEventFilterMock",
-  :"Raxol.Core.Runtime.Plugins.PluginCommandDispatcher" =>
-    :"Raxol.Core.Runtime.Plugins.PluginCommandDispatcherMock",
   :"Raxol.Core.Runtime.Plugins.PluginReloader" =>
     :"Raxol.Core.Runtime.Plugins.PluginReloaderMock",
   :"Raxol.Core.Runtime.Plugins.PluginCommandHandler" =>
     :"Raxol.Core.Runtime.Plugins.PluginCommandHandlerMock",
-  :"Raxol.Core.Runtime.Plugins.TimerManager" =>
-    :"Raxol.Core.Runtime.Plugins.TimerManagerMock",
-  :"Raxol.Core.Runtime.Rendering.Engine" =>
-    :"Raxol.Core.Runtime.Rendering.EngineMock",
 
   # System and UI mocks
   :"Raxol.Terminal.Config.EnvironmentAdapter" =>
-    :"Raxol.Terminal.Config.EnvironmentAdapterMock",
-  :"Raxol.Terminal.ClipboardBehaviour" => :"Raxol.Terminal.ClipboardMock"
+    :"Raxol.Terminal.Config.EnvironmentAdapterMock"
 }
 
 # Configure the KeyboardShortcuts module to use for testing
@@ -102,13 +93,10 @@ config :raxol, :debug_mode, true
 # Configure mock implementations for behaviours
 config :raxol, :keyboard_shortcuts_impl, Raxol.Mocks.KeyboardShortcutsMock
 
-config :raxol, :environment_adapter_impl, Raxol.Mocks.EnvironmentAdapterMock
-
 # Note: This was not Raxol.Mocks.SystemInteractionMock, may need consistency check
 config :raxol, :system_interaction_impl, SystemInteractionMock
 config :raxol, :focus_manager_impl, Raxol.Mocks.FocusManagerMock
 config :raxol, :accessibility_impl, Raxol.Mocks.AccessibilityMock
-config :raxol, :event_manager, Raxol.Mocks.EventManagerMock
 
 # Configure Mox mocks for testing
 config :raxol,

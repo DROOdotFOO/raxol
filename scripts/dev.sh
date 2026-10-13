@@ -62,22 +62,14 @@ run_checks() {
     # Format check
     mix format --check-formatted
     
-    # Run comprehensive checks
-    if [ -f "$SCRIPT_DIR/quality/pre_commit_check.exs" ]; then
-        mix run scripts/quality/pre_commit_check.exs
-    else
-        # Fallback individual checks
-        mix raxol.dialyzer --check
-        mix credo
-        mix docs
-    fi
+    mix dialyzer
+    mix credo
+    mix docs
 }
 
 run_dialyzer() {
-    echo "Running Dialyzer static analysis with PLT caching..."
-    
-    # Use our enhanced Dialyzer task
-    mix raxol.dialyzer "$@"
+    echo "Running Dialyzer static analysis..."
+    mix dialyzer "$@"
 }
 
 setup_env() {

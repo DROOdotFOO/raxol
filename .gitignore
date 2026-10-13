@@ -37,6 +37,7 @@ erl_crash.dump
 packages/raxol_terminal/lib/termbox2_nif/c_src/*.o
 packages/raxol_terminal/lib/termbox2_nif/c_src/*.so
 packages/raxol_terminal/lib/termbox2_nif/priv/*.so
+packages/raxol_terminal/lib/termbox2_nif/ebin/
 packages/raxol_terminal/priv/*.so
 priv/termbox2_nif.so
 

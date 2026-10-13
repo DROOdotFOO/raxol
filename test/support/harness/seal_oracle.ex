@@ -1,8 +1,8 @@
 defmodule Raxol.Harness.Test.SealOracle do
   @moduledoc """
-  The two oracles from `harness-ui-testing/02-renderer.md` §2, built
+  Two seal oracles, built
   ADDITIVELY on top of `test/support/cross_terminal/` — no VT
-  re-implementation here (CLAUDE.md rule: reuse `raxol_terminal`'s parser as
+  re-implementation here (house rule: reuse `raxol_terminal`'s parser as
   the test oracle).
 
     * **O1 — mechanical / positional** (`scroll_region/1`, `cup_rows/2`,
