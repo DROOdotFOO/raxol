@@ -78,8 +78,24 @@ defmodule Raxol.Core.Runtime.ProcessComponentTest do
       GenServer.stop(pid)
     end
 
+    # One nightly (#1253) saw `{:ok, pid}` from `start_link/1` and then a
+    # `:noproc` DOWN from the monitor taken right after it, which the old test
+    # reported as a bare `assert_receive` timeout: it could not say whether
+    # the owner died early, the component died on its own, or the component
+    # outlived the owner. Monitoring both processes before anything else means
+    # every exit arrives as a DOWN with a distinct pinned ref, so a mismatch
+    # names the process; the `alive?` checks and the `refute_received` prove
+    # neither died during start, before the owner is told to leave. The
+    # `on_exit` releases the owner if an assertion fails, so a failed run
+    # does not leak a process blocked in `receive`.
     test "stops when the process that owns it exits" do
       owner = spawn(fn -> receive do: (:exit -> :ok) end)
+
+      on_exit(fn ->
+        if Process.alive?(owner), do: send(owner, :exit)
+      end)
+
+      owner_ref = Process.monitor(owner)
 
       {:ok, pid} =
         ProcessComponent.start_link(
@@ -88,10 +104,16 @@ defmodule Raxol.Core.Runtime.ProcessComponentTest do
           parent_pid: owner
         )
 
-      ref = Process.monitor(pid)
+      component_ref = Process.monitor(pid)
+
+      assert Process.alive?(owner), "owner died before the component started"
+      assert Process.alive?(pid), "component died during start"
+      refute_received {:DOWN, _, :process, _, _}
+
       send(owner, :exit)
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+      assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
+      assert_receive {:DOWN, ^component_ref, :process, ^pid, :normal}
     end
   end
 
