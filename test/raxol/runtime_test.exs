@@ -105,6 +105,12 @@ defmodule Raxol.RuntimeTest do
     RuntimeSupervisor.start_link(init_arg)
   end
 
+  defp dispatcher_child(sup_pid) do
+    sup_pid
+    |> Supervisor.which_children()
+    |> Enum.find(fn {id, _, _, _} -> id == MockDispatcher end)
+  end
+
   test "successfully starts the supervisor and core processes" do
     {:ok, sup_pid} = start_supervisor()
     assert Process.alive?(sup_pid)
@@ -148,12 +154,7 @@ defmodule Raxol.RuntimeTest do
   test "supervisor restarts child processes after crash" do
     {:ok, sup_pid} = start_supervisor()
 
-    # Get initial dispatcher PID
-    dispatcher_info =
-      Supervisor.which_children(sup_pid)
-      |> Enum.find(fn {id, _, _, _} -> id == MockDispatcher end)
-
-    assert {MockDispatcher, old_pid, :worker, _} = dispatcher_info
+    assert {MockDispatcher, old_pid, :worker, _} = dispatcher_child(sup_pid)
     assert Process.alive?(old_pid)
 
     # Kill the dispatcher
@@ -161,15 +162,19 @@ defmodule Raxol.RuntimeTest do
     Process.exit(old_pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^old_pid, :killed}, 5000
 
-    # Wait for supervisor restart (one_for_all restarts all)
-    Process.sleep(500)
+    # The supervisor restarts (one_for_all) when it processes the EXIT, which
+    # is not ordered against our :DOWN; poll until a fresh child is registered.
+    Raxol.Test.TestHelper.wait_for_state(
+      fn ->
+        match?(
+          {MockDispatcher, pid, :worker, _} when is_pid(pid) and pid != old_pid,
+          dispatcher_child(sup_pid)
+        )
+      end,
+      5_000
+    )
 
-    # Verify new processes were started
-    new_dispatcher_info =
-      Supervisor.which_children(sup_pid)
-      |> Enum.find(fn {id, _, _, _} -> id == MockDispatcher end)
-
-    assert {MockDispatcher, new_pid, :worker, _} = new_dispatcher_info
+    assert {MockDispatcher, new_pid, :worker, _} = dispatcher_child(sup_pid)
     refute new_pid == old_pid
     assert Process.alive?(new_pid)
 
