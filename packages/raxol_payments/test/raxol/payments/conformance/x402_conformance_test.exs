@@ -30,6 +30,19 @@ defmodule Raxol.Payments.Conformance.X402ConformanceTest do
     ]
   }
 
+  # `by_protocol/1` answers [] both when the fixture is absent and when it loads
+  # but carries no erc3009 vectors, and a `for` over [] generates no tests at
+  # all. The moduletag above covers the first case; this covers the second,
+  # where the suite would otherwise report a green run having asserted nothing
+  # about ERC-3009.
+  describe "fixture coverage" do
+    test "the loaded fixture yields at least one erc3009 vector" do
+      assert ConformanceFixture.by_protocol("erc3009") != [],
+             "fixture loaded but produced no erc3009 vectors -- every generated " <>
+               "test below was silently skipped out of existence"
+    end
+  end
+
   describe "ERC-3009 (x402) EIP-712 conformance vs CLI" do
     for vec <- ConformanceFixture.by_protocol("erc3009") do
       @vec vec
