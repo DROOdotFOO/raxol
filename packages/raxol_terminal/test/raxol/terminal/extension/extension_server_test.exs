@@ -3,12 +3,10 @@ defmodule Raxol.Terminal.Extension.ExtensionServerTest do
   alias Raxol.Terminal.Extension.ExtensionServer
 
   setup do
-    {:ok, _pid} =
-      ExtensionServer.start_link(
-        name: ExtensionServer,
-        extension_paths: ["test/fixtures/extensions"],
-        auto_load: false
-      )
+    start_supervised!(
+      {ExtensionServer,
+       name: ExtensionServer, extension_paths: ["test/fixtures/extensions"], auto_load: false}
+    )
 
     :ok
   end
