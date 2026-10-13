@@ -5,9 +5,7 @@ defmodule Raxol.Terminal.Extension.ExtensionServerTest do
   setup do
     start_supervised!(
       {ExtensionServer,
-       name: ExtensionServer,
-       extension_paths: ["test/fixtures/extensions"],
-       auto_load: false}
+       name: ExtensionServer, extension_paths: ["test/fixtures/extensions"], auto_load: false}
     )
 
     :ok
