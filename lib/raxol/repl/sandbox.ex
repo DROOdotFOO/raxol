@@ -89,6 +89,20 @@ defmodule Raxol.REPL.Sandbox do
     {Process, :exit, "process termination"},
     {Node, :connect, "node connection"},
     {Kernel, :apply, "dynamic function application"},
+    # `defmodule`, `defimpl`, `defprotocol` and `use` are Kernel MACROS, and
+    # `Kernel` is required in every evaluation env, so each is callable as a
+    # remote call that the bare-form clauses of `check_node/2` never see:
+    # `Kernel.defmodule(Zzz, do: ...)` defined a module, `Kernel.defimpl(
+    # String.Chars, for: Reference, do: ...)` replaced a protocol impl for
+    # the whole node, and `Kernel.use(Bitwise)` ran a `__using__/1`, each
+    # `:ok` at both levels. The other definition macros (`def`, `defstruct`,
+    # ...) raise outside a module body, which these three are the only way
+    # to open; `import`, `alias` and `require` are special forms with no
+    # remote form at all.
+    {Kernel, :defmodule, "runtime module definition"},
+    {Kernel, :defprotocol, "runtime module definition"},
+    {Kernel, :defimpl, "runtime module definition"},
+    {Kernel, :use, "module indirection cannot be checked"},
     # Message passing / process reach: a sandboxed eval sharing a node with a
     # signing process must not be able to message or look it up. `send` (special
     # form) is handled separately; these close the qualified-call variants and
@@ -330,6 +344,15 @@ defmodule Raxol.REPL.Sandbox do
   # it names, so it is refused in every form (`warn_once/3` is its
   # undocumented twin).
   #
+  # `IO.stream/0,2` and `IO.binstream/0,2` carry a device the same way, one
+  # step removed: each returns an `%IO.Stream{}` whose `device` field is what
+  # its `Collectable` and `Enumerable` impls hand to `:io`, and a struct
+  # update rewrites that field without naming it in any call (`%{s | device:
+  # :code_server}`, `Map.put(s, :device, p)`). `Enum.into(["x"], %{IO.stream()
+  # | device: :code_server})` sent the io request at `:strict` with the
+  # device rule satisfied, so the two builders are refused in every form;
+  # a literal `:stdio` is no exception, since the field outlives the call.
+  #
   # The entries are each function's full arity, whose first argument is the
   # device; the default-device arities (`IO.puts(x)`, `IO.inspect(x, opts)`)
   # name none. `getn/2` is both `getn(prompt, count)` and
@@ -339,6 +362,8 @@ defmodule Raxol.REPL.Sandbox do
   @standard_io_devices [:stdio, :standard_io]
 
   @io_stderr_writers [:warn, :warn_once]
+
+  @io_stream_builders [:stream, :binstream]
 
   @io_device_calls [
     read: 2,
@@ -350,8 +375,6 @@ defmodule Raxol.REPL.Sandbox do
     binwrite: 2,
     puts: 2,
     inspect: 3,
-    stream: 2,
-    binstream: 2,
     each_stream: 2,
     each_binstream: 2
   ]
@@ -529,7 +552,31 @@ defmodule Raxol.REPL.Sandbox do
   # `:erlang.binary_to_atom/2` call, already denied. The other `String.to_atom`
   # uses in kernel.ex run at compile time on source text: `defmodule` alias
   # expansion and the calendar suffix of `~D/~T/~N/~U` sigils.
-  defp atom_syntax_violations({:sigil_w, _, [{:<<>>, _, pieces}, mods]})
+  #
+  # `~w` is the macro `Kernel.sigil_w/2`, and `Kernel` is required in every
+  # evaluation env, so `Kernel.sigil_w("#{x}", [?a])` expands to the same
+  # runtime split-and-mint as the sigil with none of its syntax: it is one
+  # dot call among the allowed module's others. Both spellings are judged by
+  # the same rule. (A non-binary first argument fails the macro's own
+  # clauses at expansion, so only a `<<>>` node can reach the runtime.)
+  defp atom_syntax_violations({:sigil_w, _, args}),
+    do: sigil_w_violations(args)
+
+  defp atom_syntax_violations({{:., _, [module, :sigil_w]}, _, args}) do
+    if strict_module(module) == {:ok, Kernel},
+      do: sigil_w_violations(args),
+      else: []
+  end
+
+  defp atom_syntax_violations({:__aliases__, _, [head | _]})
+       when not is_atom(head),
+       do: [
+         "a computed alias (expr.Alias) is not allowed (dynamic atom creation)"
+       ]
+
+  defp atom_syntax_violations(_node), do: []
+
+  defp sigil_w_violations([{:<<>>, _, pieces}, mods])
        when is_list(pieces) and is_list(mods) do
     if ?a in mods and not Enum.all?(pieces, &is_binary/1) do
       [
@@ -540,13 +587,7 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  defp atom_syntax_violations({:__aliases__, _, [head | _]})
-       when not is_atom(head),
-       do: [
-         "a computed alias (expr.Alias) is not allowed (dynamic atom creation)"
-       ]
-
-  defp atom_syntax_violations(_node), do: []
+  defp sigil_w_violations(_args), do: []
 
   defp check_node(
          {{:., _, [{:__aliases__, _, mod_parts}, func]}, _, _args},
@@ -678,8 +719,10 @@ defmodule Raxol.REPL.Sandbox do
   # A qualified capture removes every argument, so a function that can write a
   # `__struct__` key from runtime data is refused captured: `&Map.put/3`
   # applied to a computed key forges as well as the call does. A captured
-  # device arity of `IO` takes its device from the caller the same way, and a
-  # sorter capture (`&Enum.sort/2`) hides its sorter the same way.
+  # device arity of `IO` takes its device from the caller the same way, a
+  # sorter capture (`&Enum.sort/2`) hides its sorter the same way, and a
+  # captured `IO.Stream` builder returns the struct the device rule cannot
+  # follow.
   defp check_node(
          {:&, _, [{:/, _, [{{:., _, [module, func]}, _, _}, arity]}]},
          :strict
@@ -854,6 +897,9 @@ defmodule Raxol.REPL.Sandbox do
 
       module == IO and func in @io_stderr_writers ->
         io_stderr_refusal(func)
+
+      module == IO and func in @io_stream_builders ->
+        io_stream_refusal(func)
 
       module == IO and {func, arity} in @io_device_calls ->
         io_device_refusal(func, arity)
@@ -1409,12 +1455,16 @@ defmodule Raxol.REPL.Sandbox do
 
   defp forge_rule(_module, _func, _args), do: []
 
-  # See `@io_device_calls`. `IO.warn` is refused whatever its arguments. A
-  # literal count makes `getn/2` the prompt form; a standard device in first
-  # place is fine whether or not the arity takes one. Anything else at a
-  # device arity -- a name, a variable, a pipe's left-hand side -- is refused.
+  # See `@io_device_calls`. `IO.warn` and the `IO.Stream` builders are
+  # refused whatever their arguments. A literal count makes `getn/2` the
+  # prompt form; a standard device in first place is fine whether or not the
+  # arity takes one. Anything else at a device arity -- a name, a variable,
+  # a pipe's left-hand side -- is refused.
   defp io_rule(func, _args) when func in @io_stderr_writers,
     do: io_stderr_refusal(func)
+
+  defp io_rule(func, _args) when func in @io_stream_builders,
+    do: io_stream_refusal(func)
 
   defp io_rule(:getn, [_prompt, count])
        when (is_integer(count) and count > 0) or count == :eof,
@@ -1507,6 +1557,14 @@ defmodule Raxol.REPL.Sandbox do
       "#{name} is not allowed at :strict here (its sorter must be a function, " <>
         ":asc, :desc or a whitelisted module written out; a module sorter " <>
         "is called as module.compare/2)"
+    ]
+  end
+
+  defp io_stream_refusal(func) do
+    [
+      "IO.#{func} is not allowed at :strict (its IO.Stream can be re-pointed " <>
+        "at any process with %{stream | device: name}, past the evaluator's " <>
+        "output capture); read with IO.gets/1 and write with IO.puts/1"
     ]
   end
 

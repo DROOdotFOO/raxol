@@ -1216,6 +1216,33 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
 
+    # `IO.stream/0,2` and `IO.binstream/0,2` return an `%IO.Stream{}` whose
+    # `device` field is handed to `:io` by its `Collectable` and `Enumerable`
+    # impls, and a struct update rewrites that field without naming it in a
+    # call: `Enum.into(["x"], %{IO.stream() | device: :code_server})` sent an
+    # io request to `:code_server` at `:strict`, past the device rule above.
+    test "IO.stream and IO.binstream are refused in every form" do
+      for code <- [
+            ~S{IO.stream()},
+            ~S{IO.binstream()},
+            ~S{IO.stream(:stdio, :line)},
+            ~S{IO.binstream(:standard_io, 10)},
+            ~S{:stdio |> IO.stream(:line)},
+            ~S{Kernel.|>(:stdio, IO.binstream(:line))},
+            ~S{:"Elixir.IO".stream()},
+            ~S{&IO.stream/0},
+            ~S{&IO.binstream/2},
+            "s = IO.stream(); Enum.into([\"x\"], %{s | device: :code_server})",
+            "Enum.to_list(Map.put(IO.binstream(), :device, :code_server))"
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(violations, &String.contains?(&1, "IO.Stream")),
+               "expected an IO.Stream violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
     test "the standard devices and the default-device arities are allowed" do
       for code <- [
             ~S{IO.puts("x")},
@@ -1362,6 +1389,88 @@ defmodule Raxol.REPL.SandboxTest do
           ] do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
       end
+    end
+  end
+
+  # `defmodule`, `defimpl`, `defprotocol`, `use` and `~w` are Kernel macros,
+  # and `Kernel` is required in every evaluation env, so each is callable as
+  # a remote call on a module both levels allow: `Kernel.defmodule(Zzz, do:
+  # ...)` defined a module, `Kernel.defimpl(String.Chars, for: Reference, do:
+  # ...)` replaced a protocol impl node-wide, `Kernel.use(Bitwise)` ran a
+  # `__using__` and `Kernel.sigil_w("#{x}", [?a])` minted an atom, each
+  # `:ok` at `:strict` while the bare form was refused.
+  describe "a remote Kernel macro call reaches no further than its bare form" do
+    test "Kernel.defmodule, defprotocol and defimpl are refused like the bare forms" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Kernel.defmodule(Zzz, do: 1)|,
+            ~S|Kernel.defmodule Zzz do 1 end|,
+            ~S|:"Elixir.Kernel".defmodule(Zzz, do: 1)|,
+            "Zzz |> Kernel.defmodule(do: 1)",
+            ~S|Kernel.defimpl(String.Chars, for: Reference, do: 1)|,
+            ~S|Kernel.defprotocol(Zproto, do: 1)|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, level),
+               "#{code} passed #{level}"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "runtime module definition")
+               ),
+               "expected a module definition violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "Kernel.use is refused like the bare directive" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Kernel.use(GenServer)|,
+            ~S|Kernel.use GenServer, []|,
+            ~S|:"Elixir.Kernel".use(GenServer)|,
+            "GenServer |> Kernel.use()"
+          ] do
+        assert {:error, violations} = Sandbox.check(code, level),
+               "#{code} passed #{level}"
+
+        assert Enum.any?(violations, &String.contains?(&1, "Kernel.use")),
+               "expected a Kernel.use violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "Kernel.sigil_w with interpolation and the a modifier is refused like ~w" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Kernel.sigil_w("#{x}", [?a])|,
+            ~S|Kernel.sigil_w(<<x::binary>>, [?a])|,
+            ~S|Kernel.sigil_w("a #{x}", [97])|,
+            ~S|:"Elixir.Kernel".sigil_w("#{x}", [?a])|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, level),
+               "#{code} passed #{level}"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "dynamic atom creation")
+               ),
+               "expected an atom creation violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "the literal and non-atom remote forms are unaffected" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Kernel.sigil_w("a b", [?a])|,
+            ~S|Kernel.sigil_w("#{x}", [])|,
+            ~S|Kernel.sigil_w("#{x}", [?c])|,
+            ~S|Kernel.then(1, & &1)|
+          ] do
+        assert :ok = Sandbox.check(code, level),
+               "#{code} was refused at #{level}"
+      end
+    end
+
+    test "none still allows them -- it is the local-terminal level" do
+      assert :ok = Sandbox.check(~S|Kernel.defmodule(Zzz, do: 1)|, :none)
     end
   end
 end
