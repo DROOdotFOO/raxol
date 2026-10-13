@@ -5,6 +5,12 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
   one on every frame and never stop any, so a view with one such node grew
   a process per frame and the component's state never outlived a frame.
 
+  A component's `init/1` runs after its process has started, so the frame
+  that starts it draws a `starting` placeholder and the component tells the
+  engine when it is ready. One that exits is drawn as a placeholder and
+  restarted after a run of frames that doubles with each failure in a row,
+  not on the very next frame.
+
   Views render through headless sessions, each with its own engine, and the
   component announces to the test every process it starts in.
   """
@@ -50,6 +56,34 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
       do: %{type: :text, content: "#{state.label}~#{state.count}", style: %{}}
   end
 
+  # Its init waits until the test lets it go.
+  defmodule Slow do
+    @moduledoc false
+
+    def init(%{test: test, label: label}) do
+      send(test, {:started, label, self()})
+
+      receive do
+        :go -> {:ok, %{label: label}}
+      end
+    end
+
+    def render(state, _context),
+      do: %{type: :text, content: "#{state.label} ready", style: %{}}
+  end
+
+  # Its init always fails.
+  defmodule Failing do
+    @moduledoc false
+
+    def init(%{test: test, label: label}) do
+      send(test, {:started, label, self()})
+      {:error, :nope}
+    end
+
+    def render(_state, _context), do: %{type: :text, content: "?", style: %{}}
+  end
+
   defmodule ShowApp do
     @moduledoc false
     # Its model is the view it shows.
@@ -88,11 +122,32 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
       end)
     end
 
+    test "is drawn as starting until its init has run, then as its tree" do
+      slow = View.process_component(Slow, %{test: self(), label: "s"})
+
+      with_session(View.column(children: [slow, View.text("rest")]), fn id ->
+        screen = frame(id)
+        assert screen =~ "[pc-#{inspect(Slow)}: starting]"
+        assert screen =~ "rest"
+        assert_receive {:started, "s", pid}
+
+        # Still in init: another frame neither waits on it nor starts a second.
+        assert frame(id) =~ "starting"
+        refute_received {:started, _, _}
+
+        send(pid, :go)
+        ready(pid)
+
+        assert frame(id) =~ "s ready"
+      end)
+    end
+
     test "keeps its state across frames" do
       with_session(counter("a"), fn id ->
-        assert frame(id) =~ "a=0"
-        assert_received {:started, "a", pid}
+        frame(id)
+        pid = started(id, "a")
 
+        assert frame(id) =~ "a=0"
         :ok = ProcessComponent.send_update(pid, :increment)
 
         assert frame(id) =~ "a=1"
@@ -103,8 +158,8 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "gives same-module siblings a process each" do
       with_session(View.column(children: [counter("a"), counter("b")]), fn id ->
         frame(id)
-        assert_received {:started, "a", a}
-        assert_received {:started, "b", _b}
+        a = started(id, "a")
+        _b = started(id, "b")
 
         :ok = ProcessComponent.send_update(a, :increment)
         screen = frame(id)
@@ -118,7 +173,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "passes changed props to update_props/2, keeping the rest of its state" do
       with_session(counter("a"), fn id ->
         frame(id)
-        assert_received {:started, "a", pid}
+        pid = started(id, "a")
         :ok = ProcessComponent.send_update(pid, :increment)
 
         :ok = Headless.send_message(id, {:show, counter("b")})
@@ -133,7 +188,8 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
       with_session(refresher.("a"), fn id ->
         frame(id)
-        assert_received {:initialised, "a", pid}
+        assert_receive {:initialised, "a", pid}
+        ready(pid)
         :ok = ProcessComponent.send_update(pid, :increment)
         assert frame(id) =~ "a~1"
 
@@ -151,7 +207,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
       with_session(View.column(children: [pinned]), fn id ->
         frame(id)
-        assert_received {:started, "a", pid}
+        pid = started(id, "a")
         :ok = ProcessComponent.send_update(pid, :increment)
 
         moved = View.column(children: [View.text("above"), pinned])
@@ -165,7 +221,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "stops its process once the view no longer has it" do
       with_session(counter("a"), fn id ->
         frame(id)
-        assert_received {:started, "a", pid}
+        pid = started(id, "a")
         ref = Process.monitor(pid)
 
         :ok = Headless.send_message(id, {:show, View.text("gone")})
@@ -178,7 +234,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "stops its process when the session stops" do
       with_session(counter("a"), fn id ->
         frame(id)
-        assert_received {:started, "a", pid}
+        pid = started(id, "a")
         ref = Process.monitor(pid)
 
         :ok = Headless.stop(id)
@@ -187,26 +243,71 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
       end)
     end
 
-    test "that crashes draws a placeholder, and the next frame restarts it" do
+    test "that crashes draws a placeholder, sits out a frame, then restarts" do
       view = View.column(children: [counter("a"), View.text("rest")])
 
       with_session(view, fn id ->
         frame(id)
-        assert_received {:started, "a", pid}
+        pid = started(id, "a")
         ref = Process.monitor(pid)
         :ok = ProcessComponent.send_update(pid, :break)
 
         capture_log(fn ->
           screen = frame(id)
           assert screen =~ "rest"
-          assert screen =~ inspect(Counter)
+          assert screen =~ "[pc-#{inspect(Counter)}: crashed]"
           refute screen =~ "a="
+          assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+
+          assert frame(id) =~ "crashed"
+          refute_received {:started, _, _}
+
+          assert frame(id) =~ "starting"
         end)
 
-        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
-        assert frame(id) =~ "a=0"
-        assert_received {:started, "a", restarted}
+        restarted = started(id, "a")
         assert restarted != pid
+        assert frame(id) =~ "a=0"
+      end)
+    end
+
+    test "that fails in init is retried after 1, 2, 4, 8 ... frames" do
+      with_session(failing("f"), fn id ->
+        capture_log(fn ->
+          assert start_frames(id, "f", 20) == [1, 3, 6, 11, 20]
+        end)
+      end)
+    end
+
+    test "that comes up again starts its backoff over" do
+      with_session(counter("a"), fn id ->
+        frame(id)
+        pid = started(id, "a")
+
+        capture_log(fn ->
+          crash_and_restart(id, pid)
+          # Had the first failure still counted, this would sit out two frames.
+          restarted = started(id, "a")
+          crash_and_restart(id, restarted)
+          assert started(id, "a") != restarted
+        end)
+      end)
+    end
+
+    test "that leaves the view while sitting out its frames is forgotten" do
+      with_session(failing("f"), fn id ->
+        capture_log(fn ->
+          # Two failures in a row: the second has it sitting out two frames.
+          assert start_frames(id, "f", 4) == [1, 3]
+
+          :ok = Headless.send_message(id, {:show, View.text("gone")})
+          assert frame(id) =~ "gone"
+
+          # Brought back, it starts at once rather than sitting out the rest.
+          :ok = Headless.send_message(id, {:show, failing("f")})
+          assert frame(id) =~ "starting"
+          assert_receive {:started, "f", _pid}
+        end)
       end)
     end
   end
@@ -215,11 +316,11 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "run separate processes, and stopping one leaves the other's" do
       with_session(counter("a"), fn first ->
         frame(first)
-        assert_received {:started, "a", ours}
+        ours = started(first, "a")
 
         with_session(counter("a"), fn second ->
           frame(second)
-          assert_received {:started, "a", theirs}
+          theirs = started(second, "a")
           assert theirs != ours
 
           :ok = ProcessComponent.send_update(ours, :increment)
@@ -239,6 +340,55 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
   defp counter(label),
     do: View.process_component(Counter, %{test: self(), label: label})
+
+  defp failing(label),
+    do: View.process_component(Failing, %{test: self(), label: label})
+
+  # The component's process once it has started, after its init and mount
+  # have run: the component has sent the engine its ready message by then,
+  # which is queued there ahead of the frame asked for here. The engine
+  # answers the ready message by asking itself for a frame, queued behind
+  # this one; so the test's next frame is the one after that, and the frame
+  # counts of the tests below stand.
+  defp started(id, label) do
+    assert_receive {:started, ^label, pid}
+    ready(pid)
+    frame(id)
+    pid
+  end
+
+  defp ready(pid), do: :sys.get_state(pid)
+
+  # Breaks the component, draws its crash and the one frame it sits out, and
+  # the frame that starts it afresh.
+  defp crash_and_restart(id, pid) do
+    ref = Process.monitor(pid)
+    :ok = ProcessComponent.send_update(pid, :break)
+
+    assert frame(id) =~ "crashed"
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+    assert frame(id) =~ "crashed"
+    assert frame(id) =~ "starting"
+  end
+
+  # Draws `frames` frames of a component whose init fails and returns the
+  # numbers of the frames that started it. Each start is seen to its end
+  # before the next frame, so each frame's count is settled.
+  defp start_frames(id, label, frames) do
+    Enum.flat_map(1..frames, fn n ->
+      screen = frame(id)
+
+      if screen =~ "starting" do
+        assert_receive {:started, ^label, pid}
+        ref = Process.monitor(pid)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+        [n]
+      else
+        assert screen =~ "[pc-#{inspect(Failing)}: failed to start]"
+        []
+      end
+    end)
+  end
 
   defp with_session(view, fun) do
     id = :"engine_process_components_#{System.unique_integer([:positive])}"
