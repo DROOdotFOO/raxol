@@ -199,14 +199,22 @@ defmodule Raxol.Core.Renderer.View.Components do
   `Raxol.DynamicSupervisor`, owned by the rendering engine that draws it. The
   process, and the component's state, last across frames while the node stays
   at the same place in the view (or keeps the same `:id` key, if you put one
-  on the node), and stop when the node leaves the view. Changed props reach
-  the running component as `update_props(props, state)` if it exports one;
-  otherwise its state is re-initialised from them with `init/1`. If it
-  crashes, the frame draws a placeholder in its place and the next frame
-  restarts it with fresh state from `init/1` -- the rest of the app continues.
+  on the node), and stop when the node leaves the view. The component's
+  `init/1` and `mount/1` run inside that process after it starts; the frame
+  draws a "starting" placeholder until they have, then the component's own
+  tree. Changed props reach the running component as
+  `update_props(props, state)` if it exports one; otherwise `unmount/1` sees
+  the old state and the component is re-initialised from the new props with
+  `init/1`. If it crashes, or `init/1` returns `{:error, reason}` or
+  anything other than `{:ok, state}` or a state map, the frame draws a
+  placeholder in its place and a later frame starts it again with fresh
+  state from `init/1` -- the rest of the app continues. `unmount/1` runs
+  whenever a live component stops. Crash reports show the module and id,
+  never its state or props.
 
   ## Parameters
-    * `module` - Component module implementing `init/1`, `render/2`, and optionally `update/2` and `update_props/2`
+    * `module` - Component module implementing `init/1`, `render/2`, and
+      optionally `update/2`, `update_props/2`, `mount/1` and `unmount/1`
     * `props` - Initial properties passed to `init/1`
   """
   def process_component(module, props \\ %{}) do
