@@ -5,12 +5,6 @@
 # match, per the port's mandatory defect-fix (a)); added coverage for the
 # forward-compat `_meta` fold (defect-fix (d)) and the `StopReason.from_json/1`
 # totality fix (upstream had no catch-all clause, defect-fix (a)).
-#
-# `Implementation`/`InitializeRequest`/`InitializeResponse` tests that touch
-# `ClientCapabilities` (ported separately, in `client_types.ex`, not yet
-# landed at the time this file was written) are tagged `:pending_sibling` and
-# excluded by default — see this file's coder report for the compile-barrier
-# note.
 defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
   use ExUnit.Case, async: true
 
@@ -135,8 +129,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
     end
   end
 
-  @tag :pending_sibling
-  test "InitializeRequest to_json/from_json (needs ClientCapabilities)" do
+  test "InitializeRequest to_json/from_json" do
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeRequest
     req = InitializeRequest.new(1)
     json = InitializeRequest.to_json(req)
@@ -145,8 +138,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
     assert decoded.protocol_version == 1
   end
 
-  @tag :pending_sibling
-  test "InitializeResponse to_json/from_json (needs ClientCapabilities/AgentCapabilities)" do
+  test "InitializeResponse to_json/from_json" do
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeResponse
     resp = InitializeResponse.new(1)
     json = InitializeResponse.to_json(resp)
