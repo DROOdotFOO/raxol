@@ -1,8 +1,14 @@
 defmodule Raxol.Core.Renderer.ViewDslConformanceTest.ProbeWidget do
   @moduledoc false
   # A component for the `process_component` row: the rendering engine runs it
-  # in its own process and draws its render tree.
-  def init(props), do: {:ok, props}
+  # in its own process and draws its render tree. Its init runs after the
+  # frame that starts it, so it tells the test process its pid; the test
+  # checks the frame drawn once it is ready.
+  def init(props) do
+    send(props.test, {:probe_widget, self()})
+    {:ok, props}
+  end
+
   def render(state, _context), do: %{type: :text, content: state.label}
 end
 
@@ -423,7 +429,10 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest.Rows do
       {View, :process_component, [1, 2],
        render(
          fn ->
-           View.process_component(ProbeWidget, %{label: "from a process"})
+           View.process_component(ProbeWidget, %{
+             label: "from a process",
+             test: self()
+           })
          end,
          text: "from a process"
        )},
@@ -1500,7 +1509,23 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
 
   # --- rendering -----------------------------------------------------------
 
-  defp render_frame(view) do
+  # A process_component node's component starts on the frame that first
+  # draws it and runs its init afterwards in its own process, so that frame
+  # shows a "starting" placeholder. The probe widget reports its pid from
+  # init/1; once its init has run (and so its ready message has reached the
+  # engine), the next frame draws its tree, and that is the frame checked.
+  defp render_frame(%{type: :process_component} = view) do
+    with_session(view, fn id ->
+      {:ok, _starting} = Headless.get_buffer(id)
+      assert_receive {:probe_widget, pid}
+      :sys.get_state(pid)
+      frame(id)
+    end)
+  end
+
+  defp render_frame(view), do: with_session(view, &frame/1)
+
+  defp with_session(view, fun) do
     id = :"view_dsl_conformance_#{System.unique_integer([:positive])}"
 
     {:ok, ^id} =
@@ -1508,11 +1533,15 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
 
     try do
       :ok = Headless.send_message(id, {:show, view})
-      {:ok, buffer} = Headless.get_buffer(id)
-      %{rows: buffer.cells, lines: Enum.map(buffer.cells, &row_text/1)}
+      fun.(id)
     after
       Headless.stop(id)
     end
+  end
+
+  defp frame(id) do
+    {:ok, buffer} = Headless.get_buffer(id)
+    %{rows: buffer.cells, lines: Enum.map(buffer.cells, &row_text/1)}
   end
 
   defp row_text(row), do: Enum.map_join(row, &cell_char/1)
