@@ -169,6 +169,7 @@ packages/**/deps/
 IDEAS.md
 SPECS.md
 AGENTS.md
+/CLAUDE.md
 TODO.md
 HANDOVER.md
 *HANDOVER.md

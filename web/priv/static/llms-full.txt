@@ -1881,7 +1881,7 @@ The main `raxol` package does not depend on `raxol_agent`, `raxol_broker`, `raxo
 
 ## Publishing
 
-See [Hex Publishing](https://github.com/DROOdotFOO/raxol/blob/master/CLAUDE.md#hex-publishing) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.
+See the [Release checklist](https://github.com/DROOdotFOO/raxol/blob/master/docs/development/RELEASE_CHECKLIST.md#publish-the-public-hex-train) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.
 
 Run `mix raxol.release.check` before publishing anything. It walks the public train in dependency order and, per package, validates the metadata, confirms every file the tarball would carry is tracked by git, and runs `mix hex.build --unpack` without publishing. `--metadata-only` skips the builds; `mix raxol.check` runs that faster half for you.
 

@@ -64,6 +64,8 @@ reactivating it. Never move a published version tag as routine recovery.
    `mix raxol.release.check` validates the public train, proves every packaged
    file is tracked, runs each `HEX_BUILD=1 mix hex.build --unpack`, and compares
    the generated package metadata with the source project configuration.
+   `Raxol.Release.PackageCheck` holds the train order; a new package under
+   `packages/` fails the catalog check until it is classified there.
 4. Push package-scoped documentation tags for changed independent-version
    packages. They must point at the release commit:
 
