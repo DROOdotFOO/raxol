@@ -3,10 +3,10 @@ defmodule Raxol.Payments.FeeScheduleTest do
   Parity against the canonical schedule, plus the arithmetic on top of it.
 
   The oracle in `priv/fee-oracle/schedule.json` is the generated projection of
-  `Riddler.Integrations.Xochi.FeePolicy` -- the same artifact `@xochi/reference`
-  checks its TypeScript mirror against. Pinning to it is what makes this module
-  a mirror rather than a second opinion: if Riddler reprices, these fail instead
-  of raxol.io quietly advertising a rate nobody charges.
+  `Riddler.Integrations.Xochi.FeePolicy` -- the same artifact `@xochi/client`
+  checks its TypeScript mirror (`fee.ts`) against. Pinning to it is what makes
+  this module a mirror rather than a second opinion: if Riddler reprices, these
+  fail instead of raxol.io quietly advertising a rate nobody charges.
   """
   use ExUnit.Case, async: true
 
