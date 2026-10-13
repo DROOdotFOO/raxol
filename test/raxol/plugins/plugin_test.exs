@@ -1,7 +1,7 @@
 defmodule Raxol.Plugins.PluginTest do
   use ExUnit.Case
-  alias Raxol.Plugins.HyperlinkPlugin
-  alias Raxol.Plugins.Manager.Events, as: PluginManager
+  alias Raxol.Plugins.{EventHandler, HyperlinkPlugin}
+  alias Raxol.Plugins.Manager, as: PluginManager
 
   alias Raxol.Core.Runtime.Plugins.{PluginLifecycle, PluginSupervisor}
 
@@ -51,20 +51,16 @@ defmodule Raxol.Plugins.PluginTest do
       # Debug: Check if plugin was loaded correctly
       assert Map.has_key?(manager.plugins, "hyperlink")
 
-      result = PluginManager.disable_plugin(manager, "hyperlink")
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-      {:ok, manager} = result
-      {:ok, plugin} = PluginManager.get_plugin(manager, "hyperlink")
-      assert plugin.enabled == false
+      {:ok, manager} = PluginManager.disable_plugin(manager, "hyperlink")
+      assert manager.plugins["hyperlink"].enabled == false
       {:ok, manager} = PluginManager.enable_plugin(manager, "hyperlink")
-      {:ok, plugin} = PluginManager.get_plugin(manager, "hyperlink")
-      assert plugin.enabled == true
+      assert manager.plugins["hyperlink"].enabled == true
     end
 
     test "processes input through plugins" do
       {:ok, manager} = Raxol.Plugins.Manager.new()
       {:ok, manager} = PluginManager.load_plugin(manager, HyperlinkPlugin)
-      {:ok, _manager} = PluginManager.process_input(manager, "test input")
+      {:ok, _manager} = EventHandler.handle_input(manager, "test input")
     end
 
     test "processes output through plugins" do
@@ -72,7 +68,7 @@ defmodule Raxol.Plugins.PluginTest do
       {:ok, manager} = PluginManager.load_plugin(manager, HyperlinkPlugin)
 
       {:ok, _manager, _transformed_output} =
-        Raxol.Plugins.Manager.Events.process_output(manager, "test output")
+        EventHandler.handle_output(manager, "test output")
     end
 
     test "processes mouse events through plugins" do
@@ -88,7 +84,7 @@ defmodule Raxol.Plugins.PluginTest do
       }
 
       {:ok, _manager, _propagation} =
-        PluginManager.handle_mouse_event(manager, event, %{})
+        EventHandler.handle_mouse_event(manager, event, %{})
     end
   end
 
