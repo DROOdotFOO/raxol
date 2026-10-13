@@ -21,7 +21,7 @@ defmodule Raxol.Payments.Test.XochiSpec do
   @version_file Path.expand("../fixtures/XOCHI_SPEC_VERSION", __DIR__)
   @external_resource @version_file
 
-  @doc "The pinned `@xochi/spec` version, e.g. `\"0.8.0\"`."
+  @doc "The pinned `@xochi/spec` version, e.g. `\"0.8.1\"`."
   @spec pinned_version() :: String.t()
   def pinned_version, do: @version_file |> File.read!() |> String.trim()
 
