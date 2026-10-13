@@ -263,6 +263,18 @@ jobs:
       - name: Check singleton allowlist
         run: bash scripts/check_singletons.sh
 
+      # `package-tests` compiles every package standalone with
+      # --warnings-as-errors, so a call into main raxol from a package is a
+      # compile error there -- unless the file hides it behind
+      # `@compile {:no_warn_undefined, Mod}`. Four sites in raxol_terminal did
+      # exactly that and raised UndefinedFunctionError when the package ran
+      # without main raxol. This resolves every such attribute to the
+      # tree that defines the module and fails on one the package's mix.exs
+      # does not declare, beyond the grandfathered list in
+      # scripts/.package-boundaries-allowlist. git + grep only, no compile.
+      - name: Check package boundaries
+        run: bash scripts/check-package-boundaries.sh
+
       # raxol_agent now has its own package-tests cell, but this guard stays
       # here: a schema_version bump that ships without a frozen golden journal
       # is unrecoverable, and this check is dependency-free, so it answers in

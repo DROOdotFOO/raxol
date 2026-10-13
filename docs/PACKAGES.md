@@ -76,6 +76,10 @@ raxol_sensor   --> (none)
 
 The main `raxol` package does not depend on `raxol_agent`, `raxol_broker`, `raxol_earn`, `raxol_agent_client_protocol`, `raxol_gateway`, or any of the surface packages. You opt into those.
 
+### Boundary rule
+
+The arrows are the only direction code may call. A package reaches modules in its own tree and in the trees of the packages its `mix.exs` declares (transitively), never in main `raxol` or in a sibling it does not list: `raxol_core` cannot name `Raxol.Terminal.*`, and `raxol_terminal` cannot name anything that lives under the root `lib/`. Each package compiles standalone in CI with `--warnings-as-errors`, so such a call is a compile error there unless the file hides it behind `@compile {:no_warn_undefined, Mod}`, which is how `Raxol.Terminal.Config.Capabilities.optimized_config/0` and `Raxol.Terminal.Theme.Manager.load_from_registry/2` came to raise `UndefinedFunctionError` whenever `raxol_terminal` ran without main `raxol`. `scripts/check-package-boundaries.sh` (the `Check package boundaries` step of CI) resolves every `no_warn_undefined` under `packages/*/lib` to the tree that defines the module and fails on one the package does not declare, beyond the grandfathered sites in `scripts/.package-boundaries-allowlist`, which only shrinks. Fix a report by moving the module into the package that owns the concept (`Raxol.Core.Theming.ThemeRegistry` now lives in `raxol_core`), by reading the implementation from application config with an in-package default (`config :raxol_core, :default_terminal_preferences, {Mod, :fun, args}` is how main `raxol` hands `Raxol.Core.UserPreferences` its terminal defaults), or by deleting the dead call. `Code.ensure_loaded?/1` is not a fix: it is the guard that hid the originals.
+
 ## Publishing
 
 See the [Release checklist](https://github.com/DROOdotFOO/raxol/blob/master/docs/development/RELEASE_CHECKLIST.md#publish-the-public-hex-train) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.

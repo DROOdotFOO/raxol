@@ -1,0 +1,60 @@
+# Grandfathered cross-package references: `@compile {:no_warn_undefined, Mod}`
+# sites where Mod lives in a tree the package's mix.exs does not declare.
+# One `file<TAB>module<TAB>owning tree` per line; `undefined` means no
+# defmodule in the repo matches. Checked by scripts/check-package-boundaries.sh.
+#
+# This list only shrinks. Entries are not a licence to call the module: each
+# one raises UndefinedFunctionError when the package runs without that tree.
+# Remove an entry when the site is fixed (module moved into the owning
+# package, implementation injected via application config, or call deleted).
+packages/raxol_agent/lib/raxol/agent/code/cost_ledger.ex	Raxol.Payments.Ledger	raxol_payments
+packages/raxol_agent/lib/raxol/agent/scheduler/delivery.ex	Raxol.Gateway.Delivery	raxol_gateway
+packages/raxol_core/lib/raxol/core/accessibility/preference_manager.ex	Raxol.Style.Colors.System	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.BarChart	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.LineChart	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.ScatterChart	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Display.Tree	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Display.Viewport	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.Button	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.Checkbox	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.Menu	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.PasswordField	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.Scrubber	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.SelectList	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.Tabs	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.TextArea	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Input.TextInput	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Modal	raxol
+packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Table	raxol
+packages/raxol_core/lib/raxol/core/runtime/plugins/state_manager.ex	Raxol.Core.StateManager	raxol
+packages/raxol_liveview/lib/raxol/live_view/tea_live.ex	Raxol.Core.Runtime.Lifecycle	raxol
+packages/raxol_liveview/lib/raxol/live_view/terminal_bridge.ex	Raxol.Effects.BorderBeam.CSS	raxol
+packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.BehaviorTracker	raxol
+packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.FeedbackLoop	raxol
+packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.LayoutRecommender	raxol
+packages/raxol_mcp/lib/raxol/mcp/agent_bridge.ex	Raxol.Agent.Registry	undefined
+packages/raxol_mcp/lib/raxol/mcp/agent_bridge.ex	Raxol.Headless	raxol
+packages/raxol_mcp/lib/raxol/mcp/server.ex	Raxol.Headless	raxol
+packages/raxol_mcp/lib/raxol/mcp/test.ex	Raxol.Headless	raxol
+packages/raxol_mcp/lib/raxol/mcp/test.ex	Raxol.Headless.EventBuilder	raxol
+packages/raxol_mcp/lib/raxol/mcp/tool_synchronizer.ex	Raxol.Adaptive.BehaviorTracker	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Charts.BarChart	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Charts.LineChart	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Charts.ScatterChart	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Display.Tree	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Display.Viewport	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.Button	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.Checkbox	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.Menu	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.PasswordField	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.Scrubber	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.SelectList	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.Tabs	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.TextArea	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Input.TextInput	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Modal	raxol
+packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex	Raxol.UI.Components.Table	raxol
+packages/raxol_terminal/lib/raxol/terminal/ansi/sequences/colors.ex	Raxol.Style.Colors.Advanced	raxol
+packages/raxol_terminal/lib/raxol/terminal/ansi/sequences/colors.ex	Raxol.Style.Colors.Color	raxol
+packages/raxol_terminal/lib/raxol/terminal/commands/window_handler.ex	Raxol.Performance.Caches.FontMetricsCache	raxol
+packages/raxol_terminal/lib/raxol/terminal/input/clipboard_handler.ex	Raxol.System.Clipboard	raxol
