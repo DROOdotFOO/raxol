@@ -145,7 +145,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "keeps its state across frames" do
       with_session(counter("a"), fn id ->
         frame(id)
-        pid = started("a")
+        pid = started(id, "a")
 
         assert frame(id) =~ "a=0"
         :ok = ProcessComponent.send_update(pid, :increment)
@@ -158,8 +158,8 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "gives same-module siblings a process each" do
       with_session(View.column(children: [counter("a"), counter("b")]), fn id ->
         frame(id)
-        a = started("a")
-        _b = started("b")
+        a = started(id, "a")
+        _b = started(id, "b")
 
         :ok = ProcessComponent.send_update(a, :increment)
         screen = frame(id)
@@ -173,7 +173,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "passes changed props to update_props/2, keeping the rest of its state" do
       with_session(counter("a"), fn id ->
         frame(id)
-        pid = started("a")
+        pid = started(id, "a")
         :ok = ProcessComponent.send_update(pid, :increment)
 
         :ok = Headless.send_message(id, {:show, counter("b")})
@@ -207,7 +207,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
       with_session(View.column(children: [pinned]), fn id ->
         frame(id)
-        pid = started("a")
+        pid = started(id, "a")
         :ok = ProcessComponent.send_update(pid, :increment)
 
         moved = View.column(children: [View.text("above"), pinned])
@@ -221,7 +221,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "stops its process once the view no longer has it" do
       with_session(counter("a"), fn id ->
         frame(id)
-        pid = started("a")
+        pid = started(id, "a")
         ref = Process.monitor(pid)
 
         :ok = Headless.send_message(id, {:show, View.text("gone")})
@@ -234,7 +234,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "stops its process when the session stops" do
       with_session(counter("a"), fn id ->
         frame(id)
-        pid = started("a")
+        pid = started(id, "a")
         ref = Process.monitor(pid)
 
         :ok = Headless.stop(id)
@@ -248,7 +248,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
       with_session(view, fn id ->
         frame(id)
-        pid = started("a")
+        pid = started(id, "a")
         ref = Process.monitor(pid)
         :ok = ProcessComponent.send_update(pid, :break)
 
@@ -265,7 +265,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
           assert frame(id) =~ "starting"
         end)
 
-        restarted = started("a")
+        restarted = started(id, "a")
         assert restarted != pid
         assert frame(id) =~ "a=0"
       end)
@@ -282,14 +282,14 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "that comes up again starts its backoff over" do
       with_session(counter("a"), fn id ->
         frame(id)
-        pid = started("a")
+        pid = started(id, "a")
 
         capture_log(fn ->
           crash_and_restart(id, pid)
           # Had the first failure still counted, this would sit out two frames.
-          restarted = started("a")
+          restarted = started(id, "a")
           crash_and_restart(id, restarted)
-          assert started("a") != restarted
+          assert started(id, "a") != restarted
         end)
       end)
     end
@@ -316,11 +316,11 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     test "run separate processes, and stopping one leaves the other's" do
       with_session(counter("a"), fn first ->
         frame(first)
-        ours = started("a")
+        ours = started(first, "a")
 
         with_session(counter("a"), fn second ->
           frame(second)
-          theirs = started("a")
+          theirs = started(second, "a")
           assert theirs != ours
 
           :ok = ProcessComponent.send_update(ours, :increment)
@@ -346,10 +346,14 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
 
   # The component's process once it has started, after its init and mount
   # have run: the component has sent the engine its ready message by then,
-  # which is queued there ahead of the next frame asked for.
-  defp started(label) do
+  # which is queued there ahead of the frame asked for here. The engine
+  # answers the ready message by asking itself for a frame, queued behind
+  # this one; so the test's next frame is the one after that, and the frame
+  # counts of the tests below stand.
+  defp started(id, label) do
     assert_receive {:started, ^label, pid}
     ready(pid)
+    frame(id)
     pid
   end
 
