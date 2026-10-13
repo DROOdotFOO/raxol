@@ -787,8 +787,13 @@ defmodule Raxol.HeadlessTest do
       end
       """)
 
-      assert {:error, {:compile_timed_out, ^wedge, 150}} =
-               with_compile_budget(150, fn ->
+      # The body must reach its `send` before the budget lands the kill, so
+      # the budget here is not the 150ms the non-trapping wedge races: on
+      # 2026-10-12 the 1.17.3/macOS nightly cell killed the compile before the
+      # body ran and `{:compiling, _}` never arrived. The body sleeps forever,
+      # so the budget is exactly this test's wall time; 1s is cheap.
+      assert {:error, {:compile_timed_out, ^wedge, 1_000}} =
+               with_compile_budget(1_000, fn ->
                  Headless.start(wedge, id: :trap_wedge)
                end)
 
