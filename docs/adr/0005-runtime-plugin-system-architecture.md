@@ -40,14 +40,18 @@ Build a runtime plugin system on Elixir's native code loading with lifecycle man
 
 **Process Isolation** (`lib/raxol/core/runtime/plugins/plugin_supervisor.ex`): crash isolation via Task.Supervisor. Configurable timeouts (default 5000ms). Individual failure isolation.
 
-**Dependency Management** (`lib/raxol/plugins/lifecycle/dependencies.ex`): topological sorting for load order, circular dependency detection, and version compatibility checking.
+**Dependency Management** (`packages/raxol_core/lib/raxol/core/runtime/plugins/dependency_resolver.ex`, fronted for the root facade by `lib/raxol/plugins/lifecycle/dependencies.ex`): topological sorting for load order, circular dependency detection, and version compatibility checking.
 
-`resolve_plugin_order/1` is Kahn's algorithm, stable across equally-ready plugins so the
-order is deterministic; dependencies outside the batch being loaded are treated as already
-satisfied and constrain nothing. `check_for_circular_dependency/2` walks the transitive
-graph, so `a -> b -> a` is rejected and not only self-reference. `check_dependencies/2`
-honours the requirement half of a `{name, requirement}` tuple through `Version.match?/2`,
-and fails closed when a version or requirement cannot be parsed.
+`DependencyResolver.resolve/1` and `resolve_incremental/2` are Kahn's algorithm, stable
+across equally-ready plugins so the order is deterministic, and a cycle error names the
+cycle itself rather than every plugin stuck behind it. `Dependencies.resolve_plugin_order/1`
+maps root plugin structs onto manifests and delegates there; dependencies outside the batch
+being loaded are treated as already satisfied and constrain nothing.
+`check_for_circular_dependency/2` walks the transitive graph with
+`DependencyResolver.find_cycle/2`, so `a -> b -> a` is rejected and not only
+self-reference. `check_dependencies/2` honours the requirement half of a
+`{name, requirement}` tuple through `Version.match?/2`, and fails closed when a version
+or requirement cannot be parsed.
 
 > **History.** These three capabilities were silently lost when the
 > `Raxol.Core.Runtime.Plugins.DependencyManager` subsystem was deleted in `ac583975d`, a

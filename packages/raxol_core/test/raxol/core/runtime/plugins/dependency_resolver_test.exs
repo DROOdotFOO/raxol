@@ -17,11 +17,19 @@ defmodule Raxol.Core.Runtime.Plugins.DependencyResolverTest do
   end
 
   describe "resolve/1" do
-    test "resolves independent plugins in stable order" do
-      manifests = [manifest(:a), manifest(:b), manifest(:c)]
-      assert {:ok, order} = DependencyResolver.resolve(manifests)
-      assert length(order) == 3
-      assert MapSet.new(order) == MapSet.new([:a, :b, :c])
+    test "keeps input order for independent plugins" do
+      manifests = [manifest(:x), manifest(:y), manifest(:z)]
+      assert {:ok, [:x, :y, :z]} = DependencyResolver.resolve(manifests)
+    end
+
+    test "places a dependency before the plugin that declares it" do
+      # registration order is deliberately wrong
+      manifests = [
+        manifest(:dependent, depends_on: [{:base, ">= 1.0.0"}]),
+        manifest(:base)
+      ]
+
+      assert {:ok, [:base, :dependent]} = DependencyResolver.resolve(manifests)
     end
 
     test "resolves linear dependency chain" do
@@ -53,6 +61,26 @@ defmodule Raxol.Core.Runtime.Plugins.DependencyResolverTest do
                Enum.find_index(order, &(&1 == :c))
     end
 
+    test "keeps input order among plugins that become ready together" do
+      manifests = [
+        manifest(:d, depends_on: [{:b, ">= 0"}, {:c, ">= 0"}]),
+        manifest(:b, depends_on: [{:a, ">= 0"}]),
+        manifest(:c, depends_on: [{:a, ">= 0"}]),
+        manifest(:a)
+      ]
+
+      assert {:ok, [:a, :b, :c, :d]} = DependencyResolver.resolve(manifests)
+    end
+
+    test "counts a duplicated dependency once" do
+      manifests = [
+        manifest(:b, depends_on: [{:a, ">= 0"}, {:a, ">= 1.0.0"}]),
+        manifest(:a)
+      ]
+
+      assert {:ok, [:a, :b]} = DependencyResolver.resolve(manifests)
+    end
+
     test "detects cycle" do
       manifests = [
         manifest(:a, depends_on: [{:b, ">= 0"}]),
@@ -64,6 +92,28 @@ defmodule Raxol.Core.Runtime.Plugins.DependencyResolverTest do
 
       assert :a in cycle_ids
       assert :b in cycle_ids
+    end
+
+    test "rejects a plugin that depends on itself" do
+      manifests = [manifest(:loop, depends_on: [{:loop, ">= 0"}])]
+
+      assert {:error, {:cycle, [:loop, :loop]}} =
+               DependencyResolver.resolve(manifests)
+    end
+
+    test "names the cycle, not the plugins stuck behind it" do
+      manifests = [
+        manifest(:c, depends_on: [{:a, ">= 0"}]),
+        manifest(:a, depends_on: [{:b, ">= 0"}]),
+        manifest(:b, depends_on: [{:a, ">= 0"}])
+      ]
+
+      assert {:error, {:cycle, cycle_ids}} =
+               DependencyResolver.resolve(manifests)
+
+      assert :a in cycle_ids
+      assert :b in cycle_ids
+      refute :c in cycle_ids
     end
 
     test "detects missing dependency" do
@@ -157,6 +207,28 @@ defmodule Raxol.Core.Runtime.Plugins.DependencyResolverTest do
                  manifest(:a, requires: [:nav]),
                  manifest(:b, provides: [:nav])
                ])
+    end
+  end
+
+  describe "find_cycle/2" do
+    test "returns nil for an acyclic graph" do
+      graph = %{top: [:mid], mid: [:base], base: []}
+      assert nil == DependencyResolver.find_cycle(:top, graph)
+    end
+
+    test "returns nil for a diamond" do
+      graph = %{top: [:left, :right], left: [:base], right: [:base]}
+      assert nil == DependencyResolver.find_cycle(:top, graph)
+    end
+
+    test "returns the path of an indirect cycle" do
+      graph = %{a: [:b], b: [:c], c: [:a]}
+      assert [:a, :b, :c, :a] = DependencyResolver.find_cycle(:a, graph)
+    end
+
+    test "ignores a cycle not reachable from the start node" do
+      graph = %{solo: [], a: [:b], b: [:a]}
+      assert nil == DependencyResolver.find_cycle(:solo, graph)
     end
   end
 end
