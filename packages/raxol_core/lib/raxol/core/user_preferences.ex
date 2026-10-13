@@ -11,9 +11,6 @@ defmodule Raxol.Core.UserPreferences do
   alias Raxol.Core.Runtime.Log
   use Raxol.Core.Behaviours.BaseManager
 
-  # Terminal.Config.Defaults lives in main raxol; guarded with Code.ensure_loaded?
-  @compile {:no_warn_undefined, Raxol.Terminal.Config.Defaults}
-
   alias Raxol.Core.Preferences.Persistence
   alias Raxol.Core.Utils.Debounce
 
@@ -333,12 +330,7 @@ defmodule Raxol.Core.UserPreferences do
       theme: %{
         active_id: :default
       },
-      terminal:
-        if Code.ensure_loaded?(Raxol.Terminal.Config.Defaults) do
-          Raxol.Terminal.Config.Defaults.generate_default_config()
-        else
-          %{}
-        end,
+      terminal: default_terminal_preferences(),
       accessibility: %{
         enabled: true,
         screen_reader: true,
@@ -353,5 +345,19 @@ defmodule Raxol.Core.UserPreferences do
           # Add default keybindings here
         }
     }
+  end
+
+  # raxol_core does not depend on raxol_terminal, so the terminal section of
+  # the defaults is supplied by whoever assembles the application:
+  #
+  #     config :raxol_core, :default_terminal_preferences,
+  #       {Raxol.Terminal.Config.Defaults, :generate_default_config, []}
+  #
+  # Main raxol sets this in config/config.exs. Standalone it is empty.
+  defp default_terminal_preferences do
+    case Application.get_env(:raxol_core, :default_terminal_preferences, %{}) do
+      {mod, fun, args} -> apply(mod, fun, args)
+      %{} = defaults -> defaults
+    end
   end
 end
