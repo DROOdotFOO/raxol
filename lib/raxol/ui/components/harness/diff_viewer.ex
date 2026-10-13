@@ -4,15 +4,14 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   Renders the line-based diff between a file's current content (`old`) and
   a proposed edit (`new`) BEFORE the edit is applied. This is the
-  "pre-apply confirmation over post-hoc undo" surface described in
-  `docs/proposals/in-flight/harness-spec-frontend.md`: framing always
+  "pre-apply confirmation over post-hoc undo" surface: framing always
   reads as "this WILL change" -- a "Proposed change" header and a "Not yet
   applied" caption, never past tense.
 
   ## Visual language
 
-  Ports the Pierre (`@pierre/diffs`) visual language --
-  `docs/proposals/in-flight/pierre-diffs-analysis.md` -- flattened for a
+  Ports the Pierre (`@pierre/diffs`) visual language,
+  flattened for a
   terminal cell grid (one bg + one fg per cell, no alpha compositing):
 
     * **Diff paints background only; syntax tokens own foreground and are
@@ -290,12 +289,6 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # -- Diff palette ---------------------------------------------------------
   # The tiers now live in `Raxol.UI.Theming.Palette.diff_palette/0`, with the
   # rationale for flattening the translucency documented there.
-  #
-  # The TODO this replaces asked to "consolidate with the project-wide
-  # palette inventory at docs/proposals/in-flight/palette-inventory.md once
-  # it exists". No such file exists at that path or at the
-  # docs/proposals/palette-inventory.md path `Palette` itself cites, so the
-  # TODO's precondition could never have been met.
   @diff_palette Raxol.UI.Theming.Palette.diff_palette()
 
   defp add_base, do: @diff_palette.add_base

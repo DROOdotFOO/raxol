@@ -1,7 +1,6 @@
 defmodule Raxol.Harness.T2dTeardownNegativeTest do
   @moduledoc """
-  Unit T2d (inline driver profile) -- negative suite
-  (`docs/proposals/in-flight/harness-ui-testing/03-lifecycle.md` §3.2):
+  Inline driver profile -- negative suite:
   the honest-residual facts that need a real controlling tty (Tier B,
   `Raxol.Test.PtyHarness`, unit TP) plus the ordering-violation properties
   that don't (Tier A, pure).

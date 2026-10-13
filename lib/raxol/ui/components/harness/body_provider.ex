@@ -1,15 +1,14 @@
 defmodule Raxol.UI.Components.Harness.BodyProvider do
   @moduledoc """
-  The T5 seam: an explicit per-kind content-map contract, plus the mapping
+  An explicit per-kind content-map contract, plus the mapping
   from a `%Raxol.UI.Components.Harness.Block{}`'s `kind` to the merged
   component (or pair of components) that renders its EXPANDED body.
 
-  Per `docs/proposals/in-flight/harness-ui-STATE.md`'s binding advisory
-  note, this contract is defined BEFORE mounting: `Block.content` (T4) is
+  This contract is defined BEFORE mounting: `Block.content` is
   a plain, kind-shaped map (see `Block`'s moduledoc, "Rendering"), and
   every known kind's shape is documented here as the schema a body map
   must satisfy to mount safely. `Raxol.UI.Components.Harness.BlockBody`
-  (T5's fold-aware entry point) is the only caller in production code;
+  (the fold-aware entry point) is the only caller in production code;
   this module is also directly test-facing so the schema and the
   kind-to-component mapping are independently exercisable.
 

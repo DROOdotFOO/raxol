@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed, 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
-H2.3). Builds on the existing REPL (`Raxol.REPL.Evaluator`, `Raxol.REPL.Sandbox`,
+Proposed, 2026-06-18. Tier 2 Hermes-parity ADR
+(`execute_code`). Builds on the existing REPL (`Raxol.REPL.Evaluator`, `Raxol.REPL.Sandbox`,
 `Raxol.REPL.VfsHelpers`), the `Raxol.Agent.Action` behaviour, and ADR-0020's authorization seams.
 
 ## Context
@@ -140,7 +140,7 @@ is the right home for *non-Elixir* `execute_code`, noted above.
 
 ## References
 
-- `~/Desktop/hermes-extraction-report.md` (item H2.3; Hermes `execute_code`)
+- Internal research notes on Hermes `execute_code`
 - ADR-0020: Agent Sandbox, ThreadLog, declarative Policies (the authorization the script's tool calls
   flow through)
 - ADR-0024: Execution backends (the home for non-Elixir `execute_code`)

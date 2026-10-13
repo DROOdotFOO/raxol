@@ -2,7 +2,7 @@ defmodule Raxol.Harness.Fixture.Session do
   @moduledoc """
   A fully-loaded fixture: header + the ordered, upcasted envelope list.
   Helpers here are read-only projections over that list — the real
-  journal-fold projection (T7) is a separate, not-yet-built module; these
+  journal-fold projection is `Raxol.Harness.Projection`; these
   helpers exist so tests (and the bless task) don't hand-roll `Enum`
   pipelines over `envelopes` everywhere.
 

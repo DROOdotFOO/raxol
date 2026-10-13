@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed, 2026-06-16. Direct follow-up to ADR-0017 (paused-run query and pause-checkpoint contract). Codifies the cross-layer pattern that emerged when ADR-0017's runtime primitive was surfaced through six channels (Terminal, LiveView, MCP, Telegram, Watch, Orchestrator subscribers) in a single session.
+Proposed, 2026-06-16. Direct follow-up to ADR-0017 (paused-run query and pause-checkpoint contract). Codifies the cross-layer pattern that emerged when ADR-0017's runtime primitive was surfaced through six channels (Terminal, LiveView, MCP, Telegram, Watch, Orchestrator subscribers).
 
 ## Context
 
-ADR-0017 made paused runs first-class in the Workflow runtime: pause checkpoints with `interrupt_reason` metadata, the `c:list_paused/2` Saver callback, and `[:raxol, :workflow, :run, :paused | :resumed]` lifecycle telemetry. ADR-0016 Phase B added a `Job.Server.list_paused/0,1` facade on raxol_earn. The Symphony orchestrator's pause/resume machinery (`park_paused/4`, `dispatch_resumption/3`, `resume_run/3`) was wired but untested before this session and is now covered by lifecycle tests. The Codex runner converts `:approval_required` errors into `{:pause, :awaiting_approval, token}`. The Symphony MCP surface gained `symphony_list_paused` and `symphony_resume_run`. The Terminal, LiveView, Telegram, and Watch surfaces all render the paused set with the same `interrupt_reason` vocabulary and the same `sym:resume:<issue_id>:<decision>` callback shape.
+ADR-0017 made paused runs first-class in the Workflow runtime: pause checkpoints with `interrupt_reason` metadata, the `c:list_paused/2` Saver callback, and `[:raxol, :workflow, :run, :paused | :resumed]` lifecycle telemetry. ADR-0016 added a `Job.Server.list_paused/0,1` facade on raxol_earn. The Symphony orchestrator's pause/resume machinery (`park_paused/4`, `dispatch_resumption/3`, `resume_run/3`) is covered by lifecycle tests. The Codex runner converts `:approval_required` errors into `{:pause, :awaiting_approval, token}`. The Symphony MCP surface gained `symphony_list_paused` and `symphony_resume_run`. The Terminal, LiveView, Telegram, and Watch surfaces all render the paused set with the same `interrupt_reason` vocabulary and the same `sym:resume:<issue_id>:<decision>` callback shape.
 
 That is six channels (eight if you count the Workflow `[:raxol, :workflow, :*]` telemetry stream and the per-run `{:command_result, ...}` message stream as separate consumers) that all converge on the same operator-flow vocabulary. The pattern is real, repeated, and works. It is not documented.
 
@@ -132,7 +132,7 @@ A channel that wants to expose pause state programmatically (an HTTP API, a quer
 - **New channels onboard without re-deriving the pattern.** A Slack or Discord author reads this ADR, builds a `Formatter`, and inherits the cross-channel callback shape for free.
 - **Cross-channel resolution.** An operator can pause on Watch, switch to their desk, see the same paused run on the LiveView dashboard, and resume from Telegram on their phone, all without losing context, because the `interrupt_reason` vocabulary and the issue_id are uniform.
 - **Cross-runner pause adoption.** A new runner (Anthropic-direct, OpenAI, a custom one) maps blocking operations to `{:pause, :awaiting_<subject>, token}` and gets channel surfacing for free. No surface-side changes needed.
-- **Analytics and audit.** Subscribing to `[:raxol, :workflow, :run, :paused | :resumed]` gives durable lifecycle data with `causation_id` chaining (per Phase 24). "How long was this paused before resolution?" becomes a metric.
+- **Analytics and audit.** Subscribing to `[:raxol, :workflow, :run, :paused | :resumed]` gives durable lifecycle data with `causation_id` chaining. "How long was this paused before resolution?" becomes a metric.
 - **MCP-driven incident response.** Operators (or other agents) can write tools that walk paused runs and apply policies (auto-approve known-safe commands, escalate unknown ones to humans). The `interrupt_reason` vocabulary is the policy surface.
 
 ### What costs we accept

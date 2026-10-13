@@ -3,8 +3,7 @@ Code.require_file("support/u4_red_support.ex", __DIR__)
 defmodule Raxol.Agent.Red.U4ReattachRedTest do
   @moduledoc """
   U4-R — the failing-first suite for U4 "Reattach/replay" (AD-15 / FI-12),
-  authored against the ratified JS-FREEZE contract
-  (`docs/proposals/in-flight/harness-freeze-contracts.md` §1) BEFORE any
+  authored against the ratified JS-FREEZE contract BEFORE any
   implementation existed.
 
   These tests assert the *correct* reattach behaviour. U4 has since landed:

@@ -2,15 +2,14 @@
 
 ## Status
 
-Accepted, 2026-07-22 (implemented in `Raxol.Agent.Memory.Stack`, `Raxol.Agent.Memory.SessionSearch`, and `Raxol.Agent.UserModel`). Originally proposed 2026-06-17. Second of the Hermes-extraction Tier 1 ADRs (`~/Desktop/hermes-extraction-report.md`,
-item H1.3). Companion to ADR-0021 (self-improving agents), which deliberately scoped memory OUT and
+Accepted, 2026-07-22 (implemented in `Raxol.Agent.Memory.Stack`, `Raxol.Agent.Memory.SessionSearch`, and `Raxol.Agent.UserModel`). Originally proposed 2026-06-17. Second of the Tier 1 Hermes-parity ADRs
+(memory providers). Companion to ADR-0021 (self-improving agents), which deliberately scoped memory OUT and
 deferred it here. Builds on the existing `Raxol.Agent.Memory` behaviour and the omnigent item-log
-(`Raxol.Agent.Conversation.{Store,Log}`). The following Tier 1 ADR is H1.4 (unified messaging gateway).
+(`Raxol.Agent.Conversation.{Store,Log}`). The following Tier 1 ADR is ADR-0023 (unified messaging gateway).
 
-Revised 2026-06-17 after a second Hermes research pass against current sources (v0.14-v0.16 official
-docs + the `NousResearch/hermes-agent` repo). Corrections folded in below: the provider set has grown
+The provider set has grown
 to nine, and Honcho injects its dialectic into the *system prompt* (cache preserved by a session-start
-frozen snapshot), not the user message, so the user-message injection here is now framed as a
+frozen snapshot), not the user message, so the user-message injection here is framed as a
 deliberate improvement over Honcho rather than parity.
 
 ## Context
@@ -232,7 +231,7 @@ user message, keeping both the per-turn refresh and a stable cached prefix.
 
 ## References
 
-- `~/Desktop/hermes-extraction-report.md` (item H1.3; Honcho/Mem0/session_search mechanisms)
+- Internal research notes on the Honcho/Mem0/session_search mechanisms
 - ADR-0021: Self-improving agents (curation writes INTO memory; this ADR defines reads + providers)
 - `packages/raxol_agent/lib/raxol/agent/memory.ex:33-64` (the behaviour + helpers; `build_user_context/1` is added here)
 - `packages/raxol_agent/lib/raxol/agent/memory/manager.ex:18-41` (system-prompt injection; the user-context injection mirrors it)

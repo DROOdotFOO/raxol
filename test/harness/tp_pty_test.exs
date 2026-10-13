@@ -1,7 +1,6 @@
 defmodule Raxol.Harness.TpPtyTest do
   @moduledoc """
-  Unit TP smoke test (`docs/proposals/in-flight/harness-ui-roadmap.md`,
-  design in `harness-ui-testing/03-lifecycle.md` §1.2-1.3): proves the pty
+  Pty harness smoke test: proves the pty
   harness itself -- spawn-under-pty, real signal delivery to the BEAM's
   child, and post-mortem `stty -a` capture -- before any T2d/T2a/T25 test
   builds on it.

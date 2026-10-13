@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-07-22 (implemented in `Raxol.Workflow.Graph` via `add_channel/3` + `add_join/4`). Originally proposed 2026-06-16. Direct follow-up to ADR-0015 (Workflow Graph), which shipped the sequential single-branch runtime and explicitly deferred joins and channels. ADR-0017 (pause checkpoints) and ADR-0018 (operator-flow contract) layered on top of the sequential runtime; this ADR adds the parallel branches without invalidating either. Pre-requisite for any future work (Phase 26, distributed Symphony, cross-chain settlement) that wants fan-out + reduce inside a single workflow graph.
+Accepted, 2026-07-22 (implemented in `Raxol.Workflow.Graph` via `add_channel/3` + `add_join/4`). Originally proposed 2026-06-16. Direct follow-up to ADR-0015 (Workflow Graph), which shipped the sequential single-branch runtime and explicitly deferred joins and channels. ADR-0017 (pause checkpoints) and ADR-0018 (operator-flow contract) layered on top of the sequential runtime; this ADR adds the parallel branches without invalidating either. Pre-requisite for any future work (sandboxed agents, distributed Symphony, cross-chain settlement) that wants fan-out + reduce inside a single workflow graph.
 
 ## Context
 
@@ -10,11 +10,11 @@ Accepted, 2026-07-22 (implemented in `Raxol.Workflow.Graph` via `add_channel/3` 
 
 > Joins (`add_join/4`) and channel reducers (`add_channel/4`) are still follow-ups: the runtime is single-branch sequential today.
 
-The deferral is intentional. ADR-0015 prioritized a working runtime with checkpoints, interrupts, retry, compensate, and Postgrex durability over a richer execution model. Phase 25 shipped four months of capability inside that constraint; the deferred concurrency primitive is now the natural next chunk because every consumer that's piled on top of the runtime has the same shape:
+The deferral is intentional. ADR-0015 prioritized a working runtime with checkpoints, interrupts, retry, compensate, and Postgrex durability over a richer execution model. ADR-0015 shipped four months of capability inside that constraint; the deferred concurrency primitive is now the natural next chunk because every consumer that's piled on top of the runtime has the same shape:
 
 - **raxol_earn** Job.Workflow is a 10-node graph that walks one phase ladder. Cross-chain settlement (Xochi mandates, multi-party escrow) wants two on-chain calls in parallel followed by a reduction.
 - **Symphony** GraphAdapter is a 5-node strictly-sequential pipeline (`tracker_poll -> candidate_selection -> runner_dispatch -> evidence_collection -> completion` at `packages/raxol_symphony/lib/raxol/symphony/workflow/graph_adapter.ex:18-30`). The orchestrator gets concurrency at the *process* level by spawning multiple workers (`DynamicSupervisor` + `max_concurrent_agents`), each running the graph independently. The graph itself can't fan out.
-- **Future Phase 26 sandboxed agents** will want to dispatch sub-tasks in parallel inside one workflow run rather than orchestrating that at the agent's `update/2` callback.
+- **Sandboxed agents (ADR-0020)** will want to dispatch sub-tasks in parallel inside one workflow run rather than orchestrating that at the agent's `update/2` callback.
 
 The single existing parallel-adjacent feature is `ConditionalEdge.chooser` (in `lib/raxol/workflow/edge.ex:51-73`): its return type is documented as `(state -> id | [id])` but the runtime only honors single-id returns. `runtime.ex:813-836` `pick_next/2` returns `{:ok, single_id} | :no_match | {:error, _}`; a list of ids is not destructured. That mismatch is the cleanest seam to extend.
 
@@ -28,7 +28,7 @@ And on channels:
 
 > Channels (`add_channel/4`) declare typed reducers between nodes. A workflow that fans out to three parallel branches each emitting a partial state can reduce them through a `Channel{:partial, into: :final, with: &Map.merge/2}` declaration.
 
-ADR-0015 listed the deferred work plainly: distributed execution, joins, channels. Phase 25 was "make the single-branch substrate solid", and Phase 25 succeeded: `MIX_ENV=test mix test test/raxol/workflow/` passes 143/0 today.
+ADR-0015 listed the deferred work plainly: distributed execution, joins, channels. ADR-0015 was "make the single-branch substrate solid", and it succeeded: `MIX_ENV=test mix test test/raxol/workflow/` passes 143/0 today.
 
 ### Why this is a runtime change, not a library
 
@@ -139,7 +139,7 @@ Compile failures match the existing error tuple shape from ADR-0015's `compile/2
 
 - **raxol_earn cross-chain settlement** can express two on-chain calls (e.g., `createMemo` on chain A and `createMemo` on chain B) as parallel branches, with a join that reconciles their tx_hashes before advancing the phase. Today this requires either two sequential calls (slower) or a Task.async_stream inside one node (loses retry + compensate + checkpoint per call).
 - **Symphony GraphAdapter** can fan out across multiple candidate issues inside one workflow run rather than relying on `DynamicSupervisor` slot management. The orchestrator-level concurrency stays; the graph-level concurrency becomes available for cases where the parallel work is logically one unit.
-- **Phase 26 sandboxed agents** can dispatch parallel sub-tasks (one shell command per branch, one file edit per branch) inside one workflow with uniform sandbox + thread-log + policy semantics. The agent doesn't have to choose between "the runtime gives me retry/compensate" and "I can do things in parallel."
+- **Sandboxed agents (ADR-0020)** can dispatch parallel sub-tasks (one shell command per branch, one file edit per branch) inside one workflow with uniform sandbox + thread-log + policy semantics. The agent doesn't have to choose between "the runtime gives me retry/compensate" and "I can do things in parallel."
 - **Channels generalize.** A workflow that wants "the latest of N branches" uses `with: fn _old, new -> new end`. "Sum of partial counts" uses `with: &Kernel.+/2`. "Topic with append-only history" uses `with: fn old, new -> old ++ [new] end`. One declaration shape covers what LangGraph splits into 4+ channel types.
 - **Branch-level observability.** `:node` telemetry events carry `branch_id`; dashboards can render per-branch lifecycle without consuming a new namespace.
 
@@ -154,7 +154,7 @@ Compile failures match the existing error tuple shape from ADR-0015's `compile/2
 
 ### What this ADR does not decide
 
-- **Distributed parallel execution.** Branches run on the same BEAM node. ADR-0015 deferred distributed execution to Phase 26+; this ADR holds that line.
+- **Distributed parallel execution.** Branches run on the same BEAM node. ADR-0015 deferred distributed execution; this ADR holds that line.
 - **Dynamic branch counts.** `add_join/4`'s `upstream_ids` is static. A future "fan out over a runtime-decided list" needs a separate primitive (`add_dynamic_fan_out/4`) that includes runtime branch tracking; out of scope here.
 - **Multi-channel reducers per join.** Each channel is independent; a join with three channels reduces three keys independently. Cross-channel reducers (e.g., "reduce key A and key B together with a combined function") aren't supported. Workaround: write the cross-key reduction in the join node's body.
 - **Cancellation cascade on branch failure.** Branches finish their current node; the run fails on the next checkpoint commit. Cascading kills land as a follow-up if a consumer needs them.
@@ -192,7 +192,7 @@ Rejected as default. The semantics are surprising (a parallel region's outcome d
 
 Branches dispatch through `:rpc.async_call/4` or libcluster to other nodes. Scales the runtime horizontally.
 
-Rejected. ADR-0015 deferred distributed execution explicitly; nothing about this ADR's design precludes adding it later. The single-node branch model already covers every consumer's current need; cross-node is a Phase 26+ question.
+Rejected. ADR-0015 deferred distributed execution explicitly; nothing about this ADR's design precludes adding it later. The single-node branch model already covers every consumer's current need; cross-node is a later question.
 
 ### Preserve sequential-only with better external concurrency primitives
 
@@ -213,7 +213,7 @@ How we know the design is right:
 
 ## References
 
-- ADR-0015: Workflow Graph (`Raxol.Workflow.*`): Phase 25 runtime, this ADR's predecessor
+- ADR-0015: Workflow Graph (`Raxol.Workflow.*`): Workflow runtime, this ADR's predecessor
 - ADR-0017: Workflow paused-run query and pause-checkpoint contract: the metadata-extension precedent
 - ADR-0018: Operator-flow contract for paused runs: the per-channel surfacing the new branch-level events will flow through
 - `lib/raxol/workflow/runtime.ex:29-30` (the deferral comment quoted in Context)
@@ -223,4 +223,4 @@ How we know the design is right:
 - `lib/raxol/workflow/checkpoint.ex:31-48` (Checkpoint struct, where `branch_id` lands in metadata)
 - `packages/raxol_symphony/lib/raxol/symphony/workflow/graph_adapter.ex:18-30` (Symphony's sequential pipeline, the largest existing consumer)
 - LangGraph's channel design (referenced for naming, not constraint)
-- `caudena/beam_weaver` (cited in ADR-0015; concurrency layer not adopted in Phase 25)
+- `caudena/beam_weaver` (cited in ADR-0015; concurrency layer not adopted by ADR-0015)

@@ -5,8 +5,7 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
   verdict to the turn's last block -- either a bounded, typed, sanitized
   list of evidence entries (when the evidence gate accepted refs) or the
   explicit `%{evidence: :none}` absence marker, NEVER a silent success
-  toast (see `docs/proposals/in-flight/` design creed: "a 'done' claim is
-  only as good as its evidence").
+  toast ("a 'done' claim is only as good as its evidence").
 
   Ground truth for the wire shape: `packages/raxol_agent/lib/raxol/agent/
   contract.ex`'s `gated_done_payload/4` -- `final: true` always, `refs:`

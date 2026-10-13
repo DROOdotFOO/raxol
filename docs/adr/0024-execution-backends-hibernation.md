@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted, 2026-07-22 (execution backends implemented in `Raxol.Agent.Backend.{Native,ClaudeCode,Cursor}` + `Raxol.Agent.NativeHarness`; serverless hibernation deferred). Originally proposed 2026-06-18. First of the Hermes-extraction Tier 2 ADRs (research deliverable at
-`~/Desktop/hermes-extraction-report.md`, item H2.1). Hermes is the benchmark agent this work targets.
+Accepted, 2026-07-22 (execution backends implemented in `Raxol.Agent.Backend.{Native,ClaudeCode,Cursor}` + `Raxol.Agent.NativeHarness`; serverless hibernation deferred). Originally proposed 2026-06-18. First of the Tier 2 Hermes-parity ADRs
+(execution backends). Hermes is the benchmark agent this work targets.
 Builds on ADR-0020 (the `Raxol.Agent.Sandbox` protocol and the `CommandHook`/`ThreadLog` seams) and
 the omnigent item-log (`Raxol.Agent.Conversation.{Store,Log}`).
 
@@ -154,7 +154,7 @@ serialization is fragile and unnecessary when the state is already externalized.
 
 ## References
 
-- `~/Desktop/hermes-extraction-report.md` (item H2.1; the Hermes backends + hibernation model)
+- Internal research notes on the Hermes backends + hibernation model
 - ADR-0020: Agent Sandbox, ThreadLog, declarative Policies (the gating `Sandbox` protocol this
   execution boundary complements)
 - `packages/raxol_agent/lib/raxol/agent/sandbox/shell.ex` (the `:shell` runner that routes through

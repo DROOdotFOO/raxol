@@ -339,8 +339,7 @@ defmodule Raxol.ApplicationTest do
     # `determine_startup_mode/1` returns `:test` under `mix test` and
     # `get_children_for_mode(:test)` never calls `maybe_add_mcp_supervisor/0`,
     # so the server is never running here and the old `nil -> :ok` branch made
-    # this test a no-op: reverting the opts to `[]` -- the bug this PR fixes --
-    # left it green.
+    # this test a no-op.
     test "the application's own supervisor opts carry an authorizer" do
       server = start_mcp_server!()
 

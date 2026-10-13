@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-06-15. Lands as Phase 25 of the jido + beam_weaver extraction plan opened on 2026-06-14. ADRs 0005 (plugin system), 0012 (MCP as rendering target), 0013 (event dispatch backpressure), and 0014 (Telegram Guardian behaviour) are the closest priors. Phase 24's effect-system landing (PRs #276, #277, #280, #281) is the direct dependency: the CloudEvents envelope, `causation_id`, and `with_dispatch_span` machinery are all load-bearing for what this ADR proposes.
+Accepted, 2026-06-15. Part of the jido + beam_weaver extraction plan. ADRs 0005 (plugin system), 0012 (MCP as rendering target), 0013 (event dispatch backpressure), and 0014 (Telegram Guardian behaviour) are the closest priors. The effect-system landing (PRs #276, #277, #280, #281) is the direct dependency: the CloudEvents envelope, `causation_id`, and `with_dispatch_span` machinery are all load-bearing for what this ADR proposes.
 
 ## Context
 
@@ -17,7 +17,7 @@ The forces shaping this ADR:
 - **OTP fit.** A workflow primitive on the BEAM has to feel like a BEAM primitive: supervised, message-friendly, hot-reloadable, with structured shutdown. A direct port of LangGraph (a Python DAG executor) would import a global-state model that fights `Raxol.Core.Behaviours.BaseManager` and the existing dispatcher idioms.
 - **LangGraph familiarity is real.** LangGraph's StateGraph (compile -> invoke -> stream_events -> resume) is the API users will arrive expecting. Naming things the same and shaping the API in parallel reduces friction for the population of users coming from Python agent stacks. caudena/beam_weaver already proved an OTP-flavoured port is small and tractable; that reference exists, and pulling it apart is cheaper than greenfield design.
 - **Resumability is the load-bearing feature.** Without durable checkpoints, multi-step workflows on long-running ACP jobs are no more recoverable than the current per-phase state machine. With them, `Compiled.resume/3` plus a Saver backend (DETS at minimum) gives ACP a substrate that survives process restarts and node restarts without case-by-case wiring.
-- **Phase 24 already paid for observability.** The CloudEvents envelope, `causation_id`, `TraceContext.with_span`, and `TelemetryAdapter` are all in place. A Workflow runtime that emits per-node start/stop/interrupt/resume events through the same telemetry path gets full causation chains for free. Without Phase 24 this would be a much bigger undertaking; with it, the cost is mostly wiring.
+- **The effect system already paid for observability.** The CloudEvents envelope, `causation_id`, `TraceContext.with_span`, and `TelemetryAdapter` are all in place. A Workflow runtime that emits per-node start/stop/interrupt/resume events through the same telemetry path gets full causation chains for free. Without the effect system this would be a much bigger undertaking; with it, the cost is mostly wiring.
 - **No mandatory adoption.** Symphony's current consumers run with the prompt-only path. ACP's current Job model works for the canonical flows. The Workflow primitive must be *opt in*, layered on top, and indifferent to whether the rest of the system uses it.
 
 The shape we pick has to fit alongside the existing TEA runtime, the existing agent framework, and Symphony's prompt-only path without leaking into any of them.
@@ -26,7 +26,7 @@ The shape we pick has to fit alongside the existing TEA runtime, the existing ag
 
 `raxol_earn` and `raxol_symphony` are the two motivating consumers. `raxol_agent` will benefit too (Pipelines + Actions become composable inside a graph). All three already depend on main raxol. A new `raxol_workflow` package would require either (a) duplicating the dispatcher's directive plumbing or (b) re-exporting `Raxol.Core.Runtime.Directive` from a third package; both options widen the dep graph for no real isolation gain. The Workflow primitive uses `Directive.Executor` directly, leverages `TraceContext.with_span`, and emits via `TelemetryAdapter`. That coupling is intrinsic, not incidental.
 
-The dep graph from CLAUDE.md is already non-trivial (`raxol -> {core, terminal, sensor, mcp, liveview, plugin}`, `agent -> raxol`, `payments -> agent runtime: false`, `acp -> payments + agent runtime: false`). Adding a sixth top-level package for a primitive that piggybacks on the runtime would be cargo-culted modularity.
+The package dependency graph is already non-trivial (`raxol -> {core, terminal, sensor, mcp, liveview, plugin}`, `agent -> raxol`, `payments -> agent runtime: false`, `acp -> payments + agent runtime: false`). Adding a sixth top-level package for a primitive that piggybacks on the runtime would be cargo-culted modularity.
 
 ### Why the workflow primitive does not live inside `raxol_symphony`
 
@@ -42,15 +42,15 @@ The answer is shape and lifetime. Pipelines are designed for *intra-agent* compo
 
 The cleaner shape is: Workflow nodes can *contain* Actions or Pipelines (a `node` wrapping `{:action, MyAction, args}` is fine), but Workflow is its own primitive with its own lifecycle.
 
-### What Phase 24 unlocked
+### What the effect system unlocked
 
-Phase 24's foundation makes a meaningful difference to what this primitive can promise:
+The effect system's foundation makes a meaningful difference to what this primitive can promise:
 
 - `Raxol.Core.Events.CloudEvent` v1.0 envelope means every node's telemetry event is a structured, externally-readable record (subject = node name, type = `raxol.workflow.<event>`, source from app env).
 - `TraceContext.causation_id` plus `with_dispatch_span` (the multi-hop fix from PR #281) means a Workflow node emitting a `Directive.send_agent` propagates causation through the chain, and the next workflow run that consumes that agent's reply will see `causation_id == that node's span_id`. Full lineage from workflow start to terminal effect.
 - `Raxol.Core.Runtime.Directive.Executor` protocol means Workflow nodes can emit effects (shell, async, send_agent, ACP directives, Payments.Pay) using the same protocol any TEA app uses. No second effect system.
 
-Without Phase 24, this ADR would have to define its own envelope, causation strategy, and effect protocol. With Phase 24, the Workflow runtime is mostly an orchestrator over machinery that already exists.
+Without the effect system, this ADR would have to define its own envelope, causation strategy, and effect protocol. With it, the Workflow runtime is mostly an orchestrator over machinery that already exists.
 
 ## Decision
 
@@ -108,7 +108,7 @@ Channels (`add_channel/4`) declare typed reducers between nodes. A workflow that
 - `stream_events(compiled, initial_state, opts)`: returns a lazy `Stream` of `Raxol.Core.Events.CloudEvent` structs as the run progresses. Each node emits start/stop events; the stream completes when the run terminates.
 - `resume(compiled, run_id, resume_value, opts)`: consume an interrupt: hydrate from the checkpoint, feed `resume_value` to the scratchpad's resume queue, continue execution. Returns the same shape as `invoke/3`.
 
-Failure policy (`:retry`, `:halt`, `:compensate`), per-step timeout (`step_timeout_ms`), and total run timeout (`run_timeout_ms`) are options on `compile/2`. The runtime emits CloudEvents at the boundaries: `raxol.workflow.run.started`, `raxol.workflow.node.started`, `raxol.workflow.node.completed`, `raxol.workflow.node.failed`, `raxol.workflow.run.interrupted`, `raxol.workflow.run.completed`. Each event carries `trace_id`, `span_id`, `parent_span_id`, and `causation_id` via the Phase 24 propagation; subscribers can reconstruct the full execution graph from telemetry alone.
+Failure policy (`:retry`, `:halt`, `:compensate`), per-step timeout (`step_timeout_ms`), and total run timeout (`run_timeout_ms`) are options on `compile/2`. The runtime emits CloudEvents at the boundaries: `raxol.workflow.run.started`, `raxol.workflow.node.started`, `raxol.workflow.node.completed`, `raxol.workflow.node.failed`, `raxol.workflow.run.interrupted`, `raxol.workflow.run.completed`. Each event carries `trace_id`, `span_id`, `parent_span_id`, and `causation_id` via the effect-system propagation; subscribers can reconstruct the full execution graph from telemetry alone.
 
 ### Checkpoint Saver protocol
 
@@ -132,7 +132,7 @@ Two adapters ship in this phase:
 - **Ets**: in-process ETS table, cleared at app stop. Default for tests and short-lived runs.
 - **Dets**: file-backed DETS, survives BEAM restarts. Default for `raxol_earn` durable jobs.
 
-A `Saver.Postgrex` adapter is a natural follow-up for shared deployments but is *not* in scope for Phase 25. The behaviour shape is meant to support it without modification.
+A `Saver.Postgrex` adapter is a natural follow-up for shared deployments but is *not* in scope for this ADR. The behaviour shape is meant to support it without modification.
 
 A `Checkpoint` is a struct with `thread_id`, `step`, `state`, `metadata`, `parent_step`, `created_at`. Saves are append-only: `put/5` adds a new checkpoint without mutating prior ones. `list/3` returns them newest-first. This makes time-travel debugging (replay the run from any prior checkpoint) a one-call operation.
 
@@ -156,13 +156,13 @@ This shape gives human-in-the-loop approval gates a clean idiom: a node that nee
 
 ### Symphony adoption (opt-in)
 
-`raxol_symphony` adopts via an optional `Raxol.Symphony.Workflow.GraphAdapter`. The adapter is a separate PR (Phase 25 follow-up) that translates a parsed `WORKFLOW.md` config into a `Raxol.Workflow.Graph` (nodes for tracker poll, candidate selection, runner dispatch, evidence collection, completion), then dispatches via `Compiled.async_invoke/3`. Opt in by setting `workflow_mode: :graph` in symphony config. The current `Orchestrator` BaseManager + prompt-only path stays the default.
+`raxol_symphony` adopts via an optional `Raxol.Symphony.Workflow.GraphAdapter`. The adapter is a separate PR (follow-up) that translates a parsed `WORKFLOW.md` config into a `Raxol.Workflow.Graph` (nodes for tracker poll, candidate selection, runner dispatch, evidence collection, completion), then dispatches via `Compiled.async_invoke/3`. Opt in by setting `workflow_mode: :graph` in symphony config. The current `Orchestrator` BaseManager + prompt-only path stays the default.
 
-This boundary is firm: nothing in the Phase 25 core touches `raxol_symphony`. The adapter is purely additive on the Symphony side, and the Workflow core has no awareness of Symphony's existence.
+This boundary is firm: nothing in the Workflow core touches `raxol_symphony`. The adapter is purely additive on the Symphony side, and the Workflow core has no awareness of Symphony's existence.
 
 ### `raxol_earn` adoption (later phase)
 
-`raxol_earn` Jobs are not migrated in Phase 25. The Workflow primitive becomes *available* to ACP; a follow-up phase (likely 27 or 28) replaces or augments the existing `Job.Server` state machine with a Workflow-backed implementation. The reason for the gap: ACP just landed canonical alignment, and a Job migration is a real piece of work that deserves its own ADR.
+`raxol_earn` Jobs are not migrated by this ADR. The Workflow primitive becomes *available* to ACP; a follow-up replaces or augments the existing `Job.Server` state machine with a Workflow-backed implementation. The reason for the gap: ACP just landed canonical alignment, and a Job migration is a real piece of work that deserves its own ADR.
 
 ## Consequences
 
@@ -176,7 +176,7 @@ This boundary is firm: nothing in the Phase 25 core touches `raxol_symphony`. Th
 
 ### What costs we accept
 
-- **Engineering scope.** Phase 25 is ~4-6 weeks of work per the planning estimate. Graph builder + Compiled + Saver + Scratchpad + interrupts + telemetry + tests is multiple PRs.
+- **Engineering scope.** This is ~4-6 weeks of work. Graph builder + Compiled + Saver + Scratchpad + interrupts + telemetry + tests is multiple PRs.
 - **Surface area added to main raxol.** ~12 new public modules under `Raxol.Workflow.*`. Justified by being the canonical primitive, not by being small.
 - **Documentation burden.** A LangGraph-shaped API is familiar but non-obvious. The first three users (us, ACP migration, Symphony adoption) will need a real guide, not just `@doc` strings.
 - **Property test ergonomics for graph compilation.** Validating "no orphan nodes, no implicit cycles, every node reaches `:__end__`" property-style requires graph generators. Not hard, but real work; planned.
@@ -188,7 +188,7 @@ This boundary is firm: nothing in the Phase 25 core touches `raxol_symphony`. Th
 - Postgrex Saver shape or schema. The behaviour leaves room; a future PR adds the adapter.
 - Whether `Raxol.Agent.Action.Pipeline` becomes a thin wrapper over `Raxol.Workflow.Graph`. Probably not, but worth revisiting once the Workflow runtime is real.
 - Whether Symphony's `WORKFLOW.md` format evolves to expose graph constructs directly. The first GraphAdapter translates the existing flat config; a richer `WORKFLOW.md` schema is a downstream decision.
-- Distributed execution. The runtime is single-node in Phase 25. `Raxol.Swarm` already exists for cross-node coordination; a future phase can wire a node off-host without changing the Workflow API.
+- Distributed execution. The runtime is single-node for now. `Raxol.Swarm` already exists for cross-node coordination; future work can wire a node off-host without changing the Workflow API.
 
 ## Alternatives considered
 

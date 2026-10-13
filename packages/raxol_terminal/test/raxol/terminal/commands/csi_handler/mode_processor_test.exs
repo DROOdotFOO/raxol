@@ -336,7 +336,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
     @calls_per_run 12
 
     # Derived from the registry, never hand-copied: a hard-coded list is the
-    # same drift this PR's registry-coverage test exists to prevent, one file
+    # same drift the registry-coverage test exists to prevent, one file
     # over -- a newly registered mode would silently never be fuzzed.
     @registered_codes ModeTypes.get_all_modes()
                       |> Map.values()

@@ -1,7 +1,6 @@
 # `adversarial.jsonl` — corruption offset table
 
-Companion to `docs/proposals/in-flight/harness-ui-testing/06-projection.md`
-§4 (the NEGATIVE suite). Line numbers are 1-based, matching the `offset`
+Corruption table for the NEGATIVE projection suite. Line numbers are 1-based, matching the `offset`
 field `Raxol.Harness.Fixture.Envelope` carries after `Fixture.load/1`
 (line 1 is the header, so envelope offsets start at 2).
 

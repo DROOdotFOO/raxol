@@ -1,10 +1,9 @@
 defmodule Raxol.Harness.StatusStrip do
   @moduledoc """
-  Roadmap unit T10 (`docs/proposals/in-flight/harness-ui-roadmap.md`,
-  "Construction -- chrome" section): the pinned status strip, as a pure
+  The pinned status strip, as a pure
   projection `state -> [footer_line]`.
 
-  Per the T2c footer contract (`Raxol.UI.Rendering.PaintAuthority`'s
+  Per the footer contract (`Raxol.UI.Rendering.PaintAuthority`'s
   `repaint_footer/2` and `keyframe_footer/2` -- both take `iodata()`, no
   width parameter of their own): callers hand the paint authority
   *already width-truncated* text. This module is that seam for the

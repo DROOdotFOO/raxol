@@ -1,6 +1,6 @@
 defmodule Raxol.Harness.T10StatusStripTest do
   @moduledoc """
-  Roadmap unit T10 (status strip). Exercises the acceptance criteria
+  Status strip suite. Exercises the acceptance criteria
   verbatim: "fixture drives all fields", "missing data renders `—`
   with explicit invalidation on absent `turn_completed`", "elapsed
   ticks during a long silent tool call". See the property-test sibling

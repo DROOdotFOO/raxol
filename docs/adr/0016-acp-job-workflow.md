@@ -4,7 +4,7 @@
 
 **Superseded (2026-07-08)** by the seller-stack v1->v2 migration (Phases 1-4, #385/#390/#388/#389/#391). `Raxol.Earn.Job.Server`, `Raxol.Earn.Job.Workflow`, `Raxol.Earn.Job.StateMachine`, `Raxol.Earn.Job.Store`, and `Raxol.Earn.ContractClient` were all deleted; the v2 runtime is `Raxol.Earn.JobSession` + `Raxol.Earn.HookClient` -> `AgenticCommerceV3` (see `packages/raxol_earn/MIGRATION_V2.md`). The decision below is retained as historical record.
 
-Proposed, 2026-06-16. Direct follow-up to ADR-0015 (Workflow Graph), which shipped the `Raxol.Workflow.*` primitive in Phase 25 and explicitly excluded the raxol_earn Job migration from its scope. This ADR makes that decision.
+Proposed, 2026-06-16. Direct follow-up to ADR-0015 (Workflow Graph), which shipped the `Raxol.Workflow.*` primitive and explicitly excluded the raxol_earn Job migration from its scope. This ADR makes that decision.
 
 ## Context
 
@@ -48,9 +48,9 @@ The `Raxol.Workflow` runtime has a primitive for exactly this shape: `Workflow.i
 
 The current Store is a DETS file handle. ACP jobs that span days (cross-chain settlement, multi-day evaluation cycles) outlive any single BEAM process or container. Today, migrating an active job between deployments means manually shipping the DETS file. There is no built-in mechanism for one BEAM node to pick up where another left off.
 
-Phase 25 shipped `Raxol.Workflow.Checkpoint.Saver.Postgrex` precisely for this case: multiple BEAM nodes pointing at the same Postgres database see each other's checkpoints. A job interrupted on node A can be resumed on node B via `Compiled.resume/4` against the shared Saver. No file shipping, no manual coordination.
+The Workflow runtime later gained `Raxol.Workflow.Checkpoint.Saver.Postgrex` (PR #296) precisely for this case: multiple BEAM nodes pointing at the same Postgres database see each other's checkpoints. A job interrupted on node A can be resumed on node B via `Compiled.resume/4` against the shared Saver. No file shipping, no manual coordination.
 
-### What Phase 25 already gave us
+### What ADR-0015 already gave us
 
 ADR-0015's runtime ships with the building blocks that close these gaps:
 
@@ -60,7 +60,7 @@ ADR-0015's runtime ships with the building blocks that close these gaps:
 - `Workflow.interrupt/1` and `Compiled.resume/4` for the waiting-phase pattern in Gap 2.
 - Per-node CloudEvents telemetry with `causation_id` propagation. A run's full execution can be reconstructed from `[:raxol, :workflow, :*]` events.
 
-Without Phase 25, this migration would be infrastructure work plus protocol work. With Phase 25, it is protocol work over an existing substrate.
+Without ADR-0015, this migration would be infrastructure work plus protocol work. With it, it is protocol work over an existing substrate.
 
 ## Decision
 
@@ -93,7 +93,7 @@ Phase B is acknowledged here but warrants its own ADR because the interrupt shap
 
 ### Out of scope
 
-- **Phase 24F.** Deleting the `Raxol.Core.Runtime.Command` struct is still gated on raxol_earn adopting Phase 24 `Directive`s for its on-chain operations (D-6). The Workflow migration in this ADR is independent: the node bodies call `ContractClient.create_memo` directly, not via a Directive. If D-6 lands first, the nodes can be re-implemented atop directives without changing the graph shape.
+- **`Command` struct deletion.** Deleting the `Raxol.Core.Runtime.Command` struct is still gated on raxol_earn adopting `Directive`s for its on-chain operations (D-6). The Workflow migration in this ADR is independent: the node bodies call `ContractClient.create_memo` directly, not via a Directive. If D-6 lands first, the nodes can be re-implemented atop directives without changing the graph shape.
 - **Cross-chain settlement workflows.** Xochi mandates live in `raxol_payments`. Whether they should become Workflow graphs is a separate question with different motivations (settlement is async, multi-party, and currently handled by a Mandate.Store GenServer).
 - **TypedNode protocol for ACP-semantic nodes.** A future refinement might introduce `Raxol.Earn.Job.Node.CreateMemo` as a `TypedNode` struct implementing `Raxol.Workflow.Node.Executor`. Phase A deliberately uses `BehaviourNode` so the node code lives in the ACP module hierarchy and is easy to read alongside the StateMachine module. The TypedNode refactor is a polish pass after Phase A proves itself.
 - **The DETS-to-Saver migration path for existing deployments.** Pre-alpha raxol_earn has no production deployments today, so we do not need a data migration tool. If that changes before Phase A ships, this ADR will need amendment.
@@ -103,7 +103,7 @@ Phase B is acknowledged here but warrants its own ADR because the interrupt shap
 ### What becomes possible
 
 - **Saver-backed cross-node resumability.** Postgrex Saver lets an ACP job interrupted on node A continue on node B. The seller's deployment is no longer one BEAM-node-wide.
-- **Per-node telemetry and trace context.** Every transition emits `[:raxol, :workflow, :node, :*]` events through Phase 24's CloudEvents envelope. Causation IDs chain across the lifecycle. Existing `[:raxol_earn, :job, :*]` events can be emitted in parallel during a deprecation window.
+- **Per-node telemetry and trace context.** Every transition emits `[:raxol, :workflow, :node, :*]` events through the CloudEvents envelope. Causation IDs chain across the lifecycle. Existing `[:raxol_earn, :job, :*]` events can be emitted in parallel during a deprecation window.
 - **Retry transparency.** RPC failures retry automatically without `Job.Server` knowing. Callers see one terminal `{:error, reason}` after `max_attempts`, not three.
 - **Resume-on-restart collapses into one code path.** Today the `Job.Server.init_manager/1` hydration path and the `Compiled.resume/4` path are two implementations of the same idea. After Phase A, only `Compiled.resume/4` exists. One code path is easier to reason about, test, and audit.
 - **Foundation for Phase B.** The waiting-phase interrupts in Phase B are a small change on top of the Phase A graph. Without Phase A, Phase B is a from-scratch redesign.
@@ -140,7 +140,7 @@ Rejected. This doubles the process count per active job (one server + one workfl
 
 The idea: raxol_earn is pre-alpha; the current model works for canonical flows. Ship more features on top of it, revisit the migration when production usage actually demands it.
 
-Rejected. The cost of the migration grows with adoption. Doing it now, before external callers depend on `Job.Server`'s internals (none currently do), is materially cheaper than doing it later. Phase 25's Workflow primitive is also genuinely better suited to ACP's lifecycle than the bespoke GenServer state machine; deferring means continuing to pay the cost of the visibility-lag and waiting-state gaps for no architectural benefit.
+Rejected. The cost of the migration grows with adoption. Doing it now, before external callers depend on `Job.Server`'s internals (none currently do), is materially cheaper than doing it later. ADR-0015's Workflow primitive is also genuinely better suited to ACP's lifecycle than the bespoke GenServer state machine; deferring means continuing to pay the cost of the visibility-lag and waiting-state gaps for no architectural benefit.
 
 ### New top-level package `raxol_acp_workflow`
 
@@ -173,5 +173,5 @@ How we know Phase A is done correctly:
 - `packages/raxol_earn/lib/raxol/acp/job/state_machine.ex` (current StateMachine)
 - `packages/raxol_earn/lib/raxol/acp/job/store.ex` (current Store)
 - `packages/raxol_earn/test/raxol/acp/job/store_test.exs` (the transient-restart test, the canonical Phase A oracle)
-- `lib/raxol/workflow/runtime.ex` (Phase 25 runtime)
+- `lib/raxol/workflow/runtime.ex` (Workflow runtime)
 - `lib/raxol/workflow/checkpoint/saver/postgrex.ex` (Postgrex saver, PR #296)

@@ -1,16 +1,11 @@
 defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   @moduledoc """
-  U8 — the blast-radius gate: write/destructive tools are **LOCKED by default**;
+  The blast-radius gate: write/destructive tools are **LOCKED by default**;
   unlocking requires an approval flow (AD-6b / AD-14).
 
-  **SKELETON ONLY.** This module is the enabler for the permanent U8-R red suite
-  (`test/raxol/agent/red/u8_blast_radius_red_test.exs`), authored *before*
-  implementation per the red-first fan-out against the harness safety substrate
-  (see `docs/harness/architecture.md`, "The safety substrate"). Every public
-  function here raises `:not_implemented` — the red contours run against this
-  skeleton and MUST fail until U8 lands, at which point they turn green in
-  place. The suite's reference gate (test support) is the executable spec
-  these callbacks must match.
+  The contract is pinned by `test/raxol/agent/red/u8_blast_radius_red_test.exs`
+  against the harness safety substrate (see `docs/harness/architecture.md`,
+  "The safety substrate").
 
   ## The contract this gate enforces
 

@@ -10,10 +10,8 @@
 # suppression this script exists to replace. A ratchet makes the trend
 # enforceable without a big-bang cleanup.
 #
-# Why the counts live here and not in AGENTS.md: a number in prose has nothing
-# validating it. AGENTS.md claimed "Credo strict: 0 issues, Dialyzer clean"
-# while both gates were non-blocking and neither result was read by the status
-# gate. This file is machine-owned and machine-updated.
+# Why the counts live here and not in prose: a number in prose has nothing
+# validating it. This file is machine-owned and machine-updated.
 #
 # ---------------------------------------------------------------------------
 # MEASUREMENT INTEGRITY

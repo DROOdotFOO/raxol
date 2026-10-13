@@ -1,7 +1,7 @@
 defmodule Raxol.UI.Harness.Keymap do
   @moduledoc """
   Harness keybind layer: canonical input event + mode context → typed
-  command, or `:passthrough`. T12 in `harness-ui-roadmap.md`.
+  command, or `:passthrough`.
 
   ## The seam this closes
 
@@ -190,33 +190,31 @@ defmodule Raxol.UI.Harness.Keymap do
   a first-class canonical key atom (`:tab`) verified across the real
   termbox and ANSI wires by T27, and Composer does not otherwise bind it.
 
-  ## Command shape: reusing U3's channel without a compile-time dependency
+  ## Command shape: reusing the agent command channel without a compile-time dependency
 
   `packages/raxol_agent` owns the live command struct
-  (`Raxol.Agent.Command`, `%Command{type: atom(), payload: map()}`,
-  U3/#543) and the harness protocol's validation seam (`decode/1`). Main
+  (`Raxol.Agent.Command`, `%Command{type: atom(), payload: map()}`)
+  and the harness protocol's validation seam (`decode/1`). Main
   `raxol` does not (and per the package dependency graph, must not) depend
   on `raxol_agent` -- this module ships in the harness-UI lane, which is
-  fixture-driven and requires no agent lane (T13a's own acceptance: "No
-  agent lane required"). Per the documented cross-package convention
-  (`CLAUDE.md`: "Struct patterns across package boundaries use map
+  fixture-driven and requires no agent lane. Per the documented cross-package convention
+  (`docs/development/README.md#package-boundaries`: "Struct patterns across package boundaries use map
   patterns... instead of struct patterns"), `command()` here is a **plain
-  map** with the *same field names* U3 shipped -- `%{type: atom(), payload:
+  map** with the *same field names* as the struct -- `%{type: atom(), payload:
   map()}` -- not the struct. This is not a parallel command type: it is the
   identical wire shape, one `struct(Raxol.Agent.Command, cmd)` away from
-  the real thing at the one boundary (T13b's live wiring) that actually
+  the real thing at the one boundary (the live wiring) that actually
   depends on `raxol_agent`.
 
-  `:interrupt` mirrors U3's existing type verbatim (empty payload, same as
-  U3's own `:interrupt` validation). `:steer` mirrors the protocol spec's
-  documented (not yet decoded by U3) `steer` type
-  (`harness-spec-protocol.md` §4: `%{text}`) -- T12 emits an empty payload
-  since it has no access to composer text (a pure keymap, per the roadmap,
+  `:interrupt` mirrors the agent's existing type verbatim (empty payload, same as
+  its own `:interrupt` validation). `:steer` mirrors the protocol's
+  documented `steer` type
+  (`%{text}`) -- the keymap emits an empty payload
+  since it has no access to composer text (a pure keymap
   takes the event + a *small* mode context, not component state); the
   assembly layer that already has the composer's buffer fills `payload.text`
-  in before dispatch. `:fold_toggle` / `:jump_next` / `:jump_prev` are new
-  vocabulary this unit adds (the task's own named example of "a needed
-  command kind [that] doesn't exist yet") -- transcript-navigation actions
+  in before dispatch. `:fold_toggle` / `:jump_next` / `:jump_prev` are
+  vocabulary this module adds -- transcript-navigation actions
   that never need to leave the UI lane, so they ride the same channel for
   the command palette's invocation parity without ever being routed to
   `raxol_agent`. `:open_palette` / `:open_jump_picker` /

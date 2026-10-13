@@ -1,7 +1,6 @@
 defmodule Raxol.Harness.T2dTeardownPositiveTest do
   @moduledoc """
-  Unit T2d (inline driver profile) -- positive exit-class matrix
-  (`docs/proposals/in-flight/harness-ui-testing/03-lifecycle.md` §3.1).
+  Inline driver profile -- positive exit-class matrix.
 
   Tier A (byte capture, `StringIO` device, no pty) exercises the full
   Lifecycle wiring end-to-end (`environment: :inline` reaches

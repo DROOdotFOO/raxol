@@ -1,15 +1,14 @@
 defmodule Raxol.Harness.Fixture.Event do
   @moduledoc """
   The decoded `body` of a fixture `Envelope` — one observable step of an
-  agent run, per `harness-spec-protocol.md` §3.
+  agent run.
 
   Field names are aligned with the shipped `Raxol.Agent.Contract.Event`
-  (PR #542, `packages/raxol_agent/lib/raxol/agent/contract.ex`): `id`,
+  (`packages/raxol_agent/lib/raxol/agent/contract.ex`): `id`,
   `turn_id`, `ts`, `family`, `type`, `tier`, `payload` match exactly.
   `scope` and `provenance` are not yet in Contract v0 — they are optional
   here and filled with defaults by `Raxol.Harness.Fixture.Upcast` so
-  fixtures recorded before those fields existed still load (the upcast
-  story, 06-projection §1.2).
+  fixtures recorded before those fields existed still load.
   """
 
   @enforce_keys [:id, :ts, :family, :type, :tier, :payload]

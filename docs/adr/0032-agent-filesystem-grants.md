@@ -43,9 +43,9 @@ A linked worktree's `.git` is a file, and the path inside it is absolute:
 ```
 $ git worktree add /tmp/wt
 $ cat /tmp/wt/.git
-gitdir: /Users/droo/CODE/raxol/.git/worktrees/wt
+gitdir: /home/dev/raxol/.git/worktrees/wt
 
-$ cat /Users/droo/CODE/raxol/.git/worktrees/wt/gitdir
+$ cat /home/dev/raxol/.git/worktrees/wt/gitdir
 /private/tmp/wt/.git
 ```
 
@@ -137,9 +137,9 @@ appear inside a path.
 
 ```
 grants
-  repo       /Users/droo/CODE/raxol                 rw     (primary)
+  repo       /home/dev/raxol                        rw     (primary)
   gitdir     .../.git/worktrees/issue-912           rw
-  gitcommon  /Users/droo/CODE/raxol/.git            rw
+  gitcommon  /home/dev/raxol/.git                   rw
   gitconfig  .../.git/config, .../config.worktree   ro
   work       /tmp/raxol-wt/issue-912                rw
   scratch    /tmp/raxol-scratch-a1b2                rw     (owned, reaped)
@@ -195,8 +195,8 @@ The git grants are derived by asking git, not by path arithmetic:
 ```
 $ git rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir
 /private/tmp/wt
-/Users/droo/CODE/raxol/.git/worktrees/wt
-/Users/droo/CODE/raxol/.git
+/home/dev/raxol/.git/worktrees/wt
+/home/dev/raxol/.git
 ```
 
 Three paths, all absolute, covering worktrees, submodules, and `--separate-git-dir` without
@@ -209,9 +209,9 @@ annotated it "makes /work usable"; it does the opposite. Git writes into both:
 
 ```
 $ git -C /tmp/wt rev-parse --git-path index
-/Users/droo/CODE/raxol/.git/worktrees/wt/index
+/home/dev/raxol/.git/worktrees/wt/index
 $ git -C /tmp/wt rev-parse --git-path objects
-/Users/droo/CODE/raxol/.git/objects
+/home/dev/raxol/.git/objects
 ```
 
 `git add` writes `index.lock` into the per-worktree directory and `git commit` writes objects,
@@ -230,7 +230,7 @@ repository:
 
 ```
 $ git rev-parse --git-path hooks
-/Users/droo/CODE/raxol/.githooks
+/home/dev/raxol/.githooks
 ```
 
 `core.hooksPath` points at a tracked directory in the working tree, so `.git/hooks` holds

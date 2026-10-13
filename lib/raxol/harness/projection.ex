@@ -3,9 +3,9 @@ defmodule Raxol.Harness.Projection do
   The journal-fold projection: durable events -> an ordered block list;
   ephemeral `item_delta` -> a live-tail state, never a durable block.
 
-  Roadmap unit T7 (journal-fold projection). Test design covers P-DET/
-  P-TIER/P-FOLD properties, N-ADV/N-DORM/N-SEAL/N-FWD negatives, and the
-  recovery policy table documented inline across this module,
+  Determinism, tier separation, and fold properties, the adversarial and
+  dormant-session negatives, and the recovery policy table are documented
+  inline across this module,
   `Raxol.Harness.Projection.Recovery`, and
   `Raxol.Harness.Projection.BlockBuilder`.
 

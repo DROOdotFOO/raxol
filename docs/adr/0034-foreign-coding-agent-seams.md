@@ -24,8 +24,8 @@ generalizing a single observation, and each was caught only by probing a second 
 about a foreign agent should assume its own claims are one experiment deep until they say
 otherwise.
 
-Written against **Oh My Pi** (`omp` 18.1.6), a derivative of `earendil-works/pi`, verified
-directly. The distinction matters throughout: upstream pi and omp share a CLI surface, env
+Written against **Oh My Pi** (`omp` 18.1.6), a derivative of `earendil-works/pi`.
+The distinction matters throughout: upstream pi and omp share a CLI surface, env
 vars (`PI_SMOL_MODEL`, `PI_CODING_AGENT_DIR`) and an extension model, but omp adds an approval
 system, MCP support, and an ACP server, which are precisely the three things the seam choice
 turns on. Claims sourced from upstream pi's documentation are marked as such.
@@ -271,16 +271,9 @@ the side effect lands. So omp does implement the client round trip, and honours 
 Before the results, the baseline they were measured against, because it is not what "default"
 suggests. `--approval-mode` overrides the `tools.approvalMode` setting, whose three values omp
 documents as: `always-ask` auto-approves read-only tools only, `write` auto-approves read and
-workspace-write tools, and `yolo` auto-approves all tiers. On the probing machine:
-
-```
-$ omp config get tools.approvalMode
-yolo
-```
-
-and `~/.omp/agent/config.yml` is nine lines carrying model role, theme, composer shape and
-`setupVersion: 2`, with **no approval key at all**. So `yolo` is what omp resolves to
-unconfigured, not an override someone chose. The two related knobs are also empty:
+workspace-write tools, and `yolo` auto-approves all tiers. On the probing machine, whose
+`config.yml` carried no approval key, `tools.approvalMode` reported `yolo`, so `yolo` is what
+omp resolved to unconfigured there, not an override someone chose. The two related knobs are also empty:
 `tools.approval` (a per-tool `allow`/`prompt`/`deny` record, documented as honoured in every
 mode) is `{}`, and `bash.patterns` is `[]`.
 

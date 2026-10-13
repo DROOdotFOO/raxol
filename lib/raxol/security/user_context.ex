@@ -4,11 +4,6 @@ defmodule Raxol.Security.UserContext do
 
   This module provides user context management for security operations,
   eliminating Process dictionary usage in favor of supervised state.
-
-  ## Migration Notes
-
-  This module replaces Process.get(:current_user) calls in encryption modules
-  with proper OTP-compliant state management.
   """
 
   alias Raxol.Security.UserContext.ContextServer, as: Server

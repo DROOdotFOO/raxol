@@ -10,7 +10,7 @@ defmodule Raxol.Docs.ProseLint do
   Three rules run by default, all errors:
 
     * `:unicode_punctuation` - em-dash, en-dash, and curly quotes. House style
-      is ASCII (see the repo `CLAUDE.md`).
+      is ASCII (see `docs/development/ASCII_STANDARDS.md`).
     * `:prose_dash` - ` -- ` used as an em-dash substitute. Fenced code, inline
       code spans, and all-dash table cells are exempt, so CLI flags
       (`mix ... -- --quick`), Lua comments, and `| -- |` placeholders pass.
@@ -39,7 +39,6 @@ defmodule Raxol.Docs.ProseLint do
 
   # Files where the character under test is the subject, not the punctuation.
   @allowlist [
-    "docs/proposals/in-flight/agent-lane-response-to-ui-intersection.md",
     "test/fixtures/harness/sessions/adversarial.notes.md",
     "test/fixtures/harness/sessions/projection-panels.notes.md"
   ]
@@ -540,8 +539,7 @@ defmodule Raxol.Docs.ProseLint do
   # A link to a gitignored file resolves on the author's disk and is broken for
   # every reader, so `File.exists?/1` alone answers differently depending on
   # where it runs: green locally, red in CI, where the checkout has no untracked
-  # files. `docs/README.md` shipped a link to `TODO.md` (gitignored) for exactly
-  # that reason -- the local run could not see it.
+  # files.
   #
   # Fails OPEN. Outside a git checkout (an unpacked Hex tarball, a vendored
   # copy) `git` answers nothing useful, and a linter that cannot tell must not

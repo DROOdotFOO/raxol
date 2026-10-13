@@ -4,11 +4,6 @@ defmodule Raxol.Animation.Gestures do
 
   This module provides the same gesture detection and animation functionality
   as the original but uses supervised state management instead of Process dictionary.
-
-  ## Migration Notes
-
-  Gesture state tracking has been moved to Animation.Gestures.Server,
-  eliminating Process dictionary usage while maintaining full functionality.
   """
 
   alias Raxol.Animation.Gestures.GestureServer, as: Server

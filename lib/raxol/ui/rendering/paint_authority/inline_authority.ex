@@ -96,13 +96,12 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   measured NOT to; ghostty is unmeasurable and conservatively `false`).
   `resize/3` consults it (alongside `ScrollRegionManager.geometry_changed?/2`'s
   thin "did the split point actually move" fact) purely to emit a
-  `:telemetry` event when both hold — **no bytes are re-emitted**. A
-  FUTURE unit reads that telemetry (or calls `reflow_capable?/1` directly)
-  to gate bounded soft-owned-history re-emission. Wiring the hook here,
-  without acting on it, is the whole point: reflow-aware re-emission is a
-  runtime-detected additive upgrade, deferred for a future unit to
-  implement. Contract-only-grows: this module never has to be rewritten
-  to add reflow-aware re-emission later, only extended.
+  `:telemetry` event when both hold — **no bytes are re-emitted**.
+  Reflow-aware re-emission (gated on that telemetry or on
+  `reflow_capable?/1` directly) is not yet implemented. Wiring the hook
+  here, without acting on it, keeps it a runtime-detected additive upgrade:
+  this module never has to be rewritten to add reflow-aware re-emission,
+  only extended.
 
   ## The pinned footer viewport (buffer-diff, footer-scoped)
 
@@ -1698,14 +1697,13 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     reflow_relevant? = geometry_changed? or width_changed?
 
     if reflow_relevant? and t.reflow_capable? do
-      # The reflow-aware detection seam firing: this session's terminal
+      # The reflow-aware detection seam firing: this terminal
       # is known, from the real-hardware terminal-matrix probe, to reflow
       # sealed history cleanly on a geometry-changing resize. NOTHING is
-      # re-emitted here — re-emission is a FUTURE unit's job (ship
-      # seal-time-only now; reflow-aware re-emission is a runtime-detected
-      # ADDITIVE upgrade). This telemetry event is the thin hook that unit
-      # gates on — it carries BOTH axes so the future unit can tell a
-      # rewrapping width change from a pure row change.
+      # re-emitted here — reflow-aware re-emission is not yet implemented.
+      # This telemetry event is the hook it will gate on; it carries BOTH
+      # axes so a consumer can tell a rewrapping width change from a pure
+      # row change.
       :telemetry.execute(
         [:raxol, :ui, :paint_authority, :reflow_capable_resize],
         %{},

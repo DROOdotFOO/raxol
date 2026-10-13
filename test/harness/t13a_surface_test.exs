@@ -122,7 +122,7 @@ defmodule Raxol.Harness.T13aSurfaceTest do
   # token, concatenated -- the mechanical way to compare CONTENT while
   # ignoring styling/positioning (mirrors the degradation ladder's own
   # `flat_is_pure_text?/1` convention, reusing the project's real ANSI
-  # tokenizer per CLAUDE.md rather than a bespoke regex).
+  # tokenizer rather than a bespoke regex).
   defp strip_ansi(raw) when is_binary(raw) do
     raw
     |> SequenceScanner.scan()

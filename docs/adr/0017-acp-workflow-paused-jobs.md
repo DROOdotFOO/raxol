@@ -29,7 +29,7 @@ raxol_earn could maintain its own ETS index of paused jobs, mirroring every tran
 
 The problem with the local-index approach is that it splits the source of truth. A paused job is a Workflow concept: the runtime is the only thing that can definitively say "this node interrupted, this is the reason, the state is durably persisted." An ACP-local mirror is downstream of that fact and has to handle reconciliation when the workflow runtime sees something the mirror missed (a crash mid-write, a resume on a different node, a checkpoint replay). Every consumer that wants paused-job enumeration would need its own mirror; raxol_payments will want one, raxol_symphony already builds something analogous around runs. The substrate is the right level.
 
-Phase 24's CloudEvents envelope and the Phase 25 Saver behaviour already give the runtime the tools. The cost is one additional checkpoint write per interrupt, one new optional Saver callback, and two new lifecycle telemetry events.
+The CloudEvents envelope and the Saver behaviour already give the runtime the tools. The cost is one additional checkpoint write per interrupt, one new optional Saver callback, and two new lifecycle telemetry events.
 
 ## Decision
 
@@ -143,7 +143,7 @@ A module-level `Raxol.Earn.Job.Workflow.pause_reasons/0` returns the canonical f
 - **Semantic change to "latest checkpoint."** Three workflow tests pinned the pre-ADR invariant ("latest checkpoint is the predecessor of the interrupting node"). They are updated as part of the same PR; the contract is explicit and documented here. Future readers won't be misled.
 - **Postgrex schema migration.** Two new nullable columns and a partial index. Pre-alpha deployments take the `ALTER TABLE` snippet documented in `Raxol.Workflow.Checkpoint.Saver.Postgrex`'s moduledoc; new deployments get the full schema from `create_table_sql/1`. No data backfill.
 - **DETS `list_paused` is a full file scan.** Acceptable for the pre-alpha deployment count. Documented as a known limit; consumers expecting high paused-job counts should pick Postgrex.
-- **`list_paused` only surfaces workflow-backed jobs.** Legacy-path ACP jobs (`do_transition_legacy`, surviving until Phase 24F lands) don't have interrupts, so they correctly don't appear. The default flip to `via_workflow: true` shipping in the same PR series narrows the legacy population.
+- **`list_paused` only surfaces workflow-backed jobs.** Legacy-path ACP jobs (`do_transition_legacy`, surviving until the `Command` struct deletion lands) don't have interrupts, so they correctly don't appear. The default flip to `via_workflow: true` shipping in the same PR series narrows the legacy population.
 
 ### What this ADR supersedes
 
@@ -177,11 +177,11 @@ Add `Saver.put_thread_status/3` and `Saver.list_threads_by_status/2` as a separa
 
 Rejected. It doubles the Saver's surface area for what is structurally the same data the checkpoint already carries (a row identified by thread, state attached). The cleanest read of the runtime is "checkpoints are the durable history; paused-ness is a property of the latest checkpoint." A side table would invite divergence over time as one path of the runtime writes to the chain and another to the side table.
 
-### Defer until Phase 24F lands
+### Defer until the `Command` struct is deleted
 
-Wait until the `Raxol.Core.Runtime.Command` struct is deleted and raxol_earn adopts Phase 24 Directives end-to-end, then revisit pause semantics.
+Wait until the `Raxol.Core.Runtime.Command` struct is deleted and raxol_earn adopts Directives end-to-end, then revisit pause semantics.
 
-Rejected. Phase 24F is gated on raxol_earn's Directive migration (D-6), which is its own multi-session effort. The paused-jobs dashboard is a near-term seller need; tying it to the Command-deletion timeline indefinitely defers a small, well-scoped improvement. The two are independent.
+Rejected. The `Command` struct deletion is gated on raxol_earn's Directive migration (D-6), which is its own multi-session effort. The paused-jobs dashboard is a near-term seller need; tying it to the Command-deletion timeline indefinitely defers a small, well-scoped improvement. The two are independent.
 
 ## Validation
 
@@ -196,7 +196,7 @@ How we know Phase B is done correctly:
 
 ## References
 
-- ADR-0015: Workflow Graph (Phase 25 runtime)
+- ADR-0015: Workflow Graph (Workflow runtime)
 - ADR-0016: raxol_earn Job migration to Raxol.Workflow (Phase A delivered in PR #298)
 - PR #296: Postgrex saver landing
 - `lib/raxol/workflow/runtime.ex:502-516, 629-696` (interrupt catch and pause-checkpoint write)

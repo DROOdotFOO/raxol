@@ -3,12 +3,10 @@ defmodule Raxol.UI.Components.Harness.ToolResultBlock do
   Renders one tool result from the harness protocol stream.
 
   Render-dual of `item_completed{item_type: :tool_result, content}`, folded
-  with the owning event envelope's `provenance.trust`
-  (`docs/proposals/in-flight/harness-spec-protocol.md` sec 3). Long output
+  with the owning event envelope's `provenance.trust`. Long output
   collapses behind a one-line summary; Enter/Space toggles it. Composes
   `Raxol.UI.Components.Harness.TaintBadge` for the `provenance.trust:
-  :tainted` case -- the lethal-trifecta visibility marker described in
-  `harness-spec-frontend.md` sec 6.
+  :tainted` case -- the lethal-trifecta visibility marker.
 
   The output body reuses `Raxol.UI.Components.CodeBlock`'s bordered/padded
   box convention (`box style: %{border: :single, padding: 1}`), but not its

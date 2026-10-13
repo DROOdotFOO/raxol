@@ -3,9 +3,7 @@ defmodule Raxol.Harness.Fixture.DecodeError do
   Typed decode error for a malformed harness fixture line.
 
   Fixture decoding is loud-reject: a structurally invalid line is a typed
-  error, never a silently-skipped line or a partially-applied record (per
-  `docs/proposals/in-flight/harness-ui-testing/06-projection.md` §1.2 and
-  the validation-seam discipline in `harness-spec-protocol.md` §6).
+  error, never a silently-skipped line or a partially-applied record.
   """
 
   defexception [:reason, :offset, :details]

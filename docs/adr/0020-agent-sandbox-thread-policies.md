@@ -1,12 +1,12 @@
-# ADR-0020: Phase 26: Agent Sandbox, Thread log, declarative Policies
+# ADR-0020: Agent Sandbox, Thread log, declarative Policies
 
 ## Status
 
-Accepted, 2026-07-22 (implemented in `Raxol.Agent.Sandbox`, `Raxol.Agent.ThreadLog`, and `Raxol.Agent.Policy`). Originally proposed 2026-06-16. Symmetric to ADR-0019 (Workflow concurrency) for the agent stack: ADR-0019 scopes the runtime-side parallel-branch primitive, this ADR scopes the agent-side isolation + audit + policy primitive. Together they frame the next 3-6 months of substrate work. Builds on ADR-0012 (MCP as rendering target), ADR-0017 (paused-run query), ADR-0018 (operator-flow contract), and Phase 24F (Command struct deletion, leaving Directive as the canonical effect shape).
+Accepted, 2026-07-22 (implemented in `Raxol.Agent.Sandbox`, `Raxol.Agent.ThreadLog`, and `Raxol.Agent.Policy`). Originally proposed 2026-06-16. Symmetric to ADR-0019 (Workflow concurrency) for the agent stack: ADR-0019 scopes the runtime-side parallel-branch primitive, this ADR scopes the agent-side isolation + audit + policy primitive. Together they frame the next 3-6 months of substrate work. Builds on ADR-0012 (MCP as rendering target), ADR-0017 (paused-run query), ADR-0018 (operator-flow contract), and the `Command` struct deletion (leaving `Directive` as the canonical effect shape).
 
 ## Context
 
-The agent stack today is feature-complete for the prompt-then-react loop. `use Raxol.Agent` gives an author the TEA callbacks (`init/1`, `update/2`, `view/1`, plus agent-specific `handle_message/2`, `handle_tick/1`, `compaction_config/0`, `command_hooks/0`, `memory_provider/0`, `available_actions/0`). Directives (`Raxol.Agent.Directive.Async`, `Shell`, `SendAgent`) emit effects; the framework dispatches them via the `Raxol.Core.Runtime.Directive.Executor` protocol after Phase 24F. The `CommandHook` behaviour (`packages/raxol_agent/lib/raxol/agent/command_hook.ex:57-75`) gives authors `c:pre_execute/2` + `c:post_execute/3` interception. `PermissionHook` (`packages/raxol_agent/lib/raxol/agent/permission_hook.ex:8-14, 66-82`) ships a five-level mode hierarchy (`:read_only`, `:send_only`, `:workspace_write`, `:full_access`, `:allow`) implemented as a CommandHook.
+The agent stack today is feature-complete for the prompt-then-react loop. `use Raxol.Agent` gives an author the TEA callbacks (`init/1`, `update/2`, `view/1`, plus agent-specific `handle_message/2`, `handle_tick/1`, `compaction_config/0`, `command_hooks/0`, `memory_provider/0`, `available_actions/0`). Directives (`Raxol.Agent.Directive.Async`, `Shell`, `SendAgent`) emit effects; the framework dispatches them via the `Raxol.Core.Runtime.Directive.Executor` protocol after the `Command` struct deletion. The `CommandHook` behaviour (`packages/raxol_agent/lib/raxol/agent/command_hook.ex:57-75`) gives authors `c:pre_execute/2` + `c:post_execute/3` interception. `PermissionHook` (`packages/raxol_agent/lib/raxol/agent/permission_hook.ex:8-14, 66-82`) ships a five-level mode hierarchy (`:read_only`, `:send_only`, `:workspace_write`, `:full_access`, `:allow`) implemented as a CommandHook.
 
 Three structural gaps emerge as the agent stack picks up real consumers:
 
@@ -33,17 +33,17 @@ Grep for `:retry`, `:timeout`, `:rate_limit`, `:cache`, `backoff` in `packages/r
 
 Every Action that needs retry, every tool that needs caching, every external API call that needs rate-limiting implements its own. The patterns are well-understood (exponential backoff with jitter, ETS-backed TTL caches, token-bucket rate limiters) but writing them inline pollutes business logic. The cost of *not* having a shared declarative layer is that consumers either skip these primitives (and bugs land in production) or write them ad-hoc (and the patterns diverge across the codebase).
 
-### What ADR-0019 said about Phase 26
+### What ADR-0019 said about sandboxed agents
 
-ADR-0019 cited Phase 26 sandboxed agents explicitly as the consumer that wants parallel sub-tasks inside one workflow:
+ADR-0019 cited sandboxed agents explicitly as the consumer that wants parallel sub-tasks inside one workflow:
 
-> Phase 26 sandboxed agents can dispatch parallel sub-tasks (one shell command per branch, one file edit per branch) inside one workflow with uniform sandbox + thread-log + policy semantics.
+> Sandboxed agents can dispatch parallel sub-tasks (one shell command per branch, one file edit per branch) inside one workflow with uniform sandbox + thread-log + policy semantics.
 
 That framing names the three primitives this ADR scopes. ADR-0019 deferred the agent-side work; this ADR picks it up.
 
 ## Decision
 
-**Add three coordinated primitives to `raxol_agent`: a multi-dimensional `Sandbox` behaviour, a durable `ThreadLog` behaviour, and declarative `Policy.{Retry, Timeout, RateLimit, Cache}` structs. Introduce a `Cache` behaviour as a Phase 26 prerequisite. All three primitives compose at action invocation through a single applier pipeline.**
+**Add three coordinated primitives to `raxol_agent`: a multi-dimensional `Sandbox` behaviour, a durable `ThreadLog` behaviour, and declarative `Policy.{Retry, Timeout, RateLimit, Cache}` structs. Introduce a `Cache` behaviour as a prerequisite. All three primitives compose at action invocation through a single applier pipeline.**
 
 ### 1. `Raxol.Agent.Sandbox` behaviour
 
@@ -175,7 +175,7 @@ The policies apply outermost-first at invocation: cache check -> rate-limit chec
 
 ### 4. `Raxol.Agent.Cache` behaviour (new prerequisite)
 
-Required by `Policy.Cache`. No cache primitive exists in the codebase today; introducing one is a Phase 26 prerequisite, not a separate ADR.
+Required by `Policy.Cache`. No cache primitive exists in the codebase today; introducing one is a prerequisite of this ADR, not a separate ADR.
 
 ```elixir
 @callback get(config(), key()) :: {:ok, value()} | :miss
@@ -186,7 +186,7 @@ Required by `Policy.Cache`. No cache primitive exists in the codebase today; int
 
 Two adapters ship: `Cache.Ets` (default, in-process, per-agent table), `Cache.Postgrex` (cross-process, shared via a database row with `expires_at` column).
 
-The Cache is a Phase 26 module but its scope is generic enough that future raxol_core / raxol_payments consumers can use it. Kept under `Raxol.Agent.Cache` namespace initially; promote to `Raxol.Cache` if a non-agent consumer needs it.
+The Cache is introduced by this ADR but its scope is generic enough that future raxol_core / raxol_payments consumers can use it. Kept under `Raxol.Agent.Cache` namespace initially; promote to `Raxol.Cache` if a non-agent consumer needs it.
 
 ### 5. Compose at the applier pipeline
 
@@ -223,7 +223,7 @@ Three new event families:
 - `[:raxol, :agent, :thread_log, :appended]`: fires after every ThreadLog write. Metadata: `agent_id`, `kind`, `sequence`. High-volume; consumers should sample.
 - `[:raxol, :agent, :policy, :*]`: `:retry_attempt`, `:retry_exhausted`, `:rate_limited`, `:cache_hit`, `:cache_miss`, `:timeout`. Metadata: `agent_id`, `action_name`, `policy_kind`, plus policy-specific fields.
 
-All three event families flow through Phase 24's CloudEvents envelope with `causation_id` chaining. The existing `[:raxol, :agent, :*]` event family is unchanged.
+All three event families flow through the CloudEvents envelope with `causation_id` chaining. The existing `[:raxol, :agent, :*]` event family is unchanged.
 
 ## Consequences
 
@@ -233,7 +233,7 @@ All three event families flow through Phase 24's CloudEvents envelope with `caus
 - **Durable audit trail per agent.** "What did MyAgent do in the last 24 hours" is now answerable from the ThreadLog without telemetry capture. Cross-session, cross-restart, cross-deployment if Postgrex is configured. Pairs with the operator-flow contract from ADR-0018: a paused run's "what was the agent doing" is now a query.
 - **Declarative policies replace ad-hoc patterns.** Retry, timeout, rate-limit, cache become per-Action declarations. The framework guarantees they're applied uniformly. Bugs that come from per-call-site implementations (forgotten backoff, missing timeout on shell-out, cache-key collisions) disappear by construction.
 - **MCP-driven agent introspection.** The `agent://<agent_id>/thread` resource (materialized from `ThreadLog`) lets operators using Claude as an MCP client query agent activity directly. ADR-0012's "MCP as rendering target" extends to agents.
-- **Foundation for Workflow concurrency in agents.** ADR-0019's parallel branches let a single workflow fan out N sub-tasks. Phase 26 sandboxes give each branch its own isolation surface; Phase 26 ThreadLog gives each branch its own audit slice; Phase 26 policies give each branch its own retry/timeout/rate-limit posture. The three ADRs (0017, 0018, 0019, 0020) compose into a workable substrate.
+- **Foundation for Workflow concurrency in agents.** ADR-0019's parallel branches let a single workflow fan out N sub-tasks. Sandboxes give each branch its own isolation surface; ThreadLog gives each branch its own audit slice; policies give each branch its own retry/timeout/rate-limit posture. The three ADRs (0017, 0018, 0019, 0020) compose into a workable substrate.
 
 ### What costs we accept
 
@@ -287,11 +287,11 @@ Cache is generic enough that ETS-or-Postgrex layers exist in plenty of consumers
 
 Rejected. The `Policy.Cache` struct is much more useful with a paired primitive that just works. Authors writing a single agent shouldn't have to bring their own cache library to get TTL semantics. The two adapters (`Cache.Ets`, `Cache.Postgrex`) are ~150 LOC each; the cost is low.
 
-### Defer Phase 26 until a third consumer demands it
+### Defer until a third consumer demands it
 
 Wait for raxol_payments or a future agent to need sandboxing before scoping it.
 
-Rejected. The design memory for the operator-flow / sandbox / audit space is freshest now (ADR-0017, 0018, 0019 all landed in this session). Codifying when context is loaded is cheaper than re-deriving the design later. Implementation can wait; the scope shouldn't.
+Rejected. The design memory for the operator-flow / sandbox / audit space is freshest now (ADR-0017, 0018, 0019 all landed recently). Codifying when context is loaded is cheaper than re-deriving the design later. Implementation can wait; the scope shouldn't.
 
 ## Validation
 
@@ -299,7 +299,7 @@ How we know the design is right:
 
 - **Existing tests pass unchanged.** Every test in `packages/raxol_agent/test/` (461 today) runs against the new code without modification. Sandbox/ThreadLog/Policies are opt-in.
 - **A reference agent under `packages/raxol_agent/examples/agents/` exercises all three primitives.** Sandbox with three dimensions, ThreadLog with the Ets adapter, an Action with all four Policy types declared. Tests assert: a Sandbox deny produces a `:command_denied` message and a `:sandbox_deny` ThreadLog event; a Cache hit short-circuits the action body and writes a `:cache_hit` event; a Retry attempt produces N `:retry_attempt` events plus one final `:tool_result`.
-- **Symphony's RaxolAgent runner stays green.** `packages/raxol_symphony/lib/raxol/symphony/runners/raxol_agent.ex` consumes agents through the existing surface; Phase 26 changes don't break the runner or its 444+ Symphony tests.
+- **Symphony's RaxolAgent runner stays green.** `packages/raxol_symphony/lib/raxol/symphony/runners/raxol_agent.ex` consumes agents through the existing surface; these changes don't break the runner or its 444+ Symphony tests.
 - **ThreadLog round-trip:** an agent writes 100 tool calls, restarts, reads them back from `ThreadLog.Ets` (in-process persistence via the Ets table) and `ThreadLog.Dets` (cross-restart). Property test: `list/3` returns exactly what `append/2` wrote, in order, no gaps in `sequence`.
 - **Postgrex adapter is opt-in and tested via `:integration` tags (same pattern as `Saver.Postgrex`)**: gated on `RAXOL_AGENT_PG_URL` or `POSTGRES_*` env vars.
 - **Policy applier order is property-tested.** Property: applying Policy.Cache + Policy.Retry + Policy.Timeout produces identical outputs across reorderings of the policy list (modulo where caching takes effect). Specific composition order (Cache -> RateLimit -> Timeout -> Retry -> run) is documented and pinned.
@@ -317,4 +317,4 @@ How we know the design is right:
 - `packages/raxol_agent/lib/raxol/agent/context_compactor.ex` (the existing ephemeral compaction; ThreadLog records what compaction discards)
 - `packages/raxol_agent/lib/raxol/agent/context_store.ex` (ephemeral ETS-backed session state)
 - `packages/raxol_symphony/lib/raxol/symphony/runners/raxol_agent.ex:1-114` (Symphony's agent runner; the largest consumer)
-- `CLAUDE.md:235` (the REPL sandbox three-level model; influence but not constraint)
+- `docs/features/REPL.md` (the REPL sandbox three-level model; influence but not constraint)
