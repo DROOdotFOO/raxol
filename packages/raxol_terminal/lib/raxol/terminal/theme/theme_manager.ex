@@ -23,9 +23,6 @@ defmodule Raxol.Terminal.Theme.Manager do
       {:ok, style, manager} = Raxol.Terminal.Theme.Manager.get_style(manager, :normal)
   """
 
-  # ThemeRegistry lives in main raxol; guarded at runtime
-  @compile {:no_warn_undefined, Raxol.Core.Theming.ThemeRegistry}
-
   @type color :: %{
           r: integer(),
           g: integer(),
@@ -219,7 +216,6 @@ defmodule Raxol.Terminal.Theme.Manager do
       {:ok, manager} = Manager.load_from_registry(manager, :dracula)
       {:ok, manager} = Manager.load_from_registry(manager, :synthwave84)
   """
-  @dialyzer {:nowarn_function, load_from_registry: 2}
   @spec load_from_registry(t(), atom()) ::
           {:ok, t()} | {:error, :theme_not_found}
   def load_from_registry(manager, theme_name) when is_atom(theme_name) do

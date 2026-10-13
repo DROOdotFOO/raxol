@@ -1,6 +1,4 @@
-# EnvironmentAdapterImpl lives in main raxol; guarded at runtime
 defmodule Raxol.Terminal.Config.Capabilities do
-  @compile {:no_warn_undefined, Raxol.System.EnvironmentAdapterImpl}
   @moduledoc """
   Terminal capability detection and management.
 
