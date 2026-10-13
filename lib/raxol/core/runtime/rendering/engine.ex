@@ -44,7 +44,8 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
               # Writer function for SSH rendering
               io_writer: nil,
               # Component processes this engine owns, one per process_component
-              # node: {module, id or position} => %{pid: pid, props: props}
+              # node: {module, id or position} => component entry, see
+              # `new_component_entry/2`
               process_components: %{},
               # Whether terminal supports Mode 2026 synchronized output
               sync_output: false,
@@ -178,13 +179,62 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     {:reply, {:ok, state.buffer}, state}
   end
 
+  # The component announces itself once its init and mount have run (it
+  # starts asynchronously, see `Raxol.Core.Runtime.ProcessComponent`). The
+  # frame that started it drew a placeholder, so a fresh one is requested
+  # rather than leaving the placeholder up until the app's next event. A pid
+  # no entry knows was stopped before it got this far.
+  @impl true
+  def handle_info({:process_component_ready, pid}, state) do
+    case find_component(state, &(&1.pid == pid)) do
+      nil ->
+        {:noreply, state}
+
+      {key, entry} ->
+        entry = %{entry | ready?: true, failures: 0, skip: 0}
+        GenServer.cast(self(), :render_frame)
+        {:noreply, put_component(state, key, entry)}
+    end
+  end
+
+  # A component's exit, whatever the cause, reaches here through the monitor
+  # taken at start. The entry stays, pid-less, so its node keeps its place in
+  # the view and is restarted after a run of frames that doubles with each
+  # failure in a row (`record_failure/1`), rather than every frame.
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    case find_component(state, &(&1.monitor == ref)) do
+      nil ->
+        {:noreply, state}
+
+      {key, entry} ->
+        unless reason in [:normal, :shutdown] do
+          Raxol.Core.Runtime.Log.warning_with_context(
+            "Rendering Engine: process component exited",
+            %{component: key_label(key), reason: reason}
+          )
+        end
+
+        {:noreply, put_component(state, key, record_failure(entry))}
+    end
+  end
+
+  @impl true
+  def handle_info(message, state) do
+    Raxol.Core.Runtime.Log.debug(
+      "Rendering Engine ignoring message: #{inspect(message)}"
+    )
+
+    {:noreply, state}
+  end
+
   # The component processes live under Raxol.DynamicSupervisor, not this
   # process, so they go with the engine here. (Each also monitors the engine
   # and stops if it dies without running this.)
   @impl true
   def terminate(_reason, state) do
-    Enum.each(state.process_components, fn {_key, %{pid: pid}} ->
-      stop_component(pid)
+    Enum.each(state.process_components, fn {_key, entry} ->
+      stop_component(entry)
     end)
   end
 
@@ -660,12 +710,19 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   # The engine owns one component process per node, keyed by the node's module
   # and its `:id` or, without one, its position in the view, so the process
   # and the component's state last across frames. The processes of nodes that
-  # left the view are stopped.
+  # left the view are stopped, and their entries dropped with them, pid or no
+  # pid: a node that leaves while its component is in backoff is forgotten.
+  #
+  # Each entry is `%{pid, props, ready?, monitor, failures, skip, problem}`:
+  # the pid and monitor of the live process (nil between an exit and the
+  # restart), the props it last got, whether it has announced itself ready,
+  # the failures in a row, the frames left before the next start, and what
+  # the last failure was, for the placeholder.
   defp resolve_process_components(view, state) do
     {resolved, {stale, live}} =
       resolve_node(view, [], {state.process_components, %{}})
 
-    Enum.each(stale, fn {_key, %{pid: pid}} -> stop_component(pid) end)
+    Enum.each(stale, fn {_key, entry} -> stop_component(entry) end)
     {resolved, %{state | process_components: live}}
   end
 
@@ -677,7 +734,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     id = Map.get(node, :id)
     key = {mod, id || {:position, path}}
     {entry, acc} = take_component(acc, key)
-    label = component_label(id, mod)
+    label = key_label(key)
     {tree, entry} = render_component(entry, mod, props, label)
     {tree, keep_component(acc, key, entry)}
   end
@@ -708,15 +765,35 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     end
   end
 
-  defp keep_component(acc, _key, nil), do: acc
-
   defp keep_component({stale, live}, key, entry),
     do: {stale, Map.put(live, key, entry)}
 
-  defp render_component(entry, mod, props, label) do
-    case ensure_component(entry, mod, props, label) do
-      {:ok, entry} ->
-        render_live_component(entry, props, label)
+  defp new_component_entry(props) do
+    %{
+      pid: nil,
+      props: props,
+      ready?: false,
+      monitor: nil,
+      failures: 0,
+      skip: 0,
+      problem: nil
+    }
+  end
+
+  # A node seen for the first time, or one whose component exited and has
+  # sat out its frames, gets a process started. One still sitting out is
+  # drawn as its last failure and counted down. One that has started but not
+  # yet announced itself (its init runs after start_child returns) is drawn
+  # as starting, without a call that would only wait on that init. A ready
+  # one is rendered.
+  defp render_component(nil, mod, props, label),
+    do: render_component(new_component_entry(props), mod, props, label)
+
+  defp render_component(%{pid: nil, skip: 0} = entry, mod, props, label) do
+    case start_component(mod, props, label) do
+      {:ok, pid, ref} ->
+        entry = %{entry | pid: pid, monitor: ref, props: props}
+        {component_fallback(label, "starting"), entry}
 
       {:error, reason} ->
         Raxol.Core.Runtime.Log.warning_with_context(
@@ -724,17 +801,19 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
           %{component: label, reason: reason}
         )
 
-        {component_fallback(label, "failed to start"), nil}
+        entry = record_failure(entry)
+        {component_fallback(label, entry.problem), entry}
     end
   end
 
-  defp ensure_component(entry, mod, props, label) do
-    if entry && Process.alive?(entry.pid) do
-      {:ok, entry}
-    else
-      start_component(mod, props, label)
-    end
-  end
+  defp render_component(%{pid: nil, skip: skip} = entry, _mod, _props, label),
+    do: {component_fallback(label, entry.problem), %{entry | skip: skip - 1}}
+
+  defp render_component(%{ready?: false} = entry, _mod, _props, label),
+    do: {component_fallback(label, "starting"), entry}
+
+  defp render_component(entry, _mod, props, label),
+    do: render_live_component(entry, props, label)
 
   defp start_component(mod, props, label) do
     spec =
@@ -742,7 +821,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
        module: mod, props: props, id: label, parent_pid: self()}
 
     case DynamicSupervisor.start_child(Raxol.DynamicSupervisor, spec) do
-      {:ok, pid} -> {:ok, %{pid: pid, props: props}}
+      {:ok, pid} -> {:ok, pid, Process.monitor(pid)}
       {:error, reason} -> {:error, reason}
       :ignore -> {:error, :ignore}
     end
@@ -751,21 +830,23 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   end
 
   # A component that crashes, or outlasts the call timeout, is stopped and
-  # drawn as a placeholder for this frame; the next frame starts it afresh.
+  # drawn as a placeholder, and restarted after its backoff like one that
+  # exited on its own.
   defp render_live_component(%{pid: pid} = entry, props, label) do
     case call_component(pid, props, entry.props) do
       {:ok, tree} ->
         {tree, %{entry | props: props}}
 
       {:error, reason} ->
-        stop_component(pid)
+        stop_component(entry)
 
         Raxol.Core.Runtime.Log.warning_with_context(
           "Rendering Engine: process component crashed",
           %{component: label, reason: reason}
         )
 
-        {component_fallback(label, "crashed"), nil}
+        entry = record_failure(entry)
+        {component_fallback(label, entry.problem), entry}
     end
   end
 
@@ -778,18 +859,47 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     :exit, reason -> {:error, reason}
   end
 
+  # The frames sat out double with each failure in a row, from one, capped
+  # at 64, so a component that keeps dying costs a start every few seconds
+  # of frames rather than one per frame. A component that never announced
+  # itself failed to start; one that had, crashed.
+  defp record_failure(%{failures: failures} = entry) do
+    %{
+      entry
+      | pid: nil,
+        monitor: nil,
+        ready?: false,
+        failures: failures + 1,
+        skip: min(Integer.pow(2, failures), 64),
+        problem: if(entry.ready?, do: "crashed", else: "failed to start")
+    }
+  end
+
+  defp find_component(state, fun) do
+    Enum.find(state.process_components, fn {_key, entry} -> fun.(entry) end)
+  end
+
+  defp put_component(state, key, entry) do
+    %{state | process_components: Map.put(state.process_components, key, entry)}
+  end
+
   # terminate_child/2 is a no-op for a component that already exited; an
   # exit here means Raxol.DynamicSupervisor is down, and its children with it.
-  defp stop_component(pid) do
+  # The monitor goes first, flushed, so the stop is not later taken for a
+  # failure.
+  defp stop_component(%{pid: nil}), do: :ok
+
+  defp stop_component(%{pid: pid, monitor: ref}) do
+    if ref, do: Process.demonitor(ref, [:flush])
     _ = DynamicSupervisor.terminate_child(Raxol.DynamicSupervisor, pid)
     :ok
   catch
     :exit, _reason -> :ok
   end
 
-  defp component_label(nil, mod), do: "pc-#{inspect(mod)}"
-  defp component_label(id, _mod) when is_binary(id), do: id
-  defp component_label(id, _mod), do: inspect(id)
+  defp key_label({mod, {:position, _path}}), do: "pc-#{inspect(mod)}"
+  defp key_label({_mod, id}) when is_binary(id), do: id
+  defp key_label({_mod, id}), do: inspect(id)
 
   defp component_fallback(label, problem),
     do: %{type: :text, content: "[#{label}: #{problem}]", style: %{}}
