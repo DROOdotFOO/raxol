@@ -12,7 +12,9 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
   not on the very next frame.
 
   Views render through headless sessions, each with its own engine, and the
-  component announces to the test every process it starts in.
+  component announces to the test every process it starts in. Showing a
+  view draws a frame of its own, which the tests see out before counting
+  frames (`show/2`).
   """
   use ExUnit.Case, async: false
 
@@ -176,7 +178,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
         pid = started(id, "a")
         :ok = ProcessComponent.send_update(pid, :increment)
 
-        :ok = Headless.send_message(id, {:show, counter("b")})
+        show(id, counter("b"))
 
         assert frame(id) =~ "b=1"
         refute_received {:started, _, _}
@@ -193,7 +195,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
         :ok = ProcessComponent.send_update(pid, :increment)
         assert frame(id) =~ "a~1"
 
-        :ok = Headless.send_message(id, {:show, refresher.("b")})
+        show(id, refresher.("b"))
 
         screen = frame(id)
         assert screen =~ "b~0"
@@ -211,7 +213,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
         :ok = ProcessComponent.send_update(pid, :increment)
 
         moved = View.column(children: [View.text("above"), pinned])
-        :ok = Headless.send_message(id, {:show, moved})
+        show(id, moved)
 
         assert frame(id) =~ "a=1"
         refute_received {:started, _, _}
@@ -224,7 +226,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
         pid = started(id, "a")
         ref = Process.monitor(pid)
 
-        :ok = Headless.send_message(id, {:show, View.text("gone")})
+        show(id, View.text("gone"))
 
         assert frame(id) =~ "gone"
         assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
@@ -272,9 +274,9 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     end
 
     test "that fails in init is retried after 1, 2, 4, 8 ... frames" do
-      with_session(failing("f"), fn id ->
+      with_session(View.text("empty"), fn id ->
         capture_log(fn ->
-          assert start_frames(id, "f", 20) == [1, 3, 6, 11, 20]
+          assert start_frames(id, failing("f"), "f", 20) == [1, 3, 6, 11, 20]
         end)
       end)
     end
@@ -295,18 +297,16 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     end
 
     test "that leaves the view while sitting out its frames is forgotten" do
-      with_session(failing("f"), fn id ->
+      with_session(View.text("empty"), fn id ->
         capture_log(fn ->
           # Two failures in a row: the second has it sitting out two frames.
-          assert start_frames(id, "f", 4) == [1, 3]
+          assert start_frames(id, failing("f"), "f", 4) == [1, 3]
 
-          :ok = Headless.send_message(id, {:show, View.text("gone")})
+          show(id, View.text("gone"))
           assert frame(id) =~ "gone"
 
           # Brought back, it starts at once rather than sitting out the rest.
-          :ok = Headless.send_message(id, {:show, failing("f")})
-          assert frame(id) =~ "starting"
-          assert_receive {:started, "f", _pid}
+          assert start_frames(id, failing("f"), "f", 2) == [1]
         end)
       end)
     end
@@ -371,23 +371,58 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     assert frame(id) =~ "starting"
   end
 
-  # Draws `frames` frames of a component whose init fails and returns the
-  # numbers of the frames that started it. Each start is seen to its end
-  # before the next frame, so each frame's count is settled.
-  defp start_frames(id, label, frames) do
-    Enum.flat_map(1..frames, fn n ->
-      screen = frame(id)
+  # Shows a view whose component's init fails, draws `frames` frames in all
+  # counting the one the show itself draws as the first, and returns the
+  # numbers of the frames that started the component. Each start is seen to
+  # its end before the next frame, so each frame's count is settled.
+  defp start_frames(id, view, label, frames) do
+    show(id, view)
+    failed_start(label)
 
-      if screen =~ "starting" do
-        assert_receive {:started, ^label, pid}
-        ref = Process.monitor(pid)
-        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
-        [n]
-      else
-        assert screen =~ "[pc-#{inspect(Failing)}: failed to start]"
-        []
-      end
-    end)
+    rest =
+      Enum.flat_map(2..frames//1, fn n ->
+        screen = frame(id)
+
+        if screen =~ "starting" do
+          failed_start(label)
+          [n]
+        else
+          assert screen =~ "[pc-#{inspect(Failing)}: failed to start]"
+          []
+        end
+      end)
+
+    [1 | rest]
+  end
+
+  defp failed_start(label) do
+    assert_receive {:started, ^label, pid}
+    ref = Process.monitor(pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+  end
+
+  # Shows `view` and sees the frame that follows drawn. The dispatcher sends
+  # the Lifecycle `:render_needed` before it answers `send_message/2`, and
+  # the Lifecycle casts the engine `:render_frame` on it, so a call to each
+  # in turn returns once that frame is drawn. Left to land on its own it
+  # fell before or after the test's first frame as the runner's load had
+  # it, and the frame counts below with it (CI run 38445252671).
+  defp show(id, view) do
+    :ok = Headless.send_message(id, {:show, view})
+    %{lifecycle: lifecycle, engine: engine} = session_pids(id)
+    :sys.get_state(lifecycle)
+    :sys.get_state(engine)
+    :ok
+  end
+
+  defp session_pids(id) do
+    %{sessions: %{^id => %{lifecycle_pid: lifecycle}}} =
+      :sys.get_state(Headless)
+
+    %{rendering_engine_pid: engine} =
+      GenServer.call(lifecycle, :get_full_state)
+
+    %{lifecycle: lifecycle, engine: engine}
   end
 
   defp with_session(view, fun) do
@@ -395,7 +430,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     {:ok, ^id} = Headless.start(ShowApp, id: id, width: 100, height: 8)
 
     try do
-      :ok = Headless.send_message(id, {:show, view})
+      show(id, view)
       fun.(id)
     after
       Headless.stop(id)
