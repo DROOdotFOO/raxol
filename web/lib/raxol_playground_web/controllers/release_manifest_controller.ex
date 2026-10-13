@@ -22,13 +22,18 @@ defmodule RaxolPlaygroundWeb.ReleaseManifestController do
     end
   end
 
+  # The content type is set last, directly before send_resp/3. Sobelow's
+  # XSS.SendResp check (0.16) follows the connection into the sink and does
+  # not look inside maybe_mark_stale/2, so a content type set before that
+  # call counts as unset and the body is reported as HTML at high confidence,
+  # which .sobelow-conf fails the build on.
   defp send_manifest(conn, entry) do
     conn =
       conn
-      |> put_resp_content_type("application/json")
       |> put_resp_header("cache-control", @cache_control)
       |> put_resp_header("etag", entry.etag)
       |> maybe_mark_stale(entry.stale?)
+      |> put_resp_content_type("application/json")
 
     if entry.etag in get_req_header(conn, "if-none-match") do
       send_resp(conn, 304, "")
