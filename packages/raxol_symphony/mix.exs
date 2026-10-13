@@ -94,7 +94,7 @@ defmodule RaxolSymphony.MixProject do
   end
 
   defp raxol_dep(name, version, path, opts \\ []) do
-    if System.get_env("HEX_BUILD") || !File.dir?(path) do
+    if hex_package?() do
       case opts do
         [] -> {name, version}
         opts -> {name, version, opts}
@@ -102,6 +102,17 @@ defmodule RaxolSymphony.MixProject do
     else
       {name, version, Keyword.merge([path: path, override: true], opts)}
     end
+  end
+
+  # Hex form for a publish (HEX_BUILD=1) and inside a Hex install, which Hex
+  # marks by unpacking hex_metadata.config beside mix.exs; a path dep anywhere
+  # else, whether or not the directory exists. Dependabot resolves a bump in a
+  # sandbox holding only mix.exs and mix.lock, and reading that absence as a
+  # Hex install locked the siblings as Hex packages, which
+  # scripts/check_lock_path_shadows.exs rejects. The directory check also made
+  # `../..` a path dep inside a consumer's deps/: a parent always exists.
+  defp hex_package? do
+    System.get_env("HEX_BUILD") != nil or File.exists?("hex_metadata.config")
   end
 
   defp description do
