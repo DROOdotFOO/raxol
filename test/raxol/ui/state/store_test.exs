@@ -1,6 +1,7 @@
 defmodule Raxol.UI.State.StoreTest do
   # The store server is a singleton registered under a global name.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.UI.State.Management.StateManagementServer, as: Server
   alias Raxol.UI.State.Store

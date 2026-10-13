@@ -21,6 +21,7 @@ defmodule Raxol.UI.ColorResolverTest do
   # is the only place in the root suite that can reach the RP-N-03 writer
   # guard's telemetry branch (see below), so it is the only one instrumented.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   # Arms [:raxol, :ui, :color_resolver, :unresolved_intent] -- the one event
   # Raxol.Telemetry classifies :invariant. In dev/test the guard RAISES

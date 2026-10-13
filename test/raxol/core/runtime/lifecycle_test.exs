@@ -4,6 +4,7 @@ defmodule Raxol.Core.Runtime.LifecycleTest do
   environment handling, error handling, and cleanup.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   import ExUnit.CaptureLog
 
   alias Raxol.Core.Runtime.Application

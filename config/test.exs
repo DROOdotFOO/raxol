@@ -123,9 +123,5 @@ config :raxol,
 
 # Configure test helpers
 config :ex_unit,
-  capture_log: true,
   assert_receive_timeout: 1000,
   refute_receive_timeout: 1000
-
-# Show debug logs during tests
-config :logger, level: :debug

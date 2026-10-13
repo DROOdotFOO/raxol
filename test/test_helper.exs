@@ -168,7 +168,6 @@ IO.puts("[TestHelper] Initializing UserPreferences...")
 IO.puts("[TestHelper] Setting up global test configuration...")
 
 # Configure test helpers
-Application.put_env(:ex_unit, :capture_log, true)
 Application.put_env(:ex_unit, :assert_receive_timeout, 1000)
 Application.put_env(:ex_unit, :refute_receive_timeout, 1000)
 

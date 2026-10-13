@@ -1,5 +1,6 @@
 defmodule Raxol.Core.StateManager.ProcessStrategyTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.StateManager.ProcessStrategy
 

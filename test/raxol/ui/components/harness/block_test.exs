@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.Harness.BlockTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.UI.Components.Harness.Block

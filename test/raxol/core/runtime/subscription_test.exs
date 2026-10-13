@@ -5,6 +5,7 @@ defmodule Raxol.Core.Runtime.SubscriptionTest do
   """
   # Must be false due to process monitoring and timers
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   alias Raxol.Core.Runtime.Subscription
 
   describe "new/2" do

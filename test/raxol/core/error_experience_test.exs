@@ -1,5 +1,6 @@
 defmodule Raxol.Core.ErrorExperienceTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.ErrorExperience
 

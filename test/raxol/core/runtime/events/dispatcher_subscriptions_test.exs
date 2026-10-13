@@ -7,6 +7,7 @@ defmodule Raxol.Core.Runtime.Events.DispatcherSubscriptionsTest do
   # async: false -- the Subscription.events/1 tests use, and one stops, the
   # globally named EventManager.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Events.Event
   alias Raxol.Core.Events.EventManager

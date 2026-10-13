@@ -4,6 +4,7 @@ defmodule Raxol.Core.UXRefinement.UxServerTest do
   to avoid singleton conflicts.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.UXRefinement.UxServer
 

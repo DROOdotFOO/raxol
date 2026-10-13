@@ -4,6 +4,7 @@ defmodule Raxol.Core.Runtime.SupervisorTest do
   supervisor configuration, and error handling.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   import Raxol.Test.TestUtils
 
   # Mock modules for testing

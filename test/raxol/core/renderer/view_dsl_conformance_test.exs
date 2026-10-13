@@ -913,6 +913,7 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
   buffer), then its frame is checked for the text and the documented styles.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Renderer.View
   alias Raxol.Core.Renderer.ViewDslConformanceTest.Rows

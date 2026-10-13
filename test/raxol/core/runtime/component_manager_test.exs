@@ -1,5 +1,6 @@
 defmodule Raxol.Core.Runtime.ComponentManagerTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   import ExUnit.CaptureLog
 

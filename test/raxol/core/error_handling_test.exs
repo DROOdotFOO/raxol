@@ -1,5 +1,6 @@
 defmodule Raxol.Core.ErrorHandlingTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   import Raxol.Core.ErrorHandling
   alias Raxol.Core.ErrorHandling, as: ErrorHandler

@@ -1,5 +1,6 @@
 defmodule Raxol.Core.ErrorRecoveryTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.ErrorRecovery
 

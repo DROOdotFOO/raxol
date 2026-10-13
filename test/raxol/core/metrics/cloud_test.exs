@@ -5,6 +5,7 @@ defmodule Raxol.Core.Metrics.CloudTest do
   cowboy listener), so what is asserted is what a collector would receive.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Metrics.Cloud
 

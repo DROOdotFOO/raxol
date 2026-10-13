@@ -1,5 +1,6 @@
 defmodule Raxol.UI.RendererPartialRenderTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ScreenBuffer

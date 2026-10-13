@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.Fixture
   alias Raxol.Harness.Surface.ViewText

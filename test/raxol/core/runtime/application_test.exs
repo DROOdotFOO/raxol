@@ -5,6 +5,7 @@ defmodule Raxol.Core.Runtime.ApplicationTest do
   """
   # Must be false due to process monitoring and subscriptions
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   # Test implementation of Application behavior
   defmodule TestApp do
