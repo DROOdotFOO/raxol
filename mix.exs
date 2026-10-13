@@ -236,11 +236,29 @@ defmodule Raxol.MixProject do
   end
 
   defp raxol_dep(name, version, path) do
-    if System.get_env("HEX_BUILD") || !File.dir?(path) do
+    if hex_package?() do
       {name, version}
     else
       {name, version, path: path, override: true}
     end
+  end
+
+  # The Hex form belongs to two readers of this file: a publish (HEX_BUILD=1)
+  # and a consumer's deps/raxol, which Hex marks by unpacking
+  # hex_metadata.config beside mix.exs. Every other reader is this repo, where
+  # a sibling is a path dep whether or not its directory is present.
+  #
+  # Keying this on the directory instead (`!File.dir?(path)`) handed the Hex
+  # form to a third reader. Dependabot resolves a bump in a sandbox holding
+  # only mix.exs and mix.lock, so the siblings were absent there and every
+  # bump locked them as Hex packages (#1220, #1247, #1248, #1249, #1252 in the
+  # root; #1252 in raxol_agent), which scripts/check_lock_path_shadows.exs
+  # rejects. With the path form, Mix warns about the missing directory,
+  # resolves the rest, and leaves the siblings' lock entries as committed.
+  # The same check also made `../..` a path dep in a consumer's deps/ for the
+  # packages that depend on the root: a parent directory always exists.
+  defp hex_package? do
+    System.get_env("HEX_BUILD") != nil or File.exists?("hex_metadata.config")
   end
 
   defp core_deps do
