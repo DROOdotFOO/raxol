@@ -87,7 +87,13 @@ defmodule RaxolTerminal.MixProject do
       # The termbox2 NIF sources live under lib/, so a local build leaves its
       # object files and shared library inside the packaged tree. Ship the
       # sources and let elixir_make rebuild them on the consumer's platform.
-      exclude_patterns: [~r/\.so$/, ~r/\.o$/, ~r/\.dylib$/],
+      exclude_patterns: [
+        ~r/\.so$/,
+        ~r/\.o$/,
+        ~r/\.dylib$/,
+        ~r/\.beam$/,
+        ~r{/ebin/}
+      ],
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
