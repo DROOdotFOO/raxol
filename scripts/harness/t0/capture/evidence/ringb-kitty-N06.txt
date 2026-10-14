@@ -1,5 +1,5 @@
 Last login: Thu Jul 16 04:19:08 on ttys007
-$ T0_HOLD_SECONDS=8 bash 'scripts/harness/t0/probes/n06_keyframe_clear.sh' 24 3 20 ringb-kitty-N06-15554
+$ T0_HOLD_SECONDS=8 bash '<repo>/scripts/harness/t0/probes/n06_keyframe_clear.sh' 24 3 20 ringb-kitty-N06-15554
 
 
 

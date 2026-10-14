@@ -2,9 +2,9 @@
 STATUS: idle                                                                    
 PROMPT>                                                                         
 For more details, please visit https://support.apple.com/kb/HT208050.
-$ T0_HOLD_SECONDS=8 bash '/path/to/raxol
-/scripts/harness/t0/probes/n07_inverte
-d_region.sh' 24 3 40 ringb-wezterm-N07-15042
+$ T0_HOLD_SECONDS=8 bash '<repo>/scripts/harness/t0/probes/n07_inverted_region.s
+h' 24 3 40 ringb-wezterm-N07-15042
+
 
 
 

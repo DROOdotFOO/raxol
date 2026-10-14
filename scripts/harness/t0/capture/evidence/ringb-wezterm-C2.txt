@@ -2,9 +2,9 @@
 The default interactive shell is now zsh.
 To update your account to use zsh, please run `chsh -s /bin/zsh`.
 For more details, please visit https://support.apple.com/kb/HT208050.
-$ T0_HOLD_SECONDS=8 bash '/path/to/raxol
-/scripts/harness/t0/probes/p02_scrollb
-ack_feed.sh' 24 3 100 ringb-wezterm-C2-14850
+$ T0_HOLD_SECONDS=8 bash '<repo>/scripts/harness/t0/probes/p02_scrollback_feed.s
+h' 24 3 100 ringb-wezterm-C2-14850
+
 
 
 

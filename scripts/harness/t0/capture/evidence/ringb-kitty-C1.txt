@@ -1,6 +1,6 @@
 Last login: Thu Jul 16 04:18:23 on ttys007
-T0_HOLD_SECONDS=8 bash 'scripts/harness/t0/probes/p01_region_footer.sh' 24 3 40 ringb-kitty-C1-15170
-$ T0_HOLD_SECONDS=8 bash 'scripts/harness/t0/probes/p01_region_footer.sh' 24 3 40 ringb-kitty-C1-15170
+T0_HOLD_SECONDS=8 bash '<repo>/scripts/harness/t0/probes/p01_region_footer.sh' 24 3 40 ringb-kitty-C1-15170
+$ T0_HOLD_SECONDS=8 bash '<repo>/scripts/harness/t0/probes/p01_region_footer.sh' 24 3 40 ringb-kitty-C1-15170
 
 
 
