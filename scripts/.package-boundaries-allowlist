@@ -1,15 +1,20 @@
-# Grandfathered cross-package references: `@compile {:no_warn_undefined, Mod}`
-# sites where Mod lives in a tree the package's mix.exs does not declare.
+# Grandfathered cross-package references: files under packages/*/lib that name
+# a module (call, capture, apply/3, `@compile no_warn_undefined`, `use`,
+# typespec, atom, or a module/process name used as a value) living in a tree
+# the package's mix.exs does not declare for :prod.
 # One `file<TAB>module<TAB>owning tree` per line; `undefined` means no
-# defmodule in the repo matches. Checked by scripts/check-package-boundaries.sh.
+# defmodule in the repo matches. Checked by scripts/check_package_boundaries.exs.
 #
-# This list only shrinks. Entries are not a licence to call the module: each
-# one raises UndefinedFunctionError when the package runs without that tree.
-# Remove an entry when the site is fixed (module moved into the owning
-# package, implementation injected via application config, or call deleted).
+# This list only shrinks: CI fails on an entry the pull request's base does
+# not have. Entries are not a licence to use the module: each one breaks when
+# the package runs without that tree. Remove an entry when the site is fixed
+# (module moved into the owning package, implementation injected via
+# application config, or reference deleted).
+packages/raxol_agent/lib/raxol/agent/backend/catalog.ex	Raxol.Symphony.Runners.Codex	raxol_symphony
 packages/raxol_agent/lib/raxol/agent/code/cost_ledger.ex	Raxol.Payments.Ledger	raxol_payments
 packages/raxol_agent/lib/raxol/agent/scheduler/delivery.ex	Raxol.Gateway.Delivery	raxol_gateway
 packages/raxol_core/lib/raxol/core/accessibility/preference_manager.ex	Raxol.Style.Colors.System	raxol
+packages/raxol_core/lib/raxol/core/accessibility/preference_manager.ex	Raxol.Style.Colors.System.ColorSystemServer	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.BarChart	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.LineChart	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.ScatterChart	raxol
@@ -28,6 +33,8 @@ packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Componen
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Components.Table	raxol
 packages/raxol_core/lib/raxol/core/runtime/plugins/state_manager.ex	Raxol.Core.StateManager	raxol
 packages/raxol_liveview/lib/raxol/live_view/tea_live.ex	Raxol.Core.Runtime.Lifecycle	raxol
+packages/raxol_liveview/lib/raxol/live_view/tea_live.ex	Raxol.PubSub	raxol
+packages/raxol_liveview/lib/raxol/live_view/terminal_bridge.ex	Raxol.Core.Buffer	raxol
 packages/raxol_liveview/lib/raxol/live_view/terminal_bridge.ex	Raxol.Effects.BorderBeam.CSS	raxol
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.BehaviorTracker	raxol
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.FeedbackLoop	raxol

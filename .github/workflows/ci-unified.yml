@@ -268,12 +268,23 @@ jobs:
       # compile error there -- unless the file hides it behind
       # `@compile {:no_warn_undefined, Mod}`. Four sites in raxol_terminal did
       # exactly that and raised UndefinedFunctionError when the package ran
-      # without main raxol. This resolves every such attribute to the
-      # tree that defines the module and fails on one the package's mix.exs
-      # does not declare, beyond the grandfathered list in
-      # scripts/.package-boundaries-allowlist. git + grep only, no compile.
+      # without main raxol. This parses every packages/*/lib file, resolves
+      # each module it names (calls, apply/3, every no_warn_undefined form,
+      # atoms) to the tree that defines it, and fails on one the package's
+      # mix.exs does not declare for :prod, beyond the grandfathered list in
+      # scripts/.package-boundaries-allowlist. On a pull request it also fails
+      # when that list gained an entry the base commit does not have. Plain
+      # `elixir`, no compile.
       - name: Check package boundaries
-        run: bash scripts/check-package-boundaries.sh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            elixir scripts/check_package_boundaries.exs --base "$BASE_SHA"
+          else
+            elixir scripts/check_package_boundaries.exs
+          fi
 
       # raxol_agent now has its own package-tests cell, but this guard stays
       # here: a schema_version bump that ships without a frozen golden journal
