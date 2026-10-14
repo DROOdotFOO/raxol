@@ -32,7 +32,7 @@ defmodule RaxolMcp.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol_core, "~> 2.7", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
       {:jason, "~> 1.4"},
       {:plug, "~> 1.16", optional: true},
 

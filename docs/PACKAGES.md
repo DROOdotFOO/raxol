@@ -12,7 +12,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 
 | Package                                                    | Hex                           | What                                       |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------ |
-| [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.7"}`     | Behaviours, events, config, plugins        |
+| [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.8"}`     | Behaviours, events, config, plugins        |
 | [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.7"}` | Terminal emulation, termbox2 NIF           |
 | [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.7"}`      | MCP server, client, registry, test harness |
 | [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |

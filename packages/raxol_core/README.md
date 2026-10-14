@@ -5,7 +5,7 @@ Core behaviours, utilities, events, config, accessibility, and plugin infrastruc
 ## Install
 
 ```elixir
-{:raxol_core, "~> 2.7"}
+{:raxol_core, "~> 2.8"}
 ```
 
 ## What's included
