@@ -5,7 +5,6 @@ defmodule Raxol.Core.Plugins.Core.NotificationPluginTest do
   """
   # Use async: false due to Mox
   use ExUnit.Case, async: false
-  @moduletag :capture_log
   # Add this import to make verify_on_exit! available
   import Mox
 

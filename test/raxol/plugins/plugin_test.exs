@@ -1,6 +1,5 @@
 defmodule Raxol.Plugins.PluginTest do
   use ExUnit.Case
-  @moduletag :capture_log
   alias Raxol.Plugins.HyperlinkPlugin
   alias Raxol.Plugins.Manager.Events, as: PluginManager
 
