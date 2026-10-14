@@ -119,8 +119,7 @@ defmodule Raxol.Core.Buffer do
     new_buffer = create_blank_buffer(new_width, new_height)
 
     # Copy existing content where it fits
-    Enum.reduce(0..(min(buffer.height, new_height) - 1), new_buffer, fn y,
-                                                                        acc ->
+    Enum.reduce(0..(min(buffer.height, new_height) - 1), new_buffer, fn y, acc ->
       copy_row(buffer, acc, y, min(buffer.width, new_width))
     end)
   end

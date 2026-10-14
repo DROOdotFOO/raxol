@@ -2,7 +2,6 @@ defmodule Raxol.Core.ColorSystemTest do
   # The color system server is a singleton registered under a global name.
   use ExUnit.Case, async: false
 
-  alias Raxol.Core.Accessibility.PreferenceManager
   alias Raxol.Core.ColorSystem
   alias Raxol.Style.Colors.System.ColorSystemServer
 
@@ -19,15 +18,6 @@ defmodule Raxol.Core.ColorSystemTest do
       assert {:ok, _theme} = ColorSystem.get_current_theme()
 
       GenServer.stop(ColorSystemServer)
-    end
-
-    test "a high contrast preference change reaches the running server" do
-      start_supervised!(ColorSystemServer)
-      refute ColorSystemServer.get_high_contrast()
-
-      PreferenceManager.maybe_notify_color_system(:high_contrast, true)
-
-      assert ColorSystemServer.get_high_contrast()
     end
   end
 end

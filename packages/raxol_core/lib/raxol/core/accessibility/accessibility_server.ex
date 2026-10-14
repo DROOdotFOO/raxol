@@ -392,8 +392,6 @@ defmodule Raxol.Core.Accessibility.AccessibilityServer do
     if Process.whereis(EventManager),
       do: EventManager.dispatch({:accessibility_preference_changed, key, value})
 
-    PreferenceManager.maybe_notify_color_system(key, value)
-
     {:reply, :ok, new_state}
   end
 
@@ -410,8 +408,6 @@ defmodule Raxol.Core.Accessibility.AccessibilityServer do
 
     if Process.whereis(EventManager),
       do: EventManager.dispatch({:accessibility_preference_changed, key, value})
-
-    PreferenceManager.maybe_notify_color_system(key, value)
 
     {:reply, :ok, new_state}
   end
