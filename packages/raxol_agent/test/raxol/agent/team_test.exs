@@ -190,7 +190,8 @@ defmodule Raxol.Agent.TeamTest do
 
       Supervisor.stop(team_pid)
 
-      # Registry drops keys from its DOWN monitor, after the process is gone.
+      # Registry is linked to registrants and drops keys when it handles the
+      # {:EXIT, ...}; lookup doesn't filter dead pids, so poll until it has.
       wait_until(fn ->
         Registry.lookup(Raxol.Agent.Registry, :ts2_coord) == [] and
           Registry.lookup(Raxol.Agent.Registry, :ts2_worker) == []

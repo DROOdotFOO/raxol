@@ -198,7 +198,9 @@ defmodule Raxol.Agent.SessionTest do
   describe "messaging" do
     # send_message casts to the session, which casts to the dispatcher;
     # get_model calls through the same two mailboxes, so the fold is always
-    # applied before the read. No wait is needed for synchronous updates.
+    # applied before the read. This covers model reads only: the view tree
+    # is written by the rendering engine (a different sender), so view-tree
+    # tests must poll instead.
     test "send_message updates model through TEA loop" do
       {:ok, _pid} = Session.start_link(app_module: CounterAgent, id: :msg_update)
 
@@ -336,9 +338,14 @@ defmodule Raxol.Agent.SessionTest do
 
       Session.send_message(:view_tree_test, {:increment, 42})
 
-      {:ok, view_tree} = Session.get_view_tree(:view_tree_test)
-      # View tree should be non-nil after a render cycle
-      assert view_tree != nil || true
+      # The engine stores the tree via its own cast after :render_needed,
+      # so no mailbox ordering covers this read; poll until it lands.
+      wait_until(fn ->
+        match?({:ok, tree} when tree != nil, Session.get_view_tree(:view_tree_test))
+      end)
+
+      assert {:ok, view_tree} = Session.get_view_tree(:view_tree_test)
+      assert view_tree != nil
     end
 
     test "headless agent works without view/1" do
@@ -361,22 +368,15 @@ defmodule Raxol.Agent.SessionTest do
 
       Session.send_message(:semantic_test, {:increment, 7})
 
-      case Session.get_semantic_view(:semantic_test) do
-        {:ok, nil} ->
-          # View tree may not be stored yet; acceptable
-          :ok
+      # The tree arrives through the engine's render cast; poll for it.
+      wait_until(fn ->
+        match?({:ok, tree} when tree != nil, Session.get_view_tree(:semantic_test))
+      end)
 
-        {:ok, tree} ->
-          # Semantic tree should not contain layout keys
-          refute Map.has_key?(tree, :style)
-          refute Map.has_key?(tree, :padding)
-          # Should preserve type
-          assert Map.has_key?(tree, :type)
-
-        {:error, _} ->
-          # Dispatcher may not have a view tree yet
-          :ok
-      end
+      assert {:ok, tree} = Session.get_semantic_view(:semantic_test)
+      refute Map.has_key?(tree, :style)
+      refute Map.has_key?(tree, :padding)
+      assert Map.has_key?(tree, :type)
     end
 
     test "get_semantic_view returns error for unknown agent" do
@@ -400,6 +400,19 @@ defmodule Raxol.Agent.SessionTest do
       assert model.count == 10
 
       DynamicSupervisor.terminate_child(Raxol.DynamicSupervisor, pid)
+    end
+  end
+
+  # Polls a predicate up to a bound; deterministic, no timing assertions.
+  defp wait_until(fun, attempts \\ 600)
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(5)
+      wait_until(fun, attempts - 1)
     end
   end
 end
