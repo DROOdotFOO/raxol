@@ -3,7 +3,7 @@ defmodule Raxol.Agent.Journal.Tip do
   The FROZEN conversational-tip predicate — the single contract implementation
   of `conversational?/1` and `tip/2`.
 
-  Frozen contract (JS-FREEZE). U4 (reattach, AD-15/FI-12) locates the resume
+  Frozen contract. U4 (reattach, AD-15/FI-12) locates the resume
   point by a backward scan under this predicate; U9 (checkpoint, AD-10) validates
   its stamped `tip_offset` against it. Both units consume THIS module — neither
   re-invents tip semantics (that shared re-invention was the U4∥U9 false parallel

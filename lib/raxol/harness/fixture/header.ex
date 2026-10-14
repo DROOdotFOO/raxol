@@ -1,7 +1,7 @@
 defmodule Raxol.Harness.Fixture.Header do
   @moduledoc """
   Line 1 of a harness fixture JSONL file: schema + provenance tags for the
-  whole recorded session (FI-2: every transcript version-tagged).
+  whole recorded session (every transcript is version-tagged).
   """
 
   @enforce_keys [

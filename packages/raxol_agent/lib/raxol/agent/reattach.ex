@@ -8,8 +8,8 @@ defmodule Raxol.Agent.Reattach do
        conversational tip, or none; and
     2. the **live** durable tail from `from_offset` onward,
 
-  with **no gap and no duplicate delivered as live** — the replay-closure law
-  (P-JS5):
+  with **no gap and no duplicate delivered as live** — the replay-closure
+  law:
 
       read(0..o−1) ++ attach_live(o..) == the full durable record stream
 
