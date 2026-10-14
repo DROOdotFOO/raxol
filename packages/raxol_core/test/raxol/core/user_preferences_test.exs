@@ -293,4 +293,82 @@ defmodule Raxol.Core.UserPreferencesTest do
       end)
     end
   end
+
+  describe "default_preferences/0 terminal section" do
+    import ExUnit.CaptureLog
+
+    # The key is read from :raxol_core first, then from :raxol_terminal's app
+    # env. Clear both and put back whatever was there.
+    setup do
+      saved =
+        for app <- [:raxol_core, :raxol_terminal] do
+          {app, Application.fetch_env(app, :default_terminal_preferences)}
+        end
+
+      Enum.each(saved, fn {app, _} ->
+        Application.delete_env(app, :default_terminal_preferences)
+      end)
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {app, {:ok, value}} -> Application.put_env(app, :default_terminal_preferences, value)
+          {app, :error} -> Application.delete_env(app, :default_terminal_preferences)
+        end)
+      end)
+
+      :ok
+    end
+
+    test "is empty when unset" do
+      assert UserPreferences.default_preferences().terminal == %{}
+    end
+
+    test "uses a configured map" do
+      Application.put_env(:raxol_core, :default_terminal_preferences, %{width: 120})
+
+      assert UserPreferences.default_preferences().terminal == %{width: 120}
+    end
+
+    test "calls a configured {m, f, a}" do
+      Application.put_env(:raxol_core, :default_terminal_preferences, {Map, :new, [[width: 132]]})
+
+      assert UserPreferences.default_preferences().terminal == %{width: 132}
+    end
+
+    test "falls back to the :raxol_terminal app env" do
+      Application.put_env(:raxol_terminal, :default_terminal_preferences, %{width: 80})
+
+      assert UserPreferences.default_preferences().terminal == %{width: 80}
+    end
+
+    test ":raxol_core config overrides the :raxol_terminal default" do
+      Application.put_env(:raxol_terminal, :default_terminal_preferences, %{width: 80})
+      Application.put_env(:raxol_core, :default_terminal_preferences, %{width: 100})
+
+      assert UserPreferences.default_preferences().terminal == %{width: 100}
+    end
+
+    for {label, value} <- [
+          {"a keyword list", [width: 80]},
+          {"nil", nil},
+          {"a two-tuple", {Map, :new}},
+          {"an mfa whose module does not exist", {Raxol.NoSuchModule, :defaults, []}},
+          {"an mfa that returns a non-map", {Kernel, :self, []}}
+        ] do
+      test "warns and yields %{} for #{label}" do
+        Application.put_env(
+          :raxol_core,
+          :default_terminal_preferences,
+          unquote(Macro.escape(value))
+        )
+
+        log =
+          capture_log([level: :warning], fn ->
+            assert UserPreferences.default_preferences().terminal == %{}
+          end)
+
+        assert log =~ "Ignoring :default_terminal_preferences"
+      end
+    end
+  end
 end

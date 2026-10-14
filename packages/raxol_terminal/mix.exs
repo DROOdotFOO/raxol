@@ -36,7 +36,17 @@ defmodule RaxolTerminal.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger]]
+    [
+      extra_applications: [:logger],
+      # Raxol.Core.UserPreferences cannot name this package (raxol_core does
+      # not depend on raxol_terminal), so it reads its terminal defaults from
+      # this key. Shipped in the .app file so every consumer gets them, not
+      # only projects that copy a line into their own config.
+      env: [
+        default_terminal_preferences:
+          {Raxol.Terminal.Config.Defaults, :generate_default_config, []}
+      ]
+    ]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]

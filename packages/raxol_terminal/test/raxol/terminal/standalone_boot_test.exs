@@ -48,6 +48,17 @@ defmodule Raxol.Terminal.StandaloneBootTest do
     end
   end
 
+  describe "UserPreferences terminal defaults" do
+    test "come from this package's app env, with no consumer config" do
+      assert Application.fetch_env(:raxol_core, :default_terminal_preferences) == :error
+
+      assert Raxol.Core.UserPreferences.default_preferences().terminal ==
+               Raxol.Terminal.Config.Defaults.generate_default_config()
+
+      assert map_size(Raxol.Core.UserPreferences.default_preferences().terminal) > 0
+    end
+  end
+
   describe "ScriptServer auto_load" do
     test "keeps scripts found on script_paths in the server's own state" do
       dir =

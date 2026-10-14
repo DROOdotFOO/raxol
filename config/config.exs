@@ -69,13 +69,6 @@ config :raxol, :terminal,
   enable_ansi: true,
   enable_mouse: true
 
-# raxol_core cannot see raxol_terminal (docs/PACKAGES.md: terminal depends on
-# core, never the reverse), so the terminal section of
-# Raxol.Core.UserPreferences.default_preferences/0 is injected here.
-config :raxol_core,
-       :default_terminal_preferences,
-       {Raxol.Terminal.Config.Defaults, :generate_default_config, []}
-
 # Configure buffer system
 # Set to :new to use the refactored modular BufferServer
 # Set to :old to use the original monolithic BufferServer
