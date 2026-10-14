@@ -38,7 +38,7 @@ defmodule RaxolTelegram.MixProject do
   defp deps do
     [
       # Core dependency (Events, Behaviours)
-      raxol_dep(:raxol_core, "~> 2.7", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
       {:telemetry, "~> 1.3"},
 
       # Main raxol (Lifecycle runtime -- required for Session to start TEA apps)

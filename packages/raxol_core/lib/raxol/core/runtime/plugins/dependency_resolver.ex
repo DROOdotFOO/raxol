@@ -3,7 +3,12 @@ defmodule Raxol.Core.Runtime.Plugins.DependencyResolver do
   Install-time and load-time dependency resolution for plugins.
 
   Uses Kahn's algorithm for topological sort with cycle detection,
-  conflict checking, and capability matching.
+  conflict checking, and capability matching. The sort is stable: plugins
+  that are ready at the same time keep their input order, so the result is
+  deterministic for a given manifest list.
+
+  `Raxol.Plugins.Lifecycle.Dependencies` delegates its ordering and cycle
+  detection here; this module is the only Kahn/DFS implementation.
   """
 
   alias Raxol.Core.Runtime.Plugins.Manifest
@@ -112,6 +117,33 @@ defmodule Raxol.Core.Runtime.Plugins.DependencyResolver do
     end
   end
 
+  @doc """
+  Depth-first walk of `graph` (`%{node => [successor]}`) from `start`.
+
+  Returns the cycle path as a list starting and ending with the same node
+  (`[:a, :b, :a]`), or `nil` when no cycle is reachable from `start`.
+  """
+  @spec find_cycle(term(), %{term() => [term()]}) :: [term()] | nil
+  def find_cycle(start, graph), do: find_cycle(start, graph, [], MapSet.new())
+
+  defp find_cycle(node, graph, stack, seen) do
+    cond do
+      node in stack ->
+        path = stack |> Enum.take_while(&(&1 != node)) |> Enum.reverse()
+        [node | path] ++ [node]
+
+      MapSet.member?(seen, node) ->
+        nil
+
+      true ->
+        graph
+        |> Map.get(node, [])
+        |> Enum.find_value(fn next ->
+          find_cycle(next, graph, [node | stack], MapSet.put(seen, node))
+        end)
+    end
+  end
+
   # -- Private: Kahn's algorithm --------------------------------------------
 
   defp check_missing_deps(manifests) do
@@ -131,65 +163,65 @@ defmodule Raxol.Core.Runtime.Plugins.DependencyResolver do
   end
 
   defp topo_sort(manifests) do
+    order = Enum.map(manifests, & &1.id)
     graph = build_graph(manifests)
-    in_degrees = compute_in_degrees(manifests, graph)
-    all_ids = Enum.map(manifests, & &1.id)
+    in_degrees = compute_in_degrees(manifests)
+    ready = Enum.filter(order, &(Map.get(in_degrees, &1, 0) == 0))
 
-    queue =
-      all_ids
-      |> Enum.filter(fn id -> Map.get(in_degrees, id, 0) == 0 end)
-      |> :queue.from_list()
-
-    kahn_loop(queue, graph, in_degrees, [], length(all_ids))
+    case kahn_loop(ready, order, graph, in_degrees, []) do
+      {:ok, sorted} -> {:ok, sorted}
+      {:error, remaining} -> {:error, {:cycle, extract_cycle(remaining, graph)}}
+    end
   end
 
+  # edges point dependency -> dependent
   defp build_graph(manifests) do
-    for m <- manifests,
-        {dep_id, _} <- m.depends_on,
-        reduce: %{} do
+    for m <- manifests, dep_id <- dep_ids(m), reduce: %{} do
       acc -> Map.update(acc, dep_id, [m.id], &[m.id | &1])
     end
   end
 
-  defp compute_in_degrees(manifests, _graph) do
+  defp compute_in_degrees(manifests) do
     for m <- manifests,
-        {dep_id, _} <- m.depends_on,
-        dep_id != m.id,
+        _dep_id <- dep_ids(m),
         reduce: Map.new(manifests, fn m -> {m.id, 0} end) do
       acc -> Map.update(acc, m.id, 1, &(&1 + 1))
     end
   end
 
-  defp kahn_loop(queue, graph, in_degrees, sorted, total) do
-    case :queue.out(queue) do
-      {:empty, _} ->
-        if length(sorted) == total do
-          {:ok, Enum.reverse(sorted)}
-        else
-          cycle_ids =
-            in_degrees
-            |> Enum.filter(fn {_id, deg} -> deg > 0 end)
-            |> Enum.map(fn {id, _} -> id end)
+  defp dep_ids(manifest) do
+    manifest.depends_on |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+  end
 
-          {:error, {:cycle, cycle_ids}}
-        end
-
-      {{:value, id}, rest} ->
-        neighbors = Map.get(graph, id, [])
-
-        {new_queue, new_degrees} =
-          Enum.reduce(neighbors, {rest, in_degrees}, fn neighbor, {q, degs} ->
-            new_deg = Map.get(degs, neighbor, 0) - 1
-            degs = Map.put(degs, neighbor, new_deg)
-
-            if new_deg == 0 do
-              {:queue.in(neighbor, q), degs}
-            else
-              {q, degs}
-            end
-          end)
-
-        kahn_loop(new_queue, graph, new_degrees, [id | sorted], total)
+  defp kahn_loop([], order, _graph, in_degrees, acc) do
+    case Enum.filter(order, &(Map.get(in_degrees, &1, 0) > 0)) do
+      [] -> {:ok, Enum.reverse(acc)}
+      remaining -> {:error, remaining}
     end
+  end
+
+  defp kahn_loop([node | rest], order, graph, in_degrees, acc) do
+    {next_ready, in_degrees} =
+      graph
+      |> Map.get(node, [])
+      |> Enum.reduce({[], in_degrees}, fn dependent, {ready, degs} ->
+        degs = Map.update(degs, dependent, 0, &(&1 - 1))
+
+        case Map.get(degs, dependent) do
+          0 -> {[dependent | ready], degs}
+          _ -> {ready, degs}
+        end
+      end)
+
+    # keep input order among newly-ready nodes
+    queued = rest ++ Enum.filter(order, &(&1 in next_ready))
+    kahn_loop(queued, order, graph, in_degrees, [node | acc])
+  end
+
+  # Name the actual cycle rather than every node stuck behind it.
+  defp extract_cycle(remaining, graph) do
+    subgraph = Map.new(remaining, &{&1, Map.get(graph, &1, [])})
+
+    Enum.find_value(remaining, &find_cycle(&1, subgraph)) || remaining
   end
 end

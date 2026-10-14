@@ -226,7 +226,7 @@ defmodule Raxol.MixProject do
       # requirement as a minor bump keeps the one-constraint-form rule that
       # Raxol.Release.PackageCheck enforces ("~> major.minor" exactly);
       # patch-pinning "~> 2.6.2" would have violated it.
-      raxol_dep(:raxol_core, "~> 2.7", "packages/raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.8", "packages/raxol_core"),
       raxol_dep(:raxol_terminal, "~> 2.7", "packages/raxol_terminal"),
       raxol_dep(:raxol_sensor, "~> 2.7", "packages/raxol_sensor"),
       raxol_dep(:raxol_mcp, "~> 2.7", "packages/raxol_mcp"),

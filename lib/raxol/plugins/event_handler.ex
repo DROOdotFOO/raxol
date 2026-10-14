@@ -4,6 +4,7 @@ defmodule Raxol.Plugins.EventHandler do
   """
 
   alias Raxol.Plugins.EventHandler.InputEvents
+  alias Raxol.Plugins.EventHandler.MouseEvents
   alias Raxol.Plugins.EventHandler.OutputEvents
 
   @doc """
@@ -24,16 +25,15 @@ defmodule Raxol.Plugins.EventHandler do
   @doc """
   Handles resize events.
   """
-  def handle_resize(manager, _width, _height) do
-    # Stub implementation
-    {:ok, manager}
+  def handle_resize(manager, width, height) do
+    MouseEvents.handle_resize(manager, width, height)
   end
 
   @doc """
   Handles mouse events.
+  Returns `{:ok, manager, :propagate | :halt}` or `{:error, reason}`.
   """
-  def handle_mouse_event(manager, _event, _rendered_cells) do
-    # Stub implementation
-    {:ok, manager}
+  def handle_mouse_event(manager, event, rendered_cells) do
+    MouseEvents.handle_mouse_event(manager, event, rendered_cells)
   end
 end

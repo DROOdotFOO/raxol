@@ -16,6 +16,8 @@ defmodule Raxol.Plugins.Lifecycle.Dependencies do
     so a plugin cannot be satisfied by an incompatible version.
   """
 
+  alias Raxol.Core.Runtime.Plugins.{DependencyResolver, Manifest}
+
   @type dep :: {String.t(), String.t() | nil, term()}
 
   # ---------------------------------------------------------------- public API
@@ -59,46 +61,25 @@ defmodule Raxol.Plugins.Lifecycle.Dependencies do
   Dependencies outside the given batch are assumed already loaded and place no
   constraint on this ordering. Returns `{:ok, names}` or
   `{:error, :circular_dependency, cycle, []}`.
+
+  Delegates to `Raxol.Core.Runtime.Plugins.DependencyResolver`, mapping plugin
+  names to manifest ids and back.
   """
   def resolve_plugin_order(initialized_plugins) do
-    order = Enum.map(initialized_plugins, &normalize_plugin_key(&1.name))
-    in_batch = MapSet.new(order)
+    manifests = Enum.map(initialized_plugins, &manifest/1)
+    in_batch = MapSet.new(manifests, & &1.id)
 
-    # edges: dependency -> dependent, restricted to plugins in this batch
-    edges =
-      Enum.reduce(initialized_plugins, %{}, fn plugin, acc ->
-        name = normalize_plugin_key(plugin.name)
+    outside =
+      manifests
+      |> Enum.flat_map(fn m -> Enum.map(m.depends_on, &elem(&1, 0)) end)
+      |> Enum.reject(&MapSet.member?(in_batch, &1))
 
-        plugin
-        |> dependencies()
-        |> Enum.map(fn {dep, _req, _orig} -> dep end)
-        |> Enum.filter(&MapSet.member?(in_batch, &1))
-        |> Enum.reduce(acc, fn dep, inner ->
-          Map.update(inner, dep, [name], &[name | &1])
-        end)
-      end)
+    case DependencyResolver.resolve_incremental(manifests, outside) do
+      {:ok, ids} ->
+        {:ok, Enum.map(ids, &Atom.to_string/1)}
 
-    indegree =
-      Enum.reduce(initialized_plugins, %{}, fn plugin, acc ->
-        name = normalize_plugin_key(plugin.name)
-
-        count =
-          plugin
-          |> dependencies()
-          |> Enum.map(fn {dep, _req, _orig} -> dep end)
-          |> Enum.filter(&MapSet.member?(in_batch, &1))
-          |> Enum.uniq()
-          |> length()
-
-        Map.put(acc, name, count)
-      end)
-
-    case kahn(order, edges, indegree) do
-      {:ok, sorted} ->
-        {:ok, sorted}
-
-      {:error, remaining} ->
-        {:error, :circular_dependency, extract_cycle(remaining, edges), []}
+      {:error, {:cycle, ids}} ->
+        {:error, :circular_dependency, Enum.map(ids, &Atom.to_string/1), []}
     end
   end
 
@@ -109,7 +90,7 @@ defmodule Raxol.Plugins.Lifecycle.Dependencies do
     name = normalize_plugin_key(plugin.name)
     graph = dependency_graph(plugin, manager)
 
-    case find_cycle(name, graph, [], MapSet.new()) do
+    case DependencyResolver.find_cycle(name, graph) do
       nil -> :ok
       cycle -> {:error, {:circular_dependency, cycle}}
     end
@@ -167,69 +148,14 @@ defmodule Raxol.Plugins.Lifecycle.Dependencies do
     plugin |> dependencies() |> Enum.map(fn {name, _req, _orig} -> name end)
   end
 
-  # Depth-first walk returning the cycle path if one closes back on a node
-  # already on the current stack.
-  defp find_cycle(node, graph, stack, seen) do
-    cond do
-      node in stack ->
-        Enum.reverse([node | Enum.take_while(stack, &(&1 != node))]) ++ [node]
-
-      MapSet.member?(seen, node) ->
-        nil
-
-      true ->
-        graph
-        |> Map.get(node, [])
-        |> Enum.find_value(fn next ->
-          find_cycle(next, graph, [node | stack], MapSet.put(seen, node))
+  defp manifest(plugin) do
+    %Manifest{
+      id: String.to_atom(normalize_plugin_key(plugin.name)),
+      depends_on:
+        Enum.map(dependencies(plugin), fn {name, req, _orig} ->
+          {String.to_atom(name), req}
         end)
-    end
-  end
-
-  # Kahn's algorithm, preserving input order among equally-ready nodes so the
-  # result is deterministic.
-  defp kahn(order, edges, indegree) do
-    ready = Enum.filter(order, &(Map.get(indegree, &1, 0) == 0))
-    kahn_loop(ready, order, edges, indegree, [])
-  end
-
-  defp kahn_loop([], order, _edges, indegree, acc) do
-    remaining = Enum.filter(order, &(Map.get(indegree, &1, 0) > 0))
-
-    case remaining do
-      [] -> {:ok, Enum.reverse(acc)}
-      _ -> {:error, remaining}
-    end
-  end
-
-  defp kahn_loop([node | rest], order, edges, indegree, acc) do
-    {next_ready, indegree} =
-      edges
-      |> Map.get(node, [])
-      |> Enum.reduce({[], indegree}, fn dependent, {ready, deg} ->
-        deg = Map.update(deg, dependent, 0, &(&1 - 1))
-
-        case Map.get(deg, dependent) do
-          0 -> {[dependent | ready], deg}
-          _ -> {ready, deg}
-        end
-      end)
-
-    # keep input order among newly-ready nodes
-    queued = rest ++ Enum.filter(order, &(&1 in next_ready))
-    kahn_loop(queued, order, edges, indegree, [node | acc])
-  end
-
-  defp extract_cycle(remaining, edges) do
-    # edges point dependency -> dependent; walk that direction to name a cycle
-    graph = Map.new(remaining, fn node -> {node, Map.get(edges, node, [])} end)
-
-    remaining
-    |> Enum.find_value(&find_cycle(&1, graph, [], MapSet.new()))
-    |> case do
-      nil -> remaining
-      cycle -> cycle
-    end
+    }
   end
 
   # -------------------------------------------------------------- dependencies

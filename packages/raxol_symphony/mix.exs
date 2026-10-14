@@ -36,7 +36,7 @@ defmodule RaxolSymphony.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol_core, "~> 2.7", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
 
       # Main raxol (Lifecycle runtime, Recording for evidence). Compile-time only --
       # runtime: false keeps :raxol out of this package's .app applications list so
