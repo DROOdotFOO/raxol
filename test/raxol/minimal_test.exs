@@ -1,5 +1,6 @@
 defmodule Raxol.MinimalTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   doctest Raxol.Minimal
 
   describe "minimal terminal startup" do

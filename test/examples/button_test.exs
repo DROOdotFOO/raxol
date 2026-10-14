@@ -1,5 +1,6 @@
 defmodule Raxol.Examples.ButtonTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   use Raxol.Test.Unit
   use Raxol.Test.Integration
   use Raxol.Test.Visual

@@ -10,6 +10,7 @@ defmodule Raxol.ExamplesRenderTest do
   the frame must show something.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   import ExUnit.CaptureIO
 

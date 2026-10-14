@@ -21,6 +21,7 @@ defmodule Raxol.Harness.InlineAuthoritySealWidthTest do
   section accordingly rather than deleting this test.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Harness.Test.SealOracle
   alias Raxol.UI.Rendering.PaintAuthority.InlineAuthority

@@ -16,6 +16,7 @@ defmodule Raxol.Harness.SurfaceFrontierFeedTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.Surface
   alias Raxol.UI.Components.Harness.Block

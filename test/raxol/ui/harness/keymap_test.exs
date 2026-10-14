@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Harness.KeymapTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Core.Events.Event

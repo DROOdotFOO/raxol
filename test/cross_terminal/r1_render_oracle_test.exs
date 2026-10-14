@@ -9,6 +9,7 @@ defmodule Raxol.CrossTerminal.R1RenderOracleTest do
   the recovery and sanitization invariants.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Test.CrossTerminal.RenderOracle, as: Oracle

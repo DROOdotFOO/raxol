@@ -3,6 +3,7 @@ defmodule Raxol.UI.Components.ProgressTest do
   Test suite for the Progress component.
   """
   use ExUnit.Case
+  @moduletag :capture_log
   alias Raxol.UI.Components.Progress
 
   describe "bar/2" do

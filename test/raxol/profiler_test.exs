@@ -1,6 +1,7 @@
 defmodule Raxol.ProfilerTest do
   # The profiler is a singleton registered under a global name.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Performance.Profiler
 

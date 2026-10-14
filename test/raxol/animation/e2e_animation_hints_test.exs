@@ -9,6 +9,7 @@ defmodule Raxol.Animation.E2EAnimationHintsTest do
   4. TerminalBridge generates CSS transitions from hints
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
 
   alias Raxol.Animation.{Framework, Helpers, Hint}

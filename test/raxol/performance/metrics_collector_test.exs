@@ -4,6 +4,7 @@ defmodule Raxol.Performance.MetricsCollectorTest do
   memory usage tracking, garbage collection statistics, and error handling.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.ProcessStore
   alias Raxol.Performance.MetricsCollector

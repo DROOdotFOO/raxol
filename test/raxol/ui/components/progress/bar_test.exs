@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.Progress.BarTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.UI.Components.Progress.Bar
 

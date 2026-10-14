@@ -1,5 +1,6 @@
 defmodule Raxol.Search.FuzzyTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   alias Raxol.Core.Buffer
   alias Raxol.Search.Fuzzy
 

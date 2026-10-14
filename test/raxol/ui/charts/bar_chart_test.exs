@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Charts.BarChartTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.UI.Charts.BarChart
 

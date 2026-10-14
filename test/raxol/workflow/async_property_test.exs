@@ -12,6 +12,7 @@ defmodule Raxol.Workflow.AsyncPropertyTest do
   """
 
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Workflow.Compiled

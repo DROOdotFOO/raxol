@@ -3,6 +3,7 @@ defmodule Mix.Tasks.Raxol.NewTest do
   # what its README promises: lib/ compiles and the app draws. Not async: the
   # setup below changes the VM-wide environment the generator's git reads.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   @moduletag capture_log: true
 
   import ExUnit.CaptureIO

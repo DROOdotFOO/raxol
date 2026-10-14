@@ -6,6 +6,7 @@ defmodule Raxol.CrossTerminal.MultilineTextRenderTest do
   its layout box), and layout must reserve one row per line.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
   alias Raxol.Terminal.Buffer.Queries

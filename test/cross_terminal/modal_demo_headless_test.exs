@@ -6,6 +6,7 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
   unmoved, dimmed behind it.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
 

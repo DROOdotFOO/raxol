@@ -4,6 +4,7 @@ defmodule Raxol.CrossTerminal.EmulatorReplayTest do
   sequence families the renderer emits.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Test.CrossTerminal.AnsiReplayer, as: Replayer
 

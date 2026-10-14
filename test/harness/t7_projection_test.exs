@@ -36,6 +36,7 @@ defmodule Raxol.Harness.T7ProjectionTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.Fixture
   alias Raxol.Harness.Fixture.Session

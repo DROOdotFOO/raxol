@@ -1,5 +1,6 @@
 defmodule Raxol.HeadlessTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
   import ExUnit.CaptureLog, only: [capture_log: 1]

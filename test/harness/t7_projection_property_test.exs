@@ -28,6 +28,7 @@ defmodule Raxol.Harness.T7ProjectionPropertyTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Harness.Fixture

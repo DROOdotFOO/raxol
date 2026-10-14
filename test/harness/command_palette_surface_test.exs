@@ -24,6 +24,7 @@ defmodule Raxol.Harness.CommandPaletteSurfaceTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Events.Event
   alias Raxol.Harness.Surface

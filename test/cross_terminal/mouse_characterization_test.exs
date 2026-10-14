@@ -1,6 +1,7 @@
 defmodule Raxol.CrossTerminal.MouseCharacterizationTest do
   # Pin InputParser (1-based) vs MouseHandler (0-based) SGR decode.
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Terminal.ANSI.InputParser
   alias Raxol.Terminal.Input.MouseHandler

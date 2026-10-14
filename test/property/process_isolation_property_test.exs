@@ -13,6 +13,7 @@ defmodule Raxol.Property.ProcessIsolationTest do
   the parent process survives and receives the :DOWN message.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   # -- Generators --

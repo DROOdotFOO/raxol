@@ -1,5 +1,6 @@
 defmodule Raxol.AnimationTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   require Raxol.AccessibilityTestHelpers
   import Raxol.AccessibilityTestHelpers
 

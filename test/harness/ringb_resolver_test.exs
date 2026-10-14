@@ -27,6 +27,7 @@ defmodule Raxol.Harness.RingBResolverTest do
   """
 
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias T0.RingB.Runner
 

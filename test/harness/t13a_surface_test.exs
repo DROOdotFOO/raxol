@@ -47,6 +47,7 @@ defmodule Raxol.Harness.T13aSurfaceTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Core.Events.Event

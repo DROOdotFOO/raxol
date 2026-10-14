@@ -14,6 +14,7 @@ defmodule Raxol.Harness.SurfaceParityTest do
       itself, and only diverges when compared against a sibling surface.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.Surface.Parity
 

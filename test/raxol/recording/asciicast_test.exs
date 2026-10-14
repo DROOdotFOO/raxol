@@ -1,5 +1,6 @@
 defmodule Raxol.Recording.AsciicastTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Recording.{Asciicast, Session}
 

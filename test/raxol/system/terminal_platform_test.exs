@@ -1,5 +1,6 @@
 defmodule Raxol.System.TerminalPlatformTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   alias Raxol.System.TerminalPlatform
 
   describe "get_terminal_capabilities/0" do

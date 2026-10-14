@@ -5,6 +5,7 @@ defmodule Raxol.CrossTerminal.ParserCharacterizationTest do
   corpus, asserting observable outcomes only.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Test.CrossTerminal.AnsiReplayer, as: Replayer
   alias Raxol.Terminal.ANSI.Parser, as: StatelessParser

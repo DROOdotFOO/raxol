@@ -61,6 +61,10 @@ ExUnit.configure(
 #   @moduletag :ring_b
 #   @moduletag :macos_gui
 
+# Global log capture is off (config/test.exs sets no :capture_log), so a test
+# module whose tests emit log lines must add `@moduletag :capture_log`.
+# Logs are then shown only for failing tests.
+
 # Start ExUnit
 IO.puts("[TestHelper] Starting ExUnit...")
 

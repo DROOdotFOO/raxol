@@ -43,6 +43,7 @@ end
 
 defmodule Raxol.RuntimeTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.Supervisor, as: RuntimeSupervisor
 

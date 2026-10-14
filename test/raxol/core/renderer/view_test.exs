@@ -4,6 +4,7 @@ defmodule Raxol.Core.Renderer.ViewTest do
   construction-time validation.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   alias Raxol.Core.Renderer.View
   require Raxol.Core.Renderer.View
 

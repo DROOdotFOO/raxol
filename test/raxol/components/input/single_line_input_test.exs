@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.Input.SingleLineInputTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Input.SingleLineInput

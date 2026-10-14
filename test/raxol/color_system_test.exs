@@ -1,5 +1,6 @@
 defmodule Raxol.ColorSystemTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   import Raxol.AccessibilityTestHelpers
 

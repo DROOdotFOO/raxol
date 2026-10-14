@@ -1,5 +1,6 @@
 defmodule Mix.Tasks.Raxol.Release.CheckTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   import ExUnit.CaptureIO
 

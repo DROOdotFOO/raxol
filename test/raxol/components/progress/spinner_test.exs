@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.Progress.SpinnerTest do
   use ExUnit.Case
+  @moduletag :capture_log
 
   alias Raxol.UI.Components.Progress.Spinner
 

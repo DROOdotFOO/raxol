@@ -20,6 +20,7 @@ defmodule Raxol.Harness.EditorPtyTest do
   """
 
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Test.PtyHarness
 

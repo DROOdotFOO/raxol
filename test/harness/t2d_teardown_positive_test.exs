@@ -20,6 +20,7 @@ defmodule Raxol.Harness.T2dTeardownPositiveTest do
   """
 
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Terminal.Capabilities
   alias Raxol.Test.PtyHarness

@@ -22,6 +22,7 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.Fixture
   alias Raxol.Harness.Surface

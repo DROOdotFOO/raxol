@@ -1,5 +1,6 @@
 defmodule Raxol.Plugins.Examples.GitIntegrationPluginTest do
   use Raxol.Plugins.Testing.PluginTestFramework, async: false
+  @moduletag :capture_log
 
   alias Raxol.Plugins.Examples.GitIntegrationPlugin
 

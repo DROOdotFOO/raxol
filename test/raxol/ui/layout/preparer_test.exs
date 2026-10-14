@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Layout.PreparerTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.UI.Layout.{PreparedElement, Preparer}
 

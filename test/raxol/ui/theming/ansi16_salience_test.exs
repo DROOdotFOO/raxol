@@ -35,6 +35,7 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
       so the exemption list cannot silently grow or drift.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.Theming.Ansi16Salience

@@ -4,6 +4,7 @@ defmodule Raxol.UI.SyntaxHighlighterRegistryTest do
   # async highlighter/diff tests that read it. ExUnit runs sync suites apart
   # from async ones, and setup restores the captured registry either way.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.UI.SyntaxHighlighter
 

@@ -3,6 +3,7 @@ defmodule Raxol.HeadlessResizeTest do
   End-to-end: `Headless.send_resize/3` must reach app `update/2` and resize the Rendering Engine buffer.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
 
