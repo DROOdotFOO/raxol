@@ -2,6 +2,11 @@ defmodule Raxol.Plugins.ImagePlugin do
   @moduledoc """
   Plugin that enables displaying images in the terminal using the iTerm2 image protocol.
   Supports various image formats and provides options for image display.
+
+  The image placeholder cell renders the file at `config[:image_path]`. The
+  default is the Raxol logo bundled in the repository at `priv/images/logo.png`;
+  the Hex package does not ship it, so set `:image_path` when using the plugin
+  from a dependency.
   """
 
   @behaviour Raxol.Plugins.Plugin
@@ -154,11 +159,18 @@ defmodule Raxol.Plugins.ImagePlugin do
   end
 
   defp generate_and_return_sequence(plugin) do
+    image_path =
+      Map.get(
+        plugin.config || %{},
+        :image_path,
+        Application.app_dir(:raxol, "priv/images/logo.png")
+      )
+
     Raxol.Core.Runtime.Log.debug(
-      "[ImagePlugin.handle_cells] sequence_just_generated=false. BEFORE generate_sequence_from_path for path: @static/static/images/logo.png"
+      "[ImagePlugin.handle_cells] sequence_just_generated=false. BEFORE generate_sequence_from_path for path: #{image_path}"
     )
 
-    case generate_sequence_from_path("@static/static/images/logo.png") do
+    case generate_sequence_from_path(image_path) do
       {:ok, sequence} ->
         Raxol.Core.Runtime.Log.debug(
           "[ImagePlugin.handle_cells] Sequence generated successfully."
@@ -169,7 +181,7 @@ defmodule Raxol.Plugins.ImagePlugin do
 
       {:error, reason} ->
         Raxol.Core.Runtime.Log.error(
-          "[ImagePlugin.handle_cells] Failed to generate sequence for @static/static/images/logo.png: #{inspect(reason)}"
+          "[ImagePlugin.handle_cells] Failed to generate sequence for #{image_path}: #{inspect(reason)}"
         )
 
         {:cont, plugin}

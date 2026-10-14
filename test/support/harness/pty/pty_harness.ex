@@ -1,18 +1,15 @@
 defmodule Raxol.Test.PtyHarness do
   @moduledoc """
-  Elixir wrapper around the vendored `pty_spawn.py` helper (unit TP,
-  `docs/proposals/in-flight/harness-ui-roadmap.md`).
+  Elixir wrapper around the vendored `pty_spawn.py` helper.
 
-  Canonical location: `test/support/harness/pty/` (this directory). The
-  03-lifecycle design doc's earlier draft said `test/support/pty/`; this
-  path is the one that shipped -- consumers (T2d/T2a/T25 suites) should
-  `alias Raxol.Test.PtyHarness` and not care about the directory.
+  Canonical location: `test/support/harness/pty/` (this directory);
+  consumers should `alias Raxol.Test.PtyHarness` and not care about the
+  directory.
 
   Spawns a command under a fresh pty via a `Port`, delivers signals to its
   process group, tees its combined stdout/stderr byte stream to a capture
   file, and takes a post-mortem `stty -a` snapshot of the pty's kernel line
-  discipline. This is Tier B of
-  `docs/proposals/in-flight/harness-ui-testing/03-lifecycle.md` -- the tier
+  discipline. This is Tier B -- the tier
   reserved for facts that need a *real* controlling tty (signal delivery,
   kernel line-discipline residual, kill-9 recovery, job control) that a pure
   byte-capture harness cannot observe.

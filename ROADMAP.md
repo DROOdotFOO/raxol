@@ -43,9 +43,9 @@ The twelve published Hex packages track two version lines: the framework package
 | Graduate `raxol_earn`      | Live run on Base mainnet with one offering, then the first Hex release | Medium |
 | Graduate `raxol_symphony` | Parallel dispatch + release packaging landed; remaining: a live run against a real repo (see the package `RUNBOOK.md`), then `mix hex.publish` | Medium |
 
-### Fast-Follow: Hermes Parity
+### Agent runtime parity
 
-Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Moat tags: **RAILS** = routes agent spend through the commerce rails · **SURFACE** = another projection of the one TEA module · **CATCH-UP** = table-stakes to stop losing users at the door. Guard: nothing here may compromise the single-module invariant or the frame budget.
+Capabilities a general-purpose agent runtime is expected to have, measured against [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Moat tags: **RAILS** = routes agent spend through the commerce rails · **SURFACE** = another projection of the one TEA module · **CATCH-UP** = table-stakes to stop losing users at the door. Guard: nothing here may compromise the single-module invariant or the frame budget.
 
 **P0: funnel & reach**
 
@@ -102,14 +102,14 @@ Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/ac
 
 | Item | What | Effort | Status |
 | ---- | ---- | ------ | ------ |
-| `:raxol` package target | Generator emits a raxol-targeted `soul.md`/`AGENTS.md`/`tasks.json`/`skills/`; `Console.Package` parses it back (round-trip tested) | S | DONE |
-| Stage-3 seam | A scheduled task runs under the soul.md persona and delivers to a gateway channel (`Fire.runner` + `Scheduler.Delivery.gateway`), proven end-to-end | S | DONE |
-| `raxol_console` loader | DONE. `RuntimeConfig` + `Scheduler.Wiring` + `Boot`/`Supervisor`/`Reconciler` (persona-wired scheduler + idempotent job convergence) + gateway channel subtree (per-chat sessions run the persona handler; MCP/dynamic tools dispatch via ReAct) + `Console.Bench.Adapter` (native bench: boots the runtime, runs boot/prompt/task-dry-run checks) + `Console.Application` (container entrypoint: plan from config/env -> load package -> boot; no-op when unconfigured, self-starts outside `:test`). 27 tests | M | DONE |
-| Tool breadth to 40+ | DONE: dynamic-dispatch seam (`Action.Dynamic`) + `Agent.McpBundle` (default server set, fail-open, wraps each server's tools). `raxol_console` `Boot` loads the bundle and joins its tools into the chat handler's `:actions` (dispatched via ReAct). 25 built-ins + bundled filesystem/fetch/git/... -> ~50 callable tools | S | Done |
+| `:raxol` package target | Generator emits a raxol-targeted `soul.md`/`AGENTS.md`/`tasks.json`/`skills/`; `Console.Package` parses it back (round-trip tested) | S | Done |
+| Stage-3 seam | A scheduled task runs under the soul.md persona and delivers to a gateway channel (`Fire.runner` + `Scheduler.Delivery.gateway`), proven end-to-end | S | Done |
+| `raxol_console` loader | `RuntimeConfig` + `Scheduler.Wiring` + `Boot`/`Supervisor`/`Reconciler` (persona-wired scheduler + idempotent job convergence) + gateway channel subtree (per-chat sessions run the persona handler; MCP/dynamic tools dispatch via ReAct) + `Console.Bench.Adapter` (native bench: boots the runtime, runs boot/prompt/task-dry-run checks) + `Console.Application` (container entrypoint: plan from config/env -> load package -> boot; no-op when unconfigured, self-starts outside `:test`) | M | Done |
+| Tool breadth to 40+ | Dynamic-dispatch seam (`Action.Dynamic`) + `Agent.McpBundle` (default server set, fail-open, wraps each server's tools). `raxol_console` `Boot` loads the bundle and joins its tools into the chat handler's `:actions` (dispatched via ReAct). 25 built-ins + bundled filesystem/fetch/git/... -> ~50 callable tools | S | Done |
 | Native ACP registration | Scaffolded: `Chain` registry-address field + `require_service_registry/1` fail-closed gate; `JobApi.register_agent/2` optional callback (Mock impl); idempotent `Seller.Registration.ensure_registered/3`. Blocked on Virtuals: registry address, HTTP register endpoint, identity standard (ERC-8004/8183), and the on-chain `HookClient.register_agent` variant | M | Scaffolded / partner-blocked |
 | TEA app_module handler | Optional `Handler.Lifecycle` runtime mode for a stateful per-chat UI (issue #763) | M | Deferred |
 
-The load-bearing unknown is external: the Console's third-party runtime-registration and container contract is undocumented, escalated to Virtuals (`~/Desktop/virtuals-console-runtime-questions.md`).
+The load-bearing unknown is external: the Console's third-party runtime-registration and container contract is undocumented and has been escalated to Virtuals.
 
 ### Web3 data surface (`raxol_web3`)
 

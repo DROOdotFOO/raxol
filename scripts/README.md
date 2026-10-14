@@ -49,14 +49,14 @@ subdirectories hold narrower tooling.
 
 | Directory | Contents |
 | --- | --- |
-| `ci/` | Build/test automation, structure validation, workflow migration |
-| `dev/` | Release management, native-terminal runner, Nix verification, one-off refactor helpers |
+| `ci/` | Build/test automation, structure validation |
+| `dev/` | Release management, native-terminal runner, Nix verification |
 | `testing/` | Test runner, coverage, platform tests, terminal verification |
 | `quality/` | Style, docs, type-safety, accessibility, and performance checks |
 | `db/` | Database setup and diagnostics |
 | `docs/` | API doc generation, link validation, docs search |
 | `visualization/` | Demo video generation and visualization benchmarks |
-| `harness/` | The T0 terminal-matrix measurement harness (see `docs/proposals/t0-runbook.md`) |
+| `harness/` | The T0 terminal-matrix measurement harness (see `docs/testing/T0_RUNBOOK.md`) |
 | `deploy/` | Deployment build scripts |
 | `bin/` | Demo and showcase runners |
 

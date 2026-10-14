@@ -373,5 +373,3 @@ In the suite rather than at a shell:
   source dials through, and the EVM backend whose declared capabilities grow in this change
 - [The upstream survey](../proposals/web3-upstream-survey.md): the chain-side derivation of
   the original six, and the "Unverified" list this decision measures three entries from
-- `docs/proposals/web3-client-plan-review.md`: "not asked about" item 4, which reaches the
-  same degradation from the observability side

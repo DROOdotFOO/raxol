@@ -3,8 +3,7 @@ defmodule Raxol.UI.Components.Harness.ApprovalPrompt do
   The agent-harness approval gate: shows what an action wants to do, its
   blast radius, and a keyboard-driven choice of how far to trust it.
 
-  Render-dual of the harness protocol's approval exchange (see
-  `docs/proposals/in-flight/harness-spec-frontend.md`, §4 row A6):
+  Render-dual of the harness protocol's approval exchange:
 
     * Payload in — `approval_requested{action, blast_radius, options}`,
       read by `init/1` as the `:action`, `:blast_radius`, `:options` props.

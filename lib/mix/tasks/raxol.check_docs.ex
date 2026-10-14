@@ -139,25 +139,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
 
   defp check_counts do
     Mix.Task.run("compile", ["--no-warnings-as-errors"])
-
-    demos = length(Raxol.Playground.Catalog.list_components())
-    categories = length(Raxol.Playground.Catalog.list_categories())
-
-    check_claude_md(demos, categories) ++ stale_counts(count_sources())
-  end
-
-  defp check_claude_md(demos, categories) do
-    expected = "#{demos} demos across #{categories} categories"
-
-    case File.read("CLAUDE.md") do
-      {:ok, content} ->
-        if String.contains?(content, expected),
-          do: [],
-          else: ["CLAUDE.md: playground description should say '#{expected}'"]
-
-      {:error, _} ->
-        ["CLAUDE.md: file not found"]
-    end
+    stale_counts(count_sources())
   end
 
   # Every prose claim that quotes a number the code produces, paired with the

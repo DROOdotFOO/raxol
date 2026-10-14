@@ -2,7 +2,7 @@ defmodule Raxol.Playground.Demos.HarnessStatusDemo do
   @moduledoc """
   Playground demo: harness status bar, context/spend meters, activity
   indicator, advisory feed, drift indicator, and a toast -- the
-  status/observability surface of an agent harness (`docs/proposals/in-flight/harness-spec-frontend.md`).
+  status/observability surface of an agent harness.
   """
   use Raxol.Core.Runtime.Application
 

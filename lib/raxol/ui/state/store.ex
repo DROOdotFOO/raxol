@@ -4,11 +4,6 @@ defmodule Raxol.UI.State.Store do
 
   This module provides the same Redux-like state management as the original
   but uses supervised state instead of Process dictionary for debounce timers.
-
-  ## Migration Notes
-
-  Debounce timer management has been moved to the UI.State.Management.Server,
-  eliminating Process dictionary usage while maintaining full functionality.
   """
 
   alias Raxol.UI.State.Management.StateManagementServer, as: Server

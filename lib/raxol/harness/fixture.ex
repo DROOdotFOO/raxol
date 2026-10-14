@@ -3,14 +3,12 @@ defmodule Raxol.Harness.Fixture do
   Loader + decode shim for versioned JSONL harness fixtures.
 
   A fixture is the recorded *bus stream* (both tiers — ephemeral
-  `item_delta` traffic included), not the durable journal
-  (`docs/proposals/in-flight/harness-ui-testing/06-projection.md` §1.1).
+  `item_delta` traffic included), not the durable journal.
   Line 1 is a header record; every subsequent line is one serialized
-  `%Envelope{}` per `harness-spec-protocol.md` §2/§3.
+  `%Envelope{}`.
 
   `decode/1` is the stand-in for the real agent-lane codec (which does not
-  exist in code yet — `harness-spec-protocol.md` §6 describes the eventual
-  single validation seam; `Raxol.Agent.Contract` from PR #542 is the
+  exist in code yet; `Raxol.Agent.Contract` is the
   shipped v0 slice). It is loud-reject: a structurally invalid line
   produces a typed `Raxol.Harness.Fixture.DecodeError`, never a
   best-effort partial parse. `load/1` upcasts every envelope on read via

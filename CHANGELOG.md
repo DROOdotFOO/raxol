@@ -42,10 +42,7 @@
 - **Security: `Raxol.REPL.Sandbox` `:strict` refuses `IO` calls that write anywhere but the evaluator's capture.** `IO` hands any atom, pid or tuple device to `:io`, which sends an io request to that process (a read waits on its reply), so `IO.write(Raxol.Payments.Wallets.Op, "x")`, `IO.puts(:logger, "x")`, `IO.read(:code_server, :line)` and `IO.stream(dev, :line)` passed `:strict`, the level `ReplDemo` serves anonymously, while `Kernel.send(Raxol.Payments.Wallets.Op, :x)` was refused; `IO.write(:stderr, "x")` and `IO.warn("x")` passed too and wrote to the node's real stderr, past the output capture. Every device arity (`read/2`, `binread/2`, `gets/2`, `getn/2,3`, `write/2`, `binwrite/2`, `puts/2`, `inspect/3`, `stream/2`, `binstream/2`) now needs `:stdio` or `:standard_io` written as a literal, including when a pipe supplies it (`dev |> IO.write("x")`, `Kernel.|>(:n, IO.puts("x"))`) or the module is the atom `:"Elixir.IO"`, and those arities are refused captured (`&IO.write/2`); `IO.warn/1,2` is refused in every form. **Behavior change at `:strict`:** `IO.write(:stderr, x)` and `IO.warn(x)` are now refused. `IO.puts(x)`, `IO.inspect(x, label: "a")`, `x |> IO.inspect()` and `IO.puts(:stdio, x)` still work; `IO.getn(a, b)` is allowed only with a literal count or `:eof` second, or `:stdio`/`:standard_io` first.
 - **Security: `Raxol.REPL.Sandbox` refuses syntax that mints atoms from runtime data.** Atoms are never collected, so neither the evaluation timeout nor the heap cap bounds them, and filling the atom table kills the node. `~w(#{x})a`, which `Kernel.sigil_w/2` expands to `String.to_atom/1` over the runtime split, and computed aliases such as `x.Foo`, `%{x.Foo => 1}` and `Integer.to_string(i).Foo`, which concatenate a new `Elixir.`-prefixed atom, all returned `:ok` at `:strict` and `:standard`; both levels now refuse them (and `__MODULE__.Foo`). `~w(a b)a`, uninterpolated or non-atom word lists and literal aliases are unaffected.
 - **Security: `Raxol.REPL.Sandbox` `:strict` refuses forged structs (#1235).** A map whose `__struct__` key names a module is protocol-dispatched to that module, so `m = %{__struct__: File.Stream, path: p, ...}; Enum.into(["hi"], m)` passed `:strict`, the level `ReplDemo` serves anonymously, and wrote the file; `Enum.count/1`, string interpolation, `Map.put/3`, `Map.new/1`, `struct/2` and `%File.Stream{}` reached other modules' impls the same way. #1230 had refused only a forged map written directly as the `Enum.into` target. The key is now refused where a map is built: a `:__struct__` or computed key in a map literal or an access path, a struct literal or `struct/2` outside `URI`, `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Range` and `MapSet`, a `Map.put`-family call with a non-literal key, `Map.new/1`, `Map.from_keys/2`, `Enum.into`/`Stream.into` into a map from a computed input, `for ... into:` anything but a list or `MapSet`, and `Map.new/2`, `Map.map/2`, `Map.merge/3`, `Map.intersect/3`. **Behavior change at `:strict`:** `Enum.into(l, %{})`, `Map.new(l)`, `for ... into: %{}` and `Map.put(acc, k, v)` with a computed `k` are now refused; `%{m | a: 1}` and literal-key builders still work. Keys that exist only at runtime in an unlisted form can still forge; the OS-isolated peer node (#1231) closes the class.
-  - Review follow-ups: a bare name piped into `struct`/`struct!` (`File.Stream |> struct`, which `Kernel.|>` expands to `struct(File.Stream)`) is checked as that call; `Access.values/0` is refused outside a path too, since its access fun rewrites a planted `__struct__` value; a key is judged by its top-level form, so string, interpolated, tuple, list and map keys are allowed and nested map keys no longer cost quadratic time; and a refused computed `%expr{}` no longer echoes its expression, which made 9.6 KB of nested input produce 2.7 GB of messages.
-    - Refusals of a computed map key, a one-key writer (`Map.put`-family, `Access.key/1,2`), `Map.new`, `Enum.into`/`Stream.into` and `for ... into:` now name what still works at `:strict`: a computed key wrapped in a string or tuple (`"#{k}"`, `{k}`), `Enum.frequencies/1`, `Enum.group_by/2,3`, and collecting into a list or `MapSet`; `docs/features/REPL.md` describes the shallow key rule. Every forge rule entry now has tests of its own in each call form: deleting `:update_in` or `:struct!` from the Kernel forge calls, `Time` from the struct-literal allowlist, `:find` from the list selectors or the alias case from the plain-key rule failed no test before.
-    - A piped call is judged once, as the call the pipe rebuilds, so a piped form passes exactly when its direct form does: `URI |> struct(host: "x")`, `[a: 1] |> Enum.into(%{})` and `[:a] |> Map.from_keys(0)` were refused because the right-hand node was also checked alone with its arguments one place off. `Enum.into`/`Stream.into` and `for ... into:` give one refusal per site that names only targets that pass (a literal list or `MapSet.new()`); the string-target refusal used to recommend a map or `Map.new()`, which the forge rule then refused.
-    - A qualified capture of a forge or `__`-prefixed function (`&Map.put/3`, `&URI.__struct__/1`) gives one refusal, from the capture; the argument-less call inside it was also judged alone and added a second, wrong one ("its key cannot be seen").
+  - A bare name piped into `struct`/`struct!` (`File.Stream |> struct`, which `Kernel.|>` expands to `struct(File.Stream)`) is checked as that call; `Access.values/0` is refused outside a path too, since its access fun rewrites a planted `__struct__` value; a key is judged by its top-level form, so string, interpolated, tuple, list and map keys are allowed and nested map keys no longer cost quadratic time; and a refused computed `%expr{}` no longer echoes its expression, which made 9.6 KB of nested input produce 2.7 GB of messages. A piped call is judged once, as the call the pipe rebuilds, so a piped form passes exactly when its direct form does (`URI |> struct(host: "x")`, `[a: 1] |> Enum.into(%{})` and `[:a] |> Map.from_keys(0)` were refused because the right-hand node was also checked alone with its arguments one place off), and a qualified capture of a forge or `__`-prefixed function (`&Map.put/3`, `&URI.__struct__/1`) gives one refusal, from the capture, not a second, wrong one ("its key cannot be seen") from the argument-less call inside it. Refusals of a computed map key, a one-key writer (`Map.put`-family, `Access.key/1,2`), `Map.new`, `Enum.into`/`Stream.into` and `for ... into:` name what still works at `:strict`: a computed key wrapped in a string or tuple (`"#{k}"`, `{k}`), `Enum.frequencies/1`, `Enum.group_by/2,3`, and collecting into a list or `MapSet`; `Enum.into`/`Stream.into` and `for ... into:` give one refusal per site that names only targets that pass (a literal list or `MapSet.new()`), where the string-target refusal used to recommend a map or `Map.new()`, which the forge rule then refused. `docs/features/REPL.md` describes the shallow key rule. Every forge rule entry now has tests of its own in each call form: deleting `:update_in` or `:struct!` from the Kernel forge calls, `Time` from the struct-literal allowlist, `:find` from the list selectors or the alias case from the plain-key rule failed no test before.
 - **`Raxol.REPL.Sandbox.check/2` returns a syntax error instead of raising on a stray `end` or invalid UTF-8.** The parser splits a stray `end`'s message into a `{prefix, suffix}` tuple, which the `"Syntax error: #{message}"` interpolation raised on, and `Code.string_to_quoted/1` raises on invalid UTF-8; `ReplDemo` then logged a stack trace per Enter and kept the input. Both now come back as `{:error, ["Syntax error: ..."]}` at every level, with the parser's token included in the message as Elixir prints it.
 - **`raxol_agent` on Windows: `mix raxol.p` no longer crashes at start, Curator rollback finds its backups, and a CRLF `SKILL.md` parses.** `SignalTrap.install/1` called `:os.set_signal(:sigterm, :handle)`, which raises on Windows, before any other work; it is now a no-op there (Windows has no SIGTERM to claim). `Curator` found its backups with `Path.wildcard/1` on a pattern built from `backups_dir`, so the directory's own name was read as glob syntax: on Windows every `\` was an escape and `rollback/1` returned `:no_backup` beside the backup it had just written, and on any platform a `[`/`{` in the name did the same or worse (a `backups_dir` of `bk{a,b}` matched `bka/` and `bkb/`, and pruning deleted the backups there). Backups are now found by listing `backups_dir` and filtering names. `Skill.parse/1` required LF after each `---` delimiter, so a `SKILL.md` saved with CRLF endings was `:missing_frontmatter`. `Skills.Store.view/3` now also refuses a drive-rooted path such as `/etc/passwd` on Windows (`:volumerelative`), as its comment always said. Found by the new Windows `raxol_agent` CI job; a new test parses a CRLF skill on every platform.
 - **Globs under a directory no longer read the directory's own name as pattern.** `Path.wildcard(Path.join(dir, "*.md"))` compiles `dir` too, so a directory named `app [v2]` matched nothing, `app{a,b}` matched `appa/` and `appb/` instead, and on Windows every `\` separator was an escape. The directory part is now escaped (`Raxol.Utils.Glob.under/3` in the root app, `Raxol.Agent.Glob.under/3` in `raxol_agent`, a private equivalent in `raxol_core` and `raxol_earn`). Affected: the agent `glob` tools (`Code.Glob`, `Workspace.Glob`, which returned no matches inside such a project), `Skills.Store` (skipped every skill under such a root), `mix raxol.inspect`'s skill counts, `Raxol.Release.PackageCheck` (its provenance walk saw no files, dotfiles included, in such a checkout), `Config.Loader`, `Headless.DocsResource`, `Benchmark.Storage`, `mix raxol.convert.base_manager`, `mix raxol.gen.specs`, `Telemetry.Invariants.scan_lib!/1` and the ACP console package reader. Patterns that are themselves user globs (`mix raxol.mutation`, `files:` entries) keep their syntax.
@@ -502,10 +499,10 @@ These are public modules of published packages, so their removal is breaking and
   - PrivacyTier attestation requirements per tier, downgrade logic
   - Router attestation-aware routing with `trust_score_for/1`
 - **AutoPay wiring**: `Backend.HTTP` accepts `:req_plugins` for transparent HTTP 402 handling. `Raxol.Payments.Req.AgentPlugin.auto_pay/1` builds the closure.
-- **Riddler solver wiring (ADR-0005)**: Complete on both sides. 9 Xochi endpoints, fee policy (5 tiers + privacy premiums), stealth/ERC-4337 settlement, ZKSAR attestation, EIP-712 typed data. 119 Riddler tests + 347 raxol_payments tests.
+- **Riddler solver wiring (ADR-0005)**: 9 Xochi endpoints, fee policy (5 tiers + privacy premiums), stealth/ERC-4337 settlement, ZKSAR attestation, EIP-712 typed data.
 - **raxol_liveview package**: TerminalBridge, TEALive, TerminalComponent, 5 themes, CSS asset. 37 tests.
 - **raxol_plugin package**: `use Raxol.Plugin` macro, API facade, Manifest, Testing helpers, generator. 50 tests.
-- **Hex publishing readiness**: All packages at v2.4.0 with LICENSE.md, README.md, package metadata, version-constrained path deps. Publishing order: raxol_sensor + raxol_core -> raxol_terminal/mcp/plugin/liveview -> raxol -> raxol_agent -> raxol_payments.
+- **Hex publishing**: All packages at v2.4.0 with LICENSE.md, README.md, package metadata, version-constrained path deps. Publishing order: raxol_sensor + raxol_core -> raxol_terminal/mcp/plugin/liveview -> raxol -> raxol_agent -> raxol_payments.
 
 ### Changed
 
@@ -529,7 +526,6 @@ These are public modules of published packages, so their removal is breaking and
 - **Headless session manager** (`Raxol.Headless`): GenServer managing non-interactive TEA app instances in `:agent` environment. Start from module or .exs file, take text screenshots, send keystrokes, read model state. Used by MCP tools and future test harness.
 - **MCP tools for Claude Code**: 6 tools (`raxol_start`, `raxol_screenshot`, `raxol_send_key`, `raxol_get_model`, `raxol_stop`, `raxol_list`) injected into Tidewave at dev startup. Tidewave MCP proxy script for stdio transport.
 - **ADR-0012: MCP as Rendering Target**: Architecture decision formalizing MCP as a first-class rendering target. Automatic tool derivation from widget tree via ToolProvider behaviour, focus lens with mouse tracking, context tree as MCP resources, agent-MCP symmetry, multi-surface cockpit vision (terminal, MCP, Telegram, speech, watch). Category theory foundations for design and property-based test invariants.
-- **SPECS.md Phases 8-11**: raxol_mcp package, ToolProvider + tool derivation, context tree + resources, MCP test harness.
 - **Playground resize handling**: Fixed resize event propagation in playground demos.
 
 ### Changed
@@ -674,18 +670,8 @@ Fixed failing GitHub Actions workflows and updated to latest Elixir/OTP versions
   - Clarified that full Sixel rendering pipeline is implemented and tested
   - Updated integration test with proper assertions for Sixel pixel rendering
   - Removed outdated TODO comments suggesting Sixel was incomplete
-  - Added detailed implementation documentation to TODO.md
   - Core rendering complete: Parser, Graphics module, DCS Handler, Buffer operations, Cell support
   - All Sixel tests passing (parser, graphics, integration)
-
-- **Sixel Graphics Rendering Verification** - Comprehensive validation of complete implementation
-  - Verified all 5 core components working correctly (Parser, Graphics, DCS Handler, Buffer Ops, Cell)
-  - 100% test coverage: 3 parser tests, 11 graphics tests, 2 integration tests, 25+ DCS handler tests
-  - Confirmed edge case handling: empty sequences, invalid colors, bounds checking, malformed DCS
-  - Performance validated: ~3-5μs per pattern character, O(1) palette lookups, sparse pixel buffer
-  - Integration verified: Emulator -> DCS Handler -> SixelGraphics -> Parser -> Pixel Buffer -> Screen Buffer -> Cell
-  - Documentation updated to reflect production-ready status with known limitations clearly defined
-  - Known limitations documented: Plugin visualization integration (future), Kitty protocol (future), animations (spec limitation)
 
 ### Changed
 
@@ -695,20 +681,6 @@ Fixed failing GitHub Actions workflows and updated to latest Elixir/OTP versions
   - `regression-testing.yml` - Performance and memory regression tests
   - `performance-tracking.yml` - Performance benchmarks
   - `release.yml` - Release workflow
-
-- Reduced TODO.md from 2000+ lines to ~70 lines (removed completed historical content)
-
-- **TODO.md Restructured** - Reorganized development roadmap with priority-based categorization
-  - CRITICAL, HIGH, MEDIUM, LOW priority sections
-  - Added effort estimates for high-priority items
-  - Separated completed items and known non-issues
-  - Improved clarity for v2.0.1 release planning
-
-- **TODO.md Final Cleanup** - Removed all completed tasks (2025-12-05)
-  - All HIGH, MEDIUM, and LOW priority completed items moved to CHANGELOG.md
-  - Removed: Window Server Tests, Scroll Server Tests, Command History, Theme System, Git Diff, StateManager Delete, CharsetManager Single Shift, Rainbow Theme Plugin
-  - Remaining items: Hex.pm Publishing checklist, optional future enhancements, known non-issues
-  - TODO.md now concise and focused on remaining work
 
 ### Fixed
 
@@ -811,9 +783,8 @@ Fixed failing GitHub Actions workflows and updated to latest Elixir/OTP versions
 
 ### Major Release - Modular Architecture
 
-Complete v2.0 transformation with modular package architecture for incremental adoption.
-All 6 phases implemented: Core modules, LiveView integration, Spotify plugin showcase,
-documentation overhaul, package split, and feature additions.
+Modular package architecture for incremental adoption: core modules, LiveView integration,
+Spotify plugin showcase, documentation overhaul, package split, and feature additions.
 
 ### Package structure
 
@@ -830,7 +801,6 @@ Four independent packages now available:
 - Raxol.Core.Renderer: Pure functional rendering with diff calculation
 - Raxol.Core.Box: Box drawing with multiple border styles (single, double, rounded, heavy, dashed)
 - Raxol.Core.Style: ANSI color and style management
-- Complete test coverage (73/73 tests passing)
 - Documentation: BUFFER_API.md, GETTING_STARTED.md, ARCHITECTURE.md
 - Examples: hello_buffer, box_drawing
 
@@ -842,7 +812,6 @@ Four independent packages now available:
 - Five themes: Nord, Dracula, Solarized Dark/Light, Monokai
 - Performance: 1.24ms avg rendering (60fps target achieved)
 - CSS grid layout with accessibility features
-- Complete test coverage (31/31 tests passing)
 
 ### Phase 3: Spotify Plugin Showcase
 
@@ -878,7 +847,6 @@ Four independent packages now available:
 - Fuzzy Search: fzf-style matching with scoring, highlighting, case-sensitive/insensitive modes
 - Virtual Filesystem: ls, cat, cd, pwd, mkdir, rm with absolute/relative paths
 - Cursor Effects: rainbow, comet, minimal presets with smooth interpolation
-- Complete test coverage (180/180 feature tests passing)
 
 ### Test results
 

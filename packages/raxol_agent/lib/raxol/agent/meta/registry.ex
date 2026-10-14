@@ -1,23 +1,18 @@
 defmodule Raxol.Agent.Meta.Registry do
   @moduledoc """
-  U11 meta-event type registry — the **frozen** type table as data (see
+  Meta-event type registry — the **frozen** type table as data (see
   `docs/harness/architecture.md`, "The event contract").
 
-  This is the U11 *enabler*: the table is real, checked-in data so the U11-R
-  red suite (and, later, the U11-I implementation) both read one source of
+  The table is checked-in data so the validator, the decoder, and the red
+  suite all read one source of
   truth for "which meta types exist, what payload keys each requires, and what
   scope each carries". The registry is **grow-only**: entries are immutable, new
   types are appended, and no registered type is ever renamed, repurposed, or
   type-narrowed.
 
-  ## What lives here vs. what is U11-I work
-
-  Only the *table* is frozen here. The **seams** that consume it — the
+  Only the *table* lives here. The **seams** that consume it — the
   producer-strict validator, the reader-tolerant decoder, and the taint /
-  actor / precedence folds — live in `Raxol.Agent.Meta` and return
-  `:not_implemented` until U11-I lands. The red suite asserts those seams meet
-  the frozen contract; they fail until implemented (that is the point of a
-  failing-first suite).
+  actor / precedence folds — live in `Raxol.Agent.Meta`.
   """
 
   @typedoc "A registry entry: the required payload keys and the event scope."

@@ -4,8 +4,7 @@ defmodule Raxol.UI.Components.Harness.ToolCallBlock do
 
   Render-dual of the event pair `item_started{item_id, item_type: :tool_use}`
   followed by `item_completed{item_type: :tool_use, content: %{name, args}}`
-  (see `docs/proposals/in-flight/harness-spec-protocol.md` sec 3, family
-  `:loop`). It is a pure projection of `name` + `args` + `status` -- it holds
+  (family `:loop`). It is a pure projection of `name` + `args` + `status` -- it holds
   no protocol state of its own; the caller re-inits or updates props as the
   envelope's events arrive (`:pending` on `item_started`, then `:running`,
   landing on `:done`/`:failed` when `item_completed` closes the item).

@@ -340,9 +340,7 @@ defmodule Raxol.Application do
   # end-to-end checks no-ops: `determine_startup_mode/1` returns `:test` under
   # `mix test`, and `get_children_for_mode(:test)` never calls
   # `maybe_add_mcp_supervisor/0`, so the server was always absent and every
-  # such test took its `nil -> :ok` branch. Reverting this function to
-  # `{Raxol.MCP.Supervisor, []}` -- the bug this PR fixes -- left the suite
-  # green.
+  # such test took its `nil -> :ok` branch.
   @spec mcp_supervisor_opts() :: keyword()
   def mcp_supervisor_opts do
     production? = mcp_production?()

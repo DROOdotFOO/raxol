@@ -21,7 +21,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
       race.
     * `resize/3`          — policy-bearing: which of seal-time-only /
       soft-owned / live-region-only a resize follows is a terminal-
-      compatibility decision (D-PA; `docs/proposals/t0-verdict-schema.md`
+      compatibility decision (D-PA; `docs/testing/T0_VERDICT_SCHEMA.md`
       tracks the measurement matrix that resolves it). This behaviour does
       not pick a policy; implementers do.
     * `region_top/1`      — the current split point `H - N` (number of rows
@@ -59,7 +59,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
   @doc """
   Applies a resize. Policy-bearing per D-PA: what happens to already-sealed
   history on resize is a terminal-compatibility decision this behaviour
-  stays agnostic to (`docs/proposals/t0-verdict-schema.md` tracks the
+  stays agnostic to (`docs/testing/T0_VERDICT_SCHEMA.md` tracks the
   measurement matrix that resolves it). Implementations MUST emit their DECSTBM re-set
   (one `Dialect.region_set/2` per resize) through their own emit path, so
   INV-5's "re-set exactly once as `CSI 1;(h-N) r`" is byte-assertable.

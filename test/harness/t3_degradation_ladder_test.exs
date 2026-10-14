@@ -99,7 +99,7 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
 
   # Every scanned token is `{:text, _}` -- the mechanical "zero escape
   # bytes anywhere" assert `FlatAuthority`'s moduledoc commits to. Reuses
-  # the project's existing ANSI tokenizer (CLAUDE.md: reuse
+  # the project's existing ANSI tokenizer (house rule: reuse
   # `raxol_terminal`'s parser as the test oracle, never hand-roll one)
   # rather than a bespoke `\e[` regex.
   defp flat_is_pure_text?(raw) when is_binary(raw) do

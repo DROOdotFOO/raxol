@@ -14,7 +14,7 @@ Also in this directory:
 ```bash
 git clone https://github.com/DROOdotFOO/raxol.git
 cd raxol
-nix-shell
+nix develop
 mix deps.get
 mix setup
 ```
@@ -223,6 +223,59 @@ mix raxol.check               # Run all quality checks before committing
 - Zero compilation warnings (`--warnings-as-errors` in CI)
 - All `mix raxol.check` steps must pass
 - Functional patterns
+- OTP process communication: `GenServer.call/3` for requests that expect a reply, `GenServer.cast/2` for fire-and-forget; when in doubt, use `call` over `cast`, to ensure back-pressure
+
+### Guard at the resource
+
+Authorization and input validation sit on the function that performs the side
+effect, not on the routing clause that reaches it; a dispatch-level check is UX
+only. The `%{jail: true}` gate is the worked example: `/login` refusing at
+`apply_command/3` still left `Commands.connect/4` writing the host-global
+credential store from the onboarding wizard, so the refusal moved into
+`connect/4` and `Wizard.save_key_to_op/1` (#1011). Same shape elsewhere: the
+mode allow-list belongs with the handlers that apply a mode, and a startup
+barrier cannot trust the lane to report its own readiness.
+
+### Package boundaries
+
+The dependency graph between `packages/*` is in [PACKAGES.md](../PACKAGES.md);
+main `raxol` does not depend on `raxol_agent`, `raxol_earn`, `raxol_gateway`,
+or `raxol_agent_client_protocol`. Cross-package references use
+`@compile {:no_warn_undefined, Module}` and `Code.ensure_loaded?/1` guards.
+Struct patterns across package boundaries use map patterns (`%{field: x}`)
+instead of struct patterns (`%Struct{field: x}`).
+
+Each package formats at its own line length (98, not the root's 80). The root
+`.formatter.exs` delegates every `packages/*` path to that package's config via
+`:subdirectories`, so `mix format` from the repo root is correct for any file
+and matches what CI checks.
+
+### Test rules
+
+Tags, auto-excluded by environment:
+
+- `@tag :docker` - requires termbox2/Docker (excluded when `SKIP_TERMBOX2_TESTS=true`)
+- `@tag :skip_on_ci` - excluded when `SKIP_TERMBOX2_TESTS=true`
+- `@tag :unix_only` - excluded on Windows
+- `@tag :slow` / `@tag :integration` - long-running
+
+Timing:
+
+- Never assert on measured elapsed time. A ceiling set close to the real cost
+  flakes on a loaded runner; one set far above it proves nothing.
+- Prove causality instead: by message (`assert_receive`, a monitor `:DOWN`), by
+  ordering (timestamps written from each participant), or by the returned value
+  when only one branch can produce it.
+- Keep a lower bound only where the code guarantees it (`Process.sleep(50)`
+  then `assert elapsed >= 50`).
+- When the failure mode is a hang or a superlinear blow-up, the budget is the
+  test's own `@tag timeout:` (or `@describetag`), set an order of magnitude
+  above the observed cost. ExUnit reports it as a failure with a stack, and
+  nothing has to be measured.
+- Throughput and allocation budgets live in `bench/` and the regression-testing
+  workflow, never in the suite. `bench/core/buffer_gate.exs` is the worked
+  example: budgets with a stated headroom factor and a provenance block, a
+  non-zero exit, and a CI job that fails on a breach.
 
 ## Build & Release
 

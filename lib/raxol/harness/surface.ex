@@ -3245,7 +3245,7 @@ defmodule Raxol.Harness.Surface do
     # painted_count`, the scan/walk-agreement property), so this changes
     # nothing there; on a refusal the cursor is the honest one.
     #
-    # Named `committed_cursor`, NOT `tail_start`: this PR's whole thesis is
+    # Named `committed_cursor`, NOT `tail_start`: the point is
     # that the scan's `tail_start` and the committed cursor are DIFFERENT
     # quantities that diverge exactly on refusal, so the one function whose
     # reason-to-exist is that distinction must not reuse the scan's name.

@@ -5,8 +5,7 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
   impossible to miss.
 
   Render-dual of the `blast_radius` field carried by the harness's
-  `approval_requested` payload (see
-  `docs/proposals/in-flight/harness-spec-frontend.md`, §4 row A6). Typically
+  `approval_requested` payload. Typically
   embedded inside `Raxol.UI.Components.Harness.ApprovalPrompt`, but stands
   alone for the playground and for testing.
 

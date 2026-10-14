@@ -47,7 +47,6 @@ defmodule Raxol.MixProject do
       ],
       # NIF compilation moved to packages/raxol_terminal
 
-      usage_rules: usage_rules(),
       dialyzer: [
         # PLT Configuration for caching
         plt_core_path: "priv/plts/core.plt",
@@ -264,7 +263,6 @@ defmodule Raxol.MixProject do
       {:circular_buffer, "~> 1.0"},
       # Plugin dependencies (optional - only needed for specific plugins)
       {:req, "~> 0.5", optional: true}
-      # {:oauth2, "~> 2.1", optional: true}  # Removed - unused
     ]
   end
 
@@ -289,8 +287,6 @@ defmodule Raxol.MixProject do
     [
       {:ecto_sql, "~> 3.12", optional: true},
       {:postgrex, "~> 0.22.0", optional: true, runtime: false}
-      # Password hashing (removed - unused)
-      # {:bcrypt_elixir, "~> 3.3", optional: true}
     ]
   end
 
@@ -323,11 +319,9 @@ defmodule Raxol.MixProject do
 
       # AI development tools
       {:tidewave, "~> 0.9.0", only: :dev},
-      {:usage_rules, "~> 1.2", only: :dev},
 
       # Testing
       {:mox, "~> 1.2", only: :test},
-      {:meck, "~> 1.0", only: :test},
       {:excoveralls, "~> 0.18", only: :test},
       {:stream_data, "~> 1.1", only: [:dev, :test]},
       {:junit_formatter, "~> 3.4", only: :test},
@@ -347,8 +341,6 @@ defmodule Raxol.MixProject do
       {:uuid, "~> 1.1"},
       # TOML configuration
       {:toml, "~> 0.7"},
-      # MIME type detection (removed - unused)
-      # {:mimerl, "~> 1.4"},
       # HTTP client (for optional integrations)
       {:httpoison, "~> 3.0", optional: true},
       # Localization
@@ -366,20 +358,12 @@ defmodule Raxol.MixProject do
       {:telemetry, "~> 1.3"},
       {:telemetry_metrics, "~> 1.1"},
       {:telemetry_poller, "~> 1.2"}
-      # {:telemetry_metrics_prometheus, "~> 1.1"} # Removed - unused
     ]
   end
 
   defp i18n_deps do
     # ex_cldr deps removed - unused. Re-add when i18n is implemented.
     []
-  end
-
-  defp usage_rules do
-    [
-      file: "CLAUDE.md",
-      usage_rules: [:elixir, :otp]
-    ]
   end
 
   defp aliases do
@@ -422,9 +406,7 @@ defmodule Raxol.MixProject do
       "release.prod": ["run scripts/dev/release.exs --env prod"],
       "release.all": ["run scripts/dev/release.exs --env prod --all"],
       "release.clean": ["run scripts/dev/release.exs --clean"],
-      "release.tag": ["run scripts/dev/release.exs --tag"],
-      # AI development tools
-      "usage_rules.update": ["usage_rules.sync"]
+      "release.tag": ["run scripts/dev/release.exs --tag"]
     ]
   end
 

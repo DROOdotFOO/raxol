@@ -6,8 +6,8 @@ Accepted; implemented 2026-07-26 (`Raxol.Agent.Scheduler` + `Raxol.Agent.Schedul
 the `cronjob` Action + `Scheduler.Fire`/`Scheduler.Delivery` in PR #725). As built, a fire runs
 `Raxol.Agent.Stream.react/2` directly; the `Raxol.Agent.Turn` driver named in decision item 4 is
 not on the path. Originally proposed
-2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
-H2.2). Builds on the agent skill runtime (ADR-0021), the unified messaging gateway (ADR-0023, for
+2026-06-18. Tier 2 Hermes-parity ADR (scheduled
+tasks). Builds on the agent skill runtime (ADR-0021), the unified messaging gateway (ADR-0023, for
 delivery), and `Raxol.Core.Stores.Dets` (the shared ETS+DETS store).
 
 ## Context
@@ -142,7 +142,7 @@ Keep jobs in memory only. Rejected: a restart would silently drop every recurrin
 
 ## References
 
-- `~/Desktop/hermes-extraction-report.md` (item H2.2; the Hermes cronjob tool + cron internals)
+- Internal research notes on the Hermes cronjob tool + cron internals
 - ADR-0021: Self-improving agents (the `Skills.Store` a fire injects from)
 - ADR-0023: Unified messaging gateway (the delivery path for job targets)
 - `packages/raxol_symphony/lib/raxol/symphony/orchestrator.ex` (the existing fixed-cadence poll the

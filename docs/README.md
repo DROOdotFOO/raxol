@@ -43,6 +43,7 @@ distributed systems, developer tools, and alternate surfaces.
 - [Buffer API](core/BUFFER_API.md)
 - [Tool/Action Catalog](reference/TOOL_CATALOG.md): every LLM-callable tool, generated
 - [Architecture Decisions](adr/)
+- [Ubiquitous Language](UBIQUITOUS_LANGUAGE.md): the domain glossary
 - [Plugin Development](plugins/)
 - [Benchmarks](bench/README.md)
 - [Development](development/README.md): setup, commands, troubleshooting

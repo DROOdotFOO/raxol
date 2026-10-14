@@ -3,8 +3,8 @@
 ## Status
 
 Accepted, 2026-06-21 (implemented in `Raxol.Agent.Auxiliary`; `SelfImprove` and
-`UserModel` wired). Proposed 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
-H2.5). Builds on `Raxol.Agent.ExecutorConfig` + `Raxol.Agent.Backend.Selector` and formalizes the
+`UserModel` wired). Proposed 2026-06-18. Tier 2 Hermes-parity ADR
+(auxiliary model routing). Builds on `Raxol.Agent.ExecutorConfig` + `Raxol.Agent.Backend.Selector` and formalizes the
 ad-hoc auxiliary-model plumbing already present in ADR-0021's `SelfImprove`/`Curator` and ADR-0022's
 `UserModel`.
 
@@ -145,7 +145,7 @@ simpler and more predictable; an adaptive router is noted as future work.
 
 ## References
 
-- `~/Desktop/hermes-extraction-report.md` (item H2.5; the eleven Hermes auxiliary slots)
+- Internal research notes on the eleven Hermes auxiliary slots
 - ADR-0021: Self-improving agents (`SelfImprove` + `Curator`, current ad-hoc aux config)
 - ADR-0022: Memory provider stack (`UserModel`'s dialectic aux model)
 - `packages/raxol_agent/lib/raxol/agent/executor_config.ex` (`new/1`, `to_backend_opts/1`; the per-request config the router returns)

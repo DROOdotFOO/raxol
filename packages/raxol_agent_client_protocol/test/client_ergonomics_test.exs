@@ -83,9 +83,8 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
     # string at this call site (module attributes / `System.tmp_dir!()`
     # calls / string interpolation are all still-unevaluated AST at this
     # point and would raise `FunctionClauseError`, as discovered while
-    # writing this test). `TMPDIR=/tmp` is pinned for tests in this repo
-    # (see CLAUDE.md / `.claude/settings.json`), so a literal `/tmp/...`
-    # path is stable across environments here.
+    # writing this test). `TMPDIR=/tmp` is pinned for tests in this repo,
+    # so a literal `/tmp/...` path is stable across environments here.
     @sandbox_base "/tmp/acp_client_ergonomics_fs_sandbox"
     @sandbox_root "/tmp/acp_client_ergonomics_fs_sandbox/root"
     @sandbox_outside "/tmp/acp_client_ergonomics_fs_sandbox/outside"

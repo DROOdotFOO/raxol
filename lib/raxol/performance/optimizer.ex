@@ -4,11 +4,6 @@ defmodule Raxol.Performance.Optimizer do
 
   This module provides the same optimization techniques as the original but uses
   supervised state management instead of Process dictionary for memoization.
-
-  ## Migration Notes
-
-  The memoize macro now uses Raxol.Performance.Memoization.Server instead
-  of Process dictionary, providing better fault tolerance and monitoring.
   """
 
   @compile {:no_warn_undefined, :poolboy}

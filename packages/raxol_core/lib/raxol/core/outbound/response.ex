@@ -19,8 +19,7 @@ defmodule Raxol.Core.Outbound.Response do
   ## Truncation is never a success
 
   `:state` is `:incomplete` until the terminating response promotes it, and
-  `to_response/1` accepts nothing else. That is finding M1 of
-  `docs/proposals/web3-client-plan-review.md`, and it is why the accumulator is
+  `to_response/1` accepts nothing else. That is why the accumulator is
   a tagged struct rather than a bare map: every halt-based reader in this
   ecosystem returns success on abort (`Finch.stream_while/5` answers `{:ok,
   acc}` for both a finished response and a `{:halt, acc}`), so an accumulator

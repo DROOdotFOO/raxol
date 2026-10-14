@@ -36,7 +36,7 @@ defmodule Raxol.Harness.SessionLane do
   ## The `session` shape (cross-package law)
 
   `session()` is a plain MAP, never a struct -- this package's own
-  cross-package convention (see the project's `CLAUDE.md`: struct
+  cross-package convention (`docs/development/README.md#package-boundaries`: struct
   patterns across package boundaries use map patterns). A lane
   implementation on the agent side may carry a real `Raxol.Agent.Session`
   struct internally, but what crosses this seam is always the map shape

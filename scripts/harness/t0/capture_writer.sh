@@ -2,14 +2,12 @@
 # T0 — capability capture writer.
 #
 # Writes one capture/<terminal>-<context>.json file conforming EXACTLY to
-# the fixture schema in
-# docs/proposals/in-flight/harness-ui-testing/04-capability.md §2
-# (`raxol.capability.capture/1`) -- these files are what T1's
-# `Raxol.Test.CapabilityFixtures.load!/1` will read once T1 lands (per
-# that doc's §10.3: "T0 writes here"). Written under scripts/harness/t0/
+# the capability-capture fixture schema
+# (`raxol.capability.capture/1`) -- these files are what
+# `Raxol.Test.CapabilityFixtures.load!/1` reads. Written under scripts/harness/t0/
 # (this unit's write-set) rather than test/fixtures/capability/capture/
 # directly -- T1's builder copies/symlinks these in when the loader exists;
-# see t0-runbook.md.
+# see T0_RUNBOOK.md.
 #
 # Usage:
 #   capture_writer.sh TERMINAL CONTEXT TERM_VERSION QUERY_HEX REPLY_HEX \

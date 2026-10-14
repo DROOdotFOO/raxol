@@ -29,8 +29,7 @@
   },
   "activationEvents": [
     "onLanguage:elixir",
-    "workspaceContains:mix.exs",
-    "workspaceContains:.raxol.exs"
+    "workspaceContains:mix.exs"
   ],
   "main": "./out/extension.js",
   "contributes": {

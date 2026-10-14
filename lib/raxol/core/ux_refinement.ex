@@ -6,11 +6,7 @@ defmodule Raxol.Core.UXRefinement do
   delegates all state management to a supervised GenUxServer, eliminating
   Process dictionary usage.
 
-  ## Migration Notes
-
-  This module maintains backward compatibility with the original API.
-  The main difference is that it requires starting the UXRefinement.UxServer
-  as part of your supervision tree:
+  Start the UXRefinement.UxServer as part of your supervision tree:
 
       children = [
         {Raxol.Core.UXRefinement.UxServer, name: Raxol.Core.UXRefinement.UxServer}

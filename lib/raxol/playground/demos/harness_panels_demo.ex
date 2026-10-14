@@ -7,7 +7,7 @@ defmodule Raxol.Playground.Demos.HarnessPanelsDemo do
   `init/1` + `render/2` directly, the same way `DemoHelpers.rich_text/2`
   mounts `Display.Text` -- with sample data shaped like the materialized
   views these panels fold from `extract{class, op, item}` / `residual` meta
-  events (see `docs/proposals/in-flight/harness-spec-frontend.md` §3).
+  events.
   """
   use Raxol.Core.Runtime.Application
 

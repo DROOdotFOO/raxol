@@ -14,9 +14,8 @@ defmodule Raxol.Playground.Demos.HarnessToolBlocksDemo do
       showing the `TaintBadge` and a collapsed long body. `[space]` toggles
       collapse, forwarded straight to the component's own `handle_event/3`.
 
-  See `docs/proposals/in-flight/harness-spec-protocol.md` sec 3 for the
-  `item_started`/`item_completed` event shapes these blocks are the
-  render-dual of.
+  These blocks are the render-dual of the `item_started`/`item_completed`
+  event shapes.
   """
   use Raxol.Core.Runtime.Application
 

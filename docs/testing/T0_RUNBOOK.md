@@ -1,7 +1,7 @@
 # T0 runbook: running the keystone matrix
 
 Date: 2026-07-15 · Status: **v1**. Companion to
-`t0-verdict-schema.md` (the file this writes to), and
+`T0_VERDICT_SCHEMA.md` (the file this writes to), and
 `scripts/harness/t0/` (everything referenced below lives there).
 
 This is the "Ring B" half of T0: real-terminal measurement a human runs by
@@ -73,7 +73,7 @@ adds real rows.)
 2. Capture via whatever method that terminal supports (native get-text API,
    `tmux capture-pane`, or a screenshot).
 3. Judge the capture against the claim's expected shape (§3 of
-   `01-t0-matrix.md`, restated in `t0-verdict-schema.md` §3).
+   `01-t0-matrix.md`, restated in `T0_VERDICT_SCHEMA.md` §3).
 4. Record it: `scripts/harness/t0/append_result.sh TERMINAL CONTEXT
    TRANSPORT CLAIM VERDICT OBSERVABLE CAPTURE_METHOD AUTOMATION
    EVIDENCE_PATH [NOTES]`: this auto-appends/upserts the row into
@@ -112,7 +112,7 @@ bash scripts/harness/t0/append_result.sh kitty plain local C2 fed \
   "kitten @ get-text --extent=all: $(grep -c '^LINE-' /tmp/t0-kitty-c2.txt)/100 lines; 21 sealed rows still on-screen above footer"
 ```
 
-Note the coherence rule (t0-verdict-schema.md): the `VERDICT` argument and
+Note the coherence rule (T0_VERDICT_SCHEMA.md): the `VERDICT` argument and
 the observable's `status` must agree (`fed`/`fed`): the resolver excludes
 mismatched rows as malformed rather than guessing which field to trust.
 
@@ -189,7 +189,7 @@ OUTER terminal is real. This is the only way to get:
 tmux set -g allow-passthrough on   # required for the host-visibility check
 ```
 
-Provenance caveat (resolver rule, t0-verdict-schema.md §4.1): rows captured
+Provenance caveat (resolver rule, T0_VERDICT_SCHEMA.md §4.1): rows captured
 via `tmux capture-pane` are recorded with `context=tmux` and measure tmux's
 own emulator: they never count as the host terminal's `plain` cells. For
 Ghostty/Alacritty/VTE's **plain**-context C2 (the cells D-PA actually
@@ -224,7 +224,7 @@ judgment logic this unit already validated in the sandbox, port the same
 `grep`/diff checks, just against a real host).
 
 **C5/C7 host-visibility, specifically** (the thing the sandbox flagged as
-untestable, `t0-verdict-schema.md` §4): after the tmux session above exits,
+untestable, `T0_VERDICT_SCHEMA.md` §4): after the tmux session above exits,
 check whether `kitten @`/`wezterm cli`/etc. on the HOST (outside tmux) saw
 the OSC 133 marks or the DECRQM reply, if the host terminal's own log/API
 shows nothing, that confirms R-04 §D's expectation (`:inert`); if it does,
@@ -283,7 +283,7 @@ timeout constant.
 Neither the tmux proxy cell nor the `emu` cell can produce C4 evidence
 (tmux resize doesn't reproduce a real terminal's SIGWINCH reflow policy;
 the emulator has no scrollback to corrupt, both documented `n/a` in
-`t0-verdict-schema.md` §4). This is a Ring-B-only claim on every real
+`T0_VERDICT_SCHEMA.md` §4). This is a Ring-B-only claim on every real
 terminal:
 
 ```bash
@@ -315,7 +315,7 @@ needs a human's eyes on the resize transition, not just the final grid.)
 elixir scripts/harness/t0/verdict_resolver.exs scripts/harness/t0/t0-verdict.json
 ```
 
-The resolver enforces its own floors in code (see t0-verdict-schema.md
+The resolver enforces its own floors in code (see T0_VERDICT_SCHEMA.md
 §4.1): fewer than 2 measured tier-1 terminals → `dpa: "pending"` with no
 provisional at all; 2-3 measured → still `"pending"` but with a
 `provisional` suggestion; a definitive `"A"/"B"/"C"` plus the §7.4

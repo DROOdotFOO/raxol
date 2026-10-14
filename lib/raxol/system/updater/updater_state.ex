@@ -5,11 +5,6 @@ defmodule Raxol.System.Updater.State do
   This module provides backward compatibility while eliminating Process dictionary usage.
   All state is now managed through the Updater.State.Server GenServer.
 
-  ## Migration Notes
-
-  This module replaces direct Process dictionary usage with supervised GenServer state.
-  The API remains the same, but the implementation is now OTP-compliant and more robust.
-
   ## Features Maintained
 
   * Update settings management

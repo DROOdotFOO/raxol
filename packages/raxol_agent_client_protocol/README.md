@@ -395,7 +395,7 @@ See `NOTICE.md` for the full attribution. Summary:
   pure-MIT despite studying an Apache-2.0 spec.
 
 This layered provenance is a deliberate license-discipline decision, not an
-accident. See `docs/proposals/acp-package-adr.md` for the full reasoning.
+accident. See `docs/adr/0041-agent-client-protocol-package.md` for the full reasoning.
 
 ## Conformance
 
@@ -464,7 +464,7 @@ site):
   from the first commit that creates a file, not as a follow-up hardening
   pass.
 
-See `docs/proposals/acp-package-adr.md` for how these gates shaped the
+See `docs/adr/0041-agent-client-protocol-package.md` for how these gates shaped the
 package's structure.
 
 ## Glossary

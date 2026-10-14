@@ -2,11 +2,11 @@
 
 ## Status
 
-Implemented, 2026-06-03. Helper landed in `aacfe55f` (PR-A), RenderBatcher adoption in `b9aef61f` (PR-B), Driver/Headless/Lifecycle/SSH adoption + Dispatcher call-mode mirror clauses in `6aa8abab` (PR-C).
+Implemented, 2026-06-03. Landed in three steps: the helper, RenderBatcher adoption, then Driver/Headless/Lifecycle/SSH adoption + Dispatcher call-mode mirror clauses.
 
 ## Context
 
-Raxol's hot-path event dispatch uses unbounded `GenServer.cast` at three sites. The dispatcher mailbox can grow without observable signal under per-keystroke load (typing, mouse motion, animation frames). The refactor backlog item #3, plus CLAUDE.md's project guidance ("when in doubt, use `call` over `cast`, to ensure back-pressure"), both flag this as a real concern.
+Raxol's hot-path event dispatch uses unbounded `GenServer.cast` at three sites. The dispatcher mailbox can grow without observable signal under per-keystroke load (typing, mouse motion, animation frames). The refactor backlog item #3, plus the OTP rule this project follows ("when in doubt, use `call` over `cast`, to ensure back-pressure"), both flag this as a real concern.
 
 The three sites and their characteristics:
 
@@ -171,4 +171,4 @@ The cost is one new module (~80 LOC including docs and specs), one property test
 - `lib/raxol/memory/optimizer.ex:78-82`: prior art for queue-depth probing.
 - `lib/raxol/core/error_recovery/recovery_wrapper.ex:279`: prior art for `Process.info(:message_queue_len)` (module removed since, #1094).
 - `lib/raxol/core/runtime/rendering/engine.ex:277`: existing telemetry shape `[:raxol, :runtime, :*]`.
-- CLAUDE.md, "OTP / Process Communication" section: "When in doubt, use `call` over `cast`, to ensure back-pressure".
+- OTP rule: "When in doubt, use `call` over `cast`, to ensure back-pressure" (see `docs/development/README.md`).

@@ -2,36 +2,30 @@
 
 ## Status
 
-Accepted, 2026-07-22 (implemented as the `raxol_gateway` package). Originally proposed 2026-06-17. Third and last of the Hermes-extraction Tier 1 ADRs
-(`~/Desktop/hermes-extraction-report.md`, item H1.4). Companion to ADR-0021 (self-improving agents)
+Accepted, 2026-07-22 (implemented as the `raxol_gateway` package). Originally proposed 2026-06-17. Third and last of the Tier 1 Hermes-parity ADRs
+(unified messaging gateway). Companion to ADR-0021 (self-improving agents)
 and ADR-0022 (memory). Builds on the existing surface packages (`raxol_telegram`, `raxol_watch`,
 `raxol_speech`), the shared `Raxol.Core.Events.Event`, the `Lifecycle` environment system, the
 omnigent item-log (`Raxol.Agent.Conversation.{Store,Log}`), and ADR-0014 (Telegram Guardian).
 
-Revised 2026-06-17 after a second Hermes research pass against current sources (v0.14-v0.16 official
-docs + the `NousResearch/hermes-agent` repo). The SQLite critique below was confirmed near-verbatim
+The SQLite critique below matches the current Hermes sources
 (schema v11, 1s busy timeout, 15 retries, WAL checkpoint every 50 writes, two-level guard). Three
 refinements folded in: the platform count is version-dependent (22-24 in recent releases), Hermes's
 own `/handoff` rebinds + summarizes rather than carrying the transcript (Raxol's persisted history
 does better), and the pairing lockout is a Raxol hardening Hermes does not document.
 
-Core implemented 2026-06-18 in `packages/raxol_gateway/`: `Adapter` behaviour (+ `Adapter.InMemory`),
-`Route` keying, `SessionRouter` + `Session` (process-per-chat under a DynamicSupervisor, idle/cooldown/
-max-session limits), `Pairing` (codes + allowlists + `authorize/2`), and `Supervisor`. Elaborations
-landed the same day: per-chat history recording (`Session` `:log` keyed by `conversation_id`), the
-four-mode `Delivery` router (decision item 4), and `SessionRouter.handoff/3` (rebind to an existing
-`conversation_id` so history follows). Still to do: the concrete platform adapters (Telegram refactor,
-Discord, ...) and the `Lifecycle`-backed handler.
+Implemented in `packages/raxol_gateway/`: `Adapter` behaviour (+ `Adapter.InMemory`; the contract is
+frozen at five callbacks, additions must be optional callbacks), `Route` keying, `SessionRouter` +
+`Session` (process-per-chat under a DynamicSupervisor, idle/cooldown/max-session limits), `Pairing`
+(codes + allowlists + `authorize/2`), `Supervisor`, per-chat history recording (`Session` `:log`
+keyed by `conversation_id`), the four-mode `Delivery` router (decision item 4), and
+`SessionRouter.handoff/3` (rebind to an existing `conversation_id` so history follows).
 
-2026-07-24: the `Adapter` contract is frozen (five callbacks; additions must be optional callbacks),
-and the first production handler landed: `Handler.Agent`, backed by `Raxol.Agent.Stream` with
-environment-resolved credentials (`auto_provider`).
-
-2026-07-25: the remaining items from the 2026-06-18 list closed. `Handler.Lifecycle` runs a full TEA
-app per chat under the new `environment: :gateway` (#721), and three platform adapters sit behind the
-frozen contract: `Raxol.Telegram.GatewayAdapter` plus its `UpdatePoller` (#715),
-`Raxol.Gateway.Adapter.Discord` plus its `GatewaySocket` (#717), and `Raxol.Gateway.Adapter.Email`
-over `gen_smtp` (#718).
+Handlers: `Handler.Agent`, backed by `Raxol.Agent.Stream` with environment-resolved credentials
+(`auto_provider`), and `Handler.Lifecycle`, which runs a full TEA app per chat under
+`environment: :gateway` (#721). Three platform adapters sit behind the frozen contract:
+`Raxol.Telegram.GatewayAdapter` plus its `UpdatePoller` (#715), `Raxol.Gateway.Adapter.Discord` plus
+its `GatewaySocket` (#717), and `Raxol.Gateway.Adapter.Email` over `gen_smtp` (#718).
 
 ## Context
 
@@ -267,7 +261,7 @@ already factored.
 
 ## References
 
-- `~/Desktop/hermes-extraction-report.md` (item H1.4; the Hermes Gateway, session keys, pairing, delivery, handoff)
+- Internal research notes on the Hermes Gateway (session keys, pairing, delivery, handoff)
 - ADR-0014: Telegram AI Guardian (applicant tracking + pluggable decision module; reused for pairing)
 - ADR-0020: Agent Sandbox/ThreadLog/Policies (auth decisions recorded to `ThreadLog`)
 - ADR-0021 / ADR-0022: skills + memory (`Conversation.Log` history unlocks `session_search` over chats)

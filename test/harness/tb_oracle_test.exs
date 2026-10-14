@@ -1,7 +1,6 @@
 defmodule Raxol.Harness.TbOracleTest do
   @moduledoc """
-  TB (byte-capture test harness) acceptance suite. Per
-  `docs/proposals/in-flight/harness-ui-roadmap.md`'s TB unit: "a hand-written
+  TB (byte-capture test harness) acceptance suite: "a hand-written
   violating stream is caught by both oracles; a known-good stream passes;
   origin tags survive interleaving."
 

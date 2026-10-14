@@ -2,17 +2,12 @@
 
 ## Status
 
-Accepted, 2026-07-22 (implemented in `Raxol.Agent.SelfImprove`, `Raxol.Agent.Curator`, and `Raxol.Agent.Skills.Store`). Originally proposed 2026-06-17. First of the Hermes-extraction Tier 1 ADRs (research deliverable at
-`~/Desktop/hermes-extraction-report.md`, items H1.1 self-improvement loop + H1.2 runtime skill
+Accepted, 2026-07-22 (implemented in `Raxol.Agent.SelfImprove`, `Raxol.Agent.Curator`, and `Raxol.Agent.Skills.Store`). Originally proposed 2026-06-17. First of the Tier 1 Hermes-parity ADRs
+(self-improvement loop + runtime skill
 authoring). Hermes (Nous Research) is the benchmark agent this work targets: its defining claim,
 "an agent that gets more capable the longer it runs," rests on agent-authored skills plus an
 after-turn background curation pass plus a Curator that ages and consolidates those artifacts.
 This ADR scopes the Raxol counterpart.
-
-Revised 2026-06-17 after a second Hermes research pass against current sources (v0.14-v0.16 official
-docs + the `NousResearch/hermes-agent` repo). The design held up (every curator threshold below
-matches Hermes verbatim) and the pass added concrete buffer caps plus a deferred-first-pass
-mitigation drawn from a real Hermes curator incident (issue #18373).
 
 Builds on ADR-0020 (Sandbox / ThreadLog / declarative Policies: the `CommandHook` chain and the
 `ThreadLog` audit seam are reused here, not re-invented) and on the omnigent item-log
@@ -309,7 +304,7 @@ consumer appears, mirroring the ADR-0020 decision to keep `ThreadLog` in `raxol_
 
 ## References
 
-- `~/Desktop/hermes-extraction-report.md` (items H1.1, H1.2; the Hermes mechanism this mirrors)
+- Internal research notes on the Hermes mechanism this mirrors
 - ADR-0020: Agent Sandbox, ThreadLog, declarative Policies (the `CommandHook` + `ThreadLog` +
   `Sandbox` seams reused for audit and isolation)
 - ADR-0012: MCP as Rendering Target (the "expose runtime state as an MCP resource" precedent; a

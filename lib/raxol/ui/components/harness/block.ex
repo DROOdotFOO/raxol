@@ -3,11 +3,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   The projection unit of the harness transcript: one sealed-or-live chunk of
   a session, folded from journal events into a renderable shape.
 
-  See `docs/proposals/in-flight/harness-ui-roadmap.md` (unit T4) and
-  `docs/proposals/in-flight/harness-spec-protocol.md` (the event contract
-  this module folds). The protocol's `%Event{}` struct does not exist in
-  code yet (spec draft only) -- `from_events/3` accepts plain maps shaped
-  like it: `%{id:, turn_id:, ts:, family:, type:, tier:, scope:,
+  `from_events/3` accepts plain maps shaped like the protocol event:
+  `%{id:, turn_id:, ts:, family:, type:, tier:, scope:,
   provenance:, payload:}`, all keys optional and read defensively. That
   tolerance is deliberate: the contract only grows, and this module must
   never crash when it meets a field it doesn't know yet.
@@ -42,8 +39,8 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   Fold state mutates freely while a block is `:live`. Once `seal/1` marks it
   `:sealed`, whether `fold/2` / `unfold/2` may still change the fold state is
-  the paint-authority decision (D-PA, `harness-ui-roadmap.md` sec 0) --
-  undecided as of this unit. Rather than hardcode a guess, every fold
+  the paint-authority decision (D-PA), which this module does not fix.
+  Rather than hardcode a guess, every fold
   transition takes a `:fold_after_seal` option (`:allow | :deny`, default
   `:deny`) so the eventual D-PA verdict plugs in as a caller-supplied policy
   with no rewrite of this module: pass `fold_after_seal: :allow` once D-PA

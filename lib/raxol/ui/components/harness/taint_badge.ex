@@ -2,11 +2,10 @@ defmodule Raxol.UI.Components.Harness.TaintBadge do
   @moduledoc """
   A tiny inline badge marking untrusted, tool-derived content.
 
-  Render-dual of one event envelope's `provenance.trust` field (see
-  `docs/proposals/in-flight/harness-spec-protocol.md` sec 3): renders
+  Render-dual of one event envelope's `provenance.trust` field: renders
   `"⚠ untrusted"` in yellow when `provenance.trust == :tainted` (passed in as
   `taint: true`); renders nothing when trusted. This is the frontend's
-  lethal-trifecta visibility marker (`harness-spec-frontend.md` sec 6) --
+  lethal-trifecta visibility marker --
   content whose provenance traces back to untrusted tool output must stay
   visibly marked, never silently blended into the primary feed.
 

@@ -2,8 +2,7 @@ defmodule Raxol.UI.Components.Harness.WordDiff do
   @moduledoc """
   Intra-line word diff for a paired deletion/addition line.
 
-  Ports the intra-line model from
-  `docs/proposals/in-flight/pierre-diffs-analysis.md` §1.3: for a paired
+  Ports the Pierre (`@pierre/diffs`) intra-line model: for a paired
   change row (the i-th deletion of a changed hunk against its i-th
   addition -- purely positional, no similarity matching), tokenize both
   lines into words and whitespace runs, diff the token sequences (LCS),

@@ -12,7 +12,7 @@ defmodule Raxol.Harness.WrapCorpusTest do
 
   In this codebase styling is separated from content: components must
   never embed raw ANSI (`\\e[...m`) in strings passed to `text()`; ANSI is
-  applied only at the final `Terminal.Renderer` stage (see CLAUDE.md). So
+  applied only at the final `Terminal.Renderer` stage. So
   `TextLayout` is deliberately **content-only / ANSI-and-control-naive** --
   it wraps plain text and is never fed escape/CR/CRLF bytes on the harness
   path.

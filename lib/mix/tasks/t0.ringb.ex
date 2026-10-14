@@ -9,7 +9,7 @@ defmodule Mix.Tasks.T0.Ringb do
   `append_result.sh`, and prints the D-PA resolver's output.
 
   This retires the manual "Ring B" half of
-  `docs/proposals/t0-runbook.md` for every terminal with a
+  `docs/testing/T0_RUNBOOK.md` for every terminal with a
   scriptable capture API. Ghostty has neither a `get-text` CLI nor a
   `get text`/`contents`/`history` AppleScript command (confirmed via
   `sdef`) — it is recorded as a documented skip (screenshot residual),
@@ -63,7 +63,7 @@ defmodule Mix.Tasks.T0.Ringb do
   # scripts/harness/t0/ringb/, not lib/ — not part of the compiled app)
   # — the compiler can't see them at compile time, so suppress the
   # undefined-function warning (same pattern this repo already uses for
-  # cross-package references, see CLAUDE.md).
+  # cross-package references, see `docs/development/README.md#package-boundaries`).
   @compile {:no_warn_undefined, [T0.RingB.Runner, T0.RingB.Boot]}
 
   @t0_root Path.expand("../../../scripts/harness/t0", __DIR__)

@@ -172,8 +172,8 @@ defmodule Raxol.UI.ColorResolver do
   # stays in raxol_terminal's renderer. `raxol_agent` is a downstream
   # package; `raxol_terminal` is a same-repo dependency of main raxol, not
   # a guaranteed-loaded sibling in every build (headless test runs,
-  # LiveView, doc generation) -- guarded per CLAUDE.md's cross-package
-  # discipline.
+  # LiveView, doc generation) -- guarded per the cross-package
+  # discipline in `docs/development/README.md#package-boundaries`.
   @compile {:no_warn_undefined, Raxol.Terminal.Capabilities}
 
   @text_floor_ratio 4.5

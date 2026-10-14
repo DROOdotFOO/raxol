@@ -1,9 +1,8 @@
 defmodule Raxol.UI.Harness.ProminencePropertyTest do
   @moduledoc """
-  Property suite for `Raxol.UI.Harness.Prominence`, per
-  `docs/proposals/in-flight/harness-ui-testing/05-salience.md` sec 2-3.
+  Property suite for `Raxol.UI.Harness.Prominence`.
 
-  Two distinct metrics (05-salience.md sec 1), used for different
+  Two distinct metrics, used for different
   properties:
 
     * **M1** (`Salience.apparent_lightness/3`, the solver's own H-K model)
