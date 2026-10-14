@@ -5,22 +5,29 @@
 # (the forward fixture proves the opposite direction). Run from
 # packages/raxol_payments with:
 #
-#   MIX_ENV=test mix run scripts/gen_reverse_stealth_vectors.exs [OUT_PATH]
+#   MIX_ENV=test mix run scripts/gen_reverse_stealth_vectors.exs OUT_PATH
 #
-# OUT_PATH defaults to test/fixtures/reverse_stealth_vectors.json; pass the
-# Xochi checkout's src/lib/reverse-stealth-vectors.json to refresh the fixture
-# consumed by its reverse-stealth-conformance.test.ts. Regenerate if
+# OUT_PATH is required (exactly one, non-empty). Pass the Xochi checkout's
+# src/lib/reverse-stealth-vectors.json to refresh the fixture consumed by its
+# reverse-stealth-conformance.test.ts. Regenerate if
 # Raxol.Payments.Xochi.Stealth changes.
 
 alias Raxol.Payments.Xochi.Stealth
 
-default_out =
-  Path.expand("../test/fixtures/reverse_stealth_vectors.json", __DIR__)
-
 out =
   case System.argv() do
-    [path | _] -> Path.expand(path)
-    [] -> default_out
+    [path] when path != "" ->
+      Path.expand(path)
+
+    argv ->
+      IO.puts(:stderr, """
+      usage: MIX_ENV=test mix run scripts/gen_reverse_stealth_vectors.exs OUT_PATH
+
+      Expected exactly one non-empty OUT_PATH, got: #{inspect(argv)}
+      To refresh Xochi's fixture, pass <xochi>/src/lib/reverse-stealth-vectors.json.
+      """)
+
+      System.halt(1)
   end
 
 # Deterministic 65-byte (r,s,v) EVM signatures and 32-byte ephemeral scalars.
