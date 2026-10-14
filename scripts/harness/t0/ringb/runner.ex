@@ -198,11 +198,13 @@ defmodule T0.RingB.Runner do
 
   Terminals hard-wrap long command lines, so a path can be split across
   a line break in the capture. The match tolerates a line break between
-  any two characters, and the line breaks it consumes are re-emitted
-  right after the placeholder, so the file's line count and every other
-  line stay exactly as captured. A `nil`, empty or `"/"` path is left
-  alone, as is a match followed by a path-name character (so `/a/raxol`
-  never rewrites `/a/raxol_other`).
+  any two characters and either path separator, and the line breaks it
+  consumes are re-emitted right after the placeholder, so the file's line
+  count and every other line stay exactly as captured. Paths are treated as
+  captured text rather than expanded for the host OS, so POSIX evidence can
+  be scrubbed on Windows and vice versa. A `nil`, empty or `"/"` path is left
+  alone, as is a match followed by a path-name character (so `/a/raxol` never
+  rewrites `/a/raxol_other`).
   """
   @spec redact_evidence(String.t(), String.t() | nil, String.t() | nil) ::
           String.t()
@@ -218,9 +220,12 @@ defmodule T0.RingB.Runner do
   defp redact_path(text, path, placeholder) do
     source =
       path
-      |> Path.expand()
+      |> String.replace("\\", "/")
       |> String.graphemes()
-      |> Enum.map_join("(?:\\r?\\n)?", &Regex.escape/1)
+      |> Enum.map_join("(?:\\r?\\n)?", fn
+        "/" -> "[/\\\\]"
+        grapheme -> Regex.escape(grapheme)
+      end)
 
     pattern = Regex.compile!(source <> "(?![\\w.\\-])", "u")
 

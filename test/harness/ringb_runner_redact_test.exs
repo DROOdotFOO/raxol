@@ -58,6 +58,15 @@ defmodule Raxol.Harness.RingBRunnerRedactTest do
              "cat ~/.zshrc\n<repo>/mix.exs\n"
   end
 
+  test "redacts Windows paths with either separator style" do
+    repo = ~S(C:\Users\someone\src\raxol)
+    home = ~S(C:\Users\someone)
+    text = ~S(C:\Users\someone\src\raxol\mix.exs C:/Users/someone/notes.txt)
+
+    assert Runner.redact_evidence(text, repo, home) ==
+             ~S(<repo>\mix.exs ~/notes.txt)
+  end
+
   test "a sibling path sharing the root as a prefix is not taken for the root" do
     text = "#{@repo}_other/x #{@home}2/y"
 
