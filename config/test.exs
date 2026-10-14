@@ -125,3 +125,6 @@ config :raxol,
 config :ex_unit,
   assert_receive_timeout: 1000,
   refute_receive_timeout: 1000
+
+# Show debug logs during tests
+config :logger, level: :debug
