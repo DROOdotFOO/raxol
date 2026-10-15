@@ -381,23 +381,30 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Elixir
+        id: beam
         uses: erlef/setup-beam@v1
         with:
           version-file: mise.toml
           version-type: strict
 
-      # Without a cache this job compiled the whole umbrella from cold before
-      # a multi-minute analysis, against a 90 min ceiling -- and a timeout
-      # here silently removes the only enforcing credo gate.
-      - name: Restore cache
+      # Dependency sources may fall back across lockfile changes. Compiled
+      # path dependencies may not: mix.lock does not record their versions.
+      - name: Cache dependency sources
         uses: actions/cache@v6
         with:
-          path: |
-            deps
-            _build
-          key: credo-${{ runner.os }}-${{ hashFiles('**/mix.lock') }}
+          path: deps
+          key: credo-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            credo-${{ runner.os }}-
+            credo-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      # Reuse compiled output only for the same source snapshot and toolchain.
+      # No fallback: stale .app metadata can fail dependency validation before
+      # Mix gets a chance to recompile a package after its version changes.
+      - name: Cache compiled output
+        uses: actions/cache@v6
+        with:
+          path: _build
+          key: credo-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ env.MIX_ENV }}-${{ github.sha }}
 
       - name: Install dependencies
         run: mix deps.get
