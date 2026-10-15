@@ -4,9 +4,6 @@ defmodule Raxol.Core.Accessibility.PreferenceManager do
   Handles merging, setting, and syncing preferences to UserPreferences.
   """
 
-  # Style.Colors.System lives in main raxol; guarded with Code.ensure_loaded?
-  @compile {:no_warn_undefined, Raxol.Style.Colors.System}
-
   @sync_keys [
     :high_contrast,
     :reduced_motion,
@@ -44,14 +41,4 @@ defmodule Raxol.Core.Accessibility.PreferenceManager do
       user_preferences_pid
     )
   end
-
-  @doc "Notifies the running ColorSystemServer when high_contrast changes."
-  def maybe_notify_color_system(:high_contrast, value) do
-    if Code.ensure_loaded?(Raxol.Style.Colors.System) and
-         Process.whereis(Raxol.Style.Colors.System.ColorSystemServer) do
-      Raxol.Style.Colors.System.handle_high_contrast({:accessibility_high_contrast, value})
-    end
-  end
-
-  def maybe_notify_color_system(_key, _value), do: :ok
 end

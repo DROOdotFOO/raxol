@@ -1,7 +1,7 @@
 defmodule Raxol.LiveView.Test.BufferHelper do
   @moduledoc false
-  # Creates buffer-like maps for testing TerminalBridge without depending on
-  # Raxol.Core.Buffer (which lives in main raxol, not raxol_core).
+  # Creates buffer-like maps for testing TerminalBridge's structural buffer
+  # contract without coupling these tests to the compatibility constructor.
 
   @doc "Create a blank buffer map with given dimensions."
   def create_blank_buffer(width, height) do
