@@ -1,6 +1,7 @@
 defmodule Raxol.Animation.FrameworkTest do
   # Disable async because we are manipulating GenServers
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   require Logger
 

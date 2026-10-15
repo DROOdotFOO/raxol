@@ -6,6 +6,7 @@ defmodule Raxol.CrossTerminal.BoxDimensionsTest do
   large screen size.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
   alias Raxol.Terminal.Buffer.Queries

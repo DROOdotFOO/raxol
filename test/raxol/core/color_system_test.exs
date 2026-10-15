@@ -1,6 +1,7 @@
 defmodule Raxol.Core.ColorSystemTest do
   # The color system server is a singleton registered under a global name.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.ColorSystem
   alias Raxol.Style.Colors.System.ColorSystemServer

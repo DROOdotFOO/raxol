@@ -1,5 +1,6 @@
 defmodule Raxol.Performance.CycleProfiler.StatsTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Performance.CycleProfiler.Stats
 

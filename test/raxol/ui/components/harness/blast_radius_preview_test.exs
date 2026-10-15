@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.Harness.BlastRadiusPreviewTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Harness.BlastRadiusPreview

@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Rendering.RenderBatcherTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.UI.Rendering.RenderBatcher
 

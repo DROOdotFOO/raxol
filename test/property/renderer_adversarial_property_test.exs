@@ -21,6 +21,7 @@ defmodule Raxol.Property.RendererAdversarialTest do
   # draw. Serializing costs nothing in throughput there (the work is
   # CPU-bound either way) and removes the contention-induced timeouts.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.Rendering.Backends
   alias Raxol.Harness.Test.SealOracle

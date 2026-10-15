@@ -1,5 +1,6 @@
 defmodule Raxol.Core.Runtime.Rendering.EngineTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.Rendering.Engine
 

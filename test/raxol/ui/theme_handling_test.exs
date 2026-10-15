@@ -1,5 +1,6 @@
 defmodule Raxol.UI.ThemeHandlingTest do
   use ExUnit.Case
+  @moduletag :capture_log
   alias Raxol.Test.RendererTestHelper, as: Helper
   alias Raxol.UI.Renderer
   alias Raxol.UI.Theming.Theme

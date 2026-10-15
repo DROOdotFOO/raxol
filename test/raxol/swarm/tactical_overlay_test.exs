@@ -1,5 +1,6 @@
 defmodule Raxol.Swarm.TacticalOverlayTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Swarm.TacticalOverlay
 

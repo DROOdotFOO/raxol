@@ -15,6 +15,7 @@ defmodule Raxol.Harness.ProjectionPanelsSurfaceTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Events.Event
   alias Raxol.Harness.Projection

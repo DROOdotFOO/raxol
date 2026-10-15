@@ -1,6 +1,7 @@
 defmodule Raxol.Style.Colors.HotReloadTest do
   # Run tests serially to avoid GenServer name conflict
   use ExUnit.Case
+  @moduletag :capture_log
 
   alias Raxol.Style.Colors.HotReload
 

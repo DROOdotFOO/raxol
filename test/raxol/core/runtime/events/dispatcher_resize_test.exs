@@ -4,6 +4,7 @@ defmodule Raxol.Core.Runtime.Events.DispatcherResizeTest do
   and resize the Rendering Engine buffer.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   import ExUnit.CaptureLog
 
   alias Raxol.Core.Events.Event

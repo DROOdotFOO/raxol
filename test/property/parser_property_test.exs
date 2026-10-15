@@ -1,5 +1,6 @@
 defmodule Raxol.Property.ParserTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Terminal.ANSI.Utils.AnsiParser, as: Parser

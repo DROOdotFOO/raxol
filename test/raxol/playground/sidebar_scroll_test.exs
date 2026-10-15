@@ -6,6 +6,7 @@ defmodule Raxol.Playground.SidebarScrollTest do
   """
 
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   @moduletag capture_log: true
 
   alias Raxol.Headless

@@ -1,5 +1,6 @@
 defmodule Raxol.Core.Runtime.Lifecycle.ShutdownTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   import ExUnit.CaptureLog
 

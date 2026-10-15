@@ -9,6 +9,7 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
   `use Raxol.Core.Runtime.Application` and rendered by a headless session.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
 

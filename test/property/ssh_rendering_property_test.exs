@@ -17,6 +17,7 @@ defmodule Raxol.Property.SSHRenderingTest do
   # draw. Serializing costs nothing in throughput there (the work is
   # CPU-bound either way) and removes the contention-induced timeouts.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Core.Runtime.Rendering.Backends

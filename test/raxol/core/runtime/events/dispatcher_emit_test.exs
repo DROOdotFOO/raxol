@@ -6,6 +6,7 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
   bug); it now emits.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.EmitBus
   alias Raxol.Core.Runtime.Events.Dispatcher

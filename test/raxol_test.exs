@@ -1,6 +1,7 @@
 defmodule RaxolTest do
   # set_theme/1 writes the application env, which is global.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
   alias Raxol.UI.Theming.Theme

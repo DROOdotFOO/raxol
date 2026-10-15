@@ -1,5 +1,6 @@
 defmodule Raxol.Animation.EasingTest do
   use ExUnit.Case
+  @moduletag :capture_log
 
   alias Raxol.Animation.Easing
 

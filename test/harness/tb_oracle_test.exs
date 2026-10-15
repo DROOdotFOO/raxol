@@ -13,6 +13,7 @@ defmodule Raxol.Harness.TbOracleTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.Test.{BuggyAuthority, CaptureAuthority}
   alias Raxol.Harness.Test.SealOracle

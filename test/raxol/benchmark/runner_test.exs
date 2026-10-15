@@ -1,5 +1,6 @@
 defmodule Raxol.Benchmark.RunnerTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   @moduletag :benchmark
 
   alias Raxol.Benchmark.{Analyzer, Reporter, Runner}

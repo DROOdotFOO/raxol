@@ -1,5 +1,6 @@
 defmodule Raxol.Adaptive.BehaviorTrackerTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Adaptive.BehaviorTracker
   alias Raxol.MCP.{Registry, ToolSynchronizer}

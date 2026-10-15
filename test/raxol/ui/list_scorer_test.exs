@@ -1,5 +1,6 @@
 defmodule Raxol.UI.ListScorerTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.UI.ListScorer

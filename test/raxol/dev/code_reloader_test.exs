@@ -1,5 +1,6 @@
 defmodule Raxol.Dev.CodeReloaderTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Dev.CodeReloader
 
@@ -45,7 +46,9 @@ defmodule Raxol.Dev.CodeReloaderTest do
 
       send(pid, {:file_event, self(), {"lib/test.txt", [:modified]}})
 
-      Process.sleep(700)
+      # :sys.get_state is served after the event; a non-.ex path must not
+      # have armed the debounce timer, so no :recompile can ever fire.
+      assert %{timer_ref: nil} = :sys.get_state(pid)
       refute_received :render_needed
 
       GenServer.stop(pid)

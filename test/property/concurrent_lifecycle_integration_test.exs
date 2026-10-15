@@ -15,6 +15,7 @@ defmodule Raxol.Property.ConcurrentLifecycleIntegrationTest do
   pointer to which singleton collision happened.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.Lifecycle
 

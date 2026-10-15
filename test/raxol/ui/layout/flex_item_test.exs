@@ -4,6 +4,7 @@ defmodule Raxol.UI.Layout.FlexItemTest do
   min-content) code against exactly these behaviors.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.UI.Layout.FlexItem
 

@@ -1,5 +1,6 @@
 defmodule Raxol.Plugins.Visualization.ImageRendererTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   alias Raxol.Plugins.Visualization.ImageRenderer
   alias Raxol.Terminal.Cell
 

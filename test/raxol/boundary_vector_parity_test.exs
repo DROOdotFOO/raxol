@@ -30,6 +30,7 @@ defmodule Raxol.BoundaryVectorParityTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   @core "packages/raxol_core/test/support/boundary_vectors"
   @acp "packages/raxol_agent_client_protocol/test/support/boundary_vectors"

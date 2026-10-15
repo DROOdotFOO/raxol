@@ -22,6 +22,7 @@ defmodule Raxol.Property.RendererSealOnceTest do
   # draw. Serializing costs nothing in throughput there (the work is
   # CPU-bound either way) and removes the contention-induced timeouts.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   use ExUnitProperties
 
   # This suite is the CPU-bound emulator-replay keystone the nightly matrix

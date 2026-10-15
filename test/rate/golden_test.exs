@@ -1,5 +1,6 @@
 defmodule Raxol.RATEGoldenTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   @moduledoc """
   Runs the RATE render corpus inside the normal suite so every arch CI builds

@@ -1,5 +1,6 @@
 defmodule Raxol.SSH.ServerTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.SSH.Server
 

@@ -1,5 +1,6 @@
 defmodule Raxol.Core.Runtime.Lifecycle.InitializerTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.Lifecycle
   alias Raxol.Core.Runtime.Lifecycle.Initializer

@@ -1,5 +1,6 @@
 defmodule Raxol.Core.Runtime.Events.BubblerTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Events.Event
   alias Raxol.Core.Runtime.Events.Bubbler

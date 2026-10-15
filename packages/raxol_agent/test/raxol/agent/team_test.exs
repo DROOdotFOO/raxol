@@ -82,7 +82,6 @@ defmodule Raxol.Agent.TeamTest do
           workers: [{WorkerAgent, [id: :t2_worker]}]
         )
 
-      Process.sleep(500)
       {:ok, model} = Session.get_model(:t2_coord)
       assert model.role == :coordinator
       assert model.messages == []
@@ -98,7 +97,6 @@ defmodule Raxol.Agent.TeamTest do
           workers: [{WorkerAgent, [id: :t3_worker]}]
         )
 
-      Process.sleep(500)
       {:ok, model} = Session.get_model(:t3_worker)
       assert model.role == :worker
       assert model.tasks_done == 0
@@ -117,7 +115,6 @@ defmodule Raxol.Agent.TeamTest do
         )
 
       Session.send_message(:tm1_worker, :do_task)
-      Process.sleep(500)
 
       {:ok, model} = Session.get_model(:tm1_worker)
       assert model.tasks_done == 1
@@ -134,7 +131,6 @@ defmodule Raxol.Agent.TeamTest do
         )
 
       Session.send_message(:tm2_coord, {:report, "status update"})
-      Process.sleep(500)
 
       {:ok, model} = Session.get_model(:tm2_coord)
       assert length(model.messages) == 1
@@ -156,7 +152,6 @@ defmodule Raxol.Agent.TeamTest do
       Session.send_message(:tm3_w1, :do_task)
       Session.send_message(:tm3_w1, :do_task)
       Session.send_message(:tm3_w2, :do_task)
-      Process.sleep(500)
 
       {:ok, w1_model} = Session.get_model(:tm3_w1)
       {:ok, w2_model} = Session.get_model(:tm3_w2)
@@ -180,7 +175,6 @@ defmodule Raxol.Agent.TeamTest do
       [{worker_pid, _}] = Registry.lookup(Raxol.Agent.Registry, :ts1_worker)
 
       Supervisor.stop(team_pid)
-      Process.sleep(100)
 
       refute Process.alive?(coord_pid)
       refute Process.alive?(worker_pid)
@@ -195,10 +189,13 @@ defmodule Raxol.Agent.TeamTest do
         )
 
       Supervisor.stop(team_pid)
-      Process.sleep(100)
 
-      assert [] = Registry.lookup(Raxol.Agent.Registry, :ts2_coord)
-      assert [] = Registry.lookup(Raxol.Agent.Registry, :ts2_worker)
+      # Registry is linked to registrants and drops keys when it handles the
+      # {:EXIT, ...}; lookup doesn't filter dead pids, so poll until it has.
+      wait_until(fn ->
+        Registry.lookup(Raxol.Agent.Registry, :ts2_coord) == [] and
+          Registry.lookup(Raxol.Agent.Registry, :ts2_worker) == []
+      end)
     end
   end
 

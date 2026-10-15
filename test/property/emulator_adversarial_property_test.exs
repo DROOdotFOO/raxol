@@ -7,6 +7,7 @@ defmodule Raxol.Terminal.EmulatorAdversarialPropertyTest do
   OSC sequences from introducers, numbers and payloads real programs send.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   alias Raxol.Terminal.Emulator

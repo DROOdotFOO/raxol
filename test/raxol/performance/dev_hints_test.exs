@@ -1,6 +1,7 @@
 defmodule Raxol.Performance.DevHintsTest do
   # DevHints is a singleton registered under a global name.
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Performance.DevHints
 

@@ -1,5 +1,6 @@
 defmodule Raxol.Plugins.Lifecycle.DependenciesTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Plugins.Lifecycle.Dependencies
   alias Raxol.Plugins.Plugin

@@ -4,6 +4,7 @@ defmodule Raxol.Core.Accessibility.ThemeIntegrationTest do
   event handling, and accessibility settings application.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Accessibility.ThemeIntegration
   alias Raxol.Core.Events.EventManager, as: EventManager

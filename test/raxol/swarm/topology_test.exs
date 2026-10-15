@@ -1,5 +1,6 @@
 defmodule Raxol.Swarm.TopologyTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Swarm.Topology
 

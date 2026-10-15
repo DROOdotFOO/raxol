@@ -10,6 +10,7 @@ defmodule Raxol.Animation.StateSettingsContractTest do
   """
 
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Animation.Adaptation
   alias Raxol.Animation.Framework

@@ -1,5 +1,6 @@
 defmodule Raxol.Workflow.CompensateTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Graph

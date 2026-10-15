@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Layout.TableTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.UI.Layout.Table
 

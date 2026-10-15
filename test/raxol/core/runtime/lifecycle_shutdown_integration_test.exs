@@ -46,6 +46,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
   triad review found a deadlock in the handler. This file is Facet 1 only.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   import ExUnit.CaptureLog
 

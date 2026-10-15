@@ -1,5 +1,6 @@
 defmodule Raxol.Adaptive.LayoutRecommenderTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Adaptive.{BehaviorTracker, LayoutRecommender}
 

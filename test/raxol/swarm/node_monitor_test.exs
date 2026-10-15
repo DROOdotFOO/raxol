@@ -1,5 +1,6 @@
 defmodule Raxol.Swarm.NodeMonitorTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Swarm.NodeMonitor
 

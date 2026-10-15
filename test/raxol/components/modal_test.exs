@@ -2,6 +2,7 @@ defmodule Raxol.UI.Components.ModalTest do
   # use ExUnit.Case, async: true
   # Run synchronously
   use ExUnit.Case
+  @moduletag :capture_log
 
   alias Raxol.UI.Components.Modal
   # For checking rendered elements

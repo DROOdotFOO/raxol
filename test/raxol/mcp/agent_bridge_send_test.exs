@@ -6,6 +6,7 @@ defmodule Raxol.MCP.AgentBridgeSendTest do
   for as long as the app took.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
   alias Raxol.MCP.AgentBridge

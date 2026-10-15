@@ -4,6 +4,7 @@ defmodule Raxol.CrossTerminal.HeadlessGoldenTest do
   boot, key events, and re-render — an end-to-end pipeline regression net.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Headless
 

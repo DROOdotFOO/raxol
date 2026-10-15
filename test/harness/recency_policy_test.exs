@@ -14,6 +14,7 @@ defmodule Raxol.Harness.RecencyPolicyTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.Projection
   alias Raxol.Harness.RecencyPolicy

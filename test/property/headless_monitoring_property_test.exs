@@ -12,6 +12,7 @@ defmodule Raxol.Property.HeadlessMonitoringTest do
   processes needed, deterministic, no race conditions.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
   use ExUnitProperties
 
   import Raxol.Test.PropertyGenerators

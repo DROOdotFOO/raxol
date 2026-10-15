@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.TableTest do
   use ExUnit.Case
+  @moduletag :capture_log
   alias Raxol.UI.Components.Table
 
   @test_columns [

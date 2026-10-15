@@ -17,6 +17,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
   frames (`show/2`).
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   import ExUnit.CaptureLog
 

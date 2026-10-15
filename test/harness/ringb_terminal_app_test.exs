@@ -16,6 +16,7 @@ defmodule Raxol.Harness.RingBTerminalAppTest do
   """
 
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias T0.RingB.Drivers.TerminalApp
   alias T0.RingB.{Guard, Measurements}

@@ -148,13 +148,32 @@ defmodule Raxol.Agent.SessionTest do
     :ok
   end
 
+  # Async directives (shell, async fn) deliver their results to the
+  # dispatcher later. Subscribe to the session's EmitBus stream so the test
+  # can wait for the typed :command_result event instead of sleeping.
+  defp subscribe_session(id) do
+    session_id = "#{id}-#{System.unique_integer([:positive])}"
+    :ok = Raxol.Core.Runtime.EmitBus.subscribe(session_id)
+    session_id
+  end
+
+  defmacrop await_command_result(pattern) do
+    quote do
+      assert_receive {:emit_bus, _,
+                      %{
+                        type: :command_result,
+                        payload: %{message: {:command_result, unquote(pattern)}}
+                      }},
+                     5_000
+    end
+  end
+
   describe "lifecycle" do
     test "starts and stops an agent session" do
       {:ok, pid} = Session.start_link(app_module: CounterAgent, id: :lifecycle_start)
       assert Process.alive?(pid)
 
       GenServer.stop(pid)
-      Process.sleep(50)
       refute Process.alive?(pid)
     end
 
@@ -177,11 +196,15 @@ defmodule Raxol.Agent.SessionTest do
   end
 
   describe "messaging" do
+    # send_message casts to the session, which casts to the dispatcher;
+    # get_model calls through the same two mailboxes, so the fold is always
+    # applied before the read. This covers model reads only: the view tree
+    # is written by the rendering engine (a different sender), so view-tree
+    # tests must poll instead.
     test "send_message updates model through TEA loop" do
       {:ok, _pid} = Session.start_link(app_module: CounterAgent, id: :msg_update)
 
       Session.send_message(:msg_update, {:increment, 5})
-      Process.sleep(200)
 
       {:ok, model} = Session.get_model(:msg_update)
       assert model.count == 5
@@ -192,10 +215,8 @@ defmodule Raxol.Agent.SessionTest do
 
       for i <- 1..5 do
         Session.send_message(:msg_multi, {:increment, i})
-        Process.sleep(50)
       end
 
-      Process.sleep(200)
       {:ok, model} = Session.get_model(:msg_multi)
       assert model.count == 15
       assert length(model.messages) == 5
@@ -213,10 +234,15 @@ defmodule Raxol.Agent.SessionTest do
   describe "shell commands" do
     @tag :unix_only
     test "agent executes shell commands and receives results" do
-      {:ok, _pid} = Session.start_link(app_module: ShellAgent, id: :shell_exec)
+      {:ok, _pid} =
+        Session.start_link(
+          app_module: ShellAgent,
+          id: :shell_exec,
+          session_id: subscribe_session("shell_exec")
+        )
 
       Session.send_message(:shell_exec, {:run, "echo hello_agent"})
-      Process.sleep(500)
+      await_command_result({:shell_result, _})
 
       {:ok, model} = Session.get_model(:shell_exec)
       assert model.status == :done
@@ -229,10 +255,14 @@ defmodule Raxol.Agent.SessionTest do
     @tag :unix_only
     test "agent executes shell directives and receives results" do
       {:ok, _pid} =
-        Session.start_link(app_module: DirectiveShellAgent, id: :directive_shell)
+        Session.start_link(
+          app_module: DirectiveShellAgent,
+          id: :directive_shell,
+          session_id: subscribe_session("directive_shell")
+        )
 
       Session.send_message(:directive_shell, {:run, "echo hello_directive"})
-      Process.sleep(500)
+      await_command_result({:shell_result, _})
 
       {:ok, model} = Session.get_model(:directive_shell)
       assert model.status == :done
@@ -245,10 +275,14 @@ defmodule Raxol.Agent.SessionTest do
     @tag :unix_only
     test "bare directive struct (not wrapped in list) is normalized" do
       {:ok, _pid} =
-        Session.start_link(app_module: BareDirectiveAgent, id: :bare_directive)
+        Session.start_link(
+          app_module: BareDirectiveAgent,
+          id: :bare_directive,
+          session_id: subscribe_session("bare_directive")
+        )
 
       Session.send_message(:bare_directive, {:run, "echo bare_directive"})
-      Process.sleep(500)
+      await_command_result({:shell_result, _})
 
       {:ok, model} = Session.get_model(:bare_directive)
       assert model.status == :done
@@ -264,7 +298,6 @@ defmodule Raxol.Agent.SessionTest do
         Session.start_link(app_module: CausationCaptureAgent, id: :causation_capture)
 
       GenServer.cast(pid, {:send_message, :capture, %{causation_id: "upstream-xyz"}})
-      Process.sleep(200)
 
       {:ok, model} = Session.get_model(:causation_capture)
       assert model.captured == "upstream-xyz"
@@ -275,7 +308,6 @@ defmodule Raxol.Agent.SessionTest do
         Session.start_link(app_module: CausationCaptureAgent, id: :causation_absent)
 
       Session.send_message(:causation_absent, :capture)
-      Process.sleep(200)
 
       {:ok, model} = Session.get_model(:causation_absent)
       assert model.captured == nil
@@ -284,10 +316,15 @@ defmodule Raxol.Agent.SessionTest do
 
   describe "async commands" do
     test "agent processes async sender callbacks" do
-      {:ok, _pid} = Session.start_link(app_module: AsyncAgent, id: :async_exec)
+      {:ok, _pid} =
+        Session.start_link(
+          app_module: AsyncAgent,
+          id: :async_exec,
+          session_id: subscribe_session("async_exec")
+        )
 
       Session.send_message(:async_exec, :start_work)
-      Process.sleep(500)
+      await_command_result({:done, :ok})
 
       {:ok, model} = Session.get_model(:async_exec)
       assert model.status == :complete
@@ -300,18 +337,21 @@ defmodule Raxol.Agent.SessionTest do
       {:ok, _pid} = Session.start_link(app_module: CounterAgent, id: :view_tree_test)
 
       Session.send_message(:view_tree_test, {:increment, 42})
-      Process.sleep(300)
 
-      {:ok, view_tree} = Session.get_view_tree(:view_tree_test)
-      # View tree should be non-nil after a render cycle
-      assert view_tree != nil || true
+      # The engine stores the tree via its own cast after :render_needed,
+      # so no mailbox ordering covers this read; poll until it lands.
+      wait_until(fn ->
+        match?({:ok, tree} when tree != nil, Session.get_view_tree(:view_tree_test))
+      end)
+
+      assert {:ok, view_tree} = Session.get_view_tree(:view_tree_test)
+      assert view_tree != nil
     end
 
     test "headless agent works without view/1" do
       {:ok, _pid} = Session.start_link(app_module: HeadlessAgent, id: :headless_test)
 
       Session.send_message(:headless_test, {:set, 99})
-      Process.sleep(200)
 
       {:ok, model} = Session.get_model(:headless_test)
       assert model.value == 99
@@ -327,24 +367,16 @@ defmodule Raxol.Agent.SessionTest do
       {:ok, _pid} = Session.start_link(app_module: CounterAgent, id: :semantic_test)
 
       Session.send_message(:semantic_test, {:increment, 7})
-      Process.sleep(300)
 
-      case Session.get_semantic_view(:semantic_test) do
-        {:ok, nil} ->
-          # View tree may not be stored yet; acceptable
-          :ok
+      # The tree arrives through the engine's render cast; poll for it.
+      wait_until(fn ->
+        match?({:ok, tree} when tree != nil, Session.get_view_tree(:semantic_test))
+      end)
 
-        {:ok, tree} ->
-          # Semantic tree should not contain layout keys
-          refute Map.has_key?(tree, :style)
-          refute Map.has_key?(tree, :padding)
-          # Should preserve type
-          assert Map.has_key?(tree, :type)
-
-        {:error, _} ->
-          # Dispatcher may not have a view tree yet
-          :ok
-      end
+      assert {:ok, tree} = Session.get_semantic_view(:semantic_test)
+      refute Map.has_key?(tree, :style)
+      refute Map.has_key?(tree, :padding)
+      assert Map.has_key?(tree, :type)
     end
 
     test "get_semantic_view returns error for unknown agent" do
@@ -363,12 +395,24 @@ defmodule Raxol.Agent.SessionTest do
       assert Process.alive?(pid)
 
       Session.send_message(:supervised_test, {:increment, 10})
-      Process.sleep(200)
 
       {:ok, model} = Session.get_model(:supervised_test)
       assert model.count == 10
 
       DynamicSupervisor.terminate_child(Raxol.DynamicSupervisor, pid)
+    end
+  end
+
+  # Polls a predicate up to a bound; deterministic, no timing assertions.
+  defp wait_until(fun, attempts \\ 600)
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(5)
+      wait_until(fun, attempts - 1)
     end
   end
 end

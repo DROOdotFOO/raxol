@@ -1,5 +1,6 @@
 defmodule Raxol.Workflow.AsyncResumeTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Test.TestUtils
 

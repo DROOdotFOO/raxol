@@ -1,5 +1,6 @@
 defmodule Raxol.UI.RendererTest do
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.UserPreferences
   alias Raxol.UI.Renderer

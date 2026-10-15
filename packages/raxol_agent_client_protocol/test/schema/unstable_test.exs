@@ -11,10 +11,7 @@
 # and `MethodNames` test groups are intentionally NOT ported here: those
 # types live in different upstream files (`maybe_undefined.ex`,
 # `client_types.ex`, `agent_side_connection.ex`, `method_names.ex`
-# respectively), so they belong to whichever coder ports those files. The
-# `SessionInfoUpdate` tests here are tagged `:pending_sibling` and excluded
-# by default since they exercise `MaybeUndefined`, not yet landed at the time
-# this file was written — see this file's coder report.
+# respectively), so they belong to the tests for those files.
 defmodule Raxol.AgentClientProtocol.Schema.UnstableTest do
   use ExUnit.Case, async: true
 
@@ -412,8 +409,7 @@ defmodule Raxol.AgentClientProtocol.Schema.UnstableTest do
     end
   end
 
-  @tag :pending_sibling
-  test "SessionInfoUpdate (needs MaybeUndefined)" do
+  test "SessionInfoUpdate round trip" do
     alias Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate
 
     update = SessionInfoUpdate.new()

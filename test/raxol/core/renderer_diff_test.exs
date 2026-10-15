@@ -5,6 +5,7 @@ defmodule Raxol.Core.RendererDiffTest do
   entirely blank.
   """
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Core.Buffer
   alias Raxol.Core.Renderer

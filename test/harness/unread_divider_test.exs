@@ -36,6 +36,7 @@ defmodule Raxol.Harness.UnreadDividerTest do
   """
 
   use ExUnit.Case, async: true
+  @moduletag :capture_log
 
   alias Raxol.Harness.UnreadDivider
   alias Raxol.UI.TextMeasure

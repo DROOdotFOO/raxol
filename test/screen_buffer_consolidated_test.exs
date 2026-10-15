@@ -1,5 +1,6 @@
 defmodule ScreenBufferTest do
   use ExUnit.Case
+  @moduletag :capture_log
   doctest Raxol.Terminal.ScreenBuffer.Core
 
   alias Raxol.Terminal.Cell

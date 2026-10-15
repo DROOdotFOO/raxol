@@ -7,6 +7,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.MultiInstanceEnvironmentTest do
   without a plugin manager.
   """
   use ExUnit.Case, async: false
+  @moduletag :capture_log
 
   alias Raxol.Core.Runtime.Lifecycle
   alias Raxol.Core.Runtime.Rendering.Backends
