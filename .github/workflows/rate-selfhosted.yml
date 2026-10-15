@@ -19,22 +19,13 @@ name: RATE self-hosted
 # x86_64 self-hosted runner or a nix-on-ubuntu-latest leg; naming an arch nobody
 # can run is not coverage.
 #
-# Security: raxol is a public repository, so these jobs must never run untrusted
-# code on the homelab. Triggers are limited to manual dispatch, pushes to master,
-# and the nightly schedule (all trusted refs). There is no pull_request trigger,
-# and the owner guard fences out forks.
+# Security: raxol is a public repository, so this job must never run untrusted
+# code on the homelab. Keep it manual while no matching self-hosted runner is
+# registered; restore trusted push/schedule triggers only after the runner is
+# online. The owner guard fences out forks.
 
 on:
   workflow_dispatch: {}
-  push:
-    branches: [master]
-    paths:
-      - "packages/raxol_terminal/**"
-      - "flake.nix"
-      - "flake.lock"
-      - ".github/workflows/rate-selfhosted.yml"
-  schedule:
-    - cron: "0 7 * * *"
 
 concurrency:
   group: rate-selfhosted-${{ github.ref }}
