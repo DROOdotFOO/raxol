@@ -1,6 +1,6 @@
 Last login: Thu Jul 16 04:17:29 on ttys007 
-➜  ~ T0_HOLD_SECONDS=8 bash '/Users/jabher/IdeaProjects/raxol/.claude/worktrees/agent-a7bd59b81a3d2184d/scripts/harness/t0/probes/p02_scrollback_feed.sh' 24 3 3 
-0 ringb-iterm2-C4-9282 
+$ T0_HOLD_SECONDS=8 bash '<repo>/scripts/harness/t0/probes/p02_scrollback_feed.sh' 24 3 30 ringb-iterm2-C4-9282 
+ 
  
  
  

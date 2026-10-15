@@ -141,7 +141,11 @@ defmodule T0.RingB.Runner do
     evidence_path =
       Path.join(evidence_dir, "ringb-#{driver.name()}-#{row.claim}.txt")
 
-    File.write!(evidence_path, row.evidence || "")
+    File.write!(
+      evidence_path,
+      redact_evidence(row.evidence || "", repo_root, System.get_env("HOME"))
+    )
+
     rel_evidence = Path.relative_to(evidence_path, repo_root)
 
     observable_json =
@@ -180,6 +184,55 @@ defmodule T0.RingB.Runner do
           append_output: String.trim(out)
         })
     end
+  end
+
+  @repo_placeholder "<repo>"
+
+  @doc """
+  Scrubs machine-local paths from captured terminal text before it is
+  written to a tracked evidence file: the absolute `repo_root` becomes
+  `#{@repo_placeholder}` and `home` (`$HOME`) becomes `~`. The probe
+  command each measurement types (`held_cmd/3` in `Measurements`) carries
+  the absolute probe path, so without this every run would commit the
+  operator's username and directory layout.
+
+  Terminals hard-wrap long command lines, so a path can be split across
+  a line break in the capture. The match tolerates a line break between
+  any two characters and either path separator, and the line breaks it
+  consumes are re-emitted right after the placeholder, so the file's line
+  count and every other line stay exactly as captured. Paths are treated as
+  captured text rather than expanded for the host OS, so POSIX evidence can
+  be scrubbed on Windows and vice versa. A `nil`, empty or `"/"` path is left
+  alone, as is a match followed by a path-name character (so `/a/raxol` never
+  rewrites `/a/raxol_other`).
+  """
+  @spec redact_evidence(String.t(), String.t() | nil, String.t() | nil) ::
+          String.t()
+  def redact_evidence(text, repo_root, home) do
+    text
+    |> redact_path(repo_root, @repo_placeholder)
+    |> redact_path(home, "~")
+  end
+
+  defp redact_path(text, path, _placeholder) when path in [nil, "", "/"],
+    do: text
+
+  defp redact_path(text, path, placeholder) do
+    source =
+      path
+      |> String.replace("\\", "/")
+      |> String.graphemes()
+      |> Enum.map_join("(?:\\r?\\n)?", fn
+        "/" -> "[/\\\\]"
+        grapheme -> Regex.escape(grapheme)
+      end)
+
+    pattern = Regex.compile!(source <> "(?![\\w.\\-])", "u")
+
+    Regex.replace(pattern, text, fn match ->
+      breaks = ~r/\r?\n/ |> Regex.scan(match) |> Enum.map_join(&hd/1)
+      placeholder <> breaks
+    end)
   end
 
   defp run_resolver(t0_root) do

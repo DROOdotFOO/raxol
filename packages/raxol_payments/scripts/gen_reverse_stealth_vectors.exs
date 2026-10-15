@@ -2,17 +2,33 @@
 #
 # Emits vectors the Xochi TS reference validates -- proving a stealth payment
 # OUR implementation generates is discoverable and spendable by the TS receiver
-# (the forward fixture proves the opposite direction). Run with:
+# (the forward fixture proves the opposite direction). Run from
+# packages/raxol_payments with:
 #
-#   MIX_ENV=test mix run scripts/gen_reverse_stealth_vectors.exs
+#   MIX_ENV=test mix run scripts/gen_reverse_stealth_vectors.exs OUT_PATH
 #
-# It writes the fixture consumed by
-# xochi/src/lib/reverse-stealth-conformance.test.ts. Regenerate if
+# OUT_PATH is required (exactly one, non-empty). Pass the Xochi checkout's
+# src/lib/reverse-stealth-vectors.json to refresh the fixture consumed by its
+# reverse-stealth-conformance.test.ts. Regenerate if
 # Raxol.Payments.Xochi.Stealth changes.
 
 alias Raxol.Payments.Xochi.Stealth
 
-out = "/Users/droo/CODE/xochi/src/lib/reverse-stealth-vectors.json"
+out =
+  case System.argv() do
+    [path] when path != "" ->
+      Path.expand(path)
+
+    argv ->
+      IO.puts(:stderr, """
+      usage: MIX_ENV=test mix run scripts/gen_reverse_stealth_vectors.exs OUT_PATH
+
+      Expected exactly one non-empty OUT_PATH, got: #{inspect(argv)}
+      To refresh Xochi's fixture, pass <xochi>/src/lib/reverse-stealth-vectors.json.
+      """)
+
+      System.halt(1)
+  end
 
 # Deterministic 65-byte (r,s,v) EVM signatures and 32-byte ephemeral scalars.
 # Distinct from the forward fixture so the two cover different inputs.

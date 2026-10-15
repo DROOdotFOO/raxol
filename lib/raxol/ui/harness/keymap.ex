@@ -5,7 +5,7 @@ defmodule Raxol.UI.Harness.Keymap do
 
   ## The seam this closes
 
-  `Raxol.UI.Harness.InputEvent` (T27) already reduces every driver key-event
+  `Raxol.UI.Harness.InputEvent` already reduces every driver key-event
   shape to one canonical `t()`. This module is the next layer: it decides
   what a *normalized* keypress *means* -- interrupt the running turn, queue
   a steer, toggle a block's fold, move focus between blocks -- without
@@ -184,11 +184,11 @@ defmodule Raxol.UI.Harness.Keymap do
   must be one that can fire *while the user is mid-composing* (queuing a
   steer message is the whole point), so it cannot be a plain printable
   character (those are text, full stop -- see the guard above). `Tab` is
-  the documented precedent for exactly this shape of decision
-  (`harness-spec-protocol.md` / `harness-spec-frontend.md`: "the corpus's
-  named steer-vs-interrupt primitive (Tab=queue / Enter=now)"); it also has
-  a first-class canonical key atom (`:tab`) verified across the real
-  termbox and ANSI wires by T27, and Composer does not otherwise bind it.
+  the documented precedent for exactly this shape of decision: the harness
+  protocol names Tab=queue / Enter=now as its steer-vs-interrupt
+  primitive. It also has a first-class canonical key atom (`:tab`)
+  verified across the real termbox and ANSI wires by `InputEvent`'s own
+  tests, and Composer does not otherwise bind it.
 
   ## Command shape: reusing the agent command channel without a compile-time dependency
 

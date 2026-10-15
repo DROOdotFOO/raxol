@@ -4,12 +4,12 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   as its real, merged per-kind component when expanded, and as `Block`'s own
   proven one-line-summary-plus-outcome-row when folded.
 
-  Per `harness-ui-roadmap.md`'s T5 accept criteria ("each block kind renders
-  its component; folded forms show one-line summary + outcome row") and the
-  D-PA note carried in `Block`'s own moduledoc ("fold semantics post-seal are
-  policy... T5 just renders whatever fold state the block carries"): this
-  module never re-derives or re-emits fold state, it only reads
-  `block.fold` and picks a rendering strategy.
+  The rule: each block kind renders its component; folded forms show a
+  one-line summary + outcome row. Combined with the D-PA note carried in
+  `Block`'s own moduledoc ("fold semantics post-seal are policy... the
+  body just renders whatever fold state the block carries"), this module
+  never re-derives or re-emits fold state, it only reads `block.fold` and
+  picks a rendering strategy.
 
     * `:folded`   -- delegates to `Block.render/2` unchanged. That render
       is already exactly "header line (fold glyph + kind glyph + summary)

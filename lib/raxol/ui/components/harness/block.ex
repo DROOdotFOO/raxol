@@ -35,7 +35,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   generated here -- `duration_ms` is derived only from `ts` fields already
   present on the source events).
 
-  ## Fold semantics and the D-PA gate
+  ## Fold semantics and the paint-authority (D-PA) gate
 
   Fold state mutates freely while a block is `:live`. Once `seal/1` marks it
   `:sealed`, whether `fold/2` / `unfold/2` may still change the fold state is
@@ -63,8 +63,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   ## Observability
 
   Both total-safety rescues (construction fallback to `:opaque`, render
-  fallback to the placeholder line) are observable per
-  `harness-ui-testing/06-projection.md` sec 4: each emits a
+  fallback to the placeholder line) are observable: each emits a
   `Logger.warning/1` and the telemetry event
   `[:raxol, :harness, :block, :recovered]` with metadata
   `%{kind:, reason:}` -- a recovery is never silent. (Distinct from
@@ -232,7 +231,7 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   @doc """
   The default fold state for `kind` (the "fold_defaults" a projection layer
-  like T7 assigns per identity sec 2 of `harness-ui-testing/06-projection.md`).
+  assigns per block identity).
   An unrecognised kind gets `:opaque`'s default.
   """
   @spec default_fold(term()) :: fold_state()
