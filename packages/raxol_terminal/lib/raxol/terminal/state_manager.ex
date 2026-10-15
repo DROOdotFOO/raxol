@@ -7,9 +7,6 @@ defmodule Raxol.Terminal.StateManager do
   patterns across the codebase while maintaining its specific terminal functionality.
   """
 
-  # Raxol.Core.StateManager lives in main raxol; guarded at runtime
-  @compile {:no_warn_undefined, Raxol.Core.StateManager}
-
   def init, do: {:ok, %{}}
   def init(opts), do: {:ok, Keyword.get(opts, :initial_state, %{})}
 

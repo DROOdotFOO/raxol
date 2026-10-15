@@ -8,9 +8,6 @@ defmodule Raxol.Terminal.Script.ScriptServer do
 
   use Raxol.Core.Behaviours.BaseManager
 
-  # Raxol.Core.StateManager lives in main raxol; guarded at runtime
-  @compile {:no_warn_undefined, Raxol.Core.StateManager}
-
   alias Raxol.Core.Runtime.Log
   @type script_id :: String.t()
   @type script_type :: :lua | :python | :javascript | :elixir
@@ -125,9 +122,7 @@ defmodule Raxol.Terminal.Script.ScriptServer do
       script_timeout: Keyword.get(opts, :script_timeout, 30_000)
     }
 
-    maybe_load_scripts(state.auto_load, state.script_paths)
-
-    {:ok, state}
+    {:ok, maybe_load_scripts(state, state.auto_load)}
   end
 
   @impl true
@@ -649,54 +644,59 @@ defmodule Raxol.Terminal.Script.ScriptServer do
     end
   end
 
-  defp load_scripts_from_paths(paths) do
-    Enum.each(paths, fn path ->
+  defp load_scripts_from_paths(scripts, paths) do
+    Enum.reduce(paths, scripts, fn path, acc ->
       case File.stat(path) do
         {:ok, %{type: :directory}} ->
-          load_scripts_from_directory(path)
+          load_scripts_from_directory(acc, path)
 
         {:ok, %{type: :regular}} ->
-          load_script_from_single_file(path)
+          load_script_from_single_file(acc, path)
 
         _ ->
           Log.warning("Invalid script path: #{path}")
+          acc
       end
     end)
   end
 
-  defp load_scripts_from_directory(path) do
+  defp load_scripts_from_directory(scripts, path) do
     case File.ls(path) do
       {:ok, entries} ->
-        Enum.each(entries, &process_directory_entry(path, &1))
+        Enum.reduce(entries, scripts, &process_directory_entry(&2, path, &1))
 
       {:error, reason} ->
         Log.error("Failed to list directory #{path}: #{inspect(reason)}")
+        scripts
     end
   end
 
-  defp process_directory_entry(base_path, entry) do
+  defp process_directory_entry(scripts, base_path, entry) do
     entry_path = Path.join(base_path, entry)
 
     case File.stat(entry_path) do
       {:ok, %{type: :directory}} ->
-        load_scripts_from_directory(entry_path)
+        load_scripts_from_directory(scripts, entry_path)
 
       {:ok, %{type: :regular}} ->
-        load_script_from_single_file(entry_path)
+        load_script_from_single_file(scripts, entry_path)
 
       _ ->
-        :ok
+        scripts
     end
   end
 
-  defp load_script_from_single_file(path) do
-    load_script_if_valid_file(script_file?(Path.basename(path)), path)
+  defp load_script_from_single_file(scripts, path) do
+    load_script_if_valid_file(scripts, script_file?(Path.basename(path)), path)
   end
 
   # Helper functions for if statement elimination
 
-  defp maybe_load_scripts(false, _paths), do: :ok
-  defp maybe_load_scripts(true, paths), do: load_scripts_from_paths(paths)
+  defp maybe_load_scripts(state, false), do: state
+
+  defp maybe_load_scripts(state, true) do
+    %{state | scripts: load_scripts_from_paths(state.scripts, state.script_paths)}
+  end
 
   defp update_script_config_if_valid(config, script, script_id, state)
        when is_map(config) do
@@ -777,24 +777,17 @@ defmodule Raxol.Terminal.Script.ScriptServer do
     end
   end
 
-  defp load_script_if_valid_file(false, _path), do: :ok
+  defp load_script_if_valid_file(scripts, false, _path), do: scripts
 
-  defp load_script_if_valid_file(true, path) do
+  defp load_script_if_valid_file(scripts, true, path) do
     case import_script_from_file(path, []) do
       {:ok, script} ->
-        script_id = generate_script_id()
-
-        # Store in process dictionary for now, could be enhanced to use GenServer state
-        _ =
-          Raxol.Core.StateManager.set_state(
-            :scripts,
-            %{{:loaded_script, script_id} => script}
-          )
-
         Log.info("Loaded script: #{script.name} from #{path}")
+        Map.put(scripts, generate_script_id(), script)
 
       {:error, reason} ->
         Log.error("Failed to load script from #{path}: #{inspect(reason)}")
+        scripts
     end
   end
 end

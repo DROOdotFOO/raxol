@@ -11,9 +11,6 @@ defmodule Raxol.Core.UserPreferences do
   alias Raxol.Core.Runtime.Log
   use Raxol.Core.Behaviours.BaseManager
 
-  # Terminal.Config.Defaults lives in main raxol; guarded with Code.ensure_loaded?
-  @compile {:no_warn_undefined, Raxol.Terminal.Config.Defaults}
-
   alias Raxol.Core.Preferences.Persistence
   alias Raxol.Core.Utils.Debounce
 
@@ -324,21 +321,29 @@ defmodule Raxol.Core.UserPreferences do
   end
 
   @doc """
-  Returns the default preferences map.
-  This includes default values for theme, terminal configuration, accessibility settings,
-  and keybindings.
+  Returns the default preferences map: theme, terminal, accessibility and
+  keybindings sections.
+
+  raxol_core does not depend on raxol_terminal, so the `:terminal` section is
+  read from application config, first match wins:
+
+    1. `config :raxol_core, :default_terminal_preferences, value`, for a
+       consumer that wants its own defaults;
+    2. `:default_terminal_preferences` in the `:raxol_terminal` application
+       env, which raxol_terminal ships in its `.app` file as
+       `{Raxol.Terminal.Config.Defaults, :generate_default_config, []}`;
+    3. otherwise `%{}` (raxol_core on its own).
+
+  `value` is a map or an `{module, function, args}` whose call returns a map.
+  Anything else, including an MFA whose function is not exported, logs a
+  warning and yields `%{}`.
   """
   def default_preferences do
     %{
       theme: %{
         active_id: :default
       },
-      terminal:
-        if Code.ensure_loaded?(Raxol.Terminal.Config.Defaults) do
-          Raxol.Terminal.Config.Defaults.generate_default_config()
-        else
-          %{}
-        end,
+      terminal: default_terminal_preferences(),
       accessibility: %{
         enabled: true,
         screen_reader: true,
@@ -353,5 +358,40 @@ defmodule Raxol.Core.UserPreferences do
           # Add default keybindings here
         }
     }
+  end
+
+  defp default_terminal_preferences do
+    with :error <- Application.fetch_env(:raxol_core, :default_terminal_preferences),
+         :error <- Application.fetch_env(:raxol_terminal, :default_terminal_preferences) do
+      %{}
+    else
+      {:ok, value} -> resolve_terminal_preferences(value)
+    end
+  end
+
+  defp resolve_terminal_preferences(%{} = defaults), do: defaults
+
+  defp resolve_terminal_preferences({mod, fun, args} = mfa)
+       when is_atom(mod) and is_atom(fun) and is_list(args) do
+    if Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do
+      case apply(mod, fun, args) do
+        %{} = defaults -> defaults
+        other -> invalid_terminal_preferences(mfa, "returned #{inspect(other)}")
+      end
+    else
+      invalid_terminal_preferences(mfa, "is not an exported function")
+    end
+  end
+
+  defp resolve_terminal_preferences(other),
+    do: invalid_terminal_preferences(other, "is neither a map nor an {m, f, a}")
+
+  defp invalid_terminal_preferences(value, reason) do
+    Raxol.Core.Runtime.Log.warning(
+      "Ignoring :default_terminal_preferences #{inspect(value)}: #{reason}; " <>
+        "terminal defaults are %{}"
+    )
+
+    %{}
   end
 end

@@ -263,6 +263,29 @@ jobs:
       - name: Check singleton allowlist
         run: bash scripts/check_singletons.sh
 
+      # `package-tests` compiles every package standalone with
+      # --warnings-as-errors, so a call into main raxol from a package is a
+      # compile error there -- unless the file hides it behind
+      # `@compile {:no_warn_undefined, Mod}`. Four sites in raxol_terminal did
+      # exactly that and raised UndefinedFunctionError when the package ran
+      # without main raxol. This parses every packages/*/lib file, resolves
+      # each module it names (calls, apply/3, every no_warn_undefined form,
+      # atoms) to the tree that defines it, and fails on one the package's
+      # mix.exs does not declare for :prod, beyond the grandfathered list in
+      # scripts/.package-boundaries-allowlist. On a pull request it also fails
+      # when that list gained an entry the base commit does not have. Plain
+      # `elixir`, no compile.
+      - name: Check package boundaries
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            elixir scripts/check_package_boundaries.exs --base "$BASE_SHA"
+          else
+            elixir scripts/check_package_boundaries.exs
+          fi
+
       # raxol_agent now has its own package-tests cell, but this guard stays
       # here: a schema_version bump that ships without a frozen golden journal
       # is unrecoverable, and this check is dependency-free, so it answers in

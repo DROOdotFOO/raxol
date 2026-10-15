@@ -247,28 +247,18 @@ defmodule Raxol.Core.Theming.ThemeRegistry do
   def convert_color(hex, :rgb), do: hex_to_rgb(hex)
   def convert_color(hex, :rgba), do: hex_to_rgba(hex)
 
-  @doc """
-  Converts a hex string to RGB tuple.
-  Delegates to `Raxol.Utils.ColorConversion`.
-  """
-  @spec hex_to_rgb(hex_color()) :: rgb_color()
-  defdelegate hex_to_rgb(hex), to: Raxol.Utils.ColorConversion
+  # Every colour this module stores is a six-digit `#rrggbb` string, so the
+  # registry parses exactly that shape and nothing else. The lenient parser in
+  # main raxol (`Raxol.Utils.ColorConversion`) is out of reach: raxol_core must
+  # stay usable without it.
+  defp hex_to_rgb(<<"#", r::binary-size(2), g::binary-size(2), b::binary-size(2)>>) do
+    {String.to_integer(r, 16), String.to_integer(g, 16), String.to_integer(b, 16)}
+  end
 
-  @doc """
-  Converts a hex string to RGBA map.
-  """
-  @spec hex_to_rgba(hex_color()) :: rgba_color()
-  def hex_to_rgba(hex) do
+  defp hex_to_rgba(hex) do
     {r, g, b} = hex_to_rgb(hex)
     %{r: r, g: g, b: b, a: 1.0}
   end
-
-  @doc """
-  Converts an RGB tuple to hex string.
-  Delegates to `Raxol.Utils.ColorConversion`.
-  """
-  @spec rgb_to_hex(rgb_color()) :: hex_color()
-  defdelegate rgb_to_hex(rgb), to: Raxol.Utils.ColorConversion
 
   # ============================================================================
   # Theme Definitions
