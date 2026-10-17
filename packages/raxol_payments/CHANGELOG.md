@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `:nothing`; `:nothing` is removed from the `t()` typespec. No design promises
   zero retention and Sovereign is excluded (xochi
   `docs/planning/shielded-execution.md` D1). `examples/privacy_modes.exs` /
-  `examples/README.md` no longer say shielded hides the amount.
+  `examples/README.md` no longer say shielded hides the amount, and call
+  recipient hiding a target that is not delivered today; the `PrivacyTier`
+  moduledoc marks Private and Sovereign shielded settlement unavailable.
 
 ## [0.3.0] - 2026-10-09
 
