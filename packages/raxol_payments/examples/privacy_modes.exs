@@ -11,14 +11,15 @@
 #     identity without their viewing key. The recipient has to go looking --
 #     there is no notification, so they scan announcements.
 #
-#   shielded (Aztec)
-#     The payment is a note in an L2's private state. The amount and the
-#     recipient are hidden, not just unlinkable. What leaks is that a
-#     transaction happened at all, and the nullifier that will eventually
-#     spend it.
+#   shielded (Aztec) -- NOT AVAILABLE; off everywhere today
+#     The accepted testnet design (A, `transfer_to_private`) hides only the
+#     recipient: the amount, the token, the solver and the timing are public
+#     on Aztec, and the deposit on the source chain is public under every
+#     design. A future design may hide the Aztec-side amount, but never the
+#     source deposit. See xochi docs/planning/shielded-execution.md.
 #
-# So: stealth breaks the link on a public ledger, shielded moves the transfer
-# off the public ledger. Section 3 puts that side by side.
+# So: both break the recipient link on a public ledger; neither hides the
+# amount today. Section 3 puts that side by side.
 #
 # Runs fully offline. Section 1 is real secp256k1 -- the same code that derives
 # a live stealth address, doing it here with throwaway keys. Section 2 drives
@@ -147,7 +148,7 @@ defmodule PrivacyModes do
 
     rows = [
       {"who was paid", "hidden", "hidden"},
-      {"how much", "PUBLIC", "hidden"},
+      {"how much", "PUBLIC", "PUBLIC (design A)"},
       {"that a payment happened", "PUBLIC", "PUBLIC"},
       {"settles on", "Ethereum", "Aztec L2"},
       {"recipient must scan", "yes", "no"},
@@ -163,9 +164,10 @@ defmodule PrivacyModes do
     IO.puts("""
 
       `Router.select(privacy: :stealth)` and `:shielded` both route to Xochi,
-      so the rail is the same and the settlement target is the difference. An
-      agent that must not reveal an amount cannot take stealth, however
-      unlinkable the address is -- which is the row people read past.
+      so the rail is the same and the settlement target is the difference.
+      Shielded is not available yet, and the accepted design hides only the
+      recipient: an agent that must not reveal an amount cannot take either
+      mode today -- which is the row people read past.
     """)
   end
 

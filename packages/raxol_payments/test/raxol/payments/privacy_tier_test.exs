@@ -70,7 +70,7 @@ defmodule Raxol.Payments.PrivacyTierTest do
       standard = PrivacyTier.from_trust_score(10)
       sovereign = PrivacyTier.from_trust_score(80)
       assert standard.data_retention == :amounts
-      assert sovereign.data_retention == :nothing
+      assert sovereign.data_retention == :wallet
     end
   end
 
