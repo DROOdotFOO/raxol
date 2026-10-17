@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `Raxol.Payments.PrivacyTier`: Sovereign's `data_retention` is `:wallet`, not
+  `:nothing`; `:nothing` is removed from the `t()` typespec. No design promises
+  zero retention and Sovereign is excluded (xochi
+  `docs/planning/shielded-execution.md` D1). `examples/privacy_modes.exs` /
+  `examples/README.md` no longer say shielded hides the amount.
+
 ## [0.3.0] - 2026-10-09
 
 ### Removed
