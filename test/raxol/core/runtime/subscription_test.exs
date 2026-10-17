@@ -141,7 +141,6 @@ defmodule Raxol.Core.Runtime.SubscriptionTest do
       setup_event_manager()
     end
 
-    @tag :skip_on_ci
     test "starts an interval subscription", %{context: context} do
       sub = Subscription.interval(50, :tick, start_immediately: true)
       assert {:ok, {:interval, timer_ref}} = Subscription.start(sub, context)
@@ -151,9 +150,11 @@ defmodule Raxol.Core.Runtime.SubscriptionTest do
         if Process.read_timer(ref), do: Process.cancel_timer(ref)
       end)
 
-      assert_receive {:subscription, :tick}, 100
-
-      assert_receive {:subscription, :tick}, 100
+      # The immediate tick is sent before start/2 returns; the timer's tick
+      # arrives whenever the scheduler gets to it, so it is waited for with a
+      # hang bound rather than a deadline.
+      assert_received {:subscription, :tick}
+      assert_receive {:subscription, :tick}, 1_000
     end
 
     test "starts an events subscription", %{context: context} do
