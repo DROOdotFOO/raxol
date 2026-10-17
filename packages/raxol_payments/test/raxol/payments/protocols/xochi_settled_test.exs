@@ -34,7 +34,11 @@ defmodule Raxol.Payments.Protocols.XochiSettledTest do
   end
 
   # Canned quote -> execute -> completed status, so a full transfer/4 runs offline.
-  defp stub_transfer do
+  # `exec_extra` merges into the execute body; each status poll reports the
+  # read-token header it carried (nil when absent).
+  defp stub_transfer(exec_extra \\ %{}) do
+    test_pid = self()
+
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
@@ -50,9 +54,18 @@ defmodule Raxol.Payments.Protocols.XochiSettledTest do
           })
 
         "/api/intent/execute" ->
-          Req.Test.json(conn, %{"success" => true, "intentId" => "int_1", "status" => "executing"})
+          Req.Test.json(
+            conn,
+            Map.merge(
+              %{"success" => true, "intentId" => "int_1", "status" => "executing"},
+              exec_extra
+            )
+          )
 
         "/api/intent/int_1/status" ->
+          token = conn |> Plug.Conn.get_req_header("x-xochi-read-token") |> List.first()
+          send(test_pid, {:status_read_token, token, conn.query_string})
+
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "status" => "completed",
@@ -61,6 +74,22 @@ defmodule Raxol.Payments.Protocols.XochiSettledTest do
           })
       end
     end)
+  end
+
+  test "transfer/4 polls with the read_token execute returned (xochi#563)" do
+    token = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    stub_transfer(%{"read_token" => token})
+
+    assert {:ok, %{status: :completed}} = Xochi.transfer(config(), request(), Wallet)
+    # Header only, never the query string.
+    assert_received {:status_read_token, ^token, ""}
+  end
+
+  test "transfer/4 polls without a read-token header when execute returned none" do
+    stub_transfer()
+
+    assert {:ok, %{status: :completed}} = Xochi.transfer(config(), request(), Wallet)
+    assert_received {:status_read_token, nil, ""}
   end
 
   test "transfer/4 emits [:raxol, :payments, :xochi, :settled] on completion" do

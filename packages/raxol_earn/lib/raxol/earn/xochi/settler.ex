@@ -63,9 +63,32 @@ defmodule Raxol.Earn.Xochi.Settler do
       }}
 
   On error: `{:error, reason}`. SolverAgent marks the session `:failed` and does
-  NOT submit a deliverable on-chain.
+  NOT submit a deliverable on-chain. A completed intent whose status carries no
+  settlement tx hash is `{:error, {:settlement_tx_hash_unavailable, intent_id}}`:
+  the deliverable schema requires that hash, and the settler never invents one.
+
+  ## Read token
+
+  For a stealth/shielded intent the Xochi worker withholds the tx hashes from a
+  caller that does not prove ownership (xochi#563). The relay is the caller that
+  executed, so it holds the intent's one-time `read_token` from the execute
+  response and presents it on every poll. It never goes into the deliverable, a
+  log line or a URL. An execute answered with a non-2xx that carries the token
+  (`{:execute_in_doubt, _, _}`: funds may have moved) is polled like a dispatched
+  intent, not failed.
+
+  ## Crash recovery
+
+  With a `:checkpoint` store (a `Raxol.Payments.Checkpoint` `{module, handle}`)
+  the settler records the intent before relaying it and, once the execute
+  answers, records its id, `read_token` and stealth announcement fields. A
+  settle re-run for the same intent after a crash resumes polling from that
+  record instead of relaying the bundle again, still with the token. A definite
+  execute failure drops the record. The record holds a bearer secret: use a
+  store you would trust with the intent itself.
   """
 
+  alias Raxol.Payments.Checkpoint
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.{ExecuteResponse, IntentStatus}
 
@@ -82,15 +105,18 @@ defmodule Raxol.Earn.Xochi.Settler do
   - `:poll_timeout_ms` -- max time to wait for intent settlement.
     Default 120_000 (2 minutes).
   - `:poll_interval_ms` -- default 2_000 (2 seconds).
+  - `:checkpoint` -- a `Raxol.Payments.Checkpoint` store; see "Crash recovery".
+    Default nil (no recovery).
   """
   @spec build(keyword()) :: (map() -> {:ok, map()} | {:error, term()})
   def build(opts) do
     xochi_config = Keyword.fetch!(opts, :xochi_config)
     poll_timeout = Keyword.get(opts, :poll_timeout_ms, 120_000)
     poll_interval = Keyword.get(opts, :poll_interval_ms, 2_000)
+    store = Keyword.get(opts, :checkpoint)
 
     fn settle_args ->
-      do_settle(settle_args, xochi_config,
+      do_settle(settle_args, xochi_config, store,
         timeout_ms: poll_timeout,
         interval_ms: poll_interval
       )
@@ -99,14 +125,67 @@ defmodule Raxol.Earn.Xochi.Settler do
 
   # -- Internal --
 
-  defp do_settle(args, xochi_config, poll_opts) do
+  defp do_settle(args, xochi_config, store, poll_opts) do
     with {:ok, bundle} <- extract_signed_intent(args),
          {:ok, intent_id} <- bundle_intent_id(bundle),
-         {:ok, %ExecuteResponse{} = exec} <- Xochi.execute_signed(xochi_config, bundle),
+         {:ok, %ExecuteResponse{} = exec} <- dispatch(xochi_config, bundle, intent_id, store),
          {:ok, %IntentStatus{} = status} <-
-           Xochi.poll_status(xochi_config, intent_id, poll_opts) do
+           Xochi.poll_status(
+             xochi_config,
+             intent_id,
+             Keyword.put(poll_opts, :read_token, exec.read_token)
+           ) do
       settle_result(status, exec, args)
     end
+  end
+
+  # Resume from the checkpoint when this intent was already relayed; otherwise
+  # record it, relay it, and record what the execute answered. A crash between
+  # the two puts leaves only the dispatched marker: the outcome is unknown, so
+  # the intent is polled (without a token) rather than relayed twice.
+  defp dispatch(xochi_config, bundle, intent_id, store) do
+    key = Checkpoint.derive_key([:xochi_settler, intent_id])
+
+    case Checkpoint.fetch(store, key) do
+      {:ok, record} ->
+        {:ok, resumed_exec(record, intent_id)}
+
+      :error ->
+        Checkpoint.put(store, key, %{intent_id: intent_id, status: :dispatched})
+
+        case Xochi.as_dispatched(Xochi.execute_signed(xochi_config, bundle), intent_id) do
+          {:ok, %ExecuteResponse{} = exec} ->
+            Checkpoint.put(store, key, executed_record(exec, intent_id))
+            {:ok, exec}
+
+          {:error, _reason} = error ->
+            Checkpoint.delete(store, key)
+            error
+        end
+    end
+  end
+
+  defp executed_record(%ExecuteResponse{} = exec, intent_id) do
+    %{
+      intent_id: exec.intent_id || intent_id,
+      status: :in_flight,
+      read_token: exec.read_token,
+      stealth_address: exec.stealth_address,
+      ephemeral_pub_key: exec.ephemeral_pub_key,
+      view_tag: exec.view_tag
+    }
+  end
+
+  defp resumed_exec(record, intent_id) do
+    %ExecuteResponse{
+      intent_id: Map.get(record, :intent_id, intent_id),
+      status: :unknown,
+      reconciling: true,
+      read_token: Map.get(record, :read_token),
+      stealth_address: Map.get(record, :stealth_address),
+      ephemeral_pub_key: Map.get(record, :ephemeral_pub_key),
+      view_tag: Map.get(record, :view_tag)
+    }
   end
 
   # The buyer's pre-signed intent bundle, threaded directly (`:signed_intent`) or
@@ -158,6 +237,22 @@ defmodule Raxol.Earn.Xochi.Settler do
   # delivery, not the recipient's identity; they are nil for a public settlement,
   # so `TransferOffering.present/1` drops them and a public deliverable is
   # byte-identical.
+  #
+  # A completed status without `tx_hash` is refused, never filled in. Since
+  # xochi#563 the worker omits a stealth/shielded intent's legs unless the
+  # caller presents the read token (or owner JWT); the relay presents the token
+  # it got from execute, so this fires only when the worker withheld anyway
+  # (token absent or rejected) or served none. The Riddler SPEC (§3.4) lets a
+  # status omit `txHash`, but the deliverable this builds follows
+  # `Offering.deliverable_schema/0,1`, which requires `settlement_tx_hash` (a
+  # 32-byte hex hash) in every mode. So the field stays required and the settle
+  # fails with the intent id for an operator to reconcile, rather than submit
+  # a deliverable that fails its own schema. `receiving_tx_hash` is optional
+  # there and is simply dropped when absent.
+  defp to_deliverable(%IntentStatus{tx_hash: hash} = status, _exec, _args)
+       when not is_binary(hash) or hash == "",
+       do: {:error, {:settlement_tx_hash_unavailable, status.intent_id}}
+
   defp to_deliverable(%IntentStatus{} = status, %ExecuteResponse{} = exec, args) do
     {:ok,
      %{

@@ -475,6 +475,10 @@ defmodule Raxol.Payments.Xochi.Schemas do
 
   defmodule ExecuteResponse do
     @moduledoc false
+    # `read_token` is a bearer secret (xochi#563): it reveals a non-public
+    # intent's settlement tx hashes to whoever presents it. Keep it out of
+    # inspect output so a logged or crash-dumped response never carries it.
+    @derive {Inspect, except: [:read_token]}
     @enforce_keys [:intent_id, :status]
     defstruct [
       :intent_id,
@@ -485,6 +489,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :ephemeral_pub_key,
       :view_tag,
       :error,
+      :read_token,
       success: false,
       reconciling: false
     ]
@@ -499,6 +504,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
             ephemeral_pub_key: String.t() | nil,
             view_tag: integer() | nil,
             error: String.t() | nil,
+            read_token: String.t() | nil,
             reconciling: boolean()
           }
 
@@ -522,9 +528,28 @@ defmodule Raxol.Payments.Xochi.Schemas do
         # In-doubt: the worker could not confirm the solver executed (a Riddler
         # 5xx/timeout wrapped as a 200) and kept the intent non-terminal. Funds
         # may be in flight; the caller must poll to resolve, never re-execute.
-        reconciling: pick(json, ["reconciling"]) || false
+        reconciling: pick(json, ["reconciling"]) || false,
+        # Read capability (xochi#563), returned once by execute. Present it on
+        # `Client.get_status/3` / `get_intent/3` to see a stealth/shielded
+        # intent's on-chain legs, which the worker otherwise withholds. Older
+        # workers omit it; nil then, and reads stay anonymous. A malformed one
+        # is dropped, never an error: the execute it rides on may have moved
+        # funds.
+        read_token: if(read_token?(json["read_token"]), do: json["read_token"])
       }
     end
+
+    @doc """
+    Is this a well-formed intent read token: 32 random bytes as unpadded
+    base64url, so exactly 43 characters of `[A-Za-z0-9_-]`? Checked where a
+    token enters (the execute response) and where one leaves (the request
+    header), so a malformed value never reaches a header.
+    """
+    @spec read_token?(term()) :: boolean()
+    def read_token?(token) when is_binary(token),
+      do: String.match?(token, ~r/\A[A-Za-z0-9_-]{43}\z/)
+
+    def read_token?(_), do: false
 
     defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
 

@@ -15,6 +15,14 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
   * `:ledger`, `:agent_id` -- optional; the `Ledger` and key from the execute, so
     a refund releases that reservation. See `SpendGate`.
+
+  ## Read token
+
+  Pass the `read_token` that `payment_execute_xochi_intent` returned for this
+  intent. The worker withholds a stealth/shielded intent's tx hashes from a
+  caller that does not prove ownership (xochi#563); the token is that proof and
+  travels only in the `X-Xochi-Read-Token` header. Without it the poll still
+  resolves the status, with `tx_hash` absent for a non-public settlement.
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}
@@ -26,6 +34,11 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     schema: [
       input: [
         intent_id: [type: :string, required: true],
+        read_token: [
+          type: :string,
+          description:
+            "The read_token payment_execute_xochi_intent returned for this intent. Reveals a stealth/shielded settlement's tx hash. A bearer secret: pass it only to this tool, never into a message, URL or log."
+        ],
         timeout_ms: [type: :integer, description: "Max wait (default 120000)"],
         interval_ms: [type: :integer, description: "Poll interval (default 2000)"]
       ],
@@ -141,6 +154,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     |> maybe_put(:timeout_ms, Map.get(params, :timeout_ms))
     |> maybe_put(:slow_interval_ms, Map.get(params, :interval_ms))
     |> maybe_put(:budget_ms, Map.get(params, :budget_ms))
+    |> maybe_put(:read_token, Map.get(params, :read_token))
   end
 
   defp maybe_put(opts, _key, nil), do: opts

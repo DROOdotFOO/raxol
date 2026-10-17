@@ -17,7 +17,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
       {:ok, quote} = Xochi.get_quote(config, request)
       {:ok, exec} = Xochi.execute(config, quote, wallet, request)
-      {:ok, status} = Xochi.poll_status(config, exec.intent_id)
+      {:ok, status} = Xochi.poll_status(config, exec.intent_id, read_token: exec.read_token)
 
   ## Fee Tiers
 
@@ -59,6 +59,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
   alias Raxol.Payments.Xochi.Schemas.{
     DepositRouteRequest,
     ExecuteRequest,
+    ExecuteResponse,
     Intent,
     IntentStatus,
     QuoteRequest,
@@ -111,11 +112,13 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   Returns the authoritative corridor + amounts written at quote time, so a
   storefront can read what the buyer signed before settlement rather than trust
-  a relayed, buyer-declared amount.
+  a relayed, buyer-declared amount. `opts[:read_token]` is forwarded to
+  `Client.get_intent/3` (see its "Read capability").
   """
-  @spec get_intent(Client.config(), String.t()) :: {:ok, Intent.t()} | {:error, term()}
-  def get_intent(config, intent_id) when is_binary(intent_id) do
-    Client.get_intent(config, intent_id)
+  @spec get_intent(Client.config(), String.t(), keyword()) ::
+          {:ok, Intent.t()} | {:error, term()}
+  def get_intent(config, intent_id, opts \\ []) when is_binary(intent_id) do
+    Client.get_intent(config, intent_id, opts)
   end
 
   @doc """
@@ -341,11 +344,32 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   @doc """
+  Read an execute result as dispatched when the worker says funds may have
+  moved.
+
+  `Client.execute/2` returns `{:error, {:execute_in_doubt, status, exec}}` for a
+  non-2xx that carries the intent's `read_token` (xochi#563). That is not a
+  clean failure: this maps it to `{:ok, exec}` with `reconciling: true` (and
+  `intent_id` defaulted to the one that was signed), so the caller polls the
+  intent with `exec.read_token` instead of releasing or retrying. Any other
+  result passes through unchanged.
+  """
+  @spec as_dispatched({:ok, ExecuteResponse.t()} | {:error, term()}, String.t() | nil) ::
+          {:ok, ExecuteResponse.t()} | {:error, term()}
+  def as_dispatched({:error, {:execute_in_doubt, _status, %ExecuteResponse{} = exec}}, intent_id),
+    do: {:ok, %{exec | intent_id: exec.intent_id || intent_id, reconciling: true}}
+
+  def as_dispatched(result, _intent_id), do: result
+
+  @doc """
   Poll intent status until terminal (completed/failed/expired) or timeout.
 
   Fast-polls inside the settlement budget window, then backs off. See
   `Raxol.Payments.Poll` for the timing options (`:budget_ms`,
-  `:fast_interval_ms`, `:slow_interval_ms`, `:timeout_ms`).
+  `:fast_interval_ms`, `:slow_interval_ms`, `:timeout_ms`). `:read_token` (the
+  execute response's `read_token`) is sent on every poll so a stealth/shielded
+  intent's tx hashes come back; without it the worker withholds them
+  (`Client.get_status/3`).
   """
   @spec poll_status(Client.config(), String.t(), keyword()) ::
           {:ok, IntentStatus.t()} | {:error, term()}
@@ -363,10 +387,12 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @spec poll_status_timed(Client.config(), String.t(), keyword()) ::
           {:ok, IntentStatus.t(), non_neg_integer()} | {:error, term()}
   def poll_status_timed(config, intent_id, opts \\ []) do
+    {read_token, poll_opts} = Keyword.pop(opts, :read_token)
+
     Poll.run(
-      fn -> Client.get_status(config, intent_id) end,
+      fn -> Client.get_status(config, intent_id, read_token: read_token) end,
       &IntentStatus.terminal?/1,
-      opts
+      poll_opts
     )
   end
 
@@ -382,8 +408,14 @@ defmodule Raxol.Payments.Protocols.Xochi do
     started = System.monotonic_time(:millisecond)
 
     with {:ok, quote_resp} <- get_quote(config, request),
-         {:ok, exec_resp} <- execute(config, quote_resp, wallet, request),
-         {:ok, status} <- poll_status(config, exec_resp.intent_id, opts) do
+         {:ok, exec_resp} <-
+           as_dispatched(execute(config, quote_resp, wallet, request), quote_resp.intent_id),
+         {:ok, status} <-
+           poll_status(
+             config,
+             exec_resp.intent_id,
+             Keyword.put(opts, :read_token, exec_resp.read_token)
+           ) do
       emit_settled(
         request,
         quote_resp,

@@ -1367,6 +1367,75 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert result.reconciling == false
     end
 
+    test "the execute's read_token is returned for the poll (xochi#563)" do
+      token = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+      stub_quote(%{
+        "success" => true,
+        "intentId" => "int_1",
+        "status" => "executing",
+        "stealthAddress" => "0xstealth",
+        "read_token" => token
+      })
+
+      assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), call_ctx())
+      assert result.read_token == token
+    end
+
+    test "a 502 carrying read_token is dispatched and in doubt, keeping its checkpoint and reservation" do
+      token = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            serve_quote(conn)
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_status(502)
+            |> Req.Test.json(%{
+              "success" => false,
+              "intent_id" => "int_1",
+              "status" => "completed",
+              "error" => "solver",
+              "read_token" => token
+            })
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-502"
+      }
+
+      assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert result.intent_id == "int_1"
+      assert result.reconciling == true
+      assert result.read_token == token
+      assert {:ok, %{summary: %{read_token: ^token}}} = Checkpoint.fetch(store, "pay-502")
+      assert [] = for(%{metadata: %{type: :release}} <- Ledger.get_history(ledger, "a1"), do: 1)
+    end
+
+    test "an older worker's execute returns no read_token" do
+      stub_quote(%{
+        "success" => true,
+        "intentId" => "int_1",
+        "status" => "executing",
+        "stealthAddress" => "0xstealth"
+      })
+
+      assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), call_ctx())
+      assert result |> Map.get(:read_token) |> is_nil()
+    end
+
     test "an in-doubt (reconciling) execute surfaces reconciling, not a clean success" do
       # The worker could not confirm the solver executed (a Riddler 5xx/timeout
       # wrapped as a 200) and kept the intent non-terminal: success=true,

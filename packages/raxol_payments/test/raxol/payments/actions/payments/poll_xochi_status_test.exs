@@ -130,4 +130,48 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
     assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy()).lifetime, "1.00")
     assert :noop = Ledger.release_by_intent(ledger, "agent_1", "int_c")
   end
+
+  # xochi#563: the worker withholds a stealth intent's legs unless the caller
+  # presents the read token execute returned. The sim reveals `tx_hash` only
+  # for the right token, as the worker does.
+  describe "read_token" do
+    @token "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+
+    setup do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        presented = Plug.Conn.get_req_header(conn, "x-xochi-read-token")
+        send(test_pid, {:presented, presented})
+        base = %{"intent_id" => "int_s", "status" => "completed", "settlement_type" => "stealth"}
+
+        body =
+          if presented == [@token],
+            do: Map.put(base, "tx_hash", "0x" <> String.duplicate("c", 64)),
+            else: base
+
+        Req.Test.json(conn, body)
+      end)
+
+      :ok
+    end
+
+    test "the token is sent as a header and reveals the settlement tx" do
+      params = %{intent_id: "int_s", read_token: @token, timeout_ms: 40, interval_ms: 10}
+
+      assert {:ok, %{status: "completed", tx_hash: "0x" <> _}} =
+               PollXochiStatus.run(params, %{xochi_config: config()})
+
+      assert_received {:presented, [@token]}
+    end
+
+    test "without a token no header is sent and the status still resolves" do
+      params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
+
+      assert {:ok, %{status: "completed", settlement_type: "stealth", tx_hash: nil}} =
+               PollXochiStatus.run(params, %{xochi_config: config()})
+
+      assert_received {:presented, []}
+    end
+  end
 end

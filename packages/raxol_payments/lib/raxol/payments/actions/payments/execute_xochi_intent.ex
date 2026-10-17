@@ -5,12 +5,20 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   Quotes the intent, authorizes the spend through `SpendGate` before any
   signature is released, signs and submits via the wallet, and returns the
   intent id and initial status. Poll for the terminal status with
-  `Raxol.Payments.Actions.Payments.PollXochiStatus`.
+  `Raxol.Payments.Actions.Payments.PollXochiStatus`, passing it the returned
+  `read_token` (xochi#563): without it the worker withholds a stealth/shielded
+  intent's tx hashes. The token is returned once, rides the checkpointed
+  summary so a resumed run can still poll with it, and is nil from an older
+  worker.
 
   The spend is gated on the human-decimal `amount`; the atomic `from_amount`
   sent to Xochi is derived from the token's decimals. If execution fails after
   the gate reserved budget (including a raise while signing or submitting),
-  the reservation is released and the checkpoint deleted.
+  the reservation is released and the checkpoint deleted. An execute whose
+  non-2xx body carries a `read_token` is the worker saying funds may have
+  moved: it is reported as dispatched with `reconciling: true` and its token,
+  the reservation stays tagged and the checkpoint kept, as for a reconciling
+  200.
 
   With `swap_kind: "exact_output"` the caller fixes the delivered
   `output_amount` instead, the solver picks the origin amount, and `amount` is
@@ -124,6 +132,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           type: :boolean,
           description:
             "True when the settlement is in doubt: the worker could not confirm the solver executed, so the intent stays non-terminal. Poll the intent status to resolve; do not re-execute."
+        ],
+        read_token: [
+          type: :string,
+          description:
+            "Read capability for this intent, returned once. Pass it to payment_poll_xochi_status so a stealth/shielded settlement's tx hash is visible. A bearer secret: never put it in a message, URL or log. Absent from older workers."
         ]
       ]
     ]
@@ -618,10 +631,17 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   # Checkpoint the intent as dispatched, then submit it; a dispatched intent has
   # its reservation tagged.
+  #
+  # An execute the worker answers with a non-2xx carrying `read_token`
+  # (`:execute_in_doubt`, xochi#563) may have moved funds: it is dispatched and
+  # in doubt, exactly like a `reconciling` 200, never a definite failure that
+  # releases the reservation and drops the checkpoint. Its token rides the
+  # summary and checkpoint so the intent can be polled.
   defp submit(config, quote, wallet, request, context, amount, store, key) do
     Checkpoint.put(store, key, dispatched_record(quote))
 
-    with {:ok, exec} <- safe_execute(config, quote, wallet, request) do
+    with {:ok, exec} <-
+           Xochi.as_dispatched(safe_execute(config, quote, wallet, request), quote.intent_id) do
       tag_dispatch(context, exec, amount)
       {:ok, exec, quote}
     end
@@ -684,7 +704,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       # Surface the in-doubt state rather than reporting a clean success: an
       # execute the worker could not confirm (often a wrapped upstream 5xx) is
       # not a completed payment. Poll the intent status to resolve.
-      reconciling: exec.reconciling
+      reconciling: exec.reconciling,
+      # The intent's read capability (xochi#563), for the poll. Kept only in
+      # this summary and its checkpoint, where the intent record already lives.
+      read_token: exec.read_token
     }
   end
 end

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Xochi read capability (xochi#563). `ExecuteResponse.read_token` carries the
+  one-time token `POST /api/intent/execute` returns (nil from an older worker;
+  excluded from `inspect`). `Xochi.Client.get_status/3` and `get_intent/3` take
+  `read_token:` and send it as the `X-Xochi-Read-Token` header, never in the
+  URL, so a stealth/shielded intent's tx hashes are returned; without it the
+  worker withholds them. `Protocols.Xochi.poll_status/3`, `poll_status_timed/3`
+  and `get_intent/3` forward `:read_token`, and `transfer/4` polls with the
+  execute's token. `payment_execute_xochi_intent` returns `read_token` (kept in
+  its checkpointed summary) and `payment_poll_xochi_status` takes it as input.
+- The read token is shape-checked both ways: a served `read_token` that is not
+  43 unpadded base64url characters is dropped (nil), and a caller's
+  `read_token:` of the wrong shape returns `{:error, :invalid_read_token}`
+  before any request. `ExecuteResponse.read_token?/1` is the check. The
+  camelCase `readToken` alias, which the worker never sends, is not read.
+- An execute whose non-2xx body carries a well-formed `read_token` (the worker
+  says funds may have moved) returns `{:error, {:execute_in_doubt, status,
+  %ExecuteResponse{}}}`; `Protocols.Xochi.as_dispatched/2` reads it as a
+  dispatched, `reconciling` execute. `transfer/4` then polls with its token,
+  and `payment_execute_xochi_intent` reports it as dispatched with
+  `reconciling: true` and the token, keeping the reservation and checkpoint
+  (it used to release both, as for a clean rejection).
+
+### Security
+
+- Every other non-2xx body returned as `{:error, {:http, status, body}}` has
+  any `read_token` replaced by `"[redacted]"`, so logging or `inspect`ing an
+  error term (as `SolverAgent` does on a failed settle) no longer prints the
+  bearer secret.
+
 ### Changed
 
 - `Raxol.Payments.PrivacyTier`: Sovereign's `data_retention` is `:wallet`, not
