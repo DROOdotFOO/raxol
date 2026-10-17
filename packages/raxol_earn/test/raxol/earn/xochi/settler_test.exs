@@ -267,5 +267,127 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
       assert relayed["signature"] == "0x" <> String.duplicate("11", 65)
       refute Map.has_key?(relayed, "destination")
     end
+
+    # xochi#563: the worker withholds a non-public intent's legs on status unless
+    # the caller presents the read token execute returned. This sim does the
+    # same: `exec_token` is what execute returns (nil = older worker / lost), and
+    # the stealth status carries hashes only for the matching header.
+    defp read_cap_sim(exec_token, test_pid, exec_status) do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+      fn conn ->
+        body =
+          case conn.request_path do
+            "/api/intent/execute" ->
+              send(test_pid, :executed)
+
+              Map.merge(
+                %{"success" => exec_status == 200, "intent_id" => "i1", "status" => "executing"},
+                if(exec_token, do: %{"read_token" => exec_token}, else: %{})
+              )
+
+            "/api/intent/i1/status" ->
+              presented = Plug.Conn.get_req_header(conn, "x-xochi-read-token")
+              send(test_pid, {:presented, presented, conn.query_string})
+
+              legs =
+                if presented == [issued],
+                  do: %{
+                    "txHash" => "0x" <> String.duplicate("a", 64),
+                    "receivingTxHash" => "0x" <> String.duplicate("b", 64)
+                  },
+                  else: %{}
+
+              Map.merge(
+                %{
+                  "intentId" => "i1",
+                  "status" => "completed",
+                  "terminal" => true,
+                  "settlementType" => "stealth"
+                },
+                legs
+              )
+          end
+
+        status = if conn.request_path == "/api/intent/execute", do: exec_status, else: 200
+        conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
+      end
+    end
+
+    defp read_cap_settler(exec_token, opts \\ []) do
+      Settler.build(
+        xochi_config: %{
+          base_url: "https://xochi.test",
+          auth_token: "stub",
+          req_options: [
+            plug: read_cap_sim(exec_token, self(), Keyword.get(opts, :exec_status, 200))
+          ]
+        },
+        poll_timeout_ms: 5_000,
+        poll_interval_ms: 10,
+        checkpoint: Keyword.get(opts, :checkpoint)
+      )
+    end
+
+    test "polls with the execute's read token, so a stealth settlement keeps its hashes" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+      assert {:ok, deliverable} = read_cap_settler(issued).(args())
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert deliverable.receiving_tx_hash == "0x" <> String.duplicate("b", 64)
+      # Header only, never the URL; and never in the deliverable.
+      assert_received {:presented, [^issued], ""}
+      refute deliverable |> Map.values() |> Enum.member?(issued)
+    end
+
+    test "a withheld settlement hash is an explicit error, never a fabricated hash" do
+      # Execute returned no token (older worker, or one lost), so the worker
+      # withholds the stealth legs. The deliverable schema requires
+      # settlement_tx_hash, so the settle fails with the intent id.
+      assert {:error, {:settlement_tx_hash_unavailable, "i1"}} = read_cap_settler(nil).(args())
+      assert_received {:presented, [], ""}
+    end
+
+    test "a 502 carrying the read token is polled with it, not failed (funds may have moved)" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+      assert {:ok, deliverable} = read_cap_settler(issued, exec_status: 502).(args())
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert_received {:presented, [^issued], ""}
+    end
+
+    test "a 502 without a token stays a failure whose error term carries no token" do
+      assert {:error, {:http, 502, body}} = read_cap_settler(nil, exec_status: 502).(args())
+      refute Map.has_key?(body, "read_token")
+      refute_received {:presented, _, _}
+    end
+
+    test "the checkpoint keeps the token, so a re-run after a crash resumes polling with it" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert {:ok, _} = read_cap_settler(issued, checkpoint: store).(args())
+      assert_received :executed
+
+      assert {:ok, %{intent_id: "i1", read_token: ^issued}} =
+               Raxol.Payments.Checkpoint.fetch(store, key)
+
+      # The restarted relay holds no token in memory, and the execute would
+      # answer without one: only the checkpoint can supply it.
+      assert {:ok, deliverable} = read_cap_settler(nil, checkpoint: store).(args())
+      refute_received :executed
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+    end
+
+    test "a definite execute failure drops the checkpoint" do
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert {:error, {:http, 502, _}} =
+               read_cap_settler(nil, exec_status: 502, checkpoint: store).(args())
+
+      assert :error = Raxol.Payments.Checkpoint.fetch(store, key)
+    end
   end
 end

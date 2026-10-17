@@ -2,6 +2,7 @@ defmodule Raxol.Payments.Xochi.ClientTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Xochi.Client
+  alias Raxol.Payments.Xochi.Schemas.{ExecuteRequest, ExecuteResponse}
 
   @claim_params %{
     stealth_address: "0xstealth",
@@ -128,6 +129,145 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       }
 
       assert {:error, {:http, 404, _}} = Client.get_intent(config, "xi_missing")
+    end
+  end
+
+  # xochi#563: execute returns a one-time read capability; the reads present it
+  # in a header so a stealth/shielded intent's on-chain legs come back.
+  describe "read token" do
+    @token "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"
+
+    test "execute parses read_token and keeps it out of inspect" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [
+          plug:
+            json_plug(%{
+              "success" => true,
+              "intent_id" => "xi_1",
+              "status" => "executing",
+              "read_token" => @token
+            })
+        ]
+      }
+
+      request = %ExecuteRequest{intent_id: "xi_1", quote_id: "xq_1", signature: "0xsig", nonce: 1}
+
+      assert {:ok, %ExecuteResponse{read_token: @token} = exec} = Client.execute(config, request)
+      refute inspect(exec) =~ @token
+      refute inspect({:error, exec}) =~ @token
+    end
+
+    test "an older worker's execute response carries no read_token" do
+      exec = ExecuteResponse.from_json(%{"intent_id" => "xi_1", "status" => "executing"})
+      assert exec.read_token == nil
+    end
+
+    test "get_status sends the token only as the x-xochi-read-token header" do
+      test_pid = self()
+
+      plug = fn conn ->
+        send(test_pid, {:url, conn.request_path, conn.query_string})
+        send(test_pid, {:headers, conn.req_headers})
+        Req.Test.json(conn, %{"intent_id" => "xi_1", "status" => "completed"})
+      end
+
+      config = %{base_url: "https://api.xochi.fi", req_options: [plug: plug]}
+
+      assert {:ok, _} = Client.get_status(config, "xi_1", read_token: @token)
+      assert_receive {:url, "/api/intent/xi_1/status", ""}
+      assert_receive {:headers, headers}
+      assert {"x-xochi-read-token", @token} in downcase(headers)
+    end
+
+    test "get_intent sends the token as the x-xochi-read-token header" do
+      assert {:ok, _} = Client.get_intent(config(auth: :none), "xi_1", read_token: @token)
+      assert_receive {:req, "GET", "/api/intent/xi_1", headers, _body}
+      assert {"x-xochi-read-token", @token} in downcase(headers)
+    end
+
+    test "without a token no read-token header is sent" do
+      assert {:ok, _} = Client.get_status(config(auth: :none), "xi_1")
+      assert_receive {:req, "GET", "/api/intent/xi_1/status", headers, _body}
+      refute has_header?(headers, "x-xochi-read-token")
+
+      assert {:ok, _} = Client.get_intent(config(auth: :none), "xi_1", read_token: nil)
+      assert_receive {:req, "GET", "/api/intent/xi_1", headers, _body}
+      refute has_header?(headers, "x-xochi-read-token")
+    end
+
+    test "mandate auth attaches nothing new to the reads" do
+      assert {:ok, _} =
+               Client.get_status(config(auth: {:mandate, "0xagent"}), "xi_1", read_token: @token)
+
+      assert_receive {:req, "GET", "/api/intent/xi_1/status", headers, _body}
+      refute has_header?(headers, "x-xochi-delegation")
+      assert {"x-xochi-read-token", @token} in downcase(headers)
+    end
+
+    @exec_request %ExecuteRequest{
+      intent_id: "xi_1",
+      quote_id: "xq_1",
+      signature: "0xsig",
+      nonce: 1
+    }
+
+    defp exec_502(body) do
+      config = %{base_url: "https://api.xochi.fi", req_options: [plug: json_plug(body, 502)]}
+      Client.execute(config, @exec_request)
+    end
+
+    test "a 502 carrying read_token is in doubt: the token is captured and never inspected" do
+      result =
+        exec_502(%{
+          "success" => false,
+          "intent_id" => "xi_1",
+          "status" => "completed",
+          "error" => "solver",
+          "read_token" => @token
+        })
+
+      assert {:error, {:execute_in_doubt, 502, %ExecuteResponse{} = exec}} = result
+      assert exec.read_token == @token
+      assert exec.intent_id == "xi_1"
+      assert exec.error == "solver"
+      refute inspect(result) =~ @token
+    end
+
+    test "a 502 without read_token is unchanged" do
+      body = %{"success" => false, "error" => "solver rejected"}
+      assert {:error, {:http, 502, ^body}} = exec_502(body)
+    end
+
+    test "a malformed read_token on a 502 is redacted, not captured" do
+      assert {:error, {:http, 502, %{"read_token" => "[redacted]", "error" => "x"}}} =
+               exec_502(%{"error" => "x", "read_token" => "short"})
+    end
+
+    test "a non-2xx text body has its read_token redacted" do
+      plug = fn conn -> Plug.Conn.send_resp(conn, 500, ~s({"read_token": "#{@token}", "x": 1)) end
+      config = %{base_url: "https://api.xochi.fi", req_options: [plug: plug, retry: false]}
+
+      assert {:error, {:http, 500, body}} = Client.get_status(config, "xi_1")
+      refute inspect(body) =~ @token
+      assert body =~ ~s("read_token": "[redacted]")
+    end
+
+    test "a malformed read_token is refused before any request, without echoing it" do
+      for bad <- ["", "short", @token <> "=", "not a token\r\nx-injected: 1"] do
+        assert {:error, :invalid_read_token} =
+                 Client.get_status(config(auth: :none), "xi_1", read_token: bad)
+
+        assert {:error, :invalid_read_token} =
+                 Client.get_intent(config(auth: :none), "xi_1", read_token: bad)
+      end
+
+      refute_received {:req, _, _, _, _}
+    end
+
+    test "a served read_token of the wrong shape is dropped" do
+      exec = ExecuteResponse.from_json(%{"intent_id" => "xi_1", "read_token" => "short"})
+      assert exec.read_token == nil
     end
   end
 
