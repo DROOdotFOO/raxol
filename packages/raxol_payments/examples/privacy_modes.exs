@@ -121,25 +121,34 @@ defmodule PrivacyModes do
     {:ok, version} = Pxe.get_version(config)
     IO.puts("  bridge #{health.status}, aztec #{version}\n")
 
+    # One key names one transfer: the bridge replays the recorded outcome for
+    # any later request under it, so a real caller derives it from its own
+    # settlement id and resends with the same key when the outcome is unknown.
     {:ok, note} =
-      Pxe.create_note(config, %CreateNoteParams{
-        recipient: "0x" <> String.duplicate("ab", 32),
-        token: "0x" <> String.duplicate("cd", 32),
-        amount: "25000000",
-        chain_id: 1
-      })
+      Pxe.create_note(
+        config,
+        %CreateNoteParams{
+          recipient: "0x" <> String.duplicate("ab", 32),
+          token: "0x" <> String.duplicate("cd", 32),
+          amount: "25000000",
+          chain_id: 1
+        },
+        "settlement-demo-1"
+      )
 
     IO.puts("  the transfer becomes a note in Aztec's private state:")
-    IO.puts("    commitment  #{note.note_commitment}")
-    IO.puts("    nullifier   #{note.nullifier_hash}")
+    Enum.each(note.note_hashes, &IO.puts("    note hash   #{&1}"))
+    Enum.each(note.nullifiers, &IO.puts("    nullifier   #{&1}"))
     IO.puts("    l2 tx       #{note.l2_tx_hash}")
 
     IO.puts("""
 
       Under tracer A the amount is public through the finalize call, and the
-      owner is not private today: default PXE tagging announces it. The
-      nullifier is what will be published when the note is spent, and it is
-      what stops it being spent twice without revealing which note it was.
+      owner is not private today: default PXE tagging announces it. A note
+      hash commits to a new note without revealing it. The nullifiers are the
+      ones this transaction published, the first being the transaction's own;
+      the new note's nullifier appears only when the note is spent, and that
+      is what stops a double spend without revealing which note it was.
     """)
   end
 
@@ -229,8 +238,15 @@ defmodule PrivacyModes do
 
       "aztec_createNote" ->
         %{
-          "noteCommitment" => "0x" <> String.duplicate("7c", 32),
-          "nullifierHash" => "0x" <> String.duplicate("3e", 32),
+          "noteHashes" => [
+            "0x" <> String.duplicate("7c", 32),
+            "0x" <> String.duplicate("7d", 32)
+          ],
+          "nullifiers" => [
+            "0x" <> String.duplicate("3e", 32),
+            "0x" <> String.duplicate("3f", 32),
+            "0x" <> String.duplicate("40", 32)
+          ],
           "l2TxHash" => "0x" <> String.duplicate("9a", 32)
         }
     end
