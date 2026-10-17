@@ -33,9 +33,10 @@ runs against an in-process pxe-bridge sim and produces a note commitment and a
 nullifier.
 
 The point is the third section. Stealth breaks the link on a public ledger and
-leaves the amount public; shielded moves the transfer off the public ledger
-entirely. An agent that must not reveal an amount cannot use stealth, however
-unlinkable the address is.
+leaves the amount public. Shielded is not available yet; the accepted testnet
+design (A) also hides only the recipient, with the amount, token, solver and
+timing public on Aztec and the source-chain deposit public under every design.
+An agent that must not reveal an amount cannot use either mode today.
 
 ```bash
 MIX_ENV=test mix run examples/privacy_modes.exs

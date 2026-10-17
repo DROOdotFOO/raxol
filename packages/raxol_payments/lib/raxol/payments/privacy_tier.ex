@@ -37,7 +37,7 @@ defmodule Raxol.Payments.PrivacyTier do
   | 0-24  | Standard  | public     | amounts        |
   | 25-49 | Stealth   | stealth    | ranges         |
   | 50-74 | Private   | shielded   | wallet         |
-  | 75+   | Sovereign | shielded   | nothing        |
+  | 75+   | Sovereign | shielded   | wallet         |
   """
 
   @type tier :: :open | :public | :standard | :stealth | :private | :sovereign
@@ -46,7 +46,7 @@ defmodule Raxol.Payments.PrivacyTier do
   @type t :: %{
           tier: tier(),
           settlement: settlement(),
-          data_retention: :full_analytics | :full | :amounts | :ranges | :wallet | :nothing
+          data_retention: :full_analytics | :full | :amounts | :ranges | :wallet
         }
 
   @tiers %{
@@ -55,7 +55,9 @@ defmodule Raxol.Payments.PrivacyTier do
     standard: %{settlement: :public, data_retention: :amounts},
     stealth: %{settlement: :stealth, data_retention: :ranges},
     private: %{settlement: :shielded, data_retention: :wallet},
-    sovereign: %{settlement: :shielded, data_retention: :nothing}
+    # Sovereign is unavailable; `:nothing` retention is not a promise of any design
+    # (xochi docs/planning/shielded-execution.md D1).
+    sovereign: %{settlement: :shielded, data_retention: :wallet}
   }
 
   @tier_order [:open, :public, :standard, :stealth, :private, :sovereign]
