@@ -12,14 +12,16 @@
 #     there is no notification, so they scan announcements.
 #
 #   shielded (Aztec) -- NOT AVAILABLE; off everywhere today
-#     The accepted testnet design (A, `transfer_to_private`) hides only the
-#     recipient: the amount, the token, the solver and the timing are public
-#     on Aztec, and the deposit on the source chain is public under every
-#     design. A future design may hide the Aztec-side amount, but never the
-#     source deposit. See xochi docs/planning/shielded-execution.md.
+#     The accepted testnet design (A, `transfer_to_private`) targets hiding
+#     the recipient, but does not deliver it today: the PXE's default tagging
+#     announces the recipient under an address-derived tag. The amount, the
+#     token, the solver and the timing are public on Aztec, and the deposit on
+#     the source chain is public under every design. B-panel is the
+#     conditionally accepted design that would hide the Aztec-side amount,
+#     never the source deposit. See xochi docs/planning/shielded-execution.md.
 #
-# So: both break the recipient link on a public ledger; neither hides the
-# amount today. Section 3 puts that side by side.
+# So: stealth breaks the recipient link on a public ledger; shielded only
+# targets it; neither hides the amount today. Section 3 puts that side by side.
 #
 # Runs fully offline. Section 1 is real secp256k1 -- the same code that derives
 # a live stealth address, doing it here with throwaway keys. Section 2 drives
@@ -134,10 +136,10 @@ defmodule PrivacyModes do
 
     IO.puts("""
 
-      No address received anything a public explorer can total up. The amount
-      is inside the note; the commitment is a hash of it. The nullifier is what
-      will be published when the note is spent, and it is what stops it being
-      spent twice without revealing which note it was.
+      The note's owner and randomness are private; its amount is public
+      through the finalize call. The nullifier is what will be published when
+      the note is spent, and it is what stops it being spent twice without
+      revealing which note it was.
     """)
   end
 
@@ -147,7 +149,7 @@ defmodule PrivacyModes do
     header("3. what each one actually hides")
 
     rows = [
-      {"who was paid", "hidden", "hidden"},
+      {"who was paid", "hidden", "target, not delivered"},
       {"how much", "PUBLIC", "PUBLIC (design A)"},
       {"that a payment happened", "PUBLIC", "PUBLIC"},
       {"settles on", "Ethereum", "Aztec L2"},
@@ -165,9 +167,11 @@ defmodule PrivacyModes do
 
       `Router.select(privacy: :stealth)` and `:shielded` both route to Xochi,
       so the rail is the same and the settlement target is the difference.
-      Shielded is not available yet, and the accepted design hides only the
-      recipient: an agent that must not reveal an amount cannot take either
-      mode today -- which is the row people read past.
+      Shielded is not available yet, and the accepted design (A) only targets
+      hiding the recipient; B-panel, conditionally accepted, would hide the
+      Aztec-side amount but never the source deposit. An agent that must not
+      reveal an amount cannot take either mode today -- which is the row
+      people read past.
     """)
   end
 

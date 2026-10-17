@@ -30,14 +30,19 @@ defmodule Raxol.Payments.PrivacyTier do
 
   ## Tiers
 
-  | Score | Tier      | Settlement | Retention      |
-  | ----- | --------- | ---------- | -------------- |
-  | --    | Open      | public     | full analytics |
-  | --    | Public    | public     | full           |
-  | 0-24  | Standard  | public     | amounts        |
-  | 25-49 | Stealth   | stealth    | ranges         |
-  | 50-74 | Private   | shielded   | wallet         |
-  | 75+   | Sovereign | shielded   | wallet         |
+  | Score | Tier      | Settlement               | Retention      |
+  | ----- | --------- | ------------------------ | -------------- |
+  | --    | Open      | public                   | full analytics |
+  | --    | Public    | public                   | full           |
+  | 0-24  | Standard  | public                   | amounts        |
+  | 25-49 | Stealth   | stealth                  | ranges         |
+  | 50-74 | Private   | shielded (unavailable)   | wallet         |
+  | 75+   | Sovereign | shielded (unavailable)\* | wallet         |
+
+  Shielded settlement is off everywhere today. \*Sovereign is excluded from
+  every design and promises no stronger retention than Private: it maps to the
+  same `:shielded` / `:wallet` target, and `:nothing` retention is not offered
+  (xochi `docs/planning/shielded-execution.md` D1).
   """
 
   @type tier :: :open | :public | :standard | :stealth | :private | :sovereign
