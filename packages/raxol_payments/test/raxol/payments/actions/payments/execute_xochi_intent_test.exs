@@ -1493,6 +1493,86 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       end
     end
 
+    test "a refusal because the intent is already executing keeps checkpoint and budget" do
+      refusals = [
+        {409, %{"success" => false, "error" => "Intent already being executed"}},
+        {400, %{"success" => false, "error" => "Cannot execute intent in executing status"}},
+        {400, %{"success" => false, "error" => "Cannot execute intent in completed status"}}
+      ]
+
+      for {{status, body}, n} <- Enum.with_index(refusals) do
+        Req.Test.stub(__MODULE__, fn conn ->
+          case conn.request_path do
+            "/api/intent/quote" -> serve_quote(conn)
+            "/api/intent/execute" -> conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
+          end
+        end)
+
+        {:ok, ledger} =
+          Ledger.start_link(table_name: :"xochi_claimed_#{System.unique_integer([:positive])}")
+
+        store = Checkpoint.ETS.new()
+        key = "pay-claimed-#{n}"
+
+        ctx = %{
+          wallet: SpyWallet,
+          xochi_config: config(),
+          ledger: ledger,
+          policy: policy(),
+          agent_id: "a1",
+          checkpoint: store,
+          idempotency_key: key
+        }
+
+        assert {:ok, %{intent_id: "int_1", reconciling: true}} =
+                 ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+        assert {:ok, %{intent_id: "int_1", summary: %{reconciling: true}}} =
+                 Checkpoint.fetch(store, key)
+
+        assert [] =
+                 for(%{metadata: %{type: :release}} <- Ledger.get_history(ledger, "a1"), do: 1)
+
+        assert Decimal.equal?(Ledger.get_totals(ledger, "a1", policy()).lifetime, "0.50")
+      end
+    end
+
+    test "a refusal because the intent expired is clean: budget released, checkpoint dropped" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            serve_quote(conn)
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_status(400)
+            |> Req.Test.json(%{
+              "success" => false,
+              "error" => "Cannot execute intent in expired status"
+            })
+        end
+      end)
+
+      {:ok, ledger} =
+        Ledger.start_link(table_name: :"xochi_expired_#{System.unique_integer([:positive])}")
+
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-expired"
+      }
+
+      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert :error = Checkpoint.fetch(store, "pay-expired")
+      assert Decimal.equal?(Ledger.get_totals(ledger, "a1", policy()).lifetime, "0")
+    end
+
     test "an older worker's execute returns no model-visible read token" do
       stub_quote(%{
         "success" => true,
