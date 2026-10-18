@@ -25,6 +25,22 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
     def delete(table, key), do: ETS.delete(table, key)
   end
 
+  # A checkpoint store that dies on delete, modelling a crash between the
+  # terminal commit and the token cleanup.
+  defmodule CrashOnDelete do
+    @behaviour Raxol.Payments.Checkpoint
+    alias Raxol.Payments.Checkpoint.ETS
+
+    @impl true
+    def fetch(table, key), do: ETS.fetch(table, key)
+
+    @impl true
+    def put(table, key, record), do: ETS.put(table, key, record)
+
+    @impl true
+    def delete(_table, _key), do: raise("crash before token cleanup")
+  end
+
   # A buyer-signed Xochi intent bundle, as it arrives in the requirement JSON
   # (string keys). Signature values are opaque -- raxol relays them; Riddler
   # verifies against its persisted quote.
@@ -428,6 +444,28 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
       assert {:ok, deliverable} = read_cap_settler(nil, checkpoint: store).(args())
       refute_received :executed
       assert_received {:presented, [^issued], ""}
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
+    end
+
+    test "a crash after the terminal commit leaves no token behind on the re-run" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      table = :ets.new(:settler_crash_delete, [:set, :public])
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert_raise RuntimeError, fn ->
+        read_cap_settler(issued, checkpoint: {CrashOnDelete, table}).(args())
+      end
+
+      store = {Raxol.Payments.Checkpoint.ETS, table}
+      assert {:ok, %{status: :terminal}} = Raxol.Payments.Checkpoint.fetch(store, key)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == issued
+      assert_received :executed
+      assert_received {:presented, [^issued], ""}
+
+      assert {:ok, deliverable} = read_cap_settler(nil, checkpoint: store).(args())
+      refute_received :executed
+      refute_received {:presented, _, _}
       assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
       assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
     end
