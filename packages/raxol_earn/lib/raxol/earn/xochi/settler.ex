@@ -190,7 +190,15 @@ defmodule Raxol.Earn.Xochi.Settler do
   # anonymously rather than relayed twice.
   defp dispatch(xochi_config, request, intent_id, store, key) do
     case Checkpoint.fetch(store, key) do
-      {:ok, %{status: :terminal, result: result}} ->
+      # A crash between the terminal commit and the token delete leaves the
+      # token behind; finish that cleanup (idempotent) before replaying.
+      {:ok, %{status: :terminal, result: result} = record} ->
+        ReadTokenStore.delete(
+          store,
+          xochi_config.base_url,
+          Map.get(record, :intent_id, intent_id)
+        )
+
         {:terminal, result}
 
       {:ok, record} ->
