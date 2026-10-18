@@ -3,7 +3,7 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
-  alias Raxol.Payments.{Ledger, SpendingPolicy}
+  alias Raxol.Payments.{Checkpoint, Ledger, SpendingPolicy}
   alias Raxol.Payments.Test.XochiIntentFixture
   alias Raxol.Payments.Xochi.AgentStream
 
@@ -18,6 +18,22 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
   defmodule AgentWallet do
     @moduledoc false
     use Raxol.Payments.Wallets.Env, env_var: "RAXOL_ANNOUNCE_WIRING_KEY"
+  end
+
+  # A checkpoint store that dies on delete, modelling a crash between the
+  # recorded completion and the token cleanup.
+  defmodule CrashOnDelete do
+    @moduledoc false
+    @behaviour Raxol.Payments.Checkpoint
+
+    @impl true
+    def fetch(table, key), do: Raxol.Payments.Checkpoint.ETS.fetch(table, key)
+
+    @impl true
+    def put(table, key, record), do: Raxol.Payments.Checkpoint.ETS.put(table, key, record)
+
+    @impl true
+    def delete(_table, _key), do: raise("crash before token cleanup")
   end
 
   setup do
@@ -178,6 +194,32 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
 
       body = assert_announce_verifies("stranded")
       assert body["event"]["intentId"] == "int_1"
+    end
+
+    test "a poll replaying a recorded completion still fires the terminal announce once" do
+      ctx = with_stream(context(%{}))
+      assert {:ok, _} = ExecuteXochiIntent.run(params(), ctx)
+      assert_announce_verifies("executing")
+
+      # The completed summary is recorded, then the process dies cleaning up
+      # the token, before the terminal announce.
+      table = :ets.new(:announce_crash, [:set, :public])
+      poll = %{intent_id: "int_1", timeout_ms: 2000}
+
+      assert_raise RuntimeError, fn ->
+        PollXochiStatus.run(poll, Map.put(ctx, :checkpoint, {CrashOnDelete, table}))
+      end
+
+      refute_receive {:announce, _}, 100
+
+      replay_ctx = Map.put(ctx, :checkpoint, {Checkpoint.ETS, table})
+      assert {:ok, %{status: "completed"}} = PollXochiStatus.run(poll, replay_ctx)
+      body = assert_announce_verifies("completed")
+      assert body["event"]["intentId"] == "int_1"
+
+      # A further replay announces nothing: the route was consumed.
+      assert {:ok, %{status: "completed"}} = PollXochiStatus.run(poll, replay_ctx)
+      refute_receive {:announce, _}, 200
     end
   end
 
