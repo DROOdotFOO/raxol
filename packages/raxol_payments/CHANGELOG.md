@@ -13,30 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-time token `POST /api/intent/execute` returns (nil from an older worker;
   excluded from `inspect`). `Xochi.Client.get_status/3` and `get_intent/3` take
   `read_token:` and send it as the `X-Xochi-Read-Token` header, never in the
-  URL, so a stealth/shielded intent's tx hashes are returned; without it the
-  worker withholds them. `Protocols.Xochi.poll_status/3`, `poll_status_timed/3`
-  and `get_intent/3` forward `:read_token`, and `transfer/4` polls with the
-  execute's token. `payment_execute_xochi_intent` returns `read_token` (kept in
-  its checkpointed summary) and `payment_poll_xochi_status` takes it as input.
+  URL. Protocol-level callers may forward it in memory.
+- The payment Actions never expose the raw capability to the model or replay
+  summary. `payment_execute_xochi_intent` stores a `Secret`-wrapped token in a
+  separate checkpoint record keyed by the non-secret intent id, and
+  `payment_poll_xochi_status` reads it from the same private context store.
+  Without that record, polling remains anonymous.
 - The read token is shape-checked both ways: a served `read_token` that is not
-  43 unpadded base64url characters is dropped (nil), and a caller's
-  `read_token:` of the wrong shape returns `{:error, :invalid_read_token}`
-  before any request. `ExecuteResponse.read_token?/1` is the check. The
-  camelCase `readToken` alias, which the worker never sends, is not read.
-- An execute whose non-2xx body carries a well-formed `read_token` (the worker
-  says funds may have moved) returns `{:error, {:execute_in_doubt, status,
-  %ExecuteResponse{}}}`; `Protocols.Xochi.as_dispatched/2` reads it as a
-  dispatched, `reconciling` execute. `transfer/4` then polls with its token,
-  and `payment_execute_xochi_intent` reports it as dispatched with
-  `reconciling: true` and the token, keeping the reservation and checkpoint
-  (it used to release both, as for a clean rejection).
+  43 unpadded base64url characters is dropped, and a caller token of the wrong
+  shape is refused before any request.
+- Execute transport timeout/reset, malformed response, and 5xx outcomes are
+  reconciling dispatches under the known intent id, with or without a token.
+  The payment Action keeps its dispatched checkpoint and budget reservation;
+  this retention is the required funds-safety choice because releasing either
+  could permit an unsafe retry after funds moved. Only a proven local failure
+  or structurally valid clean 4xx rejection releases/deletes them.
 
 ### Security
 
-- Every other non-2xx body returned as `{:error, {:http, status, body}}` has
-  any `read_token` replaced by `"[redacted]"`, so logging or `inspect`ing an
-  error term (as `SolverAgent` does on a failed settle) no longer prints the
-  bearer secret.
+- Error bodies recursively redact `read_token`; no error tuple or replayable
+  Action result carries the bearer secret.
 
 ### Changed
 

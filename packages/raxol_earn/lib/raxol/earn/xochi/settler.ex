@@ -69,28 +69,27 @@ defmodule Raxol.Earn.Xochi.Settler do
 
   ## Read token
 
-  For a stealth/shielded intent the Xochi worker withholds the tx hashes from a
-  caller that does not prove ownership (xochi#563). The relay is the caller that
-  executed, so it holds the intent's one-time `read_token` from the execute
-  response and presents it on every poll. It never goes into the deliverable, a
-  log line or a URL. An execute answered with a non-2xx that carries the token
-  (`{:execute_in_doubt, _, _}`: funds may have moved) is polled like a dispatched
-  intent, not failed.
+  For a stealth/shielded intent the Xochi worker withholds tx hashes from an
+  anonymous caller. The relay presents the execute-time read token while polling
+  but never returns, logs, or stores it in a replayable settlement record. With
+  a checkpoint store, the token is wrapped in a separate private record keyed by
+  the non-secret intent id; without it the poll remains anonymous.
 
   ## Crash recovery
 
   With a `:checkpoint` store (a `Raxol.Payments.Checkpoint` `{module, handle}`)
-  the settler records the intent before relaying it and, once the execute
-  answers, records its id, `read_token` and stealth announcement fields. A
-  settle re-run for the same intent after a crash resumes polling from that
-  record instead of relaying the bundle again, still with the token. A definite
-  execute failure drops the record. The record holds a bearer secret: use a
-  store you would trust with the intent itself.
+  the settler records the intent before relaying it and records only non-secret
+  execute metadata in the replay checkpoint. A settle re-run for the same intent
+  resumes polling instead of relaying the bundle again. Once submission starts,
+  transport failures, malformed responses, and 5xx responses remain in doubt
+  and keep that checkpoint even without a token. Only local validation failure
+  or a structurally valid clean rejection drops it.
   """
 
   alias Raxol.Payments.Checkpoint
   alias Raxol.Payments.Protocols.Xochi
-  alias Raxol.Payments.Xochi.Schemas.{ExecuteResponse, IntentStatus}
+  alias Raxol.Payments.Xochi.ReadTokenStore
+  alias Raxol.Payments.Xochi.Schemas.{ExecuteRequest, ExecuteResponse, IntentStatus}
 
   @doc """
   Build a settle_fn closure.
@@ -105,8 +104,8 @@ defmodule Raxol.Earn.Xochi.Settler do
   - `:poll_timeout_ms` -- max time to wait for intent settlement.
     Default 120_000 (2 minutes).
   - `:poll_interval_ms` -- default 2_000 (2 seconds).
-  - `:checkpoint` -- a `Raxol.Payments.Checkpoint` store; see "Crash recovery".
-    Default nil (no recovery).
+  - `:checkpoint` -- a trusted `Raxol.Payments.Checkpoint` store for replay
+    recovery and separate `Secret`-wrapped read-token state. Default nil.
   """
   @spec build(keyword()) :: (map() -> {:ok, map()} | {:error, term()})
   def build(opts) do
@@ -128,60 +127,83 @@ defmodule Raxol.Earn.Xochi.Settler do
   defp do_settle(args, xochi_config, store, poll_opts) do
     with {:ok, bundle} <- extract_signed_intent(args),
          {:ok, intent_id} <- bundle_intent_id(bundle),
-         {:ok, %ExecuteResponse{} = exec} <- dispatch(xochi_config, bundle, intent_id, store),
+         {:ok, request} <- Xochi.prepare_signed_execute(bundle),
+         {:ok, %ExecuteResponse{} = exec} <-
+           dispatch(xochi_config, request, intent_id, store),
          {:ok, %IntentStatus{} = status} <-
            Xochi.poll_status(
              xochi_config,
              intent_id,
              Keyword.put(poll_opts, :read_token, exec.read_token)
            ) do
+      ReadTokenStore.delete(store, intent_id)
       settle_result(status, exec, args)
     end
   end
 
   # Resume from the checkpoint when this intent was already relayed; otherwise
-  # record it, relay it, and record what the execute answered. A crash between
-  # the two puts leaves only the dispatched marker: the outcome is unknown, so
-  # the intent is polled (without a token) rather than relayed twice.
-  defp dispatch(xochi_config, bundle, intent_id, store) do
+  # record it before the POST. A crash between the two records leaves only the
+  # dispatched marker: the outcome is unknown, so the intent is polled
+  # anonymously rather than relayed twice.
+  defp dispatch(xochi_config, request, intent_id, store) do
     key = Checkpoint.derive_key([:xochi_settler, intent_id])
 
     case Checkpoint.fetch(store, key) do
       {:ok, record} ->
-        {:ok, resumed_exec(record, intent_id)}
+        {:ok, resumed_exec(record, intent_id, store)}
 
       :error ->
         Checkpoint.put(store, key, %{intent_id: intent_id, status: :dispatched})
 
-        case Xochi.as_dispatched(Xochi.execute_signed(xochi_config, bundle), intent_id) do
+        case safe_dispatch(xochi_config, request, intent_id) do
           {:ok, %ExecuteResponse{} = exec} ->
+            ReadTokenStore.put(store, exec.intent_id || intent_id, exec.read_token)
             Checkpoint.put(store, key, executed_record(exec, intent_id))
             {:ok, exec}
 
           {:error, _reason} = error ->
+            ReadTokenStore.delete(store, intent_id)
             Checkpoint.delete(store, key)
             error
         end
     end
   end
 
+  defp safe_dispatch(xochi_config, %ExecuteRequest{} = request, intent_id) do
+    Xochi.execute_prepared(xochi_config, request)
+  rescue
+    _exception -> {:ok, in_doubt(intent_id)}
+  catch
+    _kind, _reason -> {:ok, in_doubt(intent_id)}
+  end
+
+  defp in_doubt(intent_id) do
+    %ExecuteResponse{
+      intent_id: intent_id,
+      status: :unknown,
+      error: "response_exception",
+      reconciling: true
+    }
+  end
+
   defp executed_record(%ExecuteResponse{} = exec, intent_id) do
     %{
       intent_id: exec.intent_id || intent_id,
       status: :in_flight,
-      read_token: exec.read_token,
       stealth_address: exec.stealth_address,
       ephemeral_pub_key: exec.ephemeral_pub_key,
       view_tag: exec.view_tag
     }
   end
 
-  defp resumed_exec(record, intent_id) do
+  defp resumed_exec(record, intent_id, store) do
+    resolved_id = Map.get(record, :intent_id, intent_id)
+
     %ExecuteResponse{
-      intent_id: Map.get(record, :intent_id, intent_id),
+      intent_id: resolved_id,
       status: :unknown,
       reconciling: true,
-      read_token: Map.get(record, :read_token),
+      read_token: ReadTokenStore.fetch(store, resolved_id),
       stealth_address: Map.get(record, :stealth_address),
       ephemeral_pub_key: Map.get(record, :ephemeral_pub_key),
       view_tag: Map.get(record, :view_tag)

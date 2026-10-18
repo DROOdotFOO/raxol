@@ -94,20 +94,17 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
   matrix lists them (it lists EURe), including with the stablecoin corridor
   allowlist off. They reject as `{:unsupported_src_token, _, _}` /
   `{:unsupported_dst_token, _, _}`.
-- **The Xochi settler polls with the intent's read token** (xochi#563). The
-  worker now withholds a stealth/shielded intent's tx hashes on status unless
-  the caller presents the one-time `read_token` that execute returned; the
-  settler sends it on every poll (header only). A completed intent whose status
-  still carries no settlement tx hash now fails the settle with
-  `{:error, {:settlement_tx_hash_unavailable, intent_id}}` instead of producing
-  a deliverable that fails `Offering.deliverable_schema/0,1`, which requires it.
-  An execute answered with a non-2xx that carries the token (funds may have
-  moved) is polled with it instead of failing the settle. With the new
-  `:checkpoint` option (a `Raxol.Payments.Checkpoint` store) the settler
-  records the intent before relaying it and its token once the execute
-  answers, so a re-run after a crash resumes polling with the token rather
-  than relaying again; a definite execute failure drops the record. Needs the
-  `raxol_payments` release with `Protocols.Xochi.as_dispatched/2`.
+- **The Xochi settler polls with the intent's read token** (xochi#563), sent
+  only in the request header. The token never enters the deliverable, error, or
+  replay checkpoint: a `Secret`-wrapped value lives in a separate private
+  checkpoint record keyed by the non-secret intent id and is deleted at a
+  terminal status. A completed anonymous view with no settlement tx hash fails
+  with `{:error, {:settlement_tx_hash_unavailable, intent_id}}`.
+- Once execute submission starts, timeout/reset, malformed response, and 5xx
+  outcomes remain in doubt and are polled under the signed intent id, even when
+  no token was returned. Their dispatched checkpoint is retained so a restart
+  never re-relays an unknown outcome; only local validation failure or a
+  structurally valid clean 4xx rejection drops it.
 
 ### Security
 
