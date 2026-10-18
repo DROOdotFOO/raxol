@@ -103,11 +103,13 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
   `{:error, {:settlement_tx_hash_unavailable, intent_id}}`.
 - At a terminal status the settler replaces the in-flight checkpoint with a
   terminal record holding the settle result (public deliverable fields or the
-  error, never the token) and only then deletes the token; a re-run returns the
-  stored result without polling and deletes a token left by a crash between the
-  commit and the delete. A crash before that commit keeps the token for the
-  re-run's owner-view poll, and an anonymous (`legs_withheld`) terminal answer
-  commits nothing and keeps the token.
+  error, never the token) and only then deletes the token. Every path that
+  returns a committed terminal record (a re-run, or a concurrent writer whose
+  execute returned after another writer's commit) deletes any token left for
+  that intent first and returns the stored result without polling. A crash
+  before that commit keeps the token for the re-run's owner-view poll, and an
+  anonymous (`legs_withheld`) terminal answer commits nothing and keeps the
+  token.
 - Once execute submission starts, timeout/reset, malformed response, and 5xx
   outcomes remain in doubt and are polled under the signed intent id, even when
   no token was returned. So does a refusal because another writer already

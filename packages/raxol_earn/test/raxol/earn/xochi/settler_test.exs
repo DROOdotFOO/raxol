@@ -470,6 +470,50 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
       assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
     end
 
+    test "a writer whose execute returns after another committed terminal drops its token" do
+      token_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+      committed = {:ok, %{intent_id: "i1", status: "completed"}}
+      test_pid = self()
+
+      # Writer A commits its terminal record (and crashes before deleting its
+      # token) while B's execute is in flight; B then gets its own token back.
+      plug = fn conn ->
+        case conn.request_path do
+          "/api/intent/execute" ->
+            Raxol.Payments.Checkpoint.put(store, key, %{
+              intent_id: "i1",
+              status: :terminal,
+              result: committed
+            })
+
+            Req.Test.json(conn, %{
+              "success" => true,
+              "intent_id" => "i1",
+              "status" => "executing",
+              "read_token" => token_b
+            })
+
+          "/api/intent/i1/status" ->
+            send(test_pid, :polled)
+            Req.Test.json(conn, %{"intent_id" => "i1", "status" => "executing"})
+        end
+      end
+
+      settle =
+        Settler.build(
+          xochi_config: %{base_url: @base_url, auth_token: "stub", req_options: [plug: plug]},
+          poll_timeout_ms: 30,
+          poll_interval_ms: 10,
+          checkpoint: store
+        )
+
+      assert ^committed = settle.(args())
+      refute_received :polled
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
+    end
+
     test "an anonymous terminal answer commits nothing and keeps the token" do
       foreign = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
       store = Raxol.Payments.Checkpoint.ETS.new()
