@@ -338,26 +338,31 @@ defmodule Raxol.Payments.Protocols.Xochi do
           {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()}
           | {:error, term()}
   def execute_signed(config, signed_intent) when is_map(signed_intent) do
-    with {:ok, exec_request} <- build_signed_execute_request(signed_intent) do
-      Client.execute(config, exec_request)
+    with {:ok, exec_request} <- prepare_signed_execute(signed_intent) do
+      execute_prepared(config, exec_request)
     end
   end
 
-  @doc """
-  Read an execute result as dispatched when the worker says funds may have
-  moved.
+  @doc false
+  @spec prepare_signed_execute(signed_intent()) :: {:ok, ExecuteRequest.t()} | {:error, term()}
+  def prepare_signed_execute(signed_intent) when is_map(signed_intent),
+    do: build_signed_execute_request(signed_intent)
 
-  `Client.execute/2` returns `{:error, {:execute_in_doubt, status, exec}}` for a
-  non-2xx that carries the intent's `read_token` (xochi#563). That is not a
-  clean failure: this maps it to `{:ok, exec}` with `reconciling: true` (and
-  `intent_id` defaulted to the one that was signed), so the caller polls the
-  intent with `exec.read_token` instead of releasing or retrying. Any other
-  result passes through unchanged.
+  @doc false
+  @spec execute_prepared(Client.config(), ExecuteRequest.t()) ::
+          {:ok, ExecuteResponse.t()} | {:error, term()}
+  def execute_prepared(config, %ExecuteRequest{} = request), do: Client.execute(config, request)
+
+  @doc """
+  Preserve the signed intent id on an execute response that omitted it.
+
+  Ambiguous post-submit outcomes already arrive as a reconciling successful
+  response from `Client.execute/2`; clean rejections remain errors.
   """
   @spec as_dispatched({:ok, ExecuteResponse.t()} | {:error, term()}, String.t() | nil) ::
           {:ok, ExecuteResponse.t()} | {:error, term()}
-  def as_dispatched({:error, {:execute_in_doubt, _status, %ExecuteResponse{} = exec}}, intent_id),
-    do: {:ok, %{exec | intent_id: exec.intent_id || intent_id, reconciling: true}}
+  def as_dispatched({:ok, %ExecuteResponse{} = exec}, intent_id),
+    do: {:ok, %{exec | intent_id: exec.intent_id || intent_id}}
 
   def as_dispatched(result, _intent_id), do: result
 

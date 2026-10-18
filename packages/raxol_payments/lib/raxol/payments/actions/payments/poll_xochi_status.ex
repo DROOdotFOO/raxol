@@ -15,14 +15,14 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
   * `:ledger`, `:agent_id` -- optional; the `Ledger` and key from the execute, so
     a refund releases that reservation. See `SpendGate`.
+  * `:checkpoint` -- optional private checkpoint store used by the execute
+    Action; supplies and then deletes the intent's read token at terminal status.
 
-  ## Read token
-
-  Pass the `read_token` that `payment_execute_xochi_intent` returned for this
-  intent. The worker withholds a stealth/shielded intent's tx hashes from a
-  caller that does not prove ownership (xochi#563); the token is that proof and
-  travels only in the `X-Xochi-Read-Token` header. Without it the poll still
-  resolves the status, with `tx_hash` absent for a non-public settlement.
+  The execute Action stores the read token outside its model-visible result, in
+  private checkpoint state keyed by `intent_id`. Pass the same `:checkpoint`
+  store in this Action's context and it presents the token automatically in the
+  `X-Xochi-Read-Token` header. Without that private record, polling still
+  resolves status anonymously and a non-public intent's tx hashes stay absent.
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}
@@ -34,11 +34,6 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     schema: [
       input: [
         intent_id: [type: :string, required: true],
-        read_token: [
-          type: :string,
-          description:
-            "The read_token payment_execute_xochi_intent returned for this intent. Reveals a stealth/shielded settlement's tx hash. A bearer secret: pass it only to this tool, never into a message, URL or log."
-        ],
         timeout_ms: [type: :integer, description: "Max wait (default 120000)"],
         interval_ms: [type: :integer, description: "Poll interval (default 2000)"]
       ],
@@ -65,14 +60,14 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
   alias Raxol.Payments.{Failure, Poll}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.IntentStatus
-  alias Raxol.Payments.Xochi.SwapAnnouncer
+  alias Raxol.Payments.Xochi.{ReadTokenStore, SwapAnnouncer}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
   def run(%{intent_id: intent_id} = params, context) do
     case Map.fetch(context, :xochi_config) do
       {:ok, config} ->
-        opts = poll_opts(params)
+        opts = poll_opts(params, context, intent_id)
         budget = Keyword.get(opts, :budget_ms, Poll.default_budget_ms())
         result = Xochi.poll_status_timed(config, intent_id, opts)
         handle_result(result, context, intent_id, budget)
@@ -90,6 +85,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
        ) do
     # Settled: the spend stands. Drop the reservation tag so the ledger's
     # in-flight set stays bounded; nothing to release.
+    ReadTokenStore.delete(Map.get(ctx, :checkpoint), id)
     SpendGate.forget_reservation(ctx, id)
     announce_terminal(ctx, id, status)
     {:ok, summary(status, elapsed_ms, budget)}
@@ -105,6 +101,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     # idempotently -- a re-poll of an already-refunded intent releases nothing
     # further -- so a refunded payment stops consuming budget. Still surfaced as
     # an error carrying the refund reason.
+    ReadTokenStore.delete(Map.get(ctx, :checkpoint), id)
     SpendGate.release_by_intent(ctx, id)
     announce_terminal(ctx, id, status)
     reason = status.error || status.refund_reason || status.substatus_message
@@ -117,6 +114,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     # have moved funds, so the spend stands -- forget the tag (no release), but
     # keep the reason (an explicit error, then the solver's substatus_message) so
     # why it failed is never lost.
+    ReadTokenStore.delete(Map.get(ctx, :checkpoint), id)
     SpendGate.forget_reservation(ctx, id)
     announce_terminal(ctx, id, status)
     reason = status.error || status.substatus_message
@@ -149,12 +147,12 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     :ok
   end
 
-  defp poll_opts(params) do
+  defp poll_opts(params, context, intent_id) do
     []
     |> maybe_put(:timeout_ms, Map.get(params, :timeout_ms))
     |> maybe_put(:slow_interval_ms, Map.get(params, :interval_ms))
     |> maybe_put(:budget_ms, Map.get(params, :budget_ms))
-    |> maybe_put(:read_token, Map.get(params, :read_token))
+    |> maybe_put(:read_token, ReadTokenStore.fetch(Map.get(context, :checkpoint), intent_id))
   end
 
   defp maybe_put(opts, _key, nil), do: opts

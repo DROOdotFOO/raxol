@@ -2,7 +2,8 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Actions.Payments.PollXochiStatus
-  alias Raxol.Payments.{Failure, Ledger, SpendingPolicy}
+  alias Raxol.Payments.{Checkpoint, Failure, Ledger, SpendingPolicy}
+  alias Raxol.Payments.Xochi.ReadTokenStore
 
   defp config do
     %{
@@ -156,13 +157,16 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
       :ok
     end
 
-    test "the token is sent as a header and reveals the settlement tx" do
-      params = %{intent_id: "int_s", read_token: @token, timeout_ms: 40, interval_ms: 10}
+    test "the token is loaded from private checkpoint state and reveals the settlement tx" do
+      store = Checkpoint.ETS.new()
+      ReadTokenStore.put(store, "int_s", @token)
+      params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
       assert {:ok, %{status: "completed", tx_hash: "0x" <> _}} =
-               PollXochiStatus.run(params, %{xochi_config: config()})
+               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
 
       assert_received {:presented, [@token]}
+      assert ReadTokenStore.fetch(store, "int_s") == nil
     end
 
     test "without a token no header is sent and the status still resolves" do

@@ -213,11 +213,15 @@ defmodule Raxol.Payments.Xochi.ClientTest do
     }
 
     defp exec_502(body) do
-      config = %{base_url: "https://api.xochi.fi", req_options: [plug: json_plug(body, 502)]}
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(body, 502), retry: false]
+      }
+
       Client.execute(config, @exec_request)
     end
 
-    test "a 502 carrying read_token is in doubt: the token is captured and never inspected" do
+    test "a 502 carrying read_token is in doubt without putting the token in an error" do
       result =
         exec_502(%{
           "success" => false,
@@ -227,21 +231,127 @@ defmodule Raxol.Payments.Xochi.ClientTest do
           "read_token" => @token
         })
 
-      assert {:error, {:execute_in_doubt, 502, %ExecuteResponse{} = exec}} = result
+      assert {:ok, %ExecuteResponse{} = exec} = result
+      assert exec.reconciling
       assert exec.read_token == @token
       assert exec.intent_id == "xi_1"
-      assert exec.error == "solver"
+      assert exec.error == "{:http, 502}"
       refute inspect(result) =~ @token
     end
 
-    test "a 502 without read_token is unchanged" do
-      body = %{"success" => false, "error" => "solver rejected"}
-      assert {:error, {:http, 502, ^body}} = exec_502(body)
+    test "a 502 without read_token remains in doubt under the known intent id" do
+      assert {:ok, %ExecuteResponse{} = exec} =
+               exec_502(%{"success" => false, "error" => "solver rejected"})
+
+      assert exec.intent_id == "xi_1"
+      assert exec.reconciling
+      assert exec.read_token == nil
     end
 
-    test "a malformed read_token on a 502 is redacted, not captured" do
-      assert {:error, {:http, 502, %{"read_token" => "[redacted]", "error" => "x"}}} =
+    test "a malformed read_token on a 502 is dropped and never enters an error" do
+      assert {:ok, %ExecuteResponse{} = exec} =
                exec_502(%{"error" => "x", "read_token" => "short"})
+
+      assert exec.reconciling
+      assert exec.read_token == nil
+      refute inspect(exec) =~ "short"
+    end
+
+    test "a 4xx carrying a valid read token is not a clean rejection" do
+      body = %{"error" => "uncertain", "read_token" => @token}
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(body, 409), retry: false]
+      }
+
+      assert {:ok,
+              %ExecuteResponse{
+                intent_id: "xi_1",
+                reconciling: true,
+                read_token: @token
+              }} = Client.execute(config, @exec_request)
+    end
+
+    test "a structurally valid 4xx is a clean rejection with nested tokens redacted" do
+      body = %{"error" => "rejected", "details" => %{"read_token" => @token}}
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(body, 422), retry: false]
+      }
+
+      assert {:error, {:http, 422, redacted}} = Client.execute(config, @exec_request)
+      assert redacted["details"]["read_token"] == "[redacted]"
+      refute inspect(redacted) =~ @token
+    end
+
+    test "transport timeout and reset remain in doubt and are never retried" do
+      test_pid = self()
+
+      for reason <- [:timeout, :closed] do
+        plug = fn conn ->
+          send(test_pid, {:execute_attempt, reason})
+          Req.Test.transport_error(conn, reason)
+        end
+
+        config = %{
+          base_url: "https://api.xochi.fi",
+          req_options: [plug: plug, retry: :transient]
+        }
+
+        assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true, read_token: nil}} =
+                 Client.execute(config, @exec_request)
+
+        assert_received {:execute_attempt, ^reason}
+        refute_received {:execute_attempt, ^reason}
+      end
+    end
+
+    test "an execute 5xx is never retried even when config requests transient retries" do
+      test_pid = self()
+
+      plug = fn conn ->
+        send(test_pid, :execute_attempt)
+        conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "upstream"})
+      end
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: plug, retry: :transient]
+      }
+
+      assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true}} =
+               Client.execute(config, @exec_request)
+
+      assert_received :execute_attempt
+      refute_received :execute_attempt
+    end
+
+    test "a decoded response with the wrong structure remains in doubt" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(["not", "an", "object"]), retry: false]
+      }
+
+      assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true}} =
+               Client.execute(config, @exec_request)
+    end
+
+    test "a JSON decode failure remains in doubt under the known intent id" do
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, "{not-json")
+      end
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: plug, retry: false]
+      }
+
+      assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true}} =
+               Client.execute(config, @exec_request)
     end
 
     test "a non-2xx text body has its read_token redacted" do

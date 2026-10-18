@@ -50,11 +50,11 @@ defmodule Raxol.Payments.Xochi.Client do
   unpadded base64url characters is refused with `{:error, :invalid_read_token}`
   before any request.
 
-  The worker also serves the token on an execute 502 when funds may have
-  moved. `execute/2` then returns `{:error, {:execute_in_doubt, status,
-  %ExecuteResponse{}}}` carrying it: poll that intent with it, never
-  re-execute. Every other non-2xx body has any `read_token` replaced by
-  `"[redacted]"` before it is returned, so an error term can be logged.
+  Any transport failure, 5xx, or malformed response after the execute request
+  starts is returned as a reconciling `ExecuteResponse`: the worker may have
+  accepted the intent even when the client could not read a valid answer. A
+  structurally valid 4xx remains a clean rejection. Error bodies always redact
+  `read_token`.
 
   ## Configuration
 
@@ -96,7 +96,6 @@ defmodule Raxol.Payments.Xochi.Client do
 
   @type error ::
           {:error, {:http, integer(), term()}}
-          | {:error, {:execute_in_doubt, integer(), ExecuteResponse.t()}}
           | {:error, term()}
 
   @doc "Request an intent quote."
@@ -131,18 +130,26 @@ defmodule Raxol.Payments.Xochi.Client do
   @doc """
   Execute a quoted intent with a signed payload.
 
-  A non-2xx whose body carries a well-formed `read_token` is the worker saying
-  funds may have moved (xochi#563): it returns `{:error, {:execute_in_doubt,
-  status, %ExecuteResponse{}}}`, whose `read_token` (hidden from `inspect`)
-  polls the intent. Treat it as dispatched and in doubt, never as a clean
-  failure to retry.
+  Once the POST starts it is never retried by the transport. A timeout, reset,
+  5xx, or malformed response has an unknown outcome: the worker may have
+  accepted the intent. Those cases return
+  `{:ok, %ExecuteResponse{reconciling: true}}`, retaining the request's known
+  intent id and any valid read token the worker supplied. Only a structurally
+  valid 4xx is returned as a clean rejection.
   """
   @spec execute(config(), ExecuteRequest.t()) :: {:ok, ExecuteResponse.t()} | error()
   def execute(config, %ExecuteRequest{} = request) do
-    config
-    |> build_req()
-    |> Req.post(url: "/api/intent/execute", json: ExecuteRequest.to_json(request))
-    |> handle_execute_response()
+    with {:ok, req, json} <- prepare_execute(config, request) do
+      try do
+        req
+        |> Req.post(url: "/api/intent/execute", json: json, retry: false)
+        |> handle_execute_response(request.intent_id)
+      rescue
+        _exception -> {:ok, in_doubt(request.intent_id, :response_exception)}
+      catch
+        _kind, _reason -> {:ok, in_doubt(request.intent_id, :response_exception)}
+      end
+    end
   end
 
   @doc """
@@ -231,6 +238,14 @@ defmodule Raxol.Payments.Xochi.Client do
 
   # -- Private --
 
+  defp prepare_execute(config, request) do
+    {:ok, build_req(config), ExecuteRequest.to_json(request)}
+  rescue
+    _exception -> {:error, :execute_preparation_failed}
+  catch
+    _kind, _reason -> {:error, :execute_preparation_failed}
+  end
+
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
@@ -306,20 +321,138 @@ defmodule Raxol.Payments.Xochi.Client do
   end
 
   defp handle_execute_response(
-         {:ok, %Req.Response{status: status, body: %{"read_token" => token} = body}}
+         {:ok, %Req.Response{status: status, body: body}},
+         intent_id
        )
-       when status not in 200..299 do
-    if ExecuteResponse.read_token?(token),
-      do: {:error, {:execute_in_doubt, status, ExecuteResponse.from_json(body)}},
-      else: {:error, {:http, status, redact_read_token(body)}}
+       when status in 200..299 do
+    {:ok, parse_execute(body, intent_id)}
   end
 
-  defp handle_execute_response(response),
-    do: handle_response(response, &ExecuteResponse.from_json/1)
+  defp handle_execute_response(
+         {:ok, %Req.Response{status: status, body: body}},
+         intent_id
+       )
+       when status >= 500 do
+    {:ok, parse_in_doubt(body, intent_id, {:http, status})}
+  end
 
-  # An error term is logged and returned to callers that `inspect` it; the
-  # token is a bearer secret, so it never rides one. A non-JSON body is text.
-  defp redact_read_token(%{"read_token" => _} = body), do: %{body | "read_token" => "[redacted]"}
+  defp handle_execute_response(
+         {:ok, %Req.Response{status: status, body: body}},
+         intent_id
+       )
+       when status in 400..499 and is_map(body) do
+    cond do
+      ExecuteResponse.read_token?(body["read_token"]) ->
+        {:ok, parse_in_doubt(body, intent_id, {:http, status})}
+
+      clean_rejection?(body) ->
+        {:error, {:http, status, redact_read_token(body)}}
+
+      true ->
+        {:ok, in_doubt(intent_id, {:invalid_rejection, status})}
+    end
+  end
+
+  defp handle_execute_response({:ok, %Req.Response{status: status}}, intent_id),
+    do: {:ok, in_doubt(intent_id, {:invalid_response, status})}
+
+  defp handle_execute_response({:error, _reason}, intent_id),
+    do: {:ok, in_doubt(intent_id, :transport_error)}
+
+  defp parse_execute(body, intent_id) do
+    exec = ExecuteResponse.from_json(body)
+
+    if valid_execute_response?(exec, intent_id),
+      do: sanitize_execute(exec, intent_id),
+      else: sanitize_in_doubt(exec, intent_id, :invalid_response)
+  end
+
+  defp parse_in_doubt(body, intent_id, reason) when is_map(body) do
+    body
+    |> ExecuteResponse.from_json()
+    |> sanitize_in_doubt(intent_id, reason)
+  rescue
+    _exception -> in_doubt(intent_id, reason)
+  end
+
+  defp parse_in_doubt(_body, intent_id, reason), do: in_doubt(intent_id, reason)
+
+  defp valid_execute_response?(%ExecuteResponse{} = exec, intent_id) do
+    exec.intent_id in [nil, intent_id] and exec.status != :unknown and
+      is_boolean(exec.reconciling) and optional_binary?(exec.tx_hash) and
+      optional_binary?(exec.note_commitment) and optional_binary?(exec.stealth_address) and
+      optional_binary?(exec.ephemeral_pub_key) and optional_integer?(exec.view_tag) and
+      optional_binary?(exec.error)
+  end
+
+  defp sanitize_execute(%ExecuteResponse{} = exec, intent_id) do
+    token = exec.read_token
+
+    %{
+      exec
+      | intent_id: intent_id,
+        tx_hash: public_binary(exec.tx_hash, token),
+        note_commitment: public_binary(exec.note_commitment, token),
+        stealth_address: public_binary(exec.stealth_address, token),
+        ephemeral_pub_key: public_binary(exec.ephemeral_pub_key, token),
+        error: redact_execute_error(exec.error, token)
+    }
+  end
+
+  defp sanitize_in_doubt(%ExecuteResponse{} = exec, intent_id, reason) do
+    %ExecuteResponse{
+      intent_id: intent_id,
+      status: if(exec.status == :unknown, do: :unknown, else: exec.status),
+      read_token: exec.read_token,
+      tx_hash: public_binary(exec.tx_hash, exec.read_token),
+      note_commitment: public_binary(exec.note_commitment, exec.read_token),
+      stealth_address: public_binary(exec.stealth_address, exec.read_token),
+      ephemeral_pub_key: public_binary(exec.ephemeral_pub_key, exec.read_token),
+      view_tag: optional_integer(exec.view_tag),
+      error: inspect(reason),
+      reconciling: true
+    }
+  end
+
+  defp in_doubt(intent_id, reason) do
+    %ExecuteResponse{
+      intent_id: intent_id,
+      status: :unknown,
+      error: inspect(reason),
+      reconciling: true
+    }
+  end
+
+  defp optional_binary?(value), do: is_nil(value) or is_binary(value)
+  defp optional_integer?(value), do: is_nil(value) or is_integer(value)
+  defp optional_integer(value) when is_integer(value), do: value
+  defp optional_integer(_value), do: nil
+
+  defp redact_execute_error(error, token) when is_binary(error) and is_binary(token),
+    do: String.replace(error, token, "[redacted]")
+
+  defp redact_execute_error(error, _token), do: error
+
+  defp public_binary(value, token) when is_binary(value) and value != token, do: value
+  defp public_binary(_value, _token), do: nil
+
+  defp clean_rejection?(body) do
+    Enum.any?(["error", "reason", "message"], fn key ->
+      value = body[key]
+      is_binary(value) and value != ""
+    end)
+  end
+
+  # Error terms can be logged or persisted. Recursively redact the bearer
+  # capability rather than assuming it appears only at the response root.
+  defp redact_read_token(body) when is_map(body) do
+    Map.new(body, fn
+      {"read_token", _value} -> {"read_token", "[redacted]"}
+      {key, value} -> {key, redact_read_token(value)}
+    end)
+  end
+
+  defp redact_read_token(body) when is_list(body), do: Enum.map(body, &redact_read_token/1)
 
   defp redact_read_token(body) when is_binary(body),
     do: Regex.replace(~r/("read_token"\s*:\s*")[^"]*"/, body, ~S(\1[redacted]"))

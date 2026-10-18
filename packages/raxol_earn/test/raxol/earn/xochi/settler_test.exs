@@ -2,6 +2,7 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Earn.Xochi.Settler
+  alias Raxol.Payments.Xochi.ReadTokenStore
 
   @src_token "0x" <> String.duplicate("11", 20)
   @dst_token "0x" <> String.duplicate("22", 20)
@@ -281,9 +282,13 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
             "/api/intent/execute" ->
               send(test_pid, :executed)
 
-              Map.merge(
-                %{"success" => exec_status == 200, "intent_id" => "i1", "status" => "executing"},
-                if(exec_token, do: %{"read_token" => exec_token}, else: %{})
+              base =
+                %{"success" => exec_status == 200, "intent_id" => "i1", "status" => "executing"}
+
+              base
+              |> Map.merge(if(exec_token, do: %{"read_token" => exec_token}, else: %{}))
+              |> Map.merge(
+                if(exec_status in 400..499, do: %{"error" => "request_rejected"}, else: %{})
               )
 
             "/api/intent/i1/status" ->
@@ -356,13 +361,14 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
       assert_received {:presented, [^issued], ""}
     end
 
-    test "a 502 without a token stays a failure whose error term carries no token" do
-      assert {:error, {:http, 502, body}} = read_cap_settler(nil, exec_status: 502).(args())
-      refute Map.has_key?(body, "read_token")
-      refute_received {:presented, _, _}
+    test "a 502 without a token is polled anonymously because the outcome is unknown" do
+      assert {:error, {:settlement_tx_hash_unavailable, "i1"}} =
+               read_cap_settler(nil, exec_status: 502).(args())
+
+      assert_received {:presented, [], ""}
     end
 
-    test "the checkpoint keeps the token, so a re-run after a crash resumes polling with it" do
+    test "the replay checkpoint excludes the token and resume reads private state" do
       issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
       store = Raxol.Payments.Checkpoint.ETS.new()
       key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
@@ -370,24 +376,93 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
       assert {:ok, _} = read_cap_settler(issued, checkpoint: store).(args())
       assert_received :executed
 
-      assert {:ok, %{intent_id: "i1", read_token: ^issued}} =
-               Raxol.Payments.Checkpoint.fetch(store, key)
+      assert {:ok, record} = Raxol.Payments.Checkpoint.fetch(store, key)
+      refute Map.has_key?(record, :read_token)
+      refute inspect(record) =~ issued
 
-      # The restarted relay holds no token in memory, and the execute would
-      # answer without one: only the checkpoint can supply it.
+      # Terminal settlement deletes the short-lived private capability.
+      assert ReadTokenStore.fetch(store, "i1") == nil
+
+      # Seed the private state to model a crash after execute but before terminal
+      # poll, then verify replay polls rather than executing again.
+      ReadTokenStore.put(store, "i1", issued)
       assert {:ok, deliverable} = read_cap_settler(nil, checkpoint: store).(args())
       refute_received :executed
       assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      refute inspect(deliverable) =~ issued
     end
 
-    test "a definite execute failure drops the checkpoint" do
+    defp ambiguous_sim(outcome, test_pid) do
+      fn conn ->
+        case conn.request_path do
+          "/api/intent/execute" ->
+            send(test_pid, :executed)
+
+            case outcome do
+              :timeout ->
+                Req.Test.transport_error(conn, :timeout)
+
+              :closed ->
+                Req.Test.transport_error(conn, :closed)
+
+              :invalid_json ->
+                conn
+                |> Plug.Conn.put_resp_content_type("application/json")
+                |> Plug.Conn.send_resp(200, "{not-json")
+
+              :invalid_body ->
+                Req.Test.json(conn, ["not", "an", "execute", "response"])
+
+              :server_500 ->
+                conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "upstream"})
+            end
+
+          "/api/intent/i1/status" ->
+            Req.Test.json(conn, %{
+              "intent_id" => "i1",
+              "status" => "completed",
+              "terminal" => true,
+              "tx_hash" => "0x" <> String.duplicate("a", 64)
+            })
+        end
+      end
+    end
+
+    test "transport, decode, and 5xx execute outcomes poll instead of re-relaying" do
+      for outcome <- [:timeout, :closed, :invalid_json, :invalid_body, :server_500] do
+        store = Raxol.Payments.Checkpoint.ETS.new()
+        key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+        settle =
+          Settler.build(
+            xochi_config: %{
+              base_url: "https://xochi.test",
+              auth_token: "stub",
+              req_options: [plug: ambiguous_sim(outcome, self()), retry: false]
+            },
+            poll_timeout_ms: 5_000,
+            poll_interval_ms: 10,
+            checkpoint: store
+          )
+
+        assert {:ok, %{intent_id: "i1", status: "completed"}} = settle.(args())
+        assert_received :executed
+        refute_received :executed
+
+        assert {:ok, %{intent_id: "i1", status: :in_flight}} =
+                 Raxol.Payments.Checkpoint.fetch(store, key)
+      end
+    end
+
+    test "a structurally valid clean execute rejection drops the checkpoint" do
       store = Raxol.Payments.Checkpoint.ETS.new()
       key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
 
-      assert {:error, {:http, 502, _}} =
-               read_cap_settler(nil, exec_status: 502, checkpoint: store).(args())
+      assert {:error, {:http, 422, _}} =
+               read_cap_settler(nil, exec_status: 422, checkpoint: store).(args())
 
       assert :error = Raxol.Payments.Checkpoint.fetch(store, key)
+      assert ReadTokenStore.fetch(store, "i1") == nil
     end
   end
 end
