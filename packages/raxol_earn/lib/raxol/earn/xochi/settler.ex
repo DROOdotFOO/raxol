@@ -73,7 +73,9 @@ defmodule Raxol.Earn.Xochi.Settler do
   anonymous caller. The relay presents the execute-time read token while polling
   but never returns, logs, or stores it in a replayable settlement record. With
   a checkpoint store, the token is wrapped in a separate private record keyed by
-  the non-secret intent id; without it the poll remains anonymous.
+  the API origin and the non-secret intent id; without it the poll remains
+  anonymous. The token is deleted only after the terminal result is committed,
+  and kept when the worker answered with the anonymous view (`legs_withheld`).
 
   ## Crash recovery
 
@@ -81,9 +83,15 @@ defmodule Raxol.Earn.Xochi.Settler do
   the settler records the intent before relaying it and records only non-secret
   execute metadata in the replay checkpoint. A settle re-run for the same intent
   resumes polling instead of relaying the bundle again. Once submission starts,
-  transport failures, malformed responses, and 5xx responses remain in doubt
-  and keep that checkpoint even without a token. Only local validation failure
-  or a structurally valid clean rejection drops it.
+  transport failures, malformed responses, 5xx responses, and refusals because
+  the intent is already executing or past `quoted` remain in doubt and keep that
+  checkpoint even without a token. Only local validation failure or a
+  structurally valid clean rejection drops it.
+
+  At a terminal status the in-flight record is replaced by a terminal record
+  holding the settle result (public deliverable fields or the error, never the
+  token), and only then is the token deleted. A re-run that finds the terminal
+  record returns that result without polling.
   """
 
   alias Raxol.Payments.Checkpoint
@@ -127,17 +135,52 @@ defmodule Raxol.Earn.Xochi.Settler do
   defp do_settle(args, xochi_config, store, poll_opts) do
     with {:ok, bundle} <- extract_signed_intent(args),
          {:ok, intent_id} <- bundle_intent_id(bundle),
-         {:ok, request} <- Xochi.prepare_signed_execute(bundle),
-         {:ok, %ExecuteResponse{} = exec} <-
-           dispatch(xochi_config, request, intent_id, store),
-         {:ok, %IntentStatus{} = status} <-
+         {:ok, request} <- Xochi.prepare_signed_execute(bundle) do
+      key = Checkpoint.derive_key([:xochi_settler, intent_id])
+
+      case dispatch(xochi_config, request, intent_id, store, key) do
+        {:terminal, result} -> result
+        {:ok, %ExecuteResponse{} = exec} -> poll(xochi_config, exec, args, store, key, poll_opts)
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp poll(xochi_config, exec, args, store, key, poll_opts) do
+    # A writer that lost the execute race holds no token of its own; the
+    # winner's, if already stored for this origin, still opens the owner view.
+    token = exec.read_token || ReadTokenStore.fetch(store, xochi_config.base_url, exec.intent_id)
+
+    with {:ok, %IntentStatus{} = status} <-
            Xochi.poll_status(
              xochi_config,
-             intent_id,
-             Keyword.put(poll_opts, :read_token, exec.read_token)
+             exec.intent_id,
+             Keyword.put(poll_opts, :read_token, token)
            ) do
-      ReadTokenStore.delete(store, intent_id)
-      settle_result(status, exec, args)
+      status
+      |> settle_result(exec, args)
+      |> commit_terminal(status, exec.intent_id, xochi_config, store, key)
+    end
+  end
+
+  # The terminal record replaces the in-flight one in a single put, and the
+  # token is dropped only after it lands: a crash before the put leaves the
+  # token for the re-run's owner-view poll, a crash after it leaves the stored
+  # result. An anonymous answer (`legs_withheld`) means the token was absent or
+  # refused, so neither is committed and a re-run polls again. A terminal
+  # record another writer already committed wins.
+  defp commit_terminal(result, %IntentStatus{legs_withheld: true}, _id, _config, _store, _key),
+    do: result
+
+  defp commit_terminal(result, %IntentStatus{}, intent_id, xochi_config, store, key) do
+    case Checkpoint.fetch(store, key) do
+      {:ok, %{status: :terminal, result: committed}} ->
+        committed
+
+      _ ->
+        Checkpoint.put(store, key, %{intent_id: intent_id, status: :terminal, result: result})
+        ReadTokenStore.delete(store, xochi_config.base_url, intent_id)
+        result
     end
   end
 
@@ -145,28 +188,73 @@ defmodule Raxol.Earn.Xochi.Settler do
   # record it before the POST. A crash between the two records leaves only the
   # dispatched marker: the outcome is unknown, so the intent is polled
   # anonymously rather than relayed twice.
-  defp dispatch(xochi_config, request, intent_id, store) do
-    key = Checkpoint.derive_key([:xochi_settler, intent_id])
-
+  defp dispatch(xochi_config, request, intent_id, store, key) do
     case Checkpoint.fetch(store, key) do
+      {:ok, %{status: :terminal, result: result}} ->
+        {:terminal, result}
+
       {:ok, record} ->
-        {:ok, resumed_exec(record, intent_id, store)}
+        {:ok, resumed_exec(record, intent_id, xochi_config, store)}
 
       :error ->
         Checkpoint.put(store, key, %{intent_id: intent_id, status: :dispatched})
 
         case safe_dispatch(xochi_config, request, intent_id) do
           {:ok, %ExecuteResponse{} = exec} ->
-            ReadTokenStore.put(store, exec.intent_id || intent_id, exec.read_token)
-            Checkpoint.put(store, key, executed_record(exec, intent_id))
-            {:ok, exec}
+            ReadTokenStore.put(
+              store,
+              xochi_config.base_url,
+              exec.intent_id || intent_id,
+              exec.read_token
+            )
 
+            record_executed(store, key, exec, intent_id)
+
+          # A clean rejection carries no token, so any stored for this intent
+          # was issued to another writer and is left alone.
           {:error, _reason} = error ->
-            ReadTokenStore.delete(store, intent_id)
             Checkpoint.delete(store, key)
             error
         end
     end
+  end
+
+  # A concurrent writer for the same intent shares this key. Never overwrite a
+  # terminal record it committed, and keep the announcement fields it recorded
+  # when this (in-doubt) response carries none.
+  defp record_executed(store, key, exec, intent_id) do
+    case Checkpoint.fetch(store, key) do
+      {:ok, %{status: :terminal, result: result}} ->
+        {:terminal, result}
+
+      {:ok, existing} ->
+        put_executed(
+          store,
+          key,
+          exec,
+          Map.merge(existing, executed_record(exec, intent_id), &keep_known/3)
+        )
+
+      :error ->
+        put_executed(store, key, exec, executed_record(exec, intent_id))
+    end
+  end
+
+  defp keep_known(_field, old, nil), do: old
+  defp keep_known(_field, _old, new), do: new
+
+  defp put_executed(store, key, exec, record) do
+    Checkpoint.put(store, key, record)
+    {:ok, announced_exec(exec, record)}
+  end
+
+  defp announced_exec(%ExecuteResponse{} = exec, record) do
+    %{
+      exec
+      | stealth_address: record.stealth_address,
+        ephemeral_pub_key: record.ephemeral_pub_key,
+        view_tag: record.view_tag
+    }
   end
 
   defp safe_dispatch(xochi_config, %ExecuteRequest{} = request, intent_id) do
@@ -196,14 +284,14 @@ defmodule Raxol.Earn.Xochi.Settler do
     }
   end
 
-  defp resumed_exec(record, intent_id, store) do
+  defp resumed_exec(record, intent_id, xochi_config, store) do
     resolved_id = Map.get(record, :intent_id, intent_id)
 
     %ExecuteResponse{
       intent_id: resolved_id,
       status: :unknown,
       reconciling: true,
-      read_token: ReadTokenStore.fetch(store, resolved_id),
+      read_token: ReadTokenStore.fetch(store, xochi_config.base_url, resolved_id),
       stealth_address: Map.get(record, :stealth_address),
       ephemeral_pub_key: Map.get(record, :ephemeral_pub_key),
       view_tag: Map.get(record, :view_tag)

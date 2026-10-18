@@ -16,23 +16,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   URL. Protocol-level callers may forward it in memory.
 - The payment Actions never expose the raw capability to the model or replay
   summary. `payment_execute_xochi_intent` stores a `Secret`-wrapped token in a
-  separate checkpoint record keyed by the non-secret intent id, and
-  `payment_poll_xochi_status` reads it from the same private context store.
-  Without that record, polling remains anonymous.
+  separate checkpoint record keyed by the canonical API origin
+  (scheme://host[:port]) and the non-secret intent id, and
+  `payment_poll_xochi_status` reads it from the same private context store for
+  its own `base_url` only. Without that record, polling remains anonymous.
+- `IntentStatus` parses `settlement_tx_hash`, `settlement_chain_id`, and the
+  anonymous view's `settlement_confirmed` / `legs_withheld` markers
+  (`IntentStatus.settlement_confirmed?/1`). `payment_poll_xochi_status`
+  reports them and `receiving_tx_hash` in its summary, and deletes the token
+  only after a completed owner-view status is in that summary; it keeps the
+  token after an anonymous answer and after a failed, expired, or refunded
+  status. A poll that times out on a confirmed but non-terminal fill returns a
+  `terminal: false` summary instead of `:stranded`; the `intent_stranded`
+  telemetry carries the last status and `legs_withheld`. Neither marker
+  releases, refunds, or re-executes anything.
+- `Raxol.Payments.Poll.run/3` takes `last_status_on_timeout: true` to return
+  `{:error, {:timeout, last_status}}`.
 - The read token is shape-checked both ways: a served `read_token` that is not
   43 unpadded base64url characters is dropped, and a caller token of the wrong
   shape is refused before any request.
 - Execute transport timeout/reset, malformed response, and 5xx outcomes are
   reconciling dispatches under the known intent id, with or without a token.
-  The payment Action keeps its dispatched checkpoint and budget reservation;
-  this retention is the required funds-safety choice because releasing either
-  could permit an unsafe retry after funds moved. Only a proven local failure
-  or structurally valid clean 4xx rejection releases/deletes them.
+  So is a refusal because the intent already left `quoted`: a 409 (another
+  writer holds the claim) unless it is a pre-claim `promo_unavailable` or
+  quote-expiry refusal, and a 400 naming any status but `expired`. The payment
+  Action keeps its dispatched checkpoint and budget reservation; this retention
+  is the required funds-safety choice because releasing either could permit an
+  unsafe retry after funds moved. Only a proven local failure or structurally
+  valid clean 4xx rejection releases/deletes them.
 
 ### Security
 
 - Error bodies recursively redact `read_token`; no error tuple or replayable
   Action result carries the bearer secret.
+- A read token is never presented to, or deleted under, an API origin other
+  than the one whose execute issued it.
 
 ### Changed
 

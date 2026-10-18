@@ -32,7 +32,8 @@ defmodule Raxol.Payments.Checkpoint do
   load-bearing field is the id a resume polls -- `:intent_id` for the Xochi
   intent, `:transfer_id` for the Relay transfer. Replayable result records must
   contain no bearer secrets; Xochi read capabilities use a separate,
-  `Secret`-wrapped checkpoint entry keyed by the non-secret intent id.
+  `Secret`-wrapped checkpoint entry keyed by the API origin and the non-secret
+  intent id.
   """
 
   @type handle :: term()
