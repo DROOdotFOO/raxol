@@ -137,45 +137,181 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
   # for the right token, as the worker does.
   describe "read_token" do
     @token "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    @other "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
 
-    setup do
-      test_pid = self()
-
+    # Owner view for the right token; otherwise the worker's anonymous view of
+    # a private settlement: status-only, `legs_withheld`, `settlement_confirmed`.
+    defp stub_private(test_pid, status) do
       Req.Test.stub(__MODULE__, fn conn ->
         presented = Plug.Conn.get_req_header(conn, "x-xochi-read-token")
         send(test_pid, {:presented, presented})
-        base = %{"intent_id" => "int_s", "status" => "completed", "settlement_type" => "stealth"}
+        base = %{"intent_id" => "int_s", "status" => status, "settlement_type" => "stealth"}
 
         body =
           if presented == [@token],
-            do: Map.put(base, "tx_hash", "0x" <> String.duplicate("c", 64)),
-            else: base
+            do:
+              Map.merge(base, %{
+                "tx_hash" => "0x" <> String.duplicate("c", 64),
+                "receiving_tx_hash" => "0x" <> String.duplicate("d", 64),
+                "settlement_tx_hash" => "0x" <> String.duplicate("d", 64),
+                "settlement_chain_id" => 10
+              }),
+            else: Map.merge(base, %{"settlement_confirmed" => true, "legs_withheld" => true})
 
         Req.Test.json(conn, body)
       end)
+    end
 
+    setup do
+      stub_private(self(), "completed")
       :ok
     end
 
     test "the token is loaded from private checkpoint state and reveals the settlement tx" do
       store = Checkpoint.ETS.new()
-      ReadTokenStore.put(store, "int_s", @token)
+      ReadTokenStore.put(store, config().base_url, "int_s", @token)
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
-      assert {:ok, %{status: "completed", tx_hash: "0x" <> _}} =
+      assert {:ok, summary} =
                PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
 
+      # Every owner-view leg is in the result before the token is dropped.
+      assert %{
+               status: "completed",
+               tx_hash: "0x" <> _,
+               receiving_tx_hash: "0x" <> _,
+               settlement_tx_hash: "0x" <> _,
+               settlement_chain_id: 10,
+               settlement_confirmed: true,
+               legs_withheld: false
+             } = summary
+
       assert_received {:presented, [@token]}
-      assert ReadTokenStore.fetch(store, "int_s") == nil
+      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == nil
     end
 
     test "without a token no header is sent and the status still resolves" do
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
-      assert {:ok, %{status: "completed", settlement_type: "stealth", tx_hash: nil}} =
-               PollXochiStatus.run(params, %{xochi_config: config()})
+      assert {:ok,
+              %{
+                status: "completed",
+                settlement_type: "stealth",
+                tx_hash: nil,
+                legs_withheld: true,
+                settlement_confirmed: true
+              }} = PollXochiStatus.run(params, %{xochi_config: config()})
 
       assert_received {:presented, []}
+    end
+
+    test "an anonymous terminal answer keeps the token for a later owner-view poll" do
+      store = Checkpoint.ETS.new()
+      ReadTokenStore.put(store, config().base_url, "int_s", @other)
+      params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
+
+      assert {:ok, %{legs_withheld: true, tx_hash: nil}} =
+               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+
+      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == @other
+    end
+
+    test "a failed status keeps the token, since the error carries none of its legs" do
+      stub_private(self(), "failed")
+      store = Checkpoint.ETS.new()
+      ReadTokenStore.put(store, config().base_url, "int_s", @token)
+      params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
+
+      assert {:error, %Failure{}} =
+               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+
+      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == @token
+    end
+
+    test "a token stored for another API origin is never presented" do
+      store = Checkpoint.ETS.new()
+      ReadTokenStore.put(store, "https://other.test", "int_s", @token)
+      params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
+
+      assert {:ok, %{tx_hash: nil}} =
+               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+
+      assert_received {:presented, []}
+      assert ReadTokenStore.fetch(store, "https://other.test", "int_s") == @token
+    end
+  end
+
+  describe "a confirmed private fill that is not yet terminal" do
+    setup do
+      handler_id = "confirmed-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :payments, :xochi, :intent_stranded],
+        fn _e, _m, meta, _ -> send(test_pid, {:stranded, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+    end
+
+    test "is reported as confirmed and non-terminal, not stranded, and releases nothing" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intent_id" => "int_p",
+          "status" => "settling",
+          "terminal" => false,
+          "settlement_type" => "shielded",
+          "settlement_confirmed" => true,
+          "legs_withheld" => true
+        })
+      end)
+
+      {:ok, ledger} = Ledger.start_link(table_name: :"poll_confirmed_#{:erlang.unique_integer()}")
+      ctx = %{xochi_config: config(), ledger: ledger, agent_id: "agent_1"}
+      :ok = Ledger.try_spend(ledger, "agent_1", Decimal.new("1.00"), policy(), %{})
+      :ok = Ledger.tag_reservation(ledger, "agent_1", "int_p", Decimal.new("1.00"))
+
+      params = %{intent_id: "int_p", timeout_ms: 40, interval_ms: 10}
+
+      assert {:ok,
+              %{
+                status: "settling",
+                terminal: false,
+                settlement_confirmed: true,
+                legs_withheld: true
+              }} = PollXochiStatus.run(params, ctx)
+
+      refute_received {:stranded, _}
+      # The reservation is neither released nor forgotten.
+      assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy()).lifetime, "1.00")
+      assert :released = Ledger.release_by_intent(ledger, "agent_1", "int_p")
+    end
+
+    test "an unconfirmed private fill is stranded, and the report says the legs were withheld" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intent_id" => "int_u",
+          "status" => "settling",
+          "terminal" => false,
+          "settlement_confirmed" => false,
+          "legs_withheld" => true
+        })
+      end)
+
+      params = %{intent_id: "int_u", timeout_ms: 40, interval_ms: 10}
+
+      assert {:error, %Failure{reason: :stranded}} =
+               PollXochiStatus.run(params, %{xochi_config: config()})
+
+      assert_received {:stranded,
+                       %{
+                         intent_id: "int_u",
+                         status: "settling",
+                         settlement_confirmed: false,
+                         legs_withheld: true
+                       }}
     end
   end
 end

@@ -1383,7 +1383,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), ctx)
       refute Map.has_key?(result, :read_token)
       refute inspect(result) =~ token
-      assert ReadTokenStore.fetch(store, "int_1") == token
+      assert ReadTokenStore.fetch(store, config().base_url, "int_1") == token
 
       assert {:ok, %{summary: summary}} = Checkpoint.fetch(store, "pay-token")
 
@@ -1431,7 +1431,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       refute Map.has_key?(result, :read_token)
       assert {:ok, %{summary: summary}} = Checkpoint.fetch(store, "pay-502")
       refute Map.has_key?(summary, :read_token)
-      assert ReadTokenStore.fetch(store, "int_1") == token
+      assert ReadTokenStore.fetch(store, config().base_url, "int_1") == token
       assert [] = for(%{metadata: %{type: :release}} <- Ledger.get_history(ledger, "a1"), do: 1)
     end
 

@@ -7,14 +7,16 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   intent id and initial status. Poll for the terminal status with
   `Raxol.Payments.Actions.Payments.PollXochiStatus`. When a checkpoint store is
   configured, the execute-time read token is kept in a separate private record
-  keyed by the intent id; it never enters the Action result or replay summary.
+  keyed by the API origin and intent id; it never enters the Action result or
+  replay summary.
   Polling reads that private record automatically and otherwise stays anonymous.
 
   The spend is gated on the human-decimal `amount`; the atomic `from_amount`
   sent to Xochi is derived from the token's decimals. A proven local signing
   failure or structurally valid clean server rejection releases the reservation
   and deletes the checkpoint. Once submission starts, a transport failure,
-  malformed response or 5xx is in doubt: it is reported as dispatched with
+  malformed response, 5xx, or a refusal because the intent is already executing
+  or past `quoted` is in doubt: it is reported as dispatched with
   `reconciling: true`, and the checkpoint and reservation remain for polling or
   operator reconciliation even when no read token was received.
 
@@ -634,7 +636,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
       with {:ok, exec} <-
              Xochi.as_dispatched(safe_dispatch(config, bundle, quote.intent_id), quote.intent_id) do
-        ReadTokenStore.put(store, exec.intent_id, exec.read_token)
+        ReadTokenStore.put(store, config.base_url, exec.intent_id, exec.read_token)
         tag_dispatch(context, exec, amount)
         {:ok, exec, quote}
       end
