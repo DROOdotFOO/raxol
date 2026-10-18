@@ -286,6 +286,45 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       refute inspect(redacted) =~ @token
     end
 
+    defp exec_with(status, body) do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(body, status), retry: false]
+      }
+
+      Client.execute(config, @exec_request)
+    end
+
+    test "an intent another writer is executing is in doubt, not a clean rejection" do
+      # The worker's lost-claim answer: this request did not execute the intent,
+      # but another one is, so its outcome is unknown.
+      assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true, status: :unknown}} =
+               exec_with(409, %{"success" => false, "error" => "Intent already being executed"})
+    end
+
+    test "an intent already past quoted is in doubt for every status but expired" do
+      for status <- ["executing", "settling", "completed", "failed", "refunded"] do
+        body = %{"success" => false, "error" => "Cannot execute intent in #{status} status"}
+
+        assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true}} =
+                 exec_with(400, body)
+      end
+    end
+
+    test "an expired intent and a pre-claim conflict stay clean rejections" do
+      expired = %{"success" => false, "error" => "Cannot execute intent in expired status"}
+      assert {:error, {:http, 400, _}} = exec_with(400, expired)
+
+      promo = %{
+        "success" => false,
+        "error" => "This quote's promo code can no longer be used.",
+        "error_category" => "promo_unavailable"
+      }
+
+      assert {:error, {:http, 409, _}} = exec_with(409, promo)
+      assert {:error, {:http, 400, _}} = exec_with(400, %{"error" => "Nonce already used"})
+    end
+
     test "transport timeout and reset remain in doubt and are never retried" do
       test_pid = self()
 

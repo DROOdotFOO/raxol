@@ -52,9 +52,11 @@ defmodule Raxol.Payments.Xochi.Client do
 
   Any transport failure, 5xx, or malformed response after the execute request
   starts is returned as a reconciling `ExecuteResponse`: the worker may have
-  accepted the intent even when the client could not read a valid answer. A
-  structurally valid 4xx remains a clean rejection. Error bodies always redact
-  `read_token`.
+  accepted the intent even when the client could not read a valid answer. So
+  is a refusal because the intent already left `quoted` (409 another writer is
+  executing it, or 400 naming any status but `expired`): this request did not
+  execute it, but another may have. Any other structurally valid 4xx remains a
+  clean rejection. Error bodies always redact `read_token`.
 
   ## Configuration
 
@@ -98,6 +100,10 @@ defmodule Raxol.Payments.Xochi.Client do
           {:error, {:http, integer(), term()}}
           | {:error, term()}
 
+  # Worker `error_category` values for a 409 refused before the execution claim:
+  # nothing can be in flight, so the rejection is clean.
+  @clean_conflict_categories ["promo_unavailable"]
+
   @doc "Request an intent quote."
   @spec get_quote(config(), QuoteRequest.t()) :: {:ok, QuoteResponse.t()} | error()
   def get_quote(config, %QuoteRequest{} = request) do
@@ -132,9 +138,10 @@ defmodule Raxol.Payments.Xochi.Client do
 
   Once the POST starts it is never retried by the transport. A timeout, reset,
   5xx, or malformed response has an unknown outcome: the worker may have
-  accepted the intent. Those cases return
+  accepted the intent. Those cases, and a refusal because the intent is already
+  executing or past `quoted` (except `expired`), return
   `{:ok, %ExecuteResponse{reconciling: true}}`, retaining the request's known
-  intent id and any valid read token the worker supplied. Only a structurally
+  intent id and any valid read token the worker supplied. Any other structurally
   valid 4xx is returned as a clean rejection.
   """
   @spec execute(config(), ExecuteRequest.t()) :: {:ok, ExecuteResponse.t()} | error()
@@ -345,6 +352,9 @@ defmodule Raxol.Payments.Xochi.Client do
       ExecuteResponse.read_token?(body["read_token"]) ->
         {:ok, parse_in_doubt(body, intent_id, {:http, status})}
 
+      past_quoted?(status, body) ->
+        {:ok, in_doubt(intent_id, {:intent_past_quoted, status})}
+
       clean_rejection?(body) ->
         {:error, {:http, status, redact_read_token(body)}}
 
@@ -441,6 +451,37 @@ defmodule Raxol.Payments.Xochi.Client do
       value = body[key]
       is_binary(value) and value != ""
     end)
+  end
+
+  # The worker refuses an execute for an intent that has already left `quoted`:
+  # a 409 when another writer holds the execution claim, a 400 naming the
+  # intent's current status otherwise. Either way this request did not start the
+  # execution, but one may be running or may have moved funds, so it is not a
+  # clean rejection: releasing the reservation or the checkpoint here would free
+  # budget for a payment still in flight. A 409 is in doubt unless it names a
+  # refusal made before any claim: a pre-claim `error_category`
+  # (`promo_unavailable`) or an expired/unknown quote, which the caller
+  # re-quotes. An `expired` intent's 400 likewise stays clean: it never executed.
+  defp past_quoted?(409, body),
+    do: body["error_category"] not in @clean_conflict_categories and not quote_gone?(body)
+
+  defp past_quoted?(400, %{"error" => error}) when is_binary(error) do
+    case Regex.run(~r/\ACannot execute intent in (\S+) status\z/, error) do
+      [_, status] -> status != "expired"
+      nil -> false
+    end
+  end
+
+  defp past_quoted?(_status, _body), do: false
+
+  # Mirrors the execute Action's re-quote trigger, so an expiry it re-quotes is
+  # never turned into an in-doubt outcome here.
+  defp quote_gone?(body) do
+    code = body["error"] || body["reason"]
+    message = body["message"]
+
+    (is_binary(code) and (String.contains?(code, "quote_expired") or code == "not_found")) or
+      (is_binary(message) and String.contains?(String.downcase(message), "expired"))
   end
 
   # Error terms can be logged or persisted. Recursively redact the bearer
