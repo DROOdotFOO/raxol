@@ -40,9 +40,49 @@ defmodule Raxol.Payments.Pxe.SchemasTest do
       assert {:error, {:invalid_amount, _}} = CreateNoteParams.validate(params)
     end
 
-    test "accepts zero amount" do
+    test "rejects zero amount, which the bridge refuses" do
       params = %{@valid_params | amount: "0"}
+      assert {:error, {:invalid_amount, _}} = CreateNoteParams.validate(params)
+    end
+
+    test "rejects an amount over 78 digits" do
+      params = %{@valid_params | amount: "1" <> String.duplicate("0", 78)}
+      assert {:error, {:invalid_amount, _}} = CreateNoteParams.validate(params)
+    end
+
+    test "rejects the zero recipient address" do
+      params = %{@valid_params | recipient: "0x" <> String.duplicate("0", 64)}
+      assert {:error, {:invalid_recipient, _}} = CreateNoteParams.validate(params)
+    end
+
+    test "accepts a complete trade context" do
+      params = %{
+        @valid_params
+        | trade_id: "0x" <> String.duplicate("ee", 32),
+          sub_trade_index: 1,
+          total_sub_trades: 2
+      }
+
       assert :ok = CreateNoteParams.validate(params)
+    end
+
+    test "rejects a partial or out-of-range trade context" do
+      trade_id = "0x" <> String.duplicate("ee", 32)
+
+      for {id, index, total} <- [
+            {trade_id, nil, nil},
+            {nil, 0, 2},
+            {trade_id, 0, 1},
+            {trade_id, 0, 101},
+            {trade_id, 2, 2},
+            {trade_id, -1, 2},
+            {"0xshort", 0, 2}
+          ] do
+        params = %{@valid_params | trade_id: id, sub_trade_index: index, total_sub_trades: total}
+
+        assert {:error, {:invalid_trade_context, _}} = CreateNoteParams.validate(params),
+               "#{inspect({id, index, total})} was accepted"
+      end
     end
 
     test "rejects non-positive chain_id" do
@@ -66,22 +106,52 @@ defmodule Raxol.Payments.Pxe.SchemasTest do
       assert json["token"] == "0xtoken"
       assert json["amount"] == "500"
       assert json["chainId"] == 42_161
+      refute Map.has_key?(json, "tradeId")
+    end
+
+    test "includes the trade context only when set" do
+      params = %CreateNoteParams{
+        recipient: "0xrecipient",
+        token: "0xtoken",
+        amount: "500",
+        chain_id: 1,
+        trade_id: "0xtrade",
+        sub_trade_index: 0,
+        total_sub_trades: 3
+      }
+
+      json = CreateNoteParams.to_json(params)
+
+      assert json["tradeId"] == "0xtrade"
+      assert json["subTradeIndex"] == 0
+      assert json["totalSubTrades"] == 3
     end
   end
 
   describe "CreateNoteResult.from_json/1" do
-    test "parses result from camelCase JSON" do
+    test "reads the note-hash and nullifier lists" do
       json = %{
-        "noteCommitment" => "0xcommit",
-        "nullifierHash" => "0xnull",
-        "l2TxHash" => "0xl2tx"
+        "noteHashes" => ["0xa", "0xb"],
+        "nullifiers" => ["0xn0", "0xn1", "0xn2"],
+        "l2TxHash" => "0xl2tx",
+        "noteCommitment" => "0xa",
+        "nullifierHash" => "0xn0"
       }
 
-      result = CreateNoteResult.from_json(json)
-
-      assert result.note_commitment == "0xcommit"
-      assert result.nullifier_hash == "0xnull"
+      assert {:ok, result} = CreateNoteResult.from_json(json)
+      assert result.note_hashes == ["0xa", "0xb"]
+      assert result.nullifiers == ["0xn0", "0xn1", "0xn2"]
       assert result.l2_tx_hash == "0xl2tx"
+    end
+
+    test "refuses a result without the lists" do
+      json = %{"noteCommitment" => "0xa", "nullifierHash" => "0xn0", "l2TxHash" => "0xl2tx"}
+      assert {:error, {:unexpected_result, ^json}} = CreateNoteResult.from_json(json)
+    end
+
+    test "refuses lists holding non-strings" do
+      json = %{"noteHashes" => [1], "nullifiers" => [], "l2TxHash" => "0xl2tx"}
+      assert {:error, {:unexpected_result, _}} = CreateNoteResult.from_json(json)
     end
   end
 

@@ -18,6 +18,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   production target B-panel (conditional) hides amount and recipient on Aztec
   only, and the source deposit is always public. The `PrivacyTier` moduledoc
   marks Private and Sovereign shielded settlement unavailable.
+- **Breaking.** `Raxol.Payments.Pxe.Client` now follows the pxe-bridge
+  contract. Previously it could not safely move money: there was no
+  `Idempotency-Key`, it timed out at 15s while the bridge proves for up to
+  120s, and `-32001`/`-32002` arrived as a generic RPC error.
+  - `create_note/3` takes an idempotency key (1-128 printable ASCII; one key
+    per transfer) and sends it as `Idempotency-Key`.
+  - `create_note/3` waits 180s (`:create_note_timeout_ms`) and retries only a
+    refused or closed connection, once, never after a timeout. Reads use
+    `:request_timeout_ms` (10s).
+  - `-32001` is `{:error, :request_in_flight}`. `-32002` is
+    `{:error, {:submitted_unknown, tx_hash | nil}}`, carrying `data.txHash`.
+    The moduledoc says which failures are safe to resend with the same key.
+  - `CreateNoteResult` holds `note_hashes`, `nullifiers` and `l2_tx_hash`.
+    `note_commitment` / `nullifier_hash` are removed: the bridge deprecated
+    them. `from_json/1` returns `{:ok, t} | {:error, {:unexpected_result, _}}`.
+  - `CreateNoteParams` rejects a zero amount and the zero recipient address,
+    as the bridge does, and accepts the optional XIP-1 trade context
+    (`trade_id`, `sub_trade_index`, `total_sub_trades`; all or none).
+  - `health/1` returns a 503 `starting` body as
+    `{:ok, %HealthStatus{status: :starting}}`.
+  - The `:retry` config key is gone.
+  - Modelled on `@xochi/client`'s transport, which uses separate timeouts for
+    long writes and reads and retries only idempotent reads on 502/503/504.
+    xochi-sdk is deleting its own `PxeBridgeClient` (xochi-sdk#32) for these
+    same defects.
 
 ## [0.3.0] - 2026-10-09
 
