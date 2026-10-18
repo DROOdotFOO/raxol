@@ -213,10 +213,12 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
 
   # A later poll of a committed intent returns the stored summary without
   # polling, and finishes the cleanup a crash may have cut short: the token
-  # delete and the tag forget are both idempotent.
+  # delete, the tag forget and the terminal announce are all idempotent (the
+  # announce consumes the stashed route, so it fires at most once).
   defp replay_completed(ctx, id, summary) do
     ReadTokenStore.delete(Map.get(ctx, :checkpoint), ctx.xochi_config.base_url, id)
     SpendGate.forget_reservation(ctx, id)
+    announce_terminal(ctx, id, %IntentStatus{intent_id: id, status: :completed, terminal: true})
     {:ok, summary}
   end
 

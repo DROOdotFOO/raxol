@@ -26,8 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports them and `receiving_tx_hash` in its summary. With a checkpoint store,
   a completed owner-view summary (never the token) is recorded under the API
   origin and intent id before the token is deleted, and a later poll returns
-  the recorded summary without polling and finishes any token cleanup a crash
-  cut short. The token is kept after an anonymous answer and after a failed,
+  the recorded summary without polling and finishes what a crash cut short:
+  the token cleanup and the terminal activity-feed announce (at most once).
+  The token is kept after an anonymous answer and after a failed,
   expired, or refunded status. A poll that times out on a confirmed but
   non-terminal fill returns a `terminal: false` summary instead of
   `:stranded`; the `intent_stranded` telemetry carries the last status and
