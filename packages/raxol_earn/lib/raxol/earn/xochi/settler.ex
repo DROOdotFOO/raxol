@@ -174,7 +174,8 @@ defmodule Raxol.Earn.Xochi.Settler do
 
   defp commit_terminal(result, %IntentStatus{}, intent_id, xochi_config, store, key) do
     case Checkpoint.fetch(store, key) do
-      {:ok, %{status: :terminal, result: committed}} ->
+      {:ok, %{status: :terminal} = record} ->
+        {:terminal, committed} = replay_terminal(record, intent_id, xochi_config, store)
         committed
 
       _ ->
@@ -184,22 +185,23 @@ defmodule Raxol.Earn.Xochi.Settler do
     end
   end
 
+  # Every path that returns a committed terminal record comes through here. A
+  # crash between the commit and the token delete, or a concurrent writer that
+  # stored its own token after the commit, leaves a token behind; delete it
+  # (idempotent) before replaying the stored result.
+  defp replay_terminal(%{result: result} = record, intent_id, xochi_config, store) do
+    ReadTokenStore.delete(store, xochi_config.base_url, Map.get(record, :intent_id, intent_id))
+    {:terminal, result}
+  end
+
   # Resume from the checkpoint when this intent was already relayed; otherwise
   # record it before the POST. A crash between the two records leaves only the
   # dispatched marker: the outcome is unknown, so the intent is polled
   # anonymously rather than relayed twice.
   defp dispatch(xochi_config, request, intent_id, store, key) do
     case Checkpoint.fetch(store, key) do
-      # A crash between the terminal commit and the token delete leaves the
-      # token behind; finish that cleanup (idempotent) before replaying.
-      {:ok, %{status: :terminal, result: result} = record} ->
-        ReadTokenStore.delete(
-          store,
-          xochi_config.base_url,
-          Map.get(record, :intent_id, intent_id)
-        )
-
-        {:terminal, result}
+      {:ok, %{status: :terminal} = record} ->
+        replay_terminal(record, intent_id, xochi_config, store)
 
       {:ok, record} ->
         {:ok, resumed_exec(record, intent_id, xochi_config, store)}
@@ -216,7 +218,7 @@ defmodule Raxol.Earn.Xochi.Settler do
               exec.read_token
             )
 
-            record_executed(store, key, exec, intent_id)
+            record_executed(store, key, exec, intent_id, xochi_config)
 
           # A clean rejection carries no token, so any stored for this intent
           # was issued to another writer and is left alone.
@@ -230,10 +232,10 @@ defmodule Raxol.Earn.Xochi.Settler do
   # A concurrent writer for the same intent shares this key. Never overwrite a
   # terminal record it committed, and keep the announcement fields it recorded
   # when this (in-doubt) response carries none.
-  defp record_executed(store, key, exec, intent_id) do
+  defp record_executed(store, key, exec, intent_id, xochi_config) do
     case Checkpoint.fetch(store, key) do
-      {:ok, %{status: :terminal, result: result}} ->
-        {:terminal, result}
+      {:ok, %{status: :terminal} = record} ->
+        replay_terminal(record, intent_id, xochi_config, store)
 
       {:ok, existing} ->
         put_executed(
