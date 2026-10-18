@@ -1815,7 +1815,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 
 | Package                                                    | Hex                           | What                                       |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------ |
-| [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.7"}`     | Behaviours, events, config, plugins        |
+| [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.8"}`     | Behaviours, events, config, plugins        |
 | [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.7"}` | Terminal emulation, termbox2 NIF           |
 | [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.7"}`      | MCP server, client, registry, test harness |
 | [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |
@@ -1827,7 +1827,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | Package                                                    | Hex                           | What                                        |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
 | [`raxol_agent`](https://hex.pm/packages/raxol_agent)       | `{:raxol_agent, "~> 2.7"}`    | AI agent framework                          |
-| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.2"}` | Agent payments, Xochi cross-chain, stealth  |
+| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.3"}` | Agent payments, Xochi cross-chain, stealth  |
 | `raxol_earn` (pre-alpha)                                    | `path: "packages/raxol_earn"`  | Virtuals Agent Commerce Protocol (seller)   |
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
 | `raxol_symphony` (pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
@@ -1878,6 +1878,10 @@ raxol_sensor   --> (none)
 ```
 
 The main `raxol` package does not depend on `raxol_agent`, `raxol_broker`, `raxol_earn`, `raxol_agent_client_protocol`, `raxol_gateway`, or any of the surface packages. You opt into those.
+
+### Boundary rule
+
+The arrows are the only direction code may call. A package reaches modules in its own tree and in the trees of the packages its `mix.exs` declares (transitively), never in main `raxol` or in a sibling it does not list: `raxol_core` cannot name `Raxol.Terminal.*`, and `raxol_terminal` cannot name anything that lives under the root `lib/`. Each package compiles standalone in CI with `--warnings-as-errors`, so such a call is a compile error there unless the file hides it behind `@compile {:no_warn_undefined, Mod}`, which is how `Raxol.Terminal.Config.Capabilities.optimized_config/0` and `Raxol.Terminal.Theme.Manager.load_from_registry/2` came to raise `UndefinedFunctionError` whenever `raxol_terminal` ran without main `raxol`. `elixir scripts/check_package_boundaries.exs` (the `Check package boundaries` step of CI) parses every file under `packages/*/lib`, resolves each module it names (remote calls and captures, `apply/3`, every form of `no_warn_undefined`, `:"Elixir.X"` atoms, `use`/`import`/`@behaviour`, typespecs, module and process names used as values) to the tree that defines it, and fails on one the package does not declare. Declared means listed in the package's `mix.exs` `deps` without an `only:` that leaves out `:prod`; a dependency named in a comment does not count. The grandfathered sites are in `scripts/.package-boundaries-allowlist`, which only shrinks: a stale entry fails the check, and on a pull request so does an entry the base commit's list does not have. Fix a report by moving the module into the package that owns the concept (`Raxol.Core.Theming.ThemeRegistry` now lives in `raxol_core`), by reading the implementation from application config with an in-package default (`Raxol.Core.UserPreferences` reads its terminal defaults from `:default_terminal_preferences`, which `raxol_terminal` ships in its application env as `{Raxol.Terminal.Config.Defaults, :generate_default_config, []}` and `config :raxol_core, :default_terminal_preferences, ...` overrides), or by deleting the dead call. `Code.ensure_loaded?/1` is not a fix: it is the guard that hid the originals.
 
 ## Publishing
 
@@ -5064,11 +5068,23 @@ Sandbox.check("System.cmd(\"rm\", [\"-rf\", \"/\"])", :standard)  # => {:error, 
 | `:standard` | Blocks known-dangerous calls | Explicit opt-in for trusted local use |
 | `:strict` | Whitelist-only | The level every served launch gets, and the minimum for SSH, web, or untrusted input |
 
-Sandbox option values are exact and case-sensitive. Unknown values fail before the terminal starts instead of silently selecting another level. Timeouts must be positive integers.
+Sandbox option values are exact and case-sensitive. Unknown values fail before the terminal starts instead of silently selecting another level, and `Sandbox.check/2` itself raises `ArgumentError` for any level other than `:none`, `:standard` or `:strict`. Timeouts must be positive integers.
 
 **Standard** blocks destructive system, file, network, and dynamic-code calls. It also denies process creation and delayed scheduling through the `Task`, `Task.Supervisor`, `Agent`, `GenServer`, `Supervisor`, `DynamicSupervisor`, `PartitionSupervisor`, `Registry`, `:proc_lib`, `:gen`, `:gen_server`, `:gen_event`, `:gen_statem`, `:supervisor`, `:supervisor_bridge`, and `:timer` APIs; every `spawn*` form exposed by `Kernel`, `Node`, or `:erlang`; and module directives that could alias or import those APIs.
 
 **Strict** only allows: `Enum`, `Stream`, `Map`, `Keyword`, `List`, `Tuple`, `MapSet`, `String`, `Integer`, `Float`, `Atom`, `IO`, `Kernel`, `Range`, `Regex`, `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Calendar`, `Access`, `Base`, `URI`, `Jason`, `Inspect`. Everything else gets rejected.
+
+Strict also refuses forged structs. A map whose `__struct__` key names a module is protocol-dispatched (`Collectable`, `Enumerable`, `String.Chars`, `Inspect`, `Access`) to that module, so `m = %{__struct__: File.Stream, path: p, ...}; Enum.into(["hi"], m)` wrote a file without naming `File`. The key is refused where a map is built: a `:__struct__` or computed key in a map literal or a `put_in`/`update_in`/`get_and_update_in` path, a `%Mod{}` literal or `struct/2` naming anything but `URI`, `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Range` or `MapSet`, a `Map.put`-family call whose key is not a literal, `Map.new/1`, `Map.from_keys/2` or `Enum.into`/`Stream.into` into a map from a computed input, `for ... into:` anything but a list or `MapSet`, and `Map.new/2`, `Map.map/2`, `Map.merge/3` and `Map.intersect/3`, whose functions can rewrite a struct's `__struct__` value. `%{m | a: 1}` stays allowed: an update only replaces keys `m` already has. Build maps from literal keys instead (`Map.put(m, :a, v)`, `%{"a" => v}`, `Enum.into([a: v], %{})`). This covers the forms the source shows; a key that only exists at runtime, in a form not listed, reaches the same implementations, and only the OS-isolated peer node of [#1231](https://github.com/DROOdotFOO/raxol/issues/1231) closes the class. Every `__`-prefixed function or macro of an allowlisted module is refused too, called or captured: the generated `URI.__struct__/1` writes a caller's `:__struct__` pair into the struct it returns.
+
+A key is judged by its top-level form alone. A literal other than `:__struct__` passes, and so does any container (a string or interpolation, a tuple, a list, a map) whatever it holds, since none can evaluate to the atom `:__struct__`; a bare variable or call in key position is refused. A computed key therefore still works wrapped: `%{"#{k}" => v}`, `%{{k} => v}`, `Map.put(m, "#{k}", v)`, `put_in(m, ["#{k}"], v)`, and `Enum.reduce(l, %{}, fn x, acc -> Map.put(acc, {x}, x) end)` in place of a refused `Map.new(l)`. Wrapping does not help `for ... into: %{}`, `Enum.into(l, %{}, fun)` or `Map.new(l, fun)`, whose keys come out of a function body rather than a key position. `Enum.frequencies/1` and `Enum.group_by/2,3` also build maps from computed keys (their values are counts and lists, never a module), and collecting into a list or `MapSet` (`Enum.into(l, MapSet.new())`, `for x <- l, into: [], do: x`) builds no map at all. Every refusal of a computed key names these forms.
+
+Strict `IO` calls may only name the evaluation's own output as a device, written as a literal: `:stdio` or `:standard_io`. Any other device (a registered name, a pid, a variable) is a process `IO` sends an io request to, so `IO.write(Raxol.Payments.Wallets.Op, "x")` messaged the process `Kernel.send/2` is refused for, and its output skipped the capture. `:stderr`/`:standard_error` and `IO.warn/1,2` are refused as well: they write to the node's real stderr, which the capture never sees. The default-device forms (`IO.puts(x)`, `IO.inspect(x, label: "a")`, `x |> IO.inspect()`) are unaffected; `dev |> IO.write("x")` and `&IO.write/2` are refused, as is `IO.getn(a, b)` unless `b` is a literal count or `:eof` (the prompt form) or `a` is `:stdio`/`:standard_io`. `IO.stream` and `IO.binstream` are refused at every arity, `:stdio` included: each returns an `IO.Stream` whose `device` field is what its `Enumerable` and `Collectable` impls send to, and `%{s | device: name}` or `Map.put(s, :device, name)` re-points it without naming a device in any `IO` call.
+
+Both `:standard` and `:strict` refuse syntax that creates atoms from runtime data, since atoms are never collected and persist across evaluations: `~w(#{x})a` (an interpolated word list with the `a` modifier, which calls `String.to_atom/1` at runtime), its spelled-out form `Kernel.sigil_w("#{x}", [?a])`, and computed aliases such as `x.Foo` or `Integer.to_string(i).Foo` (including `__MODULE__.Foo`). `~w(a b)a`, `~w(#{x})` and literal aliases like `Foo.Bar` remain allowed.
+
+Both levels also refuse the remote spellings of the definition macros and `use`: `defmodule`, `defimpl`, `defprotocol` and `use` are `Kernel` macros, so `Kernel.defmodule(Zzz, do: ...)`, `Kernel.defimpl(String.Chars, for: Reference, do: ...)` and `Kernel.use(Bitwise)` do exactly what the bare forms, which were already refused, do.
+
+Strict also refuses a sorter that could name a module chosen at runtime. `Enum.sort/2`, `Enum.sort_by/3`, `Enum.max`/`min`/`min_max` and their `_by` forms, and `List.keysort/3` call `module.compare/2` when the sorter is a module, so `Enum.sort(l, m)` dispatches to whatever `m` holds. The sorter must be written out as a function or capture, `:asc`/`:desc`, a whitelisted module (`Enum.sort(dates, Date)`) or a direction tuple of those (`{:desc, Date}`); a variable is refused even when it would hold a function, and captures such as `&Enum.sort/2` that hide the sorter are refused.
 
 ## Over SSH, and on any served surface
 
@@ -9816,7 +9832,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Superseded (v1->v2) | 2026-06-16 |
 | [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
 | [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/3`) | Accepted | 2026-06-16 |
-| [0020](0020-agent-sandbox-thread-policies.md) | Phase 26: Agent Sandbox, Thread log, declarative Policies | Accepted | 2026-06-16 |
+| [0020](0020-agent-sandbox-thread-policies.md) | Agent Sandbox, Thread log, declarative Policies | Accepted | 2026-06-16 |
 | [0021](0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Accepted | 2026-06-17 |
 | [0022](0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Accepted | 2026-06-17 |
 | [0023](0023-unified-messaging-gateway.md) | Unified messaging gateway (`raxol_gateway`) | Accepted | 2026-06-17 |
@@ -9837,6 +9853,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0038](0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |
 | [0039](0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
 | [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
+| [0041](0041-agent-client-protocol-package.md) | raxol_agent_client_protocol: port origin, layering, and license discipline | Accepted | 2026-10-13 |
 
 ## Template
 
@@ -9916,6 +9933,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0038: The guarded outbound client and the EVM REST backend](0038-guarded-outbound-client-evm-rest-backend.md)
 - [0039: The required callback set, and what a partial source is](0039-required-callback-set-partial-sources.md)
 - [0040: FX market data and rate sources](0040-fx-market-data-and-rate-sources.md)
+- [0041: raxol_agent_client_protocol: port origin, layering, and license discipline](0041-agent-client-protocol-package.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
@@ -9926,7 +9944,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0019: Workflow concurrency (joins + channels)](0019-workflow-concurrency.md)
 
 ### Agent stack
-- [0020: Phase 26 - Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
+- [0020: Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
 - [0021: Self-improving agents: runtime skills + background curation](0021-self-improving-agents-skills-curation.md)
 - [0022: Memory provider stack, full-text recall, dialectic user modeling](0022-memory-providers-fulltext-dialectic.md)
 - [0023: Unified messaging gateway (raxol_gateway)](0023-unified-messaging-gateway.md)

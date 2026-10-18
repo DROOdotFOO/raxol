@@ -37,7 +37,7 @@ Governance: an ALLOW/ASK/DENY authorization engine gates every tool call, and a 
 - raxol_liveview `{:raxol_liveview, "~> 2.7"}`: LiveView bridge
 - raxol_sensor `{:raxol_sensor, "~> 2.7"}`: Sensor fusion
 - raxol_terminal `{:raxol_terminal, "~> 2.7"}`: Terminal emulation
-- raxol_core `{:raxol_core, "~> 2.7"}`: Behaviours, events
+- raxol_core `{:raxol_core, "~> 2.8"}`: Behaviours, events
 - raxol_plugin `{:raxol_plugin, "~> 2.7"}`: Plugin SDK
 - raxol_speech `{:raxol_speech, "~> 0.2"}`: TTS/STT
 - raxol_telegram `{:raxol_telegram, "~> 0.2"}`: Telegram bot
