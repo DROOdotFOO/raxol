@@ -583,6 +583,14 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :l2_tx_hash,
       :settlement_type,
       :attestation_status,
+      # The destination fill receipt and its chain (owner view only).
+      :settlement_tx_hash,
+      :settlement_chain_id,
+      # Anonymous view of a private settlement (xochi#563): the legs are
+      # withheld, and `settlement_confirmed` says whether the fill receipt
+      # exists. Reporting markers only; never a reason to release or re-execute.
+      settlement_confirmed: false,
+      legs_withheld: false,
       terminal: false
     ]
 
@@ -618,6 +626,10 @@ defmodule Raxol.Payments.Xochi.Schemas do
             l2_tx_hash: String.t() | nil,
             settlement_type: settlement_type(),
             attestation_status: attestation_status(),
+            settlement_tx_hash: String.t() | nil,
+            settlement_chain_id: integer() | nil,
+            settlement_confirmed: boolean(),
+            legs_withheld: boolean(),
             terminal: boolean()
           }
 
@@ -648,14 +660,33 @@ defmodule Raxol.Payments.Xochi.Schemas do
         settlement_type: parse_settlement_type(pick(json, ["settlement_type", "settlementType"])),
         attestation_status:
           parse_attestation_status(pick(json, ["attestation_status", "attestationStatus"])),
+        settlement_tx_hash: string_or_nil(json["settlement_tx_hash"]),
+        settlement_chain_id: integer_or_nil(json["settlement_chain_id"]),
+        settlement_confirmed: json["settlement_confirmed"] == true,
+        legs_withheld: json["legs_withheld"] == true,
         terminal: json["terminal"] || status in @terminal_statuses
       }
     end
 
     defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
 
+    defp string_or_nil(value) when is_binary(value) and value != "", do: value
+    defp string_or_nil(_value), do: nil
+
+    defp integer_or_nil(value) when is_integer(value), do: value
+    defp integer_or_nil(_value), do: nil
+
     @spec terminal?(t()) :: boolean()
     def terminal?(%__MODULE__{terminal: t}), do: t
+
+    @doc """
+    Whether the destination fill is confirmed: the anonymous view's
+    `settlement_confirmed` marker, or the owner view's fill receipt. True while
+    the top-level status may still be settling.
+    """
+    @spec settlement_confirmed?(t()) :: boolean()
+    def settlement_confirmed?(%__MODULE__{settlement_confirmed: true}), do: true
+    def settlement_confirmed?(%__MODULE__{settlement_tx_hash: hash}), do: is_binary(hash)
 
     @spec shielded?(t()) :: boolean()
     def shielded?(%__MODULE__{settlement_type: :shielded}), do: true

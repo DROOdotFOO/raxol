@@ -12,8 +12,9 @@ defmodule Raxol.Payments.Poll do
 
   `run/3` returns `{:ok, status, elapsed_ms}` when `terminal?` first holds, so the
   caller can classify the settlement as within-budget or slow. It returns
-  `{:error, :timeout}` at the ceiling and `{:error, reason}` on a non-retryable
-  fetch error.
+  `{:error, :timeout}` at the ceiling (`{:error, {:timeout, last_status}}` with
+  `last_status_on_timeout: true`, `last_status` nil when no fetch succeeded) and
+  `{:error, reason}` on a non-retryable fetch error.
   """
 
   @default_budget_ms 3_000
@@ -43,7 +44,9 @@ defmodule Raxol.Payments.Poll do
       budget: Keyword.get(opts, :budget_ms, @default_budget_ms),
       fast: Keyword.get(opts, :fast_interval_ms, @default_fast_interval_ms),
       slow: Keyword.get(opts, :slow_interval_ms, @default_slow_interval_ms),
-      deadline: start + Keyword.get(opts, :timeout_ms, @default_timeout_ms)
+      deadline: start + Keyword.get(opts, :timeout_ms, @default_timeout_ms),
+      with_last: Keyword.get(opts, :last_status_on_timeout, false),
+      last: nil
     }
 
     do_poll(fetch, terminal?, state)
@@ -54,7 +57,7 @@ defmodule Raxol.Payments.Poll do
       {:ok, status} ->
         if terminal?.(status),
           do: {:ok, status, elapsed(state.start)},
-          else: wait_or_timeout(fetch, terminal?, state)
+          else: wait_or_timeout(fetch, terminal?, %{state | last: status})
 
       {:error, reason} ->
         if backoff?(reason),
@@ -68,7 +71,7 @@ defmodule Raxol.Payments.Poll do
     interval = if now - state.start < state.budget, do: state.fast, else: state.slow
 
     if now + interval > state.deadline do
-      {:error, :timeout}
+      if state.with_last, do: {:error, {:timeout, state.last}}, else: {:error, :timeout}
     else
       Process.sleep(interval)
       do_poll(fetch, terminal?, state)
