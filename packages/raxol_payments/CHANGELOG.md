@@ -23,13 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IntentStatus` parses `settlement_tx_hash`, `settlement_chain_id`, and the
   anonymous view's `settlement_confirmed` / `legs_withheld` markers
   (`IntentStatus.settlement_confirmed?/1`). `payment_poll_xochi_status`
-  reports them and `receiving_tx_hash` in its summary, and deletes the token
-  only after a completed owner-view status is in that summary; it keeps the
-  token after an anonymous answer and after a failed, expired, or refunded
-  status. A poll that times out on a confirmed but non-terminal fill returns a
-  `terminal: false` summary instead of `:stranded`; the `intent_stranded`
-  telemetry carries the last status and `legs_withheld`. Neither marker
-  releases, refunds, or re-executes anything.
+  reports them and `receiving_tx_hash` in its summary. With a checkpoint store,
+  a completed owner-view summary (never the token) is recorded under the API
+  origin and intent id before the token is deleted, and a later poll returns
+  the recorded summary without polling and finishes any token cleanup a crash
+  cut short. The token is kept after an anonymous answer and after a failed,
+  expired, or refunded status. A poll that times out on a confirmed but
+  non-terminal fill returns a `terminal: false` summary instead of
+  `:stranded`; the `intent_stranded` telemetry carries the last status and
+  `legs_withheld`. Neither marker releases, refunds, or re-executes anything.
 - `Raxol.Payments.Poll.run/3` takes `last_status_on_timeout: true` to return
   `{:error, {:timeout, last_status}}`.
 - The read token is shape-checked both ways: a served `read_token` that is not

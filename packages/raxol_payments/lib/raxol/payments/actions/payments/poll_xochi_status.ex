@@ -16,8 +16,10 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
   * `:ledger`, `:agent_id` -- optional; the `Ledger` and key from the execute, so
     a refund releases that reservation. See `SpendGate`.
   * `:checkpoint` -- optional private checkpoint store used by the execute
-    Action; supplies the intent's read token, deleted only once a completed
-    owner-view status is in the returned summary.
+    Action; supplies the intent's read token. At a completed owner-view status
+    the summary (never the token) is recorded under the API origin and intent
+    id before the token is deleted, and a later poll of that intent returns the
+    recorded summary without polling.
 
   The execute Action stores the read token outside its model-visible result, in
   private checkpoint state keyed by the API origin and `intent_id`. Pass the
@@ -81,7 +83,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     ]
 
   alias Raxol.Payments.Actions.SpendGate
-  alias Raxol.Payments.{Failure, Poll}
+  alias Raxol.Payments.{Checkpoint, Failure, Poll}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.IntentStatus
   alias Raxol.Payments.Xochi.{ReadTokenStore, SwapAnnouncer}
@@ -91,10 +93,16 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
   def run(%{intent_id: intent_id} = params, context) do
     case Map.fetch(context, :xochi_config) do
       {:ok, config} ->
-        opts = poll_opts(params, context, intent_id)
-        budget = Keyword.get(opts, :budget_ms, Poll.default_budget_ms())
-        result = Xochi.poll_status_timed(config, intent_id, opts)
-        handle_result(result, context, intent_id, budget)
+        case committed_summary(context, intent_id) do
+          {:ok, summary} ->
+            replay_completed(context, intent_id, summary)
+
+          :error ->
+            opts = poll_opts(params, context, intent_id)
+            budget = Keyword.get(opts, :budget_ms, Poll.default_budget_ms())
+            result = Xochi.poll_status_timed(config, intent_id, opts)
+            handle_result(result, context, intent_id, budget)
+        end
 
       :error ->
         {:error, Failure.from({:missing_context, :xochi_config})}
@@ -109,9 +117,9 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
        ) do
     # Settled: the spend stands. Drop the reservation tag so the ledger's
     # in-flight set stays bounded; nothing to release. The summary carrying the
-    # owner-view evidence is built before the token is dropped.
+    # owner-view evidence is committed before the token is dropped.
     summary = summary(status, elapsed_ms, budget)
-    drop_read_token(ctx, id, status)
+    commit_completed(ctx, id, status, summary)
     SpendGate.forget_reservation(ctx, id)
     announce_terminal(ctx, id, status)
     {:ok, summary}
@@ -181,13 +189,44 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     {:error, Failure.from({:stranded, id})}
   end
 
-  # The token is the only way back to the owner view. Drop it only after the
-  # owner-view evidence is in the result: an anonymous answer (`legs_withheld`)
-  # means the token was refused or absent, so it is kept for a later poll.
-  defp drop_read_token(_ctx, _id, %IntentStatus{legs_withheld: true}), do: :ok
+  # The token is the only way back to the owner view. With a checkpoint store,
+  # the completed summary (public status fields, never the token) is written
+  # under the API origin and intent id first, and only then is the token
+  # dropped: a crash before the write leaves the token for the next poll, a
+  # crash after it leaves the summary that poll returns. An anonymous answer
+  # (`legs_withheld`) means the token was refused or absent: nothing is
+  # committed and the token is kept for a later poll.
+  defp commit_completed(_ctx, _id, %IntentStatus{legs_withheld: true}, _summary), do: :ok
 
-  defp drop_read_token(ctx, id, _status),
-    do: ReadTokenStore.delete(Map.get(ctx, :checkpoint), ctx.xochi_config.base_url, id)
+  defp commit_completed(ctx, id, _status, summary) do
+    store = Map.get(ctx, :checkpoint)
+    Checkpoint.put(store, completed_key(ctx, id), %{status: :completed, summary: summary})
+    ReadTokenStore.delete(store, ctx.xochi_config.base_url, id)
+  end
+
+  defp committed_summary(ctx, id) do
+    case Checkpoint.fetch(Map.get(ctx, :checkpoint), completed_key(ctx, id)) do
+      {:ok, %{status: :completed, summary: summary}} -> {:ok, summary}
+      _ -> :error
+    end
+  end
+
+  # A later poll of a committed intent returns the stored summary without
+  # polling, and finishes the cleanup a crash may have cut short: the token
+  # delete and the tag forget are both idempotent.
+  defp replay_completed(ctx, id, summary) do
+    ReadTokenStore.delete(Map.get(ctx, :checkpoint), ctx.xochi_config.base_url, id)
+    SpendGate.forget_reservation(ctx, id)
+    {:ok, summary}
+  end
+
+  defp completed_key(ctx, id) do
+    Checkpoint.derive_key([
+      :xochi_poll_completed,
+      ReadTokenStore.origin(ctx.xochi_config.base_url),
+      id
+    ])
+  end
 
   # Best-effort, non-blocking: advance the user's live-feed row to its terminal
   # state. A no-op unless a capability topic_id is configured and the execute

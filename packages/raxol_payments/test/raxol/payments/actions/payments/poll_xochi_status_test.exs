@@ -5,6 +5,21 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
   alias Raxol.Payments.{Checkpoint, Failure, Ledger, SpendingPolicy}
   alias Raxol.Payments.Xochi.ReadTokenStore
 
+  # A checkpoint store that dies on delete, modelling a crash between the
+  # recorded terminal summary and the token cleanup.
+  defmodule CrashOnDelete do
+    @behaviour Checkpoint
+
+    @impl true
+    def fetch(table, key), do: Checkpoint.ETS.fetch(table, key)
+
+    @impl true
+    def put(table, key, record), do: Checkpoint.ETS.put(table, key, record)
+
+    @impl true
+    def delete(_table, _key), do: raise("crash before token cleanup")
+  end
+
   defp config do
     %{
       base_url: "https://xochi.test",
@@ -238,6 +253,44 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
 
       assert_received {:presented, []}
       assert ReadTokenStore.fetch(store, "https://other.test", "int_s") == @token
+    end
+
+    test "a crash after the completed summary is recorded replays it without polling" do
+      table = :ets.new(:poll_crash, [:set, :public])
+      crashing = {CrashOnDelete, table}
+      store = {Checkpoint.ETS, table}
+      ReadTokenStore.put(store, config().base_url, "int_s", @token)
+      params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
+
+      # The summary is recorded, then the process dies deleting the token.
+      assert_raise RuntimeError, fn ->
+        PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: crashing})
+      end
+
+      assert_received {:presented, [@token]}
+      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == @token
+
+      # The retry returns the owner-view evidence without an anonymous poll,
+      # and finishes the token cleanup.
+      assert {:ok, %{tx_hash: "0x" <> _, receiving_tx_hash: "0x" <> _, legs_withheld: false}} =
+               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+
+      refute_received {:presented, _}
+      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == nil
+    end
+
+    test "a recorded summary is not replayed under another API origin" do
+      store = Checkpoint.ETS.new()
+      ReadTokenStore.put(store, config().base_url, "int_s", @token)
+      params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
+
+      assert {:ok, %{tx_hash: "0x" <> _}} =
+               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+
+      other = %{config() | base_url: "https://other.test"}
+
+      assert {:ok, %{tx_hash: nil, legs_withheld: true}} =
+               PollXochiStatus.run(params, %{xochi_config: other, checkpoint: store})
     end
   end
 
