@@ -71,7 +71,7 @@ jobs:
           cp "$RUNNER_TEMP"/llms/llms.txt "$RUNNER_TEMP"/llms/llms-full.txt web/priv/static/
 
       - name: Open or update sync PR
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           base: master
           branch: bot/llms-sync
