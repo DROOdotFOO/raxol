@@ -18,9 +18,11 @@ defmodule Raxol.REPL.Sandbox do
   CVE-class hole on an anonymous surface, and the checker's own history is the
   argument against trusting it: computed receivers, `Module.concat/1`
   alias resolution, the bare-name capture forms of `apply` and `spawn`,
-  maps forged with a `__struct__` key, and sorters naming a runtime module
-  (`Enum.sort(l, m)` calls `m.compare/2`) were each `:ok` at `:strict` until
-  they were not.
+  maps forged with a `__struct__` key, sorters naming a runtime module
+  (`Enum.sort(l, m)` calls `m.compare/2`), and `raise`, calendar and time
+  zone database arguments holding one (`DateTime.now(tz, m)` calls
+  `m.time_zone_period_from_utc_iso_days/2`) were each `:ok` at `:strict`
+  until they were not.
 
   A forged struct is the same hole reached through data rather than a name. A
   map whose `__struct__` key names a module is protocol-dispatched
@@ -398,6 +400,112 @@ defmodule Raxol.REPL.Sandbox do
     {Enum, :min_max_by} => 2,
     {List, :keysort} => 2
   }
+
+  # Calls that call back into the calendar or time zone database module an
+  # argument holds, keyed by full arity, valued by that argument's position
+  # (0-based). Taken from every allowlisted function whose spec types an
+  # argument `Calendar.calendar()` or `Calendar.time_zone_database()`; the
+  # test suite re-derives the set from the specs, so an Elixir release that
+  # adds one fails there rather than passing here. `utc_now/1` takes a
+  # calendar OR a time unit in the same slot, `DateTime.from_iso8601/2` a
+  # calendar OR a format, so arity, not name, picks the position.
+  @module_argument_positions %{
+    {Date, :convert, 2} => 1,
+    {Date, :convert!, 2} => 1,
+    {Date, :from_erl, 2} => 1,
+    {Date, :from_erl!, 2} => 1,
+    {Date, :from_gregorian_days, 2} => 1,
+    {Date, :from_iso8601, 2} => 1,
+    {Date, :from_iso8601!, 2} => 1,
+    {Date, :new, 4} => 3,
+    {Date, :new!, 4} => 3,
+    {Date, :utc_today, 1} => 0,
+    {Time, :convert, 2} => 1,
+    {Time, :convert!, 2} => 1,
+    {Time, :from_erl, 3} => 2,
+    {Time, :from_erl!, 3} => 2,
+    {Time, :from_iso8601, 2} => 1,
+    {Time, :from_iso8601!, 2} => 1,
+    {Time, :from_seconds_after_midnight, 3} => 2,
+    {Time, :new, 5} => 4,
+    {Time, :new!, 5} => 4,
+    {Time, :utc_now, 1} => 0,
+    {Time, :utc_now, 2} => 1,
+    {DateTime, :add, 4} => 3,
+    {DateTime, :convert, 2} => 1,
+    {DateTime, :convert!, 2} => 1,
+    {DateTime, :from_gregorian_seconds, 3} => 2,
+    {DateTime, :from_iso8601, 2} => 1,
+    {DateTime, :from_iso8601, 3} => 1,
+    {DateTime, :from_naive, 3} => 2,
+    {DateTime, :from_naive!, 3} => 2,
+    {DateTime, :from_unix, 3} => 2,
+    {DateTime, :from_unix!, 3} => 2,
+    {DateTime, :new, 4} => 3,
+    {DateTime, :new!, 4} => 3,
+    {DateTime, :now, 2} => 1,
+    {DateTime, :now!, 2} => 1,
+    {DateTime, :shift, 3} => 2,
+    {DateTime, :shift_zone, 3} => 2,
+    {DateTime, :shift_zone!, 3} => 2,
+    {DateTime, :utc_now, 1} => 0,
+    {DateTime, :utc_now, 2} => 1,
+    {NaiveDateTime, :convert, 2} => 1,
+    {NaiveDateTime, :convert!, 2} => 1,
+    {NaiveDateTime, :from_erl, 3} => 2,
+    {NaiveDateTime, :from_erl!, 3} => 2,
+    {NaiveDateTime, :from_gregorian_seconds, 3} => 2,
+    {NaiveDateTime, :from_iso8601, 2} => 1,
+    {NaiveDateTime, :from_iso8601!, 2} => 1,
+    {NaiveDateTime, :local_now, 1} => 0,
+    {NaiveDateTime, :new, 8} => 7,
+    {NaiveDateTime, :new!, 8} => 7,
+    {NaiveDateTime, :utc_now, 1} => 0,
+    {NaiveDateTime, :utc_now, 2} => 1
+  }
+
+  # What those slots may hold at `:strict`: the two modules Elixir ships for
+  # them, and the non-module atoms the shared slots of `utc_now/1` and
+  # `DateTime.from_iso8601/2` also take. Any value written as anything else
+  # is refused, a variable included.
+  @module_argument_values [
+    Calendar.ISO,
+    Calendar.UTCOnlyTimeZoneDatabase,
+    :native,
+    :microsecond,
+    :millisecond,
+    :second,
+    :extended,
+    :basic
+  ]
+
+  # `raise`/`reraise` call `exception/1` on a module first argument, and
+  # `~D`/`~T`/`~N`/`~U` call the parse function of the calendar their suffix
+  # names, while the sigil expands.
+  @kernel_dispatch_calls [
+    :raise,
+    :reraise,
+    :sigil_D,
+    :sigil_T,
+    :sigil_N,
+    :sigil_U
+  ]
+  @calendar_sigils [:sigil_D, :sigil_T, :sigil_N, :sigil_U]
+
+  # The exception modules `raise` may name at `:strict`: every module Elixir
+  # itself ships that implements `Exception`, read from the `:elixir`
+  # application at compile time. A module outside it may export an
+  # `exception/1` that does anything, and the checker cannot tell.
+  @raisable_exceptions for module <- Application.spec(:elixir, :modules),
+                           Code.ensure_loaded?(module),
+                           behaviours =
+                             Keyword.get_values(
+                               module.module_info(:attributes),
+                               :behaviour
+                             ),
+                           Exception in List.flatten(behaviours),
+                           do: module
+
   @doc """
   Checks code for safety violations at the given strictness level.
 
@@ -526,13 +634,18 @@ defmodule Raxol.REPL.Sandbox do
 
   defp judged_by(meta), do: Keyword.get(meta, @judged_by_meta)
 
-  # The forge and sorter rules: both read arguments by position, so both
+  # The forge, sorter and dispatch rules read arguments by position, so they
   # skip a node its parent judges.
   defp standalone_call_rules(module, func, args, meta) do
     if func != :|> and judged_by(meta) in [:pipe, :capture],
       do: [],
-      else: forge_rule(module, func, args) ++ sorter_rule(module, func, args)
+      else: call_rules(module, func, args)
   end
+
+  defp call_rules(module, func, args),
+    do:
+      forge_rule(module, func, args) ++
+        sorter_rule(module, func, args) ++ dispatch_rule(module, func, args)
 
   defp standalone_internal_call(module, func, meta) do
     if judged_by(meta) == :capture,
@@ -710,11 +823,8 @@ defmodule Raxol.REPL.Sandbox do
       spawn_function?(name) ->
         ["&#{name}/#{arity} is not allowed (process spawning)"]
 
-      level == :strict and name in @kernel_forge_calls ->
-        [
-          "&#{name}/#{arity} is not allowed at :strict " <>
-            "(its arguments cannot be checked for a forged struct)"
-        ]
+      level == :strict ->
+        strict_local_capture_refusal(name, arity)
 
       true ->
         []
@@ -842,7 +952,9 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_node({name, meta, args}, :strict)
-       when name in [:|> | @kernel_forge_calls] and is_list(args),
+       when (name in [:|> | @kernel_forge_calls] or
+               name in @kernel_dispatch_calls) and
+              is_list(args),
        do: standalone_call_rules(Kernel, name, args, meta)
 
   defp check_node({kind, _, args}, level)
@@ -855,6 +967,22 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_node(_node, _level), do: []
+
+  defp strict_local_capture_refusal(name, arity) do
+    cond do
+      name in @kernel_forge_calls ->
+        [
+          "&#{name}/#{arity} is not allowed at :strict " <>
+            "(its arguments cannot be checked for a forged struct)"
+        ]
+
+      name in [:raise, :reraise] ->
+        raise_refusal("&#{name}/#{arity}")
+
+      true ->
+        []
+    end
+  end
 
   # Names starting with `__` are generated or internal API, never the
   # documented surface the allowlist was audited for. Every allowlisted struct
@@ -914,6 +1042,19 @@ defmodule Raxol.REPL.Sandbox do
 
       sorter_capture?(module, func, arity) ->
         sorter_refusal("&#{inspect(module)}.#{func}/#{arity}")
+
+      true ->
+        dispatch_capture_refusal(module, func, arity)
+    end
+  end
+
+  defp dispatch_capture_refusal(module, func, arity) do
+    cond do
+      module == Kernel and func in [:raise, :reraise] ->
+        raise_refusal("&Kernel.#{func}/#{arity}")
+
+      is_map_key(@module_argument_positions, {module, func, arity}) ->
+        module_argument_refusal("&#{inspect(module)}.#{func}/#{arity}")
 
       true ->
         []
@@ -1293,16 +1434,13 @@ defmodule Raxol.REPL.Sandbox do
   defp forge_violations({{:., _, [module, func]}, _, args})
        when is_atom(func) and is_list(args) do
     case strict_module(module) do
-      {:ok, module} ->
-        forge_rule(module, func, args) ++ sorter_rule(module, func, args)
-
-      :unknown ->
-        []
+      {:ok, module} -> call_rules(module, func, args)
+      :unknown -> []
     end
   end
 
   defp forge_violations({name, _, args}) when is_atom(name) and is_list(args),
-    do: forge_rule(Kernel, name, args)
+    do: call_rules(Kernel, name, args)
 
   defp forge_violations(_node), do: []
 
@@ -1562,6 +1700,105 @@ defmodule Raxol.REPL.Sandbox do
       "#{name} is not allowed at :strict here (its sorter must be a function, " <>
         ":asc, :desc or a whitelisted module written out; a module sorter " <>
         "is called as module.compare/2)"
+    ]
+  end
+
+  # #1238, the sorter's class reached through other arguments: a module
+  # chosen at runtime is called back under a name the caller fixes.
+  # `raise m, path: "x"` and `reraise m, [], st` call `m.exception/1`;
+  # `DateTime.now("Europe/Paris", m)` calls `m.time_zone_period_from_utc_iso_days/2`;
+  # `Date.new(2020, 1, 1, m)` calls `m.valid_date?/3`; `~D[2020-01-01 M]`
+  # calls `M.parse_date/1` while the sigil expands. `m` can come from data
+  # (`String.to_existing_atom/1` is allowed), and the checker cannot tell
+  # which loaded modules export a harmful function under those names. So at
+  # `:strict` the module must be written out and be one Elixir ships for the
+  # job. `raise` keeps its message and literal-exception forms, so
+  # `raise "msg"` and `raise ArgumentError, message: "x"` still work;
+  # re-raising a rescued exception held in a variable does not.
+  #
+  # A struct's own `:calendar` field reaches the same callbacks
+  # (`%{date | calendar: m}`) and is NOT covered: a value written into a map
+  # can arrive from anywhere, which an AST walk cannot follow (#1282). #1231
+  # is the fix for the class.
+  defp dispatch_rule(Kernel, func, [exception | _rest])
+       when func in [:raise, :reraise] do
+    if raisable?(exception), do: [], else: raise_refusal("#{func}")
+  end
+
+  defp dispatch_rule(Kernel, sigil, [{:<<>>, _, [string]}, _modifiers])
+       when sigil in @calendar_sigils and is_binary(string) do
+    case calendar_suffix(string) do
+      suffix when suffix in [nil, "Calendar.ISO"] ->
+        []
+
+      suffix ->
+        [
+          "#{String.replace_prefix(Atom.to_string(sigil), "sigil_", "~")} with the " <>
+            "calendar suffix #{suffix} is not allowed at :strict (the sigil calls " <>
+            "the suffix's parse function while it expands; only Calendar.ISO may be named)"
+        ]
+    end
+  end
+
+  defp dispatch_rule(module, func, args) do
+    case Map.fetch(@module_argument_positions, {module, func, length(args)}) do
+      {:ok, position} ->
+        if module_argument_ok?(Enum.at(args, position)),
+          do: [],
+          else:
+            module_argument_refusal(
+              "#{inspect(module)}.#{func}/#{length(args)}"
+            )
+
+      :error ->
+        []
+    end
+  end
+
+  defp raisable?(message) when is_binary(message), do: true
+  defp raisable?({:<<>>, _, _}), do: true
+
+  defp raisable?(exception) do
+    case strict_module(exception) do
+      {:ok, module} -> module in @raisable_exceptions
+      :unknown -> false
+    end
+  end
+
+  # Kernel's own rule (`extract_calendar/1`): the last space-separated word
+  # is a calendar when it starts with an uppercase letter.
+  defp calendar_suffix(string) do
+    case :binary.split(string, " ", [:global]) do
+      [_only] -> nil
+      parts -> uppercase_word(List.last(parts))
+    end
+  end
+
+  defp uppercase_word(<<first, _::binary>> = word) when first in ?A..?Z,
+    do: word
+
+  defp uppercase_word(_word), do: nil
+
+  defp module_argument_ok?(value) do
+    case strict_module(value) do
+      {:ok, value} -> value in @module_argument_values
+      :unknown -> false
+    end
+  end
+
+  defp raise_refusal(name) do
+    [
+      "#{name} is not allowed at :strict here (its exception must be a string " <>
+        "or an Elixir exception module written out; a module is called as " <>
+        "module.exception/1)"
+    ]
+  end
+
+  defp module_argument_refusal(name) do
+    [
+      "#{name} is not allowed at :strict here (its calendar or time zone " <>
+        "database must be written out as Calendar.ISO or " <>
+        "Calendar.UTCOnlyTimeZoneDatabase; the module it holds is called back)"
     ]
   end
 

@@ -1510,4 +1510,178 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
   end
+
+  # #1238: a module chosen at runtime, reached through an argument the
+  # callee calls back. Each form below returned `:ok` at `:strict` and ran
+  # the held module's `exception/1`, calendar or time zone database callback
+  # (the sigil while it expanded).
+  describe ":strict refuses a module argument that is called back" do
+    test "raise and reraise refuse a computed exception in every form" do
+      for code <- [
+            ~S|raise mod|,
+            ~S|raise mod, path: "x"|,
+            ~S|reraise mod, []|,
+            ~S|reraise mod, [], []|,
+            ~S|raise String.to_existing_atom("Elixir.X"), []|,
+            ~S|raise :"Elixir.X"|,
+            ~S|raise File, path: "x"|,
+            ~S|Kernel.raise(mod, [])|,
+            ~S|:"Elixir.Kernel".reraise(mod, [])|,
+            ~S{mod |> raise(path: "x")},
+            ~S{mod |> raise},
+            ~S|&raise/1|,
+            ~S|&reraise/3|,
+            ~S|&Kernel.raise/2|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "module.exception/1")
+               ),
+               "expected an exception-module violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "raise keeps its message and Elixir exception forms" do
+      for code <- [
+            ~S|raise "boom"|,
+            ~S|raise "boom #{x}"|,
+            ~S|raise ArgumentError|,
+            ~S|raise ArgumentError, "bad"|,
+            ~S|raise KeyError, key: :a, term: %{}|,
+            ~S|reraise "boom", st|,
+            ~S|reraise ArgumentError, [message: "x"], st|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    test "every calendar and time zone database argument in an allowlisted spec is guarded" do
+      slots = calendar_slots()
+      # The scan itself must find the slots, or the loop below proves nothing.
+      assert {Date, :new, 4, 3, :calendar} in slots
+      assert {DateTime, :now, 2, 1, :time_zone_database} in slots
+
+      for {module, func, arity, position, kind} <- slots do
+        name = "#{inspect(module)}.#{func}"
+
+        args = fn slot ->
+          Enum.map(
+            0..(arity - 1),
+            &if(&1 == position, do: slot, else: "a#{&1}")
+          )
+        end
+
+        computed = "#{name}(#{Enum.join(args.("mod"), ", ")})"
+
+        written =
+          "#{name}(#{Enum.join(args.(if(kind == :calendar, do: "Calendar.ISO", else: "Calendar.UTCOnlyTimeZoneDatabase")), ", ")})"
+
+        refused =
+          [computed, "&#{name}/#{arity}"] ++
+            if position > 0,
+              do: ["a0 |> #{name}(#{args.("mod") |> tl() |> Enum.join(", ")})"],
+              else: []
+
+        for code <- refused do
+          assert {:error, violations} = Sandbox.check(code, :strict),
+                 "#{code} passed"
+
+          assert Enum.any?(violations, &String.contains?(&1, "is called back")),
+                 "expected a module-argument violation for #{code}, got #{inspect(violations)}"
+        end
+
+        assert :ok = Sandbox.check(written, :strict), "#{written} was refused"
+      end
+    end
+
+    test "a shared slot keeps its unit and format atoms" do
+      for code <- [
+            ~S|DateTime.utc_now(:second)|,
+            ~S|Time.utc_now(:millisecond)|,
+            ~S|DateTime.from_iso8601("2020-01-01T00:00:00Z", :basic)|,
+            ~S|DateTime.now("Etc/UTC")|,
+            ~S|Date.new(2020, 1, 1)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      assert {:error, _} = Sandbox.check(~S|DateTime.utc_now(unit)|, :strict)
+    end
+
+    test "a calendar sigil may only name Calendar.ISO" do
+      for code <- [
+            ~S|~D[2020-01-01 Probe]|,
+            ~S|~T[12:00:00 Probe]|,
+            ~S|~N[2020-01-01 12:00:00 Probe]|,
+            ~S|~U[2020-01-01 00:00:00Z Probe]|,
+            ~S|Kernel.sigil_D(<<"2020-01-01 Probe">>, [])|,
+            ~S{<<"2020-01-01 Probe">> |> Kernel.sigil_D([])}
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "calendar suffix Probe")
+               ),
+               "expected a calendar suffix violation for #{code}, got #{inspect(violations)}"
+      end
+
+      for code <- [
+            ~S|~D[2020-01-01]|,
+            ~S|~D[2020-01-01 Calendar.ISO]|,
+            ~S|~N[2020-01-01 12:00:00]|,
+            ~S|~U[2020-01-01 00:00:00Z]|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+  end
+
+  # {module, function, arity, position, :calendar | :time_zone_database} for
+  # every argument an allowlisted spec types as a calendar or time zone
+  # database, read from the compiled specs rather than copied.
+  defp calendar_slots do
+    for module <- Sandbox.strict_modules(),
+        {:ok, specs} <- [Code.Typespec.fetch_specs(module)],
+        {{func, arity}, clauses} <- specs,
+        clause <- clauses,
+        {position, kind} <- spec_calendar_positions(func, clause),
+        uniq: true,
+        do: {module, func, arity, position, kind}
+  end
+
+  defp spec_calendar_positions(func, clause) do
+    for {arg, position} <- Enum.with_index(spec_args(func, clause)),
+        kind = calendar_kind(arg),
+        kind != nil,
+        do: {position, kind}
+  end
+
+  defp spec_args(func, clause) do
+    spec =
+      case Code.Typespec.spec_to_quoted(func, clause) do
+        {:when, _, [spec, _vars]} -> spec
+        spec -> spec
+      end
+
+    {:"::", _, [{^func, _, args}, _return]} = spec
+    args
+  end
+
+  defp calendar_kind(arg) do
+    arg
+    |> Macro.prewalk(nil, fn
+      {{:., _, [Calendar, kind]}, _, []} = node, _acc
+      when kind in [:calendar, :time_zone_database] ->
+        {node, kind}
+
+      node, acc ->
+        {node, acc}
+    end)
+    |> elem(1)
+  end
 end
