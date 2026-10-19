@@ -13,39 +13,28 @@ on:
       - "v*"
 
 jobs:
-  # raxol.io serves web/priv/static/llms.txt to agents; its package versions
-  # come from the same mix.exs files this tag publishes. llms-sync.yml keeps a
-  # regeneration PR open on master; this refuses a tag cut before it landed.
-  llms-fresh:
-    name: llms.txt matches the release
-    runs-on: ubuntu-latest
-    env:
-      MIX_ENV: dev
-      SKIP_TERMBOX2_TESTS: "true"
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: erlef/setup-beam@v1
-        with:
-          version-file: mise.toml
-          version-type: strict
-
-      - name: mix raxol.docs.llms --check
-        working-directory: web
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get
-          mix raxol.docs.llms --check
-
   publish-hex:
     name: Publish Hex packages
-    needs: llms-fresh
     uses: ./.github/workflows/release-hex.yml
     with:
       release_ref: ${{ github.ref_name }}
       publish: true
     secrets: inherit
+
+  # raxol.io serves web/priv/static/llms.txt to agents, and its dep lines take
+  # their versions from mix.exs. Those are bumped on master before the tag, so
+  # regenerating any earlier would advertise versions Hex cannot resolve yet.
+  # Only after publish-hex (which ends by verifying every package is on Hex)
+  # do the tag's versions become installable.
+  llms-sync:
+    name: Sync llms.txt to the published release
+    needs: publish-hex
+    uses: ./.github/workflows/llms-sync.yml
+    with:
+      release_ref: ${{ github.ref_name }}
+    permissions:
+      contents: write
+      pull-requests: write
 
   release:
     name: Create GitHub Release
