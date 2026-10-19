@@ -15,8 +15,9 @@ GitHub's auto-generated notes (a bare PR-title list).
 
 - `release.yml` -> `release-hex.yml`: tag-gated, environment-approved,
   dependency-ordered, resumable Hex train; `mix raxol.release.check` validates it.
-- `llms-sync.yml` keeps a regeneration PR open on master; `release.yml` runs
-  `mix raxol.docs.llms --check` on the tag before anything publishes.
+- `release.yml` calls `llms-sync.yml` after the Hex train is verified: it
+  regenerates llms.txt from the tag and opens a PR to master, so the served
+  dep lines only ever name versions Hex already has.
 - `Raxol.Agent.Backend.Catalog` `:openrouter` already sends attribution
   headers (`HTTP-Referer: https://raxol.io`, `X-OpenRouter-Title: Raxol`,
   `X-OpenRouter-Categories`), so every call through it counts toward Raxol on
@@ -40,9 +41,11 @@ merged since the last `v*` tag.
    minor, only `### Fixed`/`### Security` -> patch. Dependents' `~>`
    requirements follow (the rule `mix raxol.release.check` already enforces).
 3. Move `[Unreleased]` to `[X.Y.Z] - date`.
-4. Run `mix raxol.docs.llms`, so the release PR carries its own llms.txt.
-5. Generate notes (step 3) into `release-notes/vX.Y.Z.md`.
-6. Open `Release vX.Y.Z` from `bot/release-vX.Y.Z`.
+4. Generate notes (step 3) into `release-notes/vX.Y.Z.md`.
+5. Open `Release vX.Y.Z` from `bot/release-vX.Y.Z`.
+
+The release PR does NOT regenerate llms.txt: its bumped versions are not on
+Hex until the tag publishes (the #1275 regression).
 
 ### 3. `mix raxol.release.notes`: notes written by a Raxol agent
 
@@ -65,8 +68,8 @@ catalog entry.
 ### 4. Tag on merge
 
 `release-tag.yml`: when a `bot/release-v*` PR merges, tag the merge commit
-`vX.Y.Z`. `release.yml` then runs as today (llms check -> Hex train behind the
-`release` environment approval -> GitHub Release), but sets `body_path:
+`vX.Y.Z`. `release.yml` then runs as today (Hex train behind the `release`
+environment approval -> llms-sync PR + GitHub Release), but sets `body_path:
 release-notes/vX.Y.Z.md` instead of `generate_release_notes: true`.
 
 ### 5. Raxol identity and co-authorship

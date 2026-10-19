@@ -17,14 +17,11 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
     * `llms-full.txt`: every curated doc concatenated into one file, the
       "single-file expanded context" an agent can ingest in one fetch.
 
-  The task is deterministic: run it twice and the output is byte-identical, so a
-  CI check can assert it is up to date:
+  The task is deterministic: run it twice and the output is byte-identical.
 
-      mix raxol.docs.llms --check
-
-  `--check` writes nothing and exits non-zero when either committed file
-  differs from what the source generates. The release workflow runs it against
-  the tag, so a release cannot ship a stale llms.txt.
+  Run it only from a published release: the dep lines carry each package's
+  `mix.exs` version, which master bumps before Hex has it. `release.yml` runs it
+  through `llms-sync.yml` after the Hex train is verified.
   """
 
   use Mix.Task
@@ -49,9 +46,7 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
   ]
 
   @impl true
-  def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: [check: :boolean])
-
+  def run(_args) do
     Application.load(:raxol)
     docs_root = docs_root()
     out_dir = Path.join(:code.priv_dir(:raxol_playground), "static")
@@ -61,7 +56,7 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
       {"llms-full.txt", build_llms_full(docs_root)}
     ]
 
-    if opts[:check], do: check(out_dir, files), else: write(out_dir, files)
+    write(out_dir, files)
   end
 
   defp write(out_dir, files) do
@@ -69,24 +64,6 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
 
     sizes = Enum.map_join(files, " and ", fn {name, c} -> "#{name} (#{byte_size(c)} bytes)" end)
     Mix.shell().info([:green, "wrote ", :reset, sizes, " to web/priv/static/"])
-  end
-
-  defp check(out_dir, files) do
-    stale =
-      for {name, content} <- files,
-          File.read(Path.join(out_dir, name)) != {:ok, content},
-          do: name
-
-    case stale do
-      [] ->
-        Mix.shell().info([:green, "llms.txt and llms-full.txt are up to date"])
-
-      names ->
-        Mix.raise(
-          "#{Enum.join(names, " and ")} in web/priv/static/ are stale. " <>
-            "Run `cd web && mix raxol.docs.llms` and commit the result."
-        )
-    end
   end
 
   # --- llms.txt -------------------------------------------------------------
