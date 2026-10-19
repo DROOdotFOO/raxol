@@ -135,7 +135,12 @@ defmodule Raxol.REPL.Sandbox do
     {:erlang, :list_to_atom, "dynamic atom creation"},
     {:rpc, :call, "remote procedure call"},
     {:rpc, :cast, "remote procedure call"},
-    {:global, :whereis_name, "process lookup"}
+    {:global, :whereis_name, "process lookup"},
+    # Node-global state the evaluation timeout and heap cap cannot undo: it
+    # sets `:elixir`'s `:time_zone_database`, after which every `DateTime`
+    # zone operation in every process dispatches to the module passed in,
+    # which can be computed from data (#1237).
+    {Calendar, :put_time_zone_database, "global time zone database change"}
   ]
 
   # Every module here is part of the forged-struct guarantee (see the

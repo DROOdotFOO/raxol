@@ -1473,4 +1473,41 @@ defmodule Raxol.REPL.SandboxTest do
       assert :ok = Sandbox.check(~S|Kernel.defmodule(Zzz, do: 1)|, :none)
     end
   end
+
+  # `Calendar` is on the `:strict` whitelist, so `put_time_zone_database/1`
+  # passed both levels with any argument. It writes a node-global setting the
+  # eval timeout does not undo, after which every `DateTime` zone operation on
+  # the node dispatches to the (possibly computed) module passed in (#1237).
+  describe "the global time zone database cannot be replaced" do
+    test "put_time_zone_database is refused in every call form" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Calendar.put_time_zone_database(mod)|,
+            ~S|Calendar.put_time_zone_database(String.to_existing_atom("Elixir.X"))|,
+            ~S{mod |> Calendar.put_time_zone_database()},
+            ~S|&Calendar.put_time_zone_database/1|,
+            ~S|:"Elixir.Calendar".put_time_zone_database(mod)|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, level),
+               "#{code} passed #{level}"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "global time zone database change")
+               ),
+               "expected a time zone database violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "reading the time zone database and the rest of Calendar stay allowed" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Calendar.get_time_zone_database()|,
+            ~S|Calendar.strftime(~D[2026-01-01], "%Y")|
+          ] do
+        assert :ok = Sandbox.check(code, level),
+               "#{code} was refused at #{level}"
+      end
+    end
+  end
 end

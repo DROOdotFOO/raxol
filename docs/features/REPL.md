@@ -83,6 +83,8 @@ Both `:standard` and `:strict` refuse syntax that creates atoms from runtime dat
 
 Both levels also refuse the remote spellings of the definition macros and `use`: `defmodule`, `defimpl`, `defprotocol` and `use` are `Kernel` macros, so `Kernel.defmodule(Zzz, do: ...)`, `Kernel.defimpl(String.Chars, for: Reference, do: ...)` and `Kernel.use(Bitwise)` do exactly what the bare forms, which were already refused, do.
 
+Both levels refuse `Calendar.put_time_zone_database/1`. It replaces the time zone database for the whole node, and the setting outlives the evaluation: every later `DateTime` zone operation in every process would call the module passed in. `Calendar.get_time_zone_database/0` remains allowed.
+
 Strict also refuses a sorter that could name a module chosen at runtime. `Enum.sort/2`, `Enum.sort_by/3`, `Enum.max`/`min`/`min_max` and their `_by` forms, and `List.keysort/3` call `module.compare/2` when the sorter is a module, so `Enum.sort(l, m)` dispatches to whatever `m` holds. The sorter must be written out as a function or capture, `:asc`/`:desc`, a whitelisted module (`Enum.sort(dates, Date)`) or a direction tuple of those (`{:desc, Date}`); a variable is refused even when it would hold a function, and captures such as `&Enum.sort/2` that hide the sorter are refused.
 
 ## Over SSH, and on any served surface

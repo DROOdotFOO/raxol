@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- **Security: `Raxol.REPL.Sandbox` refuses `Calendar.put_time_zone_database/1` (#1237).** `Calendar` is on the `:strict` allowlist, so the call passed both sandboxed levels with any argument, including a module computed from data. It sets `:elixir`'s `:time_zone_database` for the whole node, which neither the evaluation timeout nor the heap cap undoes, so one anonymous `ReplDemo` submission made every later `DateTime` zone operation in every process dispatch to the module it chose. It is now on the denied list for `:standard` and `:strict`, in call, piped, captured and `:"Elixir.Calendar"` forms; `Calendar.get_time_zone_database/0` and the rest of `Calendar` stay allowed.
 - **Nightly Credo no longer restores stale compiled path dependencies.** Dependency sources retain lockfile fallback reuse, while `_build` is cached separately for the exact commit, OS, architecture, resolved OTP/Elixir versions and Mix environment, with no fallback. This prevents cached `raxol_core` 2.7.0 metadata from failing the current `~> 2.8` requirement before compilation.
 
 - **`raxol_agent` keeps local package dependencies out of its Hex lock.** The Req 0.7.5 update no longer locks `raxol_core` and `raxol_mcp` as published packages, preserving source-worktree dependency pins and passing the path-shadow guard.
