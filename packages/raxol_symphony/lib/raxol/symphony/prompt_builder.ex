@@ -117,7 +117,10 @@ defmodule Raxol.Symphony.PromptBuilder do
            strict_variables: true,
            strict_filters: true
          ) do
-      {:ok, iolist} ->
+      # Solid 1.x returns the collected errors on success too. With both strict
+      # options set, any variable or filter error takes the :error branch, so
+      # what is left here does not invalidate the render.
+      {:ok, iolist, _errors} ->
         {:ok, IO.iodata_to_binary(iolist)}
 
       {:error, errors, _partial} ->
