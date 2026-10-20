@@ -63,13 +63,13 @@ end
 
 ## Platform support
 
-| Platform        | Primary Backend | Fallback           | Performance  |
-| --------------- | --------------- | ------------------ | ------------ |
-| Linux           | termbox2_nif    | IOTerminal         | ~50us/frame  |
-| macOS           | termbox2_nif    | IOTerminal         | ~50us/frame  |
-| Windows 10+     | IOTerminal      | (primary)          | ~500us/frame |
-| FreeBSD/OpenBSD | termbox2_nif    | IOTerminal         | ~50us/frame  |
-| CI/Docker       | IOTerminal      | (no TTY detection) | N/A          |
+| Platform        | Primary Backend | Fallback           |
+| --------------- | --------------- | ------------------ |
+| Linux           | termbox2_nif    | IOTerminal         |
+| macOS           | termbox2_nif    | IOTerminal         |
+| Windows 10+     | IOTerminal      | (primary)          |
+| FreeBSD/OpenBSD | termbox2_nif    | IOTerminal         |
+| CI/Docker       | IOTerminal      | (no TTY detection) |
 
 ## IOTerminal (Pure Elixir Backend)
 
@@ -230,18 +230,9 @@ iex> Raxol.Terminal.Driver.backend()
 
 ## Performance
 
-| Operation           | termbox2_nif | IOTerminal | Notes      |
-| ------------------- | ------------ | ---------- | ---------- |
-| Initialize          | ~1ms         | ~2ms       |            |
-| Set cell            | ~1us         | ~10us      | Per cell   |
-| Full redraw (80x24) | ~50us        | ~500us     | 1920 cells |
-| Get terminal size   | ~1us         | ~5us       |            |
-| Read keypress       | ~1us         | ~10us      |            |
-
-For most applications, IOTerminal performance is fine. The difference only matters with very high refresh rates (>30 fps), large terminals (>200x60), or intensive cell-by-cell updates.
+For most applications, IOTerminal performance is fine. The difference only matters with very high refresh rates, large terminals, or intensive cell-by-cell updates.
 
 ## Related
 
 - [Windows Platform Support](./WINDOWS.md)
 - [Architecture Overview](../core/ARCHITECTURE.md)
-- [Performance Targets](../bench/PERFORMANCE_TARGETS.md)

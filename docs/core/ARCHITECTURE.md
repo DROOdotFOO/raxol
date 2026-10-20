@@ -161,7 +161,7 @@ The component gets its own GenServer under a DynamicSupervisor. If it crashes, i
 ## Performance design
 
 - **Two-phase rendering**: Text measurement (expensive, Unicode-aware) is cached separately from layout (cheap arithmetic). On resize, only layout re-runs.
-- **Buffer diff**: Only changed cells are written. ~2ms for 80x24.
+- **Buffer diff**: Only changed cells are written.
 - **ETS for reads**: Theme, i18n, config, and metrics use ETS tables. Reads bypass GenServer serialization entirely.
 - **Synchronized output**: Uses DEC mode 2026 (`\e[?2026h`) to batch terminal writes, preventing flicker.
 - **Damage tracking**: `DamageTracker` computes rectangular dirty regions. `RenderBatcher` coalesces rapid updates into single frames at 60fps.

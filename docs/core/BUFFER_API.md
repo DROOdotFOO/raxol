@@ -26,8 +26,6 @@ Creates a blank buffer with the specified dimensions. All cells initialized to b
 buffer = Raxol.Core.Buffer.create_blank_buffer(80, 24)
 ```
 
-Performance: < 1ms for standard 80x24 buffer.
-
 ---
 
 ### write_at/5
@@ -42,8 +40,6 @@ Writes text at the specified coordinates with optional styling. Text wraps chara
 buffer = Buffer.write_at(buffer, 5, 3, "Hello, World!")
 buffer = Buffer.write_at(buffer, 5, 4, "Styled text", %{bold: true, fg_color: :blue})
 ```
-
-Performance: < 1ms for typical strings.
 
 ---
 
@@ -76,8 +72,6 @@ Updates a single cell. More efficient than `write_at` for single characters. Out
 buffer = Buffer.set_cell(buffer, 10, 5, "~", %{bg_color: :red})
 ```
 
-Performance: < 100us.
-
 ---
 
 ### clear/1
@@ -103,8 +97,6 @@ buffer = Buffer.resize(buffer, 120, 40)  # expand
 buffer = Buffer.resize(buffer, 40, 20)   # shrink (content cropped)
 ```
 
-Performance: < 2ms for standard sizes.
-
 ---
 
 ### to_string/1
@@ -123,7 +115,7 @@ Pure functional rendering and diffing.
 
 ### render_to_string/1
 
-Renders buffer to plain ASCII string (no ANSI codes). < 1ms for 80x24 buffer.
+Renders buffer to plain ASCII string (no ANSI codes).
 
 ### render_diff/2
 
@@ -142,7 +134,7 @@ diff = Renderer.render_diff(old_buffer, new_buffer)
 IO.write(Renderer.apply_diff(diff))
 ```
 
-Only generates updates for changed cells. Batches consecutive changes into single writes; a row that goes fully blank collapses to a single `{:clear_line, y}`. < 2ms for 80x24 buffer.
+Only generates updates for changed cells. Batches consecutive changes into single writes; a row that goes fully blank collapses to a single `{:clear_line, y}`.
 
 ### apply_diff/1
 
@@ -203,8 +195,6 @@ Box styles:
 - `:heavy` - Bold lines
 - `:dashed` - Dashed lines
 
-Performance: 38-588us depending on size and style.
-
 ### draw_horizontal_line/5 and draw_vertical_line/5
 
 Draw lines at specified coordinates with a given character.
@@ -216,23 +206,21 @@ buffer = Box.fill_area(buffer, 10, 5, 20, 10, " ", %{bg_color: :blue})
 buffer = Box.fill_area(buffer, 10, 5, 20, 10, ".", %{})
 ```
 
-Performance: ~44us for 10x10, ~1.3ms for full 80x24.
-
 ---
 
 ## Performance targets
 
 All operations designed for < 1ms on standard 80x24 buffers:
 
-| Operation           | Target | Actual (avg) |
-| ------------------- | ------ | ------------ |
-| create_blank_buffer | < 1ms  | ~0.5ms       |
-| write_at            | < 1ms  | ~0.1ms       |
-| get_cell            | < 1ms  | ~0.001ms     |
-| set_cell            | < 1ms  | ~0.1ms       |
-| render_diff         | < 2ms  | ~2ms         |
-| draw_box            | < 1ms  | 0.04-0.6ms   |
-| fill_area (small)   | < 1ms  | 0.04ms       |
+| Operation           | Target |
+| ------------------- | ------ |
+| create_blank_buffer | < 1ms  |
+| write_at            | < 1ms  |
+| get_cell            | < 1ms  |
+| set_cell            | < 1ms  |
+| render_diff         | < 2ms  |
+| draw_box            | < 1ms  |
+| fill_area (small)   | < 1ms  |
 
 See `bench/core/` for detailed benchmarks.
 

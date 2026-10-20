@@ -101,7 +101,7 @@ diff = Renderer.render_diff(old_buffer, new_buffer)
 # ]
 ```
 
-Without diffing you'd clear and redraw everything. With diffing, only changed cells are written, bringing typical updates to ~2ms.
+Without diffing you'd clear and redraw everything. With diffing, only changed cells are written.
 
 ### Stage 3: Output generation
 
@@ -189,13 +189,13 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 ### Targets
 
-| Operation         | Target  | Typical |
-| ----------------- | ------- | ------- |
-| Buffer create     | < 1ms   | 0.3ms   |
-| write_at (single) | < 100us | 50us    |
-| draw_box          | < 500us | 240us   |
-| render_diff       | < 2ms   | 1.2ms   |
-| Full render       | < 16ms  | 8ms     |
+| Operation         | Target  |
+| ----------------- | ------- |
+| Buffer create     | < 1ms   |
+| write_at (single) | < 100us |
+| draw_box          | < 500us |
+| render_diff       | < 2ms   |
+| Full render       | < 16ms  |
 
 60 FPS = 16ms frame budget.
 
@@ -203,17 +203,13 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 **Pipeline operations** instead of intermediate variables. Elixir optimizes pipelines better.
 
-**Use diff rendering.** Typical updates drop to ~2ms.
+**Use diff rendering.** Only changed cells are written.
 
 **Reuse style references.** Avoid allocating duplicate style maps.
 
 **Use `fill_area`** instead of looping `set_cell`. Much faster for area fills.
 
 ### Memory
-
-- Each cell: ~100 bytes (character + style)
-- 80x24 buffer: ~192KB
-- 200x50 buffer: ~1MB
 
 Keep buffers reasonably sized. Don't hold references to old buffers you no longer need.
 

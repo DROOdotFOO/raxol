@@ -1,6 +1,6 @@
 # Fly.io Deployment
 
-Raxol uses a multi-tier deployment strategy. Fly.io handles the main application, with optional static hosting on Cloudflare Pages and metrics on GitHub Pages.
+Raxol uses a multi-tier deployment strategy. Fly.io handles the main application, with optional static hosting on Cloudflare Pages.
 
 ## Fly.io (Primary)
 
@@ -37,25 +37,17 @@ Static file CDN. Configured but not required for primary functionality.
 - No backend, no WebSocket, no LiveView (static files only)
 - Good for marketing pages, docs hosting, reducing Fly.io bandwidth
 
-## GitHub Pages (Metrics)
-
-Performance dashboard published to GitHub Pages `/performance` subdirectory.
-
-- Config: `.github/workflows/performance-tracking.yml`
-- Deploys `docs/performance` directory via `peaceiris/actions-gh-pages@v4`
-- Benchmark results, historical trends, pre-commit timings
-
 ## Comparison
 
-| Feature | Fly.io | Cloudflare Pages | GitHub Pages |
-|---------|--------|------------------|--------------|
-| **Use** | Full app | Static CDN | Metrics |
-| **LiveView** | Yes | No | No |
-| **WebSockets** | Yes | No | No |
-| **Custom Domain** | Yes | Possible | Limited |
-| **Auto-scaling** | Yes | CDN | N/A |
-| **Cost** | Pay-per-use | Free tier | Free |
-| **Deploy** | flyctl/Docker | GitHub Actions | GitHub Actions |
+| Feature | Fly.io | Cloudflare Pages |
+|---------|--------|------------------|
+| **Use** | Full app | Static CDN |
+| **LiveView** | Yes | No |
+| **WebSockets** | Yes | No |
+| **Custom Domain** | Yes | Possible |
+| **Auto-scaling** | Yes | CDN |
+| **Cost** | Pay-per-use | Free tier |
+| **Deploy** | flyctl/Docker | GitHub Actions |
 
 ## Architecture
 
@@ -94,7 +86,6 @@ flyctl secrets set DATABASE_URL=...
 **GitHub Actions workflows:**
 - `.github/workflows/ci-unified.yml`: tests and quality
 - `.github/workflows/deploy-web.yml`: Cloudflare Pages
-- `.github/workflows/performance-tracking.yml`: metrics
 - `.github/workflows/security.yml`: security scanning
 
 ## Environment config

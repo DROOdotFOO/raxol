@@ -272,10 +272,10 @@ Timing:
   test's own `@tag timeout:` (or `@describetag`), set an order of magnitude
   above the observed cost. ExUnit reports it as a failure with a stack, and
   nothing has to be measured.
-- Throughput and allocation budgets live in `bench/` and the regression-testing
-  workflow, never in the suite. `bench/core/buffer_gate.exs` is the worked
-  example: budgets with a stated headroom factor and a provenance block, a
-  non-zero exit, and a CI job that fails on a breach.
+- Throughput and allocation budgets live in `bench/`, never in the suite.
+  `bench/core/buffer_gate.exs` is the worked example: budgets with a stated
+  headroom factor and a provenance block, a non-zero exit, and a CI job that
+  fails on a breach.
 
 ## Build & Release
 

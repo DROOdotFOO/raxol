@@ -5,41 +5,26 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 ## Workflow Files
 
 ### Core Workflows
-- **`ci-unified.yml`**: Main CI pipeline with parallelized testing, smart caching, and conditional execution
-- **`security.yml`**: Comprehensive security scanning (dependencies, secrets, SAST)
-- **`nightly.yml`**: Nightly regression testing with full test matrix
-- **`regression-testing.yml`**: Unified performance and memory regression testing
+- **`ci-unified.yml`**: Main CI pipeline; `CI Status` aggregates the blocking jobs and is the required check
+- **`security.yml`**: Dependency audit, Hex advisories, Sobelow, Semgrep, secret detection
+- **`nightly.yml`**: Full Elixir/OTP × OS test matrix, extended scenarios, enforcing Dialyzer and Credo ratchets
+- **`lockstep-deps.yml`**: Cross-package dependency constraint and prose/link checks
+- **`web-deploy-check.yml`**: Web tests and release boot, on `web/**` and playground changes
+- **`nix.yml`**: Flake build on Linux and macOS
+
+### Release Workflows
 - **`release.yml`**: Tag-authorized Hex train plus GitHub release for `v*` tags
 - **`release-hex.yml`**: Reusable, approval-gated, dependency-ordered Hex publication
 - **`release-raxol-cli.yml`**: Native CLI builds, approval-gated npm
   publication with provenance, and CLI GitHub releases
+- **`release-raxol-console.yml`**, **`release-raxol-earn.yml`**: Per-binary release builds
+- **`llms-sync.yml`**: Syncs `llms.txt` after a Hex publish
 
-### Supporting Workflows
-- **`performance-tracking.yml`**: Performance benchmarking and tracking
-- **`pr-comment.yml`**: Automated PR feedback and status updates
-- **`deploy-web.yml`**: Web application deployment
+### Manual
+- **`rate-selfhosted.yml`**: termbox2 NIF, tty-dependent, and RATE golden suites on the self-hosted runner
 
-### Legacy/Testing workflows
-- **`ci.yml`**: Original CI workflow (deprecated in favor of main CI pipeline)
-- **`ci-local.yml`**: Simplified CI for local `act` testing
-- **`ci-local-deps.yml`**: Tests dependencies locally
-- **`test-snyk.yml`**: Security testing with Snyk
-- **`dummy-test.yml`**: Quick workflow for verifying `act` setup
-- **`macos-ci-fix.yml`**: macOS-specific CI fixes
-
-### Removed/Consolidated Components
-**Workflows consolidated into `regression-testing.yml`:**
-- **`performance-regression.yml`**: *(Removed)* - Performance regression testing
-- **`memory-regression.yml`**: *(Removed)* - Memory regression testing
-
-**Actions removed due to duplication:**
-- **`setup-beam/`**: *(Removed)* - Mock setup action, replaced by standardized `setup-elixir/`
-- **`cache/`**: *(Removed)* - Mock cache action, workflows use standard GitHub cache action
-
-**Workflow role clarifications:**
-- **`nightly.yml`**: Now focuses on comprehensive test matrix and extended scenarios
-- **`performance-tracking.yml`**: Handles historical performance tracking and dashboards (runs every 3 days at 4 AM UTC for efficiency)
-- **`regression-testing.yml`**: Handles performance/memory regression detection for PRs and baseline updates
+The only performance check that fails CI is the `buffer-gate` job in
+`ci-unified.yml` (`bench/core/buffer_gate.exs`).
 
 ## Local Testing with `act`
 
@@ -93,13 +78,6 @@ The `.github/actions/` directory contains reusable composite actions:
 - **Conditional execution**: Heavy checks only run when needed
 - **Fast feedback**: Format and compile checks run first
 
-### Regression testing (`regression-testing.yml`)
-- **Combined testing**: Performance and memory regression testing in a single workflow
-- **Flexible execution**: Can run performance, memory, or both test types
-- **Comprehensive analysis**: Automated regression detection and reporting
-- **Baseline comparison**: Compares current changes against master branch
-- **Performance gates**: Enforces memory and performance thresholds
-
 ### Security Scanning (`security.yml`)
 - **No Docker dependencies**: Uses CLI tools directly
 - **Multiple scanners**: Semgrep, Sobelow, TruffleHog, Gitleaks
@@ -107,7 +85,6 @@ The `.github/actions/` directory contains reusable composite actions:
 
 ### Nightly Builds (`nightly.yml`)
 - **Full test matrix**: Multiple Elixir/OTP versions
-- **Performance benchmarking**: Track performance over time
 - **Extended integration tests**: Include slow/heavy tests
 
 ### Tips for macOS ARM (M1/M2/M3)

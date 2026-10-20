@@ -224,15 +224,6 @@ end
 | `:detailed` | `:debug` | `[:module, :function, :line, :pid]` |
 | `:verbose` | `:debug` | All metadata |
 
-## Performance impact
-
-| Level | CPU | Memory |
-|-------|-----|--------|
-| `:off` | None | None |
-| `:basic` | ~1-2% | Minimal |
-| `:detailed` | ~5-10% | ~1MB for logs |
-| `:verbose` | ~15-20% | ~5MB for logs and traces |
-
 ## Best practices
 
 Guard expensive debug operations behind level checks:

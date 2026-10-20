@@ -5,7 +5,7 @@ Performance measurements for Raxol's core operations.
 ## Quick start
 
 ```bash
-# Framework comparison (vs Ratatui, Bubble Tea, Textual)
+# Raxol core operations and frame budget (measures Raxol only)
 mix run bench/suites/comparison/framework_comparison.exs
 
 # Quick mode (~30s instead of ~2min)
@@ -59,31 +59,11 @@ The memory figure is `erts_debug.size` on the buffer term; cells are stored
 in a map populated on write, so an empty buffer is small and memory grows
 with written cells, not dimensions.
 
-### Cross-framework comparison
-
-| Operation           | Raxol   | Ratatui (Rust) | Bubble Tea (Go) | Textual (Python) |
-| ------------------- | ------- | -------------- | --------------- | ---------------- |
-| Buffer create 80x24 | 0.32 us | ~0.5 us        | ~2 us           | ~50 us           |
-| Cell write (single) | 1.4 us  | ~0.01 us       | ~0.1 us         | ~5 us            |
-| Full screen write   | 2.6 ms  | ~20 us         | ~50 us          | ~2 ms            |
-| Tree/view diff      | 32 us   | ~5 us          | N/A             | ~100 us          |
-
-All values in microseconds unless noted. Lower is better.
-
-**Raxol**: measured on this hardware. **Others**: published/estimated numbers
-from different hardware, so the comparison is approximate at best; a
-same-machine harness is the only honest upgrade. The previous ANSI parse row
-is gone: published parser numbers for other frameworks measure lexers, while
-our comparison suite measures full emulator ingest, and comparing the two
-mislead more than it informed.
-
 ### Interpretation
 
-Raxol's per-operation latency is higher than Rust/Go (expected for a managed
-runtime), but:
+From the measured rows above:
 
 - **Full frame at 5.0ms** leaves 69% of the 60fps budget for application logic
-- **Tree diff at 32us** sits between Ratatui (~5us) and Textual (~100us)
 - **718K cell writes/sec** is more than enough for any terminal UI
 - **OTP benefits**: crash isolation, hot reload, and distribution come built
   in to the runtime
@@ -96,9 +76,9 @@ additional infrastructure in compiled languages.
 
 | Suite      | Location                   | Focus                       |
 | ---------- | -------------------------- | --------------------------- |
-| Comparison | `bench/suites/comparison/` | Cross-framework performance |
+| Comparison | `bench/suites/comparison/` | Core ops, frame budget      |
 | Parser     | `bench/suites/parser/`     | ANSI parsing, CSI sequences |
-| Terminal   | `bench/suites/terminal/`   | Buffer, cursor, emulator    |
+| Terminal   | `bench/suites/terminal/`   | Emulator                    |
 | Rendering  | `bench/suites/rendering/`  | UI rendering, tree diffing  |
 | Core       | `bench/suites/core/`       | System-wide operations      |
 
@@ -107,7 +87,6 @@ additional infrastructure in compiled languages.
 ```bash
 # Specific suite files
 mix run bench/suites/parser/parser_benchmark.exs
-mix run bench/suites/terminal/buffer_benchmark.exs
 mix run bench/suites/rendering/render_performance_simple.exs
 
 # Via mix task (uses Benchee, generates HTML reports)
