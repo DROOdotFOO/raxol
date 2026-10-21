@@ -207,5 +207,20 @@ defmodule Raxol.UI.ListScorerTest do
       assert key == long_label
       assert String.length(key) == String.length(long_label)
     end
+
+    test "a match past the scoring cap is missed, so the cap bounds every key" do
+      # The guard for the clamp itself. Without `@max_score_graphemes` the
+      # 2,000-grapheme label below matches (its "needle" sits past the cap),
+      # and scoring cost grows with key length again. The same label with the
+      # needle inside the cap still matches.
+      past_cap = String.duplicate("x", 2_000) <> "needle"
+      within_cap = String.duplicate("x", 1_000) <> "needle"
+
+      past = ListScorer.rank([past_cap, "needle-short"], "needle", &key_fn/1)
+      assert items_of(past) == ["needle-short"]
+
+      within = ListScorer.rank([within_cap], "needle", &key_fn/1)
+      assert items_of(within) == [within_cap]
+    end
   end
 end

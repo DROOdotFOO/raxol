@@ -82,15 +82,54 @@ jobs:
           # made `git diff` exit 128 and the run fail before any check started.
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
         run: |
+          # Platform-sensitive: the macOS/Windows legs (platform-tests.yml)
+          # run, and gate, only when this succeeds. True when the range
+          # changes the toolchain pin, any mix.exs/mix.lock (a dependency the
+          # Windows legs build), the termbox2 NIF or the platform workflow; or
+          # changes an Elixir file whose content on EITHER side of the range
+          # branches on the OS, calls a Platform helper, or carries an
+          # OS-scoped test tag. Checking the base side too catches a deleted
+          # OS-branching module and a removed `@tag :skip_on_windows`, which
+          # the head side alone no longer shows. Content is read from git
+          # objects, not the working tree, and paths are NUL-delimited, so
+          # odd file names neither skip the check nor reach grep as options.
+          PLATFORM_PATTERN=':os\.type\(\)|:win32|win32_|windows_only|skip_on_windows|unix_only|Platform\.'
+          platform_sensitive() {
+            local base="$1" head="$2" file
+            while IFS= read -r -d '' file; do
+              case "$file" in
+                mise.toml|mix.exs|mix.lock|packages/*/mix.exs|packages/*/mix.lock|.github/workflows/platform-tests.yml|packages/raxol_terminal/lib/termbox2_nif/*)
+                  return 0 ;;
+                *.ex|*.exs)
+                  for rev in "$head" "$base"; do
+                    if git show "$rev:$file" 2>/dev/null | grep -qE -e "$PLATFORM_PATTERN"; then
+                      return 0
+                    fi
+                  done ;;
+              esac
+            done < <(git -c core.quotePath=false diff -z --name-only "$base...$head")
+            return 1
+          }
+
           if [ "$EVENT_NAME" != "pull_request" ]; then
             # push keeps its own paths-ignore; dispatch and workflow_call
-            # always mean "run it". A push to master skips the macOS/Windows
-            # legs: nightly.yml runs them, and the PR that merged already ran
-            # them if it touched platform-sensitive code.
+            # always mean "run it".
             echo "code=true" >> "$GITHUB_OUTPUT"
             if [ "$EVENT_NAME" = "push" ]; then
-              echo "platform=false" >> "$GITHUB_OUTPUT"
+              # Branch protection does not require a PR to be up to date with
+              # master, so the merged commit can be a combination no PR run
+              # tested. Classify the pushed range the same way; a range that
+              # cannot be read (new branch, force-push) runs the legs.
+              if ! git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                echo "platform=true" >> "$GITHUB_OUTPUT"
+              elif platform_sensitive "$PUSH_BEFORE" "$PUSH_AFTER"; then
+                echo "platform=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "platform=false" >> "$GITHUB_OUTPUT"
+              fi
             else
               echo "platform=true" >> "$GITHUB_OUTPUT"
             fi
@@ -135,24 +174,11 @@ jobs:
             echo "should-run-heavy=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # Platform-sensitive: the macOS/Windows legs (platform-tests.yml)
-          # run, and gate, only when this is true. Detected by content rather
-          # than a hand-kept path list, so a new OS-branching module is covered
-          # the day it lands: any changed Elixir source or test that branches
-          # on the OS or carries an OS-scoped test tag. Plus the toolchain pin,
-          # the termbox2 NIF, and the platform workflow itself.
-          PLATFORM=false
-          while IFS= read -r file; do
-            case "$file" in
-              mise.toml|.github/workflows/platform-tests.yml|packages/raxol_terminal/lib/termbox2_nif/*)
-                PLATFORM=true ;;
-              *.ex|*.exs)
-                if [ -f "$file" ] && grep -qE ':os\.type\(\)|:win32|windows_only|skip_on_windows|unix_only' "$file"; then
-                  PLATFORM=true
-                fi ;;
-            esac
-          done <<< "$CHANGED_FILES"
-          echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+          if platform_sensitive "$BASE_SHA" "$HEAD_SHA"; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "platform=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # ========================================
   # Setup and Cache Preparation

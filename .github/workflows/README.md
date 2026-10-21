@@ -29,18 +29,27 @@ The only performance check that fails CI is the `buffer-gate` job in
 
 ## What runs when
 
-| Trigger | Runs | Gates |
+`CI Status` (from `ci-unified.yml`) is the only required check; every other
+workflow reports alongside it.
+
+| Trigger | Runs | Reports to |
 | --- | --- | --- |
-| Pull request | `ci-unified.yml`: format, compile, unit, property and package tests, input canary, buffer gate, credo ratchet, security; integration tests when `mix.exs`, `mix.lock` or `lib/` change; macOS and Windows when the diff is platform-sensitive | `CI Status` (required) |
-| Push to master | `ci-unified.yml` without macOS/Windows | `CI Status` |
-| 02:00 UTC daily | `nightly.yml`: test matrix, Windows, extended properties, Dialyzer ratchet, integration and slow tests | One `nightly-build` issue: commented while red, closed when green |
+| Pull request (any base) | `ci-unified.yml`: format, compile, unit, property and package tests, input canary, buffer gate, credo ratchet, security scan; integration tests when `mix.exs`, `mix.lock` or `lib/` change; macOS and Windows when the change is platform-sensitive. A docs-only change (`web/`, `docs/`, `assets/`, Markdown, `.github/` outside `workflows/`) skips all of it and `CI Status` passes | `CI Status` |
+| Push to `master`, `main` or `develop` | `ci-unified.yml`, same jobs; macOS and Windows when the pushed range is platform-sensitive. Docs-only pushes do not start it | `CI Status` |
+| Pull request or push to `master`/`main` | `security.yml` (not on docs-only changes); also daily at 03:00 UTC | Its own checks |
+| Path-filtered | `lockstep-deps.yml` (`mix.exs`, `mix.lock`, Markdown, `docs/`), `web-deploy-check.yml` (`web/`, playground, root `mix.*`), `nix.yml` (`flake.*`) | Their own checks |
+| 02:00 UTC daily | `nightly.yml`: test matrix, Windows, extended properties, Dialyzer ratchet, integration and slow tests | One `nightly-build` issue: commented while red, closed after a fully green night (scheduled runs only) |
 
-"Platform-sensitive" is decided by content in the `changes` job of
-`ci-unified.yml`: a changed Elixir file that branches on the OS or carries an
-OS-scoped test tag, `mise.toml`, the termbox2 NIF, or `platform-tests.yml`.
+"Platform-sensitive" is decided in the `changes` job of `ci-unified.yml`:
+the change touches `mise.toml`, any `mix.exs` or `mix.lock`, the termbox2
+NIF or `platform-tests.yml`, or changes an Elixir file whose content before
+or after the change matches `PLATFORM_PATTERN` there (OS branches, `Platform.`
+helpers, OS-scoped test tags). To force the legs on a change it misses, run
+`platform-tests.yml` by hand (`workflow_dispatch`).
 
-Credo runs only per PR and Dialyzer only nightly; both compare against
-`priv/quality_baseline.json` through `scripts/check-quality-ratchet.sh`.
+Credo runs on every `ci-unified.yml` run that does code work, and Dialyzer
+only nightly; both compare against `priv/quality_baseline.json` through
+`scripts/check-quality-ratchet.sh`.
 
 ## Local Testing with `act`
 
