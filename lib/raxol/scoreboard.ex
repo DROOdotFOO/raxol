@@ -2,18 +2,26 @@ defmodule Raxol.Scoreboard do
   @moduledoc """
   Deterministic performance counters for CI, one JSON record per run.
 
-  Each scenario drives a playground demo through the same pipeline the
-  rendering engine runs for a frame (`view/1`, layout preparation,
-  `Raxol.UI.Layout.Engine.apply_layout/3`, `Raxol.UI.Renderer.render_to_cells/2`,
-  the screen buffer, and `Backends.build_terminal_frame/4`) in-process, with no
-  TTY and no engine GenServer, and counts two things:
+  Each scenario drives a playground demo through the frame stages the
+  rendering engine runs, in-process with no TTY and no engine GenServer: the
+  theme the engine would resolve (`Pipeline.theme/1`), `view/1`, layout
+  preparation, `Raxol.UI.Layout.Engine.apply_layout/3`,
+  `Raxol.UI.Renderer.render_to_cells/2`, the border-beam pass
+  (`Pipeline.apply_border_beam/2`), and the terminal frame
+  (`Backends.terminal_frame/2`) diffed against the previous one. The stage
+  functions are the engine's own, not copies. Plugin transforms are not
+  applied: they come from the dispatcher's plugin manager at runtime, and the
+  demos run with none loaded, as an app does by default.
+
+  It counts two things:
 
     * **bytes**: the size of the ANSI frame a terminal would receive. Exact.
     * **reductions**: the BEAM's unit of work, counted for the measuring
       process only (`Process.info(self(), :reductions)`). Unlike wall-clock
-      time it does not move with runner load: repeated runs agree to within
-      about 0.005%, which is why pull requests can be compared against master
-      on shared CI runners.
+      time it does not move with runner load: repeated runs agree to within a
+      few hundredths of a percent, which is why pull requests can be compared
+      against master on shared CI runners. Reductions do move with the
+      Elixir/OTP version, which is why the record carries the full toolchain.
 
   Every scenario runs once to load code, then three times in fresh processes;
   the reported reductions are the median. Metric ids, labels, units and the
@@ -25,7 +33,7 @@ defmodule Raxol.Scoreboard do
   """
 
   alias Raxol.Core.Events.Event
-  alias Raxol.Core.Runtime.Rendering.Backends
+  alias Raxol.Core.Runtime.Rendering.{Backends, Pipeline}
   alias Raxol.Playground.Demos.{FlexLayoutDemo, TableDemo}
   alias Raxol.UI.Layout.Engine, as: LayoutEngine
   alias Raxol.UI.Layout.Preparer
@@ -42,16 +50,16 @@ defmodule Raxol.Scoreboard do
   @doc "Run every scenario and return `%{metric_id => value}`."
   @spec collect() :: metrics()
   def collect do
-    theme = Raxol.UI.Theming.Theme.new()
-
-    table = scenario(TableDemo, @table_keys, theme)
-    flex = scenario(FlexLayoutDemo, [], theme)
+    table = scenario(TableDemo, @table_keys)
+    flex = scenario(FlexLayoutDemo, [])
     keys = length(@table_keys)
 
     %{
       "table.keyframe.bytes" => table.keyframe_bytes,
       "table.keyframe.reductions" => table.keyframe_reductions,
-      "table.keystroke.bytes" => round(table.script_bytes / keys),
+      # Not rounded: with zero tolerance, a one-byte change anywhere in the
+      # script has to show.
+      "table.keystroke.bytes" => table.script_bytes / keys,
       "table.keystroke.reductions" => round(table.script_reductions / keys),
       "flex.keyframe.bytes" => flex.keyframe_bytes,
       "flex.keyframe.reductions" => flex.keyframe_reductions
@@ -82,7 +90,7 @@ defmodule Raxol.Scoreboard do
       "commit" => commit,
       "toolchain" => %{
         "elixir" => System.version(),
-        "otp" => System.otp_release(),
+        "otp" => otp_version(),
         "system_arch" => to_string(:erlang.system_info(:system_architecture))
       },
       "metrics" => metrics
@@ -101,16 +109,34 @@ defmodule Raxol.Scoreboard do
     |> Map.fetch!("metrics")
   end
 
+  # The full OTP version ("29.0.3"), not `System.otp_release/0`'s major ("29"):
+  # a patch release can move reduction counts, and the comparison only warns
+  # about a toolchain change it can see.
+  defp otp_version do
+    path =
+      Path.join([
+        to_string(:code.root_dir()),
+        "releases",
+        System.otp_release(),
+        "OTP_VERSION"
+      ])
+
+    case File.read(path) do
+      {:ok, version} -> String.trim(version)
+      {:error, _} -> System.otp_release()
+    end
+  end
+
   # -- scenarios --
 
-  defp scenario(app, keys, theme) do
+  defp scenario(app, keys) do
     # The first run pays for code loading and lazily built caches; measure
     # after it.
-    _ = in_fresh_process(fn -> run_scenario(app, keys, theme) end)
+    _ = in_fresh_process(fn -> run_scenario(app, keys) end)
 
     runs =
       for _ <- 1..@runs,
-          do: in_fresh_process(fn -> run_scenario(app, keys, theme) end)
+          do: in_fresh_process(fn -> run_scenario(app, keys) end)
 
     bytes =
       runs |> Enum.map(&{&1.keyframe_bytes, &1.script_bytes}) |> Enum.uniq()
@@ -127,14 +153,11 @@ defmodule Raxol.Scoreboard do
     }
   end
 
-  defp run_scenario(app, keys, theme) do
+  defp run_scenario(app, keys) do
     model = init_model(app)
 
     r0 = reductions()
-
-    {prev, keyframe_bytes} =
-      frame(app, model, %{buffer: nil, prepared: nil}, theme)
-
+    {prev, keyframe_bytes} = frame(app, model, %{buffer: nil, prepared: nil})
     keyframe_reductions = reductions() - r0
 
     r1 = reductions()
@@ -143,7 +166,7 @@ defmodule Raxol.Scoreboard do
       Enum.reduce(keys, {model, prev, 0}, fn key, {model, prev, bytes} ->
         event = %Event{type: :key, data: %{key: :char, char: key}}
         model = unwrap(app.update(event, model))
-        {next, frame_bytes} = frame(app, model, prev, theme)
+        {next, frame_bytes} = frame(app, model, prev)
         {model, next, bytes + frame_bytes}
       end)
 
@@ -161,18 +184,23 @@ defmodule Raxol.Scoreboard do
   defp unwrap({model, _commands}), do: model
   defp unwrap(model), do: model
 
-  # One frame through the engine's pipeline: view, layout, cells, buffer,
-  # then the terminal frame diffed against the previous buffer.
-  defp frame(app, model, prev, theme) do
+  # One frame through the engine's stages, in the engine's order.
+  defp frame(app, model, prev) do
+    theme = Pipeline.theme(nil)
     view = app.view(model)
     prepared = Preparer.prepare_incremental(view, prev.prepared)
     positioned = LayoutEngine.apply_layout(view, @size, prepared)
-    cells = Raxol.UI.Renderer.render_to_cells(positioned, theme)
-    buffer = Backends.apply_cells_to_buffer(cells, @size)
-    renderer = Raxol.Terminal.Renderer.new(buffer, %{}, %{}, true)
 
-    bytes =
-      Backends.build_terminal_frame(prev.buffer, buffer, renderer, %{
+    cells =
+      positioned
+      |> Raxol.UI.Renderer.render_to_cells(theme)
+      |> Pipeline.apply_border_beam(positioned)
+
+    {buffer, bytes} =
+      Backends.terminal_frame(cells, %{
+        width: @size.width,
+        height: @size.height,
+        buffer: prev.buffer,
         force_repaint: false
       })
 

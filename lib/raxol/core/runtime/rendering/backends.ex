@@ -20,14 +20,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
       "Rendering Engine: Executing render_to_terminal"
     )
 
-    updated_buffer = apply_cells_to_buffer(cells, state)
-
-    # style_batching: merge adjacent same-style cells into one SGR run instead
-    # of one SGR + reset per cell. Round-trip-identical (each run still
-    # \e[0m-terminated), 8-28x fewer bytes on styled UIs.
-    renderer = Raxol.Terminal.Renderer.new(updated_buffer, %{}, %{}, true)
-
-    frame = build_terminal_frame(state.buffer, updated_buffer, renderer, state)
+    {updated_buffer, frame} = terminal_frame(cells, state)
 
     if state.sync_output do
       IO.write("\e[?2026h")
@@ -46,6 +39,26 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     # state carries it -- the real Engine.State always does; test states may not.
     {:ok,
      state |> Map.put(:buffer, updated_buffer) |> Map.put(:force_repaint, false)}
+  end
+
+  @doc """
+  Builds the ANSI frame for `cells` without writing it: returns the new screen
+  buffer and the bytes a terminal would receive, diffed against `state.buffer`
+  (a keyframe when that is nil, the size changed, or `state.force_repaint`).
+  `state` needs `:width`, `:height`, `:buffer` and `:force_repaint`.
+  `render_to_terminal/2` writes this frame; `Raxol.Scoreboard` measures it.
+  """
+  @spec terminal_frame(list(), map()) :: {ScreenBuffer.t(), binary()}
+  def terminal_frame(cells, state) do
+    updated_buffer = apply_cells_to_buffer(cells, state)
+
+    # style_batching: merge adjacent same-style cells into one SGR run instead
+    # of one SGR + reset per cell. Round-trip-identical (each run still
+    # \e[0m-terminated), 8-28x fewer bytes on styled UIs.
+    renderer = Raxol.Terminal.Renderer.new(updated_buffer, %{}, %{}, true)
+
+    {updated_buffer,
+     build_terminal_frame(state.buffer, updated_buffer, renderer, state)}
   end
 
   # --- Incremental frame emission ---

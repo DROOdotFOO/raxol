@@ -34,12 +34,18 @@ jobs:
       actions: read
       contents: read
       pull-requests: write
+    # One comment job per PR branch at a time, so two runs cannot both find no
+    # comment and both create one. Queued, not cancelled: the head-commit
+    # check before writing drops a run that is no longer current.
+    concurrency:
+      group: scoreboard-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     steps:
       # Docs-only runs skip the job that uploads the artifact; that is not an
       # error, so look before downloading.
       - name: Find scoreboard artifact
         id: artifact
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RUN_ID: ${{ github.event.workflow_run.id }}
         with:
@@ -58,11 +64,15 @@ jobs:
             const usable = artifact !== undefined && artifact.size_in_bytes <= 1024 * 1024;
             core.setOutput('found', usable ? 'true' : 'false');
 
+      # Full history: the base record is the nearest recorded ancestor of the
+      # PR's base commit, found by walking first parents.
       - name: Check out default branch
         if: steps.artifact.outputs.found == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Download scoreboard artifact
         if: steps.artifact.outputs.found == 'true'
@@ -80,7 +90,8 @@ jobs:
           DIR: ${{ runner.temp }}/scoreboard
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          node "$SCOREBOARD" validate --defs "$DEFS" --record "$DIR/scoreboard.json"
+          node "$SCOREBOARD" validate --defs "$DEFS" --record "$DIR/scoreboard.json" \
+            --as candidate --expect-commit "$RUN_HEAD_SHA"
           node "$SCOREBOARD" event --file "$DIR/event.json" > "$RUNNER_TEMP/event.out"
           if ! grep -qx 'event=pull_request' "$RUNNER_TEMP/event.out"; then
             echo "::error::event.json does not describe a pull_request run"
@@ -92,34 +103,35 @@ jobs:
           fi
           cat "$RUNNER_TEMP/event.out" >> "$GITHUB_OUTPUT"
 
-      # The run's own pull_requests list is authoritative but empty for fork
-      # PRs. Then fall back to the artifact's pr_number, and only trust it if
-      # the API says that PR's head is exactly the commit this run tested.
+      # Every candidate PR must have the tested commit as its head right now.
+      # The run's own pull_requests list is tried first; it is empty for fork
+      # PRs, so the artifact's pr_number is the fallback, held to the same
+      # check.
       - name: Resolve pull request
         id: pr
         if: steps.artifact.outputs.found == 'true'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           EVENT_PR_NUMBER: ${{ steps.event.outputs.pr_number }}
         with:
           script: |
             const run = context.payload.workflow_run;
-            let number = run.pull_requests?.[0]?.number;
-            if (number === undefined) {
-              const claimed = Number(process.env.EVENT_PR_NUMBER);
-              if (!Number.isSafeInteger(claimed) || claimed <= 0) {
-                core.notice('No pull request associated with this run.');
+            const candidates = (run.pull_requests ?? []).map((p) => p.number);
+            const claimed = Number(process.env.EVENT_PR_NUMBER);
+            if (Number.isSafeInteger(claimed) && claimed > 0) candidates.push(claimed);
+            for (const number of [...new Set(candidates)]) {
+              const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
+              if (pr.head.sha === run.head_sha) {
+                core.setOutput('number', String(number));
                 return;
               }
-              const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: claimed });
-              if (pr.head.sha !== run.head_sha) {
-                core.warning(`PR #${claimed} head is ${pr.head.sha}, not ${run.head_sha}; not commenting.`);
-                return;
-              }
-              number = claimed;
+              core.info(`PR #${number} head is ${pr.head.sha}, not ${run.head_sha}`);
             }
-            core.setOutput('number', String(number));
+            core.notice('No open pull request has this run\'s commit as its head; not commenting.');
 
+      # The nearest recorded first-parent ancestor of the PR's base commit,
+      # never a newer record: master commits after the base are not in this PR
+      # and must not be attributed to it. No such record means no comparison.
       - name: Fetch master record
         id: base
         if: steps.pr.outputs.number != ''
@@ -127,26 +139,34 @@ jobs:
           BASE_SHA: ${{ steps.event.outputs.base_sha }}
         run: |
           base="$RUNNER_TEMP/base.json"
-          rm -f "$base"
-          # Any failure here only means "no master record to compare with".
-          if git fetch --no-tags --depth=1 origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages; then
-            if [ -n "$BASE_SHA" ] && git show origin/gh-pages:scoreboard/records.jsonl > "$RUNNER_TEMP/records.jsonl"; then
-              node "$SCOREBOARD" lookup --defs "$DEFS" --records "$RUNNER_TEMP/records.jsonl" --commit "$BASE_SHA" > "$base" \
-                || echo "::warning::Could not read the record for $BASE_SHA from gh-pages"
-            fi
-            if [ ! -s "$base" ]; then
-              git show origin/gh-pages:scoreboard/latest.json > "$base" \
-                || echo "::notice::gh-pages has no scoreboard/latest.json yet"
-            fi
-          else
-            echo "::notice::No gh-pages branch yet; comparing against nothing"
+          records="$RUNNER_TEMP/records.jsonl"
+          # Written once on every exit path; "-" means compare against nothing.
+          out=-
+          trap 'echo "file=$out" >> "$GITHUB_OUTPUT"' EXIT
+          if [ -z "$BASE_SHA" ]; then
+            echo "::notice::No base commit for this run; comparing against nothing"
+            exit 0
           fi
-          if [ -s "$base" ] && node "$SCOREBOARD" validate --defs "$DEFS" --record "$base"; then
-            echo "file=$base" >> "$GITHUB_OUTPUT"
-          else
-            [ -s "$base" ] && echo "::warning::master record failed validation; comparing against nothing"
-            echo "file=-" >> "$GITHUB_OUTPUT"
+          if ! git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages \
+            || ! git show origin/gh-pages:scoreboard/records.jsonl > "$records"; then
+            echo "::notice::No scoreboard history on gh-pages yet; comparing against nothing"
+            exit 0
           fi
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            && ! git fetch --no-tags origin "$BASE_SHA"; then
+            echo "::notice::Base commit $BASE_SHA is not fetchable; comparing against nothing"
+            exit 0
+          fi
+          node "$SCOREBOARD" commits --defs "$DEFS" --records "$records" > "$RUNNER_TEMP/recorded.txt"
+          git rev-list --first-parent --max-count=200 "$BASE_SHA" > "$RUNNER_TEMP/walk.txt"
+          nearest=$(grep -Fx -m1 -f "$RUNNER_TEMP/recorded.txt" "$RUNNER_TEMP/walk.txt" || true)
+          if [ -z "$nearest" ]; then
+            echo "::notice::No recorded master commit within 200 first-parent ancestors of $BASE_SHA"
+            exit 0
+          fi
+          node "$SCOREBOARD" lookup --defs "$DEFS" --records "$records" --commit "$nearest" > "$base"
+          node "$SCOREBOARD" validate --defs "$DEFS" --record "$base" --as stored
+          out=$base
 
       - name: Render comment
         if: steps.pr.outputs.number != ''
@@ -159,7 +179,7 @@ jobs:
 
       - name: Upsert comment
         if: steps.pr.outputs.number != ''
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         with:
@@ -168,6 +188,13 @@ jobs:
             const marker = '<!-- raxol-scoreboard -->';
             const body = fs.readFileSync(`${process.env.RUNNER_TEMP}/comment.md`, 'utf8');
             const issue_number = Number(process.env.PR_NUMBER);
+            // Checked again right before writing: a push while this job ran
+            // makes these numbers stale, and the newer run will comment.
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: issue_number });
+            if (pr.head.sha !== context.payload.workflow_run.head_sha) {
+              core.notice(`PR #${issue_number} moved to ${pr.head.sha}; not writing stale numbers.`);
+              return;
+            }
             const comments = await github.paginate(github.rest.issues.listComments, {
               ...context.repo,
               issue_number,
@@ -203,7 +230,7 @@ jobs:
     steps:
       - name: Find scoreboard artifact
         id: artifact
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RUN_ID: ${{ github.event.workflow_run.id }}
         with:
@@ -224,7 +251,7 @@ jobs:
 
       - name: Check out default branch
         if: steps.artifact.outputs.found == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
 

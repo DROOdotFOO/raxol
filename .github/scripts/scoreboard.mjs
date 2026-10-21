@@ -8,8 +8,9 @@
 // that ends up in markdown or $GITHUB_OUTPUT is restricted to safe characters.
 //
 // Subcommands:
-//   validate --defs FILE --record FILE [--expect-commit SHA]
+//   validate --defs FILE --record FILE [--as fresh|candidate|stored] [--expect-commit SHA]
 //   compare  --defs FILE --base FILE|- --head FILE [--base-label T] [--head-label T]
+//            (head read as "candidate", base as "stored"; see validateRecord)
 //   badges   --defs FILE --record FILE --out DIR
 //   release  --defs FILE --records FILE --from SHA --to SHA [--from-label T] [--to-label T]
 //   lookup   --defs FILE --records FILE --commit SHA   (prints the record, or nothing)
@@ -17,7 +18,7 @@
 //   publish  --defs FILE --record FILE --dir DIR --run-id N [--recorded-at ISO]
 //   event    --file FILE                               (key=value lines for $GITHUB_OUTPUT)
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -96,10 +97,26 @@ function loadDefs(file) {
 
 // -------------------------------------------------------------------- records
 
-function validateRecord(raw, defs, what = "record") {
+// `mode` says where the record came from, chosen by the caller, never by the
+// record:
+//   "fresh"     a CI artifact headed for history (publish): defined ids only,
+//               and no `recorded_at`/`run_id`, which only publish adds.
+//   "candidate" a CI artifact shown in a pull request comment: as "fresh",
+//               except ids master does not define yet (the PR adds them) are
+//               set aside in `unknown` instead of failing the comment.
+//   "stored"    a line of the gh-pages history: ids retired from the defs
+//               since it was written are dropped, so removing a metric never
+//               orphans old history.
+const MODES = new Set(["fresh", "candidate", "stored"]);
+
+function validateRecord(raw, defs, what, mode) {
+  if (!MODES.has(mode)) throw new Error(`unknown record mode ${mode}`);
   if (!isPlainObject(raw)) fail(`${what}: top level must be an object`);
   for (const key of Object.keys(raw)) {
     if (!RECORD_KEYS.has(key)) fail(`${what}: unexpected key ${JSON.stringify(key)}`);
+  }
+  if (mode !== "stored" && (raw.recorded_at !== undefined || raw.run_id !== undefined)) {
+    fail(`${what}: recorded_at and run_id are set by the publish step, not by CI`);
   }
   if (raw.schema !== 1) fail(`${what}: unsupported schema ${JSON.stringify(raw.schema)}`);
   if (typeof raw.commit !== "string" || !SHA_RE.test(raw.commit)) fail(`${what}: commit must be a 40-character lowercase hex sha`);
@@ -116,19 +133,16 @@ function validateRecord(raw, defs, what = "record") {
   }
 
   if (!isPlainObject(raw.metrics)) fail(`${what}: metrics must be an object`);
-  // A record carrying `recorded_at` came out of the gh-pages history, written
-  // by the publish job after validation. A metric retired from the defs since
-  // then is dropped there, so removing a metric never orphans old history.
-  // Fresh records (CI artifacts) must use defined ids only.
-  const stored = raw.recorded_at !== undefined;
   const metrics = {};
+  const unknown = [];
   for (const [id, value] of Object.entries(raw.metrics)) {
     if (!defs.byId.has(id)) {
-      if (stored && ID_RE.test(id)) {
-        process.stderr.write(`warning: ${what}: dropping retired metric ${id}\n`);
-        continue;
+      if (mode === "fresh" || !ID_RE.test(id)) {
+        fail(`${what}: metric ${JSON.stringify(id)} is not defined in the metric definitions`);
       }
-      fail(`${what}: metric ${JSON.stringify(id)} is not defined in the metric definitions`);
+      if (mode === "stored") process.stderr.write(`warning: ${what}: dropping retired metric ${id}\n`);
+      else unknown.push(id);
+      continue;
     }
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) {
       fail(`${what}: metric ${id} must be a finite number between 0 and ${Number.MAX_SAFE_INTEGER}`);
@@ -137,6 +151,7 @@ function validateRecord(raw, defs, what = "record") {
   }
 
   const record = { schema: 1, commit: raw.commit, toolchain, metrics };
+  if (unknown.length > 0) Object.defineProperty(record, "unknown", { value: unknown.sort(), enumerable: false });
   if (raw.recorded_at !== undefined) {
     if (typeof raw.recorded_at !== "string" || !ISO_RE.test(raw.recorded_at)) fail(`${what}: recorded_at must be an ISO-8601 UTC time`);
     record.recorded_at = raw.recorded_at;
@@ -148,9 +163,9 @@ function validateRecord(raw, defs, what = "record") {
   return record;
 }
 
-function loadRecord(file, defs) {
+function loadRecord(file, defs, mode) {
   const what = `record ${file}`;
-  return validateRecord(parseJson(readCapped(file, RECORD_MAX_BYTES, "record"), what), defs, what);
+  return validateRecord(parseJson(readCapped(file, RECORD_MAX_BYTES, "record"), what), defs, what, mode);
 }
 
 // records.jsonl is only ever written by the publish job, but it still passes
@@ -184,7 +199,7 @@ function findRecord(file, commit, defs) {
   if (hits.length === 0) return null;
   // Publishing is idempotent per commit, so there is at most one; take the first.
   const what = `records ${file}:${hits[0].lineNo}`;
-  return validateRecord(parseJson(hits[0].line, what), defs, what);
+  return validateRecord(parseJson(hits[0].line, what), defs, what, "stored");
 }
 
 function recordedCommits(file, defs) {
@@ -192,7 +207,7 @@ function recordedCommits(file, defs) {
   for (const entry of readHistory(file)) {
     const what = `records ${file}:${entry.lineNo}`;
     try {
-      out.push(validateRecord(parseJson(entry.line, what), defs, what).commit);
+      out.push(validateRecord(parseJson(entry.line, what), defs, what, "stored").commit);
     } catch (e) {
       if (!(e instanceof InvalidInput)) throw e;
       process.stderr.write(`warning: skipping ${e.message}\n`);
@@ -277,7 +292,14 @@ function joinClauses(parts) {
 const escapeCell = (s) =>
   s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 const short = (sha) => sha.slice(0, 7);
-const toolchainText = (t) => `Elixir ${t.elixir}, OTP ${t.otp}, ${t.system_arch}`;
+// Code spans, so a toolchain string from an untrusted artifact (characters
+// limited by TOOLCHAIN_RE) cannot autolink (`www.…`) or reference (`GH-12`).
+const toolchainText = (t) => `Elixir \`${t.elixir}\`, OTP \`${t.otp}\`, \`${t.system_arch}\``;
+// Ids master does not define yet; ID_RE limits them to [a-z0-9_.].
+const unknownNote = (record) =>
+  record.unknown?.length
+    ? [`Not compared, not defined on master yet: ${record.unknown.map((id) => `\`${id}\``).join(", ")}.`, ""]
+    : [];
 const sameToolchain = (a, b) => TOOLCHAIN_KEYS.every((k) => a[k] === b[k]);
 
 function summarize(rows, subject) {
@@ -307,7 +329,7 @@ function renderComparison(defs, base, head, { baseLabel, headLabel, subject }) {
       const v = head.metrics[def.id];
       if (v !== undefined) out.push(`| ${escapeCell(def.label)} | ${formatValue(v, def)} |`);
     }
-    out.push("", `<sub>Measured at ${short(head.commit)} on ${toolchainText(head.toolchain)}.</sub>`);
+    out.push("", ...unknownNote(head), `<sub>Measured at ${short(head.commit)} on ${toolchainText(head.toolchain)}.</sub>`);
     return out.join("\n");
   }
 
@@ -324,7 +346,7 @@ function renderComparison(defs, base, head, { baseLabel, headLabel, subject }) {
     const cell = (v) => (v === undefined ? "-" : formatValue(v, def));
     out.push(`| ${escapeCell(def.label)} | ${cell(b)} | ${cell(h)} | ${changeCell(change)} |`);
   }
-  out.push("");
+  out.push("", ...unknownNote(head));
   if (!sameToolchain(base.toolchain, head.toolchain)) {
     out.push(
       `> **Warning:** ${baseLabel} and ${headLabel} were measured on different toolchains, ` +
@@ -349,12 +371,21 @@ function badgeFor(def, value) {
   return { schemaVersion: 1, label: def.label, message: formatValue(value, def), color: "informational" };
 }
 
+// Rewrites DIR to hold exactly one badge per headline metric present in the
+// record, so a metric that is retired, renamed or no longer a headline stops
+// being served instead of freezing at its last value.
 function writeBadges(defs, record, dir) {
   mkdirSync(dir, { recursive: true });
-  const written = [];
+  const wanted = new Map();
   for (const def of defs.list) {
-    if (!def.headline || record.metrics[def.id] === undefined) continue;
-    const file = join(dir, `${def.id}.json`);
+    if (def.headline && record.metrics[def.id] !== undefined) wanted.set(`${def.id}.json`, def);
+  }
+  for (const name of readdirSync(dir)) {
+    if (name.endsWith(".json") && !wanted.has(name)) rmSync(join(dir, name));
+  }
+  const written = [];
+  for (const [name, def] of wanted) {
+    const file = join(dir, name);
     writeFileSync(file, `${JSON.stringify(badgeFor(def, record.metrics[def.id]))}\n`);
     written.push(file);
   }
@@ -373,8 +404,10 @@ const str = { type: "string" };
 
 const commands = {
   validate(argv) {
-    const a = args(argv, { defs: str, record: str, "expect-commit": str }, ["defs", "record"]);
-    const record = loadRecord(a.record, loadDefs(a.defs));
+    const a = args(argv, { defs: str, record: str, as: str, "expect-commit": str }, ["defs", "record"]);
+    const mode = a.as ?? "fresh";
+    if (!MODES.has(mode)) fail(`--as must be one of ${[...MODES].join(", ")}`);
+    const record = loadRecord(a.record, loadDefs(a.defs), mode);
     if (a["expect-commit"] !== undefined && record.commit !== a["expect-commit"]) {
       fail(`record ${a.record}: commit ${record.commit} does not match expected ${a["expect-commit"]}`);
     }
@@ -383,15 +416,15 @@ const commands = {
   compare(argv) {
     const a = args(argv, { defs: str, base: str, head: str, "base-label": str, "head-label": str }, ["defs", "base", "head"]);
     const defs = loadDefs(a.defs);
-    const head = loadRecord(a.head, defs);
-    const base = a.base === "-" ? null : loadRecord(a.base, defs);
+    const head = loadRecord(a.head, defs, "candidate");
+    const base = a.base === "-" ? null : loadRecord(a.base, defs, "stored");
     process.stdout.write(renderComment(defs, base, head, { baseLabel: a["base-label"], headLabel: a["head-label"] }));
   },
 
   badges(argv) {
     const a = args(argv, { defs: str, record: str, out: str }, ["defs", "record", "out"]);
     const defs = loadDefs(a.defs);
-    for (const file of writeBadges(defs, loadRecord(a.record, defs), a.out)) process.stdout.write(`${file}\n`);
+    for (const file of writeBadges(defs, loadRecord(a.record, defs, "fresh"), a.out)) process.stdout.write(`${file}\n`);
   },
 
   release(argv) {
@@ -427,7 +460,7 @@ const commands = {
     const runId = Number(a["run-id"]);
     if (!/^[1-9][0-9]*$/.test(a["run-id"]) || !Number.isSafeInteger(runId)) fail(`--run-id ${a["run-id"]} is not a positive integer`);
     const recordedAt = a["recorded-at"] ?? new Date().toISOString();
-    const stored = validateRecord({ ...loadRecord(a.record, defs), recorded_at: recordedAt, run_id: runId }, defs, "new record");
+    const stored = validateRecord({ ...loadRecord(a.record, defs, "fresh"), recorded_at: recordedAt, run_id: runId }, defs, "new record", "stored");
 
     mkdirSync(a.dir, { recursive: true });
     const historyFile = join(a.dir, "records.jsonl");
@@ -443,7 +476,7 @@ const commands = {
     const history = readHistory(historyFile);
     const last = history.at(-1);
     const what = `records ${historyFile}:${last.lineNo}`;
-    const latest = validateRecord(parseJson(last.line, what), defs, what);
+    const latest = validateRecord(parseJson(last.line, what), defs, what, "stored");
     writeFileSync(join(a.dir, "latest.json"), `${JSON.stringify(latest, null, 2)}\n`);
     writeBadges(defs, latest, join(a.dir, "badges"));
   },
