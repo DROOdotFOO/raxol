@@ -4,14 +4,14 @@ Techniques for achieving 60fps terminal rendering.
 
 ## Performance targets
 
-| Operation         | Budget  | Typical | Excellent |
-| ----------------- | ------- | ------- | --------- |
-| Buffer create     | < 1ms   | 0.3ms   | 0.1ms     |
-| write_at (single) | < 100us | 50us    | 20us      |
-| draw_box          | < 500us | 240us   | 150us     |
-| render_diff       | < 2ms   | 1.2ms   | 0.5ms     |
-| Full render       | < 16ms  | 8ms     | 4ms       |
-| LiveView update   | < 16ms  | 5ms     | 2ms       |
+| Operation         | Budget  |
+| ----------------- | ------- |
+| Buffer create     | < 1ms   |
+| write_at (single) | < 100us |
+| draw_box          | < 500us |
+| render_diff       | < 2ms   |
+| Full render       | < 16ms  |
+| LiveView update   | < 16ms  |
 
 16ms per frame = 60fps.
 
@@ -35,8 +35,6 @@ defmodule PerformantRenderer do
   end
 end
 ```
-
-Without diffing: ~15ms for 80x24 buffer (clear + full redraw). Diff rendering brings typical updates to ~2ms.
 
 ### Smart diffing
 
@@ -72,8 +70,6 @@ defp message_style(:ok), do: @success_style
 defp message_style(:error), do: @error_style
 defp message_style(_), do: %{}
 ```
-
-10-20% faster by avoiding style allocation.
 
 ### Buffer caching
 
@@ -113,7 +109,7 @@ defmodule ViewportRenderer do
 end
 ```
 
-100x faster for large datasets (render 24 rows instead of 1000+).
+For large datasets this renders 24 rows instead of 1000+.
 
 ### Virtual scrolling
 
@@ -182,8 +178,6 @@ Enum.reduce(lines, buffer, fn line, buf ->
 end)
 ```
 
-30% faster for 100+ writes.
-
 ### Full redraws
 
 ```elixir
@@ -195,8 +189,6 @@ IO.puts(Buffer.to_string(buffer))
 diff = Renderer.render_diff(old_buffer, new_buffer)
 IO.write(Renderer.apply_diff(diff))
 ```
-
-Diff rendering brings typical updates to ~2ms.
 
 ### Blocking in render loop
 
@@ -246,7 +238,7 @@ end
 
 ## Benchmarks
 
-See `docs/bench/README.md` for the full benchmark suite comparing Raxol against Ratatui, Bubble Tea, and Textual.
+See `docs/bench/README.md` for the benchmark suite and the latest measured results.
 
 ## Next steps
 

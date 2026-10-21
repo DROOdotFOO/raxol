@@ -7,7 +7,6 @@ see [docs/bench/README.md](../docs/bench/README.md).
 
 ```bash
 mix run bench/suites/parser/parser_benchmark.exs               # ANSI parser
-mix run bench/suites/terminal/buffer_benchmark.exs             # screen buffer
 mix run bench/suites/rendering/render_performance_simple.exs   # rendering
 mix run bench/suites/core/performance_summary.exs              # system-wide
 mix run bench/suites/comparison/framework_comparison.exs       # the README table
@@ -34,7 +33,7 @@ sensitivity and budget-change rules before changing a number.
 | Directory | Contents |
 | --- | --- |
 | `suites/parser/` | `parser_benchmark.exs`, `ansi_profile.exs`, `parser_chain_profile.exs`, `sgr_comparison.exs` |
-| `suites/terminal/` | `buffer_benchmark.exs`, `cursor_benchmark.exs`, `emulator_profiling.exs`, `lite_emulator_test.exs` |
+| `suites/terminal/` | `emulator_profiling.exs`, `lite_emulator_test.exs` |
 | `suites/rendering/` | `render_performance_simple.exs` |
 | `suites/core/` | `performance_summary.exs` |
 | `suites/comparison/` | `framework_comparison.exs`, the source of the root README's frame-time table |

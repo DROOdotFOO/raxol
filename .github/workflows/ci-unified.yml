@@ -790,10 +790,7 @@ jobs:
             --only input_protocol_canary
 
   # Buffer fill/read/scroll throughput and per-cell memory. This is the only
-  # buffer performance check in the repo that fails a job: the
-  # `memory-regression` matrix in regression-testing.yml has no buffer
-  # scenario and renders its findings as a `[WARN]` PR comment, which is a
-  # report, not a gate.
+  # performance check in the repo that fails a job.
   #
   # `mix run` propagates the script's exit status, and its flushing shutdown
   # uses status 1 for a budget breach and 2 when it could not measure. Either

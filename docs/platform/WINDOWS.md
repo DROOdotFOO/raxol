@@ -5,14 +5,13 @@ Raxol works on Windows through a pure Elixir terminal driver. No native compilat
 **Status**: Supported (v2.0+)
 **Backend**: Pure Elixir (IOTerminal) using OTP 28+ raw mode
 **Requirements**: Windows 10+ with VT100 terminal emulation
-**Performance**: ~500us per frame (plenty for 60fps)
 
 ## How it works
 
 Raxol picks the terminal backend automatically:
 
-- **Unix/macOS**: Native termbox2 NIF (~50us/frame)
-- **Windows**: Pure Elixir IOTerminal (~500us/frame)
+- **Unix/macOS**: Native termbox2 NIF
+- **Windows**: Pure Elixir IOTerminal
 
 No configuration needed. It just works.
 
@@ -68,17 +67,6 @@ Everything works the same on Windows:
 - Raw keyboard input (OTP 28+ raw mode), mouse events, special keys
 - Multi-framework UI (React, LiveView, HEEx, Raw)
 - Component library, theme system, event handling, state management
-
-## Performance
-
-| Operation    | Windows (IOTerminal) | Unix (termbox2 NIF) |
-| ------------ | -------------------- | ------------------- |
-| Frame render | ~500us               | ~50us               |
-| Screen clear | <100us               | <10us               |
-| Set cursor   | <50us                | <5us                |
-| Set cell     | <100us               | <10us               |
-
-This is more than enough for 60fps terminal UIs (16ms frame budget), interactive apps, text editors, and dashboards.
 
 ## Terminal emulators
 
@@ -210,7 +198,6 @@ The Driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex`) handles this
 | Backend     | Pure Elixir          | Native C NIF        |
 | OTP Version | 28+ required         | 26+ supported       |
 | Compilation | No C compiler needed | Requires C compiler |
-| Performance | Good (~500us)        | Excellent (~50us)   |
 | Unicode     | Full support         | Full support        |
 | Colors      | 256 colors           | 256 colors          |
 | Mouse       | Supported            | Supported           |
@@ -220,7 +207,7 @@ The Driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex`) handles this
 
 Potential optimizations, none currently needed:
 
-- **Native Windows Console API NIF**: would match Unix performance (~50us) but requires C compilation on Windows.
+- **Native Windows Console API NIF**: would match Unix performance but requires C compilation on Windows.
 - **DirectWrite integration**: GPU-accelerated text rendering with better font support.
 - **ConPTY support**: modern Windows pseudo-console, available in Windows 10 1809+.
 

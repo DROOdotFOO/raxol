@@ -40,7 +40,6 @@ subdirectories hold narrower tooling.
 | `run_live_gates.sh` | The stablecoin cross-chain go-live matrix |
 | `smoke-test.sh` | Post-deploy smoke test |
 | `acp_probe.py` | Drives an ACP agent over stdio and records the wire |
-| `analyze_performance_regression.exs`, `analyze_memory_regression.exs` | Regression analysis over benchmark output |
 | `find_missing_moduledocs.exs` | Lists modules without a `@moduledoc` |
 | `gen_landing_frames.exs`, `social_preview.exs` | Web asset generation |
 | `deploy-raxol-solver.sh` | Solver deployment |

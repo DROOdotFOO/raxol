@@ -1,5 +1,3 @@
-Mix.install([{:jason, "~> 1.4"}])
-
 defmodule ParserBenchmark do
   @moduledoc "ANSI parser performance benchmarks."
 
@@ -46,9 +44,7 @@ defmodule ParserBenchmark do
       formatters: [
         Benchee.Formatters.Console,
         {Benchee.Formatters.HTML,
-         file: "bench/output/parser_benchmark.html", auto_open: false},
-        {Benchee.Formatters.JSON,
-         file: "regression/performance/current/parser.json"}
+         file: "bench/output/parser_benchmark.html", auto_open: false}
       ]
     )
 
@@ -118,24 +114,4 @@ defmodule ParserBenchmark do
   end
 end
 
-# Handle command line arguments
-if System.argv() |> Enum.any?(&(&1 == "--json")) do
-  # JSON output for CI
-  results = %{
-    timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
-    module: "parser",
-    statistics: %{
-      # Mock: 1.25μs average parse time
-      average: 1.25,
-      # Mock: 800K operations/second
-      throughput: 800_000,
-      # Mock: 512KB memory usage
-      memory: 512
-    }
-  }
-
-  IO.puts(Jason.encode!(results))
-else
-  # Human readable output
-  ParserBenchmark.run()
-end
+ParserBenchmark.run()
