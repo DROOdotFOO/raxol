@@ -196,7 +196,7 @@ jobs:
           if-no-files-found: warn
 
   extended-scenarios:
-    name: Extended Test Scenarios
+    name: Property Tests (extended)
     if: github.event.inputs.extended_tests != 'false'
     runs-on: ubuntu-latest
 
@@ -225,14 +225,6 @@ jobs:
           mix deps.get
           mix deps.compile
 
-      - name: Run stress tests
-        run: |
-          mix test --only stress || true
-
-      - name: Run edge case tests
-        run: |
-          mix test --only edge_cases || true
-
       - name: Run property-based tests (extended)
         run: |
           # No `|| true`: this isolated 300s run is the nightly's property
@@ -247,74 +239,22 @@ jobs:
           # and flaked; exclude them like every other CI lane does.
           mix test --only property --exclude skip_on_ci --timeout 300000
 
-      - name: Generate extended test report
-        run: |
-          echo "## Extended Test Scenarios Report" > extended-report.md
-          echo "" >> extended-report.md
-          echo "Date: $(date)" >> extended-report.md
-          echo "" >> extended-report.md
-          echo "Extended test scenarios completed." >> extended-report.md
-
-          cat extended-report.md >> $GITHUB_STEP_SUMMARY
-
       - name: Upload extended test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: extended-test-results-$(date +%Y%m%d)
-          path: |
-            _build/test/lib/*/test-junit-report.xml
-            extended-report.md
+          name: extended-test-results
+          path: _build/test/lib/*/test-junit-report.xml
           retention-days: 90
           if-no-files-found: warn
 
-  # Populates the Dialyzer PLT once, on a schedule, and publishes it under a
-  # key both the enforcing nightly ratchet and the per-PR advisory job restore.
-  #
-  # Both jobs use mise.toml, the repository's reference toolchain. The old
-  # 1.19/OTP 27 literals made nightly report 111 findings while PR CI and a
-  # clean local run on the reference 1.20/OTP 29 toolchain reported 118. One
-  # baseline cannot ratchet measurements from different analyzers.
-  #
-  # The prebuilt key deliberately omits packages/ sources and keys only on the
-  # resolved toolchain and mix.lock, so it is stable across PRs. Staleness with
-  # respect to packages/ is not this key's job: check-quality-ratchet.sh
-  # detects it by content hash and discards the deps PLT when necessary.
-  #
-  # The PLT is populated by a real analysis run, never `mix dialyzer --plt`;
-  # see the prohibition in priv/quality_baseline.json. `|| true` is correct
-  # here: findings are expected and this job only publishes the populated PLT.
-  plt-prebuild:
-    name: Prebuild Dialyzer PLT
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Elixir
-        id: beam
-        uses: erlef/setup-beam@v1
-        with:
-          version-file: mise.toml
-          version-type: strict
-
-      - name: Cache dependencies and PLTs
-        uses: actions/cache@v6
-        with:
-          path: |
-            deps
-            _build
-            priv/plts
-          key: plt-prebuilt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
-
-      - name: Install dependencies
-        run: |
-          mix deps.get
-          mix deps.compile
-
-      - name: Populate the PLT via a full analysis run
-        run: mix dialyzer --format short || true
-        timeout-minutes: 90
+  # Windows root suite and the raxol_agent Windows package suite. The matrix
+  # above already covers macOS, so that leg is off here.
+  platform:
+    name: Platform
+    uses: ./.github/workflows/platform-tests.yml
+    with:
+      macos: false
 
   dialyzer-full:
     name: Full Dialyzer Check
@@ -330,8 +270,6 @@ jobs:
           version-file: mise.toml
           version-type: strict
 
-      # Keyed the same way `plt-prebuild` saves, so the enforcing run analyses
-      # against the PLT that job populated rather than building its own.
       - name: Cache dependencies and PLTs
         uses: actions/cache@v6
         with:
@@ -341,7 +279,6 @@ jobs:
             priv/plts
           key: plt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            plt-prebuilt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
             plt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
 
       - name: Install dependencies
@@ -350,8 +287,8 @@ jobs:
           mix deps.get
           mix deps.compile
 
-      # No `mix dialyzer --plt` step. priv/quality_baseline.json and
-      # ci-unified's dialyzer job both prohibit that call, and this job was
+      # No `mix dialyzer --plt` step. priv/quality_baseline.json prohibits
+      # that call, and this job was
       # the last place still making it: it produces a deps PLT the size of
       # core.plt with none of the dependency apps in it, after which dialyxir
       # reports "PLT is up to date!" permanently because freshness comes from
@@ -364,59 +301,11 @@ jobs:
       # refuses to report a count when unknown_function dominates.
       #
       # Enforced against priv/quality_baseline.json. Counts may only go down.
+      # This is the only place the dialyzer ratchet runs; pull requests do
+      # not run it.
       - name: Dialyzer ratchet
         run: ./scripts/check-quality-ratchet.sh --gate dialyzer
         timeout-minutes: 90
-
-  # Credo is enforced here rather than in ci-unified because the scan cannot
-  # be sharded: `mix credo <path>` analyzes nothing against the root
-  # .credo.exs (verified), so it must run as one repo-wide pass. ci-unified
-  # runs it advisory-only for fast feedback; this job is what actually fails.
-  credo-ratchet:
-    name: Credo Ratchet
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Elixir
-        id: beam
-        uses: erlef/setup-beam@v1
-        with:
-          version-file: mise.toml
-          version-type: strict
-
-      # Dependency sources may fall back across lockfile changes. Compiled
-      # path dependencies may not: mix.lock does not record their versions.
-      - name: Cache dependency sources
-        uses: actions/cache@v6
-        with:
-          path: deps
-          key: credo-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            credo-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
-
-      # Reuse compiled output only for the same source snapshot and toolchain.
-      # No fallback: stale .app metadata can fail dependency validation before
-      # Mix gets a chance to recompile a package after its version changes.
-      - name: Cache compiled output
-        uses: actions/cache@v6
-        with:
-          path: _build
-          key: credo-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ env.MIX_ENV }}-${{ github.sha }}
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      # Compile explicitly so a compile failure is reported as a compile
-      # failure, not as an unparseable credo document 10 minutes later.
-      - name: Compile
-        run: mix compile
-        timeout-minutes: 30
-
-      - name: Credo ratchet
-        run: ./scripts/check-quality-ratchet.sh --gate credo
 
   integration-tests:
     name: Extended Integration Tests
@@ -474,7 +363,7 @@ jobs:
 
       - name: Run integration tests
         run: |
-          mix test --only integration --only slow || echo "No integration/slow tests found or tests failed"
+          mix test --only integration --only slow
         env:
           POSTGRES_HOST: localhost
           POSTGRES_USER: postgres
@@ -489,8 +378,8 @@ jobs:
       [
         test-matrix,
         extended-scenarios,
+        platform,
         dialyzer-full,
-        credo-ratchet,
         integration-tests
       ]
     runs-on: ubuntu-latest
@@ -509,21 +398,48 @@ jobs:
           echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Test Matrix | ${{ needs.test-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Extended Scenarios | ${{ needs.extended-scenarios.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Property Tests (extended) | ${{ needs.extended-scenarios.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform (Windows) | ${{ needs.platform.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Dialyzer | ${{ needs.dialyzer-full.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Credo Ratchet | ${{ needs.credo-ratchet.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-      
-      - name: Create issue on failure
-        if: contains(needs.*.result, 'failure')
+
+      # One open `nightly-build` issue at a time: a red night comments on it
+      # (or opens it), a green night closes it. A new issue per failing night
+      # buried the signal under duplicates nobody triaged.
+      - name: Report to the nightly issue
         uses: actions/github-script@v9
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         with:
           script: |
+            const { owner, repo } = context.repo;
+            const needs = JSON.parse(process.env.NEEDS);
+            const bad = Object.entries(needs)
+              .filter(([, v]) => v.result === 'failure')
+              .map(([job, v]) => `- \`${job}\`: ${v.result}`);
             const date = new Date().toISOString().split('T')[0];
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `🌙 Nightly build failure - ${date}`,
-              body: `The nightly build failed. Please check the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.`,
-              labels: ['bug', 'nightly-build']
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner, repo, labels: 'nightly-build', state: 'open',
+              sort: 'created', direction: 'desc', per_page: 1,
             });
+            const issue = open[0];
+
+            if (bad.length > 0) {
+              const body = `Nightly ${date} failed ([run](${runUrl})):\n\n${bad.join('\n')}`;
+              if (issue) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body });
+              } else {
+                await github.rest.issues.create({
+                  owner, repo, title: 'Nightly build failing', body,
+                  labels: ['bug', 'nightly-build'],
+                });
+              }
+            } else if (issue) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: `Nightly ${date} passed ([run](${runUrl})). Closing.`,
+              });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }

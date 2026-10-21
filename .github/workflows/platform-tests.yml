@@ -1,0 +1,160 @@
+name: Platform Tests
+
+# The macOS and Windows legs. They no longer run on every pull request:
+# ci-unified.yml calls this workflow when a change touches platform-sensitive
+# code (see the `platform` output of its `changes` job) and gates on the
+# result, and nightly.yml calls it every night with `macos: false`, because
+# its own Elixir/OTP matrix already runs the suite on macOS.
+on:
+  workflow_call:
+    inputs:
+      macos:
+        description: 'Include the macOS root-suite leg'
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: 'Include the macOS root-suite leg'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  SKIP_TERMBOX2_TESTS: "true"
+
+jobs:
+  root:
+    name: Test ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.macos && '["macos-latest", "windows-2022"]' || '["windows-2022"]') }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set TMPDIR (Unix)
+        if: runner.os != 'Windows'
+        run: echo "TMPDIR=/tmp" >> "$GITHUB_ENV"
+
+      - name: Set TMPDIR (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "TMPDIR=$env:TEMP" >> $env:GITHUB_ENV
+
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      - name: Cache dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
+
+      - name: Install dependencies
+        # Force bash (git-bash on Windows). The default Windows shell is pwsh,
+        # where `mix deps.get --check-locked || mix deps.get` does not reliably
+        # run the fallback for mix.bat, so upstream lock drift is never resolved
+        # and `mix test` then fails with a stale-dep "lock mismatch". bash runs
+        # the fallback identically on every OS.
+        shell: bash
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.clean --unused
+          # Prefer the committed lock (fast-fails if mix.exs was edited without
+          # a committed mix.lock). Fall back to a plain resolve so pure upstream
+          # drift -- a transitive dep publishing a newer patch after the lock was
+          # committed -- does not red the whole pipeline. ci-unified's `setup`
+          # job enforces the committed lock with `--check-locked` and no fallback.
+          mix deps.get --check-locked || mix deps.get
+          mix deps.compile
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        run: mix test --exclude slow --exclude docker --exclude integration --exclude skip_on_ci
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        # --timeout 180000: the Windows runner is CPU-starved enough that
+        # emulator-replay-heavy property tests (substrate keystones, SSH
+        # rendering round-trips) blow the 60s default as a runner-speed
+        # artifact — a different one each run. Raising the job-wide ceiling
+        # keeps full coverage; genuine hangs still fail at the raised bound.
+        run: mix test --timeout 180000 --exclude slow --exclude docker --exclude integration --exclude skip_on_ci --exclude skip_on_windows
+
+  # raxol_agent spawns OS processes through `Raxol.Agent.SpawnedPort`, whose
+  # Windows clause (a direct spawn whose stdin erts opens on NUL) has no
+  # wrapper shell to fall back on, and ci-unified's package matrix runs only on
+  # Linux. Its `:windows_only` tests (Credentials.run_executable/3 against
+  # native binaries) can run nowhere else. The package test_helper drops
+  # `:unix_only` / `:skip_on_windows` on Windows, as the root suite does.
+  # `--timeout`: same runner-speed reasoning as the root Windows leg above.
+  raxol-agent-windows:
+    name: Package Tests (raxol_agent, Windows)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/raxol_agent
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The runner's %TEMP% is spelled with an 8.3 short name
+      # (C:\Users\RUNNER~1\...), but a symlink's target reads back with the
+      # long one (runneradmin), so a link inside a temp-dir sandbox would look
+      # like it leaves it. RUNNER_TEMP (D:\a\_temp) has no short components.
+      - name: Use a long-path temp dir
+        working-directory: .
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      # Same key shape as ci-unified's Linux package matrix; runner.os keeps
+      # the caches apart.
+      - name: Cache package dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            packages/raxol_agent/deps
+            packages/raxol_agent/_build
+          key: pkg-raxol_agent-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('packages/raxol_agent/mix.lock') }}-${{ hashFiles('mix.exs', 'packages/*/mix.exs') }}
+
+      - name: Compile package
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --check-locked
+          mix compile --warnings-as-errors
+
+      # :skip_on_ci for the same reason as the Linux cell; no live_* tag in
+      # this package is outside its test_helper's own exclusions.
+      - name: Run package tests
+        run: mix test --timeout 180000 --exclude skip_on_ci
+
+      # The run above prints dots. Re-run the `:windows_only` tests by name so
+      # the log shows each one ran here; they are the only coverage of the
+      # direct-spawn clause.
+      - name: List Windows-only tests
+        run: mix test test/raxol/agent/backend/credentials_test.exs --only windows_only --trace

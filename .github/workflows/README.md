@@ -6,8 +6,9 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 
 ### Core Workflows
 - **`ci-unified.yml`**: Main CI pipeline; `CI Status` aggregates the blocking jobs and is the required check
+- **`platform-tests.yml`**: macOS and Windows suites, reusable; called by `ci-unified.yml` on platform-sensitive changes and by `nightly.yml`
 - **`security.yml`**: Dependency audit, Hex advisories, Sobelow, Semgrep, secret detection
-- **`nightly.yml`**: Full Elixir/OTP × OS test matrix, extended scenarios, enforcing Dialyzer and Credo ratchets
+- **`nightly.yml`**: Elixir/OTP × OS test matrix, Windows, extended property run, Dialyzer ratchet; keeps one `nightly-build` issue open while red
 - **`lockstep-deps.yml`**: Cross-package dependency constraint and prose/link checks
 - **`web-deploy-check.yml`**: Web tests and release boot, on `web/**` and playground changes
 - **`nix.yml`**: Flake build on Linux and macOS
@@ -26,6 +27,21 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 The only performance check that fails CI is the `buffer-gate` job in
 `ci-unified.yml` (`bench/core/buffer_gate.exs`).
 
+## What runs when
+
+| Trigger | Runs | Gates |
+| --- | --- | --- |
+| Pull request | `ci-unified.yml`: format, compile, unit, property and package tests, input canary, buffer gate, credo ratchet, security; integration tests when `mix.exs`, `mix.lock` or `lib/` change; macOS and Windows when the diff is platform-sensitive | `CI Status` (required) |
+| Push to master | `ci-unified.yml` without macOS/Windows | `CI Status` |
+| 02:00 UTC daily | `nightly.yml`: test matrix, Windows, extended properties, Dialyzer ratchet, integration and slow tests | One `nightly-build` issue: commented while red, closed when green |
+
+"Platform-sensitive" is decided by content in the `changes` job of
+`ci-unified.yml`: a changed Elixir file that branches on the OS or carries an
+OS-scoped test tag, `mise.toml`, the termbox2 NIF, or `platform-tests.yml`.
+
+Credo runs only per PR and Dialyzer only nightly; both compare against
+`priv/quality_baseline.json` through `scripts/check-quality-ratchet.sh`.
+
 ## Local Testing with `act`
 
 Use [act](https://github.com/nektos/act) to run workflows locally for debugging.
@@ -41,51 +57,15 @@ Use [act](https://github.com/nektos/act) to run workflows locally for debugging.
 Use the helper script `./scripts/dev/run-local-actions.sh`:
 
 ```bash
-# Run the default CI workflow (ci.yml)
-./scripts/dev/run-local-actions.sh
-
 # Run a specific workflow (-w) and job (-j)
-./scripts/dev/run-local-actions.sh -w cross_platform_tests.yml -j test_linux
+./scripts/dev/run-local-actions.sh -w ci-unified.yml -j format
 
 # Enable verbose debugging (-d)
 ./scripts/dev/run-local-actions.sh -d
 
 # List available workflows and options (-h)
 ./scripts/dev/run-local-actions.sh -h
-
-# Run the dummy test to quickly verify setup
-./scripts/dev/run-local-actions.sh -w dummy-test.yml
 ```
-
-The `dummy-test.yml` workflow uses mock setups for quick verification without running the full suite. It's useful for:
-
-- Troubleshooting `act` or workflow configuration.
-- Verifying local setup.
-- Testing new workflow steps quickly.
-
-## Reusable actions
-
-The `.github/actions/` directory contains reusable composite actions:
-
-- **`setup-elixir`**: Sets up Elixir/OTP with caching
-- **`run-tests`**: Runs tests with coverage and artifact upload
-
-## CI/CD architecture
-
-### Main CI Pipeline (`ci-unified.yml`)
-- **Parallel test execution**: Tests split into unit, integration, and property tests
-- **Smart caching**: Cache strategy with dependency detection
-- **Conditional execution**: Heavy checks only run when needed
-- **Fast feedback**: Format and compile checks run first
-
-### Security Scanning (`security.yml`)
-- **No Docker dependencies**: Uses CLI tools directly
-- **Multiple scanners**: Semgrep, Sobelow, TruffleHog, Gitleaks
-- **Automated reporting**: Creates issues for critical findings
-
-### Nightly Builds (`nightly.yml`)
-- **Full test matrix**: Multiple Elixir/OTP versions
-- **Extended integration tests**: Include slow/heavy tests
 
 ### Tips for macOS ARM (M1/M2/M3)
 

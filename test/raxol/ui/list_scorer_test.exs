@@ -184,127 +184,28 @@ defmodule Raxol.UI.ListScorerTest do
     end
   end
 
-  describe "performance" do
-    # Realistic-shaped labels (branch-name-like: `word-word-word-hex`,
-    # drawn from a 23-word vocabulary so a query narrows the match set
-    # instead of matching everything) rather than a synthetic corpus
-    # where every item literally contains the query -- see the module
-    # note below for why that distinction is the whole ballgame here.
-    defp realistic_items(vocab, count) do
-      for i <- 1..count do
-        words = for _ <- 1..3, do: Enum.random(vocab)
-        Enum.join(words, "-") <> "-" <> Integer.to_string(:erlang.phash2(i), 16)
-      end
-    end
-
-    @vocab ~w(harness agent payments gateway terminal render picker session
-              swarm acp symphony core plugin liveview speech watch telegram
-              fix feat chore test docs refactor)
-
-    @tag :bench
-    @tag :slow
-    test "ranks 10k items well under 16ms/keystroke for a narrowing query" do
-      items = realistic_items(@vocab, 10_000)
-      # A 3+ character fragment -- what a picker sees after a couple of
-      # keystrokes -- narrows the match set the way real typing does.
-      query = "harn"
-
-      # Warm the code path once before timing (BEAM JIT/first-call cost
-      # would otherwise pollute a single-shot measurement).
-      ListScorer.rank(items, query, &key_fn/1)
-
-      {micros, results} =
-        :timer.tc(fn -> ListScorer.rank(items, query, &key_fn/1) end)
-
-      millis = micros / 1000
-
-      IO.puts(
-        "[bench] ListScorer.rank/4, 10,000 realistic items, query #{inspect(query)}: " <>
-          "#{Float.round(millis, 3)}ms (#{length(results)}/10000 matched)"
-      )
-
-      assert millis < 16.0,
-             "expected 10k-item filter under 16ms/keystroke, took #{millis}ms"
-    end
-
-    @tag :bench
-    @tag :slow
-    test "characterizes the pathological worst case: every item matches" do
-      # Honesty check on the target, not a claim it's met here: if every
-      # single item in a 10k-item list shares the literal query as a
-      # substring (a degenerate corpus no real picker would show -- fuzzy
-      # filtering exists precisely because most items DON'T match), the
-      # full Smith-Waterman-lite DP + backtrack runs for all 10,000 of
-      # them. That's a materially different cost profile from the
-      # narrowing case above (which rejects most items in the O(query +
-      # key) two-pointer subsequence check before ever reaching the DP).
-      # This test measures and reports that ceiling; it intentionally
-      # does not assert 16ms against it -- see the commit body for the
-      # measured number and the honest read on what it means.
-      items =
-        for i <- 1..10_000 do
-          "session-#{Integer.to_string(i, 16)}-#{:erlang.phash2(i)}-item"
-        end
-
-      query = "session"
-
-      ListScorer.rank(items, query, &key_fn/1)
-
-      {micros, results} =
-        :timer.tc(fn -> ListScorer.rank(items, query, &key_fn/1) end)
-
-      millis = micros / 1000
-
-      IO.puts(
-        "[bench] ListScorer.rank/4, 10,000/10,000-match pathological case: " <>
-          "#{Float.round(millis, 3)}ms (#{length(results)} matches)"
-      )
-
-      # Regression guard only (order-of-magnitude), not the 16ms target.
-      assert millis < 200.0,
-             "pathological all-match case regressed badly: #{millis}ms"
-    end
-
+  describe "long keys" do
     test "a ~1,000,000-grapheme adversarial label still matches and keeps its full key" do
       # Nothing else in this suite exercises a long K: the realistic corpus
-      # above caps out around ~20 chars/label. The `@max_score_graphemes` clamp
+      # caps out around ~20 chars/label. The `@max_score_graphemes` clamp
       # in `ListScorer` bounds the O(query length * key length) DP (and its
       # two-pointer subsequence pre-check) so an unbounded paste, or a log line
       # used as a list key, can't make a single keystroke's filter pass
       # arbitrarily slow. The clamp only bounds the internal scoring lists;
       # `key:` itself is never truncated, so callers (Picker's `render_row`)
       # keep highlighting the real label, not a truncated stand-in. This is the
-      # deterministic half; the wall-clock guard lives in the :slow test below.
+      # deterministic half; the timing lives in
+      # bench/features/list_scorer_benchmark.exs.
       long_label = "prefix-match-" <> String.duplicate("x", 1_000_000)
       items = ["short-one", long_label, "short-two"]
       query = "prefix-match"
 
-      assert [%{item: matched, key: key}] = ListScorer.rank(items, query, &key_fn/1)
+      assert [%{item: matched, key: key}] =
+               ListScorer.rank(items, query, &key_fn/1)
+
       assert matched == long_label
       assert key == long_label
       assert String.length(key) == String.length(long_label)
-    end
-
-    @tag :bench
-    @tag :slow
-    test "a single ~1,000,000-grapheme adversarial label stays bounded" do
-      # Perf regression guard for the clamp: without `@max_score_graphemes`, the
-      # O(query * key) DP over a 1M-grapheme label costs seconds. This is a
-      # wall-clock assertion on a shared runner, so it carries :slow/:bench
-      # (excluded from PR CI) like the sibling benchmarks above -- a 200ms target
-      # still flaked on loaded macOS CI at ~25ms with the clamp working. Runs
-      # locally and on the nightly slow suite.
-      long_label = "prefix-match-" <> String.duplicate("x", 1_000_000)
-      items = ["short-one", long_label, "short-two"]
-      query = "prefix-match"
-
-      {micros, _results} =
-        :timer.tc(fn -> ListScorer.rank(items, query, &key_fn/1) end)
-
-      millis = micros / 1000
-
-      assert millis < 200.0,
-             "expected the 1M-grapheme adversarial label to stay bounded, took #{millis}ms"
     end
   end
 end

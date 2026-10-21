@@ -48,7 +48,6 @@ subdirectories hold narrower tooling.
 
 | Directory | Contents |
 | --- | --- |
-| `ci/` | Build/test automation, structure validation |
 | `dev/` | Release management, native-terminal runner, Nix verification |
 | `testing/` | Test runner, coverage, platform tests, terminal verification |
 | `quality/` | Style, docs, type-safety, accessibility, and performance checks |

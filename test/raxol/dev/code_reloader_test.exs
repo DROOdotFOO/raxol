@@ -23,6 +23,7 @@ defmodule Raxol.Dev.CodeReloaderTest do
   end
 
   describe "debouncing" do
+    @tag timeout: 120_000
     test "multiple rapid file events produce one recompile" do
       {:ok, pid} = CodeReloader.start_link(self())
 
@@ -31,10 +32,11 @@ defmodule Raxol.Dev.CodeReloaderTest do
       send(pid, {:file_event, self(), {"lib/test2.ex", [:modified]}})
       send(pid, {:file_event, self(), {"lib/test3.ex", [:modified]}})
 
-      # Wait for debounce (500ms) + recompile time with generous margin.
-      # recompile() may return :ok (sends :render_needed) or :noop (no changes).
-      # Use assert_receive with timeout to handle variable recompile duration.
-      assert_receive :render_needed, 3000
+      # After the debounce, `IEx.Helpers.recompile/0` runs a real Mix compile
+      # of this project and only then sends :render_needed. On nightly's macOS
+      # runner that outlasted the former 3s bound (2026-10-20, "Recompiling..."
+      # logged, no message). The bound is a hang detector, not a speed check.
+      assert_receive :render_needed, 60_000
 
       GenServer.stop(pid)
     end
