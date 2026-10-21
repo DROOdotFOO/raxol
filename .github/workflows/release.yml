@@ -41,9 +41,69 @@ jobs:
     needs: publish-hex
     runs-on: ubuntu-latest
     steps:
+      - name: Check out tag with history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Compares the master scoreboard records nearest to the previous v* tag
+      # and to this one (see .github/workflows/scoreboard.yml). Best effort:
+      # anything missing or broken leaves the release notes without the
+      # section instead of failing the release.
+      - name: Build scoreboard notes
+        id: scoreboard
+        continue-on-error: true
+        env:
+          DEFS: priv/scoreboard/metrics.json
+          SCOREBOARD: .github/scripts/scoreboard.mjs
+        run: |
+          if [ ! -f "$SCOREBOARD" ] || [ ! -f "$DEFS" ]; then
+            echo "::notice::No scoreboard tooling at $GITHUB_REF_NAME; skipping"
+            exit 0
+          fi
+          if ! git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages; then
+            echo "::notice::No gh-pages branch; skipping scoreboard notes"
+            exit 0
+          fi
+          records="$RUNNER_TEMP/records.jsonl"
+          if ! git show origin/gh-pages:scoreboard/records.jsonl > "$records"; then
+            echo "::notice::gh-pages has no scoreboard records; skipping"
+            exit 0
+          fi
+          if ! previous=$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^"); then
+            echo "::notice::No v* tag before $GITHUB_REF_NAME; skipping scoreboard notes"
+            exit 0
+          fi
+          node "$SCOREBOARD" commits --defs "$DEFS" --records "$records" > "$RUNNER_TEMP/recorded.txt"
+
+          # Nearest first-parent ancestor of $1 (inclusive) that has a record;
+          # prints nothing when there is none (grep's exit 1 is that case).
+          nearest() {
+            git rev-list --first-parent --max-count=200 "$1^{commit}" > "$RUNNER_TEMP/walk.txt"
+            grep -Fx -m1 -f "$RUNNER_TEMP/recorded.txt" "$RUNNER_TEMP/walk.txt" || true
+          }
+          from=$(nearest "$previous")
+          to=$(nearest "$GITHUB_REF_NAME")
+          if [ -z "$from" ] || [ -z "$to" ]; then
+            echo "::notice::No scoreboard record within 200 commits of $previous or $GITHUB_REF_NAME; skipping"
+            exit 0
+          fi
+          if [ "$from" = "$to" ]; then
+            echo "::notice::$previous and $GITHUB_REF_NAME share their nearest record; skipping"
+            exit 0
+          fi
+          notes="$RUNNER_TEMP/scoreboard.md"
+          node "$SCOREBOARD" release --defs "$DEFS" --records "$records" \
+            --from "$from" --to "$to" --from-label "$previous" --to-label "$GITHUB_REF_NAME" > "$notes"
+          if [ -s "$notes" ]; then
+            echo "body_path=$notes" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: ${{ steps.scoreboard.outputs.body_path }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

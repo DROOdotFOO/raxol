@@ -24,9 +24,31 @@ MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs
 fill/read/scroll throughput and per-cell memory against the budgets and
 ubuntu-latest provenance declared at the top of the file. It stops with
 status 1 on a breach and status 2 on an invalid measurement. The
-`buffer-gate` job in `.github/workflows/ci-unified.yml` runs it and the
+`scoreboard` job in `.github/workflows/ci-unified.yml` runs it and the
 `ci-status` aggregate job fails when that job fails. Read the gate's
 sensitivity and budget-change rules before changing a number.
+
+## Scoreboard
+
+```bash
+MIX_ENV=test mix raxol.scoreboard
+MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs --json buffer.json
+MIX_ENV=test mix raxol.scoreboard --include buffer.json --output scoreboard.json
+```
+
+`mix raxol.scoreboard` counts deterministic work, not time: the bytes a
+terminal receives and the BEAM reductions spent per frame of the playground
+table and flex-layout demos, driven in-process through the same pipeline the
+rendering engine runs. Repeated runs agree to within a few hundredths of a
+percent, so a pull request's numbers can be compared with master's on a
+shared CI runner. `--include` merges the buffer gate's memory rows. Metric ids,
+labels and which direction is better are in `priv/scoreboard/metrics.json`;
+add a metric there before emitting it.
+
+CI uploads each run's record as the `scoreboard` artifact.
+`.github/workflows/scoreboard.yml` comments a pull request's record against
+master's and appends master's records to `scoreboard/records.jsonl` on the
+`gh-pages` branch; releases list the change since the previous tag.
 
 ## Suites
 

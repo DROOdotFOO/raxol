@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "metrics": [
+    {
+      "id": "table.keystroke.bytes",
+      "label": "Bytes sent per keystroke (table demo, 120x40)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0,
+      "headline": true
+    },
+    {
+      "id": "table.keystroke.reductions",
+      "label": "Work per keystroke (table demo, BEAM reductions)",
+      "unit": "reductions",
+      "better": "lower",
+      "tolerance": 0.001,
+      "headline": true
+    },
+    {
+      "id": "table.keyframe.bytes",
+      "label": "Bytes to draw the first frame (table demo, 120x40)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "table.keyframe.reductions",
+      "label": "Work to draw the first frame (table demo, BEAM reductions)",
+      "unit": "reductions",
+      "better": "lower",
+      "tolerance": 0.001
+    },
+    {
+      "id": "flex.keyframe.bytes",
+      "label": "Bytes to draw the first frame (flex layout demo, 120x40)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "flex.keyframe.reductions",
+      "label": "Work to draw the first frame (flex layout demo, BEAM reductions)",
+      "unit": "reductions",
+      "better": "lower",
+      "tolerance": 0.001
+    },
+    {
+      "id": "buffer.80x24.heap_bytes_per_cell",
+      "label": "Memory per screen cell, 80x24 buffer (shared heap)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "buffer.80x24.flat_bytes_per_cell",
+      "label": "Memory per screen cell, 80x24 buffer (flat copy)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "buffer.200x100.heap_bytes_per_cell",
+      "label": "Memory per screen cell, 200x100 buffer (shared heap)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "buffer.200x100.flat_bytes_per_cell",
+      "label": "Memory per screen cell, 200x100 buffer (flat copy)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "buffer.500x500.flat_bytes_per_cell",
+      "label": "Memory per screen cell, 500x500 buffer (flat copy)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    }
+  ]
+}
