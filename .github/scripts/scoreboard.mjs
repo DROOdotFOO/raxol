@@ -272,7 +272,10 @@ function joinClauses(parts) {
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
 
-const escapeCell = (s) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+// Backslashes first: escaping only `|` would turn an input `\|` into `\\|`,
+// an escaped backslash followed by a live pipe that splits the table cell.
+const escapeCell = (s) =>
+  s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 const short = (sha) => sha.slice(0, 7);
 const toolchainText = (t) => `Elixir ${t.elixir}, OTP ${t.otp}, ${t.system_arch}`;
 const sameToolchain = (a, b) => TOOLCHAIN_KEYS.every((k) => a[k] === b[k]);
