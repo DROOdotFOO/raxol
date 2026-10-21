@@ -6,8 +6,9 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 
 ### Core Workflows
 - **`ci-unified.yml`**: Main CI pipeline; `CI Status` aggregates the blocking jobs and is the required check
+- **`platform-tests.yml`**: macOS and Windows suites, reusable; called by `ci-unified.yml` on platform-sensitive changes and by `nightly.yml`
 - **`security.yml`**: Dependency audit, Hex advisories, Sobelow, Semgrep, secret detection
-- **`nightly.yml`**: Full Elixir/OTP × OS test matrix, extended scenarios, enforcing Dialyzer and Credo ratchets
+- **`nightly.yml`**: Elixir/OTP × OS test matrix, Windows, extended property run, Dialyzer ratchet; keeps one `nightly-build` issue open while red
 - **`lockstep-deps.yml`**: Cross-package dependency constraint and prose/link checks
 - **`web-deploy-check.yml`**: Web tests and release boot, on `web/**` and playground changes
 - **`nix.yml`**: Flake build on Linux and macOS
@@ -26,6 +27,30 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 The only performance check that fails CI is the `buffer-gate` job in
 `ci-unified.yml` (`bench/core/buffer_gate.exs`).
 
+## What runs when
+
+`CI Status` (from `ci-unified.yml`) is the only required check; every other
+workflow reports alongside it.
+
+| Trigger | Runs | Reports to |
+| --- | --- | --- |
+| Pull request (any base) | `ci-unified.yml`: format, compile, unit, property and package tests, input canary, buffer gate, credo ratchet, security scan; integration tests when `mix.exs`, `mix.lock` or `lib/` change; macOS and Windows when the change is platform-sensitive. A docs-only change (`web/`, `docs/`, `assets/`, Markdown, `.github/` outside `workflows/`) skips all of it and `CI Status` passes | `CI Status` |
+| Push to `master`, `main` or `develop` | `ci-unified.yml`, same jobs; macOS and Windows when the pushed range is platform-sensitive. Docs-only pushes do not start it | `CI Status` |
+| Pull request or push to `master`/`main` | `security.yml` (not on docs-only changes); also daily at 03:00 UTC | Its own checks |
+| Path-filtered | `lockstep-deps.yml` (`mix.exs`, `mix.lock`, Markdown, `docs/`), `web-deploy-check.yml` (`web/`, playground, root `mix.*`), `nix.yml` (`flake.*`) | Their own checks |
+| 02:00 UTC daily | `nightly.yml`: test matrix, Windows, extended properties, Dialyzer ratchet, integration and slow tests | One `nightly-build` issue: commented while red, closed after a fully green night (scheduled runs only) |
+
+"Platform-sensitive" is decided in the `changes` job of `ci-unified.yml`:
+the change touches `mise.toml`, any `mix.exs` or `mix.lock`, the termbox2
+NIF or `platform-tests.yml`, or changes an Elixir file whose content before
+or after the change matches `PLATFORM_PATTERN` there (OS branches, `Platform.`
+helpers, OS-scoped test tags). To force the legs on a change it misses, run
+`platform-tests.yml` by hand (`workflow_dispatch`).
+
+Credo runs on every `ci-unified.yml` run that does code work, and Dialyzer
+only nightly; both compare against `priv/quality_baseline.json` through
+`scripts/check-quality-ratchet.sh`.
+
 ## Local Testing with `act`
 
 Use [act](https://github.com/nektos/act) to run workflows locally for debugging.
@@ -41,51 +66,15 @@ Use [act](https://github.com/nektos/act) to run workflows locally for debugging.
 Use the helper script `./scripts/dev/run-local-actions.sh`:
 
 ```bash
-# Run the default CI workflow (ci.yml)
-./scripts/dev/run-local-actions.sh
-
 # Run a specific workflow (-w) and job (-j)
-./scripts/dev/run-local-actions.sh -w cross_platform_tests.yml -j test_linux
+./scripts/dev/run-local-actions.sh -w ci-unified.yml -j format
 
 # Enable verbose debugging (-d)
 ./scripts/dev/run-local-actions.sh -d
 
 # List available workflows and options (-h)
 ./scripts/dev/run-local-actions.sh -h
-
-# Run the dummy test to quickly verify setup
-./scripts/dev/run-local-actions.sh -w dummy-test.yml
 ```
-
-The `dummy-test.yml` workflow uses mock setups for quick verification without running the full suite. It's useful for:
-
-- Troubleshooting `act` or workflow configuration.
-- Verifying local setup.
-- Testing new workflow steps quickly.
-
-## Reusable actions
-
-The `.github/actions/` directory contains reusable composite actions:
-
-- **`setup-elixir`**: Sets up Elixir/OTP with caching
-- **`run-tests`**: Runs tests with coverage and artifact upload
-
-## CI/CD architecture
-
-### Main CI Pipeline (`ci-unified.yml`)
-- **Parallel test execution**: Tests split into unit, integration, and property tests
-- **Smart caching**: Cache strategy with dependency detection
-- **Conditional execution**: Heavy checks only run when needed
-- **Fast feedback**: Format and compile checks run first
-
-### Security Scanning (`security.yml`)
-- **No Docker dependencies**: Uses CLI tools directly
-- **Multiple scanners**: Semgrep, Sobelow, TruffleHog, Gitleaks
-- **Automated reporting**: Creates issues for critical findings
-
-### Nightly Builds (`nightly.yml`)
-- **Full test matrix**: Multiple Elixir/OTP versions
-- **Extended integration tests**: Include slow/heavy tests
 
 ### Tips for macOS ARM (M1/M2/M3)
 

@@ -65,6 +65,7 @@ jobs:
     outputs:
       code: ${{ steps.check-changes.outputs.code }}
       should-run-heavy: ${{ steps.check-changes.outputs.should-run-heavy }}
+      platform: ${{ steps.check-changes.outputs.platform }}
 
     steps:
       - uses: actions/checkout@v7
@@ -81,11 +82,57 @@ jobs:
           # made `git diff` exit 128 and the run fail before any check started.
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
         run: |
+          # Platform-sensitive: the macOS/Windows legs (platform-tests.yml)
+          # run, and gate, only when this succeeds. True when the range
+          # changes the toolchain pin, any mix.exs/mix.lock (a dependency the
+          # Windows legs build), the termbox2 NIF or the platform workflow; or
+          # changes an Elixir file whose content on EITHER side of the range
+          # branches on the OS, calls a Platform helper, or carries an
+          # OS-scoped test tag. Checking the base side too catches a deleted
+          # OS-branching module and a removed `@tag :skip_on_windows`, which
+          # the head side alone no longer shows. Content is read from git
+          # objects, not the working tree, and paths are NUL-delimited, so
+          # odd file names neither skip the check nor reach grep as options.
+          PLATFORM_PATTERN=':os\.type\(\)|:win32|win32_|windows_only|skip_on_windows|unix_only|Platform\.'
+          platform_sensitive() {
+            local base="$1" head="$2" file
+            while IFS= read -r -d '' file; do
+              case "$file" in
+                mise.toml|mix.exs|mix.lock|packages/*/mix.exs|packages/*/mix.lock|.github/workflows/platform-tests.yml|packages/raxol_terminal/lib/termbox2_nif/*)
+                  return 0 ;;
+                *.ex|*.exs)
+                  for rev in "$head" "$base"; do
+                    if git show "$rev:$file" 2>/dev/null | grep -qE -e "$PLATFORM_PATTERN"; then
+                      return 0
+                    fi
+                  done ;;
+              esac
+            done < <(git -c core.quotePath=false diff -z --name-only "$base...$head")
+            return 1
+          }
+
           if [ "$EVENT_NAME" != "pull_request" ]; then
             # push keeps its own paths-ignore; dispatch and workflow_call
             # always mean "run it".
             echo "code=true" >> "$GITHUB_OUTPUT"
+            if [ "$EVENT_NAME" = "push" ]; then
+              # Branch protection does not require a PR to be up to date with
+              # master, so the merged commit can be a combination no PR run
+              # tested. Classify the pushed range the same way; a range that
+              # cannot be read (new branch, force-push) runs the legs.
+              if ! git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                echo "platform=true" >> "$GITHUB_OUTPUT"
+              elif platform_sensitive "$PUSH_BEFORE" "$PUSH_AFTER"; then
+                echo "platform=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "platform=false" >> "$GITHUB_OUTPUT"
+              fi
+            else
+              echo "platform=true" >> "$GITHUB_OUTPUT"
+            fi
             if [ "$SKIP_HEAVY" == "true" ]; then
               echo "should-run-heavy=false" >> "$GITHUB_OUTPUT"
             else
@@ -125,6 +172,12 @@ jobs:
             echo "should-run-heavy=true" >> "$GITHUB_OUTPUT"
           else
             echo "should-run-heavy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if platform_sensitive "$BASE_SHA" "$HEAD_SHA"; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "platform=false" >> "$GITHUB_OUTPUT"
           fi
 
   # ========================================
@@ -421,12 +474,6 @@ jobs:
         env:
           MIX_TEST_PARTITION: 1
 
-      - name: Upload coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-unit
-          path: cover/unit.coverdata
-
       - name: Upload boot metrics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -669,74 +716,6 @@ jobs:
         working-directory: packages/${{ matrix.package }}
         run: mix format --check-formatted
 
-  # raxol_agent spawns OS processes through `Raxol.Agent.SpawnedPort`, whose
-  # Windows clause (a direct spawn whose stdin erts opens on NUL) has no
-  # wrapper shell to fall back on, and the matrix above runs only on Linux.
-  # Its `:windows_only` tests (Credentials.run_executable/3 against native
-  # binaries) can run nowhere else. The package test_helper drops
-  # `:unix_only` / `:skip_on_windows` on Windows, as the root suite does.
-  # `--timeout`: same runner-speed reasoning as the root Windows leg below.
-  # Not in `ci-status`, like `test-cross-platform`: a Windows-runner flake
-  # should not block a merge, but a red X here is still a red X on the PR.
-  package-tests-windows:
-    name: Package Tests (raxol_agent, Windows)
-    needs: setup
-    runs-on: windows-2022
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
-        working-directory: packages/raxol_agent
-    env:
-      MIX_ENV: test
-      SKIP_TERMBOX2_TESTS: "true"
-
-    steps:
-      - uses: actions/checkout@v7
-
-      # The runner's %TEMP% is spelled with an 8.3 short name
-      # (C:\Users\RUNNER~1\...), but a symlink's target reads back with the
-      # long one (runneradmin), so a link inside a temp-dir sandbox would look
-      # like it leaves it. RUNNER_TEMP (D:\a\_temp) has no short components.
-      - name: Use a long-path temp dir
-        working-directory: .
-        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ needs.setup.outputs.elixir-version }}
-          otp-version: ${{ needs.setup.outputs.otp-version }}
-          version-type: strict
-
-      # Same key shape as the Linux matrix; runner.os keeps the caches apart.
-      - name: Cache package dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            packages/raxol_agent/deps
-            packages/raxol_agent/_build
-          key: pkg-raxol_agent-${{ runner.os }}-${{ needs.setup.outputs.elixir-version }}-${{ needs.setup.outputs.otp-version }}-${{ hashFiles('packages/raxol_agent/mix.lock') }}-${{ hashFiles('mix.exs', 'packages/*/mix.exs') }}
-
-      - name: Compile package
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get --check-locked
-          mix compile --warnings-as-errors
-
-      # :skip_on_ci for the same reason as the Linux cell; no live_* tag in
-      # this package is outside its test_helper's own exclusions.
-      - name: Run package tests
-        run: mix test --timeout 180000 --exclude skip_on_ci
-
-      # The run above prints dots. Re-run the `:windows_only` tests by name so
-      # the log shows each one ran here; they are the only coverage of the
-      # direct-spawn clause.
-      - name: List Windows-only tests
-        run: mix test test/raxol/agent/backend/credentials_test.exs --only windows_only --trace
-
   # The local terminal input path is BEAM/OTP-coupled: keystrokes arrive by
   # tracing prim_tty's reader (a private protocol). Every unit test fabricates
   # that trace message, so none can catch an OTP change to it. This canary types
@@ -892,12 +871,6 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: raxol_test
           MIX_TEST_PARTITION: 2
-      
-      - name: Upload coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-integration
-          path: cover/integration.coverdata
 
   # The main job runs everything except `:property` (see test-unit), so this
   # job is the only place root-suite properties run. It is not gated on
@@ -949,25 +922,17 @@ jobs:
             --exclude skip_on_ci
         env:
           MIX_TEST_PARTITION: 3
-      
-      - name: Upload coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-property
-          path: cover/property.coverdata
 
   # ========================================
   # Code Quality Checks
   # ========================================
-  # BLOCKING. Runs the same ratchet nightly runs, against the same
-  # priv/quality_baseline.json: the repo-wide count may not go UP.
+  # BLOCKING, and the only place the credo ratchet runs: the repo-wide count
+  # in priv/quality_baseline.json may not go UP.
   #
   # Deliberately the absolute count and not a per-branch delta -- see the note
-  # on the step below for why `credo diff` cannot do this job. The cost of
-  # running the full pass twice (here and nightly) is the price of a number
-  # both places agree on.
+  # on the step below for why `credo diff` cannot do this job.
   credo:
-    name: Credo Analysis (advisory)
+    name: Credo Ratchet
     needs: [setup, compile]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1014,10 +979,7 @@ jobs:
       # change is unmergeable by construction.
       #
       # The absolute count against priv/quality_baseline.json has none of that
-      # ambiguity: one number, one comparison, and the same script and
-      # measurement nightly runs -- so PR-time and nightly agree by
-      # construction rather than by hope. That is the property the dialyzer
-      # gate is still missing.
+      # ambiguity: one number, one comparison.
       #
       # Affordable, which was the original objection. The claim was ~50 min;
       # measured cost of one full `--strict` pass is 95.4s of analysis in CI
@@ -1025,88 +987,6 @@ jobs:
       # Re-measure before demoting this again rather than inferring the cost.
       - name: Credo ratchet
         run: ./scripts/check-quality-ratchet.sh --gate credo
-
-  dialyzer:
-    name: Dialyzer (advisory)
-    needs: [setup, compile]
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    if: needs.setup.outputs.should-run-heavy == 'true'
-    
-    steps:
-      - uses: actions/checkout@v7
-      
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ needs.setup.outputs.elixir-version }}
-          otp-version: ${{ needs.setup.outputs.otp-version }}
-          version-type: strict
-      
-      - name: Restore cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            deps
-            _build
-            .raxol_cache
-          key: ${{ needs.setup.outputs.cache-key }}
-      
-      # Self-heal a cache that disagrees with the checked-out lock; see the
-      # note on setup's deps.get fallback. No-op when the cache is healthy.
-      - name: Fetch dependencies
-        run: mix deps.get
-
-      # The exact key includes the packages/ sources so a matching hit means
-      # the PLT was built against exactly this code. dialyxir keys its own
-      # deps PLT off the DEPS hash, which a path dependency does not move:
-      # editing a callback spec in packages/raxol_core does not touch
-      # mix.lock, so a mix.lock-only key restores a PLT describing the OLD
-      # spec and dialyzer reports against stale types. Observed locally -- a
-      # fix removing 16 callback_type_mismatch errors read as a no-op across
-      # two full runs.
-      #
-      # `restore-keys` still allows a looser hit, which is deliberate: a
-      # partial restore saves the PLT build for unrelated dependencies, and
-      # check-quality-ratchet.sh detects the mismatch by CONTENT HASH and
-      # rebuilds. An earlier revision detected it by mtime, which is wrong
-      # here -- actions/checkout writes sources with mtime=now while
-      # actions/cache restores the PLT with its archived mtime, so the check
-      # fired on every warm-cache run and turned this blocking gate into an
-      # unconditional failure.
-      - name: Restore PLT cache
-        uses: actions/cache@v6
-        with:
-          path: priv/plts
-          key: plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}-${{ hashFiles('packages/*/lib/**/*.ex') }}
-          restore-keys: |
-            plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}-
-            plt-prebuilt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
-            plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-
-
-      # No separate `mix dialyzer --plt` step: that call produces a deps PLT
-      # the size of core.plt with none of the dependency apps in it, and
-      # dialyxir then reports "PLT is up to date!" permanently because it
-      # keys freshness off a 20-byte .plt.hash. Analysing against it yields a
-      # fabricated regression (observed: 2055 findings, 1845 of them
-      # `unknown_function`, against a true 97). The ratchet discards a stale
-      # deps PLT and lets the analysis run rebuild it correctly, and refuses
-      # to report a count when `unknown_function` dominates.
-      #
-      # Advisory in pull requests; nightly.yml enforces the same ratchet.
-      #
-      # Both workflows now read the reference toolchain from mise.toml and
-      # restore PLTs keyed by the versions setup-beam actually resolved. The
-      # former split -- 1.20/OTP 29 here, 1.19/OTP 27 nightly -- produced
-      # different counts against one baseline and made the nightly verdict
-      # unrelated to this feedback.
-      #
-      # check-quality-ratchet.sh still validates the PLT against package source
-      # content before measuring, so a loose cache restore cannot make a stale
-      # package contract look current.
-      - name: Dialyzer ratchet
-        run: ./scripts/check-quality-ratchet.sh --gate dialyzer
-        timeout-minutes: 90
 
   # ========================================
   # Security Scanning
@@ -1159,200 +1039,23 @@ jobs:
         run: mix sobelow --config
 
   # ========================================
-  # Cross-Platform Testing
+  # macOS and Windows
   # ========================================
-  test-cross-platform:
-    name: Test ${{ matrix.os }}
-    needs: [setup, compile]
-    runs-on: ${{ matrix.os }}
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-2022]
-        include:
-          - os: macos-latest
-            platform: macos
-          - os: windows-2022
-            platform: windows
-    
-    steps:
-      - uses: actions/checkout@v7
-      
-      - name: Set TMPDIR (Unix)
-        if: runner.os != 'Windows'
-        run: echo "TMPDIR=/tmp" >> $GITHUB_ENV
-
-      - name: Set TMPDIR (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          echo "TMPDIR=$env:TEMP" >> $env:GITHUB_ENV
-          echo "SKIP_TERMBOX2_TESTS=true" >> $env:GITHUB_ENV
-
-      - name: Install macOS dependencies
-        if: matrix.os == 'macos-latest'
-        run: |
-          # Do NOT export LDFLAGS/CFLAGS here: a global LDFLAGS clobbers the
-          # termbox2 NIF Makefile's `LDFLAGS ?= -shared`, dropping -shared so the
-          # .so links as an executable (`_main` undefined). Nothing in the build
-          # needs openssl flags; OTP ships precompiled.
-          brew install postgresql@14
-
-          # Start PostgreSQL
-          brew services start postgresql@14 || true
-          sleep 5
-          createuser -s postgres || true
-          psql -U postgres -c "ALTER USER postgres WITH PASSWORD 'postgres';" postgres || true
-          createdb -U postgres raxol_test || true
-      
-      - name: Install Windows dependencies
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install openssl postgresql14 --no-progress
-          echo "POSTGRES_HOST=localhost" >> $env:GITHUB_ENV
-          echo "POSTGRES_PORT=5432" >> $env:GITHUB_ENV
-      
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ needs.setup.outputs.elixir-version }}
-          otp-version: ${{ needs.setup.outputs.otp-version }}
-          version-type: strict
-      
-      - name: Cache dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
-      
-      - name: Install dependencies
-        # Force bash (git-bash on Windows). The default Windows shell is pwsh,
-        # where `mix deps.get --check-locked || mix deps.get` does not reliably
-        # run the fallback for mix.bat, so upstream lock drift is never resolved
-        # and `mix test` then fails with a stale-dep "lock mismatch". bash runs
-        # the fallback identically on every OS.
-        shell: bash
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.clean --unused
-          # Prefer the committed lock (fast-fails if mix.exs was edited without
-          # a committed mix.lock). Fall back to a plain resolve so pure upstream
-          # drift -- a transitive dep publishing a newer patch after the lock was
-          # committed -- does not red the whole pipeline. The pre-commit hook and
-          # `mix raxol.check` still guard genuinely uncommitted lock changes.
-          mix deps.get --check-locked || mix deps.get
-          mix deps.compile
-
-      - name: Run tests (Unix)
-        if: runner.os != 'Windows'
-        run: mix test --exclude slow --exclude docker --exclude integration --exclude skip_on_ci
-        env:
-          MIX_ENV: test
-          SKIP_TERMBOX2_TESTS: "true"
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: raxol_test
-          PLATFORM: ${{ matrix.platform }}
-
-      - name: Run tests (Windows)
-        if: runner.os == 'Windows'
-        # --timeout 180000: the Windows runner is CPU-starved enough that
-        # emulator-replay-heavy property tests (substrate keystones, SSH
-        # rendering round-trips) blow the 60s default as a runner-speed
-        # artifact — a different one each run. Raising the job-wide ceiling
-        # keeps full coverage; genuine hangs still fail at the raised bound.
-        run: mix test --timeout 180000 --exclude slow --exclude docker --exclude integration --exclude skip_on_ci --exclude skip_on_windows
-        env:
-          MIX_ENV: test
-          SKIP_TERMBOX2_TESTS: "true"
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: raxol_test
-          PLATFORM: ${{ matrix.platform }}
-
-  # ========================================
-  # Coverage Report
-  # ========================================
-  coverage:
-    name: Coverage Report
-    needs: [test-unit, test-integration, test-property]
-    runs-on: ubuntu-latest
-    # Temporarily disabled due to ExCoveralls crash
-    if: false
-    
-    steps:
-      - uses: actions/checkout@v7
-      
-      # Reads the pin directly rather than through `needs.setup`, which this job
-      # does not depend on: those outputs resolve to empty here.
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          version-file: mise.toml
-          version-type: strict
-
-      - name: Download coverage artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: cover
-      
-      - name: Merge coverage reports
-        run: |
-          mix coveralls.json --import-cover cover/**/*.coverdata
-      
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./cover/excoveralls.json
-          flags: unittests
-          name: raxol-coverage
-          fail_ci_if_error: false
-      
-      - name: Comment coverage on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const coverage = JSON.parse(fs.readFileSync('./cover/excoveralls.json', 'utf8'));
-            const percentage = coverage.percentage;
-            
-            const comment = `## 📊 Coverage Report
-            
-            **Total Coverage:** ${percentage}%
-            
-            | Type | Coverage |
-            |------|----------|
-            | Unit Tests | ✅ |
-            | Integration Tests | ${{ needs.test-integration.result == 'success' && '✅' || '⏭️' }} |
-            | Property Tests | ${{ needs.test-property.result == 'success' && '✅' || '⏭️' }} |
-            `;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
+  # Only when `changes` flags the diff as platform-sensitive; nightly.yml
+  # covers every other change within a day. When it runs, it gates.
+  platform:
+    name: Platform
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    uses: ./.github/workflows/platform-tests.yml
 
   # ========================================
   # Final Status Check
   # ========================================
   ci-status:
     name: CI Status
-    # `dialyzer` is deliberately absent: pull requests get advisory feedback,
-    # while nightly.yml enforces the same ratchet on the reference toolchain.
+    # `dialyzer` is absent: nightly.yml enforces that ratchet, and pull
+    # requests no longer run it at all.
     #
     # Listing a job here without reading its `result` is the trap this comment
     # exists to prevent -- `credo` was once declared and never read, so it
@@ -1372,7 +1075,9 @@ jobs:
         input-canary,
         buffer-gate,
         credo,
-        security
+        security,
+        platform,
+        test-integration
       ]
     runs-on: ubuntu-latest
     if: always()
@@ -1456,20 +1161,37 @@ jobs:
             exit 1
           fi
 
-          # Dialyzer is deliberately absent: nightly.yml enforces that ratchet;
-          # this workflow exposes the same reference-toolchain result without
-          # making the expensive job part of the aggregate PR status.
-          #
-          # `security` is NOT in that category, whatever the wording here used
-          # to say. This branch printed a warning and no `exit 1`, and
-          # `CI Status` is the only required check on master, so run
-          # 35515982213 went green with the security job skipped. A vulnerable
-          # dependency or a Sobelow finding turned one job red and merged
-          # anyway. It exits like every other gate now.
+          # `security` exits like every other gate. It once printed a warning
+          # and no `exit 1`, and `CI Status` is the only required check on
+          # master, so run 35515982213 went green with the security job
+          # skipped: a vulnerable dependency or a Sobelow finding turned one
+          # job red and merged anyway.
           if [ "${{ needs.security.result }}" != "success" ]; then
             echo "❌ Security scan failed"
             echo "   Reproduce: mix deps.audit && mix sobelow --config"
             exit 1
           fi
+
+          # Skipped unless `changes` flagged the diff as platform-sensitive;
+          # when it ran, it gates like the rest.
+          case "${{ needs.platform.result }}" in
+            success|skipped) ;;
+            *)
+              echo "❌ macOS/Windows platform tests: ${{ needs.platform.result }}"
+              echo "   Reproduce on the OS in question: mix test --exclude slow --exclude docker --exclude integration --exclude skip_on_ci"
+              exit 1
+              ;;
+          esac
+
+          # Runs only when `should-run-heavy` (mix.exs, mix.lock or lib/
+          # changed); when it ran, it gates.
+          case "${{ needs.test-integration.result }}" in
+            success|skipped) ;;
+            *)
+              echo "❌ Integration tests: ${{ needs.test-integration.result }}"
+              echo "   Reproduce: mix test --only integration --exclude skip_on_ci (needs Postgres)"
+              exit 1
+              ;;
+          esac
 
           echo "✅ All required checks passed!"

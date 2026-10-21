@@ -69,8 +69,7 @@
         "halves of a delta: on a PR touching only YAML and JSON it reported",
         "209 new refactoring, 108 new readability and 138 new design findings",
         "while also claiming 659 refactoring and 49 readability were fixed.",
-        "The absolute count here has no such ambiguity, and is the same number",
-        "nightly measures."
+        "The absolute count here has no such ambiguity."
       ]
     },
     "dialyzer": {

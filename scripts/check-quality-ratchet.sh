@@ -41,12 +41,12 @@
 #                 ignore file (verified: 127-5=122, 111-5=106, 113-16=97).
 #                 Absence of the line means the run did not finish.
 #
-# Runtime: credo takes ~60 min repo-wide. `mix credo <path>` analyzes nothing
-# against the root .credo.exs (verified: exit 0, zero findings, for `lib`,
-# `lib/` and `packages/raxol_core/lib/`), so the scan cannot be sharded by
-# path and must run as one pass. Run it nightly, not per-PR. Per-PR sharding
-# needs a `.credo.exs` inside each package so `cd packages/<pkg> && mix credo`
-# uses that package's own config; only raxol_agent_client_protocol has one.
+# Where each gate runs: credo blocks every pull request (ci-unified.yml); one
+# `--strict` pass measured 95.4s of analysis in CI. `mix credo <path>` analyzes
+# nothing against the root .credo.exs (verified: exit 0, zero findings, for
+# `lib`, `lib/` and `packages/raxol_core/lib/`), so the scan cannot be sharded
+# by path and must run as one pass. Dialyzer runs nightly only (nightly.yml):
+# a cold PLT rebuild takes up to an hour.
 set -uo pipefail
 
 BASELINE=priv/quality_baseline.json

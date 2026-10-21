@@ -15,6 +15,15 @@ defmodule Raxol.Recording.RecorderTest do
     :ok
   end
 
+  # The registered recorder receives every frame and keystroke any live Raxol
+  # session in the VM produces (`Rendering.Backends`, `DispatcherHooks`), so a
+  # session another test left running adds events to it. Tests that count
+  # events use an unregistered recorder only they can reach; the registration
+  # behaviour itself is covered by the start_link/active?/stop tests.
+  defp start_unregistered(opts \\ []) do
+    GenServer.start_link(Recorder, opts)
+  end
+
   describe "start_link/1" do
     test "starts and registers the recorder" do
       {:ok, pid} = Recorder.start_link(title: "Test")
@@ -36,13 +45,13 @@ defmodule Raxol.Recording.RecorderTest do
 
   describe "record_output/2" do
     test "accumulates output events" do
-      {:ok, _pid} = Recorder.start_link()
+      {:ok, pid} = start_unregistered()
 
-      Recorder.record_output("frame 1")
-      Recorder.record_output("frame 2")
-      Recorder.record_output("frame 3")
+      Recorder.record_output(pid, "frame 1")
+      Recorder.record_output(pid, "frame 2")
+      Recorder.record_output(pid, "frame 3")
 
-      session = Recorder.get_session()
+      session = Recorder.get_session(pid)
       assert length(session.events) == 3
 
       texts = Enum.map(session.events, fn {_t, _type, data} -> data end)
@@ -50,23 +59,23 @@ defmodule Raxol.Recording.RecorderTest do
     end
 
     test "events have increasing timestamps" do
-      {:ok, _pid} = Recorder.start_link()
+      {:ok, pid} = start_unregistered()
 
-      Recorder.record_output("a")
+      Recorder.record_output(pid, "a")
       Process.sleep(10)
-      Recorder.record_output("b")
+      Recorder.record_output(pid, "b")
 
-      session = Recorder.get_session()
+      session = Recorder.get_session(pid)
       [{t1, _, _}, {t2, _, _}] = session.events
       assert t2 > t1
     end
 
     test "events are tagged as output" do
-      {:ok, _pid} = Recorder.start_link()
+      {:ok, pid} = start_unregistered()
 
-      Recorder.record_output("test")
+      Recorder.record_output(pid, "test")
 
-      session = Recorder.get_session()
+      session = Recorder.get_session(pid)
       [{_, type, _}] = session.events
       assert type == :output
     end
@@ -74,12 +83,12 @@ defmodule Raxol.Recording.RecorderTest do
 
   describe "record_input/2" do
     test "accumulates input events" do
-      {:ok, _pid} = Recorder.start_link()
+      {:ok, pid} = start_unregistered()
 
-      Recorder.record_input("a")
-      Recorder.record_input("b")
+      Recorder.record_input(pid, "a")
+      Recorder.record_input(pid, "b")
 
-      session = Recorder.get_session()
+      session = Recorder.get_session(pid)
       assert length(session.events) == 2
 
       types = Enum.map(session.events, fn {_t, type, _data} -> type end)
@@ -87,15 +96,15 @@ defmodule Raxol.Recording.RecorderTest do
     end
 
     test "interleaves with output events in order" do
-      {:ok, _pid} = Recorder.start_link()
+      {:ok, pid} = start_unregistered()
 
-      Recorder.record_output("frame 1")
+      Recorder.record_output(pid, "frame 1")
       Process.sleep(1)
-      Recorder.record_input("key")
+      Recorder.record_input(pid, "key")
       Process.sleep(1)
-      Recorder.record_output("frame 2")
+      Recorder.record_output(pid, "frame 2")
 
-      session = Recorder.get_session()
+      session = Recorder.get_session(pid)
       types = Enum.map(session.events, fn {_t, type, _data} -> type end)
       assert types == [:output, :input, :output]
     end
@@ -103,10 +112,10 @@ defmodule Raxol.Recording.RecorderTest do
 
   describe "stop/1" do
     test "returns completed session with ended_at" do
-      {:ok, _pid} = Recorder.start_link(title: "Stop Test")
-      Recorder.record_output("data")
+      {:ok, pid} = start_unregistered(title: "Stop Test")
+      Recorder.record_output(pid, "data")
 
-      session = Recorder.stop()
+      session = Recorder.stop(pid)
       assert session.ended_at != nil
       assert session.title == "Stop Test"
       assert length(session.events) == 1
