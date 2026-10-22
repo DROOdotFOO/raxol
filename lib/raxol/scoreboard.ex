@@ -26,9 +26,12 @@ defmodule Raxol.Scoreboard do
       for the same screen.
     * **reductions**: the BEAM's unit of work, counted for the measuring
       process only (`Process.info(self(), :reductions)`). Unlike wall-clock
-      time it does not move with runner load: repeated runs agree to within a
-      few hundredths of a percent, which is why pull requests can be compared
-      against master on shared CI runners. Reductions do move with the
+      time it does not move with runner load, which is why pull requests can
+      be compared against master on shared CI runners. It is not perfectly
+      repeatable: runs on one machine agree within a few hundredths of a
+      percent, but two CI runs of the same commit have differed by up to
+      0.2%, so the reduction metrics carry a 0.5% noise tolerance in
+      `priv/scoreboard/metrics.json`. Reductions also move with the
       Elixir/OTP version, which is why the record carries the full toolchain.
     * **work ratio**: a keystroke's reductions over the first frame's. A
       renderer that only redoes what a keystroke changed sits far below 1;

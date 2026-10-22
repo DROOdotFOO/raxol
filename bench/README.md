@@ -47,9 +47,10 @@ frame is replayed through `Raxol.Terminal.Emulator` and must reproduce its own
 screen (character and style), so the byte count only falls by sending less
 for the same screen. `table.keystroke.work_ratio` is a keystroke's work over
 the first frame's: an incremental renderer sits far below 1, and the table
-demo is at 0.98 today. Repeated runs agree to within a
-few hundredths of a percent, so a pull request's numbers can be compared with
-master's on a shared CI runner. `--include` merges the buffer gate's memory
+demo is at 0.98 today. Bytes and memory are exact. Reductions are not quite:
+runs on one machine agree within a few hundredths of a percent, but two CI runs
+of the same commit have differed by up to 0.2%, so reduction metrics count a
+change only beyond 0.5%. `--include` merges the buffer gate's memory
 rows. Metric ids, labels and which direction is better are in
 `priv/scoreboard/metrics.json`; add a metric there before emitting it.
 
