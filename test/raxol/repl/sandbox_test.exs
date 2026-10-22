@@ -1525,6 +1525,11 @@ defmodule Raxol.REPL.SandboxTest do
             ~S|raise String.to_existing_atom("Elixir.X"), []|,
             ~S|raise :"Elixir.X"|,
             ~S|raise File, path: "x"|,
+            ~S|raise Protocol.UndefinedError, protocol: mod, value: 1|,
+            ~S|raise UndefinedFunctionError, module: mod, function: :f, arity: 0|,
+            ~S|raise FunctionClauseError, module: mod, function: :f, arity: 0|,
+            ~S|raise msg|,
+            ~S|reraise e, st|,
             ~S|Kernel.raise(mod, [])|,
             ~S|:"Elixir.Kernel".reraise(mod, [])|,
             ~S{mod |> raise(path: "x")},
@@ -1561,28 +1566,35 @@ defmodule Raxol.REPL.SandboxTest do
     test "every calendar and time zone database argument in an allowlisted spec is guarded" do
       slots = calendar_slots()
       # The scan itself must find the slots, or the loop below proves nothing.
+      # `Calendar`'s own specs name the local `calendar()` type.
       assert {Date, :new, 4, 3, :calendar} in slots
       assert {DateTime, :now, 2, 1, :time_zone_database} in slots
+      assert {Calendar, :compatible_calendars?, 2, 0, :calendar} in slots
+      assert {Calendar, :compatible_calendars?, 2, 1, :calendar} in slots
 
-      for {module, func, arity, position, kind} <- slots do
+      for {{module, func, arity}, call_slots} <-
+            Enum.group_by(slots, &{elem(&1, 0), elem(&1, 1), elem(&1, 2)}),
+          kinds = Map.new(call_slots, &{elem(&1, 3), elem(&1, 4)}),
+          position <- Map.keys(kinds) do
         name = "#{inspect(module)}.#{func}"
 
+        # Every other slot written out, so each refusal is down to `position`.
         args = fn slot ->
-          Enum.map(
-            0..(arity - 1),
-            &if(&1 == position, do: slot, else: "a#{&1}")
-          )
+          Enum.map(0..(arity - 1), fn
+            ^position -> slot
+            i when is_map_key(kinds, i) -> written_module(kinds[i])
+            i -> "a#{i}"
+          end)
         end
 
-        computed = "#{name}(#{Enum.join(args.("mod"), ", ")})"
-
-        written =
-          "#{name}(#{Enum.join(args.(if(kind == :calendar, do: "Calendar.ISO", else: "Calendar.UTCOnlyTimeZoneDatabase")), ", ")})"
+        computed = args.("mod")
 
         refused =
-          [computed, "&#{name}/#{arity}"] ++
+          ["#{name}(#{Enum.join(computed, ", ")})", "&#{name}/#{arity}"] ++
             if position > 0,
-              do: ["a0 |> #{name}(#{args.("mod") |> tl() |> Enum.join(", ")})"],
+              do: [
+                "#{hd(computed)} |> #{name}(#{computed |> tl() |> Enum.join(", ")})"
+              ],
               else: []
 
         for code <- refused do
@@ -1592,6 +1604,9 @@ defmodule Raxol.REPL.SandboxTest do
           assert Enum.any?(violations, &String.contains?(&1, "is called back")),
                  "expected a module-argument violation for #{code}, got #{inspect(violations)}"
         end
+
+        written =
+          "#{name}(#{Enum.join(args.(written_module(kinds[position])), ", ")})"
 
         assert :ok = Sandbox.check(written, :strict), "#{written} was refused"
       end
@@ -1644,39 +1659,62 @@ defmodule Raxol.REPL.SandboxTest do
   # {module, function, arity, position, :calendar | :time_zone_database} for
   # every argument an allowlisted spec types as a calendar or time zone
   # database, read from the compiled specs rather than copied.
+  # `Calendar.put_time_zone_database/1` is refused outright at every level
+  # (see "the global time zone database cannot be replaced"), so it has no
+  # written-out form to allow.
   defp calendar_slots do
-    for module <- Sandbox.strict_modules(),
-        {:ok, specs} <- [Code.Typespec.fetch_specs(module)],
+    Sandbox.strict_modules()
+    |> Enum.flat_map(&module_calendar_slots/1)
+    |> Enum.uniq()
+    |> Enum.reject(&match?({Calendar, :put_time_zone_database, 1, _, _}, &1))
+  end
+
+  defp module_calendar_slots(module) do
+    for {:ok, specs} <- [Code.Typespec.fetch_specs(module)],
         {{func, arity}, clauses} <- specs,
         clause <- clauses,
-        {position, kind} <- spec_calendar_positions(func, clause),
-        uniq: true,
+        {position, kind} <- spec_calendar_positions(module, func, clause),
         do: {module, func, arity, position, kind}
   end
 
-  defp spec_calendar_positions(func, clause) do
+  defp spec_calendar_positions(module, func, clause) do
     for {arg, position} <- Enum.with_index(spec_args(func, clause)),
-        kind = calendar_kind(arg),
+        kind = calendar_kind(module, arg),
         kind != nil,
         do: {position, kind}
   end
 
   defp spec_args(func, clause) do
-    spec =
+    {spec, vars} =
       case Code.Typespec.spec_to_quoted(func, clause) do
-        {:when, _, [spec, _vars]} -> spec
-        spec -> spec
+        {:when, _, [spec, vars]} -> {spec, vars}
+        spec -> {spec, []}
       end
 
     {:"::", _, [{^func, _, args}, _return]} = spec
-    args
+
+    # A `when` clause types an argument through a variable: `new(..., c)
+    # when c: Calendar.calendar()`.
+    Enum.map(args, fn
+      {name, _, ctx} = arg when is_atom(name) and is_atom(ctx) ->
+        Keyword.get(vars, name, arg)
+
+      arg ->
+        arg
+    end)
   end
 
-  defp calendar_kind(arg) do
+  # `Calendar` names its own types locally, `calendar()` rather than
+  # `Calendar.calendar()`; every other module qualifies them.
+  defp calendar_kind(module, arg) do
     arg
     |> Macro.prewalk(nil, fn
       {{:., _, [Calendar, kind]}, _, []} = node, _acc
       when kind in [:calendar, :time_zone_database] ->
+        {node, kind}
+
+      {kind, _, []} = node, _acc
+      when module == Calendar and kind in [:calendar, :time_zone_database] ->
         {node, kind}
 
       node, acc ->
@@ -1684,4 +1722,9 @@ defmodule Raxol.REPL.SandboxTest do
     end)
     |> elem(1)
   end
+
+  defp written_module(:calendar), do: "Calendar.ISO"
+
+  defp written_module(:time_zone_database),
+    do: "Calendar.UTCOnlyTimeZoneDatabase"
 end

@@ -402,66 +402,70 @@ defmodule Raxol.REPL.Sandbox do
   }
 
   # Calls that call back into the calendar or time zone database module an
-  # argument holds, keyed by full arity, valued by that argument's position
+  # argument holds, keyed by full arity, valued by those arguments' positions
   # (0-based). Taken from every allowlisted function whose spec types an
-  # argument `Calendar.calendar()` or `Calendar.time_zone_database()`; the
-  # test suite re-derives the set from the specs, so an Elixir release that
-  # adds one fails there rather than passing here. `utc_now/1` takes a
+  # argument `Calendar.calendar()` or `Calendar.time_zone_database()`, or,
+  # inside `Calendar` itself, the local `calendar()`/`time_zone_database()`;
+  # the test suite re-derives the set from the specs, so an Elixir release
+  # that adds one fails there rather than passing here. `utc_now/1` takes a
   # calendar OR a time unit in the same slot, `DateTime.from_iso8601/2` a
   # calendar OR a format, so arity, not name, picks the position.
+  # `Calendar.compatible_calendars?/2` calls
+  # `day_rollover_relative_to_midnight_utc/0` on both of its arguments.
   @module_argument_positions %{
-    {Date, :convert, 2} => 1,
-    {Date, :convert!, 2} => 1,
-    {Date, :from_erl, 2} => 1,
-    {Date, :from_erl!, 2} => 1,
-    {Date, :from_gregorian_days, 2} => 1,
-    {Date, :from_iso8601, 2} => 1,
-    {Date, :from_iso8601!, 2} => 1,
-    {Date, :new, 4} => 3,
-    {Date, :new!, 4} => 3,
-    {Date, :utc_today, 1} => 0,
-    {Time, :convert, 2} => 1,
-    {Time, :convert!, 2} => 1,
-    {Time, :from_erl, 3} => 2,
-    {Time, :from_erl!, 3} => 2,
-    {Time, :from_iso8601, 2} => 1,
-    {Time, :from_iso8601!, 2} => 1,
-    {Time, :from_seconds_after_midnight, 3} => 2,
-    {Time, :new, 5} => 4,
-    {Time, :new!, 5} => 4,
-    {Time, :utc_now, 1} => 0,
-    {Time, :utc_now, 2} => 1,
-    {DateTime, :add, 4} => 3,
-    {DateTime, :convert, 2} => 1,
-    {DateTime, :convert!, 2} => 1,
-    {DateTime, :from_gregorian_seconds, 3} => 2,
-    {DateTime, :from_iso8601, 2} => 1,
-    {DateTime, :from_iso8601, 3} => 1,
-    {DateTime, :from_naive, 3} => 2,
-    {DateTime, :from_naive!, 3} => 2,
-    {DateTime, :from_unix, 3} => 2,
-    {DateTime, :from_unix!, 3} => 2,
-    {DateTime, :new, 4} => 3,
-    {DateTime, :new!, 4} => 3,
-    {DateTime, :now, 2} => 1,
-    {DateTime, :now!, 2} => 1,
-    {DateTime, :shift, 3} => 2,
-    {DateTime, :shift_zone, 3} => 2,
-    {DateTime, :shift_zone!, 3} => 2,
-    {DateTime, :utc_now, 1} => 0,
-    {DateTime, :utc_now, 2} => 1,
-    {NaiveDateTime, :convert, 2} => 1,
-    {NaiveDateTime, :convert!, 2} => 1,
-    {NaiveDateTime, :from_erl, 3} => 2,
-    {NaiveDateTime, :from_erl!, 3} => 2,
-    {NaiveDateTime, :from_gregorian_seconds, 3} => 2,
-    {NaiveDateTime, :from_iso8601, 2} => 1,
-    {NaiveDateTime, :from_iso8601!, 2} => 1,
-    {NaiveDateTime, :local_now, 1} => 0,
-    {NaiveDateTime, :new, 8} => 7,
-    {NaiveDateTime, :new!, 8} => 7,
-    {NaiveDateTime, :utc_now, 1} => 0,
-    {NaiveDateTime, :utc_now, 2} => 1
+    {Calendar, :compatible_calendars?, 2} => [0, 1],
+    {Date, :convert, 2} => [1],
+    {Date, :convert!, 2} => [1],
+    {Date, :from_erl, 2} => [1],
+    {Date, :from_erl!, 2} => [1],
+    {Date, :from_gregorian_days, 2} => [1],
+    {Date, :from_iso8601, 2} => [1],
+    {Date, :from_iso8601!, 2} => [1],
+    {Date, :new, 4} => [3],
+    {Date, :new!, 4} => [3],
+    {Date, :utc_today, 1} => [0],
+    {Time, :convert, 2} => [1],
+    {Time, :convert!, 2} => [1],
+    {Time, :from_erl, 3} => [2],
+    {Time, :from_erl!, 3} => [2],
+    {Time, :from_iso8601, 2} => [1],
+    {Time, :from_iso8601!, 2} => [1],
+    {Time, :from_seconds_after_midnight, 3} => [2],
+    {Time, :new, 5} => [4],
+    {Time, :new!, 5} => [4],
+    {Time, :utc_now, 1} => [0],
+    {Time, :utc_now, 2} => [1],
+    {DateTime, :add, 4} => [3],
+    {DateTime, :convert, 2} => [1],
+    {DateTime, :convert!, 2} => [1],
+    {DateTime, :from_gregorian_seconds, 3} => [2],
+    {DateTime, :from_iso8601, 2} => [1],
+    {DateTime, :from_iso8601, 3} => [1],
+    {DateTime, :from_naive, 3} => [2],
+    {DateTime, :from_naive!, 3} => [2],
+    {DateTime, :from_unix, 3} => [2],
+    {DateTime, :from_unix!, 3} => [2],
+    {DateTime, :new, 4} => [3],
+    {DateTime, :new!, 4} => [3],
+    {DateTime, :now, 2} => [1],
+    {DateTime, :now!, 2} => [1],
+    {DateTime, :shift, 3} => [2],
+    {DateTime, :shift_zone, 3} => [2],
+    {DateTime, :shift_zone!, 3} => [2],
+    {DateTime, :utc_now, 1} => [0],
+    {DateTime, :utc_now, 2} => [1],
+    {NaiveDateTime, :convert, 2} => [1],
+    {NaiveDateTime, :convert!, 2} => [1],
+    {NaiveDateTime, :from_erl, 3} => [2],
+    {NaiveDateTime, :from_erl!, 3} => [2],
+    {NaiveDateTime, :from_gregorian_seconds, 3} => [2],
+    {NaiveDateTime, :from_iso8601, 2} => [1],
+    {NaiveDateTime, :from_iso8601!, 2} => [1],
+    {NaiveDateTime, :local_now, 1} => [0],
+    {NaiveDateTime, :new, 8} => [7],
+    {NaiveDateTime, :new!, 8} => [7],
+    {NaiveDateTime, :utc_now, 1} => [0],
+    {NaiveDateTime, :utc_now, 2} => [1]
   }
 
   # What those slots may hold at `:strict`: the two modules Elixir ships for
@@ -492,19 +496,33 @@ defmodule Raxol.REPL.Sandbox do
   ]
   @calendar_sigils [:sigil_D, :sigil_T, :sigil_N, :sigil_U]
 
-  # The exception modules `raise` may name at `:strict`: every module Elixir
-  # itself ships that implements `Exception`, read from the `:elixir`
-  # application at compile time. A module outside it may export an
-  # `exception/1` that does anything, and the checker cannot tell.
-  @raisable_exceptions for module <- Application.spec(:elixir, :modules),
-                           Code.ensure_loaded?(module),
-                           behaviours =
-                             Keyword.get_values(
-                               module.module_info(:attributes),
-                               :behaviour
-                             ),
-                           Exception in List.flatten(behaviours),
-                           do: module
+  # The exception modules `raise` may name at `:strict`, audited by hand.
+  # Naming one is not the whole risk: `raise E, attrs` writes `attrs` into
+  # E's fields, and the evaluator's `Exception.format/3` then runs
+  # `E.message/1` over them. `Protocol.UndefinedError` calls
+  # `protocol.__protocol__/1` and `UndefinedFunctionError` loads and queries
+  # its `module`, so a field holding a module chosen at runtime is called
+  # back. Every exception here has a `message/1` (and a default or
+  # field-only `exception/1`) that only formats its fields as strings or
+  # with `inspect/1`. Before adding one, read both callbacks in the Elixir
+  # source; a module that implements `Exception` is not thereby safe.
+  @raisable_exceptions [
+    ArgumentError,
+    ArithmeticError,
+    BadBooleanError,
+    BadFunctionError,
+    BadMapError,
+    CaseClauseError,
+    CondClauseError,
+    Enum.EmptyError,
+    Enum.OutOfBoundsError,
+    KeyError,
+    MatchError,
+    RuntimeError,
+    SystemLimitError,
+    TryClauseError,
+    WithClauseError
+  ]
 
   @doc """
   Checks code for safety violations at the given strictness level.
@@ -1711,10 +1729,13 @@ defmodule Raxol.REPL.Sandbox do
   # calls `M.parse_date/1` while the sigil expands. `m` can come from data
   # (`String.to_existing_atom/1` is allowed), and the checker cannot tell
   # which loaded modules export a harmful function under those names. So at
-  # `:strict` the module must be written out and be one Elixir ships for the
-  # job. `raise` keeps its message and literal-exception forms, so
-  # `raise "msg"` and `raise ArgumentError, message: "x"` still work;
-  # re-raising a rescued exception held in a variable does not.
+  # `:strict` the module must be written out and be one audited for the
+  # job (`@raisable_exceptions`, `@module_argument_values`). `raise` keeps
+  # its literal forms, so `raise "msg"`, `raise "msg #{x}"` and
+  # `raise ArgumentError, message: "x"` still work; any other expression in
+  # the exception slot is refused, since the checker cannot tell a string
+  # from a module: a variable (`raise msg`, a rescued `reraise e, st`), a
+  # call, `<>` or a sigil.
   #
   # A struct's own `:calendar` field reaches the same callbacks
   # (`%{date | calendar: m}`) and is NOT covered: a value written into a map
@@ -1742,8 +1763,8 @@ defmodule Raxol.REPL.Sandbox do
 
   defp dispatch_rule(module, func, args) do
     case Map.fetch(@module_argument_positions, {module, func, length(args)}) do
-      {:ok, position} ->
-        if module_argument_ok?(Enum.at(args, position)),
+      {:ok, positions} ->
+        if Enum.all?(positions, &module_argument_ok?(Enum.at(args, &1))),
           do: [],
           else:
             module_argument_refusal(
@@ -1789,8 +1810,11 @@ defmodule Raxol.REPL.Sandbox do
   defp raise_refusal(name) do
     [
       "#{name} is not allowed at :strict here (its exception must be a string " <>
-        "or an Elixir exception module written out; a module is called as " <>
-        "module.exception/1)"
+        "literal, interpolation included, or an audited exception module " <>
+        "written out, such as ArgumentError, KeyError or RuntimeError; a " <>
+        "module is called as module.exception/1, and a variable or call is " <>
+        "refused even when it holds a string: interpolate it instead, " <>
+        ~S|raise "#{msg}")|
     ]
   end
 
