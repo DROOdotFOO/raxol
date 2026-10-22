@@ -299,26 +299,7 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: node "$SCOREBOARD" validate --defs "$DEFS" --record "$RECORD" --expect-commit "$HEAD_SHA"
 
-      - name: Check out gh-pages worktree
-        if: steps.artifact.outputs.found == 'true'
-        run: |
-          pages="$RUNNER_TEMP/gh-pages"
-          status=0
-          git ls-remote --exit-code --heads origin gh-pages > /dev/null || status=$?
-          if [ "$status" -eq 0 ]; then
-            git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
-            git worktree add -B gh-pages "$pages" origin/gh-pages
-          elif [ "$status" -eq 2 ]; then
-            echo "::notice::Creating orphan gh-pages branch"
-            git worktree add --detach "$pages"
-            git -C "$pages" checkout --orphan gh-pages
-            git -C "$pages" rm -rf --quiet .
-          else
-            echo "::error::git ls-remote failed with status $status"
-            exit "$status"
-          fi
-
-      - name: Commit and push
+      - name: Publish to gh-pages
         if: steps.artifact.outputs.found == 'true'
         env:
           RECORD: ${{ runner.temp }}/scoreboard/scoreboard.json
@@ -326,76 +307,5 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          pages="$RUNNER_TEMP/gh-pages"
-          scoreboard="$PWD/$SCOREBOARD"
-          defs="$PWD/$DEFS"
-          order="$RUNNER_TEMP/order.txt"
-
-          # Applies this run's record on top of whatever gh-pages holds now and
-          # sets changed=1 when that produced a commit to push. Called directly,
-          # never from a condition or $(...), so `bash -e` still stops on errors.
-          build() {
-            changed=0
-            if [ ! -f "$pages/README.md" ]; then
-              cat > "$pages/README.md" <<'EOF'
-          # Scoreboard data
-
-          Written by `.github/workflows/scoreboard.yml` on master; do not edit by hand.
-
-          - `scoreboard/records.jsonl`: one JSON record per published master commit, in
-            the order they were published (not commit order). Each line holds the commit
-            sha, the Elixir/OTP toolchain it was measured on, the metric values,
-            `recorded_at` (UTC) and the CI `run_id`.
-          - `scoreboard/latest.json`: the record of the newest recorded commit on master.
-          - `scoreboard/badges/<metric>.json`: shields.io endpoint badges for headline metrics.
-
-          Metric ids, labels, units and noise tolerances are defined in
-          `priv/scoreboard/metrics.json` on master. The measurements are deterministic
-          counts (BEAM reductions, ANSI frame bytes, memory), not wall-clock timings.
-          EOF
-            fi
-            # Newest first, so publish can pick latest.json by commit order
-            # rather than by whichever job finished last.
-            git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-            git rev-list --first-parent --max-count=1000 "refs/remotes/origin/$DEFAULT_BRANCH" > "$order"
-            node "$scoreboard" publish --defs "$defs" --record "$RECORD" \
-              --dir "$pages/scoreboard" --run-id "$RUN_ID" --order "$order"
-            git -C "$pages" add -A
-            if git -C "$pages" diff --cached --quiet; then
-              return 0
-            fi
-            git -C "$pages" \
-              -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit --quiet -m "Record scoreboard for ${HEAD_SHA:0:12}" -m "Run $RUN_ID"
-            changed=1
-          }
-
-          build
-          if [ "$changed" -eq 0 ]; then
-            echo "Nothing to publish; $HEAD_SHA is already recorded."
-            exit 0
-          fi
-
-          # Another writer may have moved gh-pages since the fetch. Rebasing an
-          # append to records.jsonl onto another append conflicts, so on a
-          # rejected push re-fetch, reset to the new tip and rebuild instead.
-          for attempt in 1 2 3; do
-            if git -C "$pages" push origin HEAD:refs/heads/gh-pages; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              break
-            fi
-            echo "::warning::Push rejected (attempt $attempt); refetching gh-pages"
-            sleep $((attempt * 5))
-            git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
-            git -C "$pages" reset --hard --quiet origin/gh-pages
-            build
-            if [ "$changed" -eq 0 ]; then
-              echo "Nothing to publish after refetch; $HEAD_SHA is already recorded."
-              exit 0
-            fi
-          done
-          echo "::error::Could not push to gh-pages after 3 attempts"
-          exit 1
+          .github/scripts/scoreboard-publish.sh "$RUN_ID" \
+            "Record scoreboard for ${HEAD_SHA:0:12}" "$RECORD"

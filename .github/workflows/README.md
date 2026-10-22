@@ -24,6 +24,7 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 
 ### Manual
 - **`rate-selfhosted.yml`**: termbox2 NIF, tty-dependent, and RATE golden suites on the self-hosted runner
+- **`scoreboard-backfill.yml`**: Measures master commits from before the scoreboard (from #1133, the first that draws today's pinned screens) with today's scoreboard and adds their records to `gh-pages` (`scripts/scoreboard-backfill.sh`)
 
 The only performance check that fails CI is the buffer gate, run by the
 `scoreboard` job in `ci-unified.yml` (`bench/core/buffer_gate.exs`). The same

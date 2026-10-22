@@ -1,0 +1,221 @@
+name: Scoreboard backfill
+
+# Measures master commits from before the scoreboard existed with today's
+# scoreboard (scripts/scoreboard-backfill.sh) and appends their records to the
+# gh-pages history, so the trend does not start at #1287.
+#
+# Manual only. It runs this branch's scripts against older master commits,
+# which are code that was already merged; `from` and `to` must be on the
+# default branch's first-parent history. Commits that already have a record,
+# touch only Markdown, `docs/`, `web/`, `assets/` or `.github/` (nothing the
+# scoreboard measures, and CI records none of them but workflow changes), or
+# already contain the scoreboard are left out. The script skips, and lists in
+# the job summary, any commit whose screens differ from today's pinned screens
+# or whose engine the harness does not reproduce. Re-running fills in whatever
+# an earlier run did not record.
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: First commit to measure (the earliest that draws today's screens is #1133)
+        default: 4c26e6944d1469959e7dd97a38e473b8f84b7dfc
+        required: true
+      to:
+        description: Last commit to measure (inclusive)
+        default: master
+        required: true
+      shards:
+        description: Parallel measuring jobs
+        default: "8"
+        required: true
+
+permissions: {}
+
+env:
+  MIX_ENV: test
+  DEFS: priv/scoreboard/metrics.json
+  SCOREBOARD: .github/scripts/scoreboard.mjs
+
+jobs:
+  plan:
+    name: Plan commits
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: List commits
+        id: plan
+        env:
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          SHARDS: ${{ inputs.shards }}
+        run: |
+          if ! [[ "$SHARDS" =~ ^[1-9][0-9]?$ ]]; then
+            echo "::error::shards must be 1-99"
+            exit 1
+          fi
+          from=$(git rev-parse --verify "$FROM^{commit}")
+          to=$(git rev-parse --verify "$TO^{commit}")
+          git rev-list --first-parent HEAD > "$RUNNER_TEMP/mainline.txt"
+          for sha in "$from" "$to"; do
+            if ! grep -qx "$sha" "$RUNNER_TEMP/mainline.txt"; then
+              echo "::error::$sha is not on ${GITHUB_REF_NAME}'s first-parent history"
+              exit 1
+            fi
+          done
+
+          recorded="$RUNNER_TEMP/recorded.txt"
+          : > "$recorded"
+          if git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages; then
+            git show origin/gh-pages:scoreboard/records.jsonl > "$RUNNER_TEMP/records.jsonl" || :
+            if [ -s "$RUNNER_TEMP/records.jsonl" ]; then
+              node "$SCOREBOARD" commits --defs "$DEFS" --records "$RUNNER_TEMP/records.jsonl" > "$recorded"
+            fi
+          fi
+
+          : > "$RUNNER_TEMP/todo.txt"
+          for sha in $(git rev-list --first-parent --reverse "$from^..$to"); do
+            if grep -qx "$sha" "$recorded"; then continue; fi
+            if git cat-file -e "$sha:lib/raxol/scoreboard.ex" 2>/dev/null; then continue; fi
+            if ! git diff --name-only "$sha^" "$sha" | grep -qvE '\.md$|^(docs|web|assets|\.github)/'; then continue; fi
+            echo "$sha" >> "$RUNNER_TEMP/todo.txt"
+          done
+
+          # Contiguous slices, so each job's worktree compiles incrementally.
+          count=$(wc -l < "$RUNNER_TEMP/todo.txt")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "$count commits to measure" >> "$GITHUB_STEP_SUMMARY"
+          matrix=$(jq -Rn --argjson shards "$SHARDS" '
+            [inputs] as $c
+            | ($c | length) as $n
+            | (if $n == 0 then 1 else ((($n + $shards - 1) / $shards) | floor) end) as $size
+            | {include: [range(0; $n; $size) as $i
+                | {index: ($i / $size | floor), commits: ($c[$i:($i + $size)] | join(" "))}]}
+          ' < "$RUNNER_TEMP/todo.txt")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  measure:
+    name: Measure (${{ matrix.index }})
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The same toolchain pin CI records master with; commits since v2.7.0
+      # pin the same versions.
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      # Any recent master build seeds the scratch worktree, so the first
+      # commit compiles incrementally too.
+      - name: Restore cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      - name: Install hex and rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Measure commits
+        env:
+          COMMITS: ${{ matrix.commits }}
+          SCOREBOARD_BACKFILL_WORKTREE: ${{ runner.temp }}/backfill-worktree
+        run: |
+          read -ra commits <<< "$COMMITS"
+          scripts/scoreboard-backfill.sh "$RUNNER_TEMP/records" "${commits[@]}"
+
+      - name: Summarize skips
+        if: always()
+        run: |
+          if [ -s "$RUNNER_TEMP/records/skipped.txt" ]; then
+            {
+              echo "### Skipped"
+              sed 's/^\([0-9a-f]\{12\}\)[0-9a-f]* /- `\1` /' "$RUNNER_TEMP/records/skipped.txt"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backfill-${{ matrix.index }}
+          path: ${{ runner.temp }}/records/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    name: Publish records
+    needs: measure
+    # Records are independent, so a failed shard does not hold back the
+    # others; a re-run measures only what is still missing.
+    if: ${{ !cancelled() && needs.measure.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Shared with scoreboard.yml's publish job: one gh-pages writer at a time.
+    concurrency:
+      group: scoreboard-gh-pages
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: backfill-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/records
+
+      - name: Validate and publish
+        env:
+          RUN_ID: ${{ github.run_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          records=()
+          # Oldest first, so records.jsonl reads in commit order.
+          for sha in $(git rev-list --first-parent --reverse HEAD); do
+            file="$RUNNER_TEMP/records/$sha.json"
+            [ -f "$file" ] || continue
+            node "$SCOREBOARD" validate --defs "$DEFS" --record "$file" --expect-commit "$sha"
+            records+=("$file")
+          done
+          echo "${#records[@]} records to publish" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${#records[@]}" -eq 0 ]; then
+            exit 0
+          fi
+          .github/scripts/scoreboard-publish.sh "$RUN_ID" \
+            "Backfill scoreboard for ${#records[@]} commits" "${records[@]}"
