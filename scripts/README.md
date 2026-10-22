@@ -39,6 +39,7 @@ subdirectories hold narrower tooling.
 | `gen_homebrew_formula.sh` | Emits the Homebrew tap formula |
 | `run_live_gates.sh` | The stablecoin cross-chain go-live matrix |
 | `smoke-test.sh` | Post-deploy smoke test |
+| `scoreboard-backfill.sh` | Measures older master commits with today's scoreboard (records for `gh-pages`), skipping any whose screens differ from the pinned ones; run by `scoreboard-backfill.yml` |
 | `acp_probe.py` | Drives an ACP agent over stdio and records the wire |
 | `find_missing_moduledocs.exs` | Lists modules without a `@moduledoc` |
 | `gen_landing_frames.exs`, `social_preview.exs` | Web asset generation |
