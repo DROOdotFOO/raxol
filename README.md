@@ -4,6 +4,8 @@
 
 [![CI](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml/badge.svg?branch=master)](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml)
 [![Hex](https://img.shields.io/hexpm/v/raxol.svg)](https://hex.pm/packages/raxol)
+[![Frame bytes per keystroke](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDROOdotFOO%2Fraxol%2Fgh-pages%2Fscoreboard%2Fbadges%2Ftable.keystroke.bytes.json&label=frame%20bytes%2Fkeystroke)](bench/README.md#scoreboard)
+[![Keystroke cost](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDROOdotFOO%2Fraxol%2Fgh-pages%2Fscoreboard%2Fbadges%2Ftable.keystroke.work_ratio.json&label=keystroke%20cost)](bench/README.md#scoreboard)
 
 [![raxol MCP server](https://glama.ai/mcp/servers/DROOdotFOO/raxol/badges/card.svg)](https://glama.ai/mcp/servers/DROOdotFOO/raxol)
 
