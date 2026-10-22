@@ -71,6 +71,44 @@ base commit on its base branch (and saying so when that is not the base commit
 itself), and appends master's records to `scoreboard/records.jsonl` on the
 `gh-pages` branch; releases list the change since the previous tag.
 
+### History
+
+The `gh-pages` history reaches back past the scoreboard itself.
+`.github/workflows/scoreboard-backfill.yml` (run by hand) runs
+`scripts/scoreboard-backfill.sh` over master's first-parent commits. The script
+copies today's `mix raxol.scoreboard` onto each commit and keeps a record only
+when the copy reproduces that commit's own engine byte for byte
+(`test/raxol/scoreboard_test.exs`) and draws the pinned screens. The first
+commit that does is #1133 (2026-09-27), so the records start there. Frame bytes
+do not move in that window, but the work does: #1170, which stopped building
+log messages on render paths, cut the table demo's work per keystroke by about
+a quarter.
+
+No release draws today's screens: v2.6.1 and v2.7.0 drop the dim (faint)
+attribute, which #1133 fixed, and v2.6.0 differs in characters and colors too,
+so releases get no records. `bench/core/scoreboard_legacy.exs` puts numbers on
+them anyway. It feeds today's cells for every scenario frame to each release's
+own terminal backend and replays the output through today's emulator. Each
+screen has 4,800 cells (120x40).
+
+```bash
+MIX_ENV=test mix run --no-start bench/core/scoreboard_legacy.exs v2.6.0 v2.6.1 v2.7.0
+```
+
+| Release | Table first frame | Table per keystroke | Flex first frame | Cells drawn differently from today |
+| --- | ---: | ---: | ---: | --- |
+| today | 5,918 B | 1,195.6 B | 6,537 B | none |
+| v2.7.0 | 5,863 B | 1,173.5 B | 6,529 B | table: every frame, up to 641 cells; flex: 162 cells (dim attribute only) |
+| v2.6.1 | 5,863 B | 1,173.5 B | 6,529 B | same as v2.7.0 |
+| v2.6.0 | 17,901 B | 19,325.9 B | 11,170 B | table: every frame, up to 1,917 cells; flex: 576 cells (characters, colors, bold, dim) |
+
+A release that draws less sends fewer bytes, which is why v2.7.0 sits below
+today. v2.6.1 is the first release with incremental frames (#534) and style
+batching. Per keystroke it sends 16 times fewer bytes than v2.6.0, which
+cleared and redrew the whole screen on every frame. v2.4.0 and v2.5.0 are
+missing because their locked dependencies build on neither their pinned OTP 26
+(cowlib) nor OTP 29 (meck).
+
 ## Suites
 
 | Directory | Contents |
