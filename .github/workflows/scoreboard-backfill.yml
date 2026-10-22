@@ -92,10 +92,11 @@ jobs:
           done
 
           # Contiguous slices, so each job's worktree compiles incrementally.
+          # One line (-c): $GITHUB_OUTPUT takes key=value per line.
           count=$(wc -l < "$RUNNER_TEMP/todo.txt")
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "$count commits to measure" >> "$GITHUB_STEP_SUMMARY"
-          matrix=$(jq -Rn --argjson shards "$SHARDS" '
+          matrix=$(jq -Rnc --argjson shards "$SHARDS" '
             [inputs] as $c
             | ($c | length) as $n
             | (if $n == 0 then 1 else ((($n + $shards - 1) / $shards) | floor) end) as $size
