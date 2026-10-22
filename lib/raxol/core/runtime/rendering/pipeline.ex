@@ -1,13 +1,18 @@
 defmodule Raxol.Core.Runtime.Rendering.Pipeline do
   @moduledoc """
-  Pure frame stages shared by `Raxol.Core.Runtime.Rendering.Engine` and
+  Frame stages shared by `Raxol.Core.Runtime.Rendering.Engine` and
   `Raxol.Scoreboard`, so the scoreboard measures the stages the engine runs
-  rather than a copy of them.
+  rather than a copy of them. They take no process state, though not all are
+  pure: `theme/1` reads the configured theme and the border beam reads the
+  clock.
 
-  The engine's remaining per-frame steps are either runtime plumbing (fetching
-  the model and view from the dispatcher, plugin transforms supplied by the
-  dispatcher's plugin manager) or the backend write, whose terminal half is
-  `Raxol.Core.Runtime.Rendering.Backends.terminal_frame/2`.
+  The engine's other per-frame steps stay in the engine: fetching the model
+  and theme id from the dispatcher, the animation pass over the model,
+  process-component substitution in the view, plugin transforms supplied by
+  the dispatcher's plugin manager, and the backend write, whose terminal half
+  is `Raxol.Core.Runtime.Rendering.Backends.terminal_frame/2`.
+  test/raxol/scoreboard_test.exs checks that the scoreboard's sequence of
+  these stages produces the engine's bytes.
   """
 
   alias Raxol.UI.Theming.Theme

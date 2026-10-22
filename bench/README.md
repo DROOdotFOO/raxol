@@ -36,18 +36,23 @@ MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs --json buffer.json
 MIX_ENV=test mix raxol.scoreboard --include buffer.json --output scoreboard.json
 ```
 
-`mix raxol.scoreboard` counts deterministic work, not time: the bytes a
-terminal receives and the BEAM reductions spent per frame of the playground
-table and flex-layout demos, driven in-process through the same pipeline the
-rendering engine runs. Repeated runs agree to within a few hundredths of a
-percent, so a pull request's numbers can be compared with master's on a
-shared CI runner. `--include` merges the buffer gate's memory rows. Metric ids,
-labels and which direction is better are in `priv/scoreboard/metrics.json`;
-add a metric there before emitting it.
+`mix raxol.scoreboard` counts deterministic work, not time: the ANSI frame
+bytes the engine writes and the BEAM reductions spent per frame of the
+playground table and flex-layout demos, driven in-process through the
+rendering engine's own stage functions. A terminal with synchronized output
+also receives a 16-byte wrapper per frame, not counted.
+`test/raxol/scoreboard_test.exs` holds `Raxol.Scoreboard.frames/2` to the
+bytes a real engine writes for the same keys. Repeated runs agree to within a
+few hundredths of a percent, so a pull request's numbers can be compared with
+master's on a shared CI runner. `--include` merges the buffer gate's memory
+rows. Metric ids, labels and which direction is better are in
+`priv/scoreboard/metrics.json`; add a metric there before emitting it.
 
 CI uploads each run's record as the `scoreboard` artifact.
-`.github/workflows/scoreboard.yml` comments a pull request's record against
-master's and appends master's records to `scoreboard/records.jsonl` on the
+`.github/workflows/scoreboard.yml` comments on the open pull request whose head
+is the tested commit, comparing against the nearest recorded ancestor of its
+base commit on its base branch (and saying so when that is not the base commit
+itself), and appends master's records to `scoreboard/records.jsonl` on the
 `gh-pages` branch; releases list the change since the previous tag.
 
 ## Suites

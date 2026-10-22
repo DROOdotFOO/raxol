@@ -9,13 +9,17 @@
 //
 // Subcommands:
 //   validate --defs FILE --record FILE [--as fresh|candidate|stored] [--expect-commit SHA]
+//            (--as defaults to fresh; see validateRecord for the modes)
 //   compare  --defs FILE --base FILE|- --head FILE [--base-label T] [--head-label T]
-//            (head read as "candidate", base as "stored"; see validateRecord)
+//            [--base-sha SHA --base-distance N]
+//            (head read as "candidate", base as "stored"; N > 0 adds a note
+//            that the base record is N commits before the PR's base SHA)
 //   badges   --defs FILE --record FILE --out DIR
 //   release  --defs FILE --records FILE --from SHA --to SHA [--from-label T] [--to-label T]
 //   lookup   --defs FILE --records FILE --commit SHA   (prints the record, or nothing)
 //   commits  --defs FILE --records FILE                (recorded commits, one per line)
 //   publish  --defs FILE --record FILE --dir DIR --run-id N [--recorded-at ISO]
+//            [--order FILE]   (newest-first commits; picks latest.json)
 //   event    --file FILE                               (key=value lines for $GITHUB_OUTPUT)
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -25,7 +29,11 @@ import { parseArgs } from "node:util";
 const MARKER = "<!-- raxol-scoreboard -->";
 const RECORD_MAX_BYTES = 64 * 1024;
 const RECORDS_MAX_BYTES = 64 * 1024 * 1024;
-const ID_RE = /^[a-z0-9_.]+$/;
+const ID_RE = /^[a-z0-9_.]{1,64}$/;
+// Column labels: branch names, tag names and fixed words. Anything else is
+// refused rather than escaped, because labels also appear outside tables.
+const LABEL_RE = /^[A-Za-z0-9._/ -]{1,64}$/;
+const UNKNOWN_LISTED = 10;
 const SHA_RE = /^[0-9a-f]{40}$/;
 const TOOLCHAIN_RE = /^[A-Za-z0-9._+-]{1,64}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
@@ -295,11 +303,15 @@ const short = (sha) => sha.slice(0, 7);
 // Code spans, so a toolchain string from an untrusted artifact (characters
 // limited by TOOLCHAIN_RE) cannot autolink (`www.…`) or reference (`GH-12`).
 const toolchainText = (t) => `Elixir \`${t.elixir}\`, OTP \`${t.otp}\`, \`${t.system_arch}\``;
-// Ids master does not define yet; ID_RE limits them to [a-z0-9_.].
-const unknownNote = (record) =>
-  record.unknown?.length
-    ? [`Not compared, not defined on master yet: ${record.unknown.map((id) => `\`${id}\``).join(", ")}.`, ""]
-    : [];
+// Ids master does not define yet; ID_RE limits them to [a-z0-9_.], at most 64
+// characters, and only the first few are listed.
+const unknownNote = (record) => {
+  const ids = record.unknown ?? [];
+  if (ids.length === 0) return [];
+  const listed = ids.slice(0, UNKNOWN_LISTED).map((id) => `\`${id}\``).join(", ");
+  const more = ids.length > UNKNOWN_LISTED ? ` and ${ids.length - UNKNOWN_LISTED} more` : "";
+  return [`Not compared, not defined on master yet: ${listed}${more}.`, ""];
+};
 const sameToolchain = (a, b) => TOOLCHAIN_KEYS.every((k) => a[k] === b[k]);
 
 function summarize(rows, subject) {
@@ -320,7 +332,10 @@ function summarize(rows, subject) {
 }
 
 // Shared body for PR comments and release notes.
-function renderComparison(defs, base, head, { baseLabel, headLabel, subject }) {
+// `baseGap`: when the base record is not the head's own base commit,
+// `{ distance, sha }` says how many commits earlier it was taken, so the
+// reader knows those commits' changes are in the comparison too.
+function renderComparison(defs, base, head, { baseLabel, headLabel, subject, baseGap = null }) {
   const out = [];
   if (base === null) {
     out.push(`No ${baseLabel} measurements to compare against yet, so this shows ${headLabel} only.`, "");
@@ -339,6 +354,15 @@ function renderComparison(defs, base, head, { baseLabel, headLabel, subject }) {
     const h = head.metrics[def.id];
     if (b === undefined && h === undefined) continue;
     rows.push({ def, b, h, change: classify(def, b, h) });
+  }
+  if (baseGap !== null && baseGap.distance > 0) {
+    const commits = baseGap.distance === 1 ? "commit" : "commits";
+    out.push(
+      `> **Note:** ${baseLabel} has no record for this PR's base \`${short(baseGap.sha)}\`; ` +
+        `the nearest is ${baseGap.distance} ${commits} earlier, so changes in those ` +
+        `${commits} are included below.`,
+      "",
+    );
   }
   out.push(summarize(rows, subject), "");
   out.push(`| Metric | ${escapeCell(baseLabel)} | ${escapeCell(headLabel)} | Change |`, "| --- | ---: | ---: | --- |");
@@ -362,8 +386,8 @@ function renderComparison(defs, base, head, { baseLabel, headLabel, subject }) {
   return out.join("\n");
 }
 
-function renderComment(defs, base, head, { baseLabel = "base", headLabel = "head" } = {}) {
-  const body = renderComparison(defs, base, head, { baseLabel, headLabel, subject: "This change" });
+function renderComment(defs, base, head, { baseLabel = "base", headLabel = "head", baseGap = null } = {}) {
+  const body = renderComparison(defs, base, head, { baseLabel, headLabel, subject: "This change", baseGap });
   return `${MARKER}\n### Scoreboard\n\n${body}\n`;
 }
 
@@ -402,6 +426,13 @@ function args(argv, spec, required) {
 
 const str = { type: "string" };
 
+// A column label from the command line, or `fallback` when none is given.
+const label = (value, fallback) => {
+  if (value === undefined) return fallback;
+  if (!LABEL_RE.test(value)) fail(`label ${JSON.stringify(value)} must match ${LABEL_RE}`);
+  return value;
+};
+
 const commands = {
   validate(argv) {
     const a = args(argv, { defs: str, record: str, as: str, "expect-commit": str }, ["defs", "record"]);
@@ -414,11 +445,24 @@ const commands = {
   },
 
   compare(argv) {
-    const a = args(argv, { defs: str, base: str, head: str, "base-label": str, "head-label": str }, ["defs", "base", "head"]);
+    const a = args(
+      argv,
+      { defs: str, base: str, head: str, "base-label": str, "head-label": str, "base-sha": str, "base-distance": str },
+      ["defs", "base", "head"],
+    );
     const defs = loadDefs(a.defs);
     const head = loadRecord(a.head, defs, "candidate");
     const base = a.base === "-" ? null : loadRecord(a.base, defs, "stored");
-    process.stdout.write(renderComment(defs, base, head, { baseLabel: a["base-label"], headLabel: a["head-label"] }));
+    const baseLabel = label(a["base-label"], "base");
+    const headLabel = label(a["head-label"], "head");
+    let baseGap = null;
+    if (a["base-distance"] !== undefined) {
+      const distance = Number(a["base-distance"]);
+      if (!/^[0-9]{1,4}$/.test(a["base-distance"])) fail(`--base-distance ${a["base-distance"]} is not a small non-negative integer`);
+      if (a["base-sha"] === undefined || !SHA_RE.test(a["base-sha"])) fail("--base-distance needs --base-sha with a 40-character hex sha");
+      baseGap = { distance, sha: a["base-sha"] };
+    }
+    process.stdout.write(renderComment(defs, base, head, { baseLabel, headLabel, baseGap }));
   },
 
   badges(argv) {
@@ -434,8 +478,8 @@ const commands = {
     const to = findRecord(a.records, a.to, defs);
     if (from === null || to === null) return;
     const body = renderComparison(defs, from, to, {
-      baseLabel: a["from-label"] ?? short(a.from),
-      headLabel: a["to-label"] ?? short(a.to),
+      baseLabel: label(a["from-label"], short(a.from)),
+      headLabel: label(a["to-label"], short(a.to)),
       subject: "This release",
     });
     process.stdout.write(`## Scoreboard\n\n${body}\n`);
@@ -453,9 +497,17 @@ const commands = {
   },
 
   // Appends the record to DIR/records.jsonl unless its commit is already
-  // there, then rewrites DIR/latest.json and DIR/badges from the last line.
+  // there, then rewrites DIR/latest.json and DIR/badges. Lines are kept in the
+  // order they were published, which is not commit order: jobs can finish out
+  // of order and old runs can be re-run. So "latest" is the first commit in
+  // --order (newest first, e.g. `git rev-list --first-parent master`) that has
+  // a record; without --order, or when none matches, the last line.
   publish(argv) {
-    const a = args(argv, { defs: str, record: str, dir: str, "run-id": str, "recorded-at": str }, ["defs", "record", "dir", "run-id"]);
+    const a = args(
+      argv,
+      { defs: str, record: str, dir: str, "run-id": str, "recorded-at": str, order: str },
+      ["defs", "record", "dir", "run-id"],
+    );
     const defs = loadDefs(a.defs);
     const runId = Number(a["run-id"]);
     if (!/^[1-9][0-9]*$/.test(a["run-id"]) || !Number.isSafeInteger(runId)) fail(`--run-id ${a["run-id"]} is not a positive integer`);
@@ -473,10 +525,19 @@ const commands = {
       process.stdout.write(`already recorded ${stored.commit}\n`);
     }
 
-    const history = readHistory(historyFile);
-    const last = history.at(-1);
-    const what = `records ${historyFile}:${last.lineNo}`;
-    const latest = validateRecord(parseJson(last.line, what), defs, what, "stored");
+    let latest = null;
+    if (a.order !== undefined) {
+      const recorded = new Set(recordedCommits(historyFile, defs));
+      const order = readCapped(a.order, RECORDS_MAX_BYTES, "order").split("\n").map((l) => l.trim());
+      const newest = order.find((sha) => SHA_RE.test(sha) && recorded.has(sha));
+      if (newest !== undefined) latest = findRecord(historyFile, newest, defs);
+    }
+    if (latest === null) {
+      const last = readHistory(historyFile).at(-1);
+      const what = `records ${historyFile}:${last.lineNo}`;
+      latest = validateRecord(parseJson(last.line, what), defs, what, "stored");
+    }
+    process.stdout.write(`latest ${latest.commit}\n`);
     writeFileSync(join(a.dir, "latest.json"), `${JSON.stringify(latest, null, 2)}\n`);
     writeBadges(defs, latest, join(a.dir, "badges"));
   },

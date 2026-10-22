@@ -43,10 +43,11 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
 
   @doc """
   Builds the ANSI frame for `cells` without writing it: returns the new screen
-  buffer and the bytes a terminal would receive, diffed against `state.buffer`
-  (a keyframe when that is nil, the size changed, or `state.force_repaint`).
-  `state` needs `:width`, `:height`, `:buffer` and `:force_repaint`.
-  `render_to_terminal/2` writes this frame; `Raxol.Scoreboard` measures it.
+  buffer and the frame payload, diffed against `state.buffer` (a keyframe when
+  that is nil, the size changed, or `state.force_repaint`). `state` needs
+  `:width`, `:height`, `:buffer` and `:force_repaint`. `render_to_terminal/2`
+  writes this payload, inside the synchronized-output wrapper when the
+  terminal supports it; `Raxol.Scoreboard` measures it.
   """
   @spec terminal_frame(list(), map()) :: {ScreenBuffer.t(), binary()}
   def terminal_frame(cells, state) do

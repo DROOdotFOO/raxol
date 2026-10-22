@@ -35,11 +35,14 @@ jobs:
       contents: read
       pull-requests: write
     # One comment job per PR branch at a time, so two runs cannot both find no
-    # comment and both create one. Queued, not cancelled: the head-commit
-    # check before writing drops a run that is no longer current.
+    # comment and both create one. `queue: max` keeps every waiting job (the
+    # default keeps one and cancels the rest, which could drop the current
+    # head's job behind a stale re-run); the head-commit check before writing
+    # drops a job whose commit is no longer the PR's head.
     concurrency:
       group: scoreboard-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
+      queue: max
     steps:
       # Docs-only runs skip the job that uploads the artifact; that is not an
       # error, so look before downloading.
@@ -103,10 +106,10 @@ jobs:
           fi
           cat "$RUNNER_TEMP/event.out" >> "$GITHUB_OUTPUT"
 
-      # Every candidate PR must have the tested commit as its head right now.
-      # The run's own pull_requests list is tried first; it is empty for fork
-      # PRs, so the artifact's pr_number is the fallback, held to the same
-      # check.
+      # Every candidate PR must be open and have the tested commit as its head
+      # right now. The run's own pull_requests list is tried first; it is empty
+      # for fork PRs, so the artifact's pr_number is the fallback, held to the
+      # same check. The PR's base branch comes from the API, never the artifact.
       - name: Resolve pull request
         id: pr
         if: steps.artifact.outputs.found == 'true'
@@ -121,30 +124,45 @@ jobs:
             if (Number.isSafeInteger(claimed) && claimed > 0) candidates.push(claimed);
             for (const number of [...new Set(candidates)]) {
               const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
-              if (pr.head.sha === run.head_sha) {
+              if (pr.state === 'open' && pr.head.sha === run.head_sha) {
                 core.setOutput('number', String(number));
+                // Also the column label, so restricted to what scoreboard.mjs
+                // accepts as one; anything else gets no comparison.
+                const ref = /^[A-Za-z0-9._/-]{1,64}$/.test(pr.base.ref) ? pr.base.ref : '';
+                core.setOutput('base_ref', ref);
                 return;
               }
-              core.info(`PR #${number} head is ${pr.head.sha}, not ${run.head_sha}`);
+              core.info(`PR #${number} is ${pr.state} at ${pr.head.sha}, not open at ${run.head_sha}`);
             }
             core.notice('No open pull request has this run\'s commit as its head; not commenting.');
 
-      # The nearest recorded first-parent ancestor of the PR's base commit,
-      # never a newer record: master commits after the base are not in this PR
-      # and must not be attributed to it. No such record means no comparison.
+      # The base record is the nearest recorded first-parent ancestor of the
+      # base commit CI merged with, never a newer record: master commits after
+      # it are not in this PR. That commit comes from the artifact, so it is
+      # only used if it is on the PR's real base branch (from the API above);
+      # a retargeted or forged base gets no comparison. When the record is
+      # not the base commit itself, the distance goes into the comment.
       - name: Fetch master record
         id: base
         if: steps.pr.outputs.number != ''
         env:
           BASE_SHA: ${{ steps.event.outputs.base_sha }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
         run: |
           base="$RUNNER_TEMP/base.json"
           records="$RUNNER_TEMP/records.jsonl"
-          # Written once on every exit path; "-" means compare against nothing.
+          # Written once on every exit path; file "-" means compare against
+          # nothing.
           out=-
-          trap 'echo "file=$out" >> "$GITHUB_OUTPUT"' EXIT
-          if [ -z "$BASE_SHA" ]; then
-            echo "::notice::No base commit for this run; comparing against nothing"
+          distance=
+          trap 'printf "file=%s\ndistance=%s\n" "$out" "$distance" >> "$GITHUB_OUTPUT"' EXIT
+          if [ -z "$BASE_SHA" ] || [ -z "$BASE_REF" ]; then
+            echo "::notice::No usable base commit or base branch; comparing against nothing"
+            exit 0
+          fi
+          # fetch-depth: 0 fetched every branch as origin/*.
+          if ! git merge-base --is-ancestor "$BASE_SHA" "refs/remotes/origin/$BASE_REF" 2>/dev/null; then
+            echo "::notice::$BASE_SHA is not on $BASE_REF (retargeted PR?); comparing against nothing"
             exit 0
           fi
           if ! git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages \
@@ -152,30 +170,35 @@ jobs:
             echo "::notice::No scoreboard history on gh-pages yet; comparing against nothing"
             exit 0
           fi
-          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
-            && ! git fetch --no-tags origin "$BASE_SHA"; then
-            echo "::notice::Base commit $BASE_SHA is not fetchable; comparing against nothing"
-            exit 0
-          fi
           node "$SCOREBOARD" commits --defs "$DEFS" --records "$records" > "$RUNNER_TEMP/recorded.txt"
           git rev-list --first-parent --max-count=200 "$BASE_SHA" > "$RUNNER_TEMP/walk.txt"
-          nearest=$(grep -Fx -m1 -f "$RUNNER_TEMP/recorded.txt" "$RUNNER_TEMP/walk.txt" || true)
-          if [ -z "$nearest" ]; then
-            echo "::notice::No recorded master commit within 200 first-parent ancestors of $BASE_SHA"
+          line=$(grep -Fxn -m1 -f "$RUNNER_TEMP/recorded.txt" "$RUNNER_TEMP/walk.txt" || true)
+          if [ -z "$line" ]; then
+            echo "::notice::No recorded commit within 200 first-parent ancestors of $BASE_SHA"
             exit 0
           fi
+          nearest="${line#*:}"
           node "$SCOREBOARD" lookup --defs "$DEFS" --records "$records" --commit "$nearest" > "$base"
           node "$SCOREBOARD" validate --defs "$DEFS" --record "$base" --as stored
+          distance=$(( ${line%%:*} - 1 ))
           out=$base
 
       - name: Render comment
         if: steps.pr.outputs.number != ''
         env:
           BASE: ${{ steps.base.outputs.file }}
+          DISTANCE: ${{ steps.base.outputs.distance }}
+          BASE_SHA: ${{ steps.event.outputs.base_sha }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
           HEAD: ${{ runner.temp }}/scoreboard/scoreboard.json
         run: |
+          gap=()
+          if [ -n "$DISTANCE" ]; then
+            gap=(--base-sha "$BASE_SHA" --base-distance "$DISTANCE")
+          fi
           node "$SCOREBOARD" compare --defs "$DEFS" --base "$BASE" --head "$HEAD" \
-            --base-label master --head-label "this PR" > "$RUNNER_TEMP/comment.md"
+            --base-label "${BASE_REF:-base}" --head-label "this PR" "${gap[@]}" \
+            > "$RUNNER_TEMP/comment.md"
 
       - name: Upsert comment
         if: steps.pr.outputs.number != ''
@@ -191,8 +214,8 @@ jobs:
             // Checked again right before writing: a push while this job ran
             // makes these numbers stale, and the newer run will comment.
             const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: issue_number });
-            if (pr.head.sha !== context.payload.workflow_run.head_sha) {
-              core.notice(`PR #${issue_number} moved to ${pr.head.sha}; not writing stale numbers.`);
+            if (pr.state !== 'open' || pr.head.sha !== context.payload.workflow_run.head_sha) {
+              core.notice(`PR #${issue_number} is ${pr.state} at ${pr.head.sha}; not writing stale numbers.`);
               return;
             }
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -224,9 +247,12 @@ jobs:
     permissions:
       actions: read
       contents: write
+    # Every publish job runs (`queue: max`; the default would cancel all but
+    # one waiting job and lose those commits' records), one at a time.
     concurrency:
       group: scoreboard-gh-pages
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Find scoreboard artifact
         id: artifact
@@ -254,6 +280,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
+          # Master's history orders the records when choosing latest.json.
+          fetch-depth: 0
 
       - name: Download scoreboard artifact
         if: steps.artifact.outputs.found == 'true'
@@ -296,10 +324,12 @@ jobs:
           RECORD: ${{ runner.temp }}/scoreboard/scoreboard.json
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           pages="$RUNNER_TEMP/gh-pages"
           scoreboard="$PWD/$SCOREBOARD"
           defs="$PWD/$DEFS"
+          order="$RUNNER_TEMP/order.txt"
 
           # Applies this run's record on top of whatever gh-pages holds now and
           # sets changed=1 when that produced a commit to push. Called directly,
@@ -312,19 +342,24 @@ jobs:
 
           Written by `.github/workflows/scoreboard.yml` on master; do not edit by hand.
 
-          - `scoreboard/records.jsonl`: one JSON record per master commit, oldest first.
-            Each line holds the commit sha, the Elixir/OTP toolchain it was measured on,
-            the metric values, `recorded_at` (UTC) and the CI `run_id`.
-          - `scoreboard/latest.json`: the most recent record.
+          - `scoreboard/records.jsonl`: one JSON record per published master commit, in
+            the order they were published (not commit order). Each line holds the commit
+            sha, the Elixir/OTP toolchain it was measured on, the metric values,
+            `recorded_at` (UTC) and the CI `run_id`.
+          - `scoreboard/latest.json`: the record of the newest recorded commit on master.
           - `scoreboard/badges/<metric>.json`: shields.io endpoint badges for headline metrics.
 
           Metric ids, labels, units and noise tolerances are defined in
           `priv/scoreboard/metrics.json` on master. The measurements are deterministic
-          counts (BEAM reductions, bytes written, memory), not wall-clock timings.
+          counts (BEAM reductions, ANSI frame bytes, memory), not wall-clock timings.
           EOF
             fi
+            # Newest first, so publish can pick latest.json by commit order
+            # rather than by whichever job finished last.
+            git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+            git rev-list --first-parent --max-count=1000 "refs/remotes/origin/$DEFAULT_BRANCH" > "$order"
             node "$scoreboard" publish --defs "$defs" --record "$RECORD" \
-              --dir "$pages/scoreboard" --run-id "$RUN_ID"
+              --dir "$pages/scoreboard" --run-id "$RUN_ID" --order "$order"
             git -C "$pages" add -A
             if git -C "$pages" diff --cached --quiet; then
               return 0

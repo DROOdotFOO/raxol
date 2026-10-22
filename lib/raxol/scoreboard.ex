@@ -9,13 +9,17 @@ defmodule Raxol.Scoreboard do
   `Raxol.UI.Renderer.render_to_cells/2`, the border-beam pass
   (`Pipeline.apply_border_beam/2`), and the terminal frame
   (`Backends.terminal_frame/2`) diffed against the previous one. The stage
-  functions are the engine's own, not copies. Plugin transforms are not
-  applied: they come from the dispatcher's plugin manager at runtime, and the
-  demos run with none loaded, as an app does by default.
+  functions are the engine's own, not copies, and `frames/2` is held to the
+  engine's exact output by test/raxol/scoreboard_test.exs, which drives a real
+  `Raxol.Core.Runtime.Rendering.Engine` through the same keys. Plugin
+  transforms are not applied: they come from the dispatcher's plugin manager
+  at runtime, and the demos run with none loaded, as an app does by default.
 
   It counts two things:
 
-    * **bytes**: the size of the ANSI frame a terminal would receive. Exact.
+    * **frame bytes**: the size of the ANSI frame payload the engine writes.
+      Exact. A terminal that supports synchronized output also receives the
+      16-byte `\\e[?2026h`/`\\e[?2026l` wrapper per frame, which is not counted.
     * **reductions**: the BEAM's unit of work, counted for the measuring
       process only (`Process.info(self(), :reductions)`). Unlike wall-clock
       time it does not move with runner load: repeated runs agree to within a
@@ -153,31 +157,52 @@ defmodule Raxol.Scoreboard do
     }
   end
 
+  @doc """
+  The ANSI frame payloads `app` produces at 120x40: its first frame (a
+  keyframe), then one frame per key in `keys`, each diffed against the one
+  before. These are the bytes the rendering engine writes for the same model
+  sequence; the scoreboard's byte metrics are their sizes.
+  """
+  @spec frames(module(), [String.t()]) :: [binary()]
+  def frames(app, keys) do
+    model = init_model(app)
+    {prev, first} = frame(app, model, %{buffer: nil, prepared: nil})
+
+    {_model, _prev, rest} =
+      Enum.reduce(keys, {model, prev, []}, fn key, {model, prev, acc} ->
+        model = unwrap(app.update(key_event(key), model))
+        {next, payload} = frame(app, model, prev)
+        {model, next, [payload | acc]}
+      end)
+
+    [first | Enum.reverse(rest)]
+  end
+
   defp run_scenario(app, keys) do
     model = init_model(app)
 
     r0 = reductions()
-    {prev, keyframe_bytes} = frame(app, model, %{buffer: nil, prepared: nil})
+    {prev, keyframe} = frame(app, model, %{buffer: nil, prepared: nil})
     keyframe_reductions = reductions() - r0
 
     r1 = reductions()
 
     {_model, _prev, script_bytes} =
       Enum.reduce(keys, {model, prev, 0}, fn key, {model, prev, bytes} ->
-        event = %Event{type: :key, data: %{key: :char, char: key}}
-        model = unwrap(app.update(event, model))
-        {next, frame_bytes} = frame(app, model, prev)
-        {model, next, bytes + frame_bytes}
+        model = unwrap(app.update(key_event(key), model))
+        {next, payload} = frame(app, model, prev)
+        {model, next, bytes + byte_size(payload)}
       end)
 
     %{
-      keyframe_bytes: keyframe_bytes,
+      keyframe_bytes: byte_size(keyframe),
       keyframe_reductions: keyframe_reductions,
       script_bytes: script_bytes,
       script_reductions: reductions() - r1
     }
   end
 
+  defp key_event(char), do: %Event{type: :key, data: %{key: :char, char: char}}
   defp init_model(app), do: unwrap(app.init(%{}))
 
   # TEA callbacks return either the model or `{model, commands}`.
@@ -204,7 +229,7 @@ defmodule Raxol.Scoreboard do
         force_repaint: false
       })
 
-    {%{buffer: buffer, prepared: prepared}, byte_size(bytes)}
+    {%{buffer: buffer, prepared: prepared}, bytes}
   end
 
   defp reductions do
