@@ -768,16 +768,20 @@ jobs:
           mix test test/raxol/terminal/input_protocol_canary_test.exs \
             --only input_protocol_canary
 
-  # Buffer fill/read/scroll throughput and per-cell memory. This is the only
-  # performance check in the repo that fails a job.
+  # Buffer fill/read/scroll throughput and per-cell memory, then the
+  # scoreboard. The buffer gate is still the only performance check in the
+  # repo that fails a job on a budget: `mix run` propagates the script's exit
+  # status, 1 for a budget breach and 2 when it could not measure.
   #
-  # `mix run` propagates the script's exit status, and its flushing shutdown
-  # uses status 1 for a budget breach and 2 when it could not measure. Either
-  # fails this job, and `ci-status` aggregates this job's result; whether the
-  # resulting `CI Status` check is required for a merge is a branch-protection
-  # setting that lives outside this repo.
-  buffer-gate:
-    name: Buffer performance gate
+  # The scoreboard (`mix raxol.scoreboard`, see lib/raxol/scoreboard.ex)
+  # records deterministic counters -- bytes emitted and BEAM reductions per
+  # frame of a reference demo, plus the gate's memory rows -- and uploads
+  # them as the `scoreboard` artifact. It reports; it does not gate on the
+  # numbers, only on collecting them. scoreboard.yml (a `workflow_run` on
+  # this workflow) compares a pull request's record against master's on the
+  # gh-pages branch and comments, and publishes master's records there.
+  scoreboard:
+    name: Buffer gate + scoreboard
     needs: [setup, compile]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -815,7 +819,39 @@ jobs:
       # application puts a supervision tree, the endpoint and telemetry
       # handlers on the same schedulers.
       - name: Run buffer performance gate
-        run: mix run --no-start bench/core/buffer_gate.exs
+        run: mix run --no-start bench/core/buffer_gate.exs --json buffer-gate.json
+
+      - name: Collect scoreboard
+        env:
+          RECORD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p scoreboard
+          mix raxol.scoreboard --include buffer-gate.json \
+            --commit "$RECORD_COMMIT" --output scoreboard/scoreboard.json
+
+      # Describes the run for scoreboard.yml, which treats this file as
+      # untrusted data and checks it against the triggering run.
+      - name: Describe the run
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          jq -n --arg event "$EVENT_NAME" --arg pr "$PR_NUMBER" \
+            --arg base "$BASE_SHA" --arg head "$HEAD_SHA" --arg ref "$REF" \
+            '{event: $event,
+              pr_number: (if $pr == "" then null else ($pr | tonumber) end),
+              base_sha: (if $base == "" then null else $base end),
+              head_sha: $head, ref: $ref}' > scoreboard/event.json
+
+      - name: Upload scoreboard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scoreboard
+          path: scoreboard/
+          retention-days: 30
 
   test-integration:
     name: Integration Tests
@@ -1073,7 +1109,7 @@ jobs:
         test-property,
         package-tests,
         input-canary,
-        buffer-gate,
+        scoreboard,
         credo,
         security,
         platform,
@@ -1147,9 +1183,10 @@ jobs:
             exit 1
           fi
 
-          if [ "${{ needs.buffer-gate.result }}" != "success" ]; then
-            echo "❌ Buffer performance gate failed"
+          if [ "${{ needs.scoreboard.result }}" != "success" ]; then
+            echo "❌ Buffer gate or scoreboard failed"
             echo "   Reproduce: MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs"
+            echo "   and: MIX_ENV=test mix raxol.scoreboard"
             echo "   Budgets and their headroom are declared at the top of that file."
             exit 1
           fi

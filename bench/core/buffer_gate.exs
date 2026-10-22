@@ -224,8 +224,34 @@ defmodule BufferGate do
     # the completed rows in the log.
     rows = Enum.flat_map(@budgets, &measure(&1, style))
 
+    write_scoreboard(rows, System.argv())
     verdict(rows)
   end
+
+  # `--json PATH` writes the deterministic memory rows as scoreboard metrics
+  # (`buffer.<size>.<flat|heap>_bytes_per_cell`, see
+  # priv/scoreboard/metrics.json) for `mix raxol.scoreboard --include PATH`.
+  # Timing rows are left out: they are wall-clock and belong to the gate only.
+  # Written before the verdict so a breached run still records what it saw.
+  defp write_scoreboard(rows, ["--json", path]) do
+    metrics =
+      for {label, metric, measured, _budget} <- rows,
+          id <- List.wrap(scoreboard_id(metric)),
+          into: %{} do
+        {"buffer.#{label}.#{id}", Float.round(measured * 1.0, 2)}
+      end
+
+    File.write!(path, Jason.encode!(%{metrics: metrics}))
+  end
+
+  defp write_scoreboard(_rows, []), do: :ok
+
+  defp write_scoreboard(_rows, args),
+    do: abort("unrecognised arguments #{inspect(args)}; expected --json PATH")
+
+  defp scoreboard_id("flat bytes/cell"), do: "flat_bytes_per_cell"
+  defp scoreboard_id("heap bytes/cell"), do: "heap_bytes_per_cell"
+  defp scoreboard_id(_timing), do: nil
 
   # Load each target before the first measured pass.
   defp warmup(style) do

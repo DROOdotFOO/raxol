@@ -21,10 +21,10 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
   alias Raxol.Core.Runtime.ProcessComponent
   alias Raxol.Core.Runtime.Rendering.Backends
+  alias Raxol.Core.Runtime.Rendering.Pipeline
   alias Raxol.Terminal.ScreenBuffer
   alias Raxol.UI.Layout.Engine, as: LayoutEngine
   alias Raxol.UI.Renderer, as: UIRenderer
-  alias Raxol.UI.Theming.Theme
 
   defmodule State do
     @moduledoc false
@@ -257,7 +257,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     case fetch_render_context(state) do
       {:ok, %{model: current_model, theme_id: current_theme_id}} ->
         animated_model = apply_animations(current_model)
-        theme = render_theme(current_theme_id)
+        theme = Pipeline.theme(current_theme_id)
 
         case do_render_frame(animated_model, theme, state) do
           {:ok, new_state} ->
@@ -300,7 +300,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
         )
 
         animated_model = apply_animations(current_model)
-        theme = render_theme(current_theme_id)
+        theme = Pipeline.theme(current_theme_id)
 
         case do_render_frame(animated_model, theme, state) do
           {:ok, rendered_state} -> rendered_state
@@ -330,18 +330,6 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       Raxol.Animation.Framework.apply_animations_to_state(current_model)
     catch
       :exit, _reason -> current_model
-    end
-  end
-
-  # The dispatcher's theme id is the default unless the app (a model
-  # `:current_theme_id`) or the user's preferences chose another. The default
-  # renders `Theme.current/0`, the theme `Raxol.set_theme/1` sets; a chosen id
-  # renders the theme registered under it, or `Theme.current/0` if none is.
-  defp render_theme(theme_id) do
-    if theme_id in [nil, Theme.default_theme_id()] do
-      Theme.current()
-    else
-      Enum.find(Theme.list_themes(), Theme.current(), &(&1.id == theme_id))
     end
   end
 
@@ -453,45 +441,8 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     end
   end
 
-  defp safe_apply_border_beam(cells, positioned_elements) do
-    hints_with_bounds = collect_border_beam_hints(positioned_elements)
-
-    case hints_with_bounds do
-      [] ->
-        {:ok, cells}
-
-      hints ->
-        Raxol.Core.ErrorHandling.safe_call(fn ->
-          {:ok, Raxol.Effects.BorderBeam.CellApplier.apply_hints(cells, hints)}
-        end)
-        |> case do
-          {:ok, result} -> result
-          {:error, _reason} -> {:ok, cells}
-        end
-    end
-  end
-
-  defp collect_border_beam_hints(elements) when is_list(elements) do
-    Enum.flat_map(elements, &border_beam_hints_for/1)
-  end
-
-  defp border_beam_hints_for(%{
-         animation_hints: hints,
-         x: x,
-         y: y,
-         width: w,
-         height: h
-       })
-       when is_list(hints) and is_integer(x) and is_integer(y) and w > 0 and
-              h > 0 do
-    bounds = %{x: x, y: y, width: w, height: h}
-
-    hints
-    |> Enum.filter(&match?(%{type: :border_beam}, &1))
-    |> Enum.map(&{&1, bounds})
-  end
-
-  defp border_beam_hints_for(_), do: []
+  defp safe_apply_border_beam(cells, positioned_elements),
+    do: {:ok, Pipeline.apply_border_beam(cells, positioned_elements)}
 
   defp log_render_error(reason, state) do
     Raxol.Core.Runtime.Log.error_with_stacktrace(

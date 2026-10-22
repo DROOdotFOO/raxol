@@ -7,6 +7,7 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 ### Core Workflows
 - **`ci-unified.yml`**: Main CI pipeline; `CI Status` aggregates the blocking jobs and is the required check
 - **`platform-tests.yml`**: macOS and Windows suites, reusable; called by `ci-unified.yml` on platform-sensitive changes and by `nightly.yml`
+- **`scoreboard.yml`**: `workflow_run` after `ci-unified.yml`; comments a pull request's scoreboard against master's and publishes master's records to `gh-pages`. Never runs pull request code
 - **`security.yml`**: Dependency audit, Hex advisories, Sobelow, Semgrep, secret detection
 - **`nightly.yml`**: Elixir/OTP × OS test matrix, Windows, extended property run, Dialyzer ratchet; keeps one `nightly-build` issue open while red
 - **`lockstep-deps.yml`**: Cross-package dependency constraint and prose/link checks
@@ -14,7 +15,7 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 - **`nix.yml`**: Flake build on Linux and macOS
 
 ### Release Workflows
-- **`release.yml`**: Tag-authorized Hex train plus GitHub release for `v*` tags
+- **`release.yml`**: Tag-authorized Hex train plus GitHub release for `v*` tags; the release notes get the scoreboard change since the previous `v*` tag
 - **`release-hex.yml`**: Reusable, approval-gated, dependency-ordered Hex publication
 - **`release-raxol-cli.yml`**: Native CLI builds, approval-gated npm
   publication with provenance, and CLI GitHub releases
@@ -24,8 +25,10 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 ### Manual
 - **`rate-selfhosted.yml`**: termbox2 NIF, tty-dependent, and RATE golden suites on the self-hosted runner
 
-The only performance check that fails CI is the `buffer-gate` job in
-`ci-unified.yml` (`bench/core/buffer_gate.exs`).
+The only performance check that fails CI is the buffer gate, run by the
+`scoreboard` job in `ci-unified.yml` (`bench/core/buffer_gate.exs`). The same
+job records the scoreboard (`mix raxol.scoreboard`), which `scoreboard.yml`
+turns into a pull-request comment and a master time series on `gh-pages`.
 
 ## What runs when
 
