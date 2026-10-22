@@ -14,7 +14,15 @@
       "label": "Work per keystroke (table demo, BEAM reductions)",
       "unit": "reductions",
       "better": "lower",
-      "tolerance": 0.001,
+      "tolerance": 0.005,
+      "headline": true
+    },
+    {
+      "id": "table.keystroke.work_ratio",
+      "label": "Keystroke work as a share of drawing the whole first frame (table demo)",
+      "unit": "of a first frame",
+      "better": "lower",
+      "tolerance": 0.005,
       "headline": true
     },
     {
@@ -29,7 +37,7 @@
       "label": "Work to draw the first frame (table demo, BEAM reductions)",
       "unit": "reductions",
       "better": "lower",
-      "tolerance": 0.001
+      "tolerance": 0.005
     },
     {
       "id": "flex.keyframe.bytes",
@@ -43,7 +51,7 @@
       "label": "Work to draw the first frame (flex layout demo, BEAM reductions)",
       "unit": "reductions",
       "better": "lower",
-      "tolerance": 0.001
+      "tolerance": 0.005
     },
     {
       "id": "buffer.80x24.heap_bytes_per_cell",

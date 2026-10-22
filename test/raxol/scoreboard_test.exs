@@ -70,7 +70,8 @@ defmodule Raxol.ScoreboardTest do
         String.replace(written, ["\e[?2026h", "\e[?2026l"], "")
       end
 
-    scoreboard_frames = Raxol.Scoreboard.frames(TableDemo, @keys)
+    scoreboard_frames =
+      TableDemo |> Raxol.Scoreboard.frames(@keys) |> Enum.map(&elem(&1, 0))
 
     assert length(engine_frames) == length(scoreboard_frames)
 
@@ -80,6 +81,41 @@ defmodule Raxol.ScoreboardTest do
              "frame #{index}: engine wrote #{byte_size(engine_frame)} bytes, " <>
                "the scoreboard measured #{byte_size(scoreboard_frame)}"
     end
+  end
+
+  # The scoreboard refuses to measure frames that do not replay to their own
+  # screen. This proves that check can fail: the real frames pass it, and the
+  # same frames with one character changed in one diff frame do not.
+  test "replay_mismatch/1 accepts the real frames and catches a corrupted one" do
+    frames = Raxol.Scoreboard.frames(TableDemo, @keys)
+    assert Raxol.Scoreboard.replay_mismatch(frames) == nil
+
+    # A row a diff frame redraws: one of the table's framework names.
+    {index, word} =
+      frames
+      |> Enum.with_index()
+      |> Enum.drop(1)
+      |> Enum.find_value(fn {{payload, _screen}, i} ->
+        word =
+          Enum.find(
+            ~w(Raxol Textual Ratatui Blessed),
+            &String.contains?(payload, &1)
+          )
+
+        word && {i, word}
+      end)
+
+    {payload, screen} = Enum.at(frames, index)
+
+    tampered =
+      String.replace(payload, word, "X" <> String.slice(word, 1..-1//1),
+        global: false
+      )
+
+    corrupted = List.replace_at(frames, index, {tampered, screen})
+
+    assert %{frame: ^index, cells: 1} =
+             Raxol.Scoreboard.replay_mismatch(corrupted)
   end
 
   defp model_sequence(app, keys) do
