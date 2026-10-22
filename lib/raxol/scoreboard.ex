@@ -50,31 +50,40 @@ defmodule Raxol.Scoreboard do
   alias Raxol.Core.Events.Event
   alias Raxol.Core.Runtime.Rendering.{Backends, Pipeline}
   alias Raxol.Playground.Demos.{FlexLayoutDemo, TableDemo}
+  alias Raxol.StableInspect
   alias Raxol.Terminal.{Emulator, ScreenBuffer}
   alias Raxol.UI.Layout.Engine, as: LayoutEngine
   alias Raxol.UI.Layout.Preparer
 
   @defs_rel "scoreboard/metrics.json"
+  @screens_rel "scoreboard/screens.refs"
   @size %{width: 120, height: 40}
   @runs 3
   # Navigation, a sort and a border change: rows move, the header changes and
   # the whole grid redraws, so the script covers small and large diffs.
   @table_keys ~w(j j j j j s j j k b)
+  @scenarios [{"table", TableDemo, @table_keys}, {"flex", FlexLayoutDemo, []}]
 
   @type metrics :: %{String.t() => number()}
 
   @doc """
   Run every scenario and return `%{metric_id => value}`.
 
-  Before anything is measured, every scenario's frames are replayed through
-  `Raxol.Terminal.Emulator` and must reproduce the screen they were rendered
-  from (see `replay_mismatch/1`); otherwise this raises. That is what keeps
-  the byte metrics honest: a change can only lower them by sending fewer bytes
-  for the same screen, not by sending a broken one.
+  Before anything is measured, two checks keep the byte metrics honest, and
+  either failing raises:
+
+    * every scenario's frames are replayed through `Raxol.Terminal.Emulator`
+      and must reproduce the screen they were rendered from
+      (`replay_mismatch/1`), so bytes cannot fall by sending a broken frame;
+    * every frame's screen must match its fingerprint in
+      `priv/scoreboard/screens.refs` (`check_screens/0`), so bytes cannot fall
+      by drawing less. An intended visual change re-blesses the fingerprints
+      (`mix raxol.scoreboard --bless`) in the same pull request, where review
+      sees it.
   """
   @spec collect() :: metrics()
   def collect do
-    for {app, keys} <- [{TableDemo, @table_keys}, {FlexLayoutDemo, []}] do
+    for {_name, app, keys} <- @scenarios do
       case replay_mismatch(frames(app, keys)) do
         nil ->
           :ok
@@ -83,6 +92,11 @@ defmodule Raxol.Scoreboard do
           raise "scoreboard: #{inspect(app)}'s frames do not reproduce its screen " <>
                   "when replayed through the terminal emulator: #{inspect(mismatch)}"
       end
+    end
+
+    case check_screens() do
+      :ok -> :ok
+      {:error, problems} -> raise screens_error(problems)
     end
 
     table = scenario(TableDemo, @table_keys)
@@ -105,6 +119,149 @@ defmodule Raxol.Scoreboard do
       "flex.keyframe.reductions" => flex.keyframe_reductions
     }
   end
+
+  # -- screen fingerprints --
+
+  @doc """
+  A fingerprint of every scenario frame's screen, as `{"table:3", sha256}`:
+  the scenario name and frame index (0 is the first frame), and a hash of
+  every cell's character and full style, serialized stably across Elixir
+  releases and architectures (the same rules as `Raxol.RATE`).
+  """
+  @spec screen_fingerprints() :: [{String.t(), String.t()}]
+  def screen_fingerprints do
+    for {name, app, keys} <- @scenarios,
+        {{_payload, screen}, index} <- Enum.with_index(frames(app, keys)) do
+      {"#{name}:#{index}", fingerprint(screen)}
+    end
+  end
+
+  @doc """
+  Compare `screen_fingerprints/0` with `priv/scoreboard/screens.refs`.
+  Returns `:ok`, or `{:error, problems}` listing every frame whose screen
+  changed, has no reference, or has a reference but no longer exists.
+  """
+  @spec check_screens() :: :ok | {:error, [String.t()]}
+  def check_screens do
+    refs = load_screen_refs()
+    current = screen_fingerprints()
+    drawn = Enum.map(current, &elem(&1, 0))
+
+    gone =
+      for key <- Enum.sort(Map.keys(refs) -- drawn),
+          do: "#{key} is referenced but no longer drawn"
+
+    case Enum.flat_map(current, &screen_problem(&1, refs)) ++ gone do
+      [] -> :ok
+      problems -> {:error, problems}
+    end
+  end
+
+  defp screen_problem({key, hash}, refs) do
+    case Map.fetch(refs, key) do
+      {:ok, ^hash} ->
+        []
+
+      {:ok, ref} ->
+        ["#{key} changed (#{short_hash(ref)} -> #{short_hash(hash)})"]
+
+      :error ->
+        ["#{key} has no reference"]
+    end
+  end
+
+  defp short_hash(hash), do: String.slice(hash, 0, 12)
+
+  @doc """
+  Rewrite `priv/scoreboard/screens.refs` from the current screens. Run from
+  the project root after an intended visual change, and commit the file.
+  """
+  @spec bless_screens() :: :ok
+  def bless_screens do
+    body =
+      Enum.map_join(screen_fingerprints(), "\n", fn {key, hash} ->
+        "#{key}  #{hash}"
+      end)
+
+    path = Path.join("priv", @screens_rel)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, body <> "\n")
+  end
+
+  defp screens_error(problems) do
+    "scoreboard: scenario screens differ from priv/#{@screens_rel}:\n  " <>
+      Enum.join(problems, "\n  ") <>
+      "\nA scenario that draws something different is a different benchmark, " <>
+      "so its numbers are not comparable. If the change is intended, run " <>
+      "`MIX_ENV=test mix raxol.scoreboard --bless` and commit the file."
+  end
+
+  defp load_screen_refs do
+    path = Path.join(to_string(:code.priv_dir(:raxol)), @screens_rel)
+
+    case File.read(path) do
+      {:ok, contents} ->
+        contents
+        |> String.split(~r/\r?\n/, trim: true)
+        |> Map.new(fn line ->
+          [key, hash] = String.split(line, ~r/\s+/, parts: 2)
+          {key, String.trim(hash)}
+        end)
+
+      {:error, :enoent} ->
+        %{}
+    end
+  end
+
+  defp fingerprint(screen) do
+    rows =
+      for y <- 0..(screen.height - 1)//1 do
+        Enum.map_join(0..(screen.width - 1)//1, " ", fn x ->
+          cell = ScreenBuffer.get_cell_at(screen, x, y)
+          "#{StableInspect.quoted(cell.char || "")}#{style_token(cell.style)}"
+        end)
+      end
+
+    "#{screen.width}x#{screen.height}\n#{Enum.join(rows, "\n")}"
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  # Every style field, sorted by name, so a new field or value changes the
+  # fingerprint while field order and inspect/1's escaping never do.
+  defp style_token(nil), do: "{}"
+
+  defp style_token(style) do
+    fields =
+      style
+      |> Map.from_struct()
+      |> Enum.sort()
+      |> Enum.map_join(",", fn {key, value} ->
+        "#{key}=#{value_token(value)}"
+      end)
+
+    "{#{fields}}"
+  end
+
+  defp value_token(value) when is_binary(value), do: StableInspect.quoted(value)
+  defp value_token(value) when is_atom(value), do: Atom.to_string(value)
+  defp value_token(value) when is_integer(value), do: Integer.to_string(value)
+
+  defp value_token(value) when is_tuple(value),
+    do: "(" <> Enum.map_join(Tuple.to_list(value), ",", &value_token/1) <> ")"
+
+  defp value_token(value) when is_list(value),
+    do: "[" <> Enum.map_join(value, ",", &value_token/1) <> "]"
+
+  defp value_token(value) when is_map(value),
+    do:
+      "%{" <>
+        Enum.map_join(Enum.sort(value), ",", fn {k, v} ->
+          "#{value_token(k)}:#{value_token(v)}"
+        end) <> "}"
+
+  defp value_token(value) when is_float(value),
+    do: :erlang.float_to_binary(value, [:short])
 
   @doc """
   Build a record: the collected metrics merged with `extra` (for example the

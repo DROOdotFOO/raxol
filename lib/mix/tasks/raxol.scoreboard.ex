@@ -15,6 +15,10 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
       given more than once.
     * `--commit SHA` -- the commit the record describes (default: `git
       rev-parse HEAD`).
+    * `--bless` -- rewrite `priv/scoreboard/screens.refs` from the current
+      scenario screens before collecting. Use it only when a scenario is
+      meant to draw something different, and commit the file with the change:
+      a different screen is a different benchmark.
 
   The application is configured but not started: the scenarios call the
   render pipeline directly, and a started application would add processes
@@ -23,19 +27,15 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
 
   use Mix.Task
 
-  @switches [output: :string, include: :keep, commit: :string]
+  @switches [output: :string, include: :keep, commit: :string, bless: :boolean]
 
   @impl true
   def run(args) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: @switches)
-
-    if rest != [] or invalid != [] do
-      Mix.raise(
-        "raxol.scoreboard: unexpected arguments #{inspect(rest ++ invalid)}"
-      )
-    end
+    opts = parse_args!(args)
 
     Mix.Task.run("app.config")
+
+    if opts[:bless], do: bless()
 
     included =
       opts
@@ -51,6 +51,23 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
       nil -> :ok
       path -> File.write!(path, Jason.encode!(record, pretty: true))
     end
+  end
+
+  defp parse_args!(args) do
+    case OptionParser.parse(args, strict: @switches) do
+      {opts, [], []} ->
+        opts
+
+      {_opts, rest, invalid} ->
+        Mix.raise(
+          "raxol.scoreboard: unexpected arguments #{inspect(rest ++ invalid)}"
+        )
+    end
+  end
+
+  defp bless do
+    :ok = Raxol.Scoreboard.bless_screens()
+    Mix.shell().info("raxol.scoreboard: rewrote priv/scoreboard/screens.refs")
   end
 
   defp read_include(path) do
