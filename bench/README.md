@@ -54,6 +54,16 @@ change only beyond 0.5%. `--include` merges the buffer gate's memory
 rows. Metric ids, labels and which direction is better are in
 `priv/scoreboard/metrics.json`; add a metric there before emitting it.
 
+Each scenario frame's screen is also pinned: its fingerprint (every cell's
+character and style) is in `priv/scoreboard/screens.refs`, and the scoreboard
+refuses to measure a screen that differs. Replay proves the bytes draw the
+screen; the pin proves it is the same screen as before, so the numbers cannot
+improve because a demo draws less. When a playground demo the scoreboard uses
+(`TableDemo`, `FlexLayoutDemo`) is meant to look different, run
+`MIX_ENV=test mix raxol.scoreboard --bless` and commit `screens.refs` in the
+same pull request, where the change and its effect on the numbers are reviewed
+together.
+
 CI uploads each run's record as the `scoreboard` artifact.
 `.github/workflows/scoreboard.yml` comments on the open pull request whose head
 is the tested commit, comparing against the nearest recorded ancestor of its
