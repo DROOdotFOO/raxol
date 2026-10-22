@@ -42,7 +42,12 @@ playground table and flex-layout demos, driven in-process through the
 rendering engine's own stage functions. A terminal with synchronized output
 also receives a 16-byte wrapper per frame, not counted.
 `test/raxol/scoreboard_test.exs` holds `Raxol.Scoreboard.frames/2` to the
-bytes a real engine writes for the same keys. Repeated runs agree to within a
+bytes a real engine writes for the same keys, and before measuring, every
+frame is replayed through `Raxol.Terminal.Emulator` and must reproduce its own
+screen (character and style), so the byte count only falls by sending less
+for the same screen. `table.keystroke.work_ratio` is a keystroke's work over
+the first frame's: an incremental renderer sits far below 1, and the table
+demo is at 0.98 today. Repeated runs agree to within a
 few hundredths of a percent, so a pull request's numbers can be compared with
 master's on a shared CI runner. `--include` merges the buffer gate's memory
 rows. Metric ids, labels and which direction is better are in

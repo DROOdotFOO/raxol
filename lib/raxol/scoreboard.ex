@@ -15,17 +15,25 @@ defmodule Raxol.Scoreboard do
   transforms are not applied: they come from the dispatcher's plugin manager
   at runtime, and the demos run with none loaded, as an app does by default.
 
-  It counts two things:
+  It counts two things, and one ratio of them:
 
     * **frame bytes**: the size of the ANSI frame payload the engine writes.
       Exact. A terminal that supports synchronized output also receives the
       16-byte `\\e[?2026h`/`\\e[?2026l` wrapper per frame, which is not counted.
+      Every frame is first replayed through `Raxol.Terminal.Emulator` and must
+      reproduce the screen it was rendered from, character and style
+      (`replay_mismatch/1`), so the byte count can only fall by sending less
+      for the same screen.
     * **reductions**: the BEAM's unit of work, counted for the measuring
       process only (`Process.info(self(), :reductions)`). Unlike wall-clock
       time it does not move with runner load: repeated runs agree to within a
       few hundredths of a percent, which is why pull requests can be compared
       against master on shared CI runners. Reductions do move with the
       Elixir/OTP version, which is why the record carries the full toolchain.
+    * **work ratio**: a keystroke's reductions over the first frame's. A
+      renderer that only redoes what a keystroke changed sits far below 1;
+      the table demo is at 0.98, so a keystroke there costs nearly a full
+      redraw.
 
   Every scenario runs once to load code, then three times in fresh processes;
   the reported reductions are the median. Metric ids, labels, units and the
@@ -39,6 +47,7 @@ defmodule Raxol.Scoreboard do
   alias Raxol.Core.Events.Event
   alias Raxol.Core.Runtime.Rendering.{Backends, Pipeline}
   alias Raxol.Playground.Demos.{FlexLayoutDemo, TableDemo}
+  alias Raxol.Terminal.{Emulator, ScreenBuffer}
   alias Raxol.UI.Layout.Engine, as: LayoutEngine
   alias Raxol.UI.Layout.Preparer
 
@@ -51,12 +60,32 @@ defmodule Raxol.Scoreboard do
 
   @type metrics :: %{String.t() => number()}
 
-  @doc "Run every scenario and return `%{metric_id => value}`."
+  @doc """
+  Run every scenario and return `%{metric_id => value}`.
+
+  Before anything is measured, every scenario's frames are replayed through
+  `Raxol.Terminal.Emulator` and must reproduce the screen they were rendered
+  from (see `replay_mismatch/1`); otherwise this raises. That is what keeps
+  the byte metrics honest: a change can only lower them by sending fewer bytes
+  for the same screen, not by sending a broken one.
+  """
   @spec collect() :: metrics()
   def collect do
+    for {app, keys} <- [{TableDemo, @table_keys}, {FlexLayoutDemo, []}] do
+      case replay_mismatch(frames(app, keys)) do
+        nil ->
+          :ok
+
+        mismatch ->
+          raise "scoreboard: #{inspect(app)}'s frames do not reproduce its screen " <>
+                  "when replayed through the terminal emulator: #{inspect(mismatch)}"
+      end
+    end
+
     table = scenario(TableDemo, @table_keys)
     flex = scenario(FlexLayoutDemo, [])
     keys = length(@table_keys)
+    keystroke_reductions = table.script_reductions / keys
 
     %{
       "table.keyframe.bytes" => table.keyframe_bytes,
@@ -64,7 +93,11 @@ defmodule Raxol.Scoreboard do
       # Not rounded: with zero tolerance, a one-byte change anywhere in the
       # script has to show.
       "table.keystroke.bytes" => table.script_bytes / keys,
-      "table.keystroke.reductions" => round(table.script_reductions / keys),
+      "table.keystroke.reductions" => round(keystroke_reductions),
+      # How much of a full redraw one keystroke costs. An incremental renderer
+      # should sit far below 1.
+      "table.keystroke.work_ratio" =>
+        Float.round(keystroke_reductions / table.keyframe_reductions, 3),
       "flex.keyframe.bytes" => flex.keyframe_bytes,
       "flex.keyframe.reductions" => flex.keyframe_reductions
     }
@@ -158,12 +191,14 @@ defmodule Raxol.Scoreboard do
   end
 
   @doc """
-  The ANSI frame payloads `app` produces at 120x40: its first frame (a
+  Every frame `app` draws at 120x40, as `{payload, screen}`: its first frame (a
   keyframe), then one frame per key in `keys`, each diffed against the one
-  before. These are the bytes the rendering engine writes for the same model
-  sequence; the scoreboard's byte metrics are their sizes.
+  before. `payload` is the ANSI the rendering engine writes for the same model
+  sequence (test/raxol/scoreboard_test.exs holds the two to the same bytes);
+  `screen` is the `Raxol.Terminal.ScreenBuffer` it was rendered from. The
+  scoreboard's byte metrics are the payload sizes.
   """
-  @spec frames(module(), [String.t()]) :: [binary()]
+  @spec frames(module(), [String.t()]) :: [{binary(), ScreenBuffer.t()}]
   def frames(app, keys) do
     model = init_model(app)
     {prev, first} = frame(app, model, %{buffer: nil, prepared: nil})
@@ -172,10 +207,53 @@ defmodule Raxol.Scoreboard do
       Enum.reduce(keys, {model, prev, []}, fn key, {model, prev, acc} ->
         model = unwrap(app.update(key_event(key), model))
         {next, payload} = frame(app, model, prev)
-        {model, next, [payload | acc]}
+        {model, next, [{payload, next.buffer} | acc]}
       end)
 
-    [first | Enum.reverse(rest)]
+    [{first, prev.buffer} | Enum.reverse(rest)]
+  end
+
+  @doc """
+  Replays `frames` (as `frames/2` returns them) in order through one
+  `Raxol.Terminal.Emulator` and checks, after each frame, that every cell's
+  character and style equal the screen the frame was rendered from.
+
+  Returns `nil` when every frame reproduces its screen, otherwise the first
+  frame that does not: `%{frame: index, cells: mismatched_cell_count,
+  first: {x, y, expected_char, replayed_char}}`.
+  """
+  @spec replay_mismatch([{binary(), ScreenBuffer.t()}]) :: map() | nil
+  def replay_mismatch(
+        [{_payload, %{width: width, height: height}} | _] = frames
+      ) do
+    frames
+    |> Enum.with_index()
+    |> Enum.reduce_while(Emulator.new(width, height), fn {{payload, screen},
+                                                          index},
+                                                         emulator ->
+      {emulator, _output} = Emulator.process_input(emulator, payload)
+
+      case screen_mismatches(screen, Emulator.get_screen_buffer(emulator)) do
+        [] ->
+          {:cont, emulator}
+
+        [first | _] = cells ->
+          {:halt, %{frame: index, cells: length(cells), first: first}}
+      end
+    end)
+    |> case do
+      %{frame: _} = mismatch -> mismatch
+      _emulator -> nil
+    end
+  end
+
+  defp screen_mismatches(expected, replayed) do
+    for y <- 0..(expected.height - 1)//1,
+        x <- 0..(expected.width - 1)//1,
+        want = ScreenBuffer.get_cell_at(expected, x, y),
+        got = ScreenBuffer.get_cell_at(replayed, x, y),
+        want.char != got.char or want.style != got.style,
+        do: {x, y, want.char, got.char}
   end
 
   defp run_scenario(app, keys) do

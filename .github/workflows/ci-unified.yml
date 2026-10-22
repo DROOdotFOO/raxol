@@ -776,8 +776,9 @@ jobs:
   # The scoreboard (`mix raxol.scoreboard`, see lib/raxol/scoreboard.ex)
   # records deterministic counters -- bytes emitted and BEAM reductions per
   # frame of a reference demo, plus the gate's memory rows -- and uploads
-  # them as the `scoreboard` artifact. It reports; it does not gate on the
-  # numbers, only on collecting them. scoreboard.yml (a `workflow_run` on
+  # them as the `scoreboard` artifact. It does not gate on the numbers. It
+  # fails when collecting fails, including when a frame replayed through the
+  # terminal emulator does not reproduce its screen. scoreboard.yml (a `workflow_run` on
   # this workflow) compares a pull request's record against master's on the
   # gh-pages branch and comments, and publishes master's records there.
   scoreboard:

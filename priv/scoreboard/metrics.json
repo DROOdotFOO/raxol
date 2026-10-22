@@ -18,6 +18,14 @@
       "headline": true
     },
     {
+      "id": "table.keystroke.work_ratio",
+      "label": "Keystroke work as a share of drawing the whole first frame (table demo)",
+      "unit": "of a first frame",
+      "better": "lower",
+      "tolerance": 0.002,
+      "headline": true
+    },
+    {
       "id": "table.keyframe.bytes",
       "label": "Frame bytes for the first frame (table demo, 120x40)",
       "unit": "bytes",
