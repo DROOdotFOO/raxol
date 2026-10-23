@@ -500,33 +500,52 @@ defmodule Raxol.REPL.Sandbox do
   ]
   @calendar_sigils [:sigil_D, :sigil_T, :sigil_N, :sigil_U]
 
-  # The exception modules `raise` may name at `:strict`, audited by hand.
-  # Naming one is not the whole risk: `raise E, attrs` writes `attrs` into
-  # E's fields, and the evaluator's `Exception.format/3` then runs
-  # `E.message/1` over them. `Protocol.UndefinedError` calls
-  # `protocol.__protocol__/1` and `UndefinedFunctionError` loads and queries
-  # its `module`, so a field holding a module chosen at runtime is called
-  # back. Every exception here has a `message/1` (and a default or
-  # field-only `exception/1`) that only formats its fields as strings or
-  # with `inspect/1`. Before adding one, read both callbacks in the Elixir
-  # source; a module that implements `Exception` is not thereby safe.
-  @raisable_exceptions [
-    ArgumentError,
-    ArithmeticError,
-    BadBooleanError,
-    BadFunctionError,
-    BadMapError,
-    CaseClauseError,
-    CondClauseError,
-    Enum.EmptyError,
-    Enum.OutOfBoundsError,
-    KeyError,
-    MatchError,
-    RuntimeError,
-    SystemLimitError,
-    TryClauseError,
-    WithClauseError
-  ]
+  # The exception modules `raise` may name at `:strict`, audited by hand,
+  # each mapped to the fields its attributes may set. Naming one is not the
+  # whole risk: `raise E, attrs` writes `attrs` into E's fields, and the
+  # evaluator's `Exception.format/3` then runs `E.message/1` over them.
+  # `Protocol.UndefinedError` calls `protocol.__protocol__/1` and
+  # `UndefinedFunctionError` loads and queries its `module`, so a field
+  # holding a module chosen at runtime is called back. Every exception here
+  # has the default `exception/1` and a `message/1` that only formats its
+  # fields as strings or with `inspect/1`. Before adding one, read both
+  # callbacks in the Elixir source; a module that implements `Exception` is
+  # not thereby safe.
+  #
+  # The attributes are judged too, because the default `exception/1` is
+  # version-dependent: on Elixir 1.17 it passes an unknown key to `IO.warn`,
+  # which writes to the node's real stderr past the evaluator's capture
+  # (1.18 raises `KeyError` instead). So at `:strict` they must be a string
+  # (only where the exception has a `:message` field, since a string becomes
+  # `message: string`) or a keyword list written out whose keys are all the
+  # exception's own fields.
+  @raisable_exceptions Map.new(
+                         [
+                           ArgumentError,
+                           ArithmeticError,
+                           BadBooleanError,
+                           BadFunctionError,
+                           BadMapError,
+                           CaseClauseError,
+                           CondClauseError,
+                           Enum.EmptyError,
+                           Enum.OutOfBoundsError,
+                           KeyError,
+                           MatchError,
+                           RuntimeError,
+                           SystemLimitError,
+                           TryClauseError,
+                           WithClauseError
+                         ],
+                         fn exception ->
+                           fields =
+                             exception.__struct__()
+                             |> Map.keys()
+                             |> Kernel.--([:__struct__, :__exception__])
+
+                           {exception, Enum.sort(fields)}
+                         end
+                       )
 
   @doc """
   Checks code for safety violations at the given strictness level.
@@ -1745,14 +1764,28 @@ defmodule Raxol.REPL.Sandbox do
   # call, `<>` or a sigil.
   #
   # A struct's own `:calendar` field reaches the same callbacks and is NOT
-  # covered: a struct literal (`%Date{year: 2020, month: 1, day: 1,
-  # calendar: m}`, `Date` being in `@strict_struct_modules`), an update
-  # (`%{date | calendar: m}`) or a key writer (`Map.put(date, :calendar, m)`)
-  # stores a value that can arrive from anywhere, which an AST walk cannot
-  # follow (#1282). #1231 is the fix for the class.
-  defp dispatch_rule(Kernel, func, [exception | _rest])
+  # covered. Nor is any map with a `:calendar` key: `Date` and `Calendar`
+  # match `%{calendar: calendar}`, so a plain map literal
+  # (`Date.leap_year?(%{calendar: m, year: 2020})`) does it with no struct
+  # at all, as do a struct literal (`%Date{..., calendar: m}`, `Date` being in
+  # `@strict_struct_modules`), an update (`%{date | calendar: m}`) and a key
+  # writer (`Map.put(date, :calendar, m)`). Each stores a value that can
+  # arrive from anywhere, which an AST walk cannot follow (#1282). #1231 is
+  # the fix for the class.
+  defp dispatch_rule(Kernel, func, [exception | rest])
        when func in [:raise, :reraise] do
-    if raisable?(exception), do: [], else: raise_refusal("#{func}")
+    case raisable(exception) do
+      :message ->
+        []
+
+      {:exception, module, fields} ->
+        if raise_attributes_ok?(raise_attributes(func, rest), fields),
+          do: [],
+          else: raise_attributes_refusal(func, module, fields)
+
+      :refused ->
+        raise_refusal("#{func}")
+    end
   end
 
   defp dispatch_rule(Kernel, sigil, [{:<<>>, _, [string]}, _modifiers])
@@ -1787,15 +1820,41 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  defp raisable?(message) when is_binary(message), do: true
-  defp raisable?({:<<>>, _, _}), do: true
+  defp raisable(message) when is_binary(message), do: :message
+  defp raisable({:<<>>, _, _}), do: :message
 
-  defp raisable?(exception) do
-    case strict_module(exception) do
-      {:ok, module} -> module in @raisable_exceptions
-      :unknown -> false
+  defp raisable(exception) do
+    with {:ok, module} <- strict_module(exception),
+         {:ok, fields} <- Map.fetch(@raisable_exceptions, module) do
+      {:exception, module, fields}
+    else
+      _ -> :refused
     end
   end
+
+  # `raise E` / `raise E, attrs`; `reraise E, st` / `reraise E, attrs, st`.
+  defp raise_attributes(:raise, [attributes]), do: {:ok, attributes}
+
+  defp raise_attributes(:reraise, [attributes, _stacktrace]),
+    do: {:ok, attributes}
+
+  defp raise_attributes(_func, _rest), do: :none
+
+  defp raise_attributes_ok?(:none, _fields), do: true
+
+  defp raise_attributes_ok?({:ok, message}, fields)
+       when is_binary(message) or
+              (is_tuple(message) and elem(message, 0) == :<<>>),
+       do: :message in fields
+
+  defp raise_attributes_ok?({:ok, pairs}, fields) when is_list(pairs) do
+    Enum.all?(pairs, fn
+      {key, _value} when is_atom(key) -> key in fields
+      _computed -> false
+    end)
+  end
+
+  defp raise_attributes_ok?({:ok, _computed}, _fields), do: false
 
   # Kernel's own rule (`extract_calendar/1`, private): the last
   # space-separated word is a calendar when it starts with an uppercase
@@ -1819,6 +1878,22 @@ defmodule Raxol.REPL.Sandbox do
       {:ok, value} -> value in Map.fetch!(@module_argument_values, kind)
       :unknown -> false
     end
+  end
+
+  defp raise_attributes_refusal(func, module, fields) do
+    accepted =
+      case fields do
+        [] -> "none"
+        fields -> Enum.map_join(fields, ", ", &inspect/1)
+      end
+
+    [
+      "#{func} #{inspect(module)} is not allowed at :strict with these " <>
+        "attributes (they must be a string, where the exception has a " <>
+        ":message field, or a keyword list written out naming only " <>
+        "#{inspect(module)}'s own fields: #{accepted}; on Elixir 1.17 an " <>
+        "unknown key is printed to the node's stderr)"
+    ]
   end
 
   defp raise_refusal(name) do

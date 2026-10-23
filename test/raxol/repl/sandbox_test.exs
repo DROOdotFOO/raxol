@@ -1573,10 +1573,39 @@ defmodule Raxol.REPL.SandboxTest do
             ~S|raise ArgumentError|,
             ~S|raise ArgumentError, "bad"|,
             ~S|raise KeyError, key: :a, term: %{}|,
+            ~S|raise ArgumentError, "bad #{x}"|,
+            ~S|raise MatchError, term: x|,
+            ~S|raise CondClauseError, []|,
+            ~S{ArgumentError |> raise(message: "x")},
             ~S|reraise "boom", st|,
+            ~S|reraise ArgumentError, st|,
             ~S|reraise ArgumentError, [message: "x"], st|
           ] do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    # On Elixir 1.17 the default `exception/1` hands an unknown key to
+    # `IO.warn`, which writes to the node's stderr past the output capture,
+    # so the attributes may only name the exception's own fields.
+    test "raise attributes may only name the exception's own fields" do
+      for code <- [
+            ~S|raise ArgumentError, zzz: x|,
+            ~S|raise ArgumentError, message: "x", zzz: 1|,
+            ~S|raise ArgumentError, attrs|,
+            ~S|raise ArgumentError, [{k, 1}]|,
+            ~S|raise MatchError, "no :message field"|,
+            ~S|raise CondClauseError, term: 1|,
+            ~S{ArgumentError |> raise(zzz: x)},
+            ~S|Kernel.raise(ArgumentError, zzz: x)|,
+            ~S|reraise ArgumentError, [zzz: x], st|,
+            ~S|reraise ArgumentError, attrs, st|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(violations, &String.contains?(&1, "own fields")),
+               "expected an attributes violation for #{code}, got #{inspect(violations)}"
       end
     end
 
