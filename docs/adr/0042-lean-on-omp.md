@@ -8,8 +8,10 @@ source and a throwaway plugin driven through `omp --mode rpc`).
 
 Supersedes [ADR-0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent
 seams) once the harness is deleted. The same deletion supersedes ADRs 0022,
-0024, 0026, 0027 and 0032 and narrows 0021 and 0028 (table under
-Consequences); each is re-marked in the PR that removes its code, not before.
+0024, 0026, 0027, 0028, 0032 and 0035 and narrows 0021, 0036 and 0037 (table
+under Consequences); each is re-marked in the PR that removes its code, not
+before. Amends [ADR-0012](0012-mcp-as-rendering-target.md): derived tool names
+become session-scoped and a session's tool set becomes sticky (Decision 2).
 
 ## Context
 
@@ -44,7 +46,18 @@ keyed by name. `ToolSynchronizer.do_sync` registers only names new to its own
 session and unregisters by bare name (`tool_synchronizer.ex:294,298`), so a
 second session with the same widget id takes over the first one's tool,
 the first never registers it again, and stopping either removes it for both.
-The per-session `discover_tools` collides the same way (`:291`).
+The per-session `discover_tools` collides the same way
+(`tool_synchronizer.ex:114-116`, `focus_lens.ex:83`).
+
+Derived write tools also do not reach application state today. A widget's
+tool handler returns a raw message such as `{:sort, id, column, direction}`
+(`lib/raxol/ui/components/table.ex:918-924`). The tool callback casts it to
+the dispatcher as an event, and the dispatcher's generic path treats it as an
+`Event` struct (`lib/raxol/core/runtime/events/dispatcher.ex:917-928`). No
+playground demo has an `update/2` clause for these messages either. The OMP
+session that drove `TableDemo` worked only through `raxol_send_key`. Making
+write tools change state end to end is therefore the first step of
+Decision 2, not an assumption under it.
 
 ## Decision
 
@@ -82,10 +95,14 @@ The first build exposes each headless session's derived tools to OMP.
   on it (observed). OMP lists MCP tools as text at the end of its system
   prompt, so every change rewrites that text mid-conversation. To keep that
   rare, a session's tool set is sticky: a tool stays registered until its
-  session stops, and a call to a widget that is not in the current view
-  returns an error naming it. Churn is then limited to session start, stop
-  and a widget's first appearance. Whether the remaining churn costs
-  provider cache hits is measured by the benchmark below.
+  session stops. Each call resolves its widget's live state at call time
+  (today a callback captures the widget as it was when the tool was derived,
+  `tree_walker.ex:224-236`, which a sticky set would freeze). A call to a
+  widget that is absent, disabled or of another type returns an error naming
+  it. Churn is then limited to session start, stop and a widget's first
+  appearance. Derived descriptions are static per widget type and action, so
+  app text never reaches OMP's system prompt. Whether the remaining churn
+  costs provider cache hits is measured by the benchmark below.
 - **Authorization stays in Raxol.** OMP treats every MCP tool as a `write`
   tool, ignores annotations, and auto-approves in its default mode, so the
   Raxol authorizer is the only gate, at the resource. `TreeWalker` passes a
@@ -141,7 +158,11 @@ The cutover PR deletes coding-only code:
   curation and trajectories, probes, setup, and `Raxol.Agent.P`.
 - The coding `Actions`: code, fs, shell, workspace, lsp, anchor, vfs, memory,
   session search, fetch, web search and task.
-- The ACP turn runner, permission bridge and login.
+- The ACP coding turn runner and login. The permission bridge is re-targeted
+  rather than deleted (Decision 5).
+- Code the cutover leaves without callers: `Auxiliary`, `AcpStreamAdapter`,
+  `Backend.Cli`, `SignalTrap`, `Fingerprint`, and `LlmPrices` unless
+  Decision 4 wires it into `omp_gateway` pricing.
 - The SSH code server and the `Harness.McpTools` registration in
   `Raxol.Application`.
 - The CLI commands `agent`, `code`, `p`, `login` and `setup`, with their mix
@@ -157,7 +178,8 @@ Kept, because they are the Raxol-agents runtime or have outside users:
 | `Raxol.Agent.Session`, `Team`, `Comm`, `Supervisor`, `Journal`, `SpendGate`, `Sandbox`, `ToolPolicy`, `Policy`, `ThreadLog`, `Cache`, `Stream`, `Turn`, `Command` | the agent runtime; `raxol_payments` compiles against `Action`, `CommandHook` and `Command` |
 | `Raxol.Agent.Scheduler` (with `Fire`, `Delivery`), `Skills`, `Skills.Store`, `Actions.{Skills, Cronjob, Web3, FX}`, `McpBundle` | `raxol_console` (ADR-0031) wires them |
 | `Raxol.Agent.Harness.SessionLane` | implements the root `Raxol.Harness.SessionLane` behaviour from the runtime alone |
-| `Raxol.Agent.Backend.Mock` | a runtime fallback in `Auxiliary`, `ExecutorConfig` and `Resolver`, and a test backend for other packages |
+| `Raxol.Agent.Backend.Mock` | a runtime fallback in `ExecutorConfig` and `Resolver`, and a test backend for other packages |
+| `Raxol.Agent.Auth.{Flow, Robinhood, Pkce, Loopback, Credential}`, `BenchmarkProfile` | `raxol_broker`'s Robinhood login uses the auth flow; `BenchmarkProfile` is used by kept pricing and budget code |
 | `Raxol.Harness.*` and `Raxol.UI.Harness.*` (root) | the agent-session UI kit; re-pointed at OMP sessions in Decision 6 |
 | `raxol_agent_client_protocol` | Decision 5 |
 
@@ -202,14 +224,24 @@ Kimi are deleted; the native CLI drivers go with the harness.
 `raxol acp --agent <id>` keeps serving ACP, but a session attaches to a
 named, long-lived Raxol agent instead of starting a coding turn:
 
+- Where such an agent lives is open. Agent lookup is local to one VM, and
+  each `raxol acp` or `raxol mcp` is its own short-lived BEAM. Either a
+  long-lived host owns the agents and the CLIs reach it over a 0600 unix
+  socket with a peer-uid check, or agents live for one editor or OMP session
+  and only their journals persist. Erlang distribution is not an option
+  (`raxol_payments` forbids it on signing nodes).
 - The package's arity-2 `:turn_runner` seam takes a runner that calls the
   agent (`Comm.call/3`, with an explicit timeout; the agent answers with
   `Comm.reply/3`) and streams its reply as message chunks.
 - `session/cancel` abandons the pending call. The agent keeps running,
   because it is long-lived by design; stopping it is
   `Session.Supervisor.stop_session/1`, which already exists.
-- `Budget`, `ParentWatch` and the `serve` scaffolding stay. The coding
-  toolset, prompt and permission bridge go, along with executor detection.
+- The permission bridge stays, re-targeted: an attached prompt's sensitive
+  actions still ask the editor per call, because OMP-style auto-approval has
+  no place on an agent that holds a wallet.
+- `ParentWatch` and the `serve` scaffolding stay. `Budget` stays only if the
+  agent's reply carries usage for it to record; otherwise it goes with the
+  coding turn runner. The coding toolset, prompt and executor detection go.
 
 This lands before the cutover, because today's server is built from modules
 the cutover deletes. Editors that want a coding agent use `omp acp`.
@@ -242,10 +274,13 @@ a watch".
   The gateway and RPC clients check the version at startup.
 - Agents in OMP use Raxol apps through semantic tools, which is the claim the
   benchmark measures.
-- Payments stay in the Raxol-agents story. Wallet tools run every spend
-  through `SpendGate` with caps from the `raxol_payments` ledger, never from
-  tool arguments. OMP's approval prompt is a convenience on top, never the
-  control.
+- Payments stay in the Raxol-agents story. Payment tools go through the
+  payments gate (`Raxol.Payments.Actions.SpendGate.authorize/3` and the
+  ledger), not the LLM-cost `Raxol.Agent.SpendGate`. They register only with
+  an operator-built spending policy and ledger, and caps never come from tool
+  arguments. OMP cannot ask a human through MCP (it answers only `ping` and
+  `roots/list`), so an amount that needs confirmation is refused rather than
+  approved. OMP's approval mode is never the control.
 - Derived tool sets still change when sessions start and stop. The weekly
   benchmark records cache reads and writes so the cost is measured, not
   guessed.
@@ -258,9 +293,16 @@ a watch".
 | 0024 | Superseded | the native execution backends go |
 | 0026 | Superseded | `execute_code` was never built and the coding harness it served is gone |
 | 0027 | Superseded | `Actions.Task` goes; OMP owns subagent fan-out |
-| 0028 | Narrowed | `Auxiliary` stays; its self-improvement and user-model wiring goes |
-| 0032 | Superseded | `Actions.Fs` goes; nothing was implemented |
-| 0034 | Superseded | the foreign coding-agent seams go |
+| 0028 | Superseded | `Auxiliary`'s only callers (`SelfImprove`, `UserModel`) go, leaving it dead |
+| 0032 | Superseded | `Actions.Fs` goes; nothing was implemented. Its sandboxed-spawn design is the reopened question for the unattended Symphony `omp` runner |
+| 0034 | Superseded | the foreign coding-agent seams go; its catalog derivation policy and Symphony-on-OMP notes carry into this ADR's follow-up PRs |
+| 0035 | Superseded | `LlmPrices`' only caller is `Code.App`, unless `omp_gateway` pricing adopts it |
+| 0036 | Narrowed | the tier-1 events are emitted only from `Code.App` |
+| 0037 | Narrowed | `.mcp.json` admission lived in `Code.McpConfig` |
+
+ADRs that keep their decision but cite deleted code get an amendment note in
+the PR that breaks them: 0018, 0020, 0031, 0033, 0038 and 0040. 0023 and 0025
+get a status note retiring their Hermes-parity framing.
 
 ## References
 
