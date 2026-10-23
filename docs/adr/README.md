@@ -47,6 +47,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0039](0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
 | [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
 | [0041](0041-agent-client-protocol-package.md) | raxol_agent_client_protocol: port origin, layering, and license discipline | Accepted | 2026-10-13 |
+| [0042](0042-lean-on-omp.md) | Lean on OMP; Raxol is what agents plug into | Proposed | 2026-10-23 |
 
 ## Template
 
@@ -151,6 +152,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0034: Foreign coding-agent integration seams](0034-foreign-coding-agent-seams.md)
 - [0035: Cost metering for multi-rate providers](0035-multi-rate-cost-metering.md)
 - [0036: Agent telemetry coverage and shape](0036-agent-telemetry-coverage-and-shape.md)
+- [0042: Lean on OMP; Raxol is what agents plug into](0042-lean-on-omp.md)
 
 ## Coverage
 
