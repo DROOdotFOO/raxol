@@ -81,8 +81,9 @@ when the copy reproduces that commit's own engine byte for byte
 (`test/raxol/scoreboard_test.exs`) and draws the pinned screens. The first
 commit that does is #1133 (2026-09-27), so the records start there. Frame bytes
 do not move in that window, but the work does: #1170, which stopped building
-log messages on render paths, cut the table demo's work per keystroke by about
-a quarter.
+log messages on render paths, cut the table demo's work per keystroke from
+2,228,840 to 1,728,340 reductions (22%) and the flex first frame from 916,446
+to 751,037 (18%), as recorded on CI.
 
 No release draws today's screens: v2.6.1 and v2.7.0 drop the dim (faint)
 attribute, which #1133 fixed, and v2.6.0 differs in characters and colors too,
