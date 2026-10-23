@@ -1653,14 +1653,13 @@ defmodule Raxol.REPL.SandboxTest do
         call = &"#{name}(#{Enum.join(args.(&1), ", ")})"
         computed = args.("mod")
 
-        refused =
-          [call.("mod"), "&#{name}/#{arity}", call.(other_module(kind))] ++
-            Enum.map(shared_atoms -- atoms, &call.(inspect(&1))) ++
-            if position > 0,
-              do: [
-                "#{hd(computed)} |> #{name}(#{computed |> tl() |> Enum.join(", ")})"
-              ],
-              else: []
+        refused = [
+          call.("mod"),
+          "&#{name}/#{arity}",
+          "#{hd(computed)} |> #{name}(#{computed |> tl() |> Enum.join(", ")})",
+          call.(other_module(kind))
+          | Enum.map(shared_atoms -- atoms, &call.(inspect(&1)))
+        ]
 
         for code <- refused do
           assert {:error, violations} = Sandbox.check(code, :strict),

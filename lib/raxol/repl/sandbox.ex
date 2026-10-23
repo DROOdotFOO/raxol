@@ -1089,6 +1089,10 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
+  # The calendar sigils need no clause here: they are macros, so a capture
+  # (`&Kernel.sigil_D/2`, `&sigil_D/2`) expands the sigil over the capture's
+  # own argument variables, which no sigil clause matches. Expansion raises
+  # `FunctionClauseError` before any calendar is named, let alone called.
   defp dispatch_capture_refusal(module, func, arity) do
     cond do
       module == Kernel and func in [:raise, :reraise] ->
