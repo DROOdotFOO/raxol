@@ -5,12 +5,20 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   Quotes the intent, authorizes the spend through `SpendGate` before any
   signature is released, signs and submits via the wallet, and returns the
   intent id and initial status. Poll for the terminal status with
-  `Raxol.Payments.Actions.Payments.PollXochiStatus`.
+  `Raxol.Payments.Actions.Payments.PollXochiStatus`. When a checkpoint store is
+  configured, the execute-time read token is kept in a separate private record
+  keyed by the API origin and intent id; it never enters the Action result or
+  replay summary.
+  Polling reads that private record automatically and otherwise stays anonymous.
 
   The spend is gated on the human-decimal `amount`; the atomic `from_amount`
-  sent to Xochi is derived from the token's decimals. If execution fails after
-  the gate reserved budget (including a raise while signing or submitting),
-  the reservation is released and the checkpoint deleted.
+  sent to Xochi is derived from the token's decimals. A proven local signing
+  failure or structurally valid clean server rejection releases the reservation
+  and deletes the checkpoint. Once submission starts, a transport failure,
+  malformed response, 5xx, or a refusal because the intent is already executing
+  or past `quoted` is in doubt: it is reported as dispatched with
+  `reconciling: true`, and the checkpoint and reservation remain for polling or
+  operator reconciliation even when no read token was received.
 
   With `swap_kind: "exact_output"` the caller fixes the delivered
   `output_amount` instead, the solver picks the origin amount, and `amount` is
@@ -46,8 +54,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   * `:xochi_config` -- `%{base_url:, auth:}` for `Xochi.Client` (e.g.
     `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
   * `:policy`, `:ledger`, `:agent_id`, `:on_confirm` -- see `SpendGate`.
-  * `:checkpoint` -- optional `{module, handle}` `Raxol.Payments.Checkpoint`
-    store for idempotent recovery (nil disables it).
+  * `:checkpoint` -- optional trusted `{module, handle}`
+    `Raxol.Payments.Checkpoint` store for idempotent recovery and the separate
+    `Secret`-wrapped read capability (nil disables both).
   * `:require_checkpoint` -- when `true`, the Action fails closed with
     `{:error, {:checkpoint_required, _}}` unless a `:checkpoint` store is present
     (default `false`; falls back to `config :raxol_payments, :require_checkpoint`).
@@ -131,8 +140,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   alias Raxol.Payments.Actions.SpendGate
   alias Raxol.Payments.{Assets, Checkpoint, DeliveryFloor, Failure, Router}
   alias Raxol.Payments.Protocols.Xochi
-  alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse}
-  alias Raxol.Payments.Xochi.{Stealth, SwapAnnouncer}
+  alias Raxol.Payments.Xochi.Schemas.{ExecuteResponse, QuoteRequest, QuoteResponse}
+  alias Raxol.Payments.Xochi.{ReadTokenStore, Stealth, SwapAnnouncer}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
@@ -616,15 +625,45 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     end
   end
 
-  # Checkpoint the intent as dispatched, then submit it; a dispatched intent has
-  # its reservation tagged.
+  # Sign before the dispatched checkpoint: a signing/encoding failure is proven
+  # local and can release the reservation. Once the checkpoint is written and
+  # submission starts, any exception or ambiguous client outcome must remain in
+  # doubt; retrying or releasing then could double-spend or free already-spent
+  # budget.
   defp submit(config, quote, wallet, request, context, amount, store, key) do
-    Checkpoint.put(store, key, dispatched_record(quote))
+    with {:ok, bundle} <- safe_sign(quote, wallet, request) do
+      Checkpoint.put(store, key, dispatched_record(quote))
 
-    with {:ok, exec} <- safe_execute(config, quote, wallet, request) do
-      tag_dispatch(context, exec, amount)
-      {:ok, exec, quote}
+      with {:ok, exec} <-
+             Xochi.as_dispatched(safe_dispatch(config, bundle, quote.intent_id), quote.intent_id) do
+        ReadTokenStore.put(store, config.base_url, exec.intent_id, exec.read_token)
+        tag_dispatch(context, exec, amount)
+        {:ok, exec, quote}
+      end
     end
+  end
+
+  defp safe_sign(quote, wallet, request) do
+    Xochi.sign_intent(quote, wallet, request)
+  rescue
+    exception -> {:error, {:exception, Exception.message(exception)}}
+  end
+
+  defp safe_dispatch(config, bundle, intent_id) do
+    Xochi.execute_signed(config, bundle)
+  rescue
+    _exception -> {:ok, in_doubt(intent_id)}
+  catch
+    _kind, _reason -> {:ok, in_doubt(intent_id)}
+  end
+
+  defp in_doubt(intent_id) do
+    %ExecuteResponse{
+      intent_id: intent_id,
+      status: :unknown,
+      error: "response_exception",
+      reconciling: true
+    }
   end
 
   defp refuse_retry(:ok, _context, _amount, _store, _key), do: :ok
@@ -635,17 +674,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     {:refused, reason}
   end
 
-  # A raise inside `Xochi.execute` (signing a malformed quote, say) is a definite
-  # failure, not an unknown outcome: report it as an error so the caller
-  # releases the reservation and drops the checkpoint instead of leaking both.
-  defp safe_execute(config, quote, wallet, request) do
-    Xochi.execute(config, quote, wallet, request)
-  rescue
-    exception -> {:error, {:exception, Exception.message(exception)}}
-  end
-
-  # A definite execute failure means nothing dispatched: refund the reservation
-  # and drop the checkpoint so a later retry of the same payment starts clean.
+  # A proven local failure or clean server rejection means nothing dispatched:
+  # release the reservation and let a later retry start clean.
   defp release_and_clear(context, amount, reason, store, key) do
     SpendGate.release(context, amount, %{protocol: :xochi, reason: :execute_failed})
     Checkpoint.delete(store, key)
@@ -682,8 +712,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       xochi_fee: quote.xochi_fee,
       stealth_address: exec.stealth_address,
       # Surface the in-doubt state rather than reporting a clean success: an
-      # execute the worker could not confirm (often a wrapped upstream 5xx) is
-      # not a completed payment. Poll the intent status to resolve.
+      # execute the worker could not confirm is not a completed payment. The
+      # retained checkpoint and budget reservation force poll/operator
+      # reconciliation instead of an unsafe retry or apparent refund.
       reconciling: exec.reconciling
     }
   end

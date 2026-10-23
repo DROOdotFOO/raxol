@@ -30,9 +30,10 @@ defmodule Raxol.Payments.Checkpoint do
 
   A record is a plain map whose shape the calling Action defines. The
   load-bearing field is the id a resume polls -- `:intent_id` for the Xochi
-  intent, `:transfer_id` for the Relay transfer. Implementations persist whatever
-  else the caller stores; both payment Actions store the full result summary so a
-  resume can return it without re-deriving anything.
+  intent, `:transfer_id` for the Relay transfer. Replayable result records must
+  contain no bearer secrets; Xochi read capabilities use a separate,
+  `Secret`-wrapped checkpoint entry keyed by the API origin and the non-secret
+  intent id.
   """
 
   @type handle :: term()

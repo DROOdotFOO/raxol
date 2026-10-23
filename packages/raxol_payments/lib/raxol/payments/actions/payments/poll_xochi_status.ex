@@ -15,6 +15,27 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
   * `:ledger`, `:agent_id` -- optional; the `Ledger` and key from the execute, so
     a refund releases that reservation. See `SpendGate`.
+  * `:checkpoint` -- optional private checkpoint store used by the execute
+    Action; supplies the intent's read token. At a completed owner-view status
+    the summary (never the token) is recorded under the API origin and intent
+    id before the token is deleted, and a later poll of that intent returns the
+    recorded summary without polling.
+
+  The execute Action stores the read token outside its model-visible result, in
+  private checkpoint state keyed by the API origin and `intent_id`. Pass the
+  same `:checkpoint` store and `:xochi_config` in this Action's context and it
+  presents the token automatically in the `X-Xochi-Read-Token` header. Without
+  that private record, polling still resolves status anonymously and a
+  non-public intent's tx hashes stay absent (`legs_withheld: true`).
+
+  The token is kept after an anonymous (`legs_withheld`) answer and after a
+  failed, expired or refunded status, whose evidence the error does not carry,
+  so a later poll can still read the owner view.
+
+  A poll that times out on a non-terminal status whose destination fill is
+  confirmed (`settlement_confirmed`) returns `{:ok, summary}` with
+  `terminal: false` instead of reporting the intent stranded. That marker never
+  releases, refunds or re-executes anything; poll again for the terminal status.
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}
@@ -44,25 +65,44 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
           type: :string,
           description:
             "Solver-supplied detail on the current/terminal status (e.g. the reconcile reason behind an in-doubt settlement). Present when the worker forwards one."
+        ],
+        receiving_tx_hash: [type: :string],
+        settlement_tx_hash: [type: :string],
+        settlement_chain_id: [type: :integer],
+        settlement_confirmed: [
+          type: :boolean,
+          description:
+            "The destination fill is confirmed, even if the top-level status is still settling."
+        ],
+        legs_withheld: [
+          type: :boolean,
+          description:
+            "The worker answered with the anonymous view of a private settlement; tx hashes are withheld."
         ]
       ]
     ]
 
   alias Raxol.Payments.Actions.SpendGate
-  alias Raxol.Payments.{Failure, Poll}
+  alias Raxol.Payments.{Checkpoint, Failure, Poll}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.IntentStatus
-  alias Raxol.Payments.Xochi.SwapAnnouncer
+  alias Raxol.Payments.Xochi.{ReadTokenStore, SwapAnnouncer}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
   def run(%{intent_id: intent_id} = params, context) do
     case Map.fetch(context, :xochi_config) do
       {:ok, config} ->
-        opts = poll_opts(params)
-        budget = Keyword.get(opts, :budget_ms, Poll.default_budget_ms())
-        result = Xochi.poll_status_timed(config, intent_id, opts)
-        handle_result(result, context, intent_id, budget)
+        case committed_summary(context, intent_id) do
+          {:ok, summary} ->
+            replay_completed(context, intent_id, summary)
+
+          :error ->
+            opts = poll_opts(params, context, intent_id)
+            budget = Keyword.get(opts, :budget_ms, Poll.default_budget_ms())
+            result = Xochi.poll_status_timed(config, intent_id, opts)
+            handle_result(result, context, intent_id, budget)
+        end
 
       :error ->
         {:error, Failure.from({:missing_context, :xochi_config})}
@@ -76,10 +116,13 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
          budget
        ) do
     # Settled: the spend stands. Drop the reservation tag so the ledger's
-    # in-flight set stays bounded; nothing to release.
+    # in-flight set stays bounded; nothing to release. The summary carrying the
+    # owner-view evidence is committed before the token is dropped.
+    summary = summary(status, elapsed_ms, budget)
+    commit_completed(ctx, id, status, summary)
     SpendGate.forget_reservation(ctx, id)
     announce_terminal(ctx, id, status)
-    {:ok, summary(status, elapsed_ms, budget)}
+    {:ok, summary}
   end
 
   defp handle_result(
@@ -110,13 +153,35 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     {:error, Failure.from({:settlement, status.status, reason})}
   end
 
-  defp handle_result({:error, :timeout}, ctx, id, _budget) do
-    # A poll that never reached a terminal status is not a clean failure: the
-    # origin funds may already have been pulled while delivery stayed
-    # unconfirmed, so the intent is stranded, not failed. Emit a distinct signal
-    # so operator tooling can reconcile or close THIS intent, and carry the id in
-    # the error so the caller does not re-execute it.
-    :telemetry.execute([:raxol, :payments, :xochi, :intent_stranded], %{}, %{intent_id: id})
+  defp handle_result({:error, {:timeout, %IntentStatus{} = last}}, ctx, id, budget) do
+    # Delivery is confirmed but the lifecycle has not closed: not stranded.
+    # Report it as a non-terminal success; the reservation and token stay for
+    # the poll that sees the terminal status.
+    if IntentStatus.settlement_confirmed?(last),
+      do: {:ok, %{summary(last, 0, budget) | settlement_speed: nil}},
+      else: stranded(ctx, id, last)
+  end
+
+  defp handle_result({:error, {:timeout, nil}}, ctx, id, _budget), do: stranded(ctx, id, nil)
+
+  defp handle_result({:error, reason}, _ctx, _id, _budget) do
+    {:error, Failure.from(reason)}
+  end
+
+  # A poll that never reached a terminal status is not a clean failure: the
+  # origin funds may already have been pulled while delivery stayed
+  # unconfirmed, so the intent is stranded, not failed. Emit a distinct signal
+  # so operator tooling can reconcile or close THIS intent, and carry the id in
+  # the error so the caller does not re-execute it. The last observed status
+  # rides the signal, including whether the legs were withheld from this view.
+  defp stranded(ctx, id, last) do
+    :telemetry.execute([:raxol, :payments, :xochi, :intent_stranded], %{}, %{
+      intent_id: id,
+      status: last && to_string(last.status),
+      settlement_confirmed: false,
+      legs_withheld: (last && last.legs_withheld) || false
+    })
+
     # Advance the live-feed row off "executing" to a stranded state so it does
     # not sit unresolved. Best-effort; leaves the route in place for a later
     # terminal announce if a re-poll resolves the intent.
@@ -124,8 +189,45 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     {:error, Failure.from({:stranded, id})}
   end
 
-  defp handle_result({:error, reason}, _ctx, _id, _budget) do
-    {:error, Failure.from(reason)}
+  # The token is the only way back to the owner view. With a checkpoint store,
+  # the completed summary (public status fields, never the token) is written
+  # under the API origin and intent id first, and only then is the token
+  # dropped: a crash before the write leaves the token for the next poll, a
+  # crash after it leaves the summary that poll returns. An anonymous answer
+  # (`legs_withheld`) means the token was refused or absent: nothing is
+  # committed and the token is kept for a later poll.
+  defp commit_completed(_ctx, _id, %IntentStatus{legs_withheld: true}, _summary), do: :ok
+
+  defp commit_completed(ctx, id, _status, summary) do
+    store = Map.get(ctx, :checkpoint)
+    Checkpoint.put(store, completed_key(ctx, id), %{status: :completed, summary: summary})
+    ReadTokenStore.delete(store, ctx.xochi_config.base_url, id)
+  end
+
+  defp committed_summary(ctx, id) do
+    case Checkpoint.fetch(Map.get(ctx, :checkpoint), completed_key(ctx, id)) do
+      {:ok, %{status: :completed, summary: summary}} -> {:ok, summary}
+      _ -> :error
+    end
+  end
+
+  # A later poll of a committed intent returns the stored summary without
+  # polling, and finishes the cleanup a crash may have cut short: the token
+  # delete, the tag forget and the terminal announce are all idempotent (the
+  # announce consumes the stashed route, so it fires at most once).
+  defp replay_completed(ctx, id, summary) do
+    ReadTokenStore.delete(Map.get(ctx, :checkpoint), ctx.xochi_config.base_url, id)
+    SpendGate.forget_reservation(ctx, id)
+    announce_terminal(ctx, id, %IntentStatus{intent_id: id, status: :completed, terminal: true})
+    {:ok, summary}
+  end
+
+  defp completed_key(ctx, id) do
+    Checkpoint.derive_key([
+      :xochi_poll_completed,
+      ReadTokenStore.origin(ctx.xochi_config.base_url),
+      id
+    ])
   end
 
   # Best-effort, non-blocking: advance the user's live-feed row to its terminal
@@ -136,11 +238,19 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
     :ok
   end
 
-  defp poll_opts(params) do
-    []
+  defp poll_opts(params, context, intent_id) do
+    [last_status_on_timeout: true]
     |> maybe_put(:timeout_ms, Map.get(params, :timeout_ms))
     |> maybe_put(:slow_interval_ms, Map.get(params, :interval_ms))
     |> maybe_put(:budget_ms, Map.get(params, :budget_ms))
+    |> maybe_put(
+      :read_token,
+      ReadTokenStore.fetch(
+        Map.get(context, :checkpoint),
+        context.xochi_config.base_url,
+        intent_id
+      )
+    )
   end
 
   defp maybe_put(opts, _key, nil), do: opts
@@ -152,6 +262,11 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
       status: to_string(status.status),
       terminal: IntentStatus.terminal?(status),
       tx_hash: status.tx_hash,
+      receiving_tx_hash: status.receiving_tx_hash,
+      settlement_tx_hash: status.settlement_tx_hash,
+      settlement_chain_id: status.settlement_chain_id,
+      settlement_confirmed: IntentStatus.settlement_confirmed?(status),
+      legs_withheld: status.legs_withheld,
       settlement_type: status.settlement_type && to_string(status.settlement_type),
       settlement_speed: speed(elapsed_ms, budget_ms),
       # Shielded (Aztec) settlements are note-based: the note commitment,

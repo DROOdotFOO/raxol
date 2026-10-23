@@ -2,9 +2,44 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Earn.Xochi.Settler
+  alias Raxol.Payments.Xochi.ReadTokenStore
 
   @src_token "0x" <> String.duplicate("11", 20)
   @dst_token "0x" <> String.duplicate("22", 20)
+  @base_url "https://xochi.test"
+
+  # A checkpoint store that dies while committing a terminal record, modelling
+  # a crash between the terminal poll and the commit.
+  defmodule CrashOnTerminal do
+    @behaviour Raxol.Payments.Checkpoint
+    alias Raxol.Payments.Checkpoint.ETS
+
+    @impl true
+    def fetch(table, key), do: ETS.fetch(table, key)
+
+    @impl true
+    def put(_table, _key, %{status: :terminal}), do: raise("crash before terminal commit")
+    def put(table, key, record), do: ETS.put(table, key, record)
+
+    @impl true
+    def delete(table, key), do: ETS.delete(table, key)
+  end
+
+  # A checkpoint store that dies on delete, modelling a crash between the
+  # terminal commit and the token cleanup.
+  defmodule CrashOnDelete do
+    @behaviour Raxol.Payments.Checkpoint
+    alias Raxol.Payments.Checkpoint.ETS
+
+    @impl true
+    def fetch(table, key), do: ETS.fetch(table, key)
+
+    @impl true
+    def put(table, key, record), do: ETS.put(table, key, record)
+
+    @impl true
+    def delete(_table, _key), do: raise("crash before token cleanup")
+  end
 
   # A buyer-signed Xochi intent bundle, as it arrives in the requirement JSON
   # (string keys). Signature values are opaque -- raxol relays them; Riddler
@@ -266,6 +301,377 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
       assert_receive {:relayed, relayed}
       assert relayed["signature"] == "0x" <> String.duplicate("11", 65)
       refute Map.has_key?(relayed, "destination")
+    end
+
+    # xochi#563: the worker withholds a non-public intent's legs on status unless
+    # the caller presents the read token execute returned. This sim does the
+    # same: `exec_token` is what execute returns (nil = older worker / lost), and
+    # the stealth status carries hashes only for the matching header.
+    defp read_cap_sim(exec_token, test_pid, exec_status) do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+      fn conn ->
+        body =
+          case conn.request_path do
+            "/api/intent/execute" ->
+              send(test_pid, :executed)
+
+              base =
+                %{"success" => exec_status == 200, "intent_id" => "i1", "status" => "executing"}
+
+              base
+              |> Map.merge(if(exec_token, do: %{"read_token" => exec_token}, else: %{}))
+              |> Map.merge(
+                if(exec_status in 400..499, do: %{"error" => "request_rejected"}, else: %{})
+              )
+
+            "/api/intent/i1/status" ->
+              presented = Plug.Conn.get_req_header(conn, "x-xochi-read-token")
+              send(test_pid, {:presented, presented, conn.query_string})
+
+              legs =
+                if presented == [issued],
+                  do: %{
+                    "txHash" => "0x" <> String.duplicate("a", 64),
+                    "receivingTxHash" => "0x" <> String.duplicate("b", 64)
+                  },
+                  else: %{"settlement_confirmed" => true, "legs_withheld" => true}
+
+              Map.merge(
+                %{
+                  "intentId" => "i1",
+                  "status" => "completed",
+                  "terminal" => true,
+                  "settlementType" => "stealth"
+                },
+                legs
+              )
+          end
+
+        status = if conn.request_path == "/api/intent/execute", do: exec_status, else: 200
+        conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
+      end
+    end
+
+    defp read_cap_settler(exec_token, opts \\ []) do
+      Settler.build(
+        xochi_config: %{
+          base_url: "https://xochi.test",
+          auth_token: "stub",
+          req_options: [
+            plug: read_cap_sim(exec_token, self(), Keyword.get(opts, :exec_status, 200))
+          ]
+        },
+        poll_timeout_ms: 5_000,
+        poll_interval_ms: 10,
+        checkpoint: Keyword.get(opts, :checkpoint)
+      )
+    end
+
+    test "polls with the execute's read token, so a stealth settlement keeps its hashes" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+      assert {:ok, deliverable} = read_cap_settler(issued).(args())
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert deliverable.receiving_tx_hash == "0x" <> String.duplicate("b", 64)
+      # Header only, never the URL; and never in the deliverable.
+      assert_received {:presented, [^issued], ""}
+      refute deliverable |> Map.values() |> Enum.member?(issued)
+    end
+
+    test "a withheld settlement hash is an explicit error, never a fabricated hash" do
+      # Execute returned no token (older worker, or one lost), so the worker
+      # withholds the stealth legs. The deliverable schema requires
+      # settlement_tx_hash, so the settle fails with the intent id.
+      assert {:error, {:settlement_tx_hash_unavailable, "i1"}} = read_cap_settler(nil).(args())
+      assert_received {:presented, [], ""}
+    end
+
+    test "a 502 carrying the read token is polled with it, not failed (funds may have moved)" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+      assert {:ok, deliverable} = read_cap_settler(issued, exec_status: 502).(args())
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert_received {:presented, [^issued], ""}
+    end
+
+    test "a 502 without a token is polled anonymously because the outcome is unknown" do
+      assert {:error, {:settlement_tx_hash_unavailable, "i1"}} =
+               read_cap_settler(nil, exec_status: 502).(args())
+
+      assert_received {:presented, [], ""}
+    end
+
+    test "the replay checkpoint excludes the token and a re-run returns the committed result" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert {:ok, first} = read_cap_settler(issued, checkpoint: store).(args())
+      assert_received :executed
+      assert_received {:presented, [^issued], ""}
+
+      assert {:ok, record} = Raxol.Payments.Checkpoint.fetch(store, key)
+      assert record.status == :terminal
+      refute Map.has_key?(record, :read_token)
+      refute inspect(record) =~ issued
+
+      # The token is dropped only once the terminal result is committed.
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
+
+      # An at-least-once re-run (or a crash after the commit) returns the stored
+      # deliverable: no relay, no anonymous poll, no hash-unavailable failure.
+      assert {:ok, ^first} = read_cap_settler(nil, checkpoint: store).(args())
+      refute_received :executed
+      refute_received {:presented, _, _}
+      assert first.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+    end
+
+    test "a crash before the terminal commit leaves the token for the re-run" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      table = :ets.new(:settler_crash, [:set, :public])
+      crashing = {CrashOnTerminal, table}
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert_raise RuntimeError, fn -> read_cap_settler(issued, checkpoint: crashing).(args()) end
+      assert_received :executed
+      assert_received {:presented, [^issued], ""}
+
+      store = {Raxol.Payments.Checkpoint.ETS, table}
+      assert {:ok, %{status: :in_flight}} = Raxol.Payments.Checkpoint.fetch(store, key)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == issued
+
+      assert {:ok, deliverable} = read_cap_settler(nil, checkpoint: store).(args())
+      refute_received :executed
+      assert_received {:presented, [^issued], ""}
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
+    end
+
+    test "a crash after the terminal commit leaves no token behind on the re-run" do
+      issued = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      table = :ets.new(:settler_crash_delete, [:set, :public])
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert_raise RuntimeError, fn ->
+        read_cap_settler(issued, checkpoint: {CrashOnDelete, table}).(args())
+      end
+
+      store = {Raxol.Payments.Checkpoint.ETS, table}
+      assert {:ok, %{status: :terminal}} = Raxol.Payments.Checkpoint.fetch(store, key)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == issued
+      assert_received :executed
+      assert_received {:presented, [^issued], ""}
+
+      assert {:ok, deliverable} = read_cap_settler(nil, checkpoint: store).(args())
+      refute_received :executed
+      refute_received {:presented, _, _}
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
+    end
+
+    test "a writer whose execute returns after another committed terminal drops its token" do
+      token_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+      committed = {:ok, %{intent_id: "i1", status: "completed"}}
+      test_pid = self()
+
+      # Writer A commits its terminal record (and crashes before deleting its
+      # token) while B's execute is in flight; B then gets its own token back.
+      plug = fn conn ->
+        case conn.request_path do
+          "/api/intent/execute" ->
+            Raxol.Payments.Checkpoint.put(store, key, %{
+              intent_id: "i1",
+              status: :terminal,
+              result: committed
+            })
+
+            Req.Test.json(conn, %{
+              "success" => true,
+              "intent_id" => "i1",
+              "status" => "executing",
+              "read_token" => token_b
+            })
+
+          "/api/intent/i1/status" ->
+            send(test_pid, :polled)
+            Req.Test.json(conn, %{"intent_id" => "i1", "status" => "executing"})
+        end
+      end
+
+      settle =
+        Settler.build(
+          xochi_config: %{base_url: @base_url, auth_token: "stub", req_options: [plug: plug]},
+          poll_timeout_ms: 30,
+          poll_interval_ms: 10,
+          checkpoint: store
+        )
+
+      assert ^committed = settle.(args())
+      refute_received :polled
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
+    end
+
+    test "an anonymous terminal answer commits nothing and keeps the token" do
+      foreign = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert {:error, {:settlement_tx_hash_unavailable, "i1"}} =
+               read_cap_settler(foreign, checkpoint: store).(args())
+
+      assert {:ok, %{status: :in_flight}} = Raxol.Payments.Checkpoint.fetch(store, key)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == foreign
+    end
+
+    defp ambiguous_sim(outcome, test_pid) do
+      fn conn ->
+        case conn.request_path do
+          "/api/intent/execute" ->
+            send(test_pid, :executed)
+
+            case outcome do
+              :timeout ->
+                Req.Test.transport_error(conn, :timeout)
+
+              :closed ->
+                Req.Test.transport_error(conn, :closed)
+
+              :invalid_json ->
+                conn
+                |> Plug.Conn.put_resp_content_type("application/json")
+                |> Plug.Conn.send_resp(200, "{not-json")
+
+              :invalid_body ->
+                Req.Test.json(conn, ["not", "an", "execute", "response"])
+
+              :server_500 ->
+                conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "upstream"})
+            end
+
+          "/api/intent/i1/status" ->
+            Req.Test.json(conn, %{
+              "intent_id" => "i1",
+              "status" => "completed",
+              "terminal" => true,
+              "tx_hash" => "0x" <> String.duplicate("a", 64)
+            })
+        end
+      end
+    end
+
+    test "transport, decode, and 5xx execute outcomes poll instead of re-relaying" do
+      for outcome <- [:timeout, :closed, :invalid_json, :invalid_body, :server_500] do
+        store = Raxol.Payments.Checkpoint.ETS.new()
+        key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+        settle =
+          Settler.build(
+            xochi_config: %{
+              base_url: "https://xochi.test",
+              auth_token: "stub",
+              req_options: [plug: ambiguous_sim(outcome, self()), retry: false]
+            },
+            poll_timeout_ms: 5_000,
+            poll_interval_ms: 10,
+            checkpoint: store
+          )
+
+        assert {:ok, %{intent_id: "i1", status: "completed"}} = settle.(args())
+        assert_received :executed
+        refute_received :executed
+
+        assert {:ok, %{intent_id: "i1", status: :terminal, result: {:ok, %{status: "completed"}}}} =
+                 Raxol.Payments.Checkpoint.fetch(store, key)
+      end
+    end
+
+    test "a structurally valid clean execute rejection drops the checkpoint" do
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+
+      assert {:error, {:http, 422, _}} =
+               read_cap_settler(nil, exec_status: 422, checkpoint: store).(args())
+
+      assert :error = Raxol.Payments.Checkpoint.fetch(store, key)
+      assert ReadTokenStore.fetch(store, @base_url, "i1") == nil
+    end
+
+    # Another writer already claimed the intent: the worker answers 409 (claim
+    # held) or 400 naming its status. This writer's outcome is unknown, so it
+    # must keep the shared checkpoint and the winner's token, and poll.
+    defp claimed_sim(status, body, test_pid) do
+      fn conn ->
+        case conn.request_path do
+          "/api/intent/execute" ->
+            send(test_pid, :executed)
+            conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
+
+          "/api/intent/i1/status" ->
+            send(test_pid, {:presented, Plug.Conn.get_req_header(conn, "x-xochi-read-token")})
+            Req.Test.json(conn, %{"intent_id" => "i1", "status" => "executing"})
+        end
+      end
+    end
+
+    test "a writer that lost the execute race keeps the winner's checkpoint and token" do
+      winner = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+      refusals = [
+        {409, %{"success" => false, "error" => "Intent already being executed"}},
+        {400, %{"success" => false, "error" => "Cannot execute intent in executing status"}}
+      ]
+
+      for {status, body} <- refusals do
+        store = Raxol.Payments.Checkpoint.ETS.new()
+        key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+        ReadTokenStore.put(store, @base_url, "i1", winner)
+
+        settle =
+          Settler.build(
+            xochi_config: %{
+              base_url: @base_url,
+              auth_token: "stub",
+              req_options: [plug: claimed_sim(status, body, self()), retry: false]
+            },
+            poll_timeout_ms: 30,
+            poll_interval_ms: 10,
+            checkpoint: store
+          )
+
+        assert {:error, :timeout} = settle.(args())
+        assert_received :executed
+        # It polls the claimed intent with the winner's token rather than failing.
+        assert_received {:presented, [^winner]}
+        assert {:ok, %{status: :in_flight}} = Raxol.Payments.Checkpoint.fetch(store, key)
+        assert ReadTokenStore.fetch(store, @base_url, "i1") == winner
+
+        # A re-run resumes the same intent; it never relays again.
+        assert {:error, :timeout} = settle.(args())
+        refute_received :executed
+        assert_received {:presented, [^winner]}
+      end
+    end
+
+    test "an expired intent's refusal stays a clean rejection" do
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      key = Raxol.Payments.Checkpoint.derive_key([:xochi_settler, "i1"])
+      body = %{"success" => false, "error" => "Cannot execute intent in expired status"}
+
+      settle =
+        Settler.build(
+          xochi_config: %{
+            base_url: @base_url,
+            auth_token: "stub",
+            req_options: [plug: claimed_sim(400, body, self()), retry: false]
+          },
+          checkpoint: store
+        )
+
+      assert {:error, {:http, 400, _}} = settle.(args())
+      assert :error = Raxol.Payments.Checkpoint.fetch(store, key)
     end
   end
 end

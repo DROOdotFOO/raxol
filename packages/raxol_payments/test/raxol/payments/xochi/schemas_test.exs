@@ -789,6 +789,45 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       assert status.settlement_type == nil
     end
 
+    test "parses the anonymous view's markers of a private settlement" do
+      status =
+        IntentStatus.from_json(%{
+          "intent_id" => "i",
+          "status" => "settling",
+          "settlement_type" => "shielded",
+          "settlement_confirmed" => true,
+          "legs_withheld" => true
+        })
+
+      assert status.legs_withheld
+      assert status.settlement_confirmed
+      assert IntentStatus.settlement_confirmed?(status)
+      refute IntentStatus.terminal?(status)
+    end
+
+    test "parses the owner view's settlement receipt and chain" do
+      hash = "0x" <> String.duplicate("e", 64)
+
+      status =
+        IntentStatus.from_json(%{
+          "intent_id" => "i",
+          "status" => "settling",
+          "settlement_tx_hash" => hash,
+          "settlement_chain_id" => 10
+        })
+
+      assert status.settlement_tx_hash == hash
+      assert status.settlement_chain_id == 10
+      refute status.legs_withheld
+      assert IntentStatus.settlement_confirmed?(status)
+    end
+
+    test "a status without either marker is unconfirmed and not withheld" do
+      status = IntentStatus.from_json(%{"intent_id" => "i", "status" => "settling"})
+      refute status.legs_withheld
+      refute IntentStatus.settlement_confirmed?(status)
+    end
+
     test "shielded? returns true for shielded settlement_type" do
       json = %{
         "intentId" => "i",

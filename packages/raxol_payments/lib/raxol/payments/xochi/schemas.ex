@@ -475,6 +475,10 @@ defmodule Raxol.Payments.Xochi.Schemas do
 
   defmodule ExecuteResponse do
     @moduledoc false
+    # `read_token` is a bearer secret (xochi#563): it reveals a non-public
+    # intent's settlement tx hashes to whoever presents it. Keep it out of
+    # inspect output so a logged or crash-dumped response never carries it.
+    @derive {Inspect, except: [:read_token]}
     @enforce_keys [:intent_id, :status]
     defstruct [
       :intent_id,
@@ -485,6 +489,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :ephemeral_pub_key,
       :view_tag,
       :error,
+      :read_token,
       success: false,
       reconciling: false
     ]
@@ -499,6 +504,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
             ephemeral_pub_key: String.t() | nil,
             view_tag: integer() | nil,
             error: String.t() | nil,
+            read_token: String.t() | nil,
             reconciling: boolean()
           }
 
@@ -522,9 +528,28 @@ defmodule Raxol.Payments.Xochi.Schemas do
         # In-doubt: the worker could not confirm the solver executed (a Riddler
         # 5xx/timeout wrapped as a 200) and kept the intent non-terminal. Funds
         # may be in flight; the caller must poll to resolve, never re-execute.
-        reconciling: pick(json, ["reconciling"]) || false
+        reconciling: pick(json, ["reconciling"]) || false,
+        # Read capability (xochi#563), returned once by execute. Present it on
+        # `Client.get_status/3` / `get_intent/3` to see a stealth/shielded
+        # intent's on-chain legs, which the worker otherwise withholds. Older
+        # workers omit it; nil then, and reads stay anonymous. A malformed one
+        # is dropped, never an error: the execute it rides on may have moved
+        # funds.
+        read_token: if(read_token?(json["read_token"]), do: json["read_token"])
       }
     end
+
+    @doc """
+    Is this a well-formed intent read token: 32 random bytes as unpadded
+    base64url, so exactly 43 characters of `[A-Za-z0-9_-]`? Checked where a
+    token enters (the execute response) and where one leaves (the request
+    header), so a malformed value never reaches a header.
+    """
+    @spec read_token?(term()) :: boolean()
+    def read_token?(token) when is_binary(token),
+      do: String.match?(token, ~r/\A[A-Za-z0-9_-]{43}\z/)
+
+    def read_token?(_), do: false
 
     defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
 
@@ -558,6 +583,14 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :l2_tx_hash,
       :settlement_type,
       :attestation_status,
+      # The destination fill receipt and its chain (owner view only).
+      :settlement_tx_hash,
+      :settlement_chain_id,
+      # Anonymous view of a private settlement (xochi#563): the legs are
+      # withheld, and `settlement_confirmed` says whether the fill receipt
+      # exists. Reporting markers only; never a reason to release or re-execute.
+      settlement_confirmed: false,
+      legs_withheld: false,
       terminal: false
     ]
 
@@ -593,6 +626,10 @@ defmodule Raxol.Payments.Xochi.Schemas do
             l2_tx_hash: String.t() | nil,
             settlement_type: settlement_type(),
             attestation_status: attestation_status(),
+            settlement_tx_hash: String.t() | nil,
+            settlement_chain_id: integer() | nil,
+            settlement_confirmed: boolean(),
+            legs_withheld: boolean(),
             terminal: boolean()
           }
 
@@ -623,14 +660,33 @@ defmodule Raxol.Payments.Xochi.Schemas do
         settlement_type: parse_settlement_type(pick(json, ["settlement_type", "settlementType"])),
         attestation_status:
           parse_attestation_status(pick(json, ["attestation_status", "attestationStatus"])),
+        settlement_tx_hash: string_or_nil(json["settlement_tx_hash"]),
+        settlement_chain_id: integer_or_nil(json["settlement_chain_id"]),
+        settlement_confirmed: json["settlement_confirmed"] == true,
+        legs_withheld: json["legs_withheld"] == true,
         terminal: json["terminal"] || status in @terminal_statuses
       }
     end
 
     defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
 
+    defp string_or_nil(value) when is_binary(value) and value != "", do: value
+    defp string_or_nil(_value), do: nil
+
+    defp integer_or_nil(value) when is_integer(value), do: value
+    defp integer_or_nil(_value), do: nil
+
     @spec terminal?(t()) :: boolean()
     def terminal?(%__MODULE__{terminal: t}), do: t
+
+    @doc """
+    Whether the destination fill is confirmed: the anonymous view's
+    `settlement_confirmed` marker, or the owner view's fill receipt. True while
+    the top-level status may still be settling.
+    """
+    @spec settlement_confirmed?(t()) :: boolean()
+    def settlement_confirmed?(%__MODULE__{settlement_confirmed: true}), do: true
+    def settlement_confirmed?(%__MODULE__{settlement_tx_hash: hash}), do: is_binary(hash)
 
     @spec shielded?(t()) :: boolean()
     def shielded?(%__MODULE__{settlement_type: :shielded}), do: true
