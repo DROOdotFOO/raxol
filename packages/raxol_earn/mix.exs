@@ -12,8 +12,9 @@ defmodule RaxolEarn.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      # cowlib 2.20.0 is the latest release and neither vulnerable function is called; see #921.
-      hex: [ignore_advisories: ["EEF-CVE-2026-43966", "EEF-CVE-2026-43969"]],
+      # cowlib 2.21.0 fixes EEF-CVE-2026-43969; 2.21.0 is still the latest
+      # release and still carries 43966, whose function we never call; see #921.
+      hex: [ignore_advisories: ["EEF-CVE-2026-43966"]],
       releases: releases(),
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore.exs"
