@@ -15,14 +15,14 @@ live_exclude = [:live_xochi, :live_relay, :live_property]
 # Each entry excludes a tag by default unless its enabling env var is set.
 # These read fixtures or spawn a local CLI; none of them move funds.
 #
-#   :cli_signer / :conformance -- spawn the riddler-client CLI or read
-#     its shared EIP-712 fixture (RIDDLER_CLI_DIR / CONFORMANCE_FIXTURE_PATH).
+#   :cli_signer -- spawn Riddler's e2e-signer CLI (RIDDLER_CLI_DIR, local-only).
+#   :conformance -- read the pinned @xochi/spec EIP-712 fixture
+#     (CONFORMANCE_FIXTURE_PATH; required under CI, see ConformanceFixture).
 #   :stealth_conformance -- match the stealth scheme against a reference SDK
 #     fixture (STEALTH_VECTORS_PATH).
 gated_tags = [
-  {[:cli_signer, :conformance],
-   System.get_env("RIDDLER_CLI_DIR") ||
-     System.get_env("CONFORMANCE_FIXTURE_PATH")},
+  {[:cli_signer], System.get_env("RIDDLER_CLI_DIR")},
+  {[:conformance], System.get_env("CONFORMANCE_FIXTURE_PATH")},
   {[:stealth_conformance],
    System.get_env("STEALTH_VECTORS_PATH") ||
      File.exists?(Path.join(__DIR__, "fixtures/stealth_vectors.json"))}
