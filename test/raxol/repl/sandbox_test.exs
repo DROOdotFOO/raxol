@@ -1720,6 +1720,72 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
 
+    # Kernel's sigil macros raise on these shapes today, before a calendar is
+    # read. The checker refuses them itself rather than trusting that to last.
+    test "a calendar sigil called with anything but sigil syntax is refused" do
+      for code <- [
+            ~S|Kernel.sigil_D("2020-01-01 Probe", [])|,
+            ~S|Kernel.sigil_D(<<"2020-01-01 ", "Probe">>, [])|,
+            ~S{"2020-01-01 Probe" |> Kernel.sigil_D([])},
+            ~S|Kernel.sigil_T(s, [])|,
+            ~S|sigil_N("2020-01-01 12:00:00 Probe", [])|,
+            ~S|:"Elixir.Kernel".sigil_U(s, [])|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "except as sigil syntax")
+               ),
+               "expected a sigil-shape violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    # Given a module, `Map.from_struct/1` calls its `__struct__/0` and, since
+    # Elixir 1.18, writes a deprecation to the node's stderr past the capture.
+    test "Map.from_struct takes only a map or struct written out" do
+      for code <- [
+            ~S|Map.from_struct(mod)|,
+            ~S|Map.from_struct(Date)|,
+            ~S|Map.from_struct(String.to_existing_atom("Elixir.X"))|,
+            ~S{mod |> Map.from_struct()},
+            ~S|:"Elixir.Map".from_struct(mod)|,
+            ~S|&Map.from_struct/1|,
+            ~S|Enum.map(l, &Map.from_struct(&1))|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "module.__struct__/0")
+               ),
+               "expected a Map.from_struct violation for #{code}, got #{inspect(violations)}"
+      end
+
+      for code <- [
+            ~S|Map.from_struct(%URI{})|,
+            ~S|Map.from_struct(%{a: 1})|,
+            ~S|Map.delete(s, :__struct__)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    # The attribute allowlist is the audited fields, not the struct's: a field
+    # a later Elixir adds has had no one read what `message/1` does with it.
+    test "every field of an audited exception has been audited" do
+      for {exception, audited} <- Sandbox.audited_exception_fields() do
+        fields =
+          Map.keys(exception.__struct__()) -- [:__struct__, :__exception__]
+
+        assert fields -- audited == [],
+               "#{inspect(exception)} has unaudited fields #{inspect(fields -- audited)}; " <>
+                 "read its message/1 and exception/1, then add them to @audited_exception_fields"
+      end
+    end
+
     # `calendar_suffix/1` copies Kernel's private `extract_calendar/1`. Each
     # form is expanded for real against a probe calendar, so a Kernel change
     # to which suffixes it dispatches to fails here instead of drifting.

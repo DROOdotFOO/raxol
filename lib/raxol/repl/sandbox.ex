@@ -19,10 +19,10 @@ defmodule Raxol.REPL.Sandbox do
   argument against trusting it: computed receivers, `Module.concat/1`
   alias resolution, the bare-name capture forms of `apply` and `spawn`,
   maps forged with a `__struct__` key, sorters naming a runtime module
-  (`Enum.sort(l, m)` calls `m.compare/2`), and `raise`, calendar and time
-  zone database arguments holding one (`DateTime.now(tz, m)` calls
-  `m.time_zone_period_from_utc_iso_days/2`) were each `:ok` at `:strict`
-  until they were not.
+  (`Enum.sort(l, m)` calls `m.compare/2`), and `raise`, calendar, time
+  zone database and `Map.from_struct/1` arguments holding one
+  (`DateTime.now(tz, m)` calls `m.time_zone_period_from_utc_iso_days/2`)
+  were each `:ok` at `:strict` until they were not.
 
   A forged struct is the same hole reached through data rather than a name. A
   map whose `__struct__` key names a module is protocol-dispatched
@@ -507,10 +507,22 @@ defmodule Raxol.REPL.Sandbox do
   # `Protocol.UndefinedError` calls `protocol.__protocol__/1` and
   # `UndefinedFunctionError` loads and queries its `module`, so a field
   # holding a module chosen at runtime is called back. Every exception here
-  # has the default `exception/1` and a `message/1` that only formats its
-  # fields as strings or with `inspect/1`. Before adding one, read both
-  # callbacks in the Elixir source; a module that implements `Exception` is
-  # not thereby safe.
+  # has the default `exception/1`, and its `message/1` calls no module a
+  # field names: it interpolates its fields or runs `inspect/1` over them.
+  # Both are protocol dispatch, so a field holding a struct still reaches
+  # that struct's calendar: `raise BadBooleanError, operator: %Date{...,
+  # calendar: m}` calls `m.date_to_string/3`. That is the `:calendar` class
+  # of #1282, which this list does not close (attribute VALUES are not
+  # judged). Before adding an exception, read both callbacks in the Elixir
+  # source; a module that implements `Exception` is not thereby safe.
+  #
+  # The fields are written out rather than read from `__struct__/0`, because
+  # the audit covers these fields and no others: one a later Elixir adds has
+  # not been read, and the test suite fails on it until someone has. Each
+  # list is the union over the supported Elixir versions, cut at compile
+  # time to the fields the running version defines, since naming a field
+  # the struct lacks is an unknown key (`Enum.OutOfBoundsError` gained
+  # `:enumerable` and `:index` in 1.19).
   #
   # The attributes are judged too, because the default `exception/1` is
   # version-dependent: on Elixir 1.17 it passes an unknown key to `IO.warn`,
@@ -519,33 +531,30 @@ defmodule Raxol.REPL.Sandbox do
   # (only where the exception has a `:message` field, since a string becomes
   # `message: string`) or a keyword list written out whose keys are all the
   # exception's own fields.
-  @raisable_exceptions Map.new(
-                         [
-                           ArgumentError,
-                           ArithmeticError,
-                           BadBooleanError,
-                           BadFunctionError,
-                           BadMapError,
-                           CaseClauseError,
-                           CondClauseError,
-                           Enum.EmptyError,
-                           Enum.OutOfBoundsError,
-                           KeyError,
-                           MatchError,
-                           RuntimeError,
-                           SystemLimitError,
-                           TryClauseError,
-                           WithClauseError
-                         ],
-                         fn exception ->
-                           fields =
-                             exception.__struct__()
-                             |> Map.keys()
-                             |> Kernel.--([:__struct__, :__exception__])
+  @audited_exception_fields %{
+    ArgumentError => [:message],
+    ArithmeticError => [:message],
+    BadBooleanError => [:operator, :term],
+    BadFunctionError => [:term],
+    BadMapError => [:term],
+    CaseClauseError => [:term],
+    CondClauseError => [],
+    Enum.EmptyError => [:message],
+    Enum.OutOfBoundsError => [:enumerable, :index, :message],
+    KeyError => [:key, :message, :term],
+    MatchError => [:term],
+    RuntimeError => [:message],
+    SystemLimitError => [:message],
+    TryClauseError => [:term],
+    WithClauseError => [:term]
+  }
 
-                           {exception, Enum.sort(fields)}
-                         end
-                       )
+  @raisable_exceptions Map.new(@audited_exception_fields, fn {exception, fields} ->
+                         struct = exception.__struct__()
+
+                         {exception,
+                          Enum.filter(fields, &Map.has_key?(struct, &1))}
+                       end)
 
   @doc """
   Checks code for safety violations at the given strictness level.
@@ -1043,6 +1052,11 @@ defmodule Raxol.REPL.Sandbox do
   @doc false
   def strict_modules, do: @allowed_strict_modules
 
+  # Exposed so the test suite can fail when an Elixir release adds a field
+  # to an audited exception that `@audited_exception_fields` does not list.
+  @doc false
+  def audited_exception_fields, do: @audited_exception_fields
+
   defp internal_call(module, func) do
     if internal_name?(func) do
       [
@@ -1097,6 +1111,9 @@ defmodule Raxol.REPL.Sandbox do
     cond do
       module == Kernel and func in [:raise, :reraise] ->
         raise_refusal("&Kernel.#{func}/#{arity}")
+
+      module == Map and func == :from_struct ->
+        map_from_struct_refusal("&Map.from_struct/#{arity}")
 
       is_map_key(@module_argument_positions, {module, func, arity}) ->
         module_argument_refusal(
@@ -1807,6 +1824,34 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
+  # Kernel's calendar sigils match only the shape sigil syntax builds, a
+  # one-part `<<>>` and a modifier list; any other argument raises
+  # `FunctionClauseError` while the macro expands, before a calendar is
+  # read. That is Kernel's rule, not this checker's, and the suite's drift
+  # test for `calendar_suffix/1` only writes sigil syntax, so the other shapes
+  # (`Kernel.sigil_D("2020-01-01 M", [])`, `<<"2020-01-01 ", "M">>`) are
+  # refused here rather than trusted to keep failing in Kernel.
+  defp dispatch_rule(Kernel, sigil, _args) when sigil in @calendar_sigils do
+    [
+      "#{sigil} is not allowed at :strict except as sigil syntax " <>
+        "(#{String.replace_prefix(Atom.to_string(sigil), "sigil_", "~")}[...]), " <>
+        "the only form whose calendar suffix is checked"
+    ]
+  end
+
+  # `Map.from_struct/1` given a module calls `module.__struct__/0`, and
+  # since Elixir 1.18 first hands a deprecation to `IO.warn`, which writes
+  # to the node's stderr past the evaluator's capture: `for _ <- 1..2000,
+  # do: Map.from_struct(Date)` wrote 880 KB there from one evaluation. The
+  # checker cannot tell a struct from a module held in a variable, so only
+  # a map or struct written out passes; `Map.delete(s, :__struct__)` does
+  # the same job for a struct held anywhere.
+  defp dispatch_rule(Map, :from_struct, [{form, _, _}]) when form in [:%, :%{}],
+    do: []
+
+  defp dispatch_rule(Map, :from_struct, [_value]),
+    do: map_from_struct_refusal("Map.from_struct/1")
+
   defp dispatch_rule(module, func, args) do
     arity = length(args)
 
@@ -1895,8 +1940,15 @@ defmodule Raxol.REPL.Sandbox do
       "#{func} #{inspect(module)} is not allowed at :strict with these " <>
         "attributes (they must be a string, where the exception has a " <>
         ":message field, or a keyword list written out naming only " <>
-        "#{inspect(module)}'s own fields: #{accepted}; on Elixir 1.17 an " <>
-        "unknown key is printed to the node's stderr)"
+        "#{inspect(module)}'s own fields: #{accepted})"
+    ]
+  end
+
+  defp map_from_struct_refusal(name) do
+    [
+      "#{name} is not allowed at :strict here (its argument must be a map " <>
+        "or struct written out: given a module it calls module.__struct__/0; " <>
+        "use Map.delete(struct, :__struct__) instead)"
     ]
   end
 
