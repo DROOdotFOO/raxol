@@ -18,6 +18,7 @@
 //   release  --defs FILE --records FILE --from SHA --to SHA [--from-label T] [--to-label T]
 //   lookup   --defs FILE --records FILE --commit SHA   (prints the record, or nothing)
 //   commits  --defs FILE --records FILE                (recorded commits, one per line)
+//   classify --defs FILE --base FILE --head FILE        (`id kind rel` per metric)
 //   publish  --defs FILE --record FILE --dir DIR --run-id N [--recorded-at ISO]
 //            [--order FILE]   (newest-first commits; picks latest.json)
 //   event    --file FILE                               (key=value lines for $GITHUB_OUTPUT)
@@ -463,6 +464,22 @@ const commands = {
       baseGap = { distance, sha: a["base-sha"] };
     }
     process.stdout.write(renderComment(defs, base, head, { baseLabel, headLabel, baseGap }));
+  },
+
+  // One line per metric, `id kind relative-change`, with the same verdict
+  // the comment shows (scripts/scoreboard-canaries.sh checks it).
+  classify(argv) {
+    const a = args(argv, { defs: str, base: str, head: str }, ["defs", "base", "head"]);
+    const defs = loadDefs(a.defs);
+    const base = loadRecord(a.base, defs, "fresh");
+    const head = loadRecord(a.head, defs, "fresh");
+    for (const def of defs.list) {
+      const b = base.metrics[def.id];
+      const h = head.metrics[def.id];
+      if (b === undefined && h === undefined) continue;
+      const c = classify(def, b, h);
+      process.stdout.write(`${def.id} ${c.kind} ${c.rel === undefined || c.rel === null ? "-" : c.rel.toFixed(6)}\n`);
+    }
   },
 
   badges(argv) {

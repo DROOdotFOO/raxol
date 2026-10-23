@@ -1,0 +1,18 @@
+Regression: Every frame is a full keyframe (clear and redraw every row), as before
+  incremental rendering (#534).
+Expect-worse: table.keystroke.bytes table.keystroke.reductions
+
+diff --git a/lib/raxol/core/runtime/rendering/backends.ex b/lib/raxol/core/runtime/rendering/backends.ex
+index a098053f7..12716fb59 100644
+--- a/lib/raxol/core/runtime/rendering/backends.ex
++++ b/lib/raxol/core/runtime/rendering/backends.ex
+@@ -82,8 +82,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
+   defp keyframe?(nil, _next, _state), do: true
+   defp keyframe?(_prev, _next, %{force_repaint: true}), do: true
+ 
+-  defp keyframe?(prev, next, _state),
+-    do: prev.width != next.width or prev.height != next.height
++  defp keyframe?(_prev, _next, _state), do: true
+ 
+   defp all_rows(buffer), do: Enum.to_list(0..(buffer.height - 1)//1)
+ 

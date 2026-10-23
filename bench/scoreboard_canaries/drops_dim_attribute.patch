@@ -1,0 +1,17 @@
+Regression: The ANSI encoder stops emitting the dim (faint) attribute, the regression
+  #1133 fixed: fewer bytes, wrong styling. The replay check must refuse.
+Expect-refused: do not reproduce
+
+diff --git a/packages/raxol_terminal/lib/raxol/terminal/renderer.ex b/packages/raxol_terminal/lib/raxol/terminal/renderer.ex
+index 48cc97261..5ccb95658 100644
+--- a/packages/raxol_terminal/lib/raxol/terminal/renderer.ex
++++ b/packages/raxol_terminal/lib/raxol/terminal/renderer.ex
+@@ -80,7 +80,7 @@ defmodule Raxol.Terminal.Renderer do
+   @ansi_underline "\e[4m"
+ 
+   # Attributes that each map to one fixed SGR code.
+-  @ansi_plain_attributes [faint: "\e[2m", reverse: "\e[7m", strikethrough: "\e[9m"]
++  @ansi_plain_attributes [reverse: "\e[7m", strikethrough: "\e[9m"]
+ 
+   # Standard foreground color codes
+   @fg_color_codes %{
