@@ -402,86 +402,90 @@ defmodule Raxol.REPL.Sandbox do
   }
 
   # Calls that call back into the calendar or time zone database module an
-  # argument holds, keyed by full arity, valued by those arguments' positions
-  # (0-based). Taken from every allowlisted function whose spec types an
-  # argument `Calendar.calendar()` or `Calendar.time_zone_database()`, or,
-  # inside `Calendar` itself, the local `calendar()`/`time_zone_database()`;
-  # the test suite re-derives the set from the specs, so an Elixir release
-  # that adds one fails there rather than passing here. `utc_now/1` takes a
+  # argument holds, keyed by full arity, valued by `{position, kind}` for
+  # each such argument (position 0-based). Taken from every allowlisted
+  # function whose spec types an argument `Calendar.calendar()` or
+  # `Calendar.time_zone_database()`, or, inside `Calendar` itself, the local
+  # `calendar()`/`time_zone_database()`; the test suite re-derives the set,
+  # and each slot's kind, from the specs, so an Elixir release that adds or
+  # widens one fails there rather than passing here. `utc_now/1` takes a
   # calendar OR a time unit in the same slot, `DateTime.from_iso8601/2` a
-  # calendar OR a format, so arity, not name, picks the position.
+  # calendar OR a format, so arity, not name, picks the kind.
   # `Calendar.compatible_calendars?/2` calls
   # `day_rollover_relative_to_midnight_utc/0` on both of its arguments.
   @module_argument_positions %{
-    {Calendar, :compatible_calendars?, 2} => [0, 1],
-    {Date, :convert, 2} => [1],
-    {Date, :convert!, 2} => [1],
-    {Date, :from_erl, 2} => [1],
-    {Date, :from_erl!, 2} => [1],
-    {Date, :from_gregorian_days, 2} => [1],
-    {Date, :from_iso8601, 2} => [1],
-    {Date, :from_iso8601!, 2} => [1],
-    {Date, :new, 4} => [3],
-    {Date, :new!, 4} => [3],
-    {Date, :utc_today, 1} => [0],
-    {Time, :convert, 2} => [1],
-    {Time, :convert!, 2} => [1],
-    {Time, :from_erl, 3} => [2],
-    {Time, :from_erl!, 3} => [2],
-    {Time, :from_iso8601, 2} => [1],
-    {Time, :from_iso8601!, 2} => [1],
-    {Time, :from_seconds_after_midnight, 3} => [2],
-    {Time, :new, 5} => [4],
-    {Time, :new!, 5} => [4],
-    {Time, :utc_now, 1} => [0],
-    {Time, :utc_now, 2} => [1],
-    {DateTime, :add, 4} => [3],
-    {DateTime, :convert, 2} => [1],
-    {DateTime, :convert!, 2} => [1],
-    {DateTime, :from_gregorian_seconds, 3} => [2],
-    {DateTime, :from_iso8601, 2} => [1],
-    {DateTime, :from_iso8601, 3} => [1],
-    {DateTime, :from_naive, 3} => [2],
-    {DateTime, :from_naive!, 3} => [2],
-    {DateTime, :from_unix, 3} => [2],
-    {DateTime, :from_unix!, 3} => [2],
-    {DateTime, :new, 4} => [3],
-    {DateTime, :new!, 4} => [3],
-    {DateTime, :now, 2} => [1],
-    {DateTime, :now!, 2} => [1],
-    {DateTime, :shift, 3} => [2],
-    {DateTime, :shift_zone, 3} => [2],
-    {DateTime, :shift_zone!, 3} => [2],
-    {DateTime, :utc_now, 1} => [0],
-    {DateTime, :utc_now, 2} => [1],
-    {NaiveDateTime, :convert, 2} => [1],
-    {NaiveDateTime, :convert!, 2} => [1],
-    {NaiveDateTime, :from_erl, 3} => [2],
-    {NaiveDateTime, :from_erl!, 3} => [2],
-    {NaiveDateTime, :from_gregorian_seconds, 3} => [2],
-    {NaiveDateTime, :from_iso8601, 2} => [1],
-    {NaiveDateTime, :from_iso8601!, 2} => [1],
-    {NaiveDateTime, :local_now, 1} => [0],
-    {NaiveDateTime, :new, 8} => [7],
-    {NaiveDateTime, :new!, 8} => [7],
-    {NaiveDateTime, :utc_now, 1} => [0],
-    {NaiveDateTime, :utc_now, 2} => [1]
+    {Calendar, :compatible_calendars?, 2} => [{0, :calendar}, {1, :calendar}],
+    {Date, :convert, 2} => [{1, :calendar}],
+    {Date, :convert!, 2} => [{1, :calendar}],
+    {Date, :from_erl, 2} => [{1, :calendar}],
+    {Date, :from_erl!, 2} => [{1, :calendar}],
+    {Date, :from_gregorian_days, 2} => [{1, :calendar}],
+    {Date, :from_iso8601, 2} => [{1, :calendar}],
+    {Date, :from_iso8601!, 2} => [{1, :calendar}],
+    {Date, :new, 4} => [{3, :calendar}],
+    {Date, :new!, 4} => [{3, :calendar}],
+    {Date, :utc_today, 1} => [{0, :calendar}],
+    {Time, :convert, 2} => [{1, :calendar}],
+    {Time, :convert!, 2} => [{1, :calendar}],
+    {Time, :from_erl, 3} => [{2, :calendar}],
+    {Time, :from_erl!, 3} => [{2, :calendar}],
+    {Time, :from_iso8601, 2} => [{1, :calendar}],
+    {Time, :from_iso8601!, 2} => [{1, :calendar}],
+    {Time, :from_seconds_after_midnight, 3} => [{2, :calendar}],
+    {Time, :new, 5} => [{4, :calendar}],
+    {Time, :new!, 5} => [{4, :calendar}],
+    {Time, :utc_now, 1} => [{0, :calendar_or_time_unit}],
+    {Time, :utc_now, 2} => [{1, :calendar}],
+    {DateTime, :add, 4} => [{3, :time_zone_database}],
+    {DateTime, :convert, 2} => [{1, :calendar}],
+    {DateTime, :convert!, 2} => [{1, :calendar}],
+    {DateTime, :from_gregorian_seconds, 3} => [{2, :calendar}],
+    {DateTime, :from_iso8601, 2} => [{1, :calendar_or_format}],
+    {DateTime, :from_iso8601, 3} => [{1, :calendar}],
+    {DateTime, :from_naive, 3} => [{2, :time_zone_database}],
+    {DateTime, :from_naive!, 3} => [{2, :time_zone_database}],
+    {DateTime, :from_unix, 3} => [{2, :calendar}],
+    {DateTime, :from_unix!, 3} => [{2, :calendar}],
+    {DateTime, :new, 4} => [{3, :time_zone_database}],
+    {DateTime, :new!, 4} => [{3, :time_zone_database}],
+    {DateTime, :now, 2} => [{1, :time_zone_database}],
+    {DateTime, :now!, 2} => [{1, :time_zone_database}],
+    {DateTime, :shift, 3} => [{2, :time_zone_database}],
+    {DateTime, :shift_zone, 3} => [{2, :time_zone_database}],
+    {DateTime, :shift_zone!, 3} => [{2, :time_zone_database}],
+    {DateTime, :utc_now, 1} => [{0, :calendar_or_time_unit}],
+    {DateTime, :utc_now, 2} => [{1, :calendar}],
+    {NaiveDateTime, :convert, 2} => [{1, :calendar}],
+    {NaiveDateTime, :convert!, 2} => [{1, :calendar}],
+    {NaiveDateTime, :from_erl, 3} => [{2, :calendar}],
+    {NaiveDateTime, :from_erl!, 3} => [{2, :calendar}],
+    {NaiveDateTime, :from_gregorian_seconds, 3} => [{2, :calendar}],
+    {NaiveDateTime, :from_iso8601, 2} => [{1, :calendar}],
+    {NaiveDateTime, :from_iso8601!, 2} => [{1, :calendar}],
+    {NaiveDateTime, :local_now, 1} => [{0, :calendar}],
+    {NaiveDateTime, :new, 8} => [{7, :calendar}],
+    {NaiveDateTime, :new!, 8} => [{7, :calendar}],
+    {NaiveDateTime, :utc_now, 1} => [{0, :calendar_or_time_unit}],
+    {NaiveDateTime, :utc_now, 2} => [{1, :calendar}]
   }
 
-  # What those slots may hold at `:strict`: the two modules Elixir ships for
-  # them, and the non-module atoms the shared slots of `utc_now/1` and
-  # `DateTime.from_iso8601/2` also take. Any value written as anything else
-  # is refused, a variable included.
-  @module_argument_values [
-    Calendar.ISO,
-    Calendar.UTCOnlyTimeZoneDatabase,
-    :native,
-    :microsecond,
-    :millisecond,
-    :second,
-    :extended,
-    :basic
-  ]
+  # What each kind of slot may hold at `:strict`: the module Elixir ships
+  # for it, plus the atoms a shared slot's spec also lists. Anything else is
+  # refused, a variable included, and so is the other kind's module:
+  # `DateTime.now(tz, Calendar.ISO)` would call `Calendar.ISO` as a time
+  # zone database.
+  @module_argument_values %{
+    calendar: [Calendar.ISO],
+    time_zone_database: [Calendar.UTCOnlyTimeZoneDatabase],
+    calendar_or_time_unit: [
+      Calendar.ISO,
+      :native,
+      :microsecond,
+      :millisecond,
+      :second
+    ],
+    calendar_or_format: [Calendar.ISO, :extended, :basic]
+  }
 
   # `raise`/`reraise` call `exception/1` on a module first argument, and
   # `~D`/`~T`/`~N`/`~U` call the parse function of the calendar their suffix
@@ -1072,7 +1076,10 @@ defmodule Raxol.REPL.Sandbox do
         raise_refusal("&Kernel.#{func}/#{arity}")
 
       is_map_key(@module_argument_positions, {module, func, arity}) ->
-        module_argument_refusal("&#{inspect(module)}.#{func}/#{arity}")
+        module_argument_refusal(
+          "&#{inspect(module)}.#{func}/#{arity}",
+          Map.fetch!(@module_argument_positions, {module, func, arity})
+        )
 
       true ->
         []
@@ -1737,10 +1744,12 @@ defmodule Raxol.REPL.Sandbox do
   # from a module: a variable (`raise msg`, a rescued `reraise e, st`), a
   # call, `<>` or a sigil.
   #
-  # A struct's own `:calendar` field reaches the same callbacks
-  # (`%{date | calendar: m}`) and is NOT covered: a value written into a map
-  # can arrive from anywhere, which an AST walk cannot follow (#1282). #1231
-  # is the fix for the class.
+  # A struct's own `:calendar` field reaches the same callbacks and is NOT
+  # covered: a struct literal (`%Date{year: 2020, month: 1, day: 1,
+  # calendar: m}`, `Date` being in `@strict_struct_modules`), an update
+  # (`%{date | calendar: m}`) or a key writer (`Map.put(date, :calendar, m)`)
+  # stores a value that can arrive from anywhere, which an AST walk cannot
+  # follow (#1282). #1231 is the fix for the class.
   defp dispatch_rule(Kernel, func, [exception | _rest])
        when func in [:raise, :reraise] do
     if raisable?(exception), do: [], else: raise_refusal("#{func}")
@@ -1762,17 +1771,19 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp dispatch_rule(module, func, args) do
-    case Map.fetch(@module_argument_positions, {module, func, length(args)}) do
-      {:ok, positions} ->
-        if Enum.all?(positions, &module_argument_ok?(Enum.at(args, &1))),
-          do: [],
-          else:
-            module_argument_refusal(
-              "#{inspect(module)}.#{func}/#{length(args)}"
-            )
+    arity = length(args)
 
-      :error ->
+    @module_argument_positions
+    |> Map.get({module, func, arity}, [])
+    |> Enum.reject(fn {position, kind} ->
+      module_argument_ok?(Enum.at(args, position), kind)
+    end)
+    |> case do
+      [] ->
         []
+
+      refused ->
+        module_argument_refusal("#{inspect(module)}.#{func}/#{arity}", refused)
     end
   end
 
@@ -1786,8 +1797,11 @@ defmodule Raxol.REPL.Sandbox do
     end
   end
 
-  # Kernel's own rule (`extract_calendar/1`): the last space-separated word
-  # is a calendar when it starts with an uppercase letter.
+  # Kernel's own rule (`extract_calendar/1`, private): the last
+  # space-separated word is a calendar when it starts with an uppercase
+  # letter. A copy can drift from Kernel's, so the test suite expands each
+  # sigil against a probe calendar and requires this rule to refuse exactly
+  # the suffixes Kernel dispatches to.
   defp calendar_suffix(string) do
     case :binary.split(string, " ", [:global]) do
       [_only] -> nil
@@ -1800,9 +1814,9 @@ defmodule Raxol.REPL.Sandbox do
 
   defp uppercase_word(_word), do: nil
 
-  defp module_argument_ok?(value) do
+  defp module_argument_ok?(value, kind) do
     case strict_module(value) do
-      {:ok, value} -> value in @module_argument_values
+      {:ok, value} -> value in Map.fetch!(@module_argument_values, kind)
       :unknown -> false
     end
   end
@@ -1818,12 +1832,32 @@ defmodule Raxol.REPL.Sandbox do
     ]
   end
 
-  defp module_argument_refusal(name) do
+  defp module_argument_refusal(name, slots) do
+    accepted =
+      slots
+      |> Enum.map(fn {_position, kind} -> kind end)
+      |> Enum.uniq()
+      |> Enum.map_join("; ", fn kind ->
+        "its #{slot_name(kind)} must be written out as " <>
+          or_list(Map.fetch!(@module_argument_values, kind))
+      end)
+
     [
-      "#{name} is not allowed at :strict here (its calendar or time zone " <>
-        "database must be written out as Calendar.ISO or " <>
-        "Calendar.UTCOnlyTimeZoneDatabase; the module it holds is called back)"
+      "#{name} is not allowed at :strict here (#{accepted}; the module it " <>
+        "holds is called back)"
     ]
+  end
+
+  defp slot_name(:calendar), do: "calendar"
+  defp slot_name(:time_zone_database), do: "time zone database"
+  defp slot_name(:calendar_or_time_unit), do: "calendar or time unit"
+  defp slot_name(:calendar_or_format), do: "calendar or format"
+
+  defp or_list([only]), do: inspect(only)
+
+  defp or_list(values) do
+    {init, [last]} = Enum.split(values, -1)
+    Enum.map_join(init, ", ", &inspect/1) <> " or " <> inspect(last)
   end
 
   defp io_stream_refusal(func) do

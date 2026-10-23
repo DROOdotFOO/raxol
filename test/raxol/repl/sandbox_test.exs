@@ -1511,6 +1511,23 @@ defmodule Raxol.REPL.SandboxTest do
     end
   end
 
+  # The calendar a sigil suffix names, for checking `calendar_suffix/1`
+  # against Kernel: records which parse function the sigil called, then
+  # refuses the string.
+  defmodule ProbeCalendar do
+    for parse <- [
+          :parse_date,
+          :parse_time,
+          :parse_naive_datetime,
+          :parse_utc_datetime
+        ] do
+      def unquote(parse)(_string) do
+        send(self(), {__MODULE__, unquote(parse)})
+        {:error, :probe}
+      end
+    end
+  end
+
   # #1238: a module chosen at runtime, reached through an argument the
   # callee calls back. Each form below returned `:ok` at `:strict` and ran
   # the held module's `exception/1`, calendar or time zone database callback
@@ -1567,30 +1584,49 @@ defmodule Raxol.REPL.SandboxTest do
       slots = calendar_slots()
       # The scan itself must find the slots, or the loop below proves nothing.
       # `Calendar`'s own specs name the local `calendar()` type.
-      assert {Date, :new, 4, 3, :calendar} in slots
-      assert {DateTime, :now, 2, 1, :time_zone_database} in slots
-      assert {Calendar, :compatible_calendars?, 2, 0, :calendar} in slots
-      assert {Calendar, :compatible_calendars?, 2, 1, :calendar} in slots
+      assert {Date, :new, 4, 3, :calendar, []} in slots
+      assert {DateTime, :now, 2, 1, :time_zone_database, []} in slots
+      assert {Calendar, :compatible_calendars?, 2, 0, :calendar, []} in slots
+      assert {Calendar, :compatible_calendars?, 2, 1, :calendar, []} in slots
+
+      assert {DateTime, :from_iso8601, 2, 1, :calendar, [:extended, :basic]} in slots
+
+      # Every atom any shared slot accepts. A slot must refuse the ones its
+      # own spec does not list: `Date.new(2020, 1, 1, :basic)` names no
+      # calendar.
+      shared_atoms = [
+        :native,
+        :microsecond,
+        :millisecond,
+        :second,
+        :extended,
+        :basic
+      ]
 
       for {{module, func, arity}, call_slots} <-
             Enum.group_by(slots, &{elem(&1, 0), elem(&1, 1), elem(&1, 2)}),
-          kinds = Map.new(call_slots, &{elem(&1, 3), elem(&1, 4)}),
-          position <- Map.keys(kinds) do
+          accepts =
+            Map.new(call_slots, fn {_, _, _, position, kind, atoms} ->
+              {position, {kind, atoms}}
+            end),
+          {position, {kind, atoms}} <- accepts do
         name = "#{inspect(module)}.#{func}"
 
-        # Every other slot written out, so each refusal is down to `position`.
+        # Every other slot written out, so each verdict is down to `position`.
         args = fn slot ->
           Enum.map(0..(arity - 1), fn
             ^position -> slot
-            i when is_map_key(kinds, i) -> written_module(kinds[i])
+            i when is_map_key(accepts, i) -> written_module(elem(accepts[i], 0))
             i -> "a#{i}"
           end)
         end
 
+        call = &"#{name}(#{Enum.join(args.(&1), ", ")})"
         computed = args.("mod")
 
         refused =
-          ["#{name}(#{Enum.join(computed, ", ")})", "&#{name}/#{arity}"] ++
+          [call.("mod"), "&#{name}/#{arity}", call.(other_module(kind))] ++
+            Enum.map(shared_atoms -- atoms, &call.(inspect(&1))) ++
             if position > 0,
               do: [
                 "#{hd(computed)} |> #{name}(#{computed |> tl() |> Enum.join(", ")})"
@@ -1605,10 +1641,11 @@ defmodule Raxol.REPL.SandboxTest do
                  "expected a module-argument violation for #{code}, got #{inspect(violations)}"
         end
 
-        written =
-          "#{name}(#{Enum.join(args.(written_module(kinds[position])), ", ")})"
-
-        assert :ok = Sandbox.check(written, :strict), "#{written} was refused"
+        for code <- [
+              call.(written_module(kind)) | Enum.map(atoms, &call.(inspect(&1)))
+            ] do
+          assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+        end
       end
     end
 
@@ -1654,11 +1691,48 @@ defmodule Raxol.REPL.SandboxTest do
         assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
       end
     end
+
+    # `calendar_suffix/1` copies Kernel's private `extract_calendar/1`. Each
+    # form is expanded for real against a probe calendar, so a Kernel change
+    # to which suffixes it dispatches to fails here instead of drifting.
+    test "the calendar suffix rule refuses exactly the suffixes Kernel dispatches to" do
+      probe = inspect(ProbeCalendar)
+
+      verdicts =
+        for {sigil, value} <- [
+              {"D", "2020-01-01"},
+              {"T", "12:00:00"},
+              {"N", "2020-01-01 12:00:00"},
+              {"U", "2020-01-01 00:00:00Z"}
+            ],
+            separator <- [" ", "  ", "\t", "\n", "\r\n"],
+            suffix <- [
+              probe,
+              probe <> " ",
+              "_" <> probe,
+              String.downcase(probe)
+            ] do
+          code = "~#{sigil}[#{value}#{separator}#{suffix}]"
+          refused? = match?({:error, _}, Sandbox.check(code, :strict))
+          dispatched? = kernel_dispatches?(code)
+
+          assert refused? == dispatched?,
+                 "#{inspect(code)}: Kernel dispatched=#{dispatched?}, checker refused=#{refused?}"
+
+          dispatched?
+        end
+
+      # Both verdicts must occur, or the comparison proves nothing.
+      assert true in verdicts
+      assert false in verdicts
+    end
   end
 
-  # {module, function, arity, position, :calendar | :time_zone_database} for
-  # every argument an allowlisted spec types as a calendar or time zone
-  # database, read from the compiled specs rather than copied.
+  # {module, function, arity, position, kind, atoms} for every argument an
+  # allowlisted spec types as a calendar or time zone database, read from
+  # the compiled specs rather than copied. `kind` is `:calendar` or
+  # `:time_zone_database`; `atoms` are the literal atoms the slot's union
+  # also lists (`DateTime.utc_now/1`'s time units).
   # `Calendar.put_time_zone_database/1` is refused outright at every level
   # (see "the global time zone database cannot be replaced"), so it has no
   # written-out form to allow.
@@ -1666,23 +1740,28 @@ defmodule Raxol.REPL.SandboxTest do
     Sandbox.strict_modules()
     |> Enum.flat_map(&module_calendar_slots/1)
     |> Enum.uniq()
-    |> Enum.reject(&match?({Calendar, :put_time_zone_database, 1, _, _}, &1))
+    |> Enum.reject(&match?({Calendar, :put_time_zone_database, 1, _, _, _}, &1))
   end
 
   defp module_calendar_slots(module) do
     for {:ok, specs} <- [Code.Typespec.fetch_specs(module)],
         {{func, arity}, clauses} <- specs,
         clause <- clauses,
-        {position, kind} <- spec_calendar_positions(module, func, clause),
-        do: {module, func, arity, position, kind}
+        {position, kind, atoms} <- spec_calendar_positions(module, func, clause),
+        do: {module, func, arity, position, kind, atoms}
   end
 
   defp spec_calendar_positions(module, func, clause) do
     for {arg, position} <- Enum.with_index(spec_args(func, clause)),
         kind = calendar_kind(module, arg),
         kind != nil,
-        do: {position, kind}
+        do: {position, kind, arg |> union_members() |> Enum.filter(&is_atom/1)}
   end
+
+  defp union_members({:|, _, [left, right]}),
+    do: union_members(left) ++ union_members(right)
+
+  defp union_members(type), do: [type]
 
   defp spec_args(func, clause) do
     {spec, vars} =
@@ -1727,4 +1806,24 @@ defmodule Raxol.REPL.SandboxTest do
 
   defp written_module(:time_zone_database),
     do: "Calendar.UTCOnlyTimeZoneDatabase"
+
+  defp other_module(:calendar), do: written_module(:time_zone_database)
+  defp other_module(:time_zone_database), do: written_module(:calendar)
+
+  # Whether expanding `code` called a `ProbeCalendar` parse function. The
+  # probe refuses every string, so a dispatched sigil raises; so does a
+  # suffix Kernel reads as part of an ISO string it cannot parse.
+  defp kernel_dispatches?(code) do
+    try do
+      Code.eval_string(code)
+    rescue
+      _ -> :raised
+    end
+
+    receive do
+      {ProbeCalendar, _parse} -> true
+    after
+      0 -> false
+    end
+  end
 end
