@@ -6,7 +6,10 @@ Proposed, 2026-10-23. Revised the same day after a review pass that checked
 every claim against the code and against OMP 18.12.6 itself (its bundled
 source and a throwaway plugin driven through `omp --mode rpc`), and again
 after an adversarial pass and the owner's decisions on tool churn, plugin
-location, teams, payments and where agents live.
+location, teams, payments and where agents live. Revised on 2026-10-24 after
+a third pass: agents keep their journal across a respawn but not their
+state, payment limits need durable single-owner state, and surfaces need an
+authenticated user.
 
 Supersedes [ADR-0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent
 seams) once the harness is deleted. The same deletion supersedes ADRs 0022,
@@ -34,9 +37,9 @@ What no coding harness has is what Raxol already is:
   tree (`Raxol.MCP.TreeWalker`, `Raxol.MCP.ToolSynchronizer`): `table.sort`,
   `search.type_into`, `dialog.dismiss`, instead of keystrokes and screen text.
 - **Agents that survive crashes.** Supervised, crash-isolated BEAM processes
-  (`Raxol.Agent.Session`, `Team`, `Comm`), with journals they resume from,
-  schedules (`Raxol.Agent.Scheduler`), sandboxes and fail-closed spend limits
-  (`Raxol.Agent.SpendGate`, `raxol_payments`).
+  (`Raxol.Agent.Session`, `Team`, `Comm`), with journals that outlive the
+  process, schedules (`Raxol.Agent.Scheduler`), sandboxes and fail-closed
+  spend limits (`Raxol.Agent.SpendGate`, `raxol_payments`).
 - **Every surface.** Terminal, LiveView, SSH, MCP, Telegram, watch.
 
 The derived tools never reach OMP usefully today. OMP sees the 11 static
@@ -74,8 +77,8 @@ what it plugs into:
 - Raxol agents are crash-isolated, journaled workers an OMP session starts,
   asks, checks and stops (MCP), and that can spend money inside
   Raxol-enforced limits (Decision 7).
-- Raxol surfaces can front an OMP session (OMP's RPC mode) on Telegram, the
-  web, SSH or a watch.
+- Raxol surfaces can front an OMP session (OMP's RPC mode) on Telegram, other
+  chat gateways and SSH.
 
 `AGENTS.md`'s Hermes section and every "Hermes parity" claim are retired. A
 coding harness joins the "Do NOT build" list.
@@ -94,20 +97,26 @@ The first build exposes each headless session's derived tools to OMP.
   names still work; short session ids keep them readable. Ids from MCP input
   are validated before any atom is created.
 - **Dynamic publication.** The server advertises `tools.listChanged` and
-  sends `notifications/tools/list_changed` on every change, and OMP re-lists
-  on it (observed). OMP lists MCP tools as text at the end of its system
-  prompt, so every change rewrites that text mid-conversation. To keep that
-  rare, a session's tool set is sticky: a tool stays registered until its
-  session stops. Each call resolves its widget's live state at call time
-  (today a callback captures the widget as it was when the tool was derived,
-  `tree_walker.ex:224-236`, which a sticky set would freeze). A call to a
-  widget that is absent, disabled or of another type returns an error naming
-  it. Churn is then limited to session start, stop and a widget's first
-  appearance. Derived descriptions are static per widget type and action, so
-  app text never reaches OMP's system prompt. Users can shed tools: a
-  per-session cap evicts the least recently used, `raxol_compact` drops tools
-  for widgets no longer in view, `raxol_stop` drops a session's whole set,
-  and `raxol_list` shows each session's count. Whether the remaining churn
+  sends `notifications/tools/list_changed` on every change. OMP re-lists on
+  it (observed) and applies the new set at its next model request, inside
+  the same turn. By default OMP lists MCP tools as text at the end of its
+  system prompt; with `--no-tools` they become provider tools and are also
+  listed in the middle of the prompt. Either way every change rewrites part
+  of what the provider cached. To keep that rare, a session's tool set is
+  sticky: a tool stays registered until its session stops. Each call
+  resolves its widget's live state at call time (today a callback captures
+  the widget as it was when the tool was derived,
+  `tree_walker.ex:224-236`, which a sticky set would freeze), and read
+  actions read the current model, not a debounced tree. A call to a widget
+  that is absent, disabled or of another type returns an error naming it, and
+  so does a call to a session that is not running. Churn is then limited to
+  session start, stop and a widget's first appearance. Derived descriptions
+  are static per widget type and action, so app text never reaches OMP's
+  system prompt. Users can shed tools: a per-session cap hides the least
+  recently used tools of widgets that are out of view, `raxol_compact` hides
+  the tools of every widget no longer in view, `raxol_stop` drops a
+  session's whole set, and `raxol_list` shows each session's count. A hidden
+  tool stays callable while its session lives. Whether the remaining churn
   costs provider cache hits is measured by the benchmark below.
 - **Authorization stays in Raxol.** OMP treats every MCP tool as a `write`
   tool, ignores annotations, and auto-approves in its default mode, so the
@@ -128,8 +137,9 @@ The first build exposes each headless session's derived tools to OMP.
     data directory, so a plugin cannot run `mix mcp.server` in a user's
     project. The plugin therefore runs `raxol mcp`, a new `@raxol/cli`
     subcommand that needs no Elixir toolchain.
-  - `raxol mcp` sets the MCP startup mode before the release boots, sends
-    logs to stderr, and gets a smoke test in the CLI release workflow.
+  - `raxol mcp` sets the MCP startup mode before the release boots, keeps
+    the protocol on standard output and sends every other byte of output to
+    stderr. It gets a smoke test on pull requests.
   - App authors expose their own modules with a project `.omp/mcp.json`
     pointing at `mix mcp.server` with their project as `cwd`.
 - **The first headline benchmark comes from this step.** A deterministic
@@ -176,7 +186,7 @@ The cutover PR deletes coding-only code:
 - The CLI commands `agent`, `code`, `p`, `login` and `setup`, with their mix
   tasks and `bin/` scripts. Bare `raxol` prints help.
 
-Measured, that is about 24k lines of `raxol_agent` library code, and 82 test
+Measured, that is about 25k lines of `raxol_agent` library code, and 91 test
 files reference it.
 
 Kept, because they are the Raxol-agents runtime or have outside users:
@@ -237,10 +247,13 @@ Kimi are deleted; the native CLI drivers go with the harness.
 Raxol agent instead of starting a coding turn:
 
 - Agents are session-scoped for now. The agent runs inside the `raxol acp`
-  process for the editor session; its journal persists, and starting the
-  same id again resumes from it. A long-lived host that several processes
-  attach to is later work: a 0600 unix socket with a peer-uid check, never
-  Erlang distribution, which `raxol_payments` forbids on signing nodes.
+  process for the editor session. Its journal persists, and starting the
+  same id again continues that journal, but the agent's state starts fresh:
+  the journal records sanitized events, not a model that can be rebuilt.
+  Restoring state needs an agent codec and checkpoints, which is later work,
+  as is a long-lived host that several processes attach to: a 0600 unix
+  socket with a peer-uid check, never Erlang distribution, which
+  `raxol_payments` forbids on signing nodes. `session/load` is not offered.
 - The package's arity-2 `:turn_runner` seam takes a runner that calls the
   agent (`Comm.call/3`, with an explicit timeout; the agent answers with
   `Comm.reply/3`) and sends its reply as message chunks.
@@ -262,7 +275,7 @@ the cutover deletes. Editors that want a coding agent use `omp acp`.
 ### 6. Raxol surfaces front OMP, later
 
 An Elixir client for OMP's RPC mode (`omp --mode rpc`) lets the root
-`Raxol.Harness` UI kit render an OMP session on any Raxol surface:
+`Raxol.Harness` UI kit render an OMP session on a Raxol surface:
 
 - The protocol is JSON lines with id correlation, `negotiate_protocol` v2
   chunking for frames over 1 MiB, and waiting for `session_settled` before
@@ -271,13 +284,18 @@ An Elixir client for OMP's RPC mode (`omp --mode rpc`) lets the root
   `omp --version` against the pin.
 - It plugs in as a `raxol_agent` implementation of the root
   `Raxol.Harness.SessionLane` behaviour, which gains a prompt callback.
-- OMP runs with `--approval-mode write`, and its approval requests go to the
-  surface's authenticated user. A surface without one (for example a
-  Telegram bot with no chat allowlist) refuses to start an OMP session,
-  because OMP's default mode would hand that chat a shell.
+- OMP runs with `--approval-mode write` and with its UI channel open (under
+  `--no-ui` an approval fails closed and nothing reaches the host). Its
+  approval requests go to the surface's authenticated user. A surface
+  without one refuses to start an OMP session, because OMP's default mode
+  would hand that user a shell. Telegram goes through the gateway's pairing
+  (keyed on the user, deny by default), not the bot's chat allowlist (keyed
+  on the chat, open when unset). SSH needs per-tenant keys, which bind the
+  user name. The LiveView surface has no authentication today, so it is left
+  out until it does.
 
-This replaces the deleted coding TUI with "OMP on Telegram, LiveView, SSH and
-a watch".
+This replaces the deleted coding TUI with "OMP on Telegram, chat gateways
+and SSH".
 
 ### 7. Raxol agents into OMP
 
@@ -286,17 +304,21 @@ team spawn, list, broadcast and stop, and a read-only journal resource per
 agent.
 
 - Agents run inside the `raxol mcp` process and end with the OMP session.
-  Their journals persist, and spawning the same id again resumes from them.
-  A second process cannot take an id whose journal another process holds.
+  Their journals persist, one directory per project, and spawning the same
+  id again continues the journal with fresh state, as in Decision 5. The
+  journal is opened and locked when the agent spawns. A second process
+  cannot take an id whose journal another process holds, and on Windows,
+  where the journal has no lock yet, agent spawning is refused.
 - Only apps on a configured allowlist can be spawned, and the tools act only
-  on agents this process spawned.
-- `Team` gains list, member and stop functions and stops creating atoms from
-  team ids.
+  on agents and teams this process spawned.
+- `Team` gains list, member and stop functions, stops creating atoms from
+  team ids, and starts under the agent supervisor rather than linked to the
+  caller.
 - Spending tools ship here, under the payments rules in Consequences.
 
 ## Consequences
 
-- About 24k lines of `raxol_agent` library code and the tests that cover it
+- About 25k lines of `raxol_agent` library code and the tests that cover it
   go, with the CLI's agent commands and their docs (measured over the
   delete set; the earlier 15-20k estimate was low).
 - Raxol depends on a third-party harness for the coding experience. MCP is
@@ -308,14 +330,26 @@ agent.
   benchmark measures.
 - Payments stay in the Raxol-agents story. The npm `raxol` binary bundles
   `raxol_payments`, so plugin users get spending tools once an operator
-  writes a policy: caps, currency and approved recipients. Payment tools go
-  through the payments gate (`Raxol.Payments.Actions.SpendGate.authorize/3`
-  and the ledger), not the LLM-cost `Raxol.Agent.SpendGate`. Without a policy
-  and ledger no payment tool registers; a recipient outside the approved list
-  or a currency other than the policy's is refused; caps never come from tool
-  arguments. OMP cannot ask a human through MCP (it answers only `ping` and
-  `roots/list`), so an amount that needs confirmation is refused rather than
-  approved. OMP's approval mode is never the control.
+  writes a policy: caps, currency, chains and approved recipients. Payment
+  tools go through the payments gate
+  (`Raxol.Payments.Actions.SpendGate.authorize/3` and the ledger), not the
+  LLM-cost `Raxol.Agent.SpendGate`.
+  - Limits survive restarts. The ledger and the idempotency store are files
+    in an operator-owned state directory, keyed by wallet, and only the one
+    process holding that directory's lock registers payment tools. Today's
+    ledger lives in memory, so every new `raxol mcp` process would start
+    with a fresh budget.
+  - The exported tools are an explicit list. Signing a mandate, a raw
+    transfer and deposit routes are not on it.
+  - A recipient must be explicit and on the approved list for its chain.
+    The currency comes from the token being spent, never from an argument.
+    Caps never come from tool arguments.
+  - The fail-closed defaults are set explicitly, because the payments
+    package's release check does not fire in the Burrito binary. Crash
+    dumps are switched off, since a dump would contain the key.
+  - OMP cannot ask a human through MCP (it answers only `ping` and
+    `roots/list`), so an amount that needs confirmation is refused rather
+    than approved. OMP's approval mode is never the control.
 - Derived tool sets still change when sessions start and stop. The weekly
   benchmark records cache reads and writes so the cost is measured, not
   guessed.
