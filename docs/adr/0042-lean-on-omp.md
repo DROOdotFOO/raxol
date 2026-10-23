@@ -2,14 +2,14 @@
 
 ## Status
 
-Proposed, 2026-10-23. Revised the same day after a review pass that checked
-every claim against the code and against OMP 18.12.6 itself (its bundled
-source and a throwaway plugin driven through `omp --mode rpc`), and again
-after an adversarial pass and the owner's decisions on tool churn, plugin
-location, teams, payments and where agents live. Revised on 2026-10-24 after
-a third pass: agents keep their journal across a respawn but not their
-state, payment limits need durable single-owner state, and surfaces need an
-authenticated user.
+Accepted, 2026-10-24. Proposed 2026-10-23 and revised the same day after a
+review pass that checked every claim against the code and against OMP
+18.12.6 itself (its bundled source and a throwaway plugin driven through
+`omp --mode rpc`), and again after an adversarial pass and the owner's
+decisions on tool churn, plugin location, teams, payments and where agents
+live. Revised on 2026-10-24 after a third pass: agents keep their journal
+across a respawn but not their state, payment limits need durable
+single-owner state, and surfaces need an authenticated user.
 
 Supersedes [ADR-0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent
 seams) once the harness is deleted. The same deletion supersedes ADRs 0022,
