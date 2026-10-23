@@ -2,13 +2,15 @@
 
 ## Status
 
-Proposed, 2026-10-23. Revised 2026-10-23 after a review pass that checked
+Proposed, 2026-10-23. Revised the same day after a review pass that checked
 every claim against the code and against OMP 18.12.6 itself (its bundled
-source and a throwaway plugin driven through `omp --mode rpc`).
+source and a throwaway plugin driven through `omp --mode rpc`), and again
+after an adversarial pass and the owner's decisions on tool churn, plugin
+location, teams, payments and where agents live.
 
 Supersedes [ADR-0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent
 seams) once the harness is deleted. The same deletion supersedes ADRs 0022,
-0024, 0026, 0027, 0028, 0032 and 0035 and narrows 0021, 0036 and 0037 (table
+0024, 0026, 0027 and 0028 and narrows 0021, 0032, 0035, 0036 and 0037 (table
 under Consequences); each is re-marked in the PR that removes its code, not
 before. Amends [ADR-0012](0012-mcp-as-rendering-target.md): derived tool names
 become session-scoped and a session's tool set becomes sticky (Decision 2).
@@ -31,9 +33,9 @@ What no coding harness has is what Raxol already is:
 - **Apps an agent can operate.** A Raxol app derives MCP tools from its widget
   tree (`Raxol.MCP.TreeWalker`, `Raxol.MCP.ToolSynchronizer`): `table.sort`,
   `search.type_into`, `dialog.dismiss`, instead of keystrokes and screen text.
-- **Agents that outlive a chat.** Supervised, crash-isolated BEAM processes
-  (`Raxol.Agent.Session`, `Team`, `Comm`), with journals, schedules
-  (`Raxol.Agent.Scheduler`), sandboxes and fail-closed spend limits
+- **Agents that survive crashes.** Supervised, crash-isolated BEAM processes
+  (`Raxol.Agent.Session`, `Team`, `Comm`), with journals they resume from,
+  schedules (`Raxol.Agent.Scheduler`), sandboxes and fail-closed spend limits
   (`Raxol.Agent.SpendGate`, `raxol_payments`).
 - **Every surface.** Terminal, LiveView, SSH, MCP, Telegram, watch.
 
@@ -69,8 +71,9 @@ behind it don't fall over.** OMP is the harness people talk to; Raxol is
 what it plugs into:
 
 - Raxol apps are OMP tools (MCP, widget-derived).
-- Raxol agents are durable workers an OMP session starts, asks, checks and
-  stops (MCP), and that can spend money inside Raxol-enforced limits.
+- Raxol agents are crash-isolated, journaled workers an OMP session starts,
+  asks, checks and stops (MCP), and that can spend money inside
+  Raxol-enforced limits (Decision 7).
 - Raxol surfaces can front an OMP session (OMP's RPC mode) on Telegram, the
   web, SSH or a watch.
 
@@ -101,7 +104,10 @@ The first build exposes each headless session's derived tools to OMP.
   widget that is absent, disabled or of another type returns an error naming
   it. Churn is then limited to session start, stop and a widget's first
   appearance. Derived descriptions are static per widget type and action, so
-  app text never reaches OMP's system prompt. Whether the remaining churn
+  app text never reaches OMP's system prompt. Users can shed tools: a
+  per-session cap evicts the least recently used, `raxol_compact` drops tools
+  for widgets no longer in view, `raxol_stop` drops a session's whole set,
+  and `raxol_list` shows each session's count. Whether the remaining churn
   costs provider cache hits is measured by the benchmark below.
 - **Authorization stays in Raxol.** OMP treats every MCP tool as a `write`
   tool, ignores annotations, and auto-approves in its default mode, so the
@@ -142,8 +148,10 @@ event codec. The Symphony runner and `raxol acp` are built on coding modules.
 So the deletion is still one clean-cutover PR, but three behaviour-preserving
 PRs go first:
 
-1. Decouple the kept code from the harness: move the policy helpers and the
-   codec, and drop the memory, self-improvement and user-model hooks.
+1. Decouple the kept code from the harness without changing behaviour: move
+   the policy helpers and the codec, and take the OpenRouter branch out of
+   the kept auth flow. The memory, self-improvement and user-model hooks are
+   public `use Raxol.Agent` callbacks, so they go in the cutover itself.
 2. Replace Symphony's coding runner with an `omp` runner (`omp -p --mode
    json`) beside the existing Codex runner.
 3. Rebuild `raxol acp` on Raxol agents (Decision 5).
@@ -161,8 +169,8 @@ The cutover PR deletes coding-only code:
 - The ACP coding turn runner and login. The permission bridge is re-targeted
   rather than deleted (Decision 5).
 - Code the cutover leaves without callers: `Auxiliary`, `AcpStreamAdapter`,
-  `Backend.Cli`, `SignalTrap`, `Fingerprint`, and `LlmPrices` unless
-  Decision 4 wires it into `omp_gateway` pricing.
+  `Backend.Cli`, `SignalTrap` and `Fingerprint`. `LlmPrices` stays, because
+  Decision 4 prices `omp_gateway` replies with it.
 - The SSH code server and the `Harness.McpTools` registration in
   `Raxol.Application`.
 - The CLI commands `agent`, `code`, `p`, `login` and `setup`, with their mix
@@ -212,6 +220,10 @@ The backend catalog's model entries shrink to `anthropic`, `ollama` and a new
   returns a streamed reply as one string after the stream ends.
 - It never claims to handle tools internally, which would bypass
   `SpendGate`.
+- It is a new `:gateway` catalog kind, used only when selected explicitly,
+  never auto-detected. Its binary must belong to the user and must not be
+  group- or world-writable. Replies are priced through `LlmPrices` from the
+  model that actually answered.
 
 Headless servers keep working without Bun through the direct Anthropic and
 Ollama backends. The HTTP backend is split rather than deleted: its
@@ -221,27 +233,28 @@ Kimi are deleted; the native CLI drivers go with the harness.
 
 ### 5. ACP stays, aimed at Raxol agents
 
-`raxol acp --agent <id>` keeps serving ACP, but a session attaches to a
-named, long-lived Raxol agent instead of starting a coding turn:
+`raxol acp --agent <app>[:<id>]` keeps serving ACP, but a session talks to a
+Raxol agent instead of starting a coding turn:
 
-- Where such an agent lives is open. Agent lookup is local to one VM, and
-  each `raxol acp` or `raxol mcp` is its own short-lived BEAM. Either a
-  long-lived host owns the agents and the CLIs reach it over a 0600 unix
-  socket with a peer-uid check, or agents live for one editor or OMP session
-  and only their journals persist. Erlang distribution is not an option
-  (`raxol_payments` forbids it on signing nodes).
+- Agents are session-scoped for now. The agent runs inside the `raxol acp`
+  process for the editor session; its journal persists, and starting the
+  same id again resumes from it. A long-lived host that several processes
+  attach to is later work: a 0600 unix socket with a peer-uid check, never
+  Erlang distribution, which `raxol_payments` forbids on signing nodes.
 - The package's arity-2 `:turn_runner` seam takes a runner that calls the
   agent (`Comm.call/3`, with an explicit timeout; the agent answers with
-  `Comm.reply/3`) and streams its reply as message chunks.
-- `session/cancel` abandons the pending call. The agent keeps running,
-  because it is long-lived by design; stopping it is
-  `Session.Supervisor.stop_session/1`, which already exists.
-- The permission bridge stays, re-targeted: an attached prompt's sensitive
-  actions still ask the editor per call, because OMP-style auto-approval has
-  no place on an agent that holds a wallet.
+  `Comm.reply/3`) and sends its reply as message chunks.
+- `session/cancel` tells the agent to abort the turn in flight. The agent
+  keeps running until the editor session ends or it is stopped with
+  `Session.Supervisor.stop_session/1`.
+- The permission bridge stays, re-targeted: a prompt's sensitive actions
+  still ask the editor per call, because auto-approval has no place on an
+  agent that holds a wallet.
 - `ParentWatch` and the `serve` scaffolding stay. `Budget` stays only if the
   agent's reply carries usage for it to record; otherwise it goes with the
   coding turn runner. The coding toolset, prompt and executor detection go.
+- Without `--agent`, `initialize` still succeeds, so registry checks that run
+  `raxol acp` bare keep working.
 
 This lands before the cutover, because today's server is built from modules
 the cutover deletes. Editors that want a coding agent use `omp acp`.
@@ -256,11 +269,30 @@ An Elixir client for OMP's RPC mode (`omp --mode rpc`) lets the root
   teardown.
 - The RPC ready frame carries no version, so the client checks
   `omp --version` against the pin.
-- It plugs in as an implementation of the root `Raxol.Harness.SessionLane`
-  behaviour.
+- It plugs in as a `raxol_agent` implementation of the root
+  `Raxol.Harness.SessionLane` behaviour, which gains a prompt callback.
+- OMP runs with `--approval-mode write`, and its approval requests go to the
+  surface's authenticated user. A surface without one (for example a
+  Telegram bot with no chat allowlist) refuses to start an OMP session,
+  because OMP's default mode would hand that chat a shell.
 
 This replaces the deleted coding TUI with "OMP on Telegram, LiveView, SSH and
 a watch".
+
+### 7. Raxol agents into OMP
+
+The `raxol mcp` server gains agent tools: spawn, list, ask, status and stop,
+team spawn, list, broadcast and stop, and a read-only journal resource per
+agent.
+
+- Agents run inside the `raxol mcp` process and end with the OMP session.
+  Their journals persist, and spawning the same id again resumes from them.
+  A second process cannot take an id whose journal another process holds.
+- Only apps on a configured allowlist can be spawned, and the tools act only
+  on agents this process spawned.
+- `Team` gains list, member and stop functions and stops creating atoms from
+  team ids.
+- Spending tools ship here, under the payments rules in Consequences.
 
 ## Consequences
 
@@ -274,10 +306,13 @@ a watch".
   The gateway and RPC clients check the version at startup.
 - Agents in OMP use Raxol apps through semantic tools, which is the claim the
   benchmark measures.
-- Payments stay in the Raxol-agents story. Payment tools go through the
-  payments gate (`Raxol.Payments.Actions.SpendGate.authorize/3` and the
-  ledger), not the LLM-cost `Raxol.Agent.SpendGate`. They register only with
-  an operator-built spending policy and ledger, and caps never come from tool
+- Payments stay in the Raxol-agents story. The npm `raxol` binary bundles
+  `raxol_payments`, so plugin users get spending tools once an operator
+  writes a policy: caps, currency and approved recipients. Payment tools go
+  through the payments gate (`Raxol.Payments.Actions.SpendGate.authorize/3`
+  and the ledger), not the LLM-cost `Raxol.Agent.SpendGate`. Without a policy
+  and ledger no payment tool registers; a recipient outside the approved list
+  or a currency other than the policy's is refused; caps never come from tool
   arguments. OMP cannot ask a human through MCP (it answers only `ping` and
   `roots/list`), so an amount that needs confirmation is refused rather than
   approved. OMP's approval mode is never the control.
@@ -294,9 +329,9 @@ a watch".
 | 0026 | Superseded | `execute_code` was never built and the coding harness it served is gone |
 | 0027 | Superseded | `Actions.Task` goes; OMP owns subagent fan-out |
 | 0028 | Superseded | `Auxiliary`'s only callers (`SelfImprove`, `UserModel`) go, leaving it dead |
-| 0032 | Superseded | `Actions.Fs` goes; nothing was implemented. Its sandboxed-spawn design is the reopened question for the unattended Symphony `omp` runner |
+| 0032 | Narrowed | `Actions.Fs` goes; its sandboxed-spawn design stays as the open follow-up for unattended runners such as the Symphony `omp` runner |
 | 0034 | Superseded | the foreign coding-agent seams go; its catalog derivation policy and Symphony-on-OMP notes carry into this ADR's follow-up PRs |
-| 0035 | Superseded | `LlmPrices`' only caller is `Code.App`, unless `omp_gateway` pricing adopts it |
+| 0035 | Narrowed | `LlmPrices` prices `omp_gateway` replies; its DeepSeek scoped rows go with the backend |
 | 0036 | Narrowed | the tier-1 events are emitted only from `Code.App` |
 | 0037 | Narrowed | `.mcp.json` admission lived in `Code.McpConfig` |
 
