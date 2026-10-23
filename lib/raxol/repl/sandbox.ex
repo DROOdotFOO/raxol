@@ -18,9 +18,11 @@ defmodule Raxol.REPL.Sandbox do
   CVE-class hole on an anonymous surface, and the checker's own history is the
   argument against trusting it: computed receivers, `Module.concat/1`
   alias resolution, the bare-name capture forms of `apply` and `spawn`,
-  maps forged with a `__struct__` key, and sorters naming a runtime module
-  (`Enum.sort(l, m)` calls `m.compare/2`) were each `:ok` at `:strict` until
-  they were not.
+  maps forged with a `__struct__` key, sorters naming a runtime module
+  (`Enum.sort(l, m)` calls `m.compare/2`), and `raise`, calendar, time
+  zone database and `Map.from_struct/1` arguments holding one
+  (`DateTime.now(tz, m)` calls `m.time_zone_period_from_utc_iso_days/2`)
+  were each `:ok` at `:strict` until they were not.
 
   A forged struct is the same hole reached through data rather than a name. A
   map whose `__struct__` key names a module is protocol-dispatched
@@ -135,7 +137,12 @@ defmodule Raxol.REPL.Sandbox do
     {:erlang, :list_to_atom, "dynamic atom creation"},
     {:rpc, :call, "remote procedure call"},
     {:rpc, :cast, "remote procedure call"},
-    {:global, :whereis_name, "process lookup"}
+    {:global, :whereis_name, "process lookup"},
+    # Node-global state the evaluation timeout and heap cap cannot undo: it
+    # sets `:elixir`'s `:time_zone_database`, after which every `DateTime`
+    # zone operation in every process dispatches to the module passed in,
+    # which can be computed from data (#1237).
+    {Calendar, :put_time_zone_database, "global time zone database change"}
   ]
 
   # Every module here is part of the forged-struct guarantee (see the
@@ -393,6 +400,162 @@ defmodule Raxol.REPL.Sandbox do
     {Enum, :min_max_by} => 2,
     {List, :keysort} => 2
   }
+
+  # Calls that call back into the calendar or time zone database module an
+  # argument holds, keyed by full arity, valued by `{position, kind}` for
+  # each such argument (position 0-based). Taken from every allowlisted
+  # function whose spec types an argument `Calendar.calendar()` or
+  # `Calendar.time_zone_database()`, or, inside `Calendar` itself, the local
+  # `calendar()`/`time_zone_database()`; the test suite re-derives the set,
+  # and each slot's kind, from the specs, so an Elixir release that adds or
+  # widens one fails there rather than passing here. `utc_now/1` takes a
+  # calendar OR a time unit in the same slot, `DateTime.from_iso8601/2` a
+  # calendar OR a format, so arity, not name, picks the kind.
+  # `Calendar.compatible_calendars?/2` calls
+  # `day_rollover_relative_to_midnight_utc/0` on both of its arguments.
+  @module_argument_positions %{
+    {Calendar, :compatible_calendars?, 2} => [{0, :calendar}, {1, :calendar}],
+    {Date, :convert, 2} => [{1, :calendar}],
+    {Date, :convert!, 2} => [{1, :calendar}],
+    {Date, :from_erl, 2} => [{1, :calendar}],
+    {Date, :from_erl!, 2} => [{1, :calendar}],
+    {Date, :from_gregorian_days, 2} => [{1, :calendar}],
+    {Date, :from_iso8601, 2} => [{1, :calendar}],
+    {Date, :from_iso8601!, 2} => [{1, :calendar}],
+    {Date, :new, 4} => [{3, :calendar}],
+    {Date, :new!, 4} => [{3, :calendar}],
+    {Date, :utc_today, 1} => [{0, :calendar}],
+    {Time, :convert, 2} => [{1, :calendar}],
+    {Time, :convert!, 2} => [{1, :calendar}],
+    {Time, :from_erl, 3} => [{2, :calendar}],
+    {Time, :from_erl!, 3} => [{2, :calendar}],
+    {Time, :from_iso8601, 2} => [{1, :calendar}],
+    {Time, :from_iso8601!, 2} => [{1, :calendar}],
+    {Time, :from_seconds_after_midnight, 3} => [{2, :calendar}],
+    {Time, :new, 5} => [{4, :calendar}],
+    {Time, :new!, 5} => [{4, :calendar}],
+    {Time, :utc_now, 1} => [{0, :calendar_or_time_unit}],
+    {Time, :utc_now, 2} => [{1, :calendar}],
+    {DateTime, :add, 4} => [{3, :time_zone_database}],
+    {DateTime, :convert, 2} => [{1, :calendar}],
+    {DateTime, :convert!, 2} => [{1, :calendar}],
+    {DateTime, :from_gregorian_seconds, 3} => [{2, :calendar}],
+    {DateTime, :from_iso8601, 2} => [{1, :calendar_or_format}],
+    {DateTime, :from_iso8601, 3} => [{1, :calendar}],
+    {DateTime, :from_naive, 3} => [{2, :time_zone_database}],
+    {DateTime, :from_naive!, 3} => [{2, :time_zone_database}],
+    {DateTime, :from_unix, 3} => [{2, :calendar}],
+    {DateTime, :from_unix!, 3} => [{2, :calendar}],
+    {DateTime, :new, 4} => [{3, :time_zone_database}],
+    {DateTime, :new!, 4} => [{3, :time_zone_database}],
+    {DateTime, :now, 2} => [{1, :time_zone_database}],
+    {DateTime, :now!, 2} => [{1, :time_zone_database}],
+    {DateTime, :shift, 3} => [{2, :time_zone_database}],
+    {DateTime, :shift_zone, 3} => [{2, :time_zone_database}],
+    {DateTime, :shift_zone!, 3} => [{2, :time_zone_database}],
+    {DateTime, :utc_now, 1} => [{0, :calendar_or_time_unit}],
+    {DateTime, :utc_now, 2} => [{1, :calendar}],
+    {NaiveDateTime, :convert, 2} => [{1, :calendar}],
+    {NaiveDateTime, :convert!, 2} => [{1, :calendar}],
+    {NaiveDateTime, :from_erl, 3} => [{2, :calendar}],
+    {NaiveDateTime, :from_erl!, 3} => [{2, :calendar}],
+    {NaiveDateTime, :from_gregorian_seconds, 3} => [{2, :calendar}],
+    {NaiveDateTime, :from_iso8601, 2} => [{1, :calendar}],
+    {NaiveDateTime, :from_iso8601!, 2} => [{1, :calendar}],
+    {NaiveDateTime, :local_now, 1} => [{0, :calendar}],
+    {NaiveDateTime, :new, 8} => [{7, :calendar}],
+    {NaiveDateTime, :new!, 8} => [{7, :calendar}],
+    {NaiveDateTime, :utc_now, 1} => [{0, :calendar_or_time_unit}],
+    {NaiveDateTime, :utc_now, 2} => [{1, :calendar}]
+  }
+
+  # What each kind of slot may hold at `:strict`: the module Elixir ships
+  # for it, plus the atoms a shared slot's spec also lists. Anything else is
+  # refused, a variable included, and so is the other kind's module:
+  # `DateTime.now(tz, Calendar.ISO)` would call `Calendar.ISO` as a time
+  # zone database.
+  @module_argument_values %{
+    calendar: [Calendar.ISO],
+    time_zone_database: [Calendar.UTCOnlyTimeZoneDatabase],
+    calendar_or_time_unit: [
+      Calendar.ISO,
+      :native,
+      :microsecond,
+      :millisecond,
+      :second
+    ],
+    calendar_or_format: [Calendar.ISO, :extended, :basic]
+  }
+
+  # `raise`/`reraise` call `exception/1` on a module first argument, and
+  # `~D`/`~T`/`~N`/`~U` call the parse function of the calendar their suffix
+  # names, while the sigil expands.
+  @kernel_dispatch_calls [
+    :raise,
+    :reraise,
+    :sigil_D,
+    :sigil_T,
+    :sigil_N,
+    :sigil_U
+  ]
+  @calendar_sigils [:sigil_D, :sigil_T, :sigil_N, :sigil_U]
+
+  # The exception modules `raise` may name at `:strict`, audited by hand,
+  # each mapped to the fields its attributes may set. Naming one is not the
+  # whole risk: `raise E, attrs` writes `attrs` into E's fields, and the
+  # evaluator's `Exception.format/3` then runs `E.message/1` over them.
+  # `Protocol.UndefinedError` calls `protocol.__protocol__/1` and
+  # `UndefinedFunctionError` loads and queries its `module`, so a field
+  # holding a module chosen at runtime is called back. Every exception here
+  # has the default `exception/1`, and its `message/1` calls no module a
+  # field names: it interpolates its fields or runs `inspect/1` over them.
+  # Both are protocol dispatch, so a field holding a struct still reaches
+  # that struct's calendar: `raise BadBooleanError, operator: %Date{...,
+  # calendar: m}` calls `m.date_to_string/3`. That is the `:calendar` class
+  # of #1282, which this list does not close (attribute VALUES are not
+  # judged). Before adding an exception, read both callbacks in the Elixir
+  # source; a module that implements `Exception` is not thereby safe.
+  #
+  # The fields are written out rather than read from `__struct__/0`, because
+  # the audit covers these fields and no others: one a later Elixir adds has
+  # not been read, and the test suite fails on it until someone has. Each
+  # list is the union over the supported Elixir versions, cut at compile
+  # time to the fields the running version defines, since naming a field
+  # the struct lacks is an unknown key (`Enum.OutOfBoundsError` gained
+  # `:enumerable` and `:index` in 1.19).
+  #
+  # The attributes are judged too, because the default `exception/1` is
+  # version-dependent: on Elixir 1.17 it passes an unknown key to `IO.warn`,
+  # which writes to the node's real stderr past the evaluator's capture
+  # (1.18 raises `KeyError` instead). So at `:strict` they must be a string
+  # (only where the exception has a `:message` field, since a string becomes
+  # `message: string`) or a keyword list written out whose keys are all the
+  # exception's own fields.
+  @audited_exception_fields %{
+    ArgumentError => [:message],
+    ArithmeticError => [:message],
+    BadBooleanError => [:operator, :term],
+    BadFunctionError => [:term],
+    BadMapError => [:term],
+    CaseClauseError => [:term],
+    CondClauseError => [],
+    Enum.EmptyError => [:message],
+    Enum.OutOfBoundsError => [:enumerable, :index, :message],
+    KeyError => [:key, :message, :term],
+    MatchError => [:term],
+    RuntimeError => [:message],
+    SystemLimitError => [:message],
+    TryClauseError => [:term],
+    WithClauseError => [:term]
+  }
+
+  @raisable_exceptions Map.new(@audited_exception_fields, fn {exception, fields} ->
+                         struct = exception.__struct__()
+
+                         {exception,
+                          Enum.filter(fields, &Map.has_key?(struct, &1))}
+                       end)
+
   @doc """
   Checks code for safety violations at the given strictness level.
 
@@ -521,13 +684,18 @@ defmodule Raxol.REPL.Sandbox do
 
   defp judged_by(meta), do: Keyword.get(meta, @judged_by_meta)
 
-  # The forge and sorter rules: both read arguments by position, so both
+  # The forge, sorter and dispatch rules read arguments by position, so they
   # skip a node its parent judges.
   defp standalone_call_rules(module, func, args, meta) do
     if func != :|> and judged_by(meta) in [:pipe, :capture],
       do: [],
-      else: forge_rule(module, func, args) ++ sorter_rule(module, func, args)
+      else: call_rules(module, func, args)
   end
+
+  defp call_rules(module, func, args),
+    do:
+      forge_rule(module, func, args) ++
+        sorter_rule(module, func, args) ++ dispatch_rule(module, func, args)
 
   defp standalone_internal_call(module, func, meta) do
     if judged_by(meta) == :capture,
@@ -705,11 +873,8 @@ defmodule Raxol.REPL.Sandbox do
       spawn_function?(name) ->
         ["&#{name}/#{arity} is not allowed (process spawning)"]
 
-      level == :strict and name in @kernel_forge_calls ->
-        [
-          "&#{name}/#{arity} is not allowed at :strict " <>
-            "(its arguments cannot be checked for a forged struct)"
-        ]
+      level == :strict ->
+        strict_local_capture_refusal(name, arity)
 
       true ->
         []
@@ -837,7 +1002,9 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_node({name, meta, args}, :strict)
-       when name in [:|> | @kernel_forge_calls] and is_list(args),
+       when (name in [:|> | @kernel_forge_calls] or
+               name in @kernel_dispatch_calls) and
+              is_list(args),
        do: standalone_call_rules(Kernel, name, args, meta)
 
   defp check_node({kind, _, args}, level)
@@ -850,6 +1017,22 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_node(_node, _level), do: []
+
+  defp strict_local_capture_refusal(name, arity) do
+    cond do
+      name in @kernel_forge_calls ->
+        [
+          "&#{name}/#{arity} is not allowed at :strict " <>
+            "(its arguments cannot be checked for a forged struct)"
+        ]
+
+      name in [:raise, :reraise] ->
+        raise_refusal("&#{name}/#{arity}")
+
+      true ->
+        []
+    end
+  end
 
   # Names starting with `__` are generated or internal API, never the
   # documented surface the allowlist was audited for. Every allowlisted struct
@@ -868,6 +1051,11 @@ defmodule Raxol.REPL.Sandbox do
   # every module's `__`-prefixed names are refused; a copied list would drift.
   @doc false
   def strict_modules, do: @allowed_strict_modules
+
+  # Exposed so the test suite can fail when an Elixir release adds a field
+  # to an audited exception that `@audited_exception_fields` does not list.
+  @doc false
+  def audited_exception_fields, do: @audited_exception_fields
 
   defp internal_call(module, func) do
     if internal_name?(func) do
@@ -909,6 +1097,29 @@ defmodule Raxol.REPL.Sandbox do
 
       sorter_capture?(module, func, arity) ->
         sorter_refusal("&#{inspect(module)}.#{func}/#{arity}")
+
+      true ->
+        dispatch_capture_refusal(module, func, arity)
+    end
+  end
+
+  # The calendar sigils need no clause here: they are macros, so a capture
+  # (`&Kernel.sigil_D/2`, `&sigil_D/2`) expands the sigil over the capture's
+  # own argument variables, which no sigil clause matches. Expansion raises
+  # `FunctionClauseError` before any calendar is named, let alone called.
+  defp dispatch_capture_refusal(module, func, arity) do
+    cond do
+      module == Kernel and func in [:raise, :reraise] ->
+        raise_refusal("&Kernel.#{func}/#{arity}")
+
+      module == Map and func == :from_struct ->
+        map_from_struct_refusal("&Map.from_struct/#{arity}")
+
+      is_map_key(@module_argument_positions, {module, func, arity}) ->
+        module_argument_refusal(
+          "&#{inspect(module)}.#{func}/#{arity}",
+          Map.fetch!(@module_argument_positions, {module, func, arity})
+        )
 
       true ->
         []
@@ -1288,16 +1499,13 @@ defmodule Raxol.REPL.Sandbox do
   defp forge_violations({{:., _, [module, func]}, _, args})
        when is_atom(func) and is_list(args) do
     case strict_module(module) do
-      {:ok, module} ->
-        forge_rule(module, func, args) ++ sorter_rule(module, func, args)
-
-      :unknown ->
-        []
+      {:ok, module} -> call_rules(module, func, args)
+      :unknown -> []
     end
   end
 
   defp forge_violations({name, _, args}) when is_atom(name) and is_list(args),
-    do: forge_rule(Kernel, name, args)
+    do: call_rules(Kernel, name, args)
 
   defp forge_violations(_node), do: []
 
@@ -1558,6 +1766,229 @@ defmodule Raxol.REPL.Sandbox do
         ":asc, :desc or a whitelisted module written out; a module sorter " <>
         "is called as module.compare/2)"
     ]
+  end
+
+  # #1238, the sorter's class reached through other arguments: a module
+  # chosen at runtime is called back under a name the caller fixes.
+  # `raise m, path: "x"` and `reraise m, [], st` call `m.exception/1`;
+  # `DateTime.now("Europe/Paris", m)` calls `m.time_zone_period_from_utc_iso_days/2`;
+  # `Date.new(2020, 1, 1, m)` calls `m.valid_date?/3`; `~D[2020-01-01 M]`
+  # calls `M.parse_date/1` while the sigil expands. `m` can come from data
+  # (`String.to_existing_atom/1` is allowed), and the checker cannot tell
+  # which loaded modules export a harmful function under those names. So at
+  # `:strict` the module must be written out and be one audited for the
+  # job (`@raisable_exceptions`, `@module_argument_values`). `raise` keeps
+  # its literal forms, so `raise "msg"`, `raise "msg #{x}"` and
+  # `raise ArgumentError, message: "x"` still work; any other expression in
+  # the exception slot is refused, since the checker cannot tell a string
+  # from a module: a variable (`raise msg`, a rescued `reraise e, st`), a
+  # call, `<>` or a sigil.
+  #
+  # A struct's own `:calendar` field reaches the same callbacks and is NOT
+  # covered. Nor is any map with a `:calendar` key: `Date` and `Calendar`
+  # match `%{calendar: calendar}`, so a plain map literal
+  # (`Date.leap_year?(%{calendar: m, year: 2020})`) does it with no struct
+  # at all, as do a struct literal (`%Date{..., calendar: m}`, `Date` being in
+  # `@strict_struct_modules`), an update (`%{date | calendar: m}`) and a key
+  # writer (`Map.put(date, :calendar, m)`). Each stores a value that can
+  # arrive from anywhere, which an AST walk cannot follow (#1282). #1231 is
+  # the fix for the class.
+  defp dispatch_rule(Kernel, func, [exception | rest])
+       when func in [:raise, :reraise] do
+    case raisable(exception) do
+      :message ->
+        []
+
+      {:exception, module, fields} ->
+        if raise_attributes_ok?(raise_attributes(func, rest), fields),
+          do: [],
+          else: raise_attributes_refusal(func, module, fields)
+
+      :refused ->
+        raise_refusal("#{func}")
+    end
+  end
+
+  defp dispatch_rule(Kernel, sigil, [{:<<>>, _, [string]}, _modifiers])
+       when sigil in @calendar_sigils and is_binary(string) do
+    case calendar_suffix(string) do
+      suffix when suffix in [nil, "Calendar.ISO"] ->
+        []
+
+      suffix ->
+        [
+          "#{String.replace_prefix(Atom.to_string(sigil), "sigil_", "~")} with the " <>
+            "calendar suffix #{suffix} is not allowed at :strict (the sigil calls " <>
+            "the suffix's parse function while it expands; only Calendar.ISO may be named)"
+        ]
+    end
+  end
+
+  # Kernel's calendar sigils match only the shape sigil syntax builds, a
+  # one-part `<<>>` and a modifier list; any other argument raises
+  # `FunctionClauseError` while the macro expands, before a calendar is
+  # read. That is Kernel's rule, not this checker's, and the suite's drift
+  # test for `calendar_suffix/1` only writes sigil syntax, so the other shapes
+  # (`Kernel.sigil_D("2020-01-01 M", [])`, `<<"2020-01-01 ", "M">>`) are
+  # refused here rather than trusted to keep failing in Kernel.
+  defp dispatch_rule(Kernel, sigil, _args) when sigil in @calendar_sigils do
+    [
+      "#{sigil} is not allowed at :strict except as sigil syntax " <>
+        "(#{String.replace_prefix(Atom.to_string(sigil), "sigil_", "~")}[...]), " <>
+        "the only form whose calendar suffix is checked"
+    ]
+  end
+
+  # `Map.from_struct/1` given a module calls `module.__struct__/0`, and
+  # since Elixir 1.18 first hands a deprecation to `IO.warn`, which writes
+  # to the node's stderr past the evaluator's capture: `for _ <- 1..2000,
+  # do: Map.from_struct(Date)` wrote 880 KB there from one evaluation. The
+  # checker cannot tell a struct from a module held in a variable, so only
+  # a map or struct written out passes; `Map.delete(s, :__struct__)` does
+  # the same job for a struct held anywhere.
+  defp dispatch_rule(Map, :from_struct, [{form, _, _}]) when form in [:%, :%{}],
+    do: []
+
+  defp dispatch_rule(Map, :from_struct, [_value]),
+    do: map_from_struct_refusal("Map.from_struct/1")
+
+  defp dispatch_rule(module, func, args) do
+    arity = length(args)
+
+    @module_argument_positions
+    |> Map.get({module, func, arity}, [])
+    |> Enum.reject(fn {position, kind} ->
+      module_argument_ok?(Enum.at(args, position), kind)
+    end)
+    |> case do
+      [] ->
+        []
+
+      refused ->
+        module_argument_refusal("#{inspect(module)}.#{func}/#{arity}", refused)
+    end
+  end
+
+  defp raisable(message) when is_binary(message), do: :message
+  defp raisable({:<<>>, _, _}), do: :message
+
+  defp raisable(exception) do
+    with {:ok, module} <- strict_module(exception),
+         {:ok, fields} <- Map.fetch(@raisable_exceptions, module) do
+      {:exception, module, fields}
+    else
+      _ -> :refused
+    end
+  end
+
+  # `raise E` / `raise E, attrs`; `reraise E, st` / `reraise E, attrs, st`.
+  defp raise_attributes(:raise, [attributes]), do: {:ok, attributes}
+
+  defp raise_attributes(:reraise, [attributes, _stacktrace]),
+    do: {:ok, attributes}
+
+  defp raise_attributes(_func, _rest), do: :none
+
+  defp raise_attributes_ok?(:none, _fields), do: true
+
+  defp raise_attributes_ok?({:ok, message}, fields)
+       when is_binary(message) or
+              (is_tuple(message) and elem(message, 0) == :<<>>),
+       do: :message in fields
+
+  defp raise_attributes_ok?({:ok, pairs}, fields) when is_list(pairs) do
+    Enum.all?(pairs, fn
+      {key, _value} when is_atom(key) -> key in fields
+      _computed -> false
+    end)
+  end
+
+  defp raise_attributes_ok?({:ok, _computed}, _fields), do: false
+
+  # Kernel's own rule (`extract_calendar/1`, private): the last
+  # space-separated word is a calendar when it starts with an uppercase
+  # letter. A copy can drift from Kernel's, so the test suite expands each
+  # sigil against a probe calendar and requires this rule to refuse exactly
+  # the suffixes Kernel dispatches to.
+  defp calendar_suffix(string) do
+    case :binary.split(string, " ", [:global]) do
+      [_only] -> nil
+      parts -> uppercase_word(List.last(parts))
+    end
+  end
+
+  defp uppercase_word(<<first, _::binary>> = word) when first in ?A..?Z,
+    do: word
+
+  defp uppercase_word(_word), do: nil
+
+  defp module_argument_ok?(value, kind) do
+    case strict_module(value) do
+      {:ok, value} -> value in Map.fetch!(@module_argument_values, kind)
+      :unknown -> false
+    end
+  end
+
+  defp raise_attributes_refusal(func, module, fields) do
+    accepted =
+      case fields do
+        [] -> "none"
+        fields -> Enum.map_join(fields, ", ", &inspect/1)
+      end
+
+    [
+      "#{func} #{inspect(module)} is not allowed at :strict with these " <>
+        "attributes (they must be a string, where the exception has a " <>
+        ":message field, or a keyword list written out naming only " <>
+        "#{inspect(module)}'s own fields: #{accepted})"
+    ]
+  end
+
+  defp map_from_struct_refusal(name) do
+    [
+      "#{name} is not allowed at :strict here (its argument must be a map " <>
+        "or struct written out: given a module it calls module.__struct__/0; " <>
+        "use Map.delete(struct, :__struct__) instead)"
+    ]
+  end
+
+  defp raise_refusal(name) do
+    [
+      "#{name} is not allowed at :strict here (its exception must be a string " <>
+        "literal, interpolation included, or an audited exception module " <>
+        "written out, such as ArgumentError, KeyError or RuntimeError; a " <>
+        "module is called as module.exception/1, and a variable or call is " <>
+        "refused even when it holds a string: interpolate it instead, " <>
+        ~S|raise "#{msg}")|
+    ]
+  end
+
+  defp module_argument_refusal(name, slots) do
+    accepted =
+      slots
+      |> Enum.map(fn {_position, kind} -> kind end)
+      |> Enum.uniq()
+      |> Enum.map_join("; ", fn kind ->
+        "its #{slot_name(kind)} must be written out as " <>
+          or_list(Map.fetch!(@module_argument_values, kind))
+      end)
+
+    [
+      "#{name} is not allowed at :strict here (#{accepted}; the module it " <>
+        "holds is called back)"
+    ]
+  end
+
+  defp slot_name(:calendar), do: "calendar"
+  defp slot_name(:time_zone_database), do: "time zone database"
+  defp slot_name(:calendar_or_time_unit), do: "calendar or time unit"
+  defp slot_name(:calendar_or_format), do: "calendar or format"
+
+  defp or_list([only]), do: inspect(only)
+
+  defp or_list(values) do
+    {init, [last]} = Enum.split(values, -1)
+    Enum.map_join(init, ", ", &inspect/1) <> " or " <> inspect(last)
   end
 
   defp io_stream_refusal(func) do

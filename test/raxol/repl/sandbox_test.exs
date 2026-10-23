@@ -1473,4 +1473,451 @@ defmodule Raxol.REPL.SandboxTest do
       assert :ok = Sandbox.check(~S|Kernel.defmodule(Zzz, do: 1)|, :none)
     end
   end
+
+  # `Calendar` is on the `:strict` whitelist, so `put_time_zone_database/1`
+  # passed both levels with any argument. It writes a node-global setting the
+  # eval timeout does not undo, after which every `DateTime` zone operation on
+  # the node dispatches to the (possibly computed) module passed in (#1237).
+  describe "the global time zone database cannot be replaced" do
+    test "put_time_zone_database is refused in every call form" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Calendar.put_time_zone_database(mod)|,
+            ~S|Calendar.put_time_zone_database(String.to_existing_atom("Elixir.X"))|,
+            ~S{mod |> Calendar.put_time_zone_database()},
+            ~S|&Calendar.put_time_zone_database/1|,
+            ~S|:"Elixir.Calendar".put_time_zone_database(mod)|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, level),
+               "#{code} passed #{level}"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "global time zone database change")
+               ),
+               "expected a time zone database violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "reading the time zone database and the rest of Calendar stay allowed" do
+      for level <- [:standard, :strict],
+          code <- [
+            ~S|Calendar.get_time_zone_database()|,
+            ~S|Calendar.strftime(~D[2026-01-01], "%Y")|
+          ] do
+        assert :ok = Sandbox.check(code, level),
+               "#{code} was refused at #{level}"
+      end
+    end
+  end
+
+  # The calendar a sigil suffix names, for checking `calendar_suffix/1`
+  # against Kernel: records which parse function the sigil called, then
+  # refuses the string.
+  defmodule ProbeCalendar do
+    for parse <- [
+          :parse_date,
+          :parse_time,
+          :parse_naive_datetime,
+          :parse_utc_datetime
+        ] do
+      def unquote(parse)(_string) do
+        send(self(), {__MODULE__, unquote(parse)})
+        {:error, :probe}
+      end
+    end
+  end
+
+  # #1238: a module chosen at runtime, reached through an argument the
+  # callee calls back. Each form below returned `:ok` at `:strict` and ran
+  # the held module's `exception/1`, calendar or time zone database callback
+  # (the sigil while it expanded).
+  describe ":strict refuses a module argument that is called back" do
+    test "raise and reraise refuse a computed exception in every form" do
+      for code <- [
+            ~S|raise mod|,
+            ~S|raise mod, path: "x"|,
+            ~S|reraise mod, []|,
+            ~S|reraise mod, [], []|,
+            ~S|raise String.to_existing_atom("Elixir.X"), []|,
+            ~S|raise :"Elixir.X"|,
+            ~S|raise File, path: "x"|,
+            ~S|raise Protocol.UndefinedError, protocol: mod, value: 1|,
+            ~S|raise UndefinedFunctionError, module: mod, function: :f, arity: 0|,
+            ~S|raise FunctionClauseError, module: mod, function: :f, arity: 0|,
+            ~S|raise msg|,
+            ~S|reraise e, st|,
+            ~S|Kernel.raise(mod, [])|,
+            ~S|:"Elixir.Kernel".reraise(mod, [])|,
+            ~S{mod |> raise(path: "x")},
+            ~S{mod |> raise},
+            ~S|&raise/1|,
+            ~S|&reraise/3|,
+            ~S|&Kernel.raise/2|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "module.exception/1")
+               ),
+               "expected an exception-module violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "raise keeps its message and Elixir exception forms" do
+      for code <- [
+            ~S|raise "boom"|,
+            ~S|raise "boom #{x}"|,
+            ~S|raise ArgumentError|,
+            ~S|raise ArgumentError, "bad"|,
+            ~S|raise KeyError, key: :a, term: %{}|,
+            ~S|raise ArgumentError, "bad #{x}"|,
+            ~S|raise MatchError, term: x|,
+            ~S|raise CondClauseError, []|,
+            ~S{ArgumentError |> raise(message: "x")},
+            ~S|reraise "boom", st|,
+            ~S|reraise ArgumentError, st|,
+            ~S|reraise ArgumentError, [message: "x"], st|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    # On Elixir 1.17 the default `exception/1` hands an unknown key to
+    # `IO.warn`, which writes to the node's stderr past the output capture,
+    # so the attributes may only name the exception's own fields.
+    test "raise attributes may only name the exception's own fields" do
+      for code <- [
+            ~S|raise ArgumentError, zzz: x|,
+            ~S|raise ArgumentError, message: "x", zzz: 1|,
+            ~S|raise ArgumentError, attrs|,
+            ~S|raise ArgumentError, [{k, 1}]|,
+            ~S|raise MatchError, "no :message field"|,
+            ~S|raise CondClauseError, term: 1|,
+            ~S{ArgumentError |> raise(zzz: x)},
+            ~S|Kernel.raise(ArgumentError, zzz: x)|,
+            ~S|reraise ArgumentError, [zzz: x], st|,
+            ~S|reraise ArgumentError, attrs, st|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(violations, &String.contains?(&1, "own fields")),
+               "expected an attributes violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    test "every calendar and time zone database argument in an allowlisted spec is guarded" do
+      slots = calendar_slots()
+      # The scan itself must find the slots, or the loop below proves nothing.
+      # `Calendar`'s own specs name the local `calendar()` type.
+      assert {Date, :new, 4, 3, :calendar, []} in slots
+      assert {DateTime, :now, 2, 1, :time_zone_database, []} in slots
+      assert {Calendar, :compatible_calendars?, 2, 0, :calendar, []} in slots
+      assert {Calendar, :compatible_calendars?, 2, 1, :calendar, []} in slots
+
+      assert {DateTime, :from_iso8601, 2, 1, :calendar, [:extended, :basic]} in slots
+
+      # Every atom any shared slot accepts. A slot must refuse the ones its
+      # own spec does not list: `Date.new(2020, 1, 1, :basic)` names no
+      # calendar.
+      shared_atoms = [
+        :native,
+        :microsecond,
+        :millisecond,
+        :second,
+        :extended,
+        :basic
+      ]
+
+      for {{module, func, arity}, call_slots} <-
+            Enum.group_by(slots, &{elem(&1, 0), elem(&1, 1), elem(&1, 2)}),
+          accepts =
+            Map.new(call_slots, fn {_, _, _, position, kind, atoms} ->
+              {position, {kind, atoms}}
+            end),
+          {position, {kind, atoms}} <- accepts do
+        name = "#{inspect(module)}.#{func}"
+
+        # Every other slot written out, so each verdict is down to `position`.
+        args = fn slot ->
+          Enum.map(0..(arity - 1), fn
+            ^position -> slot
+            i when is_map_key(accepts, i) -> written_module(elem(accepts[i], 0))
+            i -> "a#{i}"
+          end)
+        end
+
+        call = &"#{name}(#{Enum.join(args.(&1), ", ")})"
+        computed = args.("mod")
+
+        refused = [
+          call.("mod"),
+          "&#{name}/#{arity}",
+          "#{hd(computed)} |> #{name}(#{computed |> tl() |> Enum.join(", ")})",
+          call.(other_module(kind))
+          | Enum.map(shared_atoms -- atoms, &call.(inspect(&1)))
+        ]
+
+        for code <- refused do
+          assert {:error, violations} = Sandbox.check(code, :strict),
+                 "#{code} passed"
+
+          assert Enum.any?(violations, &String.contains?(&1, "is called back")),
+                 "expected a module-argument violation for #{code}, got #{inspect(violations)}"
+        end
+
+        for code <- [
+              call.(written_module(kind)) | Enum.map(atoms, &call.(inspect(&1)))
+            ] do
+          assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+        end
+      end
+    end
+
+    test "a shared slot keeps its unit and format atoms" do
+      for code <- [
+            ~S|DateTime.utc_now(:second)|,
+            ~S|Time.utc_now(:millisecond)|,
+            ~S|DateTime.from_iso8601("2020-01-01T00:00:00Z", :basic)|,
+            ~S|DateTime.now("Etc/UTC")|,
+            ~S|Date.new(2020, 1, 1)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+
+      assert {:error, _} = Sandbox.check(~S|DateTime.utc_now(unit)|, :strict)
+    end
+
+    test "a calendar sigil may only name Calendar.ISO" do
+      for code <- [
+            ~S|~D[2020-01-01 Probe]|,
+            ~S|~T[12:00:00 Probe]|,
+            ~S|~N[2020-01-01 12:00:00 Probe]|,
+            ~S|~U[2020-01-01 00:00:00Z Probe]|,
+            ~S|Kernel.sigil_D(<<"2020-01-01 Probe">>, [])|,
+            ~S{<<"2020-01-01 Probe">> |> Kernel.sigil_D([])}
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "calendar suffix Probe")
+               ),
+               "expected a calendar suffix violation for #{code}, got #{inspect(violations)}"
+      end
+
+      for code <- [
+            ~S|~D[2020-01-01]|,
+            ~S|~D[2020-01-01 Calendar.ISO]|,
+            ~S|~N[2020-01-01 12:00:00]|,
+            ~S|~U[2020-01-01 00:00:00Z]|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    # Kernel's sigil macros raise on these shapes today, before a calendar is
+    # read. The checker refuses them itself rather than trusting that to last.
+    test "a calendar sigil called with anything but sigil syntax is refused" do
+      for code <- [
+            ~S|Kernel.sigil_D("2020-01-01 Probe", [])|,
+            ~S|Kernel.sigil_D(<<"2020-01-01 ", "Probe">>, [])|,
+            ~S{"2020-01-01 Probe" |> Kernel.sigil_D([])},
+            ~S|Kernel.sigil_T(s, [])|,
+            ~S|sigil_N("2020-01-01 12:00:00 Probe", [])|,
+            ~S|:"Elixir.Kernel".sigil_U(s, [])|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "except as sigil syntax")
+               ),
+               "expected a sigil-shape violation for #{code}, got #{inspect(violations)}"
+      end
+    end
+
+    # Given a module, `Map.from_struct/1` calls its `__struct__/0` and, since
+    # Elixir 1.18, writes a deprecation to the node's stderr past the capture.
+    test "Map.from_struct takes only a map or struct written out" do
+      for code <- [
+            ~S|Map.from_struct(mod)|,
+            ~S|Map.from_struct(Date)|,
+            ~S|Map.from_struct(String.to_existing_atom("Elixir.X"))|,
+            ~S{mod |> Map.from_struct()},
+            ~S|:"Elixir.Map".from_struct(mod)|,
+            ~S|&Map.from_struct/1|,
+            ~S|Enum.map(l, &Map.from_struct(&1))|
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict),
+               "#{code} passed"
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "module.__struct__/0")
+               ),
+               "expected a Map.from_struct violation for #{code}, got #{inspect(violations)}"
+      end
+
+      for code <- [
+            ~S|Map.from_struct(%URI{})|,
+            ~S|Map.from_struct(%{a: 1})|,
+            ~S|Map.delete(s, :__struct__)|
+          ] do
+        assert :ok = Sandbox.check(code, :strict), "#{code} was refused"
+      end
+    end
+
+    # The attribute allowlist is the audited fields, not the struct's: a field
+    # a later Elixir adds has had no one read what `message/1` does with it.
+    test "every field of an audited exception has been audited" do
+      for {exception, audited} <- Sandbox.audited_exception_fields() do
+        fields =
+          Map.keys(exception.__struct__()) -- [:__struct__, :__exception__]
+
+        assert fields -- audited == [],
+               "#{inspect(exception)} has unaudited fields #{inspect(fields -- audited)}; " <>
+                 "read its message/1 and exception/1, then add them to @audited_exception_fields"
+      end
+    end
+
+    # `calendar_suffix/1` copies Kernel's private `extract_calendar/1`. Each
+    # form is expanded for real against a probe calendar, so a Kernel change
+    # to which suffixes it dispatches to fails here instead of drifting.
+    test "the calendar suffix rule refuses exactly the suffixes Kernel dispatches to" do
+      probe = inspect(ProbeCalendar)
+
+      verdicts =
+        for {sigil, value} <- [
+              {"D", "2020-01-01"},
+              {"T", "12:00:00"},
+              {"N", "2020-01-01 12:00:00"},
+              {"U", "2020-01-01 00:00:00Z"}
+            ],
+            separator <- [" ", "  ", "\t", "\n", "\r\n"],
+            suffix <- [
+              probe,
+              probe <> " ",
+              "_" <> probe,
+              String.downcase(probe)
+            ] do
+          code = "~#{sigil}[#{value}#{separator}#{suffix}]"
+          refused? = match?({:error, _}, Sandbox.check(code, :strict))
+          dispatched? = kernel_dispatches?(code)
+
+          assert refused? == dispatched?,
+                 "#{inspect(code)}: Kernel dispatched=#{dispatched?}, checker refused=#{refused?}"
+
+          dispatched?
+        end
+
+      # Both verdicts must occur, or the comparison proves nothing.
+      assert true in verdicts
+      assert false in verdicts
+    end
+  end
+
+  # {module, function, arity, position, kind, atoms} for every argument an
+  # allowlisted spec types as a calendar or time zone database, read from
+  # the compiled specs rather than copied. `kind` is `:calendar` or
+  # `:time_zone_database`; `atoms` are the literal atoms the slot's union
+  # also lists (`DateTime.utc_now/1`'s time units).
+  # `Calendar.put_time_zone_database/1` is refused outright at every level
+  # (see "the global time zone database cannot be replaced"), so it has no
+  # written-out form to allow.
+  defp calendar_slots do
+    Sandbox.strict_modules()
+    |> Enum.flat_map(&module_calendar_slots/1)
+    |> Enum.uniq()
+    |> Enum.reject(&match?({Calendar, :put_time_zone_database, 1, _, _, _}, &1))
+  end
+
+  defp module_calendar_slots(module) do
+    for {:ok, specs} <- [Code.Typespec.fetch_specs(module)],
+        {{func, arity}, clauses} <- specs,
+        clause <- clauses,
+        {position, kind, atoms} <- spec_calendar_positions(module, func, clause),
+        do: {module, func, arity, position, kind, atoms}
+  end
+
+  defp spec_calendar_positions(module, func, clause) do
+    for {arg, position} <- Enum.with_index(spec_args(func, clause)),
+        kind = calendar_kind(module, arg),
+        kind != nil,
+        do: {position, kind, arg |> union_members() |> Enum.filter(&is_atom/1)}
+  end
+
+  defp union_members({:|, _, [left, right]}),
+    do: union_members(left) ++ union_members(right)
+
+  defp union_members(type), do: [type]
+
+  defp spec_args(func, clause) do
+    {spec, vars} =
+      case Code.Typespec.spec_to_quoted(func, clause) do
+        {:when, _, [spec, vars]} -> {spec, vars}
+        spec -> {spec, []}
+      end
+
+    {:"::", _, [{^func, _, args}, _return]} = spec
+
+    # A `when` clause types an argument through a variable: `new(..., c)
+    # when c: Calendar.calendar()`.
+    Enum.map(args, fn
+      {name, _, ctx} = arg when is_atom(name) and is_atom(ctx) ->
+        Keyword.get(vars, name, arg)
+
+      arg ->
+        arg
+    end)
+  end
+
+  # `Calendar` names its own types locally, `calendar()` rather than
+  # `Calendar.calendar()`; every other module qualifies them.
+  defp calendar_kind(module, arg) do
+    arg
+    |> Macro.prewalk(nil, fn
+      {{:., _, [Calendar, kind]}, _, []} = node, _acc
+      when kind in [:calendar, :time_zone_database] ->
+        {node, kind}
+
+      {kind, _, []} = node, _acc
+      when module == Calendar and kind in [:calendar, :time_zone_database] ->
+        {node, kind}
+
+      node, acc ->
+        {node, acc}
+    end)
+    |> elem(1)
+  end
+
+  defp written_module(:calendar), do: "Calendar.ISO"
+
+  defp written_module(:time_zone_database),
+    do: "Calendar.UTCOnlyTimeZoneDatabase"
+
+  defp other_module(:calendar), do: written_module(:time_zone_database)
+  defp other_module(:time_zone_database), do: written_module(:calendar)
+
+  # Whether expanding `code` called a `ProbeCalendar` parse function. The
+  # probe refuses every string, so a dispatched sigil raises; so does a
+  # suffix Kernel reads as part of an ISO string it cannot parse.
+  defp kernel_dispatches?(code) do
+    try do
+      Code.eval_string(code)
+    rescue
+      _ -> :raised
+    end
+
+    receive do
+      {ProbeCalendar, _parse} -> true
+    after
+      0 -> false
+    end
+  end
 end
