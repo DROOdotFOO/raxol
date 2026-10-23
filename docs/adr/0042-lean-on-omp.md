@@ -2,17 +2,19 @@
 
 ## Status
 
-Proposed, 2026-10-23.
+Proposed, 2026-10-23. Revised 2026-10-23 after a review pass that checked
+every claim against the code and against OMP 18.12.6 itself (its bundled
+source and a throwaway plugin driven through `omp --mode rpc`).
 
 Supersedes [ADR-0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent
-seams) once the harness is deleted. Narrows ADRs 0021, 0022, 0024, 0026, 0027,
-0028 and 0032 to whatever survives the dependency check in Decision 3; each of
-those is re-marked when its code is removed, not before.
+seams) once the harness is deleted. The same deletion supersedes ADRs 0022,
+0024, 0026, 0027 and 0032 and narrows 0021 and 0028 (table under
+Consequences); each is re-marked in the PR that removes its code, not before.
 
 ## Context
 
 Raxol grew a full coding-agent harness: the coding TUI (`raxol code`,
-`mix raxol.code`, about 7.4k lines in `Raxol.Agent.Code.*`), a one-shot mode
+`mix raxol.code`, 7.4k lines in `Raxol.Agent.Code.*`), a one-shot mode
 (`raxol p`), an ACP agent server for editors, foreign-CLI drivers (Claude
 Code, Grok Build, Cursor), shell, LSP, compaction, memory, self-improving
 skills and a dozen model backends, most of it built for parity with Hermes
@@ -33,11 +35,16 @@ What no coding harness has is what Raxol already is:
   (`Raxol.Agent.SpendGate`, `raxol_payments`).
 - **Every surface.** Terminal, LiveView, SSH, MCP, Telegram, watch.
 
-The derived tools never reach OMP today: OMP sees only the 11 static tools,
-so an OMP agent drives a Raxol app the way it would scrape any TUI. And
-derived tool names carry no session prefix (`"#{widget_id}.#{action}"`, one
-global ETS registry keyed by name), so two headless sessions with the same
-widget id overwrite each other's tools.
+The derived tools never reach OMP usefully today. OMP sees the 11 static
+tools (six in `Raxol.Headless.McpTools`, five `adaptive_*`), so an OMP agent
+drives a Raxol app the way it would scrape any TUI. Derived tool names also
+carry no session prefix (`"#{widget_id}.#{action_name}"`,
+`packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex:228`) in one ETS `:set`
+keyed by name. `ToolSynchronizer.do_sync` registers only names new to its own
+session and unregisters by bare name (`tool_synchronizer.ex:294,298`), so a
+second session with the same widget id takes over the first one's tool,
+the first never registers it again, and stopping either removes it for both.
+The per-session `discover_tools` collides the same way (`:291`).
 
 ## Decision
 
@@ -59,107 +66,212 @@ coding harness joins the "Do NOT build" list.
 
 ### 2. Apps into OMP first
 
-The first build exposes each headless session's derived tools to OMP:
+The first build exposes each headless session's derived tools to OMP.
 
-- Derived tool names become session-scoped (`<session>.<widget>.<action>`),
-  which fixes the cross-session overwrite on its own. OMP sanitizes them to
-  `mcp__raxol_<session>_<widget>_<action>` and hashes names past 64
-  characters, so session ids stay short.
-- Tools are published dynamically: the server already advertises
-  `tools.listChanged` and sends `notifications/tools/list_changed` on every
-  change, and OMP re-lists on that notification (`refreshServerTools`).
-- The static `raxol_*` session tools stay, for starting, stopping and
+- **Session-scoped names.** Derived tools become
+  `<session>.<widget>.<action>`, and `discover_tools` becomes
+  `<session>.discover_tools`, which fixes the cross-session takeover on its
+  own. Under the plugin, OMP names them
+  `mcp__raxol_raxol_<session>_<widget>_<action>` (plugin name, then server
+  name; observed), so 47 characters remain for session, widget and action.
+  Past 64 characters OMP keeps a readable prefix and appends a hash, so long
+  names still work; short session ids keep them readable. Ids from MCP input
+  are validated before any atom is created.
+- **Dynamic publication.** The server advertises `tools.listChanged` and
+  sends `notifications/tools/list_changed` on every change, and OMP re-lists
+  on it (observed). OMP lists MCP tools as text at the end of its system
+  prompt, so every change rewrites that text mid-conversation. To keep that
+  rare, a session's tool set is sticky: a tool stays registered until its
+  session stops, and a call to a widget that is not in the current view
+  returns an error naming it. Churn is then limited to session start, stop
+  and a widget's first appearance. Whether the remaining churn costs
+  provider cache hits is measured by the benchmark below.
+- **Authorization stays in Raxol.** OMP treats every MCP tool as a `write`
+  tool, ignores annotations, and auto-approves in its default mode, so the
+  Raxol authorizer is the only gate, at the resource. `TreeWalker` passes a
+  provider's annotations through (it drops them today), and state-changing
+  widget actions are marked sensitive. Over stdio the peer is the process
+  that spawned the server, so `raxol mcp` installs an explicit allow
+  authorizer. A network deployment must supply a function authorizer, since
+  derived names are dynamic and an exact-name allowlist cannot list them.
+- **The static `raxol_*` tools stay**, for starting, stopping and
   screenshots. Keystrokes remain a fallback, not the path.
-- Distribution is an OMP plugin in this repository: `plugin.json`, an
-  `mcp.json` whose stdio command is `raxol mcp` (a new `@raxol/cli`
-  subcommand, so no Elixir toolchain is needed), an operator skill, and a
-  `raxol-operator` subagent. App authors point a project `.omp/mcp.json` at
-  `mix mcp.server` to expose their own modules.
-- The first headline benchmark comes from this step: the same tasks, done by
-  OMP through derived tools and through keystrokes plus screenshots, with
-  completion, tool calls and tokens for each.
+- **Distribution is an OMP plugin in this repository.**
+  - The catalog is `.omp-plugin/marketplace.json` at the repository root.
+    The plugin lives in `integrations/omp/raxol/`: `plugin.json`, `mcp.json`,
+    a `raxol-operator` skill and a `raxol-operator` subagent.
+  - OMP confines a plugin server's command to a bare executable name or a
+    plugin-relative path. It also confines `cwd` to the plugin's own root or
+    data directory, so a plugin cannot run `mix mcp.server` in a user's
+    project. The plugin therefore runs `raxol mcp`, a new `@raxol/cli`
+    subcommand that needs no Elixir toolchain.
+  - `raxol mcp` sets the MCP startup mode before the release boots, sends
+    logs to stderr, and gets a smoke test in the CLI release workflow.
+  - App authors expose their own modules with a project `.omp/mcp.json`
+    pointing at `mix mcp.server` with their project as `cwd`.
+- **The first headline benchmark comes from this step.** A deterministic
+  tier runs on every PR: reference tasks solved in-process through derived
+  tools and through keys plus screenshots, recording calls and bytes. A
+  weekly tier, capped at $10 a week, runs the same tasks with OMP as the
+  agent and records completion, tool calls and tokens, including cache reads
+  and writes.
 
 ### 3. Delete the coding harness, after a dependency check
 
-One clean-cutover PR, after step 2 ships `raxol mcp`. Coding-only code goes:
-`Raxol.Agent.Code.*`, `Harness.{ClaudeCode, Cursor, GrokBuild, ToolExecutor,
-McpTools, StreamJson}`, `Backend.Native` and its drivers, shell, LSP context,
-compaction, memory and user model, self-improvement and curation, probes,
-`Raxol.Agent.P`, the coding `Actions` (filesystem, shell, code), the SSH code
-server in `Raxol.Application`, and the CLI commands `agent`, `code`, `p`,
-`login` and `setup` with their mix tasks.
+The dependency check found that kept code still leans on the harness in
+places. Policy helpers live on `Actions.Code`. `Stream` (the scheduler's
+path) calls the memory manager, and the `Command` struct uses the coding
+event codec. The Symphony runner and `raxol acp` are built on coding modules.
+So the deletion is still one clean-cutover PR, but three behaviour-preserving
+PRs go first:
+
+1. Decouple the kept code from the harness: move the policy helpers and the
+   codec, and drop the memory, self-improvement and user-model hooks.
+2. Replace Symphony's coding runner with an `omp` runner (`omp -p --mode
+   json`) beside the existing Codex runner.
+3. Rebuild `raxol acp` on Raxol agents (Decision 5).
+
+The cutover PR deletes coding-only code:
+
+- `Raxol.Agent.Code.*`.
+- `Harness.{ClaudeCode, Cursor, GrokBuild, ToolExecutor, McpTools,
+  McpToolConfig, StreamJson, SessionInbox, ToolClassifier}`.
+- `Backend.{Native, ClaudeCode, Cursor, GrokBuild}` and `NativeHarness`.
+- Shell, LSP context, compaction, memory and user model, self-improvement,
+  curation and trajectories, probes, setup, and `Raxol.Agent.P`.
+- The coding `Actions`: code, fs, shell, workspace, lsp, anchor, vfs, memory,
+  session search, fetch, web search and task.
+- The ACP turn runner, permission bridge and login.
+- The SSH code server and the `Harness.McpTools` registration in
+  `Raxol.Application`.
+- The CLI commands `agent`, `code`, `p`, `login` and `setup`, with their mix
+  tasks and `bin/` scripts. Bare `raxol` prints help.
+
+Measured, that is about 24k lines of `raxol_agent` library code, and 82 test
+files reference it.
 
 Kept, because they are the Raxol-agents runtime or have outside users:
 
 | Kept | Why |
 |---|---|
-| `Raxol.Agent.Session`, `Team`, `Comm`, `Supervisor`, `Journal`, `SpendGate`, `Sandbox`, `ToolPolicy`, `Policy`, `ThreadLog`, `Cache` | the agent runtime |
-| `Raxol.Agent.Scheduler`, `Raxol.Agent.Skills.Store` | `raxol_console` (ADR-0031) wires both |
+| `Raxol.Agent.Session`, `Team`, `Comm`, `Supervisor`, `Journal`, `SpendGate`, `Sandbox`, `ToolPolicy`, `Policy`, `ThreadLog`, `Cache`, `Stream`, `Turn`, `Command` | the agent runtime; `raxol_payments` compiles against `Action`, `CommandHook` and `Command` |
+| `Raxol.Agent.Scheduler` (with `Fire`, `Delivery`), `Skills`, `Skills.Store`, `Actions.{Skills, Cronjob, Web3, FX}`, `McpBundle` | `raxol_console` (ADR-0031) wires them |
+| `Raxol.Agent.Harness.SessionLane` | implements the root `Raxol.Harness.SessionLane` behaviour from the runtime alone |
+| `Raxol.Agent.Backend.Mock` | a runtime fallback in `Auxiliary`, `ExecutorConfig` and `Resolver`, and a test backend for other packages |
 | `Raxol.Harness.*` and `Raxol.UI.Harness.*` (root) | the agent-session UI kit; re-pointed at OMP sessions in Decision 6 |
 | `raxol_agent_client_protocol` | Decision 5 |
 
-Blocking edges the PR resolves rather than breaks:
+The cutover also resolves its outside edges in the same PR:
 
-- `raxol_symphony`'s `raxol_agent` runner is a coding runner (`Actions.Code`,
-  `Actions.Fs`, `Sandbox.Shell`). It is replaced by an `omp` runner
-  (`omp -p` / `--mode json`) beside the existing Codex runner.
-- `raxol_cli`'s `doctor` reads `Raxol.Agent.Code.Inspection` and the ACP
-  agent; it is narrowed to what remains.
-- `raxol_payments`' `code_llm_ledger_test.exs` exercises
-  `Raxol.Agent.Code.CostLedger`; the ledger moves or the test goes with it.
-- `web/`'s playground capability probe for the ACP agent follows Decision 5.
+- `raxol_cli`'s `doctor`.
+- The `raxol_payments` tools-docs task and its `Code.CostLedger` test.
+- The CI entrypoint and ACP loopback jobs.
+- The CLI release workflow's `raxol p` smoke, replaced by the `raxol mcp`
+  smoke.
+- The quality baseline.
+- The docs, the web landing page and `llms.txt` sources that describe the
+  coding agent.
 
 ### 4. Model access: one direct family plus the OMP gateway
 
-The backend catalog shrinks to `anthropic`, `ollama` and a new `omp_gateway`.
-`omp_gateway` runs `omp auth-gateway stdio` (JSON lines `{id, path, body}`,
-`POST /v1/messages`) and so reaches every provider OMP is logged in to,
-including role models such as `@smol`. The gateway returns a streamed reply
-only after it ends, so `omp_gateway` declares `[:completion]`, not
-`:streaming`. Headless servers keep working without Bun through the direct
-Anthropic and Ollama backends. Lumo, the OpenAI-compatible family, Kimi and
-the native CLI drivers are deleted.
+The backend catalog's model entries shrink to `anthropic`, `ollama` and a new
+`omp_gateway`. `mock` stays as the offline and test backend, and the reserved
+`codex` entry stays for Symphony's runner.
+
+`omp_gateway` runs `omp auth-gateway stdio`:
+
+- The first line is `{"ready":true,"version":...}`. Requests are JSON lines
+  `{id, path, body}`, answered by id in completion order.
+- It reaches every provider OMP is logged in to, including role models such
+  as `@smol`.
+- It shares one Anthropic Messages codec with the direct backend.
+- It declares `:completion` and `:tool_use`, the latter confirmed by a live
+  call before release. It does not declare `:streaming`, because the gateway
+  returns a streamed reply as one string after the stream ends.
+- It never claims to handle tools internally, which would bypass
+  `SpendGate`.
+
+Headless servers keep working without Bun through the direct Anthropic and
+Ollama backends. The HTTP backend is split rather than deleted: its
+Anthropic and Ollama clauses stay, and an unknown provider becomes an error
+instead of falling through to OpenAI. Lumo, the OpenAI-compatible family and
+Kimi are deleted; the native CLI drivers go with the harness.
 
 ### 5. ACP stays, aimed at Raxol agents
 
-`raxol acp` keeps serving ACP, but a session attaches to a named, long-lived
-Raxol agent instead of starting a coding turn. The package's arity-2
-`:turn_runner` seam takes a runner that calls the agent (`Comm.call/3`) and
-streams its reply. `Budget`, `ParentWatch` and the `serve` scaffolding stay;
-the coding permission bridge and executor detection go. `Session` gains an
-explicit stop for `session/cancel`. Editors that want a coding agent use
-`omp acp`.
+`raxol acp --agent <id>` keeps serving ACP, but a session attaches to a
+named, long-lived Raxol agent instead of starting a coding turn:
+
+- The package's arity-2 `:turn_runner` seam takes a runner that calls the
+  agent (`Comm.call/3`, with an explicit timeout; the agent answers with
+  `Comm.reply/3`) and streams its reply as message chunks.
+- `session/cancel` abandons the pending call. The agent keeps running,
+  because it is long-lived by design; stopping it is
+  `Session.Supervisor.stop_session/1`, which already exists.
+- `Budget`, `ParentWatch` and the `serve` scaffolding stay. The coding
+  toolset, prompt and permission bridge go, along with executor detection.
+
+This lands before the cutover, because today's server is built from modules
+the cutover deletes. Editors that want a coding agent use `omp acp`.
 
 ### 6. Raxol surfaces front OMP, later
 
-An Elixir client for OMP's RPC mode (`omp --mode rpc`: JSON lines, id
-correlation, `negotiate_protocol` v2 chunking, `session_settled` before
-teardown) lets the root `Raxol.Harness` UI kit render an OMP session on any
-Raxol surface. This replaces the deleted coding TUI with "OMP on Telegram,
-LiveView, SSH and a watch".
+An Elixir client for OMP's RPC mode (`omp --mode rpc`) lets the root
+`Raxol.Harness` UI kit render an OMP session on any Raxol surface:
+
+- The protocol is JSON lines with id correlation, `negotiate_protocol` v2
+  chunking for frames over 1 MiB, and waiting for `session_settled` before
+  teardown.
+- The RPC ready frame carries no version, so the client checks
+  `omp --version` against the pin.
+- It plugs in as an implementation of the root `Raxol.Harness.SessionLane`
+  behaviour.
+
+This replaces the deleted coding TUI with "OMP on Telegram, LiveView, SSH and
+a watch".
 
 ## Consequences
 
-- Roughly 15-20k lines of `raxol_agent` and their tests go [estimate, to be
-  replaced by the deletion PR's actual count], with the CLI's agent commands
-  and their docs.
+- About 24k lines of `raxol_agent` library code and the tests that cover it
+  go, with the CLI's agent commands and their docs (measured over the
+  delete set; the earlier 15-20k estimate was low).
 - Raxol depends on a third-party harness for the coding experience. MCP is
-  the stable seam; the RPC and auth-gateway protocols are versioned and get
-  pinned to a tested OMP version.
+  the stable seam. OMP releases often, so CI and the docs pin a tested
+  version (18.12.6 at review) through the install script's `--ref` flag:
+  `curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v18.12.6`.
+  The gateway and RPC clients check the version at startup.
 - Agents in OMP use Raxol apps through semantic tools, which is the claim the
   benchmark measures.
-- Payments stay in the Raxol-agents story: spend limits are enforced in
-  `SpendGate` and `raxol_payments`, at the resource; OMP's approval prompt is
-  a convenience on top, never the control.
-- Derived tool sets change while an OMP conversation runs (a session starts,
-  a modal opens). Whether that costs OMP prompt-cache hits is unmeasured.
+- Payments stay in the Raxol-agents story. Wallet tools run every spend
+  through `SpendGate` with caps from the `raxol_payments` ledger, never from
+  tool arguments. OMP's approval prompt is a convenience on top, never the
+  control.
+- Derived tool sets still change when sessions start and stop. The weekly
+  benchmark records cache reads and writes so the cost is measured, not
+  guessed.
+- ADRs re-marked by the deletion:
+
+| ADR | Becomes | Because |
+|---|---|---|
+| 0021 | Narrowed | `Skills.Store` stays; `SelfImprove` and `Curator` go |
+| 0022 | Superseded | memory stack, session search and user model go |
+| 0024 | Superseded | the native execution backends go |
+| 0026 | Superseded | `execute_code` was never built and the coding harness it served is gone |
+| 0027 | Superseded | `Actions.Task` goes; OMP owns subagent fan-out |
+| 0028 | Narrowed | `Auxiliary` stays; its self-improvement and user-model wiring goes |
+| 0032 | Superseded | `Actions.Fs` goes; nothing was implemented |
+| 0034 | Superseded | the foreign coding-agent seams go |
 
 ## References
 
 - OMP docs (`omp://` in an OMP session): `mcp-config.md`,
   `mcp-runtime-lifecycle.md`, `mcp-server-tool-authoring.md`,
-  `marketplace.md`, `rpc.md`, `auth-broker-gateway.md`,
+  `marketplace.md`, `approval-mode.md`, `rpc.md`, `auth-broker-gateway.md`,
   `task-agent-discovery.md`.
+- OMP 18.12.6 source, `packages/coding-agent/src/discovery/agent-plugin-format.ts`
+  (plugin `mcp.json` rules), and the Agent Plugins 1.0.0 schemas
+  (`https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`,
+  `.../mcp.schema.json`).
 - [ADR-0012](0012-mcp-as-rendering-target.md), MCP as a rendering target.
 - [ADR-0031](0031-console-runtime-integration.md), the Console runtime that
   keeps the scheduler and skills store.
