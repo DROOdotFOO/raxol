@@ -8,8 +8,9 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 - **`ci-unified.yml`**: Main CI pipeline; `CI Status` aggregates the blocking jobs and is the required check
 - **`platform-tests.yml`**: macOS and Windows suites, reusable; called by `ci-unified.yml` on platform-sensitive changes and by `nightly.yml`
 - **`scoreboard.yml`**: `workflow_run` after `ci-unified.yml`; comments a pull request's scoreboard against master's and publishes master's records to `gh-pages`. Never runs pull request code
+- **`scoreboard-canaries.yml`**: Applies each deliberate regression in `bench/scoreboard_canaries/` and requires the scoreboard to flag it (`scripts/scoreboard-canaries.sh`); reusable, called by `ci-unified.yml` when a change touches the scoreboard or a file a canary patches, and by `nightly.yml`
 - **`security.yml`**: Dependency audit, Hex advisories, Sobelow, Semgrep, secret detection
-- **`nightly.yml`**: Elixir/OTP × OS test matrix, Windows, extended property run, Dialyzer ratchet; keeps one `nightly-build` issue open while red
+- **`nightly.yml`**: Elixir/OTP × OS test matrix, Windows, extended property run, scoreboard canaries, Dialyzer ratchet; keeps one `nightly-build` issue open while red
 - **`lockstep-deps.yml`**: Cross-package dependency constraint and prose/link checks
 - **`web-deploy-check.yml`**: Web tests and release boot, on `web/**` and playground changes
 - **`nix.yml`**: Flake build on Linux and macOS
@@ -38,11 +39,11 @@ workflow reports alongside it.
 
 | Trigger | Runs | Reports to |
 | --- | --- | --- |
-| Pull request (any base) | `ci-unified.yml`: format, compile, unit, property and package tests, input canary, buffer gate, credo ratchet, security scan; integration tests when `mix.exs`, `mix.lock` or `lib/` change; macOS and Windows when the change is platform-sensitive. A docs-only change (`web/`, `docs/`, `assets/`, Markdown, `.github/` outside `workflows/`) skips all of it and `CI Status` passes | `CI Status` |
-| Push to `master`, `main` or `develop` | `ci-unified.yml`, same jobs; macOS and Windows when the pushed range is platform-sensitive. Docs-only pushes do not start it | `CI Status` |
+| Pull request (any base) | `ci-unified.yml`: format, compile, unit, property and package tests, input canary, buffer gate, credo ratchet, security scan; integration tests when `mix.exs`, `mix.lock` or `lib/` change; macOS and Windows when the change is platform-sensitive; scoreboard canaries when it touches the scoreboard's own files or a file a canary patches. A docs-only change (`web/`, `docs/`, `assets/`, Markdown, `.github/` outside `workflows/`) skips all of it, except the canaries when it changes `.github/scripts/scoreboard.mjs`, and `CI Status` passes | `CI Status` |
+| Push to `master`, `main` or `develop` | `ci-unified.yml`, same jobs; macOS and Windows, and the scoreboard canaries, when the pushed range calls for them. Docs-only pushes do not start it | `CI Status` |
 | Pull request or push to `master`/`main` | `security.yml` (not on docs-only changes); also daily at 03:00 UTC | Its own checks |
 | Path-filtered | `lockstep-deps.yml` (`mix.exs`, `mix.lock`, Markdown, `docs/`), `web-deploy-check.yml` (`web/`, playground, root `mix.*`), `nix.yml` (`flake.*`) | Their own checks |
-| 02:00 UTC daily | `nightly.yml`: test matrix, Windows, extended properties, Dialyzer ratchet, integration and slow tests | One `nightly-build` issue: commented while red, closed after a fully green night (scheduled runs only) |
+| 02:00 UTC daily | `nightly.yml`: test matrix, Windows, extended properties, scoreboard canaries, Dialyzer ratchet, integration and slow tests | One `nightly-build` issue: commented while red, closed after a fully green night (scheduled runs only) |
 
 "Platform-sensitive" is decided in the `changes` job of `ci-unified.yml`:
 the change touches `mise.toml`, any `mix.exs` or `mix.lock`, the termbox2

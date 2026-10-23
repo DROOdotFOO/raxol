@@ -40,6 +40,7 @@ subdirectories hold narrower tooling.
 | `run_live_gates.sh` | The stablecoin cross-chain go-live matrix |
 | `smoke-test.sh` | Post-deploy smoke test |
 | `scoreboard-backfill.sh` | Measures older master commits with today's scoreboard (records for `gh-pages`), skipping any whose screens differ from the pinned ones; run by `scoreboard-backfill.yml` |
+| `scoreboard-canaries.sh` | Applies each deliberate regression in `bench/scoreboard_canaries/`, measures, reverts, and fails unless the scoreboard flags every one; run by `scoreboard-canaries.yml` |
 | `acp_probe.py` | Drives an ACP agent over stdio and records the wire |
 | `find_missing_moduledocs.exs` | Lists modules without a `@moduledoc` |
 | `gen_landing_frames.exs`, `social_preview.exs` | Web asset generation |

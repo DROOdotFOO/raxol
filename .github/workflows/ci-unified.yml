@@ -66,6 +66,7 @@ jobs:
       code: ${{ steps.check-changes.outputs.code }}
       should-run-heavy: ${{ steps.check-changes.outputs.should-run-heavy }}
       platform: ${{ steps.check-changes.outputs.platform }}
+      canaries: ${{ steps.check-changes.outputs.canaries }}
 
     steps:
       - uses: actions/checkout@v7
@@ -114,6 +115,25 @@ jobs:
             return 1
           }
 
+          # Scoreboard canaries (scoreboard-canaries.yml): when the range
+          # touches the scoreboard's own machinery, which could blind it, or a
+          # file a canary patches, which could leave that patch stale.
+          canary_sensitive() {
+            local base="$1" head="$2" file patch
+            local targets
+            targets=$(for patch in $(git ls-tree --name-only "$head" bench/scoreboard_canaries/ 2>/dev/null); do
+              git show "$head:$patch" | sed -n 's|^diff --git a/\([^ ]*\) .*|\1|p'
+            done)
+            while IFS= read -r -d '' file; do
+              case "$file" in
+                lib/raxol/scoreboard.ex|lib/mix/tasks/raxol.scoreboard.ex|priv/scoreboard/*|bench/core/buffer_gate.exs|bench/scoreboard_canaries/*|scripts/scoreboard-canaries.sh|.github/scripts/scoreboard.mjs|.github/workflows/scoreboard-canaries.yml)
+                  return 0 ;;
+              esac
+              if grep -qxF -- "$file" <<< "$targets"; then return 0; fi
+            done < <(git -c core.quotePath=false diff -z --name-only "$base...$head")
+            return 1
+          }
+
           if [ "$EVENT_NAME" != "pull_request" ]; then
             # push keeps its own paths-ignore; dispatch and workflow_call
             # always mean "run it".
@@ -125,13 +145,22 @@ jobs:
               # cannot be read (new branch, force-push) runs the legs.
               if ! git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
                 echo "platform=true" >> "$GITHUB_OUTPUT"
-              elif platform_sensitive "$PUSH_BEFORE" "$PUSH_AFTER"; then
-                echo "platform=true" >> "$GITHUB_OUTPUT"
+                echo "canaries=true" >> "$GITHUB_OUTPUT"
               else
-                echo "platform=false" >> "$GITHUB_OUTPUT"
+                if platform_sensitive "$PUSH_BEFORE" "$PUSH_AFTER"; then
+                  echo "platform=true" >> "$GITHUB_OUTPUT"
+                else
+                  echo "platform=false" >> "$GITHUB_OUTPUT"
+                fi
+                if canary_sensitive "$PUSH_BEFORE" "$PUSH_AFTER"; then
+                  echo "canaries=true" >> "$GITHUB_OUTPUT"
+                else
+                  echo "canaries=false" >> "$GITHUB_OUTPUT"
+                fi
               fi
             else
               echo "platform=true" >> "$GITHUB_OUTPUT"
+              echo "canaries=true" >> "$GITHUB_OUTPUT"
             fi
             if [ "$SKIP_HEAVY" == "true" ]; then
               echo "should-run-heavy=false" >> "$GITHUB_OUTPUT"
@@ -178,6 +207,12 @@ jobs:
             echo "platform=true" >> "$GITHUB_OUTPUT"
           else
             echo "platform=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if canary_sensitive "$BASE_SHA" "$HEAD_SHA"; then
+            echo "canaries=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "canaries=false" >> "$GITHUB_OUTPUT"
           fi
 
   # ========================================
@@ -1086,6 +1121,15 @@ jobs:
     if: needs.changes.outputs.platform == 'true'
     uses: ./.github/workflows/platform-tests.yml
 
+  # Deliberate regressions the scoreboard must flag (bench/scoreboard_canaries/).
+  # Only when `changes` sees the scoreboard's machinery or a patched file in
+  # the diff; nightly.yml runs it every night. When it runs, it gates.
+  scoreboard-canaries:
+    name: Scoreboard canaries
+    needs: changes
+    if: needs.changes.outputs.canaries == 'true'
+    uses: ./.github/workflows/scoreboard-canaries.yml
+
   # ========================================
   # Final Status Check
   # ========================================
@@ -1114,6 +1158,7 @@ jobs:
         credo,
         security,
         platform,
+        scoreboard-canaries,
         test-integration
       ]
     runs-on: ubuntu-latest
@@ -1217,6 +1262,17 @@ jobs:
             *)
               echo "❌ macOS/Windows platform tests: ${{ needs.platform.result }}"
               echo "   Reproduce on the OS in question: mix test --exclude slow --exclude docker --exclude integration --exclude skip_on_ci"
+              exit 1
+              ;;
+          esac
+
+          # Skipped unless `changes` saw the scoreboard's machinery or a file
+          # a canary patches; when it ran, it gates.
+          case "${{ needs.scoreboard-canaries.result }}" in
+            success|skipped) ;;
+            *)
+              echo "❌ Scoreboard canaries: ${{ needs.scoreboard-canaries.result }}"
+              echo "   Reproduce: MIX_ENV=test scripts/scoreboard-canaries.sh (on a clean tree)"
               exit 1
               ;;
           esac

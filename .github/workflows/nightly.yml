@@ -256,6 +256,12 @@ jobs:
     with:
       macos: false
 
+  # Every deliberate regression in bench/scoreboard_canaries/ must still be
+  # flagged; pull requests run this only when they touch the scoreboard.
+  scoreboard-canaries:
+    name: Scoreboard canaries
+    uses: ./.github/workflows/scoreboard-canaries.yml
+
   dialyzer-full:
     name: Full Dialyzer Check
     runs-on: ubuntu-latest
@@ -380,6 +386,7 @@ jobs:
         test-matrix,
         extended-scenarios,
         platform,
+        scoreboard-canaries,
         dialyzer-full,
         integration-tests
       ]
@@ -401,6 +408,7 @@ jobs:
           echo "| Test Matrix | ${{ needs.test-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Property Tests (extended) | ${{ needs.extended-scenarios.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Platform (Windows) | ${{ needs.platform.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scoreboard canaries | ${{ needs.scoreboard-canaries.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Dialyzer | ${{ needs.dialyzer-full.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
 

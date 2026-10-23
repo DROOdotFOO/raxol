@@ -1,0 +1,16 @@
+Regression: A diff frame leaves out its last changed row: fewer bytes, a stale screen.
+  The replay check must refuse to measure.
+Expect-refused: do not reproduce
+
+diff --git a/lib/raxol/core/runtime/rendering/backends.ex b/lib/raxol/core/runtime/rendering/backends.ex
+index a098053f7..d26a24275 100644
+--- a/lib/raxol/core/runtime/rendering/backends.ex
++++ b/lib/raxol/core/runtime/rendering/backends.ex
+@@ -91,6 +91,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
+     Enum.filter(0..(next.height - 1)//1, fn y ->
+       Enum.at(prev.cells, y) != Enum.at(next.cells, y)
+     end)
++    |> Enum.drop(-1)
+   end
+ 
+   defp emit_rows(renderer, rows) do

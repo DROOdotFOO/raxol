@@ -1,0 +1,17 @@
+Regression: The table demo shows three rows per page instead of four: fewer bytes for
+  a smaller screen. The screen pins must refuse to measure.
+Expect-refused: scenario screens differ
+
+diff --git a/lib/raxol/playground/demos/table_demo.ex b/lib/raxol/playground/demos/table_demo.ex
+index c642430c7..712654a46 100644
+--- a/lib/raxol/playground/demos/table_demo.ex
++++ b/lib/raxol/playground/demos/table_demo.ex
+@@ -35,7 +35,7 @@ defmodule Raxol.Playground.Demos.TableDemo do
+ 
+   @sort_cycle [nil | Enum.map(@columns, & &1.id)]
+   @border_cycle [:grid, :inner, :none]
+-  @page_size 4
++  @page_size 3
+ 
+   @impl true
+   def init(_context) do

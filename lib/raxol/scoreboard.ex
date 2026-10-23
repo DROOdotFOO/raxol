@@ -15,7 +15,7 @@ defmodule Raxol.Scoreboard do
   transforms are not applied: they come from the dispatcher's plugin manager
   at runtime, and the demos run with none loaded, as an app does by default.
 
-  It counts two things, and one ratio of them:
+  It counts three things, and one ratio:
 
     * **frame bytes**: the size of the ANSI frame payload the engine writes.
       Exact. A terminal that supports synchronized output also receives the
@@ -33,10 +33,15 @@ defmodule Raxol.Scoreboard do
       0.2%, so the reduction metrics carry a 0.5% noise tolerance in
       `priv/scoreboard/metrics.json`. Reductions also move with the
       Elixir/OTP version, which is why the record carries the full toolchain.
+    * **screen memory**: the screen buffer the engine holds after the table
+      script, with shared subterms counted once, per cell. Exact. This is the
+      render path's `Raxol.Terminal.Cell`; the buffer gate's memory rows
+      (merged in with `--include`) measure `Raxol.Terminal.Buffer`.
     * **work ratio**: a keystroke's reductions over the first frame's. A
       renderer that only redoes what a keystroke changed sits far below 1;
       the table demo is at 0.98, so a keystroke there costs nearly a full
-      redraw.
+      redraw. A ratio also falls when the first frame gets slower, so read it
+      next to the reductions it divides.
 
   Every scenario runs once to load code, then three times in fresh processes;
   the reported reductions are the median. Metric ids, labels, units and the
@@ -83,16 +88,10 @@ defmodule Raxol.Scoreboard do
   """
   @spec collect() :: metrics()
   def collect do
-    for {_name, app, keys} <- @scenarios do
-      case replay_mismatch(frames(app, keys)) do
-        nil ->
-          :ok
-
-        mismatch ->
-          raise "scoreboard: #{inspect(app)}'s frames do not reproduce its screen " <>
-                  "when replayed through the terminal emulator: #{inspect(mismatch)}"
-      end
-    end
+    screens =
+      Map.new(@scenarios, fn {name, app, keys} ->
+        {name, replayed_last_screen(app, keys)}
+      end)
 
     case check_screens() do
       :ok -> :ok
@@ -116,8 +115,37 @@ defmodule Raxol.Scoreboard do
       "table.keystroke.work_ratio" =>
         Float.round(keystroke_reductions / table.keyframe_reductions, 3),
       "flex.keyframe.bytes" => flex.keyframe_bytes,
-      "flex.keyframe.reductions" => flex.keyframe_reductions
+      "flex.keyframe.reductions" => flex.keyframe_reductions,
+      "table.screen.heap_bytes_per_cell" =>
+        heap_bytes_per_cell(screens["table"])
     }
+  end
+
+  # Raises unless every frame replays to its own screen; returns the last one.
+  defp replayed_last_screen(app, keys) do
+    frames = frames(app, keys)
+
+    case replay_mismatch(frames) do
+      nil ->
+        frames |> List.last() |> elem(1)
+
+      mismatch ->
+        raise "scoreboard: #{inspect(app)}'s frames do not reproduce its screen " <>
+                "when replayed through the terminal emulator: #{inspect(mismatch)}"
+    end
+  end
+
+  # The screen buffer the engine holds after the table script: its whole
+  # term with shared subterms counted once (`:erts_debug.size_shared/1`), per
+  # cell. This is the render path's `Raxol.Terminal.Cell`; the buffer gate's
+  # memory rows measure `Raxol.Terminal.Buffer`, a different structure.
+  defp heap_bytes_per_cell(screen) do
+    words = :erts_debug.size_shared(screen)
+
+    Float.round(
+      words * :erlang.system_info(:wordsize) / (screen.width * screen.height),
+      2
+    )
   end
 
   # -- screen fingerprints --

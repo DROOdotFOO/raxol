@@ -1,0 +1,18 @@
+Regression: The buffer gate's %Raxol.Terminal.Buffer.Cell{} gains a field (the
+  "added field" case its 460 B/cell ceiling was set against).
+Expect-worse: buffer.80x24.flat_bytes_per_cell buffer.200x100.flat_bytes_per_cell buffer.500x500.flat_bytes_per_cell
+
+diff --git a/packages/raxol_terminal/lib/raxol/terminal/buffer/cell.ex b/packages/raxol_terminal/lib/raxol/terminal/buffer/cell.ex
+index 93dc3f11a..51ff86076 100644
+--- a/packages/raxol_terminal/lib/raxol/terminal/buffer/cell.ex
++++ b/packages/raxol_terminal/lib/raxol/terminal/buffer/cell.ex
+@@ -13,7 +13,8 @@ defmodule Raxol.Terminal.Buffer.Cell do
+     # Virtual field for backward compatibility
+     :fg,
+     # Virtual field for backward compatibility
+-    :bg
++    :bg,
++    :dirty
+   ]
+ 
+   @type t :: %__MODULE__{

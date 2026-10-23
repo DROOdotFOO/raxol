@@ -1,0 +1,53 @@
+name: Scoreboard Canaries
+
+# Applies each deliberate regression in bench/scoreboard_canaries/ and
+# requires the scoreboard to flag it (scripts/scoreboard-canaries.sh): worse
+# on the named metrics, or a refusal to measure. ci-unified.yml calls this
+# when a change touches the scoreboard's machinery or a file a canary
+# patches, and gates on it; nightly.yml calls it every night.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+
+jobs:
+  canaries:
+    name: Canaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      # Restore only: this job patches lib/ and must never publish a cache.
+      - name: Restore cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --check-locked
+
+      - name: Run canaries
+        run: scripts/scoreboard-canaries.sh

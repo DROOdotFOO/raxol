@@ -1,0 +1,17 @@
+Regression: One redundant 4-byte SGR reset on every emitted row: the smallest byte
+  regression, against bytes' zero tolerance.
+Expect-worse: table.keystroke.bytes table.keyframe.bytes flex.keyframe.bytes
+
+diff --git a/lib/raxol/core/runtime/rendering/backends.ex b/lib/raxol/core/runtime/rendering/backends.ex
+index a098053f7..63e357e8d 100644
+--- a/lib/raxol/core/runtime/rendering/backends.ex
++++ b/lib/raxol/core/runtime/rendering/backends.ex
+@@ -95,7 +95,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
+ 
+   defp emit_rows(renderer, rows) do
+     Enum.map_join(rows, "", fn y ->
+-      "\e[#{y + 1};1H\e[0m\e[2K" <>
++      "\e[#{y + 1};1H\e[0m\e[0m\e[2K" <>
+         Raxol.Terminal.Renderer.render_row(renderer, y)
+     end)
+   end
