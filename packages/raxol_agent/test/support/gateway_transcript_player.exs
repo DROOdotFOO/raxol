@@ -1,7 +1,7 @@
 # Generic, content-free player for a recorded OMP JSON-lines transcript
 # (`scripts/omp_fixtures/capture.exs` format), run as a real OS process.
 #
-#   elixir gateway_transcript_player.exs TRANSCRIPT MODE [ignored args...]
+#   elixir gateway_transcript_player.exs TRANSCRIPT MODE [args...]
 #
 # It walks the transcript in order. A run of consecutive `in` events reads that
 # many lines from stdin and matches each one, id aside, against a recorded
@@ -12,11 +12,19 @@
 #
 # MODE: `play`; `exit-after:N:STATUS` (exit with STATUS right after matching
 # request N, answering nothing more); `never-answer` (print the first recorded
-# line, the ready line, then read stdin to EOF and answer nothing).
+# line, the ready line, then read stdin to EOF and answer nothing). Whatever
+# the mode, args holding `--version` print `omp/<the header's omp_version>`
+# and exit 0, as the recorded binary would; other args are ignored.
 
 defmodule GatewayTranscriptPlayer do
-  def main([transcript, mode | _ignored]) do
-    [_header | lines] = transcript |> File.read!() |> String.split("\n", trim: true)
+  def main([transcript, mode | args]) do
+    [header | lines] = transcript |> File.read!() |> String.split("\n", trim: true)
+
+    if "--version" in args do
+      IO.puts("omp/" <> JSON.decode!(header)["omp_version"])
+      System.halt(0)
+    end
+
     events = Enum.map(lines, &JSON.decode!/1)
 
     case mode do

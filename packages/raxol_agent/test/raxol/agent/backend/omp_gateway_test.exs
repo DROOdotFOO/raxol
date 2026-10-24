@@ -10,31 +10,17 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
   alias Raxol.Agent.Backend.OmpGateway.Codec
   alias Raxol.Agent.Backend.OmpGateway.Server
   alias Raxol.Agent.OMP.Version
+  alias Raxol.Agent.OMPTranscriptBinary
 
   @moduletag :tmp_dir
 
   @fixtures Path.expand("../../../fixtures/omp/gateway", __DIR__)
-  @player Path.expand("../../../support/gateway_transcript_player.exs", __DIR__)
   @smol "anthropic/claude-haiku-5-5"
 
+  # `omp` in the test's tmp dir, playing `transcript` in `mode`
+  # (`Raxol.Agent.OMPTranscriptBinary`).
   defp write_binary(dir, transcript, mode),
-    do: write_player(dir, Path.join(@fixtures, "#{transcript}.jsonl"), mode)
-
-  # Writes `omp` into the test's tmp dir: a shell script that runs the player
-  # on `fixture` in `mode`, so the backend spawns and vets it like the real
-  # binary. Rewriting it changes what the NEXT spawn runs.
-  defp write_player(dir, fixture, mode) do
-    path = Path.join(dir, "omp")
-    elixir = System.find_executable("elixir")
-
-    File.write!(path, """
-    #!/bin/sh
-    exec '#{elixir}' '#{@player}' '#{fixture}' '#{mode}' "$@"
-    """)
-
-    File.chmod!(path, 0o755)
-    path
-  end
+    do: OMPTranscriptBinary.write(dir, Path.join(@fixtures, "#{transcript}.jsonl"), mode)
 
   defp start_gateway(dir, transcript, mode) do
     path = write_binary(dir, transcript, mode)
@@ -89,7 +75,8 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
       String.replace(recorded, ready_version, ~s(\\"version\\":\\"#{older}\\"))
     )
 
-    server = start_supervised!({Server, name: nil, path: write_player(dir, fixture, "play")})
+    path = OMPTranscriptBinary.write(dir, fixture, "play")
+    server = start_supervised!({Server, name: nil, path: path})
 
     log =
       capture_log(fn ->
