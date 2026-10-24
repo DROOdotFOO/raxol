@@ -23,6 +23,19 @@ defmodule Raxol.Headless.McpTools do
   `inject_into_tidewave/1` routes through `Raxol.MCP.Server` as well rather than
   handing Tidewave the raw callbacks, so neither surface can drift from the
   policy the other enforces.
+
+  ## Startable modules
+
+  `raxol_start` starts a module only when it is on `startable/0`: the
+  playground demos except `Raxol.Playground.Demos.ReplDemo`, plus whatever
+  `config :raxol, :headless_startable` lists. An app author adds their own
+  app there:
+
+      config :raxol, :headless_startable, [MyApp]
+
+  The list binds the MCP tool, which starts a module for an untrusted caller.
+  Elixir callers of `Raxol.Headless.start/2` (`Raxol.MCP.Test`,
+  `Raxol.Recording.Video`) are trusted and start any Raxol application.
   """
 
   @doc """
@@ -35,17 +48,18 @@ defmodule Raxol.Headless.McpTools do
         name: "raxol_start",
         description: """
         Starts a headless Raxol session from a module name. The module must be
-        a Raxol application: it has to export init/1, update/2 and view/1.
-        Returns the session ID.
+        on this server's startable list (the playground demos, plus the apps
+        the deployment adds) and a Raxol application: it has to export init/1,
+        update/2 and view/1. Returns the session ID.
 
         A "path" argument also exists, but it is DISABLED unless the deployment
         sets RAXOL_HEADLESS_PATH_ROOT, because starting from a path compiles the
         file. Prefer "module"; the path property below has the details.
 
         Examples:
-          {"module": "RaxolDemo"}
-          {"module": "RaxolDemo", "id": "demo"}
-          {"module": "RaxolDemo", "width": 120, "height": 40}
+          {"module": "Raxol.Playground.Demos.TableDemo"}
+          {"module": "Raxol.Playground.Demos.TableDemo", "id": "demo"}
+          {"module": "Raxol.Playground.Demos.TableDemo", "width": 120, "height": 40}
         """,
         inputSchema: %{
           type: "object",
@@ -211,6 +225,21 @@ defmodule Raxol.Headless.McpTools do
         callback: &list_sessions/1
       }
     ]
+  end
+
+  @doc """
+  The modules `raxol_start` may start: every playground demo except
+  `Raxol.Playground.Demos.ReplDemo`, which evaluates Elixir, plus the modules
+  listed under `config :raxol, :headless_startable`.
+  """
+  @spec startable() :: [module()]
+  def startable do
+    demos =
+      for %{module: module} <- Raxol.Playground.Catalog.list_components(),
+          module != Raxol.Playground.Demos.ReplDemo,
+          do: module
+
+    Enum.uniq(demos ++ Application.get_env(:raxol, :headless_startable, []))
   end
 
   @doc """
@@ -603,32 +632,26 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
-  # `"module"` arrives from an MCP client, and atoms are never garbage collected:
-  # minting one per distinct string lets a caller looping on a wrong name grow the
-  # atom table until the VM aborts. `Raxol.Application` registers these tools at
-  # startup, so this is a reachable surface rather than a dev-only one.
-  #
-  # But the atom table alone answers the wrong question. Under `mix mcp.server`
-  # the VM loads code on demand, so a module that is compiled and sitting on the
-  # code path has no atom until something reaches for it -- and reaching for it
-  # is precisely what this tool is asked to do. So the code path decides, and the
-  # atom is minted only once a beam file for that exact name is found there:
-  # bounded by what is on disk, not by what a caller can type.
+  # `"module"` arrives from an MCP client, which is choosing what this VM runs,
+  # so it is matched by name against `startable/0` before anything resolves it.
+  # An unlisted name is refused without a code-path lookup and without minting
+  # an atom (atoms are never collected); a listed one is already an atom, and
+  # `Raxol.Headless.start/2` loads it on demand under `mix mcp.server`.
   defp resolve_module_or_path(%{"module" => _mod, "path" => _path}),
     do: {:error, "'module' and 'path' are mutually exclusive"}
 
   defp resolve_module_or_path(%{"module" => mod}) when is_binary(mod) do
-    case existing_module(mod) do
-      {:ok, module} ->
-        {:ok, module}
+    prefixed = "Elixir." <> mod
 
-      # Not "it is not loaded": the code path is what decided, and a module
-      # being unloaded is the normal state under `mix mcp.server` rather than a
-      # reason to refuse anything. What is missing is the beam itself.
-      :error ->
+    case Enum.find(startable(), &(Atom.to_string(&1) == prefixed)) do
+      nil ->
         {:error,
-         "unknown module #{inspect(mod)}: no compiled module by that name is " <>
-           "loadable in this VM"}
+         "module #{inspect(mod)} is not startable over MCP: only the playground " <>
+           "demos (except ReplDemo) and the modules listed in config :raxol, " <>
+           ":headless_startable are"}
+
+      module ->
+        {:ok, module}
     end
   end
 
@@ -671,36 +694,6 @@ defmodule Raxol.Headless.McpTools do
   # trade a refused lookup for something much worse.
   defp resolve_module_or_path(_),
     do: {:error, "Either 'module' or 'path' is required"}
-
-  # `:code.where_is_file/1` walks the code path for the beam, which is what
-  # `Code.ensure_loaded?/1` would have to find anyway -- asking first just means
-  # a name that exists nowhere never becomes an atom.
-  defp existing_module(name) do
-    prefixed = "Elixir." <> name
-
-    case atom_if_exists(prefixed) do
-      {:ok, module} -> {:ok, module}
-      :error -> beam_on_code_path(prefixed)
-    end
-  end
-
-  defp atom_if_exists(prefixed) do
-    {:ok, String.to_existing_atom(prefixed)}
-  rescue
-    ArgumentError -> :error
-  end
-
-  # The mint stays bounded because the file has to be there: `where_is_file/1`
-  # appends the name to each code-path directory and stats it, so the reachable
-  # set is the beams already on disk, which a caller supplying names cannot
-  # grow. The `Elixir.` prefix leads, so a separator-bearing name looks for a
-  # directory literally called `Elixir.<something>` and finds nothing.
-  defp beam_on_code_path(prefixed) do
-    case :code.where_is_file(String.to_charlist(prefixed <> ".beam")) do
-      :non_existing -> :error
-      _path -> {:ok, String.to_atom(prefixed)}
-    end
-  end
 
   # An absolute path is REFUSED here rather than left to `confine/3`.
   #

@@ -523,18 +523,16 @@ defmodule Raxol.UI.Charts.BarChart do
   # -- ToolProvider callbacks --
 
   @impl Raxol.MCP.ToolProvider
-  def mcp_tools(state) do
-    id = state[:id] || "bar_chart"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "get_data",
-        description: "Get current data series for bar chart '#{id}'",
+        description: "Get the bar chart's current data series",
         inputSchema: %{type: "object", properties: %{}}
       },
       %{
         name: "get_range",
-        description: "Get axis min/max range for bar chart '#{id}'",
+        description: "Get the bar chart's axis min/max range",
         inputSchema: %{type: "object", properties: %{}}
       }
     ]

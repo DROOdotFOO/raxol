@@ -171,24 +171,22 @@ defmodule Raxol.UI.Charts.LineChart do
   # -- ToolProvider callbacks --
 
   @impl Raxol.MCP.ToolProvider
-  def mcp_tools(state) do
-    id = state[:id] || "line_chart"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "get_series",
-        description: "Get all series data for line chart '#{id}'",
+        description: "Get all series data for the line chart",
         inputSchema: %{type: "object", properties: %{}}
       },
       %{
         name: "get_range",
-        description: "Get Y-axis min/max range for line chart '#{id}'",
+        description: "Get the line chart's Y-axis min/max range",
         inputSchema: %{type: "object", properties: %{}}
       },
       %{
         name: "get_point_at",
         description:
-          "Get the value at a given X index for each series in line chart '#{id}'",
+          "Get the value at a given X index for each series in the line chart",
         inputSchema: %{
           type: "object",
           properties: %{

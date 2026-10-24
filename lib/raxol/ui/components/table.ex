@@ -879,7 +879,8 @@ defmodule Raxol.UI.Components.Table do
             index: %{type: "integer", description: "Row index (0-based)"}
           },
           required: ["index"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_rows",
@@ -900,7 +901,8 @@ defmodule Raxol.UI.Components.Table do
             }
           },
           required: ["column"]
-        }
+        },
+        annotations: %{sensitive: true}
       }
     ]
   end

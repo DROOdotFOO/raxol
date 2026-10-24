@@ -348,7 +348,8 @@ defmodule Raxol.UI.Components.Display.Tree do
             node_id: %{type: "string", description: "Node ID to expand"}
           },
           required: ["node_id"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "collapse",
@@ -359,7 +360,8 @@ defmodule Raxol.UI.Components.Display.Tree do
             node_id: %{type: "string", description: "Node ID to collapse"}
           },
           required: ["node_id"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "select_node",
@@ -370,7 +372,8 @@ defmodule Raxol.UI.Components.Display.Tree do
             node_id: %{type: "string", description: "Node ID to select"}
           },
           required: ["node_id"]
-        }
+        },
+        annotations: %{sensitive: true}
       }
     ]
   end

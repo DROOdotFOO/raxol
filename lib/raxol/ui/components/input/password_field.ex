@@ -36,23 +36,23 @@ defmodule Raxol.UI.Components.Input.PasswordField do
   # -- ToolProvider callbacks --
 
   @impl Raxol.MCP.ToolProvider
-  def mcp_tools(state) do
-    id = state[:id] || "password_field"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "type_into",
-        description: "Type into password field '#{id}'",
+        description: "Type into the password field",
         inputSchema: %{
           type: "object",
           properties: %{text: %{type: "string", description: "Text to type"}},
           required: ["text"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "clear",
-        description: "Clear password field '#{id}'",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Clear the password field",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       }
     ]
   end
