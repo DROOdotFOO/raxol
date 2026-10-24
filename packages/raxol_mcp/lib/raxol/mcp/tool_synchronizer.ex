@@ -73,7 +73,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
   once the registry reflects it.
 
   A barrier: after a render whose telemetry has reached this process, `flush/1`
-  returning means the session's tools match that render.
+  returning means the session's tool set (the tool names) matches that render.
   """
   @spec flush(GenServer.server()) :: :ok
   def flush(synchronizer) do

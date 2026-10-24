@@ -159,7 +159,9 @@ defmodule Raxol.Headless do
     * `:width` - Screen width (default: 120)
     * `:height` - Screen height (default: 40)
     * `:registry` - the `Raxol.MCP.Registry` the session's tools are
-      registered in (default: `Raxol.MCP.Registry`, when it is running)
+      registered in, as a name or pid (an atom, a pid, `{:global, name}` or
+      `{:via, module, name}`); anything else is `{:error, {:invalid_registry,
+      registry}}`. (default: `Raxol.MCP.Registry`, when it is running)
     * `:subscriptions` - `false` boots the app with its declared
       subscriptions (timers, event sources) unarmed, so the model advances
       only on messages delivered explicitly via `send_message/2` or
@@ -316,14 +318,19 @@ defmodule Raxol.Headless do
   @doc """
   Returns once the session has caught up with everything sent to it so far:
   its dispatcher has taken every queued message through `update/2`, its
-  rendering engine has drawn the resulting model, and the session's MCP tools
-  reflect that frame.
+  rendering engine has drawn the resulting model, and the session's MCP tool
+  set (the tool names) matches that frame. A tool whose name was already
+  registered keeps the callback it was derived with.
 
   Three barriers in order: a model read at the dispatcher, a synchronous
   render at the engine (whose view-tree telemetry reaches the session's
   `Raxol.MCP.ToolSynchronizer` before the render answers), and a flush at the
   synchronizer. Commands `update/2` started are not awaited. Answers the same
   errors as `get_model/1` and `screenshot/1`.
+
+  Relies on the engine's telemetry cast reaching the synchronizer before the
+  caller's flush: true on a single node in practice, though the BEAM does
+  not promise ordering between two senders.
   """
   @spec settle(String.t()) :: :ok | {:error, term()}
   def settle(id) when is_binary(id) do
@@ -417,7 +424,10 @@ defmodule Raxol.Headless do
   # --- Private Helpers ---
 
   defp do_start_session(module_or_path, opts, state) do
-    with {:ok, module} <- resolve_module(module_or_path),
+    registry = Keyword.get(opts, :registry, Raxol.MCP.Registry)
+
+    with :ok <- validate_registry(registry),
+         {:ok, module} <- resolve_module(module_or_path),
          {:ok, id} <- session_id(opts, module) do
       if Map.has_key?(state.sessions, id) do
         {:error, {:already_started, id}}
@@ -425,7 +435,6 @@ defmodule Raxol.Headless do
         width = Keyword.get(opts, :width, @default_width)
         height = Keyword.get(opts, :height, @default_height)
         subscriptions = Keyword.get(opts, :subscriptions, true)
-        registry = Keyword.get(opts, :registry, Raxol.MCP.Registry)
 
         create_session(
           module,
@@ -438,6 +447,24 @@ defmodule Raxol.Headless do
       end
     end
   end
+
+  # The registry is looked up with `GenServer.whereis/1` in this process,
+  # where a value that names no server would crash it and every session it
+  # holds.
+  defp validate_registry(registry) when is_atom(registry) or is_pid(registry),
+    do: :ok
+
+  defp validate_registry({:global, _name}), do: :ok
+
+  defp validate_registry({:via, module, _name} = registry)
+       when is_atom(module) do
+    if Code.ensure_loaded?(module) and
+         function_exported?(module, :whereis_name, 1),
+       do: :ok,
+       else: {:error, {:invalid_registry, registry}}
+  end
+
+  defp validate_registry(registry), do: {:error, {:invalid_registry, registry}}
 
   defp session_id(opts, module) do
     case Keyword.get(opts, :id, module_to_id(module)) do

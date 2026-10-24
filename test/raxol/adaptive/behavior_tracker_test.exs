@@ -59,7 +59,7 @@ defmodule Raxol.Adaptive.BehaviorTrackerTest do
           {ToolSynchronizer,
            registry: registry,
            dispatcher_pid: self(),
-           session_id: :adaptive_focus_test}
+           session_id: "adaptive_focus_test"}
         )
 
       %{tracker: tracker, synchronizer: synchronizer}

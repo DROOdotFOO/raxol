@@ -291,6 +291,46 @@ defmodule Raxol.HeadlessTest do
     test "stop is idempotent for missing sessions" do
       assert :ok = Headless.stop("never_existed")
     end
+
+    test "refuses a registry that is not a server name, and keeps serving" do
+      headless = Process.whereis(Headless)
+
+      for registry <- ["not a name", {:via, NoSuchModule, :reg}, {:bogus, :reg}] do
+        assert {:error, {:invalid_registry, ^registry}} =
+                 Headless.start(TestApp, id: "bad_registry", registry: registry)
+      end
+
+      assert Process.whereis(Headless) == headless
+      refute "bad_registry" in Headless.list()
+      assert {:ok, "good_registry"} = Headless.start(TestApp, id: "good_registry")
+    end
+  end
+
+  describe "settle/1" do
+    # The key is queued, not awaited: only `settle/1` stands between it and
+    # the tool list, which gains the dialog's tools once it renders.
+    test "returns once the tool set matches the frame the key produced" do
+      registry = :"settle_registry_#{System.unique_integer([:positive])}"
+      start_supervised!({Raxol.MCP.Registry, name: registry})
+
+      {:ok, id} =
+        Headless.start(Raxol.Playground.Demos.ModalDemo,
+          id: "settle_modal",
+          registry: registry
+        )
+
+      :ok = Headless.settle(id)
+      refute "confirm.dismiss" in tool_names(registry)
+
+      :ok = Headless.send_key(id, "o", wait: false)
+      :ok = Headless.settle(id)
+
+      assert "confirm.dismiss" in tool_names(registry)
+    end
+  end
+
+  defp tool_names(registry) do
+    registry |> Raxol.MCP.Registry.list_tools() |> Enum.map(& &1.name)
   end
 
   describe "screenshot/1" do

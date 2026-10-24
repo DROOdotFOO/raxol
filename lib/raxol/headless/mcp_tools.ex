@@ -320,14 +320,6 @@ defmodule Raxol.Headless.McpTools do
       ", got: " <> inspect(value, limit: 10, printable_limit: 200)
   end
 
-  # The config error is the deployment's, not the tool's: counted as a fault,
-  # five calls opened `raxol_start`'s circuit for every client, and it stayed
-  # open after the config was fixed. Every other error still counts.
-  defp start_fault?(reason),
-    do:
-      not (is_binary(reason) and
-             String.starts_with?(reason, @startable_config_error))
-
   @doc """
   Register all headless tools with the given MCP Registry.
 
@@ -718,13 +710,30 @@ defmodule Raxol.Headless.McpTools do
     end)
   end
 
+  # Every answer `start_session` returns is a sentence about the call: a
+  # refused id, module or size, an invalid `:headless_startable` config, or
+  # the reason that module did not start. None says the tool is unavailable,
+  # so none may open its circuit for every client (a config error counted as
+  # a fault kept the circuit open after the config was fixed); a raise or an
+  # exit still does.
+  defp start_fault?(reason), do: not is_binary(reason)
+
+  # `Raxol.Headless.stop/1` answers `:ok` for an id it has no session for, so
+  # the id is checked first: a mistyped id must not report a running session
+  # as stopped.
   defp stop_session(args) do
     with_session(args, fn id ->
-      case Raxol.Headless.stop(id) do
-        :ok -> {:ok, "Session #{id} stopped."}
-        {:error, reason} -> {:error, inspect(reason)}
-      end
+      if id in Raxol.Headless.list(),
+        do: do_stop(id),
+        else: {:error, "session #{id} is not running; call raxol_list"}
     end)
+  end
+
+  defp do_stop(id) do
+    case Raxol.Headless.stop(id) do
+      :ok -> {:ok, "Session #{id} stopped."}
+      {:error, reason} -> {:error, inspect(reason)}
+    end
   end
 
   defp list_sessions(_args) do

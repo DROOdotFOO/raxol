@@ -27,8 +27,9 @@ defmodule Raxol.MCP.Test do
   auto-derives MCP tools from the view tree. Interaction helpers like
   `click/2` and `type_into/3` call tools through the registry, exercising
   the full MCP pipeline. Each helper returns once the app has handled the
-  action, rendered the result and re-derived its tools
-  (`Raxol.Headless.settle/1`), so the next step sees its effect.
+  action, rendered the result and brought its tool set (the tool names) up to
+  that frame (`Raxol.Headless.settle/1`), so the next step sees its effect. A
+  tool whose name survives the frame keeps the callback it was derived with.
 
   For unit tests that don't need a running app, use the lower-level
   modules directly: `TreeWalker.derive_tools/2`, `Registry.call_tool/3`.
@@ -60,7 +61,10 @@ defmodule Raxol.MCP.Test do
   @spec start_session(module() | String.t(), keyword()) :: Session.t()
   def start_session(module_or_path, opts \\ []) do
     unique = System.unique_integer([:positive])
-    session_id = Keyword.get(opts, :id, "t" <> Integer.to_string(unique, 36))
+
+    session_id =
+      Keyword.get(opts, :id, "t" <> String.downcase(Integer.to_string(unique, 36)))
+
     registry_name = :"test_registry_#{unique}"
 
     {:ok, registry_pid} = Registry.start_link(name: registry_name)

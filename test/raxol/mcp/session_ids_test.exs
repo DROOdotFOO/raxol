@@ -36,8 +36,7 @@ defmodule Raxol.MCP.SessionIdsTest do
   test "an id outside the pattern is refused, never replaced", %{server: server} do
     before = Headless.list()
 
-    # Four refusals: a fifth error would open raxol_start's circuit breaker.
-    for id <- ["Bad_id", "a.b", "abcdefgh"] do
+    for id <- ["Bad_id", "a.b", "abcdefgh", "ab\n", 5] do
       assert {:reply, %{result: %{isError: true, content: [%{text: text}]}}} =
                request(server, "tools/call", %{
                  "name" => "raxol_start",
@@ -55,6 +54,36 @@ defmodule Raxol.MCP.SessionIdsTest do
 
     assert text =~ "'id' is required"
     assert Headless.list() == before
+  end
+
+  # Five failures in a row open a tool's circuit for every client; a refusal
+  # is an answer about the call, not a sign the tool is down.
+  test "refusals do not open raxol_start's circuit", %{server: server} do
+    for id <- ["Bad_id", "a.b", "abcdefgh", "ab\n", 5, nil] do
+      assert {:reply, %{result: %{isError: true}}} =
+               call(server, "raxol_start", %{"module" => @table, "id" => id})
+    end
+
+    start!(server, @table, fresh_id())
+  end
+
+  test "raxol_stop refuses an id no session has", %{server: server} do
+    id = fresh_id()
+
+    assert {:reply, %{result: %{isError: true, content: [%{text: text}]}}} =
+             call(server, "raxol_stop", %{"id" => id})
+
+    assert text =~ "session #{id} is not running"
+  end
+
+  test "session id completion answers live ids, and [] for a non-string", %{
+    server: server
+  } do
+    id = fresh_id()
+    start!(server, @table, id)
+
+    assert complete(server, id) == [id]
+    assert complete(server, 5) == []
   end
 
   test "no session id becomes an atom", %{server: server} do
@@ -94,6 +123,16 @@ defmodule Raxol.MCP.SessionIdsTest do
 
   defp call(server, name, arguments),
     do: request(server, "tools/call", %{"name" => name, "arguments" => arguments})
+
+  defp complete(server, value) do
+    assert {:reply, %{result: %{completion: %{values: values}}}} =
+             request(server, "completion/complete", %{
+               "ref" => %{"type" => "ref/tool", "name" => "raxol_stop"},
+               "argument" => %{"name" => "id", "value" => value}
+             })
+
+    values
+  end
 
   defp ok_text({:reply, %{result: %{content: [%{text: text} | _]} = result}}) do
     refute Map.get(result, :isError, false), text

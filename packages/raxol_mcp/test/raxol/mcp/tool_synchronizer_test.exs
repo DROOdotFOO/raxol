@@ -151,7 +151,11 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
   end
 
   describe "debounce" do
-    test "debounces rapid view tree updates", %{registry: registry} do
+    # The debounce timer's message is what applies an update in production.
+    # It is sent here rather than waited for; if the real timer fires first,
+    # this one finds nothing pending. `:sys.get_state/1` is the barrier, not
+    # `flush/1`, which would apply the update itself.
+    test "the debounce timer applies the last of rapid updates", %{registry: registry} do
       {:ok, pid} =
         ToolSynchronizer.start_link(
           registry: registry,
@@ -159,15 +163,22 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
           session_id: "test_debounce"
         )
 
-      # Send multiple rapid updates
-      for _ <- 1..5 do
-        GenServer.cast(pid, {:view_tree_updated, %{type: :column, children: []}})
+      for n <- 1..5 do
+        view_tree = %{
+          type: :column,
+          children: [%{type: :column, id: "w#{n}", attrs: %{component_module: TestWidget}}]
+        }
+
+        GenServer.cast(pid, {:view_tree_updated, view_tree})
       end
 
-      :ok = ToolSynchronizer.flush(pid)
+      send(pid, :debounce_fire)
+      state = :sys.get_state(pid)
 
-      # Should still be alive and functional
-      assert Process.alive?(pid)
+      names = registry |> Registry.list_tools() |> Enum.map(& &1[:name])
+      assert "w5.click" in names
+      refute "w1.click" in names
+      assert state.pending_view_tree == nil
 
       GenServer.stop(pid)
     end

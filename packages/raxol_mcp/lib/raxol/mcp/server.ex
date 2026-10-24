@@ -1934,7 +1934,7 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  defp complete_session_ids(prefix) do
+  defp complete_session_ids(prefix) when is_binary(prefix) do
     if Code.ensure_loaded?(Raxol.Headless) and
          function_exported?(Raxol.Headless, :list, 0) do
       Raxol.Headless.list()
@@ -1944,4 +1944,6 @@ defmodule Raxol.MCP.Server do
       []
     end
   end
+
+  defp complete_session_ids(_prefix), do: []
 end
