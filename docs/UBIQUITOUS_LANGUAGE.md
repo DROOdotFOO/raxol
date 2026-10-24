@@ -234,7 +234,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 | -------------- | --------------------------------------------------------------------------------------------------------- | ------------------------- |
 | **MCP server** | A process that exposes Tools and Resources to AI agents over JSON-RPC (typically stdio).                  | RPC server, agent server  |
 | **MCP client** | A process that consumes an external MCP server's Tools and Resources.                                     | RPC client, integration   |
-| **Tool**       | An MCP-exposed callable: name + input schema + handler. Auto-derived from Components via `ToolProvider`, named per headless session: `<session>.<widget>.<action>`. | function, action, command |
+| **Tool**       | An MCP-exposed callable: name + input schema + handler. Auto-derived from Components via `ToolProvider`, named per headless session: `<session>.<widget>.<action>`. A session keeps every Tool its views have derived until it stops (sticky set), and a call acts on its Component as the current model renders it. | function, action, command |
 | **Resource**   | MCP-exposed read-only state: a projection of Model fields, streamed as diffs.                             | data, view, snapshot      |
 | **Focus lens** | An attention-aware filter that narrows one session's exposed Tool set to those relevant to the current interaction. | tool filter, scope        |
 

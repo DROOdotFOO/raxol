@@ -85,6 +85,8 @@ A tree walker traverses the `view(model)` output, collects tools from each Compo
 
 **Amended by [ADR-0042](0042-lean-on-omp.md), 2026-10-24.** Derived tools are named per headless session, `<session>.<widget>.<action>` (`demo.search_input.type_into`), and each session's `discover_tools` is `<session>.discover_tools`, searching that session only. Two sessions rendering the same Component used to share one tool name, so the later session's tool replaced the earlier one's and stopping either removed it for both. A name a client would merge with an existing one after its own renaming (OMP's `[^a-z0-9_]` to `_`) is refused at registration.
 
+**Amended by [ADR-0042](0042-lean-on-omp.md), 2026-10-24: sticky sets.** A session's tool set is the union of every tool its renders have derived, keyed by name, provider and a hash of the listed definition; a tool is registered again only when its provider or definition changes, and the whole set is unregistered when the session stops. A Component leaving the view no longer sends `tools/list_changed`, so a modal opened and dismissed repeatedly costs the client one re-list, not one per render. Each call resolves its Component by id in a fresh `view(model)` of the session's current model, so it acts on the Component as it is now and answers an error naming it when it is absent, disabled or of another type. The registry tracks each registration's owner process (the session's synchronizer) and removes what a dead owner held.
+
 **3. Focus lens** (attention-aware tool filtering)
 
 A complex UI could expose 100+ tools. LLM tool selection degrades past ~20. The MCP server applies an attention-aware filter:
