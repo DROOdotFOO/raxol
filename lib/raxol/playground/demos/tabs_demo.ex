@@ -39,6 +39,10 @@ defmodule Raxol.Playground.Demos.TabsDemo do
       key_match("l") ->
         {next_tab(model), []}
 
+      {:tab_change, "tabs", index}
+      when is_integer(index) and index >= 0 and index < @tab_count ->
+        {%{model | active: index}, []}
+
       _ ->
         {model, []}
     end
@@ -47,16 +51,12 @@ defmodule Raxol.Playground.Demos.TabsDemo do
   @impl true
   def view(model) do
     # snippet:start
-    tabs =
-      @tab_labels
-      |> Enum.with_index()
-      |> Enum.map(fn {label, idx} ->
-        if idx == model.active do
-          text("[ #{label} ]", style: [:bold, :underline])
-        else
-          text("  #{label}  ")
-        end
-      end)
+    tab_bar =
+      tabs(
+        id: "tabs",
+        tabs: Enum.map(@tab_labels, &%{label: &1}),
+        active: model.active
+      )
 
     # snippet:end
 
@@ -70,9 +70,7 @@ defmodule Raxol.Playground.Demos.TabsDemo do
       [
         text("Tabs Demo", style: [:bold]),
         divider(),
-        row style: %{gap: 0} do
-          tabs
-        end,
+        tab_bar,
         box style: %{
               border: :single,
               padding: 1,

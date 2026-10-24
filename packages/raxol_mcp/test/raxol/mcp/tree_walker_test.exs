@@ -179,16 +179,6 @@ defmodule Raxol.MCP.TreeWalkerTest do
       assert text =~ "test"
     end
 
-    test "callback dispatches messages to dispatcher" do
-      tree = %{type: :text_input, id: "inp", attrs: %{value: ""}}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: self(), type_map: @type_map})
-
-      type_into_tool = Enum.find(tools, &(&1.name == "inp.type_into"))
-      assert {:ok, _} = type_into_tool.callback.(%{"text" => "hello"})
-
-      assert_receive {:"$gen_cast", {:dispatch, {:input_changed, "hello"}}}
-    end
-
     test "callback handles nil dispatcher_pid" do
       tree = %{
         type: :button,

@@ -15,27 +15,41 @@ defmodule Raxol.Playground.Demos.TableDemo do
   alias Raxol.Playground.DemoHelpers
   alias Raxol.UI.Components.Table
 
-  # widths include 1-cell gutters on each side (content fits in width-2)
+  # widths include 1-cell gutters on each side (content fits in width-2).
+  # Stars are numbers, so they sort; the column shows them as "39k".
   @columns [
     %{id: :num, label: "#", width: 3, align: :right},
     %{id: :framework, label: "Framework", width: 12, align: :left},
     %{id: :language, label: "Language", width: 10, align: :left},
-    %{id: :stars, label: "Stars", width: 7, align: :right}
+    %{
+      id: :stars,
+      label: "Stars",
+      width: 7,
+      align: :right,
+      format: &__MODULE__.stars_label/1
+    }
   ]
 
   @data [
-    %{num: 1, framework: "Raxol", language: "Elixir", stars: "500"},
-    %{num: 2, framework: "Bubble Tea", language: "Go", stars: "39k"},
-    %{num: 3, framework: "Textual", language: "Python", stars: "26k"},
-    %{num: 4, framework: "Ratatui", language: "Rust", stars: "19k"},
-    %{num: 5, framework: "Ink", language: "JavaScript", stars: "35k"},
-    %{num: 6, framework: "Blessed", language: "JavaScript", stars: "23k"},
-    %{num: 7, framework: "tview", language: "Go", stars: "11k"}
+    %{num: 1, framework: "Raxol", language: "Elixir", stars: 500},
+    %{num: 2, framework: "Bubble Tea", language: "Go", stars: 39_000},
+    %{num: 3, framework: "Textual", language: "Python", stars: 26_000},
+    %{num: 4, framework: "Ratatui", language: "Rust", stars: 19_000},
+    %{num: 5, framework: "Ink", language: "JavaScript", stars: 35_000},
+    %{num: 6, framework: "Blessed", language: "JavaScript", stars: 23_000},
+    %{num: 7, framework: "tview", language: "Go", stars: 11_000}
   ]
 
   @sort_cycle [nil | Enum.map(@columns, & &1.id)]
   @border_cycle [:grid, :inner, :none]
   @page_size 4
+
+  # The id MCP tools are derived under ("playground_table.sort", ...). Tool
+  # arguments arrive as strings and map to columns and directions through these
+  # static tables, never `String.to_atom/1`.
+  @tool_id "playground_table"
+  @sort_columns Map.new(@columns, &{Atom.to_string(&1.id), &1.id})
+  @sort_directions %{"asc" => :asc, "desc" => :desc}
 
   @impl true
   def init(_context) do
@@ -85,6 +99,15 @@ defmodule Raxol.Playground.Demos.TableDemo do
 
         {%{model | table: table}, []}
 
+      {:sort, @tool_id, column, direction} ->
+        {tool_sort(model, column, direction), []}
+
+      {:select_row, @tool_id, index}
+      when is_integer(index) and index >= 0 and index < length(model.table.data) ->
+        {:ok, table} = Table.update({:select_row, index}, model.table)
+        model = DemoHelpers.log_event(model, "tool select_row -> #{index}")
+        {%{model | table: table}, []}
+
       _ ->
         case table_event(message) do
           nil ->
@@ -118,6 +141,25 @@ defmodule Raxol.Playground.Demos.TableDemo do
   end
 
   defp table_event(_other), do: nil
+
+  # Sets the column and direction outright: `Table.update({:sort, col}, ...)`
+  # toggles the direction when the column is already the sort column.
+  defp tool_sort(model, column, direction) do
+    with {:ok, sort_by} <- Map.fetch(@sort_columns, column),
+         {:ok, sort_direction} <- Map.fetch(@sort_directions, direction) do
+      table = %{model.table | sort_by: sort_by, sort_direction: sort_direction}
+
+      model =
+        DemoHelpers.log_event(
+          model,
+          "tool sort -> #{sort_by}/#{sort_direction}"
+        )
+
+      %{model | table: table}
+    else
+      :error -> model
+    end
+  end
 
   defp apply_table(model, event, summary) do
     {:ok, table} = Table.handle_event(event, model.table, %{})
@@ -196,7 +238,7 @@ defmodule Raxol.Playground.Demos.TableDemo do
           style: [:dim]
         ),
         text(""),
-        Table.render(t, %{}),
+        table_node(t),
         text(""),
         row style: %{gap: 2} do
           [
@@ -213,6 +255,25 @@ defmodule Raxol.Playground.Demos.TableDemo do
       ] ++ DemoHelpers.event_log_lines(model)
     end
   end
+
+  # `Table.render/2` returns an id-less box. `Raxol.MCP.TreeWalker` derives the
+  # Table tools from this wrapper: its id, the provider marker and the rows
+  # (read by `get_rows`). A column, since the layout engine sizes a box that
+  # carries `:attrs` from those attrs alone.
+  defp table_node(table) do
+    [children: [Table.render(table, %{})]]
+    |> column()
+    |> Map.merge(%{
+      id: @tool_id,
+      data: table.data,
+      attrs: %{component_module: Table}
+    })
+  end
+
+  @doc false
+  # The Stars column's `:format`: 39_000 shows as "39k", 500 as "500".
+  def stars_label(stars) when stars >= 1000, do: "#{div(stars, 1000)}k"
+  def stars_label(stars), do: Integer.to_string(stars)
 
   @impl true
   def subscribe(_model), do: []

@@ -250,10 +250,13 @@ defmodule Raxol.MCP.TreeWalker do
     }
   end
 
+  # A call, not a cast: each message has been through the app's update/2 by
+  # the time the tool answers. A dispatcher that is gone or does not answer
+  # exits here, and `Raxol.MCP.Registry` turns that exit into an error result.
   defp dispatch_messages(messages, dispatcher_pid)
        when is_pid(dispatcher_pid) do
     for msg <- messages, msg != nil do
-      GenServer.cast(dispatcher_pid, {:dispatch, msg})
+      :ok = GenServer.call(dispatcher_pid, {:dispatch_tool_message, msg})
     end
   end
 

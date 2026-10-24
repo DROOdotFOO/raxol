@@ -32,6 +32,33 @@ defmodule Raxol.MCP.ToolProvider do
   - `{:ok, result, [message]}` -- result + TEA messages to dispatch
   - `{:error, reason}` -- failure
 
+  ## Messages reach `update/2`
+
+  `TreeWalker` hands each message, as returned, to the app's `update/2`
+  through the session's Dispatcher, and the tool answers only once
+  `update/2` has folded it. Messages are app terms, not `%Event{}`s: an app
+  whose view renders a provider's node adds `update/2` clauses for the
+  messages it acts on. `id` is the node's binary id.
+
+  | Provider | Action: message |
+  |---|---|
+  | `Table` | `select_row`: `{:select_row, id, index}`; `sort`: `{:sort, id, column, direction}`, the column string as sent (unvalidated), direction `"asc"` or `"desc"` |
+  | `SelectList` | `select`: `{:select_option, id, index}` |
+  | `Tabs` | `select_tab`: `{:tab_change, id, index}`, index range-checked against the node's `:tabs` |
+  | `Modal` | `dismiss`: `{:modal_dismiss, id}`; `confirm`: `{:modal_confirm, id}` |
+  | `TextInput` | `type_into`: `{:text_input_change, id, text}`; `clear`: `{:text_input_change, id, ""}` |
+  | `TextArea` | `type_into`: `{:text_area_change, id, text}`; `clear`: `{:text_area_change, id, ""}` |
+  | `PasswordField` | `type_into`: `{:password_field_change, id, text}`; `clear`: `{:password_field_change, id, ""}` |
+  | `Button` | `click`: the node's `:on_click` message (top level on View DSL nodes, under `:attrs` on Component trees); nothing without one |
+  | `Checkbox` | `toggle`: `{:checkbox_toggle, id, new_checked}` |
+  | `Menu` | `select`: `{:menu_select, id, item_id}` |
+  | `Scrubber` | `seek`: `{:scrubber_seek, id, position}`; `play`: `{:scrubber_play, id}`; `pause`: `{:scrubber_pause, id}` |
+  | `Tree` | `expand`: `{:tree_expand, id, node_id}`; `collapse`: `{:tree_collapse, id, node_id}`; `select_node`: `{:tree_select, id, node_id}` |
+  | `Viewport` | `scroll_to`: `{:scroll_to, id, row}` |
+  | `BarChart`, `LineChart`, `ScatterChart` | read-only |
+
+  Every other action is a read (`{:ok, result}`) and sends nothing.
+
   ## Example
 
       defmodule MyApp.Button do

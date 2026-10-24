@@ -42,6 +42,8 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 | `Tree`       | `expand`, `collapse`, `select_node`           |
 | `Scrubber`   | `seek`, `play`, `pause`, `get_position`       |
 
+A write action reaches your app's `update/2` as a plain message, such as `{:sort, "results", "stars", "desc"}` from a Table's `sort`, and the tool answers once `update/2` has run. Add `update/2` clauses for the messages your app acts on; `Raxol.MCP.ToolProvider` lists every action's message. A Button's `click` delivers the node's `on_click` message, as a real click does.
+
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
 ## Focus lens

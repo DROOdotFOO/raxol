@@ -178,7 +178,7 @@ defmodule Raxol.UI.Components.Input.Tabs do
   @impl Raxol.MCP.ToolProvider
   def mcp_tools(state) do
     tabs = state[:tabs] || []
-    tab_names = Enum.map_join(tabs, ", ", & &1[:label])
+    tab_names = Enum.map_join(tabs, ", ", &tab_label/1)
 
     [
       %{
@@ -213,13 +213,18 @@ defmodule Raxol.UI.Components.Input.Tabs do
 
   def handle_tool_call("get_tabs", _args, context) do
     tabs = context.widget_state[:tabs] || []
-    active = context.widget_state[:active_index] || 0
-    labels = Enum.map(tabs, & &1[:label])
+    active = context.widget_state[:active] || 0
+    labels = Enum.map(tabs, &tab_label/1)
     {:ok, %{tabs: labels, active_index: active}}
   end
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  # The DSL (`Raxol.View.Components.tabs/1`) takes tabs as strings or as maps
+  # with a `:label`.
+  defp tab_label(%{} = tab), do: Map.get(tab, :label)
+  defp tab_label(label), do: label
 
   @impl Raxol.Core.Accessibility.Provider
   def a11y_node(node) do

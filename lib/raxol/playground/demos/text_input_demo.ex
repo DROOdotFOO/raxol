@@ -23,6 +23,9 @@ defmodule Raxol.Playground.Demos.TextInputDemo do
         new_value = model.value <> ch
         {%{model | value: new_value, char_count: String.length(new_value)}, []}
 
+      {:text_input_change, "input", text} when is_binary(text) ->
+        {%{model | value: text, char_count: String.length(text)}, []}
+
       _ ->
         {model, []}
     end
@@ -46,7 +49,11 @@ defmodule Raxol.Playground.Demos.TextInputDemo do
           text(display <> "_")
         end,
         # snippet:start
-        text_input(value: model.value, placeholder: "Type here..."),
+        text_input(
+          id: "input",
+          value: model.value,
+          placeholder: "Type here..."
+        ),
         # snippet:end
         divider(),
         box style: %{
