@@ -1602,6 +1602,17 @@ defmodule Raxol.MCP.Server do
       {:unknown_tool_reply, text} ->
         Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
 
+      # A derived tool whose session's dispatcher has exited (see
+      # `Raxol.MCP.TreeWalker`). Any tool may answer this shape, so the
+      # session is named only when it is a session id (`TreeWalker.id?/1`).
+      {:error, {:session_not_running, session}} ->
+        text =
+          if Raxol.MCP.TreeWalker.id?(session),
+            do: "session `#{session}` is not running in this server; call raxol_list",
+            else: "the session is not running in this server; call raxol_list"
+
+        Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
+
       # A derived tool whose widget is not as it was (see
       # `Raxol.MCP.TreeWalker`). The id is checked at derivation
       # (`[A-Za-z0-9_-]{1,32}`), so it is safe to echo.
