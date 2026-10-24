@@ -480,7 +480,7 @@ defmodule Raxol.MCP.Registry do
            fault_classifier(resource)}
 
         :ets.insert(state.table, {resource_key(resource.uri), entry})
-        own(state, resource_key(resource.uri), owner)
+        register_entry(state, resource_key(resource.uri), owner)
       end)
 
     {:reply, :ok, state}
@@ -498,7 +498,7 @@ defmodule Raxol.MCP.Registry do
            fault_classifier(prompt)}
 
         :ets.insert(state.table, {prompt_key(prompt.name), entry})
-        own(state, prompt_key(prompt.name), owner)
+        register_entry(state, prompt_key(prompt.name), owner)
       end)
 
     {:reply, :ok, state}
@@ -559,7 +559,7 @@ defmodule Raxol.MCP.Registry do
     case refuse_invalid_names(tools) do
       :ok ->
         {reply, registered} = insert_tools(state.table, tools, derived?)
-        {:reply, reply, Enum.reduce(registered, state, &own(&2, tool_key(&1), owner))}
+        {:reply, reply, Enum.reduce(registered, state, &register_entry(&2, tool_key(&1), owner))}
 
       refusal ->
         {:reply, refusal, state}
@@ -603,6 +603,14 @@ defmodule Raxol.MCP.Registry do
     :ets.delete(state.table, key)
     CircuitBreaker.reset(state.breaker_table, key)
     disown(state, key)
+  end
+
+  # A registration starts with a closed circuit: a call to the name's previous
+  # holder that finished after it was unregistered recorded its result on a
+  # row nobody owns, and the next registration must not inherit it.
+  defp register_entry(state, key, owner) do
+    CircuitBreaker.reset(state.breaker_table, key)
+    own(state, key, owner)
   end
 
   # The latest registration of an entry decides its owner, or that it has none.

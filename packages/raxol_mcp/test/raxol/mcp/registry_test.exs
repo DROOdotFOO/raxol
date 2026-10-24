@@ -507,6 +507,39 @@ defmodule Raxol.MCP.RegistryTest do
     assert %{state: :closed, failures: 0} = Registry.circuit_status(r, {:tool, "test_tool"})
   end
 
+  test "a call that finishes after its tool was unregistered leaves no circuit to the next", %{
+    registry: r
+  } do
+    test_pid = self()
+
+    tool = %{
+      sample_tool()
+      | callback: fn _args ->
+          send(test_pid, {:in_call, self()})
+          receive do: (:finish -> {:error, :down})
+        end
+    }
+
+    :ok = Registry.register_tools(r, [tool])
+    calls = for _ <- 1..5, do: Task.async(fn -> Registry.call_tool(r, "test_tool", %{}) end)
+
+    callers =
+      for _ <- calls do
+        assert_receive {:in_call, pid}
+        pid
+      end
+
+    :ok = Registry.unregister_tools(r, ["test_tool"])
+    Enum.each(callers, &send(&1, :finish))
+    assert Enum.map(calls, &Task.await/1) == List.duplicate({:error, :down}, 5)
+    assert %{state: :open} = Registry.circuit_status(r, {:tool, "test_tool"})
+
+    :ok = Registry.register_tools(r, [sample_tool()])
+
+    assert %{state: :closed, failures: 0} = Registry.circuit_status(r, {:tool, "test_tool"})
+    assert {:ok, _} = Registry.call_tool(r, "test_tool", %{})
+  end
+
   defp owner do
     pid = spawn(fn -> receive do: (:never -> :ok) end)
     on_exit(fn -> Process.exit(pid, :kill) end)
