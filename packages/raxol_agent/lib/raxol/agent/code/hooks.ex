@@ -36,7 +36,7 @@ defmodule Raxol.Agent.Code.Hooks do
   server uid, defeating the cwd jail and the `:jail` shell gate in one step.
 
   So hooks are refused whenever the tool context carries `jail: true` — the
-  same marker `Raxol.Agent.Actions.Code.shell_jail_allow/1` gates the shell
+  same marker `Raxol.Agent.Policy.Grants.shell_jail_allow/1` gates the shell
   tool on. `Raxol.Agent.Code.App` additionally declines to LOAD the config in
   a jailed session, so this check is the second of two independent gates.
   """
@@ -189,11 +189,11 @@ defmodule Raxol.Agent.Code.Hooks do
 
   @doc """
   Whether `context` marks a jailed (multi-tenant) session, in which hooks
-  never run. Delegates to `Raxol.Agent.Actions.Code.jailed?/1` so the shell
+  never run. Delegates to `Raxol.Agent.Policy.Grants.jailed?/1` so the shell
   tools and the hook path cannot disagree about what a jail is.
   """
   @spec jailed?(map()) :: boolean()
-  defdelegate jailed?(context), to: Code
+  defdelegate jailed?(context), to: Raxol.Agent.Policy.Grants
 
   defp cwd(context), do: Map.get(context, :hook_cwd) || File.cwd!()
 

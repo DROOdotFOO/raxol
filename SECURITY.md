@@ -43,7 +43,7 @@ Pre-alpha packages (`raxol_earn`, `raxol_symphony`, `raxol_gateway`,
   cwd jail, enforced by the realpath containment in
   `Raxol.Agent.Actions.Fs.resolve/2`, plus two refusals in a jailed session:
   the shell tool unless the deployment wires a `:shell_sandbox`
-  (`Raxol.Agent.Actions.Code.shell_jail_allow/1`), and workspace-configured
+  (`Raxol.Agent.Policy.Grants.shell_jail_allow/1`), and workspace-configured
   commands (`.raxol/hooks.json`, `.mcp.json`). Anything that executes code
   outside a tenant's `work/` jail, reads another tenant's workspace,
   sessions, or journal, or spends past that tenant's budget is in scope and

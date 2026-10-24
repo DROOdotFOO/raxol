@@ -49,7 +49,7 @@ defmodule Raxol.Agent.Actions.WebSearch do
   the other consequential tools.
 
   A second, coarser gate sits in front of that one:
-  `Raxol.Agent.Actions.Code.network_allow/1` refuses outright in a jailed
+  `Raxol.Agent.Policy.Grants.network_allow/1` refuses outright in a jailed
   (multi-tenant) session unless the context says `network: true`. This tool
   is in the DEFAULT toolset, so without that gate standing up a hosted
   tenant surface would hand every tenant outbound HTTP from the operator's
@@ -133,7 +133,7 @@ defmodule Raxol.Agent.Actions.WebSearch do
   def run(%{query: query} = params, context) do
     limit = limit(Map.get(params, :limit))
 
-    with :ok <- Raxol.Agent.Actions.Code.network_allow(context),
+    with :ok <- Raxol.Agent.Policy.Grants.network_allow(context),
          {:ok, provider, key} <- configured_provider(),
          {:ok, body} <- search(provider, key, query, limit, context),
          {:ok, decoded} <- decode(body) do

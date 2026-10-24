@@ -34,7 +34,7 @@ if Code.ensure_loaded?(Raxol.Web3.Router) do
     `{:error, :web3_not_configured}` rather than a tool that guesses at an
     upstream.
 
-    `Raxol.Agent.Actions.Code.network_allow/1` refuses outright in a jailed
+    `Raxol.Agent.Policy.Grants.network_allow/1` refuses outright in a jailed
     (multi-tenant) session unless the context says `network: true`, because this
     tool spends the operator's rate-limit budget against a third party from the
     operator's address.
@@ -120,7 +120,7 @@ if Code.ensure_loaded?(Raxol.Web3.Router) do
 
     @impl true
     def run(%{operation: operation, chain: chain} = params, context) do
-      with :ok <- Raxol.Agent.Actions.Code.network_allow(context),
+      with :ok <- Raxol.Agent.Policy.Grants.network_allow(context),
            {:ok, router} <- router(context),
            {:ok, callback} <- callback(operation),
            {:ok, args} <- args(callback, params) do

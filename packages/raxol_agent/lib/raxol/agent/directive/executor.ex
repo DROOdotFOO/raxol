@@ -41,7 +41,7 @@ defimpl Raxol.Core.Runtime.Directive.Executor,
     # answer at the directive as it gets at the tool, rather than two gates
     # that disagree. Confining this path for a jailed session needs those keys
     # plumbed into the dispatcher context, which is not done here.
-    case Raxol.Agent.Actions.Code.shell_allow(context, command) do
+    case Raxol.Agent.Policy.Grants.shell_allow(context, command) do
       :ok -> run_shell_directive(command, opts, context)
       {:error, reason} -> deny(reason, context)
     end

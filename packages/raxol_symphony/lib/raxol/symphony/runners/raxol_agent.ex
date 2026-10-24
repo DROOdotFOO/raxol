@@ -222,7 +222,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   needing to remember the boundary later.
 
   Runs do NOT carry `jail: true`. The jail marker disables the shell tool
-  outright (`Raxol.Agent.Actions.Code.shell_jail_allow/1`), which an autonomous
+  outright (`Raxol.Agent.Policy.Grants.shell_jail_allow/1`), which an autonomous
   coding run needs; revisit once ADR-0032's `Spawn` backends give a jailed
   session a working shell.
 

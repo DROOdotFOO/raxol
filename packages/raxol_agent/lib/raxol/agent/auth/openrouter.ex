@@ -22,9 +22,13 @@ defmodule Raxol.Agent.Auth.OpenRouter do
   """
 
   alias Raxol.Agent.Auth.Pkce
+  alias Raxol.Agent.Setup
 
   @authorize_url "https://openrouter.ai/auth"
   @keys_url "https://openrouter.ai/api/v1/auth/keys"
+
+  # The 1Password write, not the sign-in: see `store_key/2`.
+  @store_timeout 120_000
 
   @default_timeout 30_000
 
@@ -78,6 +82,21 @@ defmodule Raxol.Agent.Auth.OpenRouter do
   @doc "The endpoint the code is exchanged at, for tests and diagnostics."
   @spec keys_url() :: String.t()
   def keys_url, do: @keys_url
+
+  # 1Password raises its approval prompt at the worst moment in this flow: the
+  # instant the user gets back from a browser tab, attention still there. The
+  # default `op` budget is 15s, and losing that race discards a key the
+  # provider has already minted -- so the user pays for the round trip twice
+  # and leaves a dangling key behind. This path buys a lot more room.
+  @doc """
+  Store a minted key: the default `:store_fn` of `Raxol.Agent.Auth.Flow`'s
+  OpenRouter sign-in. Returns what `Raxol.Agent.Setup.connect_key/3` returns.
+  """
+  @spec store_key(atom(), String.t()) ::
+          {:ok, atom(), String.t(), Setup.validation()} | {:error, term()}
+  def store_key(provider, key) do
+    Setup.connect_key(provider, key, timeout_ms: @store_timeout)
+  end
 
   # -- default transport ------------------------------------------------------
 

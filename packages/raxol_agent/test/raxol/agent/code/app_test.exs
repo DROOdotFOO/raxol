@@ -1052,7 +1052,7 @@ defmodule Raxol.Agent.Code.AppTest do
                "trust" => "tainted"
              }
 
-      [decoded] = Raxol.Agent.Code.EventCodec.decode_all([record])
+      [decoded] = Raxol.Agent.Command.EventCodec.decode_all([record])
       assert decoded.provenance.trust == :tainted
     end
 

@@ -36,12 +36,9 @@ defmodule Raxol.Agent.Code.ShareToken do
   @min_secret_bytes 32
 
   # The share payload's session ids ride inside a signed token; both sign and
-  # verify refuse ids that could not name a journal directory (a `:` in the id
-  # would also break the `v2:<scope>:<id>:<exp>` framing, so an unvalidated id
-  # mints a permanently unverifiable token). `.` and `..` match the charset but
-  # are dot segments, not names — the same pair `Raxol.SSH.Server.sanitize_tenant/1`
-  # refuses, excluded here so the two id validators cannot disagree.
-  @session_id_re ~r/\A[A-Za-z0-9._-]+\z/
+  # verify refuse ids `Raxol.Agent.SessionKey.valid?/1` refuses, which is where
+  # that pattern (and why it excludes `.` and `..`) lives. A scope is held to
+  # the same dot-segment refusal.
   @dot_segments [".", ".."]
 
   # The empty scope means the host's own default journal base. A non-empty one
@@ -56,10 +53,7 @@ defmodule Raxol.Agent.Code.ShareToken do
 
   @doc "Whether `session_id` is a shape both sign and verify accept."
   @spec valid_session_id?(term()) :: boolean()
-  def valid_session_id?(session_id),
-    do:
-      is_binary(session_id) and session_id not in @dot_segments and
-        Regex.match?(@session_id_re, session_id)
+  defdelegate valid_session_id?(session_id), to: Raxol.Agent.SessionKey, as: :valid?
 
   @doc """
   Whether `scope` is a shape both sign and verify accept: `""` (the host's

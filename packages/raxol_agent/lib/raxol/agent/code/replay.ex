@@ -17,8 +17,8 @@ defmodule Raxol.Agent.Code.Replay do
 
   alias Raxol.Core.Boundary.TermText
 
-  alias Raxol.Agent.Code.EventCodec
   alias Raxol.Agent.Code.Store
+  alias Raxol.Agent.Command.EventCodec
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Harness.Projection
   alias Raxol.UI.Components.Harness.Block

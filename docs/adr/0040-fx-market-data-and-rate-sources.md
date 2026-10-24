@@ -270,10 +270,12 @@ marked every EUR asset unpriceable for about twenty hours a day.
   status and the rate it was judged against. Corridor results omit the per-corridor `assets`
   list unless asked, because it accounts for most of the 70 KB.
 - **Agent.** `Raxol.Agent.Actions.FX` is one `fx` tool with an operation enum (`stables`,
-  `stable`, `corridors`), gated by `Raxol.Agent.Actions.Code.network_allow/1`. It reads
+  `stable`, `corridors`), gated by `Raxol.Agent.Policy.Grants.network_allow/1`. It reads
   `context[:fx_source]` and answers `{:error, :fx_not_configured}` when the key is absent,
   following `Actions.Web3`. One tool rather than three, for the context-window reason
-  `Actions.Web3` records.
+  `Actions.Web3` records. Note (2026-10-24): the gate moved from
+  `Raxol.Agent.Actions.Code.network_allow/1` to `Raxol.Agent.Policy.Grants` unchanged, so it
+  outlives the coding harness ADR-0042 removes.
 - **Wiring.** Before this ADR, nothing in production set `context[:web3_router]`; only
   `web3_test.exs:16` did. Both keys are injected together, from one configuration reader over
   `Application.get_env(:raxol_agent, :web3)` plus `RAXOL_SLEUTH_API_KEY`, at every context
