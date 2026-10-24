@@ -2,6 +2,7 @@ defmodule Raxol.MCP.Transport.StdioTest do
   use ExUnit.Case, async: true
 
   alias Raxol.MCP.{Protocol, Registry, Server, Transport}
+  alias Raxol.MCP.TestSupport.PushIO
 
   setup do
     registry_name = :"registry_#{System.unique_integer([:positive])}"
@@ -10,107 +11,135 @@ defmodule Raxol.MCP.Transport.StdioTest do
     {:ok, _registry} = Registry.start_link(name: registry_name)
     {:ok, _server} = Server.start_link(name: server_name, registry: registry_name)
 
-    %{server: server_name, registry: registry_name}
+    # One device serves as stdin and stdout: the test pushes each input line
+    # and receives each written frame as a message.
+    {:ok, io} = PushIO.start_link()
+
+    {:ok, transport} =
+      Transport.Stdio.start_link(server: server_name, io_device: io, output_device: io)
+
+    %{
+      server: server_name,
+      registry: registry_name,
+      io: io,
+      transport: transport,
+      transport_ref: Process.monitor(transport)
+    }
   end
 
-  defp start_stdio(server, input_lines) do
-    # Create a StringIO device with the input lines
-    input = Enum.join(input_lines, "\n") <> "\n"
-    {:ok, input_device} = StringIO.open(input)
-    {:ok, output_device} = StringIO.open("")
+  # Above ExUnit's 100 ms default, so a loaded machine does not flake.
+  @timeout 1_000
 
-    {:ok, pid} =
-      Transport.Stdio.start_link(
-        server: server,
-        io_device: input_device,
-        output_device: output_device
-      )
+  defp push(io, message),
+    do: PushIO.push(io, message |> Protocol.encode!() |> IO.iodata_to_binary())
 
-    # Wait for reader to process and hit EOF
-    ref = Process.monitor(pid)
+  defp next_frame(io) do
+    assert_receive {:push_io, ^io, data}, @timeout
+    {:ok, frame} = Protocol.decode(data)
+    frame
+  end
 
-    receive do
-      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-    after
-      2000 -> :ok
-    end
+  # After the transport is DOWN nothing more can be written, so a zero-window
+  # `refute_received` is exact.
+  defp assert_eof_stops(%{io: io, transport: transport, transport_ref: ref}) do
+    PushIO.push(io, :eof)
+    assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
+    refute_received {:push_io, ^io, _}
+  end
 
-    # Read output
-    {_input_remaining, output} = StringIO.contents(output_device)
-    output
+  defp register_blocking_tool(registry) do
+    parent = self()
+
+    Registry.register_tools(registry, [
+      %{
+        name: "block",
+        description: "Blocks until released",
+        inputSchema: %{type: "object"},
+        callback: fn _args ->
+          send(parent, {:entered, self()})
+
+          receive do
+            :release -> {:ok, "released"}
+          end
+        end
+      }
+    ])
+  end
+
+  defp call_blocking_tool(io, id) do
+    push(io, Protocol.request(id, "tools/call", %{"name" => "block", "arguments" => %{}}))
+    assert_receive {:entered, worker}, @timeout
+    {worker, Process.monitor(worker)}
   end
 
   describe "stdio transport" do
-    test "handles initialize request", %{server: s} do
-      request = Protocol.request(1, "initialize", %{protocolVersion: "2024-11-05"})
-      {:ok, line} = Protocol.encode(request)
+    test "handles initialize request", %{io: io} = ctx do
+      push(io, Protocol.request(1, "initialize", %{protocolVersion: "2024-11-05"}))
 
-      output = start_stdio(s, [IO.iodata_to_binary(line)])
-
-      lines = String.split(output, "\n", trim: true)
-      assert length(lines) >= 1
-
-      {:ok, resp} = Protocol.decode(hd(lines))
+      resp = next_frame(io)
       assert resp.id == 1
       # After JSON round-trip, result keys are strings
       assert resp.result["protocolVersion"] == "2024-11-05"
+
+      assert_eof_stops(ctx)
     end
 
-    test "handles multiple requests", %{server: s} do
-      req1 = Protocol.request(1, "initialize", %{protocolVersion: "2024-11-05"})
-      req2 = Protocol.request(2, "ping")
+    test "handles multiple requests", %{io: io} = ctx do
+      push(io, Protocol.request(1, "initialize", %{protocolVersion: "2024-11-05"}))
+      push(io, Protocol.request(2, "ping"))
 
-      {:ok, line1} = Protocol.encode(req1)
-      {:ok, line2} = Protocol.encode(req2)
-
-      output =
-        start_stdio(s, [
-          IO.iodata_to_binary(line1),
-          IO.iodata_to_binary(line2)
-        ])
-
-      lines = String.split(output, "\n", trim: true)
-      assert length(lines) >= 2
-
-      {:ok, resp1} = Protocol.decode(Enum.at(lines, 0))
-      {:ok, resp2} = Protocol.decode(Enum.at(lines, 1))
+      resp1 = next_frame(io)
+      resp2 = next_frame(io)
 
       assert resp1.id == 1
       assert resp2.id == 2
       assert resp2.result == %{}
+
+      assert_eof_stops(ctx)
     end
 
-    test "skips notifications (no response)", %{server: s} do
-      notif = Protocol.notification("notifications/initialized")
-      {:ok, notif_line} = Protocol.encode(notif)
+    test "end of input still writes the replies owed for lines read before it",
+         %{io: io, transport: transport, transport_ref: ref} do
+      push(io, Protocol.request(1, "initialize", %{protocolVersion: "2024-11-05"}))
+      push(io, Protocol.request(2, "ping"))
+      PushIO.push(io, :eof)
 
-      req = Protocol.request(1, "ping")
-      {:ok, req_line} = Protocol.encode(req)
+      assert next_frame(io).id == 1
+      assert next_frame(io).id == 2
+      assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
+      refute_received {:push_io, ^io, _}
+    end
 
-      output =
-        start_stdio(s, [
-          IO.iodata_to_binary(notif_line),
-          IO.iodata_to_binary(req_line)
-        ])
+    test "a request named notifications/cancelled is answered method not found",
+         %{io: io} = ctx do
+      push(io, Protocol.request(5, "notifications/cancelled", %{"requestId" => 1}))
 
-      lines = String.split(output, "\n", trim: true)
+      resp = next_frame(io)
+      assert resp.id == 5
+      assert resp.error["code"] == Protocol.method_not_found()
+
+      assert_eof_stops(ctx)
+    end
+
+    test "skips notifications (no response)", %{io: io} = ctx do
+      push(io, Protocol.notification("notifications/initialized"))
+      push(io, Protocol.request(1, "ping"))
+
       # Only the ping response, not the notification
-      assert length(lines) == 1
-      {:ok, resp} = Protocol.decode(hd(lines))
-      assert resp.id == 1
+      assert next_frame(io).id == 1
+      assert_eof_stops(ctx)
     end
 
-    test "ignores blank lines", %{server: s} do
-      req = Protocol.request(1, "ping")
-      {:ok, line} = Protocol.encode(req)
+    test "ignores blank lines", %{io: io} = ctx do
+      PushIO.push(io, "")
+      push(io, Protocol.request(1, "ping"))
+      PushIO.push(io, "")
 
-      output = start_stdio(s, ["", IO.iodata_to_binary(line), ""])
-
-      lines = String.split(output, "\n", trim: true)
-      assert length(lines) == 1
+      assert next_frame(io).id == 1
+      assert_eof_stops(ctx)
     end
 
-    test "handles tools/list with registered tools", %{server: s, registry: r} do
+    test "handles tools/list with registered tools", %{io: io, registry: r} = ctx do
       tool = %{
         name: "test_tool",
         description: "A tool",
@@ -120,15 +149,50 @@ defmodule Raxol.MCP.Transport.StdioTest do
 
       Registry.register_tools(r, [tool])
 
-      req = Protocol.request(1, "tools/list")
-      {:ok, line} = Protocol.encode(req)
-
-      output = start_stdio(s, [IO.iodata_to_binary(line)])
-      lines = String.split(output, "\n", trim: true)
-      {:ok, resp} = Protocol.decode(hd(lines))
+      push(io, Protocol.request(1, "tools/list"))
+      resp = next_frame(io)
 
       assert length(resp.result["tools"]) == 1
       assert hd(resp.result["tools"])["name"] == "test_tool"
+
+      assert_eof_stops(ctx)
+    end
+  end
+
+  describe "requests in flight" do
+    test "tools/list answers while a tools/call blocks; EOF kills the blocked worker",
+         %{io: io, registry: r, transport: transport, transport_ref: transport_ref} do
+      register_blocking_tool(r)
+      {worker, worker_ref} = call_blocking_tool(io, 1)
+
+      push(io, Protocol.request(2, "tools/list"))
+      resp = next_frame(io)
+      assert resp.id == 2
+      assert [%{"name" => "block"}] = resp.result["tools"]
+
+      PushIO.push(io, :eof)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+      assert_receive {:DOWN, ^transport_ref, :process, ^transport, :normal}, @timeout
+      refute_received {:push_io, ^io, _}
+    end
+
+    test "notifications/cancelled kills the blocked worker and answers nothing",
+         %{io: io, registry: r, server: server, transport: transport} = ctx do
+      register_blocking_tool(r)
+      {worker, worker_ref} = call_blocking_tool(io, "call-1")
+
+      push(io, Protocol.notification("notifications/cancelled", %{"requestId" => "call-1"}))
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+
+      # The cancelled call's reply would be written before this one.
+      push(io, Protocol.request(3, "ping"))
+      assert next_frame(io).id == 3
+
+      # The server answered the cancelled call, so neither side still holds it.
+      assert :gen_server.reqids_size(:sys.get_state(transport).requests) == 0
+      assert :sys.get_state(server).in_flight == %{}
+
+      assert_eof_stops(ctx)
     end
   end
 end
