@@ -65,7 +65,7 @@ defmodule Raxol.Test.GeneratedApp do
       if is_nil(Process.whereis(Headless)),
         do: start_supervised!({Headless, [name: Headless]})
 
-    id = :"generated_app_#{System.unique_integer([:positive])}"
+    id = "generated_app_#{System.unique_integer([:positive])}"
 
     _ =
       assert {:ok, ^id} =

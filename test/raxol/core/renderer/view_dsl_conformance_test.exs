@@ -1527,7 +1527,7 @@ defmodule Raxol.Core.Renderer.ViewDslConformanceTest do
   defp render_frame(view), do: with_session(view, &frame/1)
 
   defp with_session(view, fun) do
-    id = :"view_dsl_conformance_#{System.unique_integer([:positive])}"
+    id = "view_dsl_conformance_#{System.unique_integer([:positive])}"
 
     {:ok, ^id} =
       Headless.start(ProbeApp, id: id, width: @width, height: @height)

@@ -13,7 +13,7 @@ alias Raxol.Recording.Recorder
 width = 80
 height = 24
 out = "demos/raxol-showcase.cast"
-session = :landing_rec
+session = "landing_rec"
 tick = 90
 
 {:ok, _rec} =

@@ -19,7 +19,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
       {:ok, pid} = ToolSynchronizer.start_link(
         registry: Raxol.MCP.Registry,
         dispatcher_pid: dispatcher_pid,
-        session_id: :my_session,
+        session_id: "demo",
         app_module: MyApp
       )
   """
@@ -62,6 +62,18 @@ defmodule Raxol.MCP.ToolSynchronizer do
   @spec sync(GenServer.server(), map()) :: :ok
   def sync(synchronizer, view_tree) do
     GenServer.cast(synchronizer, {:sync_now, view_tree})
+  end
+
+  @doc """
+  Applies a view-tree update still waiting out the debounce now, and returns
+  once the registry reflects it.
+
+  A barrier: after a render whose telemetry has reached this process, `flush/1`
+  returning means the session's tools match that render.
+  """
+  @spec flush(GenServer.server()) :: :ok
+  def flush(synchronizer) do
+    GenServer.call(synchronizer, :flush)
   end
 
   @doc """
@@ -131,6 +143,20 @@ defmodule Raxol.MCP.ToolSynchronizer do
     # Seed tools synchronously so callers never observe a meta-tool-only
     # session when the engine's first render preceded telemetry attachment.
     {:ok, sync_initial_view(state)}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:flush, _from, %{pending_view_tree: nil} = state) do
+    {:reply, :ok, state}
+  end
+
+  def handle_manager_call(:flush, _from, state) do
+    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
+
+    new_state =
+      do_sync(state.pending_view_tree, state.pending_model || state.current_model, state)
+
+    {:reply, :ok, %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager

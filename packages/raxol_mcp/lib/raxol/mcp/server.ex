@@ -1924,16 +1924,9 @@ defmodule Raxol.MCP.Server do
   defp complete_session_ids(prefix) do
     if Code.ensure_loaded?(Raxol.Headless) and
          function_exported?(Raxol.Headless, :list, 0) do
-      case Raxol.Headless.list() do
-        {:ok, sessions} ->
-          sessions
-          |> Enum.map(fn s -> Map.get(s, :id, "") |> to_string() end)
-          |> Enum.filter(&String.starts_with?(&1, prefix))
-          |> Enum.take(20)
-
-        _ ->
-          []
-      end
+      Raxol.Headless.list()
+      |> Enum.filter(&String.starts_with?(&1, prefix))
+      |> Enum.take(20)
     else
       []
     end

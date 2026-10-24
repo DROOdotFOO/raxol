@@ -45,7 +45,7 @@ defmodule Raxol.CrossTerminal.BoxDimensionsTest do
   test "box with explicit style width stays at that width on a wide screen" do
     {:ok, id} =
       Headless.start(Raxol.Playground.Demos.TextInputDemo,
-        id: :box_dims,
+        id: "box_dims",
         width: 200,
         height: 60
       )
@@ -77,7 +77,7 @@ defmodule Raxol.CrossTerminal.BoxDimensionsTest do
   test "box padding insets content from the border" do
     {:ok, id} =
       Headless.start(Raxol.Playground.Demos.TextInputDemo,
-        id: :box_pad,
+        id: "box_pad",
         width: 200,
         height: 60
       )

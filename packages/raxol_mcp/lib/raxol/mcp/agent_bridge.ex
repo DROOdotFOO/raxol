@@ -118,7 +118,7 @@ defmodule Raxol.MCP.AgentBridge do
         "No active agent sessions."
       else
         sessions
-        |> Enum.map(fn s -> "- #{inspect(s)}" end)
+        |> Enum.map(fn s -> "- #{s}" end)
         |> Enum.join("\n")
       end
 
@@ -129,39 +129,37 @@ defmodule Raxol.MCP.AgentBridge do
     send_to_agent(%{id: id, message: message})
   end
 
-  defp send_to_agent(%{id: id, message: message}) do
+  defp send_to_agent(%{id: id, message: message}) when is_binary(id) do
     if Code.ensure_loaded?(Raxol.Headless) and
          function_exported?(Raxol.Headless, :send_key, 3) do
-      case existing_session_atom(id) do
-        {:ok, session} ->
-          # Send the message as individual keystrokes, and report honestly:
-          # a failed keystroke must not be summarized as success. Queued, not
-          # awaited: this runs in the MCP server's one process, so waiting for
-          # update/2 per keystroke held every client for the length of the
-          # message times the app's update time.
-          results =
-            for char <- String.graphemes(message) do
-              Raxol.Headless.send_key(session, char, wait: false)
-            end
-
-          case Enum.reject(results, &(&1 == :ok)) do
-            [] ->
-              {:ok,
-               [
-                 %{
-                   type: "text",
-                   text: "Enqueued #{String.length(message)} keystrokes for agent #{id}"
-                 }
-               ]}
-
-            failures ->
-              {:error,
-               "#{length(failures)}/#{length(results)} keystrokes failed for " <>
-                 "agent #{id}: #{inspect(List.first(failures))}"}
+      if id in Raxol.Headless.list() do
+        # Send the message as individual keystrokes, and report honestly:
+        # a failed keystroke must not be summarized as success. Queued, not
+        # awaited: this runs in the MCP server's one process, so waiting for
+        # update/2 per keystroke held every client for the length of the
+        # message times the app's update time.
+        results =
+          for char <- String.graphemes(message) do
+            Raxol.Headless.send_key(id, char, wait: false)
           end
 
-        {:error, :unknown_session} ->
-          {:error, "Unknown agent session: #{id}"}
+        case Enum.reject(results, &(&1 == :ok)) do
+          [] ->
+            {:ok,
+             [
+               %{
+                 type: "text",
+                 text: "Enqueued #{String.length(message)} keystrokes for agent #{id}"
+               }
+             ]}
+
+          failures ->
+            {:error,
+             "#{length(failures)}/#{length(results)} keystrokes failed for " <>
+               "agent #{id}: #{inspect(List.first(failures))}"}
+        end
+      else
+        {:error, "Unknown agent session: #{id}"}
       end
     else
       {:error, "Headless module not available"}
@@ -172,15 +170,18 @@ defmodule Raxol.MCP.AgentBridge do
 
   defp get_agent_model(%{"id" => id}), do: get_agent_model(%{id: id})
 
-  defp get_agent_model(%{id: id}) do
+  defp get_agent_model(%{id: id}) when is_binary(id) do
     if Code.ensure_loaded?(Raxol.Headless) and
          function_exported?(Raxol.Headless, :get_model, 1) do
-      with {:ok, session} <- existing_session_atom(id),
-           {:ok, model} <- Raxol.Headless.get_model(session) do
-        {:ok, [%{type: "text", text: inspect(model, pretty: true, limit: :infinity)}]}
-      else
-        {:error, :unknown_session} -> {:error, "Unknown agent session: #{id}"}
-        {:error, reason} -> {:error, reason}
+      case Raxol.Headless.get_model(id) do
+        {:ok, model} ->
+          {:ok, [%{type: "text", text: inspect(model, pretty: true, limit: :infinity)}]}
+
+        {:error, :not_found} ->
+          {:error, "Unknown agent session: #{id}"}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       {:error, "Headless module not available"}
@@ -218,18 +219,6 @@ defmodule Raxol.MCP.AgentBridge do
   end
 
   defp build_input_schema(_), do: %{type: "object", properties: %{}}
-
-  # Session ids arrive as caller-supplied strings on an externally callable
-  # surface. A live headless session's id atom already exists in this VM, so
-  # to_existing_atom succeeds exactly when the session could exist; minting a
-  # new atom here (String.to_atom) would let callers grow the atom table.
-  defp existing_session_atom(id) when is_binary(id) do
-    {:ok, String.to_existing_atom(id)}
-  rescue
-    ArgumentError -> {:error, :unknown_session}
-  end
-
-  defp existing_session_atom(id) when is_atom(id), do: {:ok, id}
 
   defp atomize_keys(map) when is_map(map) do
     Map.new(map, fn

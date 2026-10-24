@@ -92,7 +92,7 @@ defmodule Raxol.Playground.DemoRenderTest do
 
   setup do
     # Use a unique session id per test so concurrent runs don't collide.
-    id = :"demo_render_#{System.unique_integer([:positive])}"
+    id = "demo_render_#{System.unique_integer([:positive])}"
     on_exit(fn -> safe_stop(id) end)
     {:ok, id: id}
   end

@@ -36,7 +36,7 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
 
   test "modal box renders centered on top, background text stays visible" do
     {:ok, id} =
-      Headless.start(Raxol.Playground.Demos.ModalDemo, id: :modal_demo_e)
+      Headless.start(Raxol.Playground.Demos.ModalDemo, id: "modal_demo_e")
 
     {:ok, closed_text} = Headless.screenshot(id)
     assert closed_text =~ "Background content (does not move):"
@@ -58,7 +58,7 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
 
   test "background text cells are byte-identical open vs closed (no reflow)" do
     {:ok, id} =
-      Headless.start(Raxol.Playground.Demos.ModalDemo, id: :modal_demo_reflow)
+      Headless.start(Raxol.Playground.Demos.ModalDemo, id: "modal_demo_reflow")
 
     {:ok, closed_buffer} = Headless.get_buffer(id)
 
@@ -78,7 +78,7 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
 
   test "background is dimmed while the modal is open, and un-dims on close" do
     {:ok, id} =
-      Headless.start(Raxol.Playground.Demos.ModalDemo, id: :modal_demo_dim)
+      Headless.start(Raxol.Playground.Demos.ModalDemo, id: "modal_demo_dim")
 
     {:ok, closed_buffer} = Headless.get_buffer(id)
     closed_title_cell = cell_at(closed_buffer, 0, 0)

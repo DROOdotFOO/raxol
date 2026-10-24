@@ -7,12 +7,11 @@ defmodule Raxol.MCP.Test.Session do
   """
 
   @type t :: %__MODULE__{
-          id: atom(),
+          id: String.t(),
           registry: GenServer.server(),
           registry_pid: pid(),
-          module: module() | String.t(),
-          settle_ms: non_neg_integer()
+          module: module() | String.t()
         }
 
-  defstruct [:id, :registry, :registry_pid, :module, settle_ms: 100]
+  defstruct [:id, :registry, :registry_pid, :module]
 end

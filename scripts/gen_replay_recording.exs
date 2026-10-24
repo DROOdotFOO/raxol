@@ -225,7 +225,7 @@ defmodule GenReplayRecording do
 
     {:ok, id} =
       Raxol.Headless.start(ReplayTour,
-        id: :replay_tour,
+        id: "replay_tour",
         width: @width,
         height: @height,
         subscriptions: false
