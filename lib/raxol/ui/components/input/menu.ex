@@ -378,7 +378,8 @@ defmodule Raxol.UI.Components.Input.Menu do
           type: "object",
           properties: %{item_id: %{type: "string", description: "Menu item ID"}},
           required: ["item_id"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_items",

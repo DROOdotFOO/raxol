@@ -221,12 +221,18 @@ defmodule Raxol.MCP.TreeWalker do
     end
   end
 
+  # Control characters in a description would reach the client's tool list
+  # verbatim, and with them a forged line break or prompt fence. The built-in
+  # providers keep descriptions static per action; this holds for any other
+  # provider as well.
+  @control_chars ~r/[\x00-\x1F\x7F\x{0080}-\x{009F}]/u
+
   defp build_tool_def(spec, widget_id, module, node, context) do
     action_name = spec.name
 
     %{
       name: "#{widget_id}.#{action_name}",
-      description: spec.description,
+      description: String.replace(spec.description, @control_chars, ""),
       inputSchema: spec.inputSchema,
       callback: fn args ->
         tool_context = %{
@@ -248,7 +254,11 @@ defmodule Raxol.MCP.TreeWalker do
         end
       end
     }
+    |> put_annotations(Map.get(spec, :annotations))
   end
+
+  defp put_annotations(tool, nil), do: tool
+  defp put_annotations(tool, annotations), do: Map.put(tool, :annotations, annotations)
 
   # A call, not a cast: each message has been through the app's update/2 by
   # the time the tool answers. A dispatcher that is gone or does not answer

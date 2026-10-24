@@ -33,27 +33,27 @@ defmodule Raxol.UI.Components.Input.TextArea do
   # -- ToolProvider callbacks --
 
   @impl Raxol.MCP.ToolProvider
-  def mcp_tools(state) do
-    id = state[:id] || "text_area"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "type_into",
-        description: "Type text into text area '#{id}'",
+        description: "Type text into the text area",
         inputSchema: %{
           type: "object",
           properties: %{text: %{type: "string", description: "Text to type"}},
           required: ["text"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "clear",
-        description: "Clear the text area '#{id}'",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Clear the text area",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_value",
-        description: "Get the current value of text area '#{id}'",
+        description: "Get the current value of the text area",
         inputSchema: %{type: "object", properties: %{}}
       }
     ]

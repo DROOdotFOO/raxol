@@ -699,39 +699,38 @@ defmodule Raxol.UI.Components.Input.Scrubber do
   def mcp_tools(%{attrs: %{disabled: true}}), do: []
   def mcp_tools(%{disabled: true}), do: []
 
-  def mcp_tools(node) do
-    name = tool_label(node)
-    {min, max_pos} = tool_range(node)
-
+  def mcp_tools(_node) do
     [
       %{
         name: "seek",
-        description:
-          "Move the '#{name}' playhead to a position (#{min}..#{max_pos})",
+        description: "Move the playhead to a position",
         inputSchema: %{
           type: "object",
           properties: %{
             position: %{
               type: "integer",
-              description: "Target position (#{min}..#{max_pos})"
+              description: "Target position (get_position reports the range)"
             }
           },
           required: ["position"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "play",
-        description: "Start '#{name}' playback",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Start playback",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       },
       %{
         name: "pause",
-        description: "Pause '#{name}' playback",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Pause playback",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_position",
-        description: "Read the '#{name}' position, range, and play state",
+        description: "Read the playhead position, range, and play state",
         inputSchema: %{type: "object", properties: %{}}
       }
     ]

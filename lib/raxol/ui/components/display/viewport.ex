@@ -349,7 +349,8 @@ defmodule Raxol.UI.Components.Display.Viewport do
             row: %{type: "integer", description: "Row to scroll to (0-based)"}
           },
           required: ["row"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_visible_range",
