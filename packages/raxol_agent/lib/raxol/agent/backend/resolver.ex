@@ -66,7 +66,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   # `env_keys` are checked in order. `native_module` is set only for native
   # harnesses, because its PRESENCE is what routes `detect_available/2` to the
   # vendor-CLI probe instead of key resolution.
-  @providers Enum.map(Catalog.by_kind([:http, :native, :mock]), fn entry ->
+  @providers Enum.map(Catalog.by_kind([:http, :native, :gateway, :mock]), fn entry ->
                spec = %{
                  harness: entry.id,
                  label: entry.label,

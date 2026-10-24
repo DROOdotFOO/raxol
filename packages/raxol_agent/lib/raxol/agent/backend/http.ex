@@ -63,10 +63,13 @@ defmodule Raxol.Agent.Backend.HTTP do
     end
   end
 
+  @doc false
   # The per-call token budget. Precedence: explicit `:max_tokens` opt >
   # `AI_MAX_TOKENS` env > `@default_max_tokens`. Read at request-build time so a
   # deployment can raise the ceiling for reasoning models without code changes.
-  defp default_max_tokens do
+  # `Backend.OmpGateway` shares it: the gateway refuses a request without one.
+  @spec default_max_tokens() :: pos_integer()
+  def default_max_tokens do
     case System.get_env("AI_MAX_TOKENS") do
       nil ->
         @default_max_tokens

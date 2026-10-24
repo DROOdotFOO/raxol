@@ -23,7 +23,7 @@ defmodule Raxol.Agent.Backend.Selector do
   # disagreeing about which backends exist. Only runnable kinds land here;
   # `:reserved` entries stay out on purpose and fall through to `reason_for/1`.
   @backend_table Map.new(
-                   Catalog.by_kind([:http, :native, :mock]),
+                   Catalog.by_kind([:http, :native, :gateway, :mock]),
                    &{&1.id, {&1.module, &1.backend_opts}}
                  )
 

@@ -100,7 +100,8 @@ Pick a backend with `ExecutorConfig` and `Backend.Selector`, then drive a turn w
 ```
 
 The harness atom selects the provider: `:anthropic`, `:openai`, `:ollama`, `:lm_studio`,
-`:claude_native` (Claude Code), `:cursor`, and more. See
+`:omp_gateway` (every model OMP is logged in to, through `omp auth-gateway stdio`; a `:gateway`
+backend, used only when named), `:claude_native` (Claude Code), `:cursor`, and more. See
 [Agent Framework](../features/AGENT_FRAMEWORK.md#native-multi-vendor-harness).
 
 ## 4. Memory, skills, and self-improvement

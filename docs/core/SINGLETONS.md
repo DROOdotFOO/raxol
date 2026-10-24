@@ -75,6 +75,7 @@ allowlist below.
 | `Raxol.Watch.Push.Noop` | Test stub |
 | `Raxol.Symphony.Runners.Noop` | Test stub |
 | `Raxol.MCP.Client.Tables` | Owns the dual-era verdict table and the client-side origin breaker table (ADR-0037 decision 2). The verdict is per upstream ORIGIN, and an `:ets` table belongs to the process that created it, so a table created per client would cache nothing shared and one created by a transient process raises in whoever still holds the reference. `[name: nil]` would reintroduce exactly that. |
+| `Raxol.Agent.Backend.OmpGateway.Server` | Owns the one `omp auth-gateway stdio` process the `:omp_gateway` backend shares (ADR-0042); requests are multiplexed over it by id. Idle until the first request. `[name: nil]` starts a private one. |
 
 ### Questionable (re-evaluate when next touched)
 

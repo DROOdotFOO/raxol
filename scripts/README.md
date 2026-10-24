@@ -59,6 +59,7 @@ subdirectories hold narrower tooling.
 | `harness/` | The T0 terminal-matrix measurement harness (see `docs/testing/T0_RUNBOOK.md`) |
 | `deploy/` | Deployment build scripts |
 | `bin/` | Demo and showcase runners |
+| `omp_fixtures/` | `capture.exs`: records scrubbed OMP protocol transcripts (the `auth-gateway stdio` F1 set into `packages/raxol_agent/test/fixtures/omp/gateway/`) from the pinned `omp`; `--with-model` makes model calls |
 
 ## Adding a script
 

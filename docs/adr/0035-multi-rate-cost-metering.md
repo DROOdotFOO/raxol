@@ -22,6 +22,14 @@ Revised 2026-09-04, after a measurement against a real ACP peer confirmed that a
 reports per-turn cost in USD on the wire. That strengthens the provider-reported-cost decision
 below from an anticipated case to an observed one; nothing else in the model changed.
 
+**Narrowed** by [ADR-0042](0042-lean-on-omp.md), 2026-10-24. Model access shrinks to the
+direct Anthropic and Ollama backends plus `omp_gateway`, OMP's `auth-gateway` over stdio.
+`LlmPrices` now prices `omp_gateway` replies on the model that answered: the gateway's stdio
+protocol drops HTTP headers, so its cost header never reaches Raxol and the table is the only
+price there is. A model the table does not know is recorded with its tokens and flagged
+unpriced, as the decision below requires. The DeepSeek scoped rows leave when ADR-0042
+deletes the DeepSeek backend.
+
 ## Context
 
 `Raxol.Agent.LlmPrices.@prices` (`llm_prices.ex:19-33`) is a flat list of

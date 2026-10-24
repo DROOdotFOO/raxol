@@ -91,7 +91,10 @@ ExUnit.start(
     # :live_lsp drives a real language server (rust-analyzer) and indexes a
     # crate, so it is minutes and a toolchain rather than seconds; run with
     # `mix test --only live_lsp`.
-    :live_lsp
+    :live_lsp,
+    # :omp runs the real `omp` binary (no model call); run with
+    # `mix test --only omp`.
+    :omp
     | os_excludes
   ]
 )
