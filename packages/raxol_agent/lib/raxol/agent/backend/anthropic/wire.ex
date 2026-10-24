@@ -7,8 +7,9 @@ defmodule Raxol.Agent.Backend.Anthropic.Wire do
   contract (`{:ok, response} | {:error, marker}`). No I/O: the caller owns the
   transport (`Raxol.Agent.Backend.HTTP` over Req).
 
-  `:max_tokens` is taken from opts as given; the caller resolves its default
-  (the `AI_MAX_TOKENS` precedence lives in the backend, not the codec).
+  `:max_tokens` is required (the API refuses a request without it); the caller
+  resolves its default (the `AI_MAX_TOKENS` precedence lives in the backend,
+  not the codec).
   """
 
   @api_version "2023-06-01"
@@ -27,8 +28,8 @@ defmodule Raxol.Agent.Backend.Anthropic.Wire do
 
   Opts: `:base_url` (default `#{@default_base_url}`), `:model` (default
   `#{@default_model}`), `:api_key` (absent or empty omits `x-api-key`),
-  `:max_tokens`, `:tools` (a non-empty list rides as `tools`). System messages
-  are joined with a newline into the top-level `system` field.
+  `:max_tokens` (required), `:tools` (a non-empty list rides as `tools`).
+  System messages are joined with a newline into the top-level `system` field.
   """
   @spec build_request([message()], keyword()) ::
           {String.t(), [{String.t(), String.t()}], map()}
@@ -61,7 +62,7 @@ defmodule Raxol.Agent.Backend.Anthropic.Wire do
 
     %{
       model: Keyword.get(opts, :model, @default_model),
-      max_tokens: Keyword.get(opts, :max_tokens),
+      max_tokens: Keyword.fetch!(opts, :max_tokens),
       messages: Enum.map(chat_msgs, &format_message/1)
     }
     |> put_system(system_text)
