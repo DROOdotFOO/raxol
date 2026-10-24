@@ -213,7 +213,10 @@ defmodule Raxol.UI.Components.Input.Tabs do
 
   def handle_tool_call("get_tabs", _args, context) do
     tabs = context.widget_state[:tabs] || []
-    active = context.widget_state[:active] || 0
+    # The DSL node carries `:active`, Tabs component state `:active_index`.
+    active =
+      context.widget_state[:active] || context.widget_state[:active_index] || 0
+
     labels = Enum.map(tabs, &tab_label/1)
     {:ok, %{tabs: labels, active_index: active}}
   end
