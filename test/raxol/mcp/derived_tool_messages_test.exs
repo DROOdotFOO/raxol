@@ -111,7 +111,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "table sort takes a column label in any case and refuses unknown input" do
-    id = start_demo(Demos.TableDemo, :table_sort_validation)
+    id = start_demo(Demos.TableDemo, "table_sort_validation")
 
     assert %{content: [%{text: text}]} =
              result =
@@ -167,7 +167,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "click on a button without an on_click message is an error result" do
-    start_demo(ProbeApp, :probe_no_message)
+    start_demo(ProbeApp, "probe_no_message")
 
     for {name, label} <- [{"silent.click", "Silent"}, {"fn.click", "Fn"}] do
       assert %{content: [%{text: text}]} = result = call_tool(name, %{})
@@ -177,7 +177,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "a message whose update/2 raises is an error result; the dispatcher survives" do
-    id = start_demo(ProbeApp, :probe_update_failed)
+    id = start_demo(ProbeApp, "probe_update_failed")
     dispatcher = dispatcher_pid(id)
 
     assert %{content: [%{text: "Error: :update_failed"}]} = result = call_tool("boom.click", %{})

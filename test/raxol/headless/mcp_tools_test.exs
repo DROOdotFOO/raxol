@@ -614,19 +614,19 @@ defmodule Raxol.Headless.McpToolsTest do
       assert {:error, message} =
                start_tool_result(%{
                  "module" => "Raxol.Playground.Demos.TabsDemo",
-                 "id" => "replaced_tabs"
+                 "id" => "rtabs"
                })
 
       assert message =~ "is not startable over MCP"
-      refute :replaced_tabs in Raxol.Headless.list()
+      refute "rtabs" in Raxol.Headless.list()
 
       assert {:ok, _} =
                start_tool_result(%{
                  "module" => "Raxol.Playground.Demos.TableDemo",
-                 "id" => "startable_table"
+                 "id" => "sttab"
                })
 
-      assert :startable_table in Raxol.Headless.list()
+      assert "sttab" in Raxol.Headless.list()
     end
 
     @bad_startable [
