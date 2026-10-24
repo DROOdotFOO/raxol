@@ -89,7 +89,7 @@ defmodule Raxol.MCP.Server do
   `:callback_timeout_ms` bounds each worker's lifetime (default 300,000 ms).
   Work above the concurrency bound receives a structured busy error. A finite
   timeout passed to `handle_message/4` also cancels that call's worker if the
-  caller stops waiting.
+  caller stops waiting; `request/3` callers cancel explicitly with `cancel/2`.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -288,6 +288,44 @@ defmodule Raxol.MCP.Server do
         GenServer.cast(server, {:cancel_request, request_ref})
         exit(reason)
     end
+  end
+
+  @doc """
+  Send a decoded JSON-RPC message without waiting for the reply.
+
+  The non-blocking form of `handle_message/3`, for a transport that must keep
+  reading while earlier requests run. Messages from one caller reach the
+  server in send order, so methods handled inline keep their order.
+
+  Returns the `:gen_server` request id and the `request_ref` that `cancel/2`
+  takes. Collect the reply with `:gen_server.check_response/2,3`: it is
+  `{:reply, map() | nil}`, exactly as `handle_message/3` returns. Every
+  request gets exactly one reply; a cancelled one gets `{:reply, nil}`.
+  """
+  @spec request(GenServer.server(), map(), conn_id()) ::
+          {:gen_server.request_id(), reference()}
+  def request(server, message, conn_id \\ @default_conn) do
+    request_ref = make_ref()
+
+    req_id =
+      :gen_server.send_request(
+        server,
+        {:handle_message, message, conn_id, request_ref, :infinity}
+      )
+
+    {req_id, request_ref}
+  end
+
+  @doc """
+  Cancel a request sent with `request/3`.
+
+  Kills the request's callback worker, if it still runs, and answers the
+  request with `{:reply, nil}`. A request that already completed is left
+  alone.
+  """
+  @spec cancel(GenServer.server(), reference()) :: :ok
+  def cancel(server, request_ref) do
+    GenServer.cast(server, {:cancel_request, request_ref})
   end
 
   @doc """
@@ -925,12 +963,16 @@ defmodule Raxol.MCP.Server do
     case pop_in_flight(state, request_ref) do
       {:ok, entry, state} ->
         stop_worker(entry)
+        reply_cancelled(entry)
         state
 
       :error ->
         state
     end
   end
+
+  defp reply_cancelled(%{delivery: {:reply, from}}), do: GenServer.reply(from, {:reply, nil})
+  defp reply_cancelled(_entry), do: :ok
 
   defp pop_in_flight(state, request_ref) do
     case Map.pop(state.in_flight, request_ref) do
