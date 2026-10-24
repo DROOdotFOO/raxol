@@ -2,15 +2,18 @@ defmodule Raxol.Agent.OMP.RPC do
   @moduledoc """
   A client for one `omp --mode rpc` session (ADR-0042, decision 7).
 
-  `start_link/1` spawns `omp --mode rpc --approval-mode write --profile
-  <profile>` in a dedicated working directory and returns once the session
-  is ready: the binary is resolved and vetted
-  (`Raxol.Agent.Backend.OmpGateway.resolve_binary/1`), `omp --version` is
+  `start_link/1` checks the options, resolves and vets the binary
+  (`Raxol.Agent.Backend.OmpGateway.resolve_binary/1`) and returns at once.
+  The handshake then runs in the session process: `omp --version` is
   checked against the tested pin (`Raxol.Agent.OMP.Version`; a different
-  major is refused, a newer minor logged), the ready frame must offer
-  protocol v2, and `negotiate_protocol` v2 must succeed. From then on a
-  frame over OMP's `maxFrameBytes` arrives as `rpc_chunk` lines, which are
-  reassembled (`Raxol.Agent.OMP.RPC.Codec`).
+  major is refused, a newer minor logged), `omp --mode rpc --approval-mode
+  write --profile <profile>` is spawned in a dedicated working directory,
+  the ready frame must offer protocol v2, and `negotiate_protocol` v2 must
+  succeed. `await_ready/2` waits for that; a request sent before it is
+  refused with `{:error, :not_ready}`. A failed handshake stops the process
+  with the reason, which `await_ready/2` returns. From then on a frame over
+  OMP's `maxFrameBytes` arrives as `rpc_chunk` lines, which are reassembled
+  (`Raxol.Agent.OMP.RPC.Codec`).
 
   `--no-ui` is never passed: with it, a tool that needs approval fails
   closed with no frame at all. Without it, OMP asks over the wire.
@@ -18,15 +21,23 @@ defmodule Raxol.Agent.OMP.RPC do
   ## The profile and the working directory
 
   The profile must already be provisioned: OMP exits 1 before its ready
-  frame on a profile with no usable model, and `start_link/1` returns
-  `{:error, {:omp_exit, 1}}`.
+  frame on a profile with no usable model, and the handshake fails with
+  `{:omp_exit, 1}`.
 
   `:cwd` is the session's own directory. OMP loads and runs a working
   directory's `.omp/extensions`, rules and context files inside the process
   that holds every credential OMP has, so the BEAM's cwd (possibly a cloned,
-  untrusted workspace) is refused, and so is a directory not owned by this
-  account or writable by its group or others
-  (`Raxol.Agent.OperatorFile.owned_unshared/2`).
+  untrusted workspace) is refused, and so is any directory inside it. Both
+  are compared by file identity (device and inode), walking the real
+  ancestors of `:cwd`, so a symlink or another spelling of the same
+  directory (`/tmp` and `/private/tmp` on macOS) is refused too. A directory
+  not owned by this account or writable by its group or others is refused
+  as well (`Raxol.Agent.OperatorFile.owned_unshared/2`).
+
+  OMP also loads the `AGENTS.md` of every ancestor of `:cwd` into the
+  session's system prompt (its `.omp/extensions` do not run). Pick a `:cwd`
+  under a state directory whose ancestors hold no context files, never
+  under a workspace.
 
   ## Requests and events
 
@@ -47,7 +58,8 @@ defmodule Raxol.Agent.OMP.RPC do
   Every `extension_ui_request` that waits for an answer gets one. A tool
   approval select goes to the principal (`:principal`) as
   `{:omp_rpc_approval, pid, ui_id, frame}`; the principal answers with one
-  of the frame's `options` through `answer/3`. With no principal, or once
+  of the frame's `options` through `answer/3`, which refuses an answer from
+  any other process (the subscriber sees the frame too). With no principal, or once
   the principal exits, approvals are denied. Every other dialog is
   cancelled. Presentation frames (`setWidget`, `notify`, ...) need no
   answer and are only forwarded.
@@ -59,7 +71,16 @@ defmodule Raxol.Agent.OMP.RPC do
   its `prompt_result` with `sessionSettled: true` (OMP sends no
   `session_settled` then). A session with no agent activity is settled. If
   the session does not settle in time, `close/2` returns
-  `{:error, {:settle_timeout, ms}}` and the session keeps running.
+  `{:error, {:settle_timeout, ms}}` and the session keeps running: an agent
+  run or an approval nobody answers can keep it unsettled. To end it anyway,
+  send `%{"type" => "abort"}` and close again, or stop the process
+  (`GenServer.stop/1`).
+
+  However the process stops, it first sends OMP `abort` and `abort_bash`,
+  then closes OMP's stdin. On EOF OMP finishes the commands it accepted
+  before it exits, so without the aborts an RPC `bash` in flight would still
+  run to its end after its caller was told `{:error, :rpc_down}`. A session
+  stopped before its handshake finished is killed instead.
 
   ## Errors
 
@@ -67,23 +88,29 @@ defmodule Raxol.Agent.OMP.RPC do
 
   From `start_link/1` (the process stops with the same reason):
   `{:invalid_option, name}` (`:subscriber`, `:principal`, `:path`,
-  `:ready_timeout_ms`), `:invalid_profile`, `{:invalid_cwd, reason}` (`:not_absolute`,
-  `:beam_cwd`, `{:not_a_directory, type}`, `{:not_owned, uid}`,
-  `{:group_or_other_writable, mode}` or a posix error), every
-  `OmpGateway.resolve_binary/1` error, `{:omp_version_failed, status}`,
-  `:omp_version_timeout`, `{:omp_refused, reason}` (a `Version.check/1`
-  error), `{:omp_spawn_failed, reason}`, `{:omp_exit, status}` (exited
-  before the handshake finished), `:rpc_ready_timeout` (no ready frame and
-  negotiation in time; the process is killed), `:invalid_ready_frame`,
-  `{:unsupported_protocol, versions}` and `{:negotiate_failed, code}`.
+  `:ready_timeout_ms`), `:invalid_profile`, `{:invalid_cwd, reason}`
+  (`:not_absolute`, `:beam_cwd`, `:inside_beam_cwd`,
+  `{:not_a_directory, type}`, `{:not_owned, uid}`,
+  `{:group_or_other_writable, mode}` or a posix error) and every
+  `OmpGateway.resolve_binary/1` error.
+
+  From the handshake, returned by `await_ready/2` (the process stops with
+  the same reason): `{:omp_version_failed, status}`, `:omp_version_timeout`,
+  `{:omp_refused, reason}` (a `Version.check/1` error),
+  `{:omp_spawn_failed, reason}`, `{:omp_exit, status}` (exited before the
+  handshake finished), `:rpc_ready_timeout` (no ready frame and negotiation
+  within `:ready_timeout_ms` of the spawn; OMP is killed),
+  `:invalid_ready_frame`, `:unsupported_protocol` and
+  `{:negotiate_failed, code}`.
 
   From `request/3`: `{:invalid_request, reason}` (see
   `Codec.encode_command/1`; `:timeout` for a timeout that is not an integer
   from 0 to 2^32 - 1, `:too_large` for a line over OMP's `maxFrameBytes`),
-  `{:rpc_error, command, code}` (OMP refused the command),
-  `{:rpc_timeout, ms}`, `{:omp_exit, status}` (OMP exited with the request
-  pending; the process stops with `{:shutdown, {:omp_exit, status}}`),
-  `:rpc_not_started` and `:rpc_down`.
+  `:not_ready`, `{:rpc_error, code}` (OMP refused the command; `code` is
+  OMP's machine-readable code or nil), `{:rpc_timeout, ms}`,
+  `{:omp_exit, status}` (OMP exited with the request pending; the process
+  stops with `{:shutdown, {:omp_exit, status}}`), `:rpc_not_started` and
+  `:rpc_down`.
 
   A session is `restart: :temporary`: one that stopped is not replaced by a
   fresh OMP session nobody asked for.
@@ -106,13 +133,16 @@ defmodule Raxol.Agent.OMP.RPC do
   @line_bytes 65_536
   # Until the ready frame says otherwise: OMP's documented physical limit.
   @default_frame_bytes 1_048_576
+  # Sent as the process stops, before OMP's stdin closes.
+  @aborts ["abort", "abort_bash"]
   # The largest delay `Process.send_after/3` accepts.
   @max_timeout_ms 4_294_967_295
   @profile ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z/
   @prompts ["prompt", "abort_and_prompt"]
 
   @doc """
-  Start a session and return once it is ready (see the moduledoc).
+  Start a session; the handshake runs after this returns (see the
+  moduledoc and `await_ready/2`).
 
   Options: `:profile` (required; the OMP profile name), `:cwd` (required;
   the session's absolute working directory), `:subscriber` (required; the
@@ -124,11 +154,33 @@ defmodule Raxol.Agent.OMP.RPC do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name)
-    ready_ms = Keyword.get(opts, :ready_timeout_ms, @default_ready_timeout_ms)
-    start_ms = if is_integer(ready_ms), do: ready_ms + @version_timeout_ms + 5_000, else: 5_000
-    gen_opts = if name, do: [name: name, timeout: start_ms], else: [timeout: start_ms]
-    GenServer.start_link(__MODULE__, opts, gen_opts)
+    GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: []))
   end
+
+  @doc """
+  Wait until the handshake has finished: `:ok`, the handshake's error from
+  the moduledoc, `{:error, {:await_timeout, ms}}` when `timeout_ms` passed
+  first (the session keeps starting), `:rpc_not_started` (no such process,
+  for example one whose handshake already failed; its exit reason says why)
+  or `:rpc_down`.
+
+  The handshake is bounded on its own: at most the `omp --version` check
+  (#{@version_timeout_ms} ms) plus `:ready_timeout_ms`.
+  """
+  @spec await_ready(GenServer.server(), timeout()) :: :ok | {:error, term()}
+  def await_ready(server, timeout_ms \\ :infinity)
+
+  def await_ready(server, timeout_ms)
+      when timeout_ms == :infinity or
+             (is_integer(timeout_ms) and timeout_ms in 0..@max_timeout_ms) do
+    GenServer.call(server, :await_ready, timeout_ms)
+  catch
+    :exit, {:timeout, _} -> {:error, {:await_timeout, timeout_ms}}
+    :exit, {:noproc, _} -> {:error, :rpc_not_started}
+    :exit, _reason -> {:error, :rpc_down}
+  end
+
+  def await_ready(_server, _timeout_ms), do: {:error, {:invalid_request, :timeout}}
 
   @doc """
   Send one command (a map with a string `type`, no `id`) and wait for its
@@ -148,6 +200,7 @@ defmodule Raxol.Agent.OMP.RPC do
 
   @doc """
   Answer approval `ui_id` with `value`, one of its `options`: `:ok`,
+  `{:error, :not_principal}` (only the `:principal` may answer),
   `{:error, :invalid_choice}` (the approval stays open) or
   `{:error, :unknown_request}` (already answered, cancelled by OMP, or never
   asked).
@@ -158,8 +211,10 @@ defmodule Raxol.Agent.OMP.RPC do
 
   @doc """
   Tear the session down once it is settled (see the moduledoc): `:ok`, or
-  `{:error, {:settle_timeout, ms}}`, `{:error, {:omp_exit, status}}`,
-  `{:error, :already_closing}`.
+  `{:error, {:settle_timeout, ms}}` (the session keeps running; see the
+  moduledoc for forcing it down), `{:error, {:omp_exit, status}}`,
+  `{:error, :already_closing}`. A session whose handshake has not finished
+  stops at once.
   """
   @spec close(GenServer.server(), non_neg_integer()) :: :ok | {:error, term()}
   def close(server, timeout_ms \\ @default_close_timeout_ms)
@@ -185,13 +240,23 @@ defmodule Raxol.Agent.OMP.RPC do
     Process.flag(:trap_exit, true)
 
     with {:ok, config} <- config(opts),
-         {:ok, path} <- OmpGateway.resolve_binary(config.path),
-         :ok <- check_version(path, config.cwd),
-         {:ok, port} <- open_port(path, config) do
-      deadline = System.monotonic_time(:millisecond) + config.ready_timeout_ms
-      handshake(initial_state(port, config), deadline)
+         {:ok, path} <- OmpGateway.resolve_binary(config.path) do
+      {:ok, initial_state(config), {:continue, {:handshake, path, config}}}
     else
       {:error, reason} -> {:stop, reason}
+    end
+  end
+
+  # The ready frame and the negotiation response arrive as port messages;
+  # `:ready_deadline` bounds them.
+  @impl true
+  def handle_continue({:handshake, path, config}, state) do
+    with :ok <- check_version(path, config.cwd),
+         {:ok, port} <- open_port(path, config) do
+      timer = Process.send_after(self(), :ready_deadline, config.ready_timeout_ms)
+      {:noreply, %{state | port: port, os_pid: os_pid(port), ready_timer: timer}}
+    else
+      {:error, reason} -> handshake_failed(state, reason)
     end
   end
 
@@ -233,17 +298,17 @@ defmodule Raxol.Agent.OMP.RPC do
   defp profile(_profile), do: {:error, :invalid_profile}
 
   defp cwd(cwd) when is_binary(cwd) do
-    cond do
-      Path.type(cwd) != :absolute -> {:error, {:invalid_cwd, :not_absolute}}
-      Path.expand(cwd) == File.cwd!() -> {:error, {:invalid_cwd, :beam_cwd}}
-      true -> vet_cwd(Path.expand(cwd))
-    end
+    if Path.type(cwd) == :absolute,
+      do: vet_cwd(Path.expand(cwd)),
+      else: {:error, {:invalid_cwd, :not_absolute}}
   end
 
   defp cwd(_cwd), do: {:error, {:invalid_cwd, :not_absolute}}
 
   defp vet_cwd(cwd) do
     with {:ok, %File.Stat{type: :directory} = stat} <- File.stat(cwd),
+         {:ok, beam} <- File.stat("."),
+         :ok <- outside(cwd, identity(stat), identity(beam)),
          :ok <- OperatorFile.owned_unshared(stat) do
       {:ok, cwd}
     else
@@ -251,6 +316,26 @@ defmodule Raxol.Agent.OMP.RPC do
       {:error, reason} -> {:error, {:invalid_cwd, reason}}
     end
   end
+
+  # By file identity, never by path: a symlink, or `/tmp` and `/private/tmp`,
+  # name the same directory. The OS resolves `dir/..` from the directory
+  # `dir` really is, so the walk visits its real ancestors, up to the root
+  # (its own parent).
+  defp outside(_dir, beam, beam), do: {:error, :beam_cwd}
+
+  defp outside(dir, id, beam) do
+    parent = Path.join(dir, "..")
+
+    with {:ok, stat} <- File.stat(parent) do
+      case identity(stat) do
+        ^beam -> {:error, :inside_beam_cwd}
+        ^id -> :ok
+        parent_id -> outside(parent, parent_id, beam)
+      end
+    end
+  end
+
+  defp identity(%File.Stat{major_device: device, inode: inode}), do: {device, inode}
 
   # `omp --version` in the session's cwd, stdin on /dev/null, bounded.
   defp check_version(path, cwd) do
@@ -307,23 +392,26 @@ defmodule Raxol.Agent.OMP.RPC do
     error in ErlangError -> {:error, {:omp_spawn_failed, error.original}}
   end
 
-  defp initial_state(port, config) do
+  defp os_pid(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, pid} -> pid
+      nil -> nil
+    end
+  end
+
+  defp initial_state(config) do
     principal_ref = if config.principal, do: Process.monitor(config.principal)
 
-    os_pid =
-      case Port.info(port, :os_pid) do
-        {:os_pid, pid} -> pid
-        nil -> nil
-      end
-
     %{
-      port: port,
-      os_pid: os_pid,
+      port: nil,
+      os_pid: nil,
       subscriber: config.subscriber,
       principal: config.principal,
       principal_ref: principal_ref,
       phase: :starting,
       handshake_error: nil,
+      ready_timer: nil,
+      waiters: [],
       max_frame_bytes: @default_frame_bytes,
       decoder: Codec.decoder(@default_frame_bytes),
       buffer: [],
@@ -338,39 +426,33 @@ defmodule Raxol.Agent.OMP.RPC do
     }
   end
 
-  # Port messages are handled here, inside `init/1`, until the ready frame
-  # and the negotiation response have arrived.
-  defp handshake(%{port: port} = state, deadline) do
-    receive do
-      {^port, {:data, data}} ->
-        state = data(state, data)
-
-        cond do
-          state.handshake_error -> stop_handshake(state, state.handshake_error)
-          state.phase == :ready -> {:ok, state}
-          true -> handshake(state, deadline)
-        end
-
-      {^port, {:exit_status, status}} ->
-        {:stop, {:omp_exit, status}}
-
-      {:EXIT, ^port, reason} ->
-        {:stop, {:omp_exit, reason}}
-    after
-      remaining(deadline) ->
-        kill(state)
-        {:stop, :rpc_ready_timeout}
-    end
+  # Every caller waiting in `await_ready/2` learns why, and an OMP that may
+  # not be reading its stdin yet is killed.
+  defp handshake_failed(state, reason) do
+    Enum.each(state.waiters, &GenServer.reply(&1, {:error, reason}))
+    cancel(state.ready_timer)
+    if state.port, do: kill(state)
+    {:stop, reason, %{state | port: nil, waiters: [], ready_timer: nil}}
   end
 
-  defp stop_handshake(state, reason) do
-    SpawnedPort.close(state.port)
-    {:stop, reason}
+  defp ready(state) do
+    cancel(state.ready_timer)
+    Enum.each(state.waiters, &GenServer.reply(&1, :ok))
+    %{state | phase: :ready, ready_timer: nil, waiters: []}
   end
 
   # -- calls --------------------------------------------------------------------
 
   @impl true
+  def handle_call(:await_ready, _from, %{phase: :ready} = state), do: {:reply, :ok, state}
+
+  def handle_call(:await_ready, from, state),
+    do: {:noreply, %{state | waiters: [from | state.waiters]}}
+
+  def handle_call({:request, _type, _encoded, _timeout_ms}, _from, %{phase: phase} = state)
+      when phase != :ready,
+      do: {:reply, {:error, :not_ready}, state}
+
   def handle_call({:request, type, encoded, timeout_ms}, from, state) do
     id = Integer.to_string(state.next_id)
     line = Codec.frame(id, encoded)
@@ -384,6 +466,10 @@ defmodule Raxol.Agent.OMP.RPC do
       {:noreply, %{state | next_id: state.next_id + 1, pending: pending}}
     end
   end
+
+  def handle_call({:answer, _ui_id, _value}, {pid, _tag}, %{principal: principal} = state)
+      when pid != principal,
+      do: {:reply, {:error, :not_principal}, state}
 
   def handle_call({:answer, ui_id, value}, _from, state) do
     case Map.fetch(state.approvals, ui_id) do
@@ -404,7 +490,7 @@ defmodule Raxol.Agent.OMP.RPC do
     do: {:reply, {:error, :already_closing}, state}
 
   def handle_call({:close, timeout_ms}, from, state) do
-    if settled?(state) do
+    if state.phase != :ready or settled?(state) do
       {:stop, :normal, :ok, state}
     else
       timer = Process.send_after(self(), :close_deadline, timeout_ms)
@@ -415,14 +501,22 @@ defmodule Raxol.Agent.OMP.RPC do
   # -- port and timers ----------------------------------------------------------
 
   @impl true
-  def handle_info({port, {:data, data}}, %{port: port} = state),
-    do: state |> data(data) |> maybe_close()
+  def handle_info({port, {:data, data}}, %{port: port} = state) do
+    state = data(state, data)
+
+    if state.handshake_error,
+      do: handshake_failed(state, state.handshake_error),
+      else: maybe_close(state)
+  end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state),
     do: omp_down(state, status)
 
   def handle_info({:EXIT, port, reason}, %{port: port} = state),
     do: omp_down(state, reason)
+
+  def handle_info(:ready_deadline, %{phase: phase} = state) when phase != :ready,
+    do: handshake_failed(state, :rpc_ready_timeout)
 
   def handle_info({:deadline, id}, state) do
     case Map.pop(state.pending, id) do
@@ -452,8 +546,20 @@ defmodule Raxol.Agent.OMP.RPC do
   # A closed port's late messages and a stale timer land here.
   def handle_info(_message, state), do: {:noreply, state}
 
+  # OMP drains the commands it accepted once its stdin closes, so an RPC
+  # `bash` in flight is aborted first rather than left to finish after its
+  # caller was told `:rpc_down`.
   @impl true
-  def terminate(_reason, %{port: port}) when is_port(port), do: SpawnedPort.close(port)
+  def terminate(_reason, %{port: port, phase: :ready}) when is_port(port) do
+    for type <- @aborts do
+      {:ok, ^type, encoded} = Codec.encode_command(%{"type" => type})
+      write(port, Codec.frame(type, encoded))
+    end
+
+    SpawnedPort.close(port)
+  end
+
+  def terminate(_reason, %{port: port} = state) when is_port(port), do: kill(state)
   def terminate(_reason, _state), do: :ok
 
   # Crash reports and `:sys.get_status/1` show counts, never content: pending
@@ -467,11 +573,12 @@ defmodule Raxol.Agent.OMP.RPC do
     |> Map.replace(:log, [])
   end
 
-  defp redact_state(%{pending: pending, approvals: approvals} = state) do
+  defp redact_state(%{pending: pending, approvals: approvals, waiters: waiters} = state) do
     %{
       state
       | pending: map_size(pending),
         approvals: map_size(approvals),
+        waiters: length(waiters),
         buffer: :redacted,
         decoder: :redacted
     }
@@ -555,12 +662,12 @@ defmodule Raxol.Agent.OMP.RPC do
   defp frame(%{phase: :negotiating} = state, %{"type" => "response", "id" => "negotiate"} = frame) do
     case Codec.result(frame) do
       {:ok, %{"protocolVersion" => 2}} ->
-        %{state | phase: :ready}
+        ready(state)
 
       {:ok, _data} ->
         %{state | handshake_error: {:negotiate_failed, nil}}
 
-      {:error, {:rpc_error, _command, code}} ->
+      {:error, {:rpc_error, code}} ->
         %{state | handshake_error: {:negotiate_failed, code}}
     end
   end
@@ -652,6 +759,9 @@ defmodule Raxol.Agent.OMP.RPC do
   end
 
   defp maybe_close(state), do: {:noreply, state}
+
+  defp omp_down(%{phase: phase} = state, status) when phase != :ready,
+    do: handshake_failed(%{state | port: nil}, {:omp_exit, status})
 
   defp omp_down(state, status) do
     reason = {:omp_exit, status}

@@ -16,6 +16,11 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
 
   # OMP's ceiling for a reassembled frame (`maxReassembledFrameBytes`).
   @max_reassembled_bytes 67_108_864
+  # The most this client buffers for one physical line, whatever the ready
+  # frame claims: 8x the 1 MiB `maxFrameBytes` that omp 18.12.6 sends.
+  @max_frame_bytes 8_388_608
+  # OMP's machine-readable error codes (`session_busy`, `stale_cursor`, ...).
+  @code ~r/\A[a-z][a-z0-9_]{0,63}\z/
   @protocol 2
 
   # Inbound frames that are not commands: OMP never answers them, so a
@@ -54,12 +59,12 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
 
   @doc """
   Check the ready frame: `{:ok, limits}` when it offers protocol v2, else
-  `{:error, {:unsupported_protocol, versions}}` or
-  `{:error, :invalid_ready_frame}`. The reassembly limit is capped at OMP's
-  own 64 MiB.
+  `{:error, :unsupported_protocol}` or `{:error, :invalid_ready_frame}`. The
+  physical frame limit is capped at 8 MiB (omp 18.12.6 sends 1 MiB) and the
+  reassembly limit at OMP's own 64 MiB, so a ready frame cannot make the
+  client buffer more.
   """
-  @spec ready(map()) ::
-          {:ok, limits()} | {:error, :invalid_ready_frame | {:unsupported_protocol, list()}}
+  @spec ready(map()) :: {:ok, limits()} | {:error, :invalid_ready_frame | :unsupported_protocol}
   def ready(%{
         "type" => "ready",
         "supportedProtocolVersions" => versions,
@@ -71,11 +76,11 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
     if @protocol in versions do
       {:ok,
        %{
-         max_frame_bytes: max_frame,
+         max_frame_bytes: min(max_frame, @max_frame_bytes),
          max_reassembled_bytes: min(max_reassembled, @max_reassembled_bytes)
        }}
     else
-      {:error, {:unsupported_protocol, versions}}
+      {:error, :unsupported_protocol}
     end
   end
 
@@ -140,15 +145,16 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
 
   @doc """
   A response as a call result: `{:ok, data}` (nil when OMP sent none), or
-  `{:error, {:rpc_error, command, code}}` with OMP's machine-readable `code`
-  (nil when absent), never its error text.
+  `{:error, {:rpc_error, code}}` with OMP's machine-readable `code` (nil when
+  absent or not a lowercase snake_case token), never its error text or any
+  other field of the response.
   """
-  @spec result(map()) :: {:ok, term()} | {:error, {:rpc_error, term(), String.t() | nil}}
+  @spec result(map()) :: {:ok, term()} | {:error, {:rpc_error, String.t() | nil}}
   def result(%{"success" => true} = response), do: {:ok, Map.get(response, "data")}
 
   def result(response) do
-    code = if is_binary(response["code"]), do: response["code"]
-    {:error, {:rpc_error, response["command"], code}}
+    code = response["code"]
+    {:error, {:rpc_error, if(is_binary(code) and Regex.match?(@code, code), do: code)}}
   end
 
   @doc """
@@ -210,10 +216,12 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
   A line that is not a JSON object is `:invalid_frame`. A chunk run must
   start at index 0 and continue with the same `chunkId`, `count` and
   `byteLength` at the next index; any other line in between drops the run
-  and itself (`:chunk_interrupted`). The run's bytes must equal
-  `byteLength` (`:chunk_length_mismatch`), stay within the limit
-  (`:chunk_too_large`), be valid base64 (`:invalid_chunk`), strict UTF-8
-  (`:chunk_not_utf8`) and one JSON object (`:invalid_frame`).
+  and itself (`:chunk_interrupted`). A run may not claim more chunks than
+  `byteLength + 1` (`:invalid_chunk`), so empty chunks cannot grow it
+  without bound. The run's bytes must equal `byteLength`
+  (`:chunk_length_mismatch`), stay within the limit (`:chunk_too_large`),
+  be valid base64 (`:invalid_chunk`), strict UTF-8 (`:chunk_not_utf8`) and
+  one JSON object (`:invalid_frame`).
   """
   @spec decode_line(decoder(), binary()) ::
           {:ok, map(), decoder()} | {:more, decoder()} | {:error, decode_error(), decoder()}
@@ -255,7 +263,7 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
          limit
        )
        when is_binary(id) and id != "" and is_integer(count) and count > 0 and
-              is_integer(length) and length >= 0 do
+              is_integer(length) and length >= 0 and count <= length + 1 do
     if length > limit,
       do: {:error, :chunk_too_large},
       else: {:ok, %{id: id, count: count, length: length, next: 0, parts: [], size: 0}}

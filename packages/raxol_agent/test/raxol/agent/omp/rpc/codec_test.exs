@@ -92,6 +92,21 @@ defmodule Raxol.Agent.OMP.RPC.CodecTest do
       assert {[{:error, :chunk_length_mismatch}], _decoder} = feed(Codec.decoder(@limit), lines)
     end
 
+    test "a run claiming more chunks than byteLength + 1 is refused at its first chunk" do
+      empty =
+        Jason.encode!(%{
+          "type" => "rpc_chunk",
+          "chunkId" => "c",
+          "index" => 0,
+          "count" => 3,
+          "byteLength" => 1,
+          "data" => ""
+        })
+
+      assert {:error, :invalid_chunk, %{chunk: nil}} =
+               Codec.decode_line(Codec.decoder(@limit), empty)
+    end
+
     test "a run that is not UTF-8 or not base64 is refused" do
       bad_utf8 =
         Jason.encode!(%{
@@ -111,15 +126,20 @@ defmodule Raxol.Agent.OMP.RPC.CodecTest do
   end
 
   describe "ready/1" do
-    test "takes the limits and caps reassembly at 64 MiB" do
+    test "takes the limits, capping a line at 8 MiB and reassembly at 64 MiB" do
+      frame = %{
+        "type" => "ready",
+        "protocolVersion" => 1,
+        "supportedProtocolVersions" => [1, 2],
+        "maxFrameBytes" => 1_048_576,
+        "maxReassembledFrameBytes" => 1_000_000_000
+      }
+
       assert {:ok, %{max_frame_bytes: 1_048_576, max_reassembled_bytes: 67_108_864}} =
-               Codec.ready(%{
-                 "type" => "ready",
-                 "protocolVersion" => 1,
-                 "supportedProtocolVersions" => [1, 2],
-                 "maxFrameBytes" => 1_048_576,
-                 "maxReassembledFrameBytes" => 1_000_000_000
-               })
+               Codec.ready(frame)
+
+      assert {:ok, %{max_frame_bytes: 8_388_608}} =
+               Codec.ready(%{frame | "maxFrameBytes" => 1_000_000_000})
     end
 
     test "refuses a frame without protocol v2 or without limits" do
@@ -130,7 +150,7 @@ defmodule Raxol.Agent.OMP.RPC.CodecTest do
         "maxReassembledFrameBytes" => 1
       }
 
-      assert {:error, {:unsupported_protocol, [1]}} = Codec.ready(frame)
+      assert {:error, :unsupported_protocol} = Codec.ready(frame)
       assert {:error, :invalid_ready_frame} = Codec.ready(Map.delete(frame, "maxFrameBytes"))
       assert {:error, :invalid_ready_frame} = Codec.ready(%{"ready" => true})
     end
@@ -164,16 +184,21 @@ defmodule Raxol.Agent.OMP.RPC.CodecTest do
     end
   end
 
-  test "result/1 keeps OMP's code and drops its error text" do
+  test "result/1 keeps OMP's code and drops its error text and command" do
     assert {:ok, nil} = Codec.result(%{"type" => "response", "success" => true})
 
-    assert {:error, {:rpc_error, "get_messages_page", "session_busy"}} =
-             Codec.result(%{
-               "command" => "get_messages_page",
-               "success" => false,
-               "error" => "busy at /home/someone",
-               "code" => "session_busy"
-             })
+    response = %{
+      "command" => "get_messages_page",
+      "success" => false,
+      "error" => "busy at /home/someone",
+      "code" => "session_busy"
+    }
+
+    assert {:error, {:rpc_error, "session_busy"}} = Codec.result(response)
+
+    # A "code" that is not a machine token is not passed on.
+    assert {:error, {:rpc_error, nil}} =
+             Codec.result(%{response | "code" => "busy at /home/someone"})
   end
 
   describe "ui_request/1" do
