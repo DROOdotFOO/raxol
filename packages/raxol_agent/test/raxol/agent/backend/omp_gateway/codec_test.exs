@@ -70,9 +70,21 @@ defmodule Raxol.Agent.Backend.OmpGateway.CodecTest do
     end
   end
 
-  test "GET /v1/models lists model ids" do
-    assert {:ok, body} = "no_model" |> reply(1) |> Codec.result()
-    assert Codec.model_ids(body) == []
+  # Synthetic, not recorded: the fixture profile is logged in nowhere, so its
+  # recorded `/v1/models` body is `{"data":[]}`.
+  test "GET /v1/models ids come from data[].id, skipping entries without one" do
+    synthetic = %{
+      "data" => [
+        %{"id" => "anthropic/claude-haiku-5-5", "type" => "model"},
+        %{"type" => "model"},
+        %{"id" => 7},
+        %{"id" => "openai/gpt-5"}
+      ],
+      "has_more" => false
+    }
+
+    assert Codec.model_ids(synthetic) == ["anthropic/claude-haiku-5-5", "openai/gpt-5"]
+    assert Codec.model_ids(%{"error" => %{"type" => "not_found_error"}}) == []
   end
 
   describe "requests" do
@@ -83,16 +95,25 @@ defmodule Raxol.Agent.Backend.OmpGateway.CodecTest do
           max_tokens: 16
         )
 
-      encoded = 1 |> Codec.encode_request(:post, "/v1/messages", body) |> IO.iodata_to_binary()
+      assert {:ok, encoded} = Codec.encode_request(:post, "/v1/messages", body)
+      line = 1 |> Codec.frame(encoded) |> IO.iodata_to_binary()
 
-      assert String.ends_with?(encoded, "\n")
-      assert Jason.decode!(encoded) == Jason.decode!(hd(ins("messages_text")))
+      assert String.ends_with?(line, "\n")
+      assert Jason.decode!(line) == Jason.decode!(hd(ins("messages_text")))
     end
 
     test "a GET carries no body" do
-      encoded = 2 |> Codec.encode_request(:get, "/nope", nil) |> IO.iodata_to_binary()
+      assert {:ok, encoded} = Codec.encode_request(:get, "/nope", nil)
+      line = 2 |> Codec.frame(encoded) |> IO.iodata_to_binary()
 
-      assert Jason.decode!(encoded) == Jason.decode!(List.last(ins("out_of_order")))
+      assert Jason.decode!(line) == Jason.decode!(List.last(ins("out_of_order")))
+    end
+
+    test "a body that cannot be JSON is an invalid request naming the failure type only" do
+      body = %{model: @smol, messages: [%{role: "user", content: <<"tool output ", 0xFF>>}]}
+
+      assert {:error, {:invalid_request, Jason.EncodeError}} =
+               Codec.encode_request(:post, "/v1/messages", body)
     end
   end
 
@@ -137,15 +158,5 @@ defmodule Raxol.Agent.Backend.OmpGateway.CodecTest do
       assert response.metadata.cost_source == :unpriced
       assert response.usage["input_tokens"] == 41
     end
-  end
-
-  test "replies come back in completion order, correlated by id" do
-    ids =
-      for line <- tl(outs("out_of_order")) do
-        {:ok, %{id: id}} = Codec.decode_response(line)
-        id
-      end
-
-    assert ids == [2, 1]
   end
 end

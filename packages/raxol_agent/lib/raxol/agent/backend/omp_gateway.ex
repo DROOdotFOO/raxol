@@ -13,12 +13,22 @@ defmodule Raxol.Agent.Backend.OmpGateway do
   is false, so `SpendGate` sees every one). No `:streaming`: the gateway
   returns a streamed reply as one string after the stream ends.
 
+  `:model` is required (owner decision): `complete/2` without one returns
+  `{:error, :model_required}` before any request, never `Wire`'s direct-API
+  default, which through the gateway would be billed to whichever OMP
+  account resolves that id.
+
   ## The binary
 
   `config :raxol_agent, :omp_gateway, path: "/abs/path/to/omp"`, else `omp`
   on an absolute `PATH` entry. It is refused unless it is a regular file
   owned by this account or by root and neither group- nor other-writable:
-  whoever can rewrite it holds every credential OMP has.
+  whoever can rewrite it holds every credential OMP has. The directory
+  holding it must be sticky, or owned by this account or root and neither
+  group- nor other-writable (owner decision; `OperatorFile.trusted_dir?/2`),
+  or another account could rename a replacement into place between the
+  check and the spawn. A symlink is followed, and the directory holding
+  each link is vetted as well as the target's.
 
   ## Pricing
 
@@ -30,17 +40,45 @@ defmodule Raxol.Agent.Backend.OmpGateway do
 
   ## Errors
 
-  `{:error, {:http_error, status, error_type}}` for a non-2xx reply (never
-  its body), `{:error, {:gateway_timeout, ms}}` past the deadline (`:timeout`,
-  default 120 s), `{:error, {:gateway_exit, status}}` when the gateway exits
-  with the request pending (the next request starts a new one), and the
-  binary and version refusals from `resolve_binary/1` and
-  `Raxol.Agent.OMP.Version`.
+  None carries a request or reply body.
+
+  The request:
+
+    * `:model_required`: `complete/2` without a `:model`.
+    * `{:invalid_request, exception_module}`: the body cannot be JSON (a
+      string that is not UTF-8, say); `{:invalid_request, :timeout}`: the
+      `:timeout` (ms, default 120 s) is not an integer from 0 to 2^32 - 1.
+      Neither reaches the gateway.
+
+  The reply:
+
+    * `{:http_error, status, error_type}`: a non-2xx reply, with the body's
+      `error.type` (or nil).
+    * A string: a 2xx `/v1/messages` body `Wire` cannot parse, as its
+      keys-only marker.
+    * `{:gateway_timeout, ms}`: no reply by the deadline.
+
+  The gateway process (the next request starts a new one):
+
+    * `{:gateway_exit, status}`: it exited with the request pending. An
+      integer is its exit status; any other term is the reason its port
+      closed.
+    * `:gateway_ready_timeout`: it printed no ready line in time (killed).
+    * `{:gateway_refused, reason}`: its first line was not a ready line
+      (`:invalid_ready_line`) or its version is refused
+      (`{:unsupported_major, found, tested}`, `Raxol.Agent.OMP.Version`).
+    * `{:gateway_spawn_failed, reason}`: the port could not be opened.
+    * `:gateway_not_started`: no server is running; `:gateway_down`: the
+      server itself stopped during the call.
+
+  The binary (`resolve_binary/1`): `:omp_not_found`,
+  `{:omp_path_not_absolute, path}`, `{:omp_not_a_file, type}`,
+  `{:omp_stat_failed, posix}`, `{:omp_not_owned, uid}`,
+  `{:omp_writable, mode}`, `{:omp_dir_untrusted, dir, refusal}` (an
+  `OperatorFile` refusal) and `:omp_symlink_loop`.
   """
 
   @behaviour Raxol.Agent.AIBackend
-
-  import Bitwise, only: [band: 2]
 
   alias Raxol.Agent.Backend.HTTP
   alias Raxol.Agent.Backend.OmpGateway.Codec
@@ -48,7 +86,7 @@ defmodule Raxol.Agent.Backend.OmpGateway do
   alias Raxol.Agent.OperatorFile
 
   @default_timeout_ms 120_000
-  @group_other_write 0o022
+  @max_links 40
 
   @doc "Supervision spec for the gateway server (see `OmpGateway.Server`)."
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -58,8 +96,19 @@ defmodule Raxol.Agent.Backend.OmpGateway do
   def complete(messages, opts \\ []) do
     opts = Keyword.put_new_lazy(opts, :max_tokens, &HTTP.default_max_tokens/0)
 
-    with {:ok, body} <- request(:post, "/v1/messages", Codec.messages_body(messages, opts), opts) do
+    with :ok <- require_model(opts),
+         {:ok, body} <-
+           request(:post, "/v1/messages", Codec.messages_body(messages, opts), opts) do
       Codec.parse_messages(body)
+    end
+  end
+
+  # Never `Anthropic.Wire`'s direct-API default: through the gateway a bare
+  # id is billed to whichever OMP account resolves it.
+  defp require_model(opts) do
+    case Keyword.get(opts, :model) do
+      model when is_binary(model) and model != "" -> :ok
+      _absent -> {:error, :model_required}
     end
   end
 
@@ -133,33 +182,55 @@ defmodule Raxol.Agent.Backend.OmpGateway do
 
   defp vet(path) do
     if Path.type(path) == :absolute do
-      path |> File.stat() |> vet_stat(path)
+      vet_link(path, @max_links)
     else
       {:error, {:omp_path_not_absolute, path}}
     end
   end
 
-  defp vet_stat({:ok, %File.Stat{type: :regular} = stat}, path) do
-    case trusted(stat) do
-      :ok -> {:ok, path}
-      {:error, reason} -> {:error, reason}
+  # Every name on the way to the file is vetted with the directory holding
+  # it: a symlink's own directory as well as its target's, so neither the
+  # link nor the file can be renamed over between this check and the spawn.
+  defp vet_link(path, hops) do
+    with :ok <- vet_dir(Path.dirname(path)) do
+      case File.lstat(path) do
+        {:ok, %File.Stat{type: :symlink}} -> follow(path, hops)
+        {:ok, %File.Stat{type: :regular} = stat} -> vet_file(stat, path)
+        {:ok, %File.Stat{type: type}} -> {:error, {:omp_not_a_file, type}}
+        {:error, :enoent} -> {:error, :omp_not_found}
+        {:error, reason} -> {:error, {:omp_stat_failed, reason}}
+      end
     end
   end
 
-  defp vet_stat({:ok, %File.Stat{type: type}}, _path), do: {:error, {:omp_not_a_file, type}}
-  defp vet_stat({:error, :enoent}, _path), do: {:error, :omp_not_found}
-  defp vet_stat({:error, reason}, _path), do: {:error, {:omp_stat_failed, reason}}
+  defp follow(_path, 0), do: {:error, :omp_symlink_loop}
 
-  # Windows reports neither a meaningful uid nor POSIX mode bits.
-  defp trusted(%File.Stat{uid: owner, mode: mode}) do
-    uid = OperatorFile.uid()
-    permissions = band(mode, 0o777)
+  defp follow(path, hops) do
+    case File.read_link(path) do
+      {:ok, target} ->
+        with {:ok, _target} <- vet_link(Path.expand(target, Path.dirname(path)), hops - 1),
+             do: {:ok, path}
 
-    cond do
-      match?({:win32, _}, :os.type()) -> :ok
-      uid != :unknown and owner not in [uid, 0] -> {:error, {:omp_not_owned, owner}}
-      band(permissions, @group_other_write) != 0 -> {:error, {:omp_writable, permissions}}
-      true -> :ok
+      {:error, reason} ->
+        {:error, {:omp_stat_failed, reason}}
+    end
+  end
+
+  # Sticky, or owned by this account or root and neither group- nor
+  # other-writable (`OperatorFile.trusted_dir?/2`).
+  defp vet_dir(dir) do
+    case OperatorFile.trusted_dir?(dir, allow_root: true) do
+      :ok -> :ok
+      {:error, :enoent} -> {:error, :omp_not_found}
+      {:error, refusal} -> {:error, {:omp_dir_untrusted, dir, refusal}}
+    end
+  end
+
+  defp vet_file(stat, path) do
+    case OperatorFile.owned_unshared(stat, allow_root: true) do
+      :ok -> {:ok, path}
+      {:error, {:not_owned, owner}} -> {:error, {:omp_not_owned, owner}}
+      {:error, {:group_or_other_writable, mode}} -> {:error, {:omp_writable, mode}}
     end
   end
 end

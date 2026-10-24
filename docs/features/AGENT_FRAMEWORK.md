@@ -221,20 +221,29 @@ reply.metadata.cost_usd    # LlmPrices on reply.metadata.model, or nil when unpr
 reply.metadata.cost_source # :flat_table, :scoped_table, or :unpriced
 ```
 
-- One supervised process (under `Raxol.Agent.Supervisor`) owns the gateway port. It starts
-  `omp` on the first request, checks the ready line's version against the tested pin
+- One supervised process (the last child of `Raxol.Agent.Supervisor`, so its crash restarts
+  nothing else) owns the gateway port. It starts `omp` on the first request, with `/` as its
+  working directory so a workspace's `.omp/extensions` never load into the process holding
+  OMP's credentials. It checks the ready line's version against the tested pin
   (`Raxol.Agent.OMP.Version`; a different major is refused), and correlates requests by id,
   since the gateway answers in completion order.
 - The binary is `config :raxol_agent, :omp_gateway, path: "/abs/path/to/omp"`, else `omp` on
   an absolute `PATH` entry. It is refused unless it belongs to this account or to root and is
-  neither group- nor other-writable.
+  neither group- nor other-writable, and its directory (and each symlink's directory) is
+  sticky or meets the same owner and mode rules.
+- `:model` is required: without one `complete/2` returns `{:error, :model_required}`, never
+  a default id that some OMP account would be billed for.
 - Requests are Anthropic Messages bodies from `Backend.Anthropic.Wire`, sent with
   `stream: false` and an explicit `max_tokens` (`AI_MAX_TOKENS`, else 4096). Capabilities
   are `[:completion, :tool_use]`: no `:streaming`, because the gateway returns a streamed
   reply as one string, and the framework drives tool calls.
+- The body is encoded in the caller: one that cannot be JSON (a string that is not UTF-8)
+  returns `{:error, {:invalid_request, exception_module}}` and never reaches the shared
+  process.
 - Each request has a deadline (`:timeout`, default 120 s). When the gateway exits, every
   pending caller gets `{:error, {:gateway_exit, status}}` and the next request starts a new
-  one. A non-2xx reply is `{:error, {:http_error, status, error_type}}`, never its body.
+  one. A non-2xx reply is `{:error, {:http_error, status, error_type}}`, never its body. The
+  full error list is in the `OmpGateway` moduledoc.
 - The gateway drops HTTP headers, so its cost header never arrives. A reply is priced by
   `Raxol.Agent.LlmPrices` on the model that answered (ADR-0035, Narrowed); a model the table
   does not know keeps its token `usage` and reads `cost_source: :unpriced`, never a silent

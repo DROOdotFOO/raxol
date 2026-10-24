@@ -32,14 +32,34 @@ defmodule Raxol.Agent.Backend.OmpGateway.Codec do
   @typedoc "Why a non-2xx response failed: its status and `error.type`, if any."
   @type http_error :: {:http_error, non_neg_integer(), String.t() | nil}
 
-  @doc "Encode one request line, newline-terminated. `body` nil sends none."
-  @spec encode_request(pos_integer(), method(), String.t(), map() | nil) :: iodata()
-  def encode_request(id, method, path, body) do
-    request = %{"id" => id, "method" => method_name(method), "path" => path}
+  @typedoc "A request line from `encode_request/3`, still without its `id`."
+  @type encoded :: binary()
+
+  @doc """
+  Encode one request, all but its id: `{:ok, encoded}` for `frame/2`, or
+  `{:error, {:invalid_request, exception_module}}` when the body cannot be
+  JSON (a string that is not UTF-8, say). The error names the failure's type
+  only, never the body. `body` nil sends none.
+
+  The caller encodes, so a body the gateway can never receive fails its own
+  request instead of the process every other request shares.
+  """
+  @spec encode_request(method(), String.t(), map() | nil) ::
+          {:ok, encoded()} | {:error, {:invalid_request, module()}}
+  def encode_request(method, path, body) do
+    request = %{"method" => method_name(method), "path" => path}
     request = if is_nil(body), do: request, else: Map.put(request, "body", body)
 
-    [Jason.encode!(request), ?\n]
+    case Jason.encode(request) do
+      {:ok, "{" <> encoded} -> {:ok, encoded}
+      {:error, %module{}} -> {:error, {:invalid_request, module}}
+    end
   end
+
+  @doc "The newline-terminated line for an encoded request, with its `id` spliced in."
+  @spec frame(pos_integer(), encoded()) :: iodata()
+  def frame(id, encoded) when is_integer(id),
+    do: [~s({"id":), Integer.to_string(id), ?,, encoded, ?\n]
 
   defp method_name(:get), do: "GET"
   defp method_name(:post), do: "POST"

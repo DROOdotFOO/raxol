@@ -15,6 +15,17 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
   waiting gets `{:error, {:gateway_exit, status}}` and the next request
   spawns a new one.
 
+  The gateway runs with `/` as its working directory (owner decision, F2):
+  `omp auth-gateway stdio` loads and runs the cwd's `.omp/extensions`, and
+  the BEAM's cwd may be a cloned, untrusted workspace, while this process
+  holds every credential OMP has.
+
+  A request is encoded and checked in the caller (`request/5`), so a body
+  that cannot be JSON, or a deadline that is not a timer value, fails that
+  one caller with `{:error, {:invalid_request, _}}` and never reaches the
+  process every other caller shares. `format_status/1` keeps request and
+  reply bodies out of crash reports and `:sys.get_status/1`.
+
   One per VM by default (`Raxol.Agent.Supervisor` starts it under this
   module's name); `:name` starts a private one.
   """
@@ -30,6 +41,8 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
   @args ["auth-gateway", "stdio"]
   @default_ready_timeout_ms 15_000
   @line_bytes 65_536
+  # The largest delay `Process.send_after/3` accepts.
+  @max_timeout_ms 4_294_967_295
 
   @doc """
   Start the server. Options: `:name` (default this module), `:path` (the
@@ -45,13 +58,33 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
   @doc """
   Send one request and wait for its response, at most `timeout_ms` after the
   server accepts it (including any wait for the gateway to start).
+
+  The body is encoded here, in the caller: `{:error, {:invalid_request,
+  exception_module}}` if it cannot be JSON, `{:error, {:invalid_request,
+  :timeout}}` unless `timeout_ms` is an integer from 0 to #{@max_timeout_ms}.
+  Neither touches the server.
   """
-  @spec request(GenServer.server(), Codec.method(), String.t(), map() | nil, pos_integer()) ::
-          {:ok, Codec.response()} | {:error, term()}
-  def request(server, method, path, body, timeout_ms) do
-    # The server answers every request by its deadline or on the gateway's
-    # exit, so the call itself needs no timeout of its own.
-    GenServer.call(server, {:request, method, path, body, timeout_ms}, :infinity)
+  @spec request(
+          GenServer.server(),
+          Codec.method(),
+          String.t(),
+          map() | nil,
+          non_neg_integer()
+        ) :: {:ok, Codec.response()} | {:error, term()}
+  def request(server, method, path, body, timeout_ms)
+      when is_integer(timeout_ms) and timeout_ms in 0..@max_timeout_ms do
+    with {:ok, encoded} <- Codec.encode_request(method, path, body) do
+      call(server, {:request, encoded, timeout_ms})
+    end
+  end
+
+  def request(_server, _method, _path, _body, _timeout_ms),
+    do: {:error, {:invalid_request, :timeout}}
+
+  # The server answers every request by its deadline or on the gateway's
+  # exit, so the call itself needs no timeout of its own.
+  defp call(server, message) do
+    GenServer.call(server, message, :infinity)
   catch
     :exit, {:noproc, _} -> {:error, :gateway_not_started}
     :exit, _reason -> {:error, :gateway_down}
@@ -69,6 +102,7 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
        os_pid: nil,
        phase: :down,
        ready_timer: nil,
+       ready_ref: nil,
        buffer: [],
        next_id: 1,
        pending: %{},
@@ -77,12 +111,12 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
   end
 
   @impl true
-  def handle_call({:request, method, path, body, timeout_ms}, from, state) do
+  def handle_call({:request, encoded, timeout_ms}, from, state) do
     case ensure_started(state) do
       {:ok, state} ->
         id = state.next_id
         timer = Process.send_after(self(), {:deadline, id}, timeout_ms)
-        line = Codec.encode_request(id, method, path, body)
+        line = Codec.frame(id, encoded)
 
         state = %{
           state
@@ -123,7 +157,9 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
     end
   end
 
-  def handle_info(:ready_timeout, %{phase: :starting} = state) do
+  # Tagged with its spawn, so a timer that fired for a gateway already gone
+  # cannot kill the one started after it.
+  def handle_info({:ready_timeout, ref}, %{phase: :starting, ready_ref: ref} = state) do
     kill(state)
     {:noreply, gateway_down(state, :gateway_ready_timeout)}
   end
@@ -135,6 +171,26 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
   def terminate(_reason, %{port: port}) when is_port(port), do: SpawnedPort.close(port)
   def terminate(_reason, _state), do: :ok
 
+  # Crash reports and `:sys.get_status/1` show counts, never a body: pending
+  # and queued requests, the partial reply line and the last message all
+  # carry request or reply content.
+  @impl true
+  def format_status(status) do
+    status
+    |> Map.replace_lazy(:state, &redact_state/1)
+    |> Map.replace_lazy(:message, &redact_message/1)
+    |> Map.replace(:log, [])
+  end
+
+  defp redact_state(%{pending: pending, queued: queued} = state),
+    do: %{state | pending: map_size(pending), queued: length(queued), buffer: :redacted}
+
+  defp redact_state(state), do: state
+
+  defp redact_message({:request, _encoded, timeout_ms}), do: {:request, :redacted, timeout_ms}
+  defp redact_message({port, {:data, _data}}) when is_port(port), do: {port, {:data, :redacted}}
+  defp redact_message(message), do: message
+
   defp ensure_started(%{phase: :down} = state) do
     with {:ok, path} <- OmpGateway.resolve_binary(state.path),
          {:ok, port} <- open_port(path) do
@@ -144,16 +200,27 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
           nil -> nil
         end
 
-      timer = Process.send_after(self(), :ready_timeout, state.ready_timeout_ms)
-      {:ok, %{state | port: port, os_pid: os_pid, phase: :starting, ready_timer: timer}}
+      ref = make_ref()
+      timer = Process.send_after(self(), {:ready_timeout, ref}, state.ready_timeout_ms)
+
+      {:ok,
+       %{
+         state
+         | port: port,
+           os_pid: os_pid,
+           phase: :starting,
+           ready_timer: timer,
+           ready_ref: ref
+       }}
     end
   end
 
   defp ensure_started(state), do: {:ok, state}
 
-  # stdin stays a pipe: requests are written to it. stderr is inherited.
+  # stdin stays a pipe: requests are written to it. stderr is inherited. The
+  # working directory is `/`, never the BEAM's (see the moduledoc).
   defp open_port(path) do
-    opts = [:binary, :exit_status, :hide, {:line, @line_bytes}, {:args, @args}]
+    opts = [:binary, :exit_status, :hide, {:line, @line_bytes}, {:args, @args}, {:cd, "/"}]
     {:ok, Port.open({:spawn_executable, path}, opts)}
   rescue
     error in ErlangError -> {:error, {:gateway_spawn_failed, error.original}}
@@ -186,7 +253,7 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
         |> Enum.reverse()
         |> Enum.each(fn {_id, queued} -> write(state.port, queued) end)
 
-        %{state | phase: :ready, ready_timer: nil, queued: []}
+        %{state | phase: :ready, ready_timer: nil, ready_ref: nil, queued: []}
 
       {:error, reason} ->
         SpawnedPort.close(state.port)
@@ -225,6 +292,7 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
         os_pid: nil,
         phase: :down,
         ready_timer: nil,
+        ready_ref: nil,
         buffer: [],
         pending: %{},
         queued: []

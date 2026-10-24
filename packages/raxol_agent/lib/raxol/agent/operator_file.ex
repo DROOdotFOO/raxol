@@ -175,6 +175,12 @@ defmodule Raxol.Agent.OperatorFile do
     end
   end
 
+  @doc """
+  Whether `dir` may hold a trusted file: a directory that is sticky, or owned
+  by `uid/0` with no group- or other-write bit. `allow_root: true` also
+  accepts a root-owned directory (an installed binary's `/usr/local/bin`).
+  `{:error, :enoent}` when there is no such directory.
+  """
   # The directory is the other half of the control, and it was missing. This
   # module stats the file and then `read_file/2` OPENS it, two syscalls apart:
   # in a directory another account may write, they rename their own file into
@@ -185,9 +191,10 @@ defmodule Raxol.Agent.OperatorFile do
   # root-owned, and a rename there is refused to anyone but the file's owner,
   # so an override pointing into a shared temp directory is as safe as one in
   # `~/.raxol` and need not be refused for its mode or its owner.
-  defp trusted_dir?(dir) do
+  @spec trusted_dir?(String.t(), keyword()) :: :ok | {:error, refusal() | :enoent}
+  def trusted_dir?(dir, opts \\ []) do
     case File.stat(dir) do
-      {:ok, %File.Stat{type: :directory} = stat} -> vet_dir(stat)
+      {:ok, %File.Stat{type: :directory} = stat} -> vet_dir(stat, opts)
       {:ok, %File.Stat{type: type}} -> {:error, {:not_a_directory, type}}
       # No directory means no file: absent, not refused.
       {:error, :enoent} -> {:error, :enoent}
@@ -195,9 +202,8 @@ defmodule Raxol.Agent.OperatorFile do
     end
   end
 
-  defp vet_dir(%File.Stat{uid: dir_uid, mode: mode}) do
+  defp vet_dir(%File.Stat{uid: dir_uid, mode: mode}, opts) do
     permissions = band(mode, 0o7777)
-    owner = uid()
 
     cond do
       match?({:win32, _}, :os.type()) ->
@@ -206,7 +212,7 @@ defmodule Raxol.Agent.OperatorFile do
       band(permissions, @sticky) != 0 ->
         :ok
 
-      owner != :unknown and dir_uid != owner ->
+      not owner?(dir_uid, opts) ->
         {:error, {:dir_not_owned, dir_uid}}
 
       band(permissions, @group_other_write) != 0 ->
@@ -219,27 +225,27 @@ defmodule Raxol.Agent.OperatorFile do
 
   @doc """
   The owner and mode half of `trusted?/1` for a stat already taken: `:ok`
-  when it belongs to `uid/0` and carries no group- or other-write bit.
+  when it belongs to `uid/0` (or to root, with `allow_root: true`) and
+  carries no group- or other-write bit.
 
   No type check and no sticky-bit allowance: a caller vetting something other
   than a control file (the journal's private session directories, say) adds
   the rules its own resource needs.
   """
-  @spec owned_unshared(File.Stat.t()) ::
+  @spec owned_unshared(File.Stat.t(), keyword()) ::
           :ok
           | {:error,
              {:not_owned, non_neg_integer()} | {:group_or_other_writable, non_neg_integer()}}
   # Windows reports neither a meaningful uid nor POSIX mode bits through
   # File.Stat, so both tests would be theatre there; the path rule still holds.
-  def owned_unshared(%File.Stat{uid: file_uid, mode: mode}) do
+  def owned_unshared(%File.Stat{uid: file_uid, mode: mode}, opts \\ []) do
     permissions = band(mode, 0o777)
-    owner = uid()
 
     cond do
       match?({:win32, _}, :os.type()) ->
         :ok
 
-      owner != :unknown and file_uid != owner ->
+      not owner?(file_uid, opts) ->
         {:error, {:not_owned, file_uid}}
 
       band(permissions, @group_other_write) != 0 ->
@@ -247,6 +253,15 @@ defmodule Raxol.Agent.OperatorFile do
 
       true ->
         :ok
+    end
+  end
+
+  # An unknown uid drops the ownership half of the check (see `uid/0`).
+  defp owner?(file_uid, opts) do
+    case uid() do
+      :unknown -> true
+      ^file_uid -> true
+      _other -> file_uid == 0 and Keyword.get(opts, :allow_root, false)
     end
   end
 

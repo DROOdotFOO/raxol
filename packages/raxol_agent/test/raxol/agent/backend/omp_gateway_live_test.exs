@@ -75,7 +75,8 @@ defmodule Raxol.Agent.Backend.OmpGatewayLiveTest do
 
     # Sent from this process, so the barrier below is ordered after it: the
     # request is pending in the server before the kill.
-    pending = :gen_server.send_request(server, {:request, :get, "/v1/models", nil, 60_000})
+    {:ok, encoded} = Codec.encode_request(:get, "/v1/models", nil)
+    pending = :gen_server.send_request(server, {:request, encoded, 60_000})
     _ = :sys.get_state(server)
     {_, 0} = System.cmd("kill", ["-KILL", os_pid])
 
@@ -94,5 +95,45 @@ defmodule Raxol.Agent.Backend.OmpGatewayLiveTest do
         _ -> nil
       end
     end)
+  end
+end
+
+defmodule Raxol.Agent.Backend.OmpGatewayCwdLiveTest do
+  # The gateway loads and runs its working directory's `.omp/extensions`, so
+  # it must not inherit the BEAM's. Not async: this changes the VM's cwd.
+  #
+  #   mix test --only omp
+  use ExUnit.Case, async: false
+
+  alias Raxol.Agent.Backend.OmpGateway
+  alias Raxol.Agent.Backend.OmpGateway.Server
+
+  @moduletag :omp
+  @moduletag :unix_only
+
+  # Outside any git checkout, so nothing but the cwd can make omp load it.
+  setup do
+    dir = Path.join(System.tmp_dir!(), "raxol_omp_cwd_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(dir, ".omp/extensions"))
+    on_exit(fn -> File.rm_rf!(dir) end)
+    %{dir: dir}
+  end
+
+  test "a workspace's .omp/extensions never run inside the gateway", %{dir: dir} do
+    marker = Path.join(dir, "MARKER")
+
+    File.write!(Path.join(dir, ".omp/extensions/probe.ts"), """
+    import { writeFileSync } from "node:fs";
+    export default function () { writeFileSync(#{inspect(marker)}, "ran"); }
+    """)
+
+    {:ok, omp} = OmpGateway.resolve_binary(nil)
+    server = start_supervised!({Server, name: nil, path: omp})
+
+    File.cd!(dir, fn ->
+      assert {:ok, _ids} = OmpGateway.list_models(server: server)
+    end)
+
+    refute File.exists?(marker)
   end
 end

@@ -5,6 +5,7 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.Backend.OmpGateway
+  alias Raxol.Agent.Backend.OmpGateway.Codec
   alias Raxol.Agent.Backend.OmpGateway.Server
 
   @moduletag :tmp_dir
@@ -127,6 +128,81 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
              )
   end
 
+  describe "a bad request fails only its own caller" do
+    test "a body that cannot be JSON is refused while another request stays pending",
+         %{tmp_dir: dir} do
+      server = start_gateway(dir, "out_of_order", "play")
+
+      slow =
+        Codec.messages_body([user("Count from 1 to 30, separated by spaces.")],
+          model: @smol,
+          max_tokens: 64
+        )
+
+      # Sent from this process, so the barrier below is ordered after it: the
+      # request is pending in the server before the bad one is made. The
+      # player answers it only once the `/nope` request below arrives.
+      {:ok, encoded} = Codec.encode_request(:post, "/v1/messages", slow)
+      pending = :gen_server.send_request(server, {:request, encoded, 60_000})
+      _ = :sys.get_state(server)
+
+      assert {:error, {:invalid_request, Jason.EncodeError}} =
+               OmpGateway.complete([user(<<"tool output ", 0xFF>>)],
+                 model: @smol,
+                 max_tokens: 16,
+                 server: server
+               )
+
+      assert {:error, {:http_error, 404, nil}} =
+               OmpGateway.request(:get, "/nope", nil, server: server)
+
+      assert {:reply, {:ok, response}} = :gen_server.receive_response(pending, 60_000)
+      assert {:ok, body} = Codec.result(response)
+      assert {:ok, %{content: "1 2 3" <> _}} = Codec.parse_messages(body)
+    end
+
+    test "a timeout that is not a timer value is refused without reaching the server" do
+      # No server by this name: anything that reached one would be
+      # `:gateway_not_started`.
+      opts = [server: :"omp_gateway_absent_#{System.unique_integer([:positive])}"]
+
+      for timeout <- [:infinity, -1, 1.5, 4_294_967_296] do
+        assert {:error, {:invalid_request, :timeout}} =
+                 OmpGateway.request(:get, "/v1/models", nil, [timeout: timeout] ++ opts)
+      end
+
+      assert {:error, :gateway_not_started} = OmpGateway.request(:get, "/v1/models", nil, opts)
+    end
+
+    test "a missing model is refused without reaching the server" do
+      opts = [server: :"omp_gateway_absent_#{System.unique_integer([:positive])}"]
+
+      assert {:error, :model_required} = OmpGateway.complete([user("hi")], opts)
+      assert {:error, :model_required} = OmpGateway.complete([user("hi")], [model: nil] ++ opts)
+
+      assert {:error, :gateway_not_started} =
+               OmpGateway.complete([user("hi")], [model: @smol] ++ opts)
+    end
+
+    test "the server's status shows no request body", %{tmp_dir: dir} do
+      server = start_gateway(dir, "messages_text", "never-answer")
+      secret = "do-not-log-#{System.unique_integer([:positive])}"
+
+      {:ok, encoded} = Codec.encode_request(:post, "/v1/messages", %{content: secret})
+      _pending = :gen_server.send_request(server, {:request, encoded, 60_000})
+      _ = :sys.get_state(server)
+
+      status =
+        server |> :sys.get_status() |> inspect(limit: :infinity, printable_limit: :infinity)
+
+      refute status =~ secret
+      assert status =~ "pending: 1"
+
+      redacted = Server.format_status(%{message: {:request, encoded, 60_000}})
+      refute inspect(redacted, limit: :infinity, printable_limit: :infinity) =~ secret
+    end
+  end
+
   describe "the binary" do
     @tag :unix_only
     test "a group-writable binary is refused before it runs", %{tmp_dir: dir} do
@@ -135,6 +211,44 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
 
       assert {:error, {:omp_writable, 0o775}} =
                OmpGateway.request(:get, "/v1/models", nil, server: server)
+    end
+
+    @tag :unix_only
+    test "a binary in a directory others may write is refused", %{tmp_dir: dir} do
+      shared = Path.join(dir, "shared")
+      File.mkdir!(shared)
+      path = write_binary(shared, "messages_text", "play")
+      File.chmod!(shared, 0o777)
+
+      assert {:error, {:omp_dir_untrusted, ^shared, {:dir_group_or_other_writable, 0o777}}} =
+               OmpGateway.resolve_binary(path)
+    end
+
+    @tag :unix_only
+    test "a binary in a sticky directory others may write is accepted", %{tmp_dir: dir} do
+      sticky = Path.join(dir, "sticky")
+      File.mkdir!(sticky)
+      path = write_binary(sticky, "messages_text", "play")
+      # `File.chmod!/2` drops the sticky bit (observed on macOS); chmod(1) keeps it.
+      {_, 0} = System.cmd("chmod", ["1777", sticky])
+
+      assert {:ok, ^path} = OmpGateway.resolve_binary(path)
+    end
+
+    @tag :unix_only
+    test "a symlink is vetted in its own directory as well as its target's", %{tmp_dir: dir} do
+      target = write_binary(dir, "messages_text", "play")
+      shared = Path.join(dir, "shared")
+      File.mkdir!(shared)
+      link = Path.join(shared, "omp")
+      File.ln_s!(target, link)
+
+      assert {:ok, ^link} = OmpGateway.resolve_binary(link)
+
+      File.chmod!(shared, 0o777)
+
+      assert {:error, {:omp_dir_untrusted, ^shared, {:dir_group_or_other_writable, 0o777}}} =
+               OmpGateway.resolve_binary(link)
     end
 
     test "a relative configured path is refused" do
