@@ -1076,7 +1076,9 @@ defmodule Raxol.Application do
     if module_available?(Raxol.MCP.Registry) and
          Process.whereis(Raxol.MCP.Registry) != nil do
       if Code.ensure_loaded?(Raxol.Headless.McpTools) do
-        Raxol.Headless.McpTools.register(Raxol.MCP.Registry)
+        Raxol.MCP.Registry
+        |> Raxol.Headless.McpTools.register()
+        |> warn_on_refused_tools(Raxol.Headless.McpTools)
       end
 
       if Code.ensure_loaded?(Raxol.Headless.DocsResource) do
@@ -1085,7 +1087,9 @@ defmodule Raxol.Application do
 
       if Code.ensure_loaded?(Raxol.MCP.AdaptiveTools) and
            Raxol.MCP.AdaptiveTools.available?() do
-        Raxol.MCP.AdaptiveTools.register(Raxol.MCP.Registry)
+        Raxol.MCP.Registry
+        |> Raxol.MCP.AdaptiveTools.register()
+        |> warn_on_refused_tools(Raxol.MCP.AdaptiveTools)
       end
 
       # The coding-agent harness tools live in raxol_agent, which main raxol
@@ -1097,6 +1101,17 @@ defmodule Raxol.Application do
     end
 
     :ok
+  end
+
+  # The registry registers every other tool, so boot goes on without the
+  # refused ones.
+  defp warn_on_refused_tools(:ok, _source), do: :ok
+
+  defp warn_on_refused_tools({:error, {:name_collision, collisions}}, source) do
+    Log.warning(
+      "[Raxol.Application] #{inspect(source)} tools refused (their client-side " <>
+        "names are taken): #{inspect(collisions)}"
+    )
   end
 
   # Tidewave dispatches out of its own map, so without this its client sees
