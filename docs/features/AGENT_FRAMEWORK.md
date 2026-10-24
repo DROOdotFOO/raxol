@@ -103,6 +103,32 @@ alias Raxol.Agent.Comm
 # {:agent_message, nil, {:team_broadcast, :my_team, {:status_update, status}}}
 ```
 
+### Agent turn contract
+
+A prompt is one turn: `Comm.call(agent, {:acp_prompt, text, approver}, timeout)` returns
+`{:ok, {:ok, text, usage}}`. `approver` is an arity-3 `:tool_authorizer` (see
+`Raxol.Agent.ToolPolicy`) that every tool call of the turn must pass. The session stands in
+as the caller: `update/2` answers inline with `Comm.reply/3`, or with `Comm.run_turn/3` for
+work that blocks. `{:acp_cancel, ref}` kills the turn's process, answers the prompt
+`{:error, :cancelled}` and is then forwarded to `update/2`; sent with `Comm.call/3`, its `:ok`
+arrives only after that process is dead. Pass `ref: ref` to `Comm.call/4` to know the ref; it
+must be a fresh `make_ref/0`, used for one call only. A prompt is also cancelled when its
+caller goes down or its `Comm.call/4` times out.
+
+An agent consults `approver`, and runs the actions it gates, in the `Comm.run_turn/3` process,
+never inline in `update/2`: an inline ask would block the whole agent until it is answered, and
+a cancel stops only the turn's process, so inline work is neither stopped nor undone. A turn
+process that changes agent state sends the change to the agent process (`self()` in
+`update/2`) as `{:command_result, msg}`, which `update/2` receives.
+
+Other answers to a prompt: `{:error, :invalid_prompt}` (`text` not a binary or `approver` not
+arity 3), `{:error, :duplicate_ref}` (the ref already names an in-flight turn),
+`{:error, :no_dispatcher}` (the agent is not running), `{:error, :turn_failed}` (the turn's
+process crashed or was killed from outside) and `{:error, :cancelled}`. A cancel sent with
+`Comm.call/3` answers `:ok` or `{:error, :not_found}` (no in-flight turn has that ref).
+`Raxol.Agent.Reference.Counter` is the reference agent (`increment`, `get`, sensitive
+`reset`, `hold` until `release` or a cancel).
+
 ## Teams
 
 `Raxol.Agent.Team` is an OTP Supervisor for agent groups:

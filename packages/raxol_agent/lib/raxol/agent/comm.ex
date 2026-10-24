@@ -18,6 +18,47 @@ defmodule Raxol.Agent.Comm do
         Raxol.Agent.Comm.reply(caller, ref, answer(question, model))
         {model, []}
       end
+
+  ## Agent turn contract
+
+  `call(agent, {:acp_prompt, text, approver}, timeout)` asks the agent for
+  one turn, answered `{:ok, text, usage}` (so the call returns
+  `{:ok, {:ok, text, usage}}`). `approver` is an arity-3 `:tool_authorizer`
+  (see `Raxol.Agent.ToolPolicy`) that the turn's tool calls must pass.
+
+  The session proxies the turn: the agent's `update/2` sees
+  `{:call, session_pid, ref, {:acp_prompt, text, approver}}` and answers it
+  inline with `reply/3`, or with `run_turn/3` for work that blocks. A
+  `{:acp_cancel, ref}` (via `send/3`, or `call/3` for an `:ok` that returns
+  once the turn's process is dead) kills that process, answers the prompt
+  `{:error, :cancelled}` and is then forwarded to `update/2`. Pass
+  `ref: ref` to `call/4` to know the prompt's ref; it must be a fresh
+  `make_ref/0`, used for one call only. A prompt is also cancelled when its
+  caller goes down, or when `call/4` times out (the `{:error, :cancelled}`
+  answer may then arrive in the caller's mailbox as a stray reply).
+
+  An agent consults `approver`, and runs the actions it gates, in the
+  `run_turn/3` process, never inline in `update/2`: an inline ask would
+  block the whole agent until it is answered, and a cancel stops only the
+  `run_turn/3` process, so inline work is neither stopped nor undone. A turn
+  process that changes agent state sends the change to the agent process
+  (`self()` in `update/2`) as `{:command_result, msg}`, which `update/2`
+  receives; `Raxol.Agent.Reference.Counter` shows the pattern.
+
+  Besides `{:ok, text, usage}`, a prompt can be answered:
+
+    * `{:error, :invalid_prompt}` - `text` is not a binary or `approver` is
+      not an arity-3 function
+    * `{:error, :duplicate_ref}` - `ref` already names an in-flight turn of
+      that agent
+    * `{:error, :no_dispatcher}` - the agent is not running (its lifecycle
+      is starting or restarting)
+    * `{:error, :turn_failed}` - the `run_turn/3` process crashed or was
+      killed from outside
+    * `{:error, :cancelled}` - the turn was cancelled
+
+  A cancel sent with `call/3` answers `:ok`, or `{:error, :not_found}` when
+  no in-flight turn has that ref.
   """
 
   alias Raxol.Agent.Session
@@ -40,14 +81,24 @@ defmodule Raxol.Agent.Comm do
   otherwise this returns `{:error, :timeout}`. A target that dies before
   replying fails fast with `{:error, :agent_down}` instead of waiting out
   the timeout.
+
+  Pass `ref: ref` to choose the request's ref (default `make_ref()`), so
+  another process can name the request, as in `{:acp_cancel, ref}`. `ref`
+  must be a fresh reference used for one call only: a late reply to an
+  earlier call with the same ref would be taken as this call's answer.
+  Raises `ArgumentError` when `ref` is not a reference.
+
+  When an `{:acp_prompt, text, approver}` call times out, it sends the
+  turn's `{:acp_cancel, ref}` before returning `{:error, :timeout}`.
   """
-  @spec call(term(), term(), timeout()) ::
+  @spec call(term(), term(), timeout(), keyword()) ::
           {:ok, term()} | {:error, :timeout | :not_found | :agent_down}
-  def call(target_id, message, timeout \\ 5_000) do
+  def call(target_id, message, timeout \\ 5_000, opts \\ []) do
+    ref = call_ref(opts)
+
     case Registry.lookup(Raxol.Agent.Registry, target_id) do
       [{pid, _}] ->
         mref = Process.monitor(pid)
-        ref = make_ref()
         GenServer.cast(pid, {:send_message, {:call, self(), ref, message}})
 
         receive do
@@ -60,6 +111,7 @@ defmodule Raxol.Agent.Comm do
         after
           timeout ->
             Process.demonitor(mref, [:flush])
+            cancel_abandoned(pid, ref, message)
             flush_reply(ref)
             {:error, :timeout}
         end
@@ -68,6 +120,19 @@ defmodule Raxol.Agent.Comm do
         {:error, :not_found}
     end
   end
+
+  defp call_ref(opts) do
+    case Keyword.get_lazy(opts, :ref, &make_ref/0) do
+      ref when is_reference(ref) -> ref
+      other -> raise ArgumentError, "Comm.call/4 :ref must be a reference, got: #{inspect(other)}"
+    end
+  end
+
+  # A prompt nobody waits for any more is aborted, not left running.
+  defp cancel_abandoned(pid, ref, {:acp_prompt, _text, _approver}),
+    do: GenServer.cast(pid, {:send_message, {:acp_cancel, ref}})
+
+  defp cancel_abandoned(_pid, _ref, _message), do: :ok
 
   # Best-effort sweep of a reply that raced the timeout. A reply arriving
   # after this returns is abandoned in the caller's mailbox; callers doing
@@ -84,6 +149,26 @@ defmodule Raxol.Agent.Comm do
   @spec reply(pid(), reference(), term()) :: :ok
   def reply(caller, ref, response) when is_pid(caller) and is_reference(ref) do
     Kernel.send(caller, {:agent_reply, ref, response})
+    :ok
+  end
+
+  @doc """
+  Answer an `{:acp_prompt, text, approver}` call by running `fun` in a turn
+  process the session owns; `fun`'s return is the reply. `{:acp_cancel, ref}`
+  kills that process. Call it from `update/2` with the prompt's `caller` and
+  `ref`.
+  """
+  @spec run_turn(pid(), reference(), (-> term())) :: :ok
+  def run_turn(caller, ref, fun)
+      when is_pid(caller) and is_reference(ref) and is_function(fun, 0) do
+    Kernel.send(caller, {:acp_run, ref, fun})
+    :ok
+  end
+
+  @doc "Send `message` to the process running turn `ref` (see `run_turn/3`)."
+  @spec send_turn(pid(), reference(), term()) :: :ok
+  def send_turn(caller, ref, message) when is_pid(caller) and is_reference(ref) do
+    Kernel.send(caller, {:acp_turn_message, ref, message})
     :ok
   end
 

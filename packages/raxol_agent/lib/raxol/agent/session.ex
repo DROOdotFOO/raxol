@@ -11,6 +11,9 @@ defmodule Raxol.Agent.Session do
 
   require Logger
 
+  alias Raxol.Agent.Comm
+  alias Raxol.Agent.Session.PromptTurn
+
   defstruct [
     :id,
     :app_module,
@@ -20,7 +23,8 @@ defmodule Raxol.Agent.Session do
     :emit_bridge,
     bridge_opts: [],
     owns_bridge?: true,
-    owns_lifecycle?: true
+    owns_lifecycle?: true,
+    turns: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -32,7 +36,15 @@ defmodule Raxol.Agent.Session do
           emit_bridge: pid() | nil,
           bridge_opts: keyword(),
           owns_bridge?: boolean(),
-          owns_lifecycle?: boolean()
+          owns_lifecycle?: boolean(),
+          turns: %{
+            reference() => %{
+              caller: pid(),
+              caller_mref: reference(),
+              pid: pid() | nil,
+              mref: reference() | nil
+            }
+          }
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -241,6 +253,38 @@ defmodule Raxol.Agent.Session do
     end
   end
 
+  # Agent turn contract (see `Raxol.Agent.Comm`). The session stands in as
+  # the prompt's caller so it can answer, and abort, the turn itself.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(
+        {:send_message, {:call, caller, ref, {:acp_prompt, text, approver}}},
+        state
+      )
+      when is_pid(caller) and is_reference(ref) do
+    {:noreply, start_turn(state, caller, ref, text, approver)}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:send_message, {:acp_cancel, ref}}, state) do
+    {_result, state} = cancel_turn(state, ref, %{})
+    {:noreply, state}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:send_message, {:acp_cancel, ref}, metadata}, state)
+      when is_map(metadata) do
+    {_result, state} = cancel_turn(state, ref, metadata)
+    {:noreply, state}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:send_message, {:call, caller, call_ref, {:acp_cancel, ref}}}, state)
+      when is_pid(caller) and is_reference(call_ref) do
+    {result, state} = cancel_turn(state, ref, %{})
+    Comm.reply(caller, call_ref, result)
+    {:noreply, state}
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:send_message, message, metadata}, state)
       when is_map(metadata) do
@@ -283,6 +327,58 @@ defmodule Raxol.Agent.Session do
     end
 
     {:noreply, state}
+  end
+
+  # Validation sits here, where the prompt enters the agent. An accepted
+  # prompt reaches `update/2` with this session as its caller.
+  defp start_turn(state, caller, ref, text, approver) do
+    cond do
+      not is_binary(text) or not is_function(approver, 3) ->
+        Comm.reply(caller, ref, {:error, :invalid_prompt})
+        state
+
+      Map.has_key?(state.turns, ref) ->
+        Comm.reply(caller, ref, {:error, :duplicate_ref})
+        state
+
+      true ->
+        dispatch_prompt(state, caller, ref, text, approver)
+    end
+  end
+
+  defp dispatch_prompt(state, caller, ref, text, approver) do
+    case get_dispatcher(state.lifecycle_pid) do
+      nil ->
+        Comm.reply(caller, ref, {:error, :no_dispatcher})
+        state
+
+      dispatcher_pid ->
+        prompt = {:call, self(), ref, {:acp_prompt, text, approver}}
+        GenServer.cast(dispatcher_pid, {:dispatch, {:agent_message, nil, prompt}})
+        turn = %{caller: caller, caller_mref: Process.monitor(caller), pid: nil, mref: nil}
+        put_in(state.turns[ref], turn)
+    end
+  end
+
+  # Kill the turn's process (if `run_turn/3` started one) before answering,
+  # so `:ok` means that process is dead. Work the agent does inline in
+  # `update/2` is not stopped and may still finish after this. The agent then
+  # sees the cancel too, to drop whatever it tracks for the turn.
+  defp cancel_turn(state, ref, metadata) do
+    case Map.pop(state.turns, ref) do
+      {nil, _turns} ->
+        {{:error, :not_found}, state}
+
+      {turn, turns} ->
+        Process.demonitor(turn.caller_mref, [:flush])
+        if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
+        Comm.reply(turn.caller, ref, {:error, :cancelled})
+
+        {:noreply, state} =
+          forward_to_dispatcher(%{state | turns: turns}, {:acp_cancel, ref}, metadata)
+
+        {:ok, state}
+    end
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -336,6 +432,48 @@ defmodule Raxol.Agent.Session do
   def handle_manager_call(_msg, _from, state),
     do: {:reply, {:error, :unknown_call}, state}
 
+  # The agent answered a prompt inline (`Comm.reply/3` to this session) or its
+  # turn process finished. A ref no longer in `turns` was cancelled, so its
+  # late reply falls through to the catch-all and is dropped.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:agent_reply, ref, reply}, %__MODULE__{turns: turns} = state)
+      when is_map_key(turns, ref) do
+    {turn, turns} = Map.pop(turns, ref)
+    Process.demonitor(turn.caller_mref, [:flush])
+    if turn.mref, do: Process.demonitor(turn.mref, [:flush])
+    Comm.reply(turn.caller, ref, reply)
+    {:noreply, %{state | turns: turns}}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:acp_run, ref, fun}, %__MODULE__{turns: turns} = state)
+      when is_map_key(turns, ref) and is_function(fun, 0) do
+    case Map.fetch!(turns, ref) do
+      %{pid: nil} = turn ->
+        {pid, mref} = PromptTurn.start(self(), ref, fun)
+        {:noreply, put_in(state.turns[ref], %{turn | pid: pid, mref: mref})}
+
+      %{pid: pid} ->
+        Logger.warning(
+          "[Agent.Session] #{inspect(state.id)} ignored a second run_turn for " <>
+            "#{inspect(ref)}; turn already running in #{inspect(pid)}"
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:acp_turn_message, ref, message}, %__MODULE__{turns: turns} = state)
+      when is_map_key(turns, ref) do
+    case Map.fetch!(turns, ref) do
+      %{pid: pid} when is_pid(pid) -> send(pid, {:turn_message, message})
+      %{pid: nil} -> :ok
+    end
+
+    {:noreply, state}
+  end
+
   # The session's emit bridge went down. Graceful stops (:normal/:shutdown)
   # need no reaction — the session itself is usually terminating. On a crash,
   # restart the bridge (same session_id, so it re-registers and re-subscribes)
@@ -360,15 +498,35 @@ defmodule Raxol.Agent.Session do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:DOWN, _ref, :process, pid, reason}, state) do
-    if pid == state.lifecycle_pid do
-      Logger.warning(
-        "[Agent.Session] Lifecycle for #{inspect(state.id)} crashed: #{inspect(reason)}"
-      )
+  def handle_manager_info(
+        {:DOWN, _ref, :process, pid, reason},
+        %__MODULE__{lifecycle_pid: pid} = state
+      ) do
+    Logger.warning(
+      "[Agent.Session] Lifecycle for #{inspect(state.id)} crashed: #{inspect(reason)}"
+    )
 
-      {:noreply, %{state | lifecycle_pid: nil}}
-    else
-      {:noreply, state}
+    {:noreply, %{state | lifecycle_pid: nil}}
+  end
+
+  # A turn process went down without reporting (it was killed from outside):
+  # the prompt still gets exactly one answer. A prompt caller that went down
+  # cancels its turn.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:DOWN, mref, :process, _pid, reason}, state) do
+    case Enum.find(state.turns, fn {_ref, turn} -> mref in [turn.mref, turn.caller_mref] end) do
+      {ref, %{mref: ^mref} = turn} ->
+        Logger.warning("[Agent.Session] turn #{inspect(ref)} died: #{inspect(reason)}")
+        Process.demonitor(turn.caller_mref, [:flush])
+        Comm.reply(turn.caller, ref, {:error, :turn_failed})
+        {:noreply, %{state | turns: Map.delete(state.turns, ref)}}
+
+      {ref, _turn} ->
+        {_result, state} = cancel_turn(state, ref, %{})
+        {:noreply, state}
+
+      nil ->
+        {:noreply, state}
     end
   end
 
