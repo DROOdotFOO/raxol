@@ -10,12 +10,13 @@ defmodule Raxol.Agent.Supervisor do
     crashing sub-agent fan-out cannot take its caller's turn down with it
   - `Raxol.Agent.SessionStreamer` -- singleton harness event stream
   - `Raxol.Agent.Orchestrator` -- multi-agent coordinator
-  - `Raxol.Agent.Backend.OmpGateway` -- owns the `omp auth-gateway stdio`
-    port; idle until the first `:omp_gateway` request spawns it
   - `Raxol.Agent.Memory.Store.Ets` -- when configured as the memory provider
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
   - `Raxol.Agent.Curator` -- when a `:curator` config is set
   - `Raxol.Agent.Scheduler` -- when a `:scheduler` config is set
+  - `Raxol.Agent.Backend.OmpGateway` -- owns the `omp auth-gateway stdio`
+    port; idle until the first `:omp_gateway` request spawns it. Last, so
+    its crash restarts no other child.
 
   Strategy is `:rest_for_one`: if the DynSup crashes, the Orchestrator
   restarts and rebuilds from ContextStore. If the Registry crashes,
@@ -45,13 +46,13 @@ defmodule Raxol.Agent.Supervisor do
         {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one},
         {Task.Supervisor, name: Raxol.Agent.TaskSupervisor},
         Raxol.Agent.SessionStreamer,
-        Raxol.Agent.Orchestrator,
-        Raxol.Agent.Backend.OmpGateway
+        Raxol.Agent.Orchestrator
       ] ++
         memory_children() ++
         skills_children() ++
         curator_children() ++
-        scheduler_children()
+        scheduler_children() ++
+        [Raxol.Agent.Backend.OmpGateway]
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
