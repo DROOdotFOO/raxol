@@ -266,22 +266,17 @@ defmodule Raxol.UI.Components.Input.Button do
   def handle_tool_call("click", _args, context) do
     widget = context.widget_state
     label = tool_label(widget)
+    message = on_click(widget)
 
-    case get_in(widget, [:attrs, :disabled]) || widget[:disabled] do
-      true ->
+    cond do
+      (get_in(widget, [:attrs, :disabled]) || widget[:disabled]) == true ->
         {:error, "Button '#{label}' is disabled"}
 
-      _ ->
-        # The targeted click Event is resolved by the Dispatcher through the
-        # Bubbler at this widget, so the node's :on_click message is
-        # dispatched exactly as for a real click.
-        {:ok, "Clicked '#{label}'",
-         [
-           %Raxol.Core.Events.Event{
-             type: :click,
-             data: %{widget_id: context.widget_id}
-           }
-         ]}
+      message?(message) ->
+        {:ok, "Clicked '#{label}'", [message]}
+
+      true ->
+        {:error, "Button '#{label}' has no on_click message"}
     end
   end
 
@@ -293,6 +288,15 @@ defmodule Raxol.UI.Components.Input.Button do
   defp tool_label(node) do
     get_in(node, [:attrs, :label]) || node[:text] || node[:label] || "Button"
   end
+
+  # The message a real click delivers: `:on_click` at the node's top level for
+  # View-DSL nodes, under `:attrs` for Component-tree nodes. A Component-tree
+  # Button keeps its `on_click` as a function in component state, which is no
+  # message, so a click on it (or on a button without one) is refused.
+  defp on_click(node), do: node[:on_click] || get_in(node, [:attrs, :on_click])
+
+  defp message?(on_click),
+    do: not is_nil(on_click) and not is_function(on_click)
 
   @impl Raxol.Core.Accessibility.Provider
   def a11y_node(node) do

@@ -3,6 +3,7 @@ defmodule Raxol.Playground.Demos.ModalDemo do
   use Raxol.Core.Runtime.Application
 
   alias Raxol.UI.Components.AbsoluteLayer
+  alias Raxol.UI.Components.Modal
   alias Raxol.UI.Components.Modal.Rendering, as: ModalRendering
 
   import Raxol.Playground.DemoHelpers, only: [effective_width: 2]
@@ -10,6 +11,11 @@ defmodule Raxol.Playground.Demos.ModalDemo do
   @stats_box_width 30
   @modal_width 40
   @modal_height 17
+
+  # The dialog's id and title: `Raxol.MCP.TreeWalker` derives "confirm.dismiss"
+  # and "confirm.confirm" from the stamped dialog while it is open.
+  @dialog_id "confirm"
+  @dialog_title "Confirm Action"
 
   @impl true
   def init(_context) do
@@ -29,6 +35,8 @@ defmodule Raxol.Playground.Demos.ModalDemo do
 
   defp handle_modal_keys(message, %{show: true} = model) do
     case message do
+      {:modal_confirm, @dialog_id} -> {do_confirm(model), []}
+      {:modal_dismiss, @dialog_id} -> {do_cancel(model), []}
       key_match(:enter) -> {do_confirm(model), []}
       key_match("y") -> {do_confirm(model), []}
       key_match(:escape) -> {do_cancel(model), []}
@@ -109,7 +117,6 @@ defmodule Raxol.Playground.Demos.ModalDemo do
     content =
       column style: %{gap: 1} do
         [
-          text("Confirm Action", style: [:bold]),
           text("Are you sure you want to proceed?"),
           text("This action cannot be undone."),
           divider(),
@@ -122,12 +129,17 @@ defmodule Raxol.Playground.Demos.ModalDemo do
         ]
       end
 
-    ModalRendering.dialog_surface(
-      width,
+    width
+    |> ModalRendering.dialog_surface(
       @modal_height,
       %{border: :double, bg: {30, 30, 45}},
       [content]
     )
+    |> Map.merge(%{
+      id: @dialog_id,
+      title: @dialog_title,
+      attrs: %{component_module: Modal}
+    })
   end
 
   @impl true

@@ -235,4 +235,17 @@ defmodule Raxol.UI.Components.Input.TabsTest do
       assert updated.theme == %{bg: :blue, fg: :green}
     end
   end
+
+  describe "get_tabs tool" do
+    test "reports the DSL node's :active and the component state's :active_index" do
+      dsl = %{tabs: ["Overview", %{label: "Details"}], active: 1}
+      {:ok, component} = Tabs.init(id: :t, tabs: sample_tabs(), active_index: 2)
+
+      assert {:ok, %{tabs: ["Overview", "Details"], active_index: 1}} =
+               Tabs.handle_tool_call("get_tabs", %{}, %{widget_state: dsl})
+
+      assert {:ok, %{active_index: 2}} =
+               Tabs.handle_tool_call("get_tabs", %{}, %{widget_state: component})
+    end
+  end
 end
