@@ -50,9 +50,9 @@ defmodule Raxol.Agent.Actions.Shell.Start do
       ]
     ]
 
-  alias Raxol.Agent.Actions.Code
   alias Raxol.Agent.Actions.Fs
   alias Raxol.Agent.Actions.Shell
+  alias Raxol.Agent.Policy.Grants
   alias Raxol.Agent.Shell.Jobs
 
   @impl true
@@ -60,7 +60,7 @@ defmodule Raxol.Agent.Actions.Shell.Start do
     # The same gate the foreground shell passes: the jail refusal plus the
     # configured `Sandbox.Shell` policy. Backgrounding does not weaken what a
     # command may do, so it must not weaken what decides whether it runs.
-    with :ok <- Code.shell_allow(context, command),
+    with :ok <- Grants.shell_allow(context, command),
          {:ok, owner} <- Shell.job_owner(context),
          {:ok, cwd} <- resolve_cd(Map.get(params, :cd), context) do
       Jobs.start(command,

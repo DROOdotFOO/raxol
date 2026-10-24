@@ -10,7 +10,7 @@ defmodule Raxol.Agent.Code.Store do
   Only the three known roles (`:user`/`:assistant`/`:system`) round-trip;
   an unknown role on read is dropped rather than minting an atom from disk.
   Events are decoded back into projection shape by
-  `Raxol.Agent.Code.EventCodec` (fixed vocabularies, no atom minting from
+  `Raxol.Agent.Command.EventCodec` (fixed vocabularies, no atom minting from
   disk). The session id is only ever used as a filename via
   `Path.basename/1`, so a crafted id can never escape the base directory.
   """
@@ -180,7 +180,7 @@ defmodule Raxol.Agent.Code.Store do
         |> Map.get("messages", [])
         |> Enum.map(&decode_message/1)
         |> Enum.reject(&is_nil/1),
-      events: Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
+      events: Raxol.Agent.Command.EventCodec.decode_all(Map.get(json, "events", []))
     }
   end
 

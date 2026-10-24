@@ -110,7 +110,7 @@ defmodule Raxol.Agent.Actions.Fetch do
   on — which is why it is gated rather than auto-allowed.
 
   A second, coarser gate sits in front of that one:
-  `Raxol.Agent.Actions.Code.network_allow/1` refuses outright in a jailed
+  `Raxol.Agent.Policy.Grants.network_allow/1` refuses outright in a jailed
   (multi-tenant) session unless the context says `network: true`. This tool
   is in the DEFAULT toolset, so without that gate standing up a hosted
   tenant surface would hand every tenant outbound HTTP from the operator's
@@ -168,7 +168,7 @@ defmodule Raxol.Agent.Actions.Fetch do
 
   @impl true
   def run(%{url: url} = params, context) do
-    with :ok <- Raxol.Agent.Actions.Code.network_allow(context) do
+    with :ok <- Raxol.Agent.Policy.Grants.network_allow(context) do
       deadline = System.monotonic_time(:millisecond) + @total_timeout_ms
       cap = cap(Map.get(params, :max_bytes))
 

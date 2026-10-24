@@ -543,29 +543,6 @@ defmodule Raxol.Agent.Actions.CodeTest do
     end
   end
 
-  describe "shell_jail_allow/1" do
-    test "refuses a jailed context" do
-      assert {:error, :shell_disabled_in_jail} =
-               Code.shell_jail_allow(%{jail: true})
-    end
-
-    test "allows a non-jailed context" do
-      assert :ok = Code.shell_jail_allow(%{})
-      assert :ok = Code.shell_jail_allow(%{jail: false})
-    end
-
-    test "a lexical sandbox is not evidence of confinement" do
-      for sandbox <- [
-            Sandbox.Shell.none(),
-            Sandbox.Shell.allowlist(["echo"]),
-            Sandbox.Shell.denylist(["rm"])
-          ] do
-        assert {:error, :shell_disabled_in_jail} =
-                 Code.shell_jail_allow(%{jail: true, shell_sandbox: sandbox})
-      end
-    end
-  end
-
   describe "Grep" do
     test "finds matches with path, line, and text", %{dir: dir} do
       File.write!(Path.join(dir, "a.txt"), "alpha\nbeta\ngamma\n")

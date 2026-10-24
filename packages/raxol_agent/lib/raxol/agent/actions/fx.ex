@@ -54,7 +54,7 @@ if Code.ensure_loaded?(Raxol.Web3.FX) do
 
     @impl true
     def run(%{operation: operation} = params, context) do
-      with :ok <- Raxol.Agent.Actions.Code.network_allow(context),
+      with :ok <- Raxol.Agent.Policy.Grants.network_allow(context),
            {:ok, fx} <- source(context),
            {:ok, tool} <- tool(operation),
            {:ok, result} <- FXTools.dispatch(fx, tool, Map.delete(params, :operation)) do

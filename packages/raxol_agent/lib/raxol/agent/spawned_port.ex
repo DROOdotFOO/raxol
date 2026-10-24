@@ -45,7 +45,7 @@ defmodule Raxol.Agent.SpawnedPort do
   input reads EOF and continues down its non-interactive path, which for tools
   like `ssh`, `git` and `curl` can mean falling through to another credential
   source rather than failing. That is the correct behaviour for a shell tool,
-  and the sandbox (`Raxol.Agent.Actions.Code.shell_allow/2`, the jail flag,
+  and the sandbox (`Raxol.Agent.Policy.Grants.shell_allow/2`, the jail flag,
   the allow/denylist) is what decides whether a command runs at all.
 
   The opposite case -- a child that must actually RECEIVE stdin -- is not

@@ -15,7 +15,7 @@ defmodule Raxol.Agent.Code.Tenant do
   does NOT confine the shell: a `/bin/sh -c` command line can `cd` or name an
   absolute path, and `{:cd, work}` is a starting directory, not a boundary.
   So `jail: true` disables the shell tool entirely (see
-  `Raxol.Agent.Actions.Code.shell_jail_allow/1`) until per-tenant OS
+  `Raxol.Agent.Policy.Grants.shell_jail_allow/1`) until per-tenant OS
   confinement is wired. Real cross-tenant isolation still wants separate OS
   uids or containers; this is one BEAM, one uid.
 

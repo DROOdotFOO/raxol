@@ -126,7 +126,7 @@ defmodule Raxol.Agent.Actions.Shell do
   """
   @spec job_owner(map()) :: {:ok, String.t()} | {:error, :shell_disabled_in_jail}
   def job_owner(context) do
-    case Raxol.Agent.Actions.Code.shell_jail_allow(context) do
+    case Raxol.Agent.Policy.Grants.shell_jail_allow(context) do
       :ok -> {:ok, Raxol.Agent.Actions.Fs.working_dir(context)}
       {:error, _reason} = error -> error
     end
@@ -134,7 +134,7 @@ defmodule Raxol.Agent.Actions.Shell do
 
   @impl true
   def run(%{command: command} = params, context) do
-    case Raxol.Agent.Actions.Code.shell_allow(context, command) do
+    case Raxol.Agent.Policy.Grants.shell_allow(context, command) do
       :ok -> run_allowed(params, context, command)
       {:error, _} = error -> error
     end

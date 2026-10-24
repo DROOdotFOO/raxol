@@ -371,7 +371,7 @@ escape, and re-tests at the read itself; `glob` rejects every wildcard match who
 realpath lands outside the root, so an out-of-workspace name stays undisclosed.
 
 In a jailed session the `bash` tool is refused entirely
-(`Raxol.Agent.Actions.Code.shell_jail_allow/1` returns
+(`Raxol.Agent.Policy.Grants.shell_jail_allow/1` returns
 `{:error, :shell_disabled_in_jail}`) unless the context carries a
 `Raxol.Agent.Sandbox.Shell`. A `/bin/sh -c` command line is not a path, so
 `{:cd, cwd}` is a starting directory rather than a boundary and the fs
