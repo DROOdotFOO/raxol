@@ -103,6 +103,18 @@ alias Raxol.Agent.Comm
 # {:agent_message, nil, {:team_broadcast, :my_team, {:status_update, status}}}
 ```
 
+### Agent turn contract
+
+A prompt is one turn: `Comm.call(agent, {:acp_prompt, text, approver}, timeout)` returns
+`{:ok, {:ok, text, usage}}`. `approver` is an arity-3 `:tool_authorizer` (see
+`Raxol.Agent.ToolPolicy`) that every tool call of the turn must pass. The session stands in
+as the caller: `update/2` answers inline with `Comm.reply/3`, or with `Comm.run_turn/3` for
+work that blocks. `{:acp_cancel, ref}` kills the turn's process, answers the prompt
+`{:error, :cancelled}` and is then forwarded to `update/2`; sent with `Comm.call/3`, its `:ok`
+arrives only after that process is dead. Pass `ref: ref` to `Comm.call/4` to know the ref.
+`Raxol.Agent.Reference.Counter` is the reference agent (`increment`, `get`, sensitive
+`reset`, `hold` until `release` or a cancel).
+
 ## Teams
 
 `Raxol.Agent.Team` is an OTP Supervisor for agent groups:
