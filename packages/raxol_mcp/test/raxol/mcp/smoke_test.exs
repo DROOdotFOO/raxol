@@ -164,20 +164,21 @@ defmodule Raxol.MCP.SmokeTest do
       tools =
         TreeWalker.derive_tools(search_app_tree(), %{
           dispatcher_pid: nil,
+          session_id: "s",
           type_map: @type_map
         })
 
       names = Enum.map(tools, & &1.name) |> Enum.sort()
 
-      assert "search_input.type_into" in names
-      assert "search_input.get_value" in names
-      assert "search_btn.click" in names
-      assert "clear_btn.click" in names
-      assert "results_table.select_row" in names
-      assert "results_table.get_rows" in names
+      assert "s.search_input.type_into" in names
+      assert "s.search_input.get_value" in names
+      assert "s.search_btn.click" in names
+      assert "s.clear_btn.click" in names
+      assert "s.results_table.select_row" in names
+      assert "s.results_table.get_rows" in names
 
       # Disabled button should NOT produce tools
-      refute "disabled_btn.click" in names
+      refute "s.disabled_btn.click" in names
 
       # Total: 2 (input) + 1 (search_btn) + 1 (clear_btn) + 2 (table) = 6
       assert length(tools) == 6
@@ -187,6 +188,7 @@ defmodule Raxol.MCP.SmokeTest do
       tools =
         TreeWalker.derive_tools(search_app_tree(), %{
           dispatcher_pid: nil,
+          session_id: "s",
           type_map: @type_map
         })
 
@@ -194,25 +196,25 @@ defmodule Raxol.MCP.SmokeTest do
 
       # get_value returns current value
       assert {:ok, [%{type: "text", text: text}]} =
-               tools_by_name["search_input.get_value"].callback.(%{})
+               tools_by_name["s.search_input.get_value"].callback.(%{})
 
       assert text =~ "elixir"
 
       # type_into returns success
       assert {:ok, [%{type: "text", text: typed}]} =
-               tools_by_name["search_input.type_into"].callback.(%{"text" => "phoenix"})
+               tools_by_name["s.search_input.type_into"].callback.(%{"text" => "phoenix"})
 
       assert typed =~ "phoenix"
 
       # click returns success
       assert {:ok, [%{type: "text", text: clicked}]} =
-               tools_by_name["search_btn.click"].callback.(%{})
+               tools_by_name["s.search_btn.click"].callback.(%{})
 
       assert clicked =~ "Search"
 
       # get_rows returns data
       assert {:ok, [%{type: "text", text: rows}]} =
-               tools_by_name["results_table.get_rows"].callback.(%{})
+               tools_by_name["s.results_table.get_rows"].callback.(%{})
 
       assert rows =~ "Phoenix"
       assert rows =~ "Ecto"
@@ -224,26 +226,28 @@ defmodule Raxol.MCP.SmokeTest do
       tools =
         TreeWalker.derive_tools(search_app_tree(), %{
           dispatcher_pid: nil,
+          session_id: "s",
           type_map: @type_map
         })
 
       focused =
-        FocusLens.filter(tools, mode: :focused, focused_id: "search_input")
+        FocusLens.filter(tools, mode: :focused, session_id: "s", focused_id: "search_input")
 
       names = Enum.map(focused, & &1.name)
 
-      assert "search_input.type_into" in names
-      assert "search_input.get_value" in names
+      assert "s.search_input.type_into" in names
+      assert "s.search_input.get_value" in names
 
       # Other widget tools should be filtered out
-      refute "search_btn.click" in names
-      refute "results_table.select_row" in names
+      refute "s.search_btn.click" in names
+      refute "s.results_table.select_row" in names
     end
 
     test "all mode returns everything" do
       tools =
         TreeWalker.derive_tools(search_app_tree(), %{
           dispatcher_pid: nil,
+          session_id: "s",
           type_map: @type_map
         })
 
@@ -259,6 +263,7 @@ defmodule Raxol.MCP.SmokeTest do
       tools =
         TreeWalker.derive_tools(search_app_tree(), %{
           dispatcher_pid: nil,
+          session_id: "s",
           type_map: @type_map
         })
 
@@ -268,19 +273,19 @@ defmodule Raxol.MCP.SmokeTest do
       listed = Registry.list_tools(registry)
       listed_names = Enum.map(listed, & &1[:name]) |> Enum.sort()
 
-      assert "search_input.type_into" in listed_names
-      assert "search_btn.click" in listed_names
-      assert "results_table.get_rows" in listed_names
+      assert "s.search_input.type_into" in listed_names
+      assert "s.search_btn.click" in listed_names
+      assert "s.results_table.get_rows" in listed_names
 
       # Call a tool through the registry
       assert {:ok, [%{type: "text", text: text}]} =
-               Registry.call_tool(registry, "search_input.get_value", %{})
+               Registry.call_tool(registry, "s.search_input.get_value", %{})
 
       assert text =~ "elixir"
 
       # Call another
       assert {:ok, [%{type: "text", text: clicked}]} =
-               Registry.call_tool(registry, "search_btn.click", %{})
+               Registry.call_tool(registry, "s.search_btn.click", %{})
 
       assert clicked =~ "Search"
 
@@ -297,18 +302,19 @@ defmodule Raxol.MCP.SmokeTest do
       tools =
         TreeWalker.derive_tools(search_app_tree(), %{
           dispatcher_pid: nil,
+          session_id: "s",
           type_map: @type_map
         })
 
       Registry.register_tools(registry, tools)
       assert length(Registry.list_tools(registry)) == 6
 
-      Registry.unregister_tools(registry, ["search_btn.click", "clear_btn.click"])
+      Registry.unregister_tools(registry, ["s.search_btn.click", "s.clear_btn.click"])
       remaining = Registry.list_tools(registry)
       remaining_names = Enum.map(remaining, & &1[:name])
 
-      refute "search_btn.click" in remaining_names
-      refute "clear_btn.click" in remaining_names
+      refute "s.search_btn.click" in remaining_names
+      refute "s.clear_btn.click" in remaining_names
       assert length(remaining) == 4
 
       GenServer.stop(registry)
@@ -338,8 +344,8 @@ defmodule Raxol.MCP.SmokeTest do
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
 
-      # Should have discover_tools (from sync init)
-      assert "discover_tools" in names
+      # Should have the session's discover_tools (from sync init)
+      assert "smoke_test.discover_tools" in names
 
       # Note: real widget modules (Button, TextInput etc) aren't loaded in
       # raxol_mcp test env, so TreeWalker won't find them via default type_map.
@@ -362,13 +368,13 @@ defmodule Raxol.MCP.SmokeTest do
 
       # discover_tools should be registered
       tools_before = Registry.list_tools(registry)
-      assert Enum.any?(tools_before, &(&1[:name] == "discover_tools"))
+      assert Enum.any?(tools_before, &(&1[:name] == "smoke_cleanup.discover_tools"))
 
       GenServer.stop(sync)
 
       # After stop, discover_tools should be gone
       tools_after = Registry.list_tools(registry)
-      refute Enum.any?(tools_after, &(&1[:name] == "discover_tools"))
+      refute Enum.any?(tools_after, &(&1[:name] == "smoke_cleanup.discover_tools"))
 
       GenServer.stop(registry)
     end
@@ -412,28 +418,29 @@ defmodule Raxol.MCP.SmokeTest do
       tools =
         TreeWalker.derive_tools(search_app_tree(), %{
           dispatcher_pid: nil,
+          session_id: "s",
           type_map: @type_map
         })
 
       Registry.register_tools(registry, tools)
 
       # Add discover_tools
-      discover = FocusLens.discover_tools_spec(registry)
+      discover = FocusLens.discover_tools_spec(registry, "s")
       Registry.register_tools(registry, [discover])
 
       # Use discover_tools to search
       assert {:ok, [%{type: "text", text: result}]} =
-               Registry.call_tool(registry, "discover_tools", %{"query" => "click"})
+               Registry.call_tool(registry, "s.discover_tools", %{"query" => "click"})
 
-      assert result =~ "search_btn.click"
-      assert result =~ "clear_btn.click"
+      assert result =~ "s.search_btn.click"
+      assert result =~ "s.clear_btn.click"
       refute result =~ "type_into"
 
       # Search for input tools
       assert {:ok, [%{type: "text", text: result2}]} =
-               Registry.call_tool(registry, "discover_tools", %{"query" => "type"})
+               Registry.call_tool(registry, "s.discover_tools", %{"query" => "type"})
 
-      assert result2 =~ "search_input.type_into"
+      assert result2 =~ "s.search_input.type_into"
 
       GenServer.stop(registry)
     end
@@ -466,7 +473,7 @@ defmodule Raxol.MCP.SmokeTest do
       # empty tool derivation gracefully (no crashes, discover_tools persists).
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      assert "discover_tools" in names
+      assert "smoke_update.discover_tools" in names
 
       GenServer.stop(sync)
       GenServer.stop(registry)

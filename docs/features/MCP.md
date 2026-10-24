@@ -8,7 +8,7 @@ MCP is a rendering target alongside terminal, browser, and SSH. The Component tr
 mix mcp.server
 ```
 
-This starts an MCP server on stdio, with tools auto-derived from your app's Component tree. Wire it into Claude Code or any MCP client.
+This starts an MCP server on stdio, with tools auto-derived from your app's Component tree and named per session (`<session>.<widget>.<action>`). Wire it into Claude Code or any MCP client.
 
 ```elixir
 # In your app
@@ -44,6 +44,10 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 
 A write action reaches your app's `update/2` as a plain message, such as `{:sort, "results", "stars", "desc"}` from a Table's `sort`, and the tool answers once `update/2` has run. An `update/2` that raises or returns an invalid result makes the call an error result. A call that times out (after 5 s) is an error result too, but `update/2` may still apply the message afterwards, so check the app's state before retrying it. Add `update/2` clauses for the messages your app acts on; `Raxol.MCP.ToolProvider` lists every action's message. A Button's `click` sends the node's `on_click` message as it was when the tool was derived: a later render that changes `on_click` does not change what `click` sends. A button whose `on_click` is missing or a function gives an error result.
 
+Derived tools are named `<session>.<widget>.<action>`: `demo.results.sort` is the `sort` action of the Component with id `results` in the headless session `demo`. Two sessions of one app each get their own tools, and stopping one removes only its own. Each session also gets `<session>.discover_tools`, which searches that session's tools by keyword.
+
+An MCP client may rename tools. OMP lowercases a name and turns every run of characters outside `[a-z0-9_]` into `_`, so `demo.x_y.click` and `demo.x.y.click` would reach it as one tool. `Raxol.MCP.Registry` computes that name (`Raxol.MCP.Registry.omp_name/1`) at registration and refuses a tool whose name is already taken there by another; the session logs the refusal. A call to a derived name whose session is not running in this server answers a tool error that names the session and points to `raxol_list`, not an unknown-method error: OMP keeps the names from its last listing, even across runs.
+
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
 ## Focus lens
@@ -59,6 +63,7 @@ A Component tree with 50 Components generates 100+ tools. That's too many for an
 tools =
   Raxol.MCP.FocusLens.filter(all_tools,
     mode: :focused,
+    session_id: "demo",
     focused_id: "search_input",
     max_tools: 15
   )
@@ -66,7 +71,7 @@ tools =
 length(tools) # ~15, not ~100
 ```
 
-The lens is attention-aware: agents see what a human would see, not a flat dump of every possible action.
+The lens is attention-aware: agents see what a human would see, not a flat dump of every possible action. It works within one session: `:session_id` names it, so another session's tools for a Component with the same id never leak in, and the session's `discover_tools` searches only that session.
 
 ## Resources
 

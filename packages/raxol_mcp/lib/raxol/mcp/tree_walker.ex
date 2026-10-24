@@ -5,21 +5,23 @@ defmodule Raxol.MCP.TreeWalker do
   The view tree is the output of a TEA app's `view/1` function -- nested maps
   with `:type`, `:id`, `:attrs`, `:children` keys. TreeWalker walks this tree,
   finds widgets that implement `Raxol.MCP.ToolProvider`, calls `mcp_tools/1`
-  to get tool specs, namespaces them by widget ID, and wraps callbacks that
-  dispatch TEA messages through the session's Dispatcher.
+  to get tool specs, namespaces them by session and widget ID, and wraps
+  callbacks that dispatch TEA messages through the session's Dispatcher.
 
   ## Usage
 
-      context = %{dispatcher_pid: dispatcher_pid}
+      context = %{dispatcher_pid: dispatcher_pid, session_id: "demo"}
       tools = TreeWalker.derive_tools(view_tree, context)
       Raxol.MCP.Registry.register_tools(tools)
 
-  Tool names are namespaced as `"widget_id.action"`, e.g., `"search_input.type_into"`.
-  Nodes without an `:id` key are skipped (layout containers like `:column`, `:row`).
-  Both halves become part of a tool name the client lists, so a provider
-  whose id is not 1-32 characters of `[A-Za-z0-9_-]` derives no tools, and
-  an action whose name is not a lowercase letter followed by up to 31 of
-  `[a-z0-9_]` derives no tool.
+  Tool names are namespaced as `"session_id.widget_id.action"`, e.g.,
+  `"demo.search_input.type_into"`, so two sessions rendering the same widget
+  each get their own tool. Nodes without an `:id` key are skipped (layout
+  containers like `:column`, `:row`). Both the widget id and the action name
+  become part of a tool name the client lists, so a provider whose id is not
+  1-32 characters of `[A-Za-z0-9_-]` derives no tools, and an action whose
+  name is not a lowercase letter followed by up to 31 of `[a-z0-9_]` derives
+  no tool.
 
   Everything else a provider writes reaches the client's tool list as well,
   which a model reads as instructions. Control, format (bidi, zero-width,
@@ -119,8 +121,9 @@ defmodule Raxol.MCP.TreeWalker do
   }
 
   @type context :: %{
-          dispatcher_pid: pid() | nil,
-          type_map: %{atom() => module()}
+          required(:session_id) => String.t(),
+          optional(:dispatcher_pid) => pid() | nil,
+          optional(:type_map) => %{atom() => module()}
         }
 
   @doc """
@@ -165,6 +168,8 @@ defmodule Raxol.MCP.TreeWalker do
 
   ## Options in context
 
+    * `:session_id` - the session's id, the first segment of every tool name
+      (required)
     * `:dispatcher_pid` - pid of the session's Dispatcher (for message dispatch)
     * `:type_map` - optional override for widget type -> module mapping
   """
@@ -400,7 +405,7 @@ defmodule Raxol.MCP.TreeWalker do
     with {:ok, description, schema} <-
            clean_spec(Map.get(spec, :description), Map.get(spec, :inputSchema)) do
       %{
-        name: "#{widget_id}.#{spec.name}",
+        name: "#{Map.fetch!(context, :session_id)}.#{widget_id}.#{spec.name}",
         description: description,
         inputSchema: schema,
         callback: tool_callback(spec.name, widget_id, module, node, context)

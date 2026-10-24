@@ -37,7 +37,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      assert "discover_tools" in names
+      assert "test_session.discover_tools" in names
 
       GenServer.stop(pid)
     end
@@ -65,7 +65,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      assert "discover_tools" in names
+      assert "test_sync.discover_tools" in names
 
       GenServer.stop(pid)
     end
@@ -92,7 +92,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       # Should still have discover_tools
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      assert "discover_tools" in names
+      assert "test_telemetry.discover_tools" in names
 
       GenServer.stop(pid)
     end
@@ -186,7 +186,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       # discover_tools should be gone (it was registered by this synchronizer)
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      refute "discover_tools" in names
+      refute "test_cleanup.discover_tools" in names
     end
   end
 
@@ -216,8 +216,8 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       state = :sys.get_state(pid)
 
       names = registry |> Registry.list_tools() |> Enum.map(& &1[:name])
-      assert "w5.click" in names
-      refute "w1.click" in names
+      assert "test_debounce.w5.click" in names
+      refute "test_debounce.w1.click" in names
       assert state.pending_view_tree == nil
 
       GenServer.stop(pid)

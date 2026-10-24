@@ -44,10 +44,10 @@ defmodule Raxol.Playground.Demos.TableDemo do
   @border_cycle [:grid, :inner, :none]
   @page_size 4
 
-  # The id MCP tools are derived under ("playground_table.sort", ...). Tool
-  # arguments arrive as strings and map to columns and directions through these
-  # static tables, never `String.to_atom/1`. A column matches its key or its
-  # label, ignoring case (the Table provider accepts both).
+  # The widget id MCP tools are derived under ("<session>.playground_table.sort",
+  # ...). Tool arguments arrive as strings and map to columns and directions
+  # through these static tables, never `String.to_atom/1`. A column matches its
+  # key or its label, ignoring case (the Table provider accepts both).
   @tool_id "playground_table"
   @sort_columns for col <- @columns,
                     name <- [Atom.to_string(col.id), col.label],

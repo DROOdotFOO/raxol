@@ -30,7 +30,8 @@ defmodule Raxol.Headless do
   Session ids are binaries of 1-32 characters of `[A-Za-z0-9_-]`, the rule
   a widget id follows (`Raxol.MCP.TreeWalker`): an id reaches MCP clients
   verbatim, in `raxol_list`, session-id completion, resource URIs and tool
-  names. The `raxol_start` MCP tool narrows it to `^[a-z][a-z0-9]{0,6}$`.
+  names. A session's MCP tools are named under its id (`"demo.table.sort"`).
+  The `raxol_start` MCP tool narrows it to `^[a-z][a-z0-9]{0,6}$`.
 
   ## Processes
 

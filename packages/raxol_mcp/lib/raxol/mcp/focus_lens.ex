@@ -9,11 +9,16 @@ defmodule Raxol.MCP.FocusLens do
   ## Modes
 
     * `:all` -- return all tools (default for headless sessions)
-    * `:focused` -- return tools for the focused widget + globals
-    * `:hover` -- return tools for focused widget + hovered widget + globals
+    * `:focused` -- return the session's tools for the focused widget + globals
+    * `:hover` -- return the session's tools for the focused widget + the
+      hovered widget + globals
 
-  In `:focused` and `:hover` modes, a `discover_tools` meta-tool is
-  always included so agents can search the full set by keyword.
+  Derived tool names are `"session_id.widget_id.action"`. In `:focused` and
+  `:hover` modes the widget prefixes are matched inside `:session_id`, so
+  another session's tools for a widget with the same ID never leak in. A
+  global tool is one with no `.` in its name (a server-level tool such as
+  `raxol_list`), and the session's `"session_id.discover_tools"` meta-tool is
+  always included so agents can search the session's full set by keyword.
 
   ## Usage
 
@@ -23,11 +28,16 @@ defmodule Raxol.MCP.FocusLens do
       FocusLens.filter(all_tools, mode: :all)
 
       # Interactive: show focused + globals
-      FocusLens.filter(all_tools, mode: :focused, focused_id: "search_input")
+      FocusLens.filter(all_tools,
+        mode: :focused,
+        session_id: "demo",
+        focused_id: "search_input"
+      )
 
       # Mouse tracking: anticipatory tool exposure
       FocusLens.filter(all_tools,
         mode: :hover,
+        session_id: "demo",
         focused_id: "search_input",
         hover_id: "submit_btn"
       )
@@ -43,6 +53,8 @@ defmodule Raxol.MCP.FocusLens do
   ## Options
 
     * `:mode` - `:all` (default), `:focused`, or `:hover`
+    * `:session_id` - the session whose tools `:focused` and `:hover` select
+      (required in those modes)
     * `:focused_id` - widget ID that currently has focus
     * `:hover_id` - widget ID under the mouse cursor (for `:hover` mode)
     * `:max_tools` - maximum number of tools to return (default: 15)
@@ -58,31 +70,37 @@ defmodule Raxol.MCP.FocusLens do
         Enum.take(tools, max_tools)
 
       :focused ->
+        scope = scope(opts)
         focused_id = Keyword.get(opts, :focused_id)
-        registry = Keyword.get(opts, :registry)
-        filter_focused(tools, focused_id, max_tools, registry)
+        filter_focused(tools, focused_id, max_tools, scope)
 
       :hover ->
+        scope = scope(opts)
         focused_id = Keyword.get(opts, :focused_id)
         hover_id = Keyword.get(opts, :hover_id)
-        registry = Keyword.get(opts, :registry)
-        filter_hover(tools, focused_id, hover_id, max_tools, registry)
+        filter_hover(tools, focused_id, hover_id, max_tools, scope)
     end
   end
 
-  @doc """
-  Returns the `discover_tools` meta-tool spec.
+  defp scope(opts) do
+    %{session_id: Keyword.fetch!(opts, :session_id), registry: Keyword.get(opts, :registry)}
+  end
 
-  This tool lets agents search the full tool set by keyword when
-  FocusLens is hiding tools. Pass a registry reference so the tool
-  can query all registered tools.
+  @doc """
+  Returns the session's `"session_id.discover_tools"` meta-tool spec.
+
+  This tool lets agents search the session's full tool set by keyword when
+  FocusLens is hiding tools. Pass a registry reference so the tool can query
+  the registered tools; it matches only the tools named under `session_id`.
   """
-  @spec discover_tools_spec(GenServer.server()) :: tool_def()
-  def discover_tools_spec(registry) do
+  @spec discover_tools_spec(GenServer.server(), String.t()) :: tool_def()
+  def discover_tools_spec(registry, session_id) do
+    prefix = "#{session_id}."
+
     %{
-      name: "discover_tools",
+      name: discover_tools_name(session_id),
       description:
-        "Search all available tools in the current session by keyword. " <>
+        "Search all available tools in this session by keyword. " <>
           "Use this when the tool you need is not in the current focused set.",
       inputSchema: %{
         type: "object",
@@ -96,13 +114,16 @@ defmodule Raxol.MCP.FocusLens do
       },
       callback: fn args ->
         query = String.downcase(args["query"] || "")
-        all_tools = Raxol.MCP.Registry.list_tools(registry)
 
         matches =
-          all_tools
+          registry
+          |> Raxol.MCP.Registry.list_tools()
           |> Enum.filter(fn tool ->
-            String.downcase(tool[:name] || "") =~ query or
-              String.downcase(tool[:description] || "") =~ query
+            name = tool[:name] || ""
+
+            String.starts_with?(name, prefix) and
+              (String.downcase(name) =~ query or
+                 String.downcase(tool[:description] || "") =~ query)
           end)
           |> Enum.map(fn tool ->
             %{name: tool[:name], description: tool[:description]}
@@ -113,76 +134,59 @@ defmodule Raxol.MCP.FocusLens do
     }
   end
 
-  defp filter_focused(tools, nil, max_tools, _registry) do
-    Enum.take(tools, max_tools)
-  end
+  @doc "The name of the session's `discover_tools` meta-tool."
+  @spec discover_tools_name(String.t()) :: String.t()
+  def discover_tools_name(session_id), do: "#{session_id}.discover_tools"
 
-  defp filter_focused(tools, focused_id, max_tools, registry) do
-    prefix = "#{focused_id}."
-
-    focused_tools =
-      Enum.filter(tools, fn tool ->
-        String.starts_with?(tool.name, prefix)
-      end)
-
-    global_tools =
-      Enum.filter(tools, fn tool ->
-        not String.contains?(tool.name, ".")
-      end)
-
-    discover =
-      if registry do
-        [discover_tools_spec(registry)]
-      else
-        []
-      end
-
-    (focused_tools ++ discover ++ global_tools)
+  defp filter_focused(tools, nil, max_tools, scope) do
+    (session_tools(tools, scope.session_id) ++ discover(scope) ++ global_tools(tools))
     |> Enum.uniq_by(& &1.name)
     |> Enum.take(max_tools)
   end
 
-  defp filter_hover(tools, focused_id, nil, max_tools, registry) do
-    filter_focused(tools, focused_id, max_tools, registry)
+  defp filter_focused(tools, focused_id, max_tools, scope) do
+    (widget_tools(tools, scope.session_id, focused_id) ++
+       discover(scope) ++ global_tools(tools))
+    |> Enum.uniq_by(& &1.name)
+    |> Enum.take(max_tools)
   end
 
-  defp filter_hover(tools, focused_id, hover_id, max_tools, registry)
+  defp filter_hover(tools, focused_id, nil, max_tools, scope) do
+    filter_focused(tools, focused_id, max_tools, scope)
+  end
+
+  defp filter_hover(tools, focused_id, hover_id, max_tools, scope)
        when hover_id == focused_id do
-    filter_focused(tools, focused_id, max_tools, registry)
+    filter_focused(tools, focused_id, max_tools, scope)
   end
 
-  defp filter_hover(tools, focused_id, hover_id, max_tools, registry) do
-    focused_prefix = if focused_id, do: "#{focused_id}.", else: nil
-    hover_prefix = "#{hover_id}."
-
+  defp filter_hover(tools, focused_id, hover_id, max_tools, scope) do
     focused_tools =
-      if focused_prefix do
-        Enum.filter(tools, fn tool ->
-          String.starts_with?(tool.name, focused_prefix)
-        end)
-      else
-        []
-      end
+      if focused_id, do: widget_tools(tools, scope.session_id, focused_id), else: []
 
-    hover_tools =
-      Enum.filter(tools, fn tool ->
-        String.starts_with?(tool.name, hover_prefix)
-      end)
+    hover_tools = widget_tools(tools, scope.session_id, hover_id)
 
-    global_tools =
-      Enum.filter(tools, fn tool ->
-        not String.contains?(tool.name, ".")
-      end)
-
-    discover =
-      if registry do
-        [discover_tools_spec(registry)]
-      else
-        []
-      end
-
-    (focused_tools ++ hover_tools ++ discover ++ global_tools)
+    (focused_tools ++ hover_tools ++ discover(scope) ++ global_tools(tools))
     |> Enum.uniq_by(& &1.name)
     |> Enum.take(max_tools)
   end
+
+  defp session_tools(tools, session_id) do
+    prefix = "#{session_id}."
+    Enum.filter(tools, &String.starts_with?(&1.name, prefix))
+  end
+
+  defp widget_tools(tools, session_id, widget_id) do
+    prefix = "#{session_id}.#{widget_id}."
+    Enum.filter(tools, &String.starts_with?(&1.name, prefix))
+  end
+
+  defp global_tools(tools) do
+    Enum.reject(tools, &String.contains?(&1.name, "."))
+  end
+
+  defp discover(%{registry: nil}), do: []
+
+  defp discover(%{registry: registry, session_id: session_id}),
+    do: [discover_tools_spec(registry, session_id)]
 end
