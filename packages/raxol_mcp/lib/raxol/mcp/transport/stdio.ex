@@ -12,11 +12,17 @@ defmodule Raxol.MCP.Transport.Stdio do
   through `Raxol.MCP.Server.request/3`, so a slow `tools/call` does not hold
   up the `tools/list` behind it, and methods the server handles inline keep
   their order. Replies arrive in this process's mailbox and only this process
-  writes stdout.
+  writes stdout. Requests run concurrently and share the server's
+  `:max_in_flight` cap with every other connection, so a stdio client can be
+  answered `server_busy`.
 
   `notifications/cancelled` cancels the named in-flight request, which kills
-  its callback worker. End of input cancels every in-flight request and stops
-  the transport `:normal`; halting the VM is the caller's job.
+  its callback worker. At end of input every reply already produced is still
+  written (methods the server answers inline, such as `initialize` and `ping`,
+  and worker-run requests that finished first); every request still running
+  in a callback worker (`tools/*`, `resources/*`, `prompts/*`,
+  `completion/complete`) is cancelled and gets no reply. The transport stops
+  `:normal` once nothing is outstanding; halting the VM is the caller's job.
 
   ## Notifications
 
@@ -41,7 +47,15 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   alias Raxol.MCP.{Protocol, Server}
 
-  defstruct [:server, :reader_ref, :io_device, :output_device, :requests, in_flight: %{}]
+  defstruct [
+    :server,
+    :reader_ref,
+    :io_device,
+    :output_device,
+    :requests,
+    in_flight: %{},
+    closing: false
+  ]
 
   @type t :: %__MODULE__{
           server: GenServer.server(),
@@ -49,7 +63,8 @@ defmodule Raxol.MCP.Transport.Stdio do
           io_device: IO.device(),
           output_device: IO.device(),
           requests: :gen_server.request_id_collection(),
-          in_flight: %{optional(term()) => reference()}
+          in_flight: %{optional(term()) => reference()},
+          closing: boolean()
         }
 
   # -- Client API ---------------------------------------------------------------
@@ -107,7 +122,8 @@ defmodule Raxol.MCP.Transport.Stdio do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:stdio_line, line}, state) do
     case Protocol.decode(line) do
-      {:ok, %{method: "notifications/cancelled"} = message} ->
+      {:ok, %{method: "notifications/cancelled"} = message}
+      when not is_map_key(message, :id) ->
         {:noreply, cancel_request(state, message)}
 
       {:ok, message} ->
@@ -126,14 +142,19 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   def handle_manager_info({:stdio_eof, _reason}, state) do
     Logger.info("[MCP.Stdio] Input stream closed, stopping")
-    cancel_all(state)
-    {:stop, :normal, state}
+    close(state)
   end
+
+  # The reader exits after reporting end of input; that exit is expected.
+  def handle_manager_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{reader_ref: ref, closing: true} = state
+      ),
+      do: {:noreply, state}
 
   def handle_manager_info({:DOWN, ref, :process, _pid, reason}, %{reader_ref: ref} = state) do
     Logger.info("[MCP.Stdio] Reader process exited: #{inspect(reason)}")
-    cancel_all(state)
-    {:stop, :normal, state}
+    close(state)
   end
 
   def handle_manager_info(msg, state) do
@@ -141,8 +162,11 @@ defmodule Raxol.MCP.Transport.Stdio do
       {{:reply, {:reply, response}}, {id, request_ref}, requests} ->
         if response, do: write_reply(state.output_device, id, response)
 
-        {:noreply,
-         %{state | requests: requests, in_flight: forget(state.in_flight, id, request_ref)}}
+        maybe_stop(%{
+          state
+          | requests: requests,
+            in_flight: forget(state.in_flight, id, request_ref)
+        })
 
       {{:error, {reason, _server}}, _label, requests} ->
         Logger.error("[MCP.Stdio] MCP server down: #{inspect(reason)}")
@@ -184,6 +208,21 @@ defmodule Raxol.MCP.Transport.Stdio do
         %{state | in_flight: in_flight}
     end
   end
+
+  # The server answers every request exactly once, a cancelled one with
+  # `{:reply, nil}`, so draining the collection ends.
+  defp close(state) do
+    cancel_all(state)
+    maybe_stop(%{state | closing: true})
+  end
+
+  defp maybe_stop(%{closing: true} = state) do
+    if :gen_server.reqids_size(state.requests) == 0,
+      do: {:stop, :normal, state},
+      else: {:noreply, state}
+  end
+
+  defp maybe_stop(state), do: {:noreply, state}
 
   defp cancel_all(state) do
     for {_req_id, {_id, request_ref}} <- :gen_server.reqids_to_list(state.requests) do

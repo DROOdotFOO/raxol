@@ -27,11 +27,14 @@ defmodule Raxol.MCP.Transport.StdioTest do
     }
   end
 
+  # Above ExUnit's 100 ms default, so a loaded machine does not flake.
+  @timeout 1_000
+
   defp push(io, message),
     do: PushIO.push(io, message |> Protocol.encode!() |> IO.iodata_to_binary())
 
   defp next_frame(io) do
-    assert_receive {:push_io, ^io, data}
+    assert_receive {:push_io, ^io, data}, @timeout
     {:ok, frame} = Protocol.decode(data)
     frame
   end
@@ -40,7 +43,7 @@ defmodule Raxol.MCP.Transport.StdioTest do
   # `refute_received` is exact.
   defp assert_eof_stops(%{io: io, transport: transport, transport_ref: ref}) do
     PushIO.push(io, :eof)
-    assert_receive {:DOWN, ^ref, :process, ^transport, :normal}
+    assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
     refute_received {:push_io, ^io, _}
   end
 
@@ -65,7 +68,7 @@ defmodule Raxol.MCP.Transport.StdioTest do
 
   defp call_blocking_tool(io, id) do
     push(io, Protocol.request(id, "tools/call", %{"name" => "block", "arguments" => %{}}))
-    assert_receive {:entered, worker}
+    assert_receive {:entered, worker}, @timeout
     {worker, Process.monitor(worker)}
   end
 
@@ -91,6 +94,29 @@ defmodule Raxol.MCP.Transport.StdioTest do
       assert resp1.id == 1
       assert resp2.id == 2
       assert resp2.result == %{}
+
+      assert_eof_stops(ctx)
+    end
+
+    test "end of input still writes the replies owed for lines read before it",
+         %{io: io, transport: transport, transport_ref: ref} do
+      push(io, Protocol.request(1, "initialize", %{protocolVersion: "2024-11-05"}))
+      push(io, Protocol.request(2, "ping"))
+      PushIO.push(io, :eof)
+
+      assert next_frame(io).id == 1
+      assert next_frame(io).id == 2
+      assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
+      refute_received {:push_io, ^io, _}
+    end
+
+    test "a request named notifications/cancelled is answered method not found",
+         %{io: io} = ctx do
+      push(io, Protocol.request(5, "notifications/cancelled", %{"requestId" => 1}))
+
+      resp = next_frame(io)
+      assert resp.id == 5
+      assert resp.error["code"] == Protocol.method_not_found()
 
       assert_eof_stops(ctx)
     end
@@ -145,22 +171,26 @@ defmodule Raxol.MCP.Transport.StdioTest do
       assert [%{"name" => "block"}] = resp.result["tools"]
 
       PushIO.push(io, :eof)
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
-      assert_receive {:DOWN, ^transport_ref, :process, ^transport, :normal}
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+      assert_receive {:DOWN, ^transport_ref, :process, ^transport, :normal}, @timeout
       refute_received {:push_io, ^io, _}
     end
 
     test "notifications/cancelled kills the blocked worker and answers nothing",
-         %{io: io, registry: r} = ctx do
+         %{io: io, registry: r, server: server, transport: transport} = ctx do
       register_blocking_tool(r)
       {worker, worker_ref} = call_blocking_tool(io, "call-1")
 
       push(io, Protocol.notification("notifications/cancelled", %{"requestId" => "call-1"}))
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
 
       # The cancelled call's reply would be written before this one.
       push(io, Protocol.request(3, "ping"))
       assert next_frame(io).id == 3
+
+      # The server answered the cancelled call, so neither side still holds it.
+      assert :gen_server.reqids_size(:sys.get_state(transport).requests) == 0
+      assert :sys.get_state(server).in_flight == %{}
 
       assert_eof_stops(ctx)
     end
