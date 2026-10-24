@@ -137,24 +137,22 @@ defmodule Raxol.UI.Charts.ScatterChart do
   # -- ToolProvider callbacks --
 
   @impl Raxol.MCP.ToolProvider
-  def mcp_tools(state) do
-    id = state[:id] || "scatter_chart"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "get_points",
-        description: "Get all data points for scatter chart '#{id}'",
+        description: "Get all data points of the scatter chart",
         inputSchema: %{type: "object", properties: %{}}
       },
       %{
         name: "get_range",
-        description: "Get X and Y axis ranges for scatter chart '#{id}'",
+        description: "Get the scatter chart's X and Y axis ranges",
         inputSchema: %{type: "object", properties: %{}}
       },
       %{
         name: "get_cluster_info",
         description:
-          "Get point density summary (count, centroid, spread) per series in scatter chart '#{id}'",
+          "Get point density summary (count, centroid, spread) per series in the scatter chart",
         inputSchema: %{type: "object", properties: %{}}
       }
     ]
