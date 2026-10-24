@@ -86,19 +86,119 @@ defmodule Raxol.Agent.TurnContractTest do
     assert_receive {:DOWN, ^worker_mon, :process, ^worker, :normal}, 5_000
   end
 
+  test "a cancel sent with from: kills the held turn", %{id: id} do
+    ref = make_ref()
+    {held, worker} = hold(id, ref)
+    worker_mon = Process.monitor(worker)
+
+    assert :ok = Comm.send(id, {:acp_cancel, ref}, from: "editor")
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert {:ok, {:error, :cancelled}} = Task.await(held)
+  end
+
+  test "a prompt whose caller times out is cancelled", %{id: id} do
+    ref = make_ref()
+
+    # The test process is the caller; its timeout sends the cancel.
+    assert {:error, :timeout} =
+             Comm.call(id, {:acp_prompt, "hold", authorizing(self())}, 1_000, ref: ref)
+
+    assert_receive {:authorizing, Counter.Hold, worker}, 5_000
+    # The cancel answers the abandoned prompt only after the worker is dead.
+    assert_receive {:agent_reply, ^ref, {:error, :cancelled}}, 5_000
+    refute Process.alive?(worker)
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
+    assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", ToolPolicy.allow_all())
+  end
+
+  test "a prompt whose caller goes down is cancelled", %{id: id} do
+    ref = make_ref()
+    approver = authorizing(self())
+    caller = spawn(fn -> Comm.call(id, {:acp_prompt, "hold", approver}, 30_000, ref: ref) end)
+    assert_receive {:authorizing, Counter.Hold, worker}, 5_000
+    worker_mon = Process.monitor(worker)
+
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
+    assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", ToolPolicy.allow_all())
+  end
+
+  test "call/4 refuses a ref that is not a reference", %{id: id} do
+    assert_raise ArgumentError, fn ->
+      Comm.call(id, {:acp_prompt, "get", ToolPolicy.allow_all()}, 5_000, ref: "turn-1")
+    end
+  end
+
+  test "cancel during a blocked approver kills the ask and changes nothing", %{id: id} do
+    assert {:ok, {:ok, "count: 1", _}} = prompt(id, "increment", ToolPolicy.allow_all())
+    ref = make_ref()
+    {held, asker} = asking(id, "reset", ref)
+    asker_mon = Process.monitor(asker)
+
+    assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
+    assert_receive {:DOWN, ^asker_mon, :process, ^asker, :killed}, 5_000
+    assert {:ok, {:error, :cancelled}} = Task.await(held)
+
+    # Approving now reaches nobody: the ask died with its turn.
+    send(asker, :approve)
+    assert {:ok, {:ok, "count: 1", _}} = prompt(id, "get", ToolPolicy.allow_all())
+  end
+
+  test "the agent answers while an approver blocks", %{id: id} do
+    {held, asker} = asking(id, "increment", make_ref())
+
+    assert {:ok, %{count: 0}} = Session.get_model(id)
+    assert {:ok, {:ok, "count: 0", _}} = prompt(id, "get", ToolPolicy.allow_all())
+
+    send(asker, :approve)
+    assert {:ok, {:ok, "count: 1", _}} = Task.await(held)
+  end
+
+  test "an approver that raises fails only its turn", %{id: id} do
+    ref = make_ref()
+    raising = fn _tool, _params, _context -> raise "approver failed" end
+
+    assert {:ok, {:error, :turn_failed}} =
+             Comm.call(id, {:acp_prompt, "reset", raising}, 5_000, ref: ref)
+
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
+    assert {:ok, {:ok, "count: 1", _}} = prompt(id, "increment", ToolPolicy.allow_all())
+  end
+
   # Start a `hold` prompt and return once its action is being authorized,
   # i.e. the turn is in flight in `worker`.
   defp hold(id, ref) do
-    test = self()
-
-    approver = fn tool, _params, _context ->
-      send(test, {:authorizing, tool, self()})
-      :ok
-    end
-
+    approver = authorizing(self())
     held = Task.async(fn -> Comm.call(id, {:acp_prompt, "hold", approver}, 30_000, ref: ref) end)
     assert_receive {:authorizing, Counter.Hold, worker}, 5_000
     {held, worker}
+  end
+
+  # Start a `text` prompt whose approver blocks until it receives `:approve`;
+  # return once the approver is asking, in process `asker`.
+  defp asking(id, text, ref) do
+    test = self()
+
+    approver = fn _tool, _params, _context ->
+      send(test, {:asking, self()})
+
+      receive do
+        :approve -> :ok
+      end
+    end
+
+    held = Task.async(fn -> Comm.call(id, {:acp_prompt, text, approver}, 30_000, ref: ref) end)
+    assert_receive {:asking, asker}, 5_000
+    {held, asker}
+  end
+
+  # An approver that allows every call and tells `test` which process asks.
+  defp authorizing(test) do
+    fn tool, _params, _context ->
+      send(test, {:authorizing, tool, self()})
+      :ok
+    end
   end
 
   defp prompt(id, text, approver), do: Comm.call(id, {:acp_prompt, text, approver})

@@ -13,9 +13,13 @@ defmodule Raxol.Agent.Reference.Counter do
     * `release` - release every held turn
 
   Actions run through `Raxol.Agent.Action.ToolConverter` with `approver` as
-  the turn's `:tool_authorizer`. `increment` and `reset` run in the agent
-  process; `hold` runs in the turn process `Raxol.Agent.Comm.run_turn/3`
-  starts, so a cancel kills it. Usage is always zero: no model is called.
+  the turn's `:tool_authorizer`, in the turn process
+  `Raxol.Agent.Comm.run_turn/3` starts, never in the agent process: a
+  blocked approver holds up only its turn, and a cancel kills it. `increment`
+  and `reset` return a change that the turn process sends back to `update/2`,
+  which applies it and hands the new count to the turn for its reply, so a
+  turn cancelled before its change is sent changes nothing. Usage is always
+  zero: no model is called.
   """
 
   use Raxol.Agent
@@ -24,22 +28,22 @@ defmodule Raxol.Agent.Reference.Counter do
   alias Raxol.Agent.Comm
 
   defmodule Increment do
-    @moduledoc "Add one to the count."
+    @moduledoc "Add one to the count (returns the change for the agent to apply)."
     use Raxol.Agent.Action, name: "increment", description: "Add one to the count"
 
     @impl true
-    def run(_params, %{count: count}), do: {:ok, %{count: count + 1}}
+    def run(_params, _context), do: {:ok, %{add: 1}}
   end
 
   defmodule Reset do
-    @moduledoc "Set the count to zero."
+    @moduledoc "Set the count to zero (returns the change for the agent to apply)."
     use Raxol.Agent.Action,
       name: "reset",
       description: "Set the count to zero",
       sensitive: true
 
     @impl true
-    def run(_params, _context), do: {:ok, %{count: 0}}
+    def run(_params, _context), do: {:ok, %{set: 0}}
   end
 
   defmodule Hold do
@@ -68,18 +72,19 @@ defmodule Raxol.Agent.Reference.Counter do
   def update({:agent_message, _from, {:acp_cancel, ref}}, model),
     do: {%{model | holds: MapSet.delete(model.holds, ref)}, []}
 
+  # An approved change from a turn process: apply it, then let the turn reply.
+  def update({:command_result, {:counter_change, caller, ref, change}}, model) do
+    count = apply_change(change, model.count)
+    Comm.send_turn(caller, ref, {:count, count})
+    {%{model | count: count}, []}
+  end
+
   def update(_msg, model), do: {model, []}
 
   defp prompt(command, caller, ref, approver, model) when command in ["increment", "reset"] do
-    case dispatch(command, approver, %{count: model.count}) do
-      {:ok, %{count: count}} ->
-        Comm.reply(caller, ref, {:ok, "count: #{count}", @usage})
-        {%{model | count: count}, []}
-
-      {:error, reason} ->
-        Comm.reply(caller, ref, {:ok, ToolConverter.public_error(command, reason), @usage})
-        {model, []}
-    end
+    agent = self()
+    Comm.run_turn(caller, ref, fn -> change_turn(agent, caller, ref, command, approver) end)
+    {model, []}
   end
 
   defp prompt("get", caller, ref, _approver, model) do
@@ -89,7 +94,7 @@ defmodule Raxol.Agent.Reference.Counter do
 
   defp prompt("hold", caller, ref, approver, model) do
     Comm.run_turn(caller, ref, fn ->
-      case dispatch("hold", approver, %{}) do
+      case dispatch("hold", approver) do
         {:ok, _released} -> {:ok, "released", @usage}
         {:error, reason} -> {:ok, ToolConverter.public_error("hold", reason), @usage}
       end
@@ -109,11 +114,30 @@ defmodule Raxol.Agent.Reference.Counter do
     {model, []}
   end
 
-  defp dispatch(name, approver, context) do
+  # Runs in the turn process: the approver is asked here, and only an approved
+  # change is sent to the agent (`agent`, the process running `update/2`).
+  defp change_turn(agent, caller, ref, command, approver) do
+    case dispatch(command, approver) do
+      {:ok, change} ->
+        send(agent, {:command_result, {:counter_change, caller, ref, change}})
+
+        receive do
+          {:count, count} -> {:ok, "count: #{count}", @usage}
+        end
+
+      {:error, reason} ->
+        {:ok, ToolConverter.public_error(command, reason), @usage}
+    end
+  end
+
+  defp apply_change(%{add: n}, count), do: count + n
+  defp apply_change(%{set: n}, _count), do: n
+
+  defp dispatch(name, approver) do
     ToolConverter.dispatch_tool_call(
       %{"name" => name, "arguments" => %{}},
       @actions,
-      Map.put(context, :tool_authorizer, approver)
+      %{tool_authorizer: approver}
     )
   end
 end
