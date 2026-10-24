@@ -3,6 +3,7 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
   # RAXOL_DEBUG). Serializing this module keeps those reads deterministic.
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.Backend.Anthropic.Wire
   alias Raxol.Agent.Backend.HTTP
 
   # This file pins the LongCat / reasoning-model wire defects: a raw response
@@ -181,6 +182,101 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
 
       body = captured_body(provider: :openai, api_key: "k", max_tokens: 256)
       assert body.max_tokens == 256
+    end
+  end
+
+  describe "Anthropic Messages codec through complete/2" do
+    test "a text reply parses to its first text block, usage and metadata" do
+      body = %{
+        "id" => "msg_1",
+        "model" => "claude-test",
+        "stop_reason" => "end_turn",
+        "content" => [%{"type" => "text", "text" => "the sky is blue"}],
+        "usage" => %{"input_tokens" => 11, "output_tokens" => 5}
+      }
+
+      assert {:ok, response} = complete_stub(body, provider: :anthropic, api_key: "k")
+
+      assert response == %{
+               content: "the sky is blue",
+               usage: %{"input_tokens" => 11, "output_tokens" => 5},
+               metadata: %{
+                 backend: :http,
+                 provider: :anthropic,
+                 model: "claude-test",
+                 stop_reason: "end_turn"
+               }
+             }
+    end
+
+    test "a tool_use reply yields tool calls, the text block, stop_reason and usage" do
+      body = %{
+        "id" => "msg_2",
+        "model" => "claude-test",
+        "stop_reason" => "tool_use",
+        "content" => [
+          %{"type" => "text", "text" => "reading it"},
+          %{
+            "type" => "tool_use",
+            "id" => "toolu_1",
+            "name" => "read_file",
+            "input" => %{"path" => "a.txt"}
+          },
+          %{"type" => "tool_use", "id" => "toolu_2", "name" => "list_dir"}
+        ],
+        "usage" => %{"input_tokens" => 20, "output_tokens" => 9}
+      }
+
+      assert {:ok, response} = complete_stub(body, provider: :anthropic, api_key: "k")
+
+      assert response == %{
+               content: "reading it",
+               tool_calls: [
+                 %{"id" => "toolu_1", "name" => "read_file", "arguments" => %{"path" => "a.txt"}},
+                 %{"id" => "toolu_2", "name" => "list_dir", "arguments" => %{}}
+               ],
+               usage: %{"input_tokens" => 20, "output_tokens" => 9},
+               metadata: %{
+                 backend: :http,
+                 provider: :anthropic,
+                 model: "claude-test",
+                 stop_reason: "tool_use"
+               }
+             }
+    end
+
+    test "max_tokens defaults to 4096 and AI_MAX_TOKENS overrides it" do
+      System.delete_env("AI_MAX_TOKENS")
+      assert captured_body(provider: :anthropic, api_key: "k").max_tokens === 4096
+
+      System.put_env("AI_MAX_TOKENS", "8000")
+      on_exit(fn -> System.delete_env("AI_MAX_TOKENS") end)
+      assert captured_body(provider: :anthropic, api_key: "k").max_tokens === 8000
+      assert captured_body(provider: :anthropic, api_key: "k", max_tokens: 256).max_tokens === 256
+    end
+
+    test "posts to /v1/messages with the codec's anthropic-version header" do
+      opts = [provider: :anthropic, api_key: "k"]
+
+      assert captured_url(opts) == "http://127.0.0.1:19876/v1/messages"
+      assert captured_headers(opts)["anthropic-version"] == [Wire.api_version()]
+      assert Wire.api_version() == "2023-06-01"
+    end
+
+    test "tools ride through to the body unchanged; messages carry string roles" do
+      tools = [
+        %{
+          "name" => "read_file",
+          "description" => "Read a file",
+          "input_schema" => %{"type" => "object", "properties" => %{}}
+        }
+      ]
+
+      body = captured_body(provider: :anthropic, api_key: "k", tools: tools)
+
+      assert body.tools == tools
+      assert body.messages == [%{role: "user", content: "hi"}]
+      refute Map.has_key?(captured_body(provider: :anthropic, api_key: "k", tools: []), :tools)
     end
   end
 
@@ -440,5 +536,25 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
 
     assert_received {:req_headers, headers}
     headers
+  end
+
+  # Captures the request URL (Req parses it into a `URI`) before the stub
+  # adapter answers.
+  defp captured_url(provider_opts) do
+    test_pid = self()
+
+    plugin = fn req ->
+      send(test_pid, {:req_url, URI.to_string(req.url)})
+      %{req | adapter: fn r -> {r, Req.Response.new(status: 200, body: %{})} end}
+    end
+
+    HTTP.complete(
+      [%{role: :user, content: "hi"}],
+      [req_plugins: [plugin], timeout: 100] ++
+        Keyword.put_new(provider_opts, :base_url, "http://127.0.0.1:19876")
+    )
+
+    assert_received {:req_url, url}
+    url
   end
 end
