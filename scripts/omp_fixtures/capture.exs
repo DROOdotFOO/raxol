@@ -1,6 +1,6 @@
 # Capture OMP protocol fixtures (ADR-0042, TODO "Fixtures").
 #
-#   elixir scripts/omp_fixtures/capture.exs f1 [--with-model] [--write]
+#   elixir scripts/omp_fixtures/capture.exs f1|f3 [--with-model] [--write]
 #
 # Runs the pinned `omp` (`omp --version` must equal the pin in
 # `Raxol.Agent.OMP.Version`) in a `mktemp -d` cwd with `--no-rules --no-skills
@@ -16,9 +16,18 @@
 # committed files with the capture.
 #
 # Transcript format (JSONL): line 1 is the header; then `{"in": line}` for a
-# line written to the gateway's stdin, `{"out": line}` for a line it printed
-# (in the order printed), and a final `{"exit": status}` after stdin EOF. Lines
-# are strings so a consumer decodes the same bytes the gateway sent.
+# line written to omp's stdin, `{"out": line}` for a line it printed (in the
+# order printed), and a final `{"exit": status}` after stdin EOF. Lines are
+# strings so a consumer decodes the same bytes omp sent.
+#
+# F3 (`omp --mode rpc`) is driven interactively, as `Raxol.Agent.OMP.RPC`
+# drives it: `negotiate_protocol` v2 (id `negotiate`) right after the ready
+# frame, then commands with ids "1", "2", ... in order, every approval select
+# answered `Deny` and every other dialog cancelled. stdin is a FIFO, so it can
+# be closed while stdout is still read. The no-model scenarios pass `--model
+# @smol` to the credential-less fixture profile (a profile with no model exits
+# 1 before its ready frame), with every credential-looking variable removed
+# from omp's environment, so a prompt fails before it reaches a model.
 
 defmodule OmpFixtures.Capture do
   @repo Path.expand("../..", __DIR__)
@@ -28,9 +37,14 @@ defmodule OmpFixtures.Capture do
   @isolation ["--no-rules", "--no-skills", "--no-extensions"]
   @fixture_profile ["--profile", "raxol-fixtures"]
   @gateway ["auth-gateway", "stdio"]
+  @rpc ["--mode", "rpc", "--approval-mode", "write"]
+  @rpc_line_bytes 2_097_152
+  @rpc_step_ms 120_000
+  @frame_bytes 1_048_576
 
   @targets %{
-    "f1" => "packages/raxol_agent/test/fixtures/omp/gateway"
+    "f1" => "packages/raxol_agent/test/fixtures/omp/gateway",
+    "f3" => "packages/raxol_agent/test/fixtures/omp/rpc"
   }
 
   def main(argv) do
@@ -40,7 +54,7 @@ defmodule OmpFixtures.Capture do
 
     unknown = flags -- ["--with-model", "--write"]
     if unknown != [], do: fail("unknown flags: #{Enum.join(unknown, " ")}")
-    if targets == [], do: fail("usage: capture.exs f1 [--with-model] [--write]")
+    if targets == [], do: fail("usage: capture.exs f1|f3 [--with-model] [--write]")
 
     omp = System.find_executable("omp") || fail("omp is not on PATH")
     version = check_pin!(omp)
@@ -59,7 +73,12 @@ defmodule OmpFixtures.Capture do
     File.mkdir_p!(out)
 
     for {name, profile, requests} <- scenarios(target, with_model?) do
-      transcript = run(omp, version, tmp, profile, requests)
+      transcript =
+        case requests do
+          {:rpc, steps} -> run_rpc(omp, version, tmp, profile, steps)
+          requests -> run(omp, version, tmp, profile, requests)
+        end
+
       if name == "out_of_order", do: check_out_of_order!(transcript)
       File.write!(Path.join(out, "#{name}.jsonl"), transcript)
       IO.puts("captured #{target}/#{name}")
@@ -134,6 +153,75 @@ defmodule OmpFixtures.Capture do
     if with_model?, do: no_model ++ model, else: no_model
   end
 
+  # F3: `omp --mode rpc`. The no-model scenarios run on the fixture profile,
+  # whose prompt fails before it reaches a model ("No API key").
+  defp scenarios("f3", with_model?) do
+    no_model_args = @fixture_profile ++ ["--model", @smol, "--no-session"]
+
+    no_model = [
+      {"handshake", no_model_args,
+       {:rpc,
+        for type <- ~w(get_state get_available_models get_available_commands
+                      get_available_thinking_levels) do
+          {:request, %{"type" => type}}
+        end}},
+      # `bash` answers when its command finishes, after a later command, and
+      # the `set_todos` reply (its phases echoed back) is just over OMP's
+      # 1 MiB frame limit, so it arrives as `rpc_chunk` lines.
+      {"chunked_out_of_order", no_model_args,
+       {:rpc,
+        [
+          {:send, [%{"type" => "bash", "command" => "sleep 1; echo done"}, big_todos("2")]},
+          {:await_responses, ["2", "1"]}
+        ]}},
+      # Admitted, then refused before the agent ran: OMP sends a second,
+      # failed response with the same id and a `prompt_result` with
+      # `agentInvoked: false`, and no `session_settled`.
+      {"unreached_prompt", no_model_args,
+       {:rpc,
+        [
+          {:send, [%{"type" => "prompt", "message" => "hi"}]},
+          {:await, &match?(%{"type" => "prompt_result", "id" => "1"}, &1)}
+        ]}}
+    ]
+
+    model = [
+      # One turn: the model calls `bash`, an exec-tier tool under
+      # `--approval-mode write`, OMP asks over the wire, the answer is Deny,
+      # and the model replies to the refusal. `cap.ts` caps every request at
+      # @max_model_tokens output tokens; the overlay turns intent tracing off
+      # so the tool call fits.
+      {"approval",
+       [
+         "--model",
+         @smol,
+         "--thinking",
+         "off",
+         "--tools",
+         "bash",
+         "--no-session",
+         "-e",
+         "cap.ts",
+         "--config",
+         "overlay.yml"
+       ],
+       {:rpc,
+        [
+          {:send,
+           [
+             %{
+               "type" => "prompt",
+               "message" => "Use the bash tool to run `echo raxol`. Do not write any text."
+             }
+           ]},
+          {:await, &match?(%{"type" => "session_settled"}, &1)},
+          {:expect_approvals, 1}
+        ]}}
+    ]
+
+    if with_model?, do: no_model ++ model, else: no_model
+  end
+
   defp messages(model, max_tokens, text) do
     if model == @smol and max_tokens > @max_model_tokens,
       do: fail("max_tokens #{max_tokens} exceeds #{@max_model_tokens}")
@@ -156,6 +244,219 @@ defmodule OmpFixtures.Capture do
         "required" => ["city"]
       }
     }
+  end
+
+  # A `set_todos` command whose line, with id `id`, is exactly OMP's 1 MiB
+  # frame limit, newline included; the response echoing it is larger.
+  defp big_todos(id) do
+    command = fn content ->
+      %{
+        "type" => "set_todos",
+        "phases" => [
+          %{"name" => "Todos", "tasks" => [%{"content" => content, "status" => "pending"}]}
+        ]
+      }
+    end
+
+    overhead = byte_size(JSON.encode!(Map.put(command.(""), "id", id))) + 1
+    command.(String.duplicate("x", @frame_bytes - overhead))
+  end
+
+  @cap_ts """
+  export default function (pi) {
+    pi.on("before_provider_request", (event) => {
+      const { thinking, ...payload } = event.payload;
+      return { ...payload, max_tokens: Math.min(payload.max_tokens ?? #{@max_model_tokens}, #{@max_model_tokens}) };
+    });
+  }
+  """
+
+  @overlay_yml """
+  tools:
+    intentTracing: false
+  """
+
+  defp run_rpc(omp, version, tmp, profile, steps) do
+    File.write!(Path.join(tmp, "cap.ts"), @cap_ts)
+    File.write!(Path.join(tmp, "overlay.yml"), @overlay_yml)
+    fifo = Path.join(tmp, "rpc-stdin")
+    File.rm(fifo)
+    {_, 0} = System.cmd("mkfifo", [fifo])
+
+    args = profile ++ @isolation ++ @rpc
+    no_model? = "raxol-fixtures" in profile
+
+    port =
+      Port.open({:spawn_executable, "/bin/sh"}, [
+        :binary,
+        :exit_status,
+        {:line, @rpc_line_bytes},
+        {:cd, tmp},
+        {:env, if(no_model?, do: credential_env(), else: [])},
+        # omp never sees EOF on a FIFO stdin (observed), but `cat` does, and
+        # then closes the pipe omp reads.
+        {:args, ["-c", ~s(cat < "#{fifo}" | "$0" "$@"), omp | args]}
+      ])
+
+    # Blocks until `cat` opens the FIFO for reading.
+    {:ok, writer} = File.open(fifo, [:write, :raw, :binary])
+
+    rec = %{port: port, writer: writer, log: [], buffer: [], chunks: [], next: 1, approvals: 0}
+    rec = await(rec, &match?(%{"type" => "ready"}, &1))
+
+    rec =
+      write(rec, %{"id" => "negotiate", "type" => "negotiate_protocol", "protocolVersion" => 2})
+
+    rec = await(rec, &match?(%{"type" => "response", "id" => "negotiate", "success" => true}, &1))
+    rec = Enum.reduce(steps, rec, &step/2)
+
+    :ok = File.close(writer)
+    {rec, status} = await_exit(rec)
+    if status != 0, do: fail("omp exited #{status}")
+
+    header = %{
+      "omp_version" => version,
+      "command" => Enum.join(["omp" | args], " "),
+      "scrub_version" => @scrub_version
+    }
+
+    {events, _seen} =
+      rec.log
+      |> Enum.reverse()
+      |> Enum.map_reduce(%{}, fn
+        {:in, line}, seen ->
+          {%{"in" => line}, seen}
+
+        {:out, line}, seen ->
+          {line, seen} = scrub_line(line, seen, tmp)
+          {%{"out" => line}, seen}
+      end)
+
+    [header | events]
+    |> Kernel.++([%{"exit" => status}])
+    |> Enum.map(&[JSON.encode!(&1), ?\n])
+  end
+
+  # Unset in omp's environment for the no-model scenarios: nothing there may
+  # give the fixture profile a credential.
+  defp credential_env do
+    for {name, _value} <- System.get_env(),
+        String.match?(name, ~r/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|BROKER/i),
+        do: {String.to_charlist(name), false}
+  end
+
+  defp step({:request, command}, rec) do
+    id = Integer.to_string(rec.next)
+    rec = step({:send, [command]}, rec)
+    await(rec, &match?(%{"type" => "response", "id" => ^id}, &1))
+  end
+
+  defp step({:send, commands}, rec) do
+    Enum.reduce(commands, rec, fn command, rec ->
+      id = Integer.to_string(rec.next)
+      write(%{rec | next: rec.next + 1}, Map.put(command, "id", id))
+    end)
+  end
+
+  defp step({:await, match}, rec), do: await(rec, match)
+
+  defp step({:await_responses, ids}, rec) do
+    {rec, seen} =
+      Enum.reduce(ids, {rec, []}, fn _id, {rec, seen} ->
+        rec = await(rec, &(&1["type"] == "response" and &1["id"] in ids and &1["id"] not in seen))
+        {rec, seen ++ [rec.last["id"]]}
+      end)
+
+    if seen != ids, do: fail("responses came back as #{inspect(seen)}, not #{inspect(ids)}")
+    rec
+  end
+
+  defp step({:expect_approvals, n}, rec) do
+    if rec.approvals != n, do: fail("#{rec.approvals} approval(s) asked, expected #{n}")
+    rec
+  end
+
+  defp write(rec, map) do
+    line = JSON.encode!(map)
+    :ok = :file.write(rec.writer, [line, ?\n])
+    %{rec | log: [{:in, line} | rec.log]}
+  end
+
+  # Reads lines until a frame (chunk runs reassembled) satisfies `match`,
+  # answering dialogs as `Raxol.Agent.OMP.RPC` would on the way.
+  defp await(rec, match) do
+    port = rec.port
+
+    receive do
+      {^port, {:data, {:noeol, chunk}}} ->
+        await(%{rec | buffer: [rec.buffer | chunk]}, match)
+
+      {^port, {:data, {:eol, chunk}}} ->
+        line = IO.iodata_to_binary([rec.buffer | chunk])
+        rec = %{rec | buffer: [], log: [{:out, line} | rec.log]}
+
+        case frame(rec, JSON.decode!(line)) do
+          {:more, rec} ->
+            await(rec, match)
+
+          {:frame, rec, frame} ->
+            rec = rec |> Map.put(:last, frame) |> dialog(frame)
+            if match.(frame), do: rec, else: await(rec, match)
+        end
+
+      {^port, {:exit_status, status}} ->
+        fail("omp exited #{status} mid-scenario")
+    after
+      @rpc_step_ms -> fail("no matching frame within #{@rpc_step_ms} ms")
+    end
+  end
+
+  defp frame(rec, %{"type" => "rpc_chunk", "index" => index, "count" => count, "data" => data}) do
+    chunks = [rec.chunks | Base.decode64!(data)]
+
+    if index == count - 1,
+      do: {:frame, %{rec | chunks: []}, chunks |> IO.iodata_to_binary() |> JSON.decode!()},
+      else: {:more, %{rec | chunks: chunks}}
+  end
+
+  defp frame(rec, frame), do: {:frame, rec, frame}
+
+  defp dialog(rec, %{"type" => "extension_ui_request", "id" => id, "method" => method} = frame) do
+    options = frame["options"] || []
+
+    cond do
+      method == "select" and List.last(options) == "Deny" and
+          Enum.any?(options, &(&1 in ["Approve", "Approve Once"])) ->
+        rec = write(rec, %{"type" => "extension_ui_response", "id" => id, "value" => "Deny"})
+        %{rec | approvals: rec.approvals + 1}
+
+      method in ~w(select confirm input editor ask) ->
+        write(rec, %{"type" => "extension_ui_response", "id" => id, "cancelled" => true})
+
+      true ->
+        rec
+    end
+  end
+
+  defp dialog(rec, _frame), do: rec
+
+  # stdin is closed: OMP drains, prints what is left and exits.
+  defp await_exit(rec) do
+    port = rec.port
+
+    receive do
+      {^port, {:data, {:noeol, chunk}}} ->
+        await_exit(%{rec | buffer: [rec.buffer | chunk]})
+
+      {^port, {:data, {:eol, chunk}}} ->
+        line = IO.iodata_to_binary([rec.buffer | chunk])
+        await_exit(%{rec | buffer: [], log: [{:out, line} | rec.log]})
+
+      {^port, {:exit_status, status}} ->
+        {rec, status}
+    after
+      @rpc_step_ms -> fail("omp did not exit within #{@rpc_step_ms} ms of stdin EOF")
+    end
   end
 
   defp run(omp, version, tmp, profile, requests) do
