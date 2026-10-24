@@ -164,6 +164,44 @@ The `:longcat` harness targets Meituan's LongCat (`https://api.longcat.chat/open
 
 The `:deepseek` harness targets DeepSeek's OpenAI-compatible endpoint (`https://api.deepseek.com`, default model `deepseek-v4-flash`, key from `DEEPSEEK_API_KEY`). Its usage frames carry `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, and `Raxol.Agent.LlmPrices` prices them exactly through its backend-scoped table (cache tier and UTC peak clock, ADR-0035); the rows are keyed to this harness, so the same model name via OpenRouter or LLM7 stays unpriced rather than borrowing the direct rate.
 
+## OMP gateway
+
+The `:omp_gateway` harness (`Raxol.Agent.Backend.OmpGateway`, catalog kind `:gateway`) reaches
+every model [OMP](https://omp.sh) is logged in to, role selectors such as `@smol` included,
+through `omp auth-gateway stdio`. It is used only when named (`--backend omp_gateway`,
+`harness: :omp_gateway`) and is never auto-detected.
+
+```elixir
+{:ok, reply} =
+  Raxol.Agent.Backend.OmpGateway.complete(
+    [%{role: :user, content: "Explain OTP"}],
+    model: "anthropic/claude-haiku-5-5",
+    max_tokens: 256
+  )
+
+reply.metadata.cost_usd    # LlmPrices on reply.metadata.model, or nil when unpriced
+reply.metadata.cost_source # :flat_table, :scoped_table, or :unpriced
+```
+
+- One supervised process (under `Raxol.Agent.Supervisor`) owns the gateway port. It starts
+  `omp` on the first request, checks the ready line's version against the tested pin
+  (`Raxol.Agent.OMP.Version`; a different major is refused), and correlates requests by id,
+  since the gateway answers in completion order.
+- The binary is `config :raxol_agent, :omp_gateway, path: "/abs/path/to/omp"`, else `omp` on
+  an absolute `PATH` entry. It is refused unless it belongs to this account or to root and is
+  neither group- nor other-writable.
+- Requests are Anthropic Messages bodies from `Backend.Anthropic.Wire`, sent with
+  `stream: false` and an explicit `max_tokens` (`AI_MAX_TOKENS`, else 4096). Capabilities
+  are `[:completion, :tool_use]`: no `:streaming`, because the gateway returns a streamed
+  reply as one string, and the framework drives tool calls.
+- Each request has a deadline (`:timeout`, default 120 s). When the gateway exits, every
+  pending caller gets `{:error, {:gateway_exit, status}}` and the next request starts a new
+  one. A non-2xx reply is `{:error, {:http_error, status, error_type}}`, never its body.
+- The gateway drops HTTP headers, so its cost header never arrives. A reply is priced by
+  `Raxol.Agent.LlmPrices` on the model that answered (ADR-0035, Narrowed); a model the table
+  does not know keeps its token `usage` and reads `cost_source: :unpriced`, never a silent
+  zero.
+
 ## Turn driver
 
 `Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Turn` drives a whole
@@ -211,6 +249,7 @@ atom to a backend:
 | `:grok_native` | `Backend.GrokBuild` |
 | `:cursor` | `Backend.Cursor` |
 | `:mock` | `Backend.Mock` |
+| `:omp_gateway` | `Backend.OmpGateway` |
 
 `Raxol.Agent.Backend.Catalog` is the single declaration this table, the resolver's provider
 registry and `ExecutorConfig.backend()` are all derived from (`Catalog.ids/0` lists every

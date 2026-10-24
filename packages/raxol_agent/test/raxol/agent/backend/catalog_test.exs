@@ -94,7 +94,7 @@ defmodule Raxol.Agent.Backend.CatalogTest do
 
     test "the selector table is the catalog's runnable kinds" do
       runnable =
-        Catalog.by_kind([:http, :native, :mock]) |> Enum.map(& &1.id) |> MapSet.new()
+        Catalog.by_kind([:http, :native, :gateway, :mock]) |> Enum.map(& &1.id) |> MapSet.new()
 
       assert MapSet.equal?(runnable, MapSet.new(Selector.supported_backends()))
       refute :codex in Selector.supported_backends()

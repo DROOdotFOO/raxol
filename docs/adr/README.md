@@ -40,7 +40,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed | 2026-08-26 |
 | [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
 | [0034](0034-foreign-coding-agent-seams.md) | Foreign coding-agent integration seams | Implemented (driver pending) | 2026-09-04 |
-| [0035](0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Implemented | 2026-09-04 |
+| [0035](0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Narrowed by ADR-0042 | 2026-09-04 |
 | [0036](0036-agent-telemetry-coverage-and-shape.md) | Agent telemetry coverage and shape | Proposed | 2026-09-05 |
 | [0037](0037-remote-mcp-client-transport.md) | Remote transport for the MCP client | Implemented | 2026-09-14 |
 | [0038](0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |

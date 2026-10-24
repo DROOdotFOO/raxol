@@ -1,0 +1,13 @@
+{"command":"omp --profile raxol-fixtures --no-rules --no-skills --no-extensions auth-gateway stdio","omp_version":"18.12.6","scrub_version":1}
+{"out":"{\"ready\":true,\"version\":\"18.12.6\"}"}
+{"in":"{\"id\":1,\"method\":\"GET\",\"path\":\"/v1/models\"}"}
+{"in":"not json"}
+{"in":"{\"id\":3,\"method\":\"GET\"}"}
+{"in":"{\"body\":{\"max_tokens\":16,\"messages\":[{\"content\":\"hi\",\"role\":\"user\"}],\"model\":\"nope/does-not-exist\",\"stream\":false},\"id\":4,\"method\":\"POST\",\"path\":\"/v1/messages\"}"}
+{"in":"{\"id\":5,\"method\":\"GET\",\"path\":\"/nope\"}"}
+{"out":"{\"id\":null,\"status\":400,\"body\":{\"error\":{\"message\":\"Invalid JSON: JSON Parse error: Unexpected identifier \\\"not\\\"\",\"type\":\"invalid_request_error\"}}}"}
+{"out":"{\"id\":3,\"status\":400,\"body\":{\"error\":{\"message\":\"`path` must be an absolute path such as /v1/chat/completions\",\"type\":\"invalid_request_error\"}}}"}
+{"out":"{\"id\":1,\"status\":200,\"body\":{\"object\":\"list\",\"data\":[]}}"}
+{"out":"{\"id\":4,\"status\":404,\"body\":{\"error\":{\"message\":\"No available model matches \\\"nope/does-not-exist\\\"\",\"type\":\"invalid_request_error\"}}}"}
+{"out":"{\"id\":5,\"status\":404,\"body\":{\"error\":\"No route: GET /nope\"}}"}
+{"exit":0}

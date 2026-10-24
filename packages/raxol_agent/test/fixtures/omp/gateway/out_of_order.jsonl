@@ -1,0 +1,7 @@
+{"command":"omp --no-rules --no-skills --no-extensions auth-gateway stdio","omp_version":"18.12.6","scrub_version":1}
+{"out":"{\"ready\":true,\"version\":\"18.12.6\"}"}
+{"in":"{\"body\":{\"max_tokens\":64,\"messages\":[{\"content\":\"Count from 1 to 30, separated by spaces.\",\"role\":\"user\"}],\"model\":\"anthropic/claude-haiku-5-5\",\"stream\":false},\"id\":1,\"method\":\"POST\",\"path\":\"/v1/messages\"}"}
+{"in":"{\"id\":2,\"method\":\"GET\",\"path\":\"/nope\"}"}
+{"out":"{\"id\":2,\"status\":404,\"body\":{\"error\":\"No route: GET /nope\"}}"}
+{"out":"{\"body\":{\"content\":[{\"text\":\"1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30\",\"type\":\"text\"}],\"id\":\"msg_SCRUBBED0001\",\"model\":\"anthropic/claude-haiku-5-5\",\"role\":\"assistant\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"input_tokens\":48,\"output_tokens\":61}},\"id\":1,\"status\":200}"}
+{"exit":0}

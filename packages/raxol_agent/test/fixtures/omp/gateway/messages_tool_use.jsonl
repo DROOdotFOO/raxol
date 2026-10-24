@@ -1,0 +1,5 @@
+{"command":"omp --no-rules --no-skills --no-extensions auth-gateway stdio","omp_version":"18.12.6","scrub_version":1}
+{"out":"{\"ready\":true,\"version\":\"18.12.6\"}"}
+{"in":"{\"body\":{\"max_tokens\":64,\"messages\":[{\"content\":\"Call get_weather for Paris.\",\"role\":\"user\"}],\"model\":\"anthropic/claude-haiku-5-5\",\"stream\":false,\"tools\":[{\"description\":\"Current weather for a city.\",\"input_schema\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"name\":\"get_weather\"}]},\"id\":1,\"method\":\"POST\",\"path\":\"/v1/messages\"}"}
+{"out":"{\"body\":{\"content\":[{\"id\":\"toolu_SCRUBBED0001\",\"input\":{\"city\":\"Paris\"},\"name\":\"get_weather\",\"type\":\"tool_use\"}],\"id\":\"msg_SCRUBBED0001\",\"model\":\"anthropic/claude-haiku-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"input_tokens\":409,\"output_tokens\":51}},\"id\":1,\"status\":200}"}
+{"exit":0}

@@ -20,21 +20,24 @@ defmodule Raxol.Agent.Backend.Catalog do
     * `:id` -- the backend atom, canonical everywhere (`:harness` in the
       resolver is the same value under its deprecated name)
     * `:label` -- human name for the setup panel and `/login`
-    * `:kind` -- `:http`, `:native`, `:mock`, or `:reserved`. `:reserved` names
-      a backend the type system accepts and the selector deliberately refuses
+    * `:kind` -- `:http`, `:native`, `:gateway`, `:mock`, or `:reserved`.
+      `:gateway` is a local process that brokers models for Raxol (OMP's
+      `auth-gateway`). `:reserved` names a backend the type system accepts
+      and the selector deliberately refuses
     * `:module` -- the backend module the selector resolves to
     * `:backend_opts` -- defaults merged under the config's own options
     * `:env_keys` -- API key env vars, checked in order; `[]` means keyless
     * `:model_env` -- env var naming a default model, or `nil`
-    * `:billing` -- `:subscription`, `:api_credits`, `:local`, or `:free`.
-      Auto-detection routes on this: `:api_credits` draws down a prepaid
-      balance and is never selected without an explicit choice
+    * `:billing` -- `:subscription`, `:api_credits`, `:local`, `:free`, or
+      `:per_model`. Auto-detection routes on this: `:api_credits` draws down a
+      prepaid balance and is never selected without an explicit choice.
+      `:per_model` bills whatever model answered, priced from the reply
     * `:detectable?` -- whether the backend takes part in the auto-detect walk
       at all, independent of what `:billing` then allows
   """
 
-  @type kind :: :http | :native | :mock | :reserved
-  @type billing :: :subscription | :api_credits | :local | :free
+  @type kind :: :http | :native | :gateway | :mock | :reserved
+  @type billing :: :subscription | :api_credits | :local | :free | :per_model
 
   @type entry :: %{
           id: atom(),
@@ -261,6 +264,21 @@ defmodule Raxol.Agent.Backend.Catalog do
       env_keys: [],
       model_env: nil,
       billing: :subscription,
+      detectable?: false
+    },
+    # The OMP gateway reaches every model OMP is logged in to, so what a request
+    # costs depends on the model that answered it, not on this entry. It is
+    # undetectable for the same reason: an installed `omp` says nothing about
+    # which account a request would draw on (ADR-0042, decision 4).
+    %{
+      id: :omp_gateway,
+      label: "OMP gateway (omp auth-gateway)",
+      kind: :gateway,
+      module: Raxol.Agent.Backend.OmpGateway,
+      backend_opts: [],
+      env_keys: [],
+      model_env: nil,
+      billing: :per_model,
       detectable?: false
     },
     # Codex speaks a stateful `app-server` JSON-RPC protocol (not the
