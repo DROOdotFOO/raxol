@@ -25,8 +25,9 @@ defmodule Raxol.MCP.Test do
   `start_session/2` spins up a headless TEA module (via `Raxol.Headless`),
   a per-session `Raxol.MCP.Registry`, and a `ToolSynchronizer` that
   auto-derives MCP tools from the view tree. Interaction helpers like
-  `click/2` and `type_into/3` call tools through the registry, exercising
-  the full MCP pipeline. Each helper returns once the app has handled the
+  `click/2` and `type_into/3` call the session's tools
+  (`"session_id.component_id.action"`) through the registry, exercising the
+  full MCP pipeline. Each helper returns once the app has handled the
   action, rendered the result and re-derived its tools
   (`Raxol.Headless.settle/1`), so the next step sees its effect.
 
@@ -111,37 +112,37 @@ defmodule Raxol.MCP.Test do
   @doc """
   Click a Button Component by ID.
 
-  Calls the `component_id.click` tool through the MCP registry.
+  Calls the session's `component_id.click` tool through the MCP registry.
 
       session |> click("submit_btn")
   """
   @spec click(Session.t(), String.t()) :: Session.t()
   def click(%Session{} = session, component_id) do
-    call_tool!(session, "#{component_id}.click", %{})
+    call_tool!(session, tool_name(session, component_id, "click"), %{})
   end
 
   @doc """
   Type text into an input Component by ID.
 
-  Calls the `component_id.type_into` tool through the MCP registry.
+  Calls the session's `component_id.type_into` tool through the MCP registry.
 
       session |> type_into("search_input", "elixir")
   """
   @spec type_into(Session.t(), String.t(), String.t()) :: Session.t()
   def type_into(%Session{} = session, component_id, text) do
-    call_tool!(session, "#{component_id}.type_into", %{"text" => text})
+    call_tool!(session, tool_name(session, component_id, "type_into"), %{"text" => text})
   end
 
   @doc """
   Clear an input Component by ID.
 
-  Calls the `component_id.clear` tool through the MCP registry.
+  Calls the session's `component_id.clear` tool through the MCP registry.
 
       session |> clear("search_input")
   """
   @spec clear(Session.t(), String.t()) :: Session.t()
   def clear(%Session{} = session, component_id) do
-    call_tool!(session, "#{component_id}.clear", %{})
+    call_tool!(session, tool_name(session, component_id, "clear"), %{})
   end
 
   @doc """
@@ -151,7 +152,7 @@ defmodule Raxol.MCP.Test do
   """
   @spec select(Session.t(), String.t(), map()) :: Session.t()
   def select(%Session{} = session, component_id, args \\ %{}) do
-    call_tool!(session, "#{component_id}.select_row", args)
+    call_tool!(session, tool_name(session, component_id, "select_row"), args)
   end
 
   @doc """
@@ -161,7 +162,7 @@ defmodule Raxol.MCP.Test do
   """
   @spec toggle(Session.t(), String.t()) :: Session.t()
   def toggle(%Session{} = session, component_id) do
-    call_tool!(session, "#{component_id}.toggle", %{})
+    call_tool!(session, tool_name(session, component_id, "toggle"), %{})
   end
 
   @doc """
@@ -169,7 +170,7 @@ defmodule Raxol.MCP.Test do
 
   Returns the session for piping. Raises on failure.
 
-      session |> call_tool("component_id.action", %{"key" => "value"})
+      session |> call_tool("\#{session.id}.component_id.action", %{"key" => "value"})
   """
   @spec call_tool(Session.t(), String.t(), map()) :: Session.t()
   def call_tool(%Session{} = session, tool_name, args \\ %{}) do
@@ -281,6 +282,8 @@ defmodule Raxol.MCP.Test do
   end
 
   # -- Internal ----------------------------------------------------------------
+
+  defp tool_name(%Session{id: id}, component_id, action), do: "#{id}.#{component_id}.#{action}"
 
   defp call_tool!(%Session{} = session, tool_name, args) do
     case Registry.call_tool(session.registry, tool_name, args) do

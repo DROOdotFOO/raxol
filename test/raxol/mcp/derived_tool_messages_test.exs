@@ -50,18 +50,18 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
           {Demos.TextInputDemo, "list_text_input", "input.type_into"},
           {Demos.TabsDemo, "list_tabs", "tabs.select_tab"}
         ] do
-      test "#{inspect(demo)} lists #{action}" do
+      test "#{inspect(demo)} lists <id>.#{action}" do
         start_demo(unquote(demo), unquote(id))
-        assert unquote(action) in tool_names()
+        assert "#{unquote(id)}.#{unquote(action)}" in tool_names()
       end
     end
 
-    test "ModalDemo lists confirm.dismiss while the dialog is open" do
+    test "ModalDemo lists <id>.confirm.dismiss while the dialog is open" do
       id = start_demo(Demos.ModalDemo, "list_modal")
-      refute "confirm.dismiss" in tool_names()
+      refute "list_modal.confirm.dismiss" in tool_names()
 
       open_modal(id)
-      assert "confirm.dismiss" in tool_names()
+      assert "list_modal.confirm.dismiss" in tool_names()
     end
   end
 
@@ -70,7 +70,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
     dispatcher = dispatcher_pid(id)
 
     assert %{content: [%{text: "Sorted by stars desc"}]} =
-             call_tool("playground_table.sort", %{"column" => "stars", "direction" => "desc"})
+             call_tool("sortdesc.playground_table.sort", %{"column" => "stars", "direction" => "desc"})
 
     {:ok, model} = Headless.get_model(id)
     assert {model.table.sort_by, model.table.sort_direction} == {:stars, :desc}
@@ -88,7 +88,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   test "select_list_pick: select confirms the option" do
     id = start_demo(Demos.SelectListDemo, "pick")
 
-    refute error?(call_tool("lang.select", %{"index" => 2}))
+    refute error?(call_tool("pick.lang.select", %{"index" => 2}))
 
     assert {:ok, %{selected: 2, confirmed: "Go", open: false}} = Headless.get_model(id)
   end
@@ -97,7 +97,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
     id = start_demo(Demos.ModalDemo, "dismiss")
     open_modal(id)
 
-    refute error?(call_tool("confirm.dismiss", %{}))
+    refute error?(call_tool("dismiss.confirm.dismiss", %{}))
 
     assert {:ok, %{show: false, cancelled: 1, confirmed: 0}} = Headless.get_model(id)
   end
@@ -105,7 +105,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   test "text_input_fill: type_into sets the value" do
     id = start_demo(Demos.TextInputDemo, "fill")
 
-    refute error?(call_tool("input.type_into", %{"text" => "hello"}))
+    refute error?(call_tool("fill.input.type_into", %{"text" => "hello"}))
 
     assert {:ok, %{value: "hello", char_count: 5}} = Headless.get_model(id)
   end
@@ -113,7 +113,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   test "tabs_switch: select_tab activates the tab" do
     id = start_demo(Demos.TabsDemo, "switch")
 
-    refute error?(call_tool("tabs.select_tab", %{"index" => 2}))
+    refute error?(call_tool("switch.tabs.select_tab", %{"index" => 2}))
 
     assert {:ok, %{active: 2}} = Headless.get_model(id)
   end

@@ -56,7 +56,8 @@ defmodule Raxol.Headless.McpTools do
         Starts a headless Raxol session from a module name. The module must be
         on this server's startable list (the playground demos, plus the apps
         the deployment adds) and a Raxol application: it has to export init/1,
-        update/2 and view/1.
+        update/2 and view/1. The session's widget tools are named
+        <id>.<widget>.<action>.
 
         A "path" argument also exists, but it is DISABLED unless the deployment
         sets RAXOL_HEADLESS_PATH_ROOT, because starting from a path compiles the
@@ -527,7 +528,7 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
-  # The id is to name every tool the session derives (`<id>.<widget>.<action>`,
+  # The id names every tool the session derives (`<id>.<widget>.<action>`),
   # and a client renames those: OMP turns each `.` into `_` and prefixes the
   # 17-character `mcp__raxol_raxol_`. No `_` or `.` in the id keeps the
   # session boundary unambiguous after that rename (`a_b.c` and `a.b_c` would

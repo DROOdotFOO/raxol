@@ -14,6 +14,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
   Started by `Raxol.Headless` when creating a session. Linked to the
   session lifecycle -- dies when the session dies, cleaning up its tools.
 
+  Every tool it registers is named under the session id: derived tools are
+  `"session_id.widget_id.action"` and the meta-tool is
+  `"session_id.discover_tools"`, so sessions rendering the same widget never
+  share a tool. A tool `Raxol.MCP.Registry` refuses (its client-side name is
+  already taken) is logged and left out of the session's set.
+
   ## Usage
 
       {:ok, pid} = ToolSynchronizer.start_link(
@@ -123,9 +129,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
       %{synchronizer: self(), dispatcher_pid: dispatcher_pid}
     )
 
-    # Register the discover_tools meta-tool
-    discover_tool = FocusLens.discover_tools_spec(registry)
-    Registry.register_tools(registry, [discover_tool])
+    # Register the session's discover_tools meta-tool
+    discover_tool = FocusLens.discover_tools_spec(registry, session_id)
+    refused = register(registry, session_id, [discover_tool])
 
     state = %__MODULE__{
       registry: registry,
@@ -133,7 +139,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
       session_id: session_id,
       app_module: app_module,
       telemetry_handler_id: handler_id,
-      current_tool_names: MapSet.new(["discover_tools"])
+      current_tool_names: MapSet.difference(MapSet.new([discover_tool.name]), refused)
     }
 
     # Register session-level resources (context tree, widget tree)
@@ -306,41 +312,77 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   defp do_sync(view_tree, model, state) do
-    context = %{
-      dispatcher_pid: state.dispatcher_pid,
-      session_id: state.session_id
-    }
-
     # Tool sync (existing behavior)
-    new_tools = TreeWalker.derive_tools(view_tree, context)
-    new_tool_names = MapSet.new(Enum.map(new_tools, & &1.name))
-    new_tool_names = MapSet.put(new_tool_names, "discover_tools")
-
-    removed = MapSet.difference(state.current_tool_names, new_tool_names)
-    added_tools = Enum.filter(new_tools, &(not MapSet.member?(state.current_tool_names, &1.name)))
-    tools_changed? = MapSet.size(removed) > 0 or added_tools != []
-
-    if MapSet.size(removed) > 0 do
-      Registry.unregister_tools(state.registry, MapSet.to_list(removed))
-    end
-
-    if added_tools != [] do
-      Registry.register_tools(state.registry, added_tools)
-    end
-
-    if tools_changed? do
-      server_notify("notifications/tools/list_changed", %{})
-    end
+    current_tool_names = sync_tools(view_tree, state)
 
     # Resource sync (model projections)
     state = sync_model_resources(model, state)
 
     %{
       state
-      | current_tool_names: new_tool_names,
+      | current_tool_names: current_tool_names,
         current_view_tree: view_tree,
         current_model: model
     }
+  end
+
+  # Answers the session's tool names after the sync.
+  defp sync_tools(view_tree, state) do
+    context = %{
+      dispatcher_pid: state.dispatcher_pid,
+      session_id: state.session_id
+    }
+
+    new_tools = TreeWalker.derive_tools(view_tree, context)
+
+    new_tool_names =
+      new_tools
+      |> MapSet.new(& &1.name)
+      |> MapSet.put(FocusLens.discover_tools_name(state.session_id))
+
+    removed = MapSet.difference(state.current_tool_names, new_tool_names)
+    added_tools = Enum.filter(new_tools, &(not MapSet.member?(state.current_tool_names, &1.name)))
+    added_names = apply_tool_changes(state, removed, added_tools)
+
+    state.current_tool_names |> MapSet.difference(removed) |> MapSet.union(added_names)
+  end
+
+  # Answers the names of the added tools the registry took.
+  defp apply_tool_changes(state, removed, added_tools) do
+    if MapSet.size(removed) > 0 do
+      Registry.unregister_tools(state.registry, MapSet.to_list(removed))
+    end
+
+    refused = register(state.registry, state.session_id, added_tools)
+    added_names = added_tools |> MapSet.new(& &1.name) |> MapSet.difference(refused)
+
+    if MapSet.size(removed) > 0 or MapSet.size(added_names) > 0 do
+      server_notify("notifications/tools/list_changed", %{})
+    end
+
+    added_names
+  end
+
+  # Answers the names the registry refused. A refused tool is not the
+  # session's, so it is neither listed in its set nor unregistered with it;
+  # the next sync offers it again.
+  defp register(_registry, _session_id, []), do: MapSet.new()
+
+  defp register(registry, session_id, tools) do
+    case Registry.register_tools(registry, tools) do
+      :ok ->
+        MapSet.new()
+
+      {:error, {:name_collision, collisions}} ->
+        Logger.warning(
+          "[MCP.ToolSynchronizer] Session #{inspect(session_id)}: refused " <>
+            Enum.map_join(collisions, ", ", fn {name, holder} ->
+              "#{inspect(name)} (its client-side name is taken by #{inspect(holder)})"
+            end)
+        )
+
+        MapSet.new(collisions, fn {name, _holder} -> name end)
+    end
   end
 
   # -- Private: model resources --

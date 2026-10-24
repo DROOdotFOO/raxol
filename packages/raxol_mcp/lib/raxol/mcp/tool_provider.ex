@@ -20,7 +20,8 @@ defmodule Raxol.MCP.ToolProvider do
       }
 
   The `name` is the action name (e.g., "click", "type_into"). The
-  TreeWalker namespaces it with the widget ID: `"submit_btn.click"`.
+  TreeWalker namespaces it with the session and widget IDs:
+  `"demo.submit_btn.click"`.
 
   The `description` is static per (provider, action): it never carries app
   text (labels, titles, tab names) or the widget ID. Descriptions reach the

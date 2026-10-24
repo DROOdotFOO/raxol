@@ -67,6 +67,8 @@ defmodule Raxol.MCP.TreeWalkerTest do
     text_input: TestInput
   }
 
+  @ctx %{dispatcher_pid: nil, session_id: "s", type_map: @type_map}
+
   describe "derive_tools/2" do
     test "derives tools from a simple widget" do
       tree = %{
@@ -75,36 +77,36 @@ defmodule Raxol.MCP.TreeWalkerTest do
         attrs: %{label: "Submit", disabled: false, on_click: :submit}
       }
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
-      assert [%{name: "submit_btn.click", description: desc}] = tools
+      assert [%{name: "s.submit_btn.click", description: desc}] = tools
       assert desc =~ "Submit"
     end
 
-    test "namespaces tools with widget ID" do
+    test "namespaces tools with session and widget ID" do
       tree = %{type: :button, id: "my_btn", attrs: %{label: "Go", disabled: false}}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
-      assert [%{name: "my_btn.click"}] = tools
+      assert [%{name: "s.my_btn.click"}] = tools
     end
 
     test "skips disabled button" do
       tree = %{type: :button, id: "btn", attrs: %{label: "Disabled", disabled: true}}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
       assert tools == []
     end
 
     test "skips nodes without id" do
       tree = %{type: :column, children: []}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
       assert tools == []
     end
 
     test "skips nodes with empty id" do
       tree = %{type: :button, id: "", attrs: %{label: "X", disabled: false}}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
       assert tools == []
     end
@@ -123,27 +125,27 @@ defmodule Raxol.MCP.TreeWalkerTest do
         ]
       }
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
       names = Enum.map(tools, & &1.name)
 
-      assert "btn1.click" in names
-      assert "btn2.click" in names
+      assert "s.btn1.click" in names
+      assert "s.btn2.click" in names
     end
 
     test "derives multiple tools from one widget" do
       tree = %{type: :text_input, id: "search", attrs: %{value: "hello"}}
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
       names = Enum.map(tools, & &1.name)
 
-      assert "search.type_into" in names
-      assert "search.get_value" in names
+      assert "s.search.type_into" in names
+      assert "s.search.get_value" in names
       assert length(tools) == 2
     end
 
     test "skips unknown widget types" do
       tree = %{type: :sparkline, id: "chart1", attrs: %{data: [1, 2, 3]}}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
       assert tools == []
     end
@@ -154,16 +156,16 @@ defmodule Raxol.MCP.TreeWalkerTest do
         %{type: :button, id: "b", attrs: %{label: "B", disabled: false}}
       ]
 
-      tools = TreeWalker.derive_tools(trees, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(trees, @ctx)
       names = Enum.map(tools, & &1.name)
 
-      assert "a.click" in names
-      assert "b.click" in names
+      assert "s.a.click" in names
+      assert "s.b.click" in names
     end
 
     test "handles nil and non-map nodes gracefully" do
       tree = %{type: :column, children: [nil, "stray", 42]}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
       assert tools == []
     end
@@ -172,9 +174,9 @@ defmodule Raxol.MCP.TreeWalkerTest do
   describe "tool callbacks" do
     test "callback invokes handle_tool_call and returns formatted result" do
       tree = %{type: :text_input, id: "inp", attrs: %{value: "test"}}
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
-      get_value_tool = Enum.find(tools, &(&1.name == "inp.get_value"))
+      get_value_tool = Enum.find(tools, &(&1.name == "s.inp.get_value"))
       assert {:ok, [%{type: "text", text: text}]} = get_value_tool.callback.(%{})
       assert text =~ "test"
     end
@@ -186,7 +188,7 @@ defmodule Raxol.MCP.TreeWalkerTest do
         attrs: %{label: "Go", disabled: false, on_click: :go}
       }
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
       tool = hd(tools)
 
       # Should not crash even with nil dispatcher
@@ -204,9 +206,8 @@ defmodule Raxol.MCP.TreeWalkerTest do
         ]
       }
 
-      ctx = %{dispatcher_pid: nil, type_map: @type_map}
-      names1 = TreeWalker.derive_tools(tree, ctx) |> Enum.map(& &1.name) |> Enum.sort()
-      names2 = TreeWalker.derive_tools(tree, ctx) |> Enum.map(& &1.name) |> Enum.sort()
+      names1 = TreeWalker.derive_tools(tree, @ctx) |> Enum.map(& &1.name) |> Enum.sort()
+      names2 = TreeWalker.derive_tools(tree, @ctx) |> Enum.map(& &1.name) |> Enum.sort()
 
       assert names1 == names2
     end
@@ -225,9 +226,9 @@ defmodule Raxol.MCP.TreeWalkerTest do
         children: [%{type: :text, content: "body"}]
       }
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
-      assert [%{name: "blk-1.click"}] = tools
+      assert [%{name: "s.blk-1.click"}] = tools
     end
 
     test "an explicit marker wins over the built-in type map" do
@@ -238,11 +239,11 @@ defmodule Raxol.MCP.TreeWalkerTest do
       }
 
       names =
-        TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+        TreeWalker.derive_tools(tree, @ctx)
         |> Enum.map(& &1.name)
         |> Enum.sort()
 
-      assert names == ["btn-m.get_value", "btn-m.type_into"]
+      assert names == ["s.btn-m.get_value", "s.btn-m.type_into"]
     end
 
     test "mcp_exclude still suppresses a marker node" do
@@ -252,7 +253,7 @@ defmodule Raxol.MCP.TreeWalkerTest do
         attrs: %{component_module: TestButton, mcp_exclude: true}
       }
 
-      assert TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map}) == []
+      assert TreeWalker.derive_tools(tree, @ctx) == []
     end
 
     test "a marker naming a non-provider module derives nothing" do
@@ -262,7 +263,7 @@ defmodule Raxol.MCP.TreeWalkerTest do
         attrs: %{component_module: Enum}
       }
 
-      assert TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map}) == []
+      assert TreeWalker.derive_tools(tree, @ctx) == []
     end
 
     test "a non-atom marker is ignored, falling back to the type map" do
@@ -272,9 +273,9 @@ defmodule Raxol.MCP.TreeWalkerTest do
         attrs: %{component_module: "not a module", label: "Go", disabled: false}
       }
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
-      assert [%{name: "blk-4.click"}] = tools
+      assert [%{name: "s.blk-4.click"}] = tools
     end
   end
 
@@ -301,9 +302,9 @@ defmodule Raxol.MCP.TreeWalkerTest do
         ]
       }
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
-      assert [%{name: "ov-btn.click"}] = tools
+      assert [%{name: "s.ov-btn.click"}] = tools
     end
 
     test "a provider in the flow child is still derived alongside overlay tools" do
@@ -328,11 +329,11 @@ defmodule Raxol.MCP.TreeWalkerTest do
       }
 
       names =
-        TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+        TreeWalker.derive_tools(tree, @ctx)
         |> Enum.map(& &1.name)
         |> Enum.sort()
 
-      assert names == ["flow-btn.click", "ov-btn.click"]
+      assert names == ["s.flow-btn.click", "s.ov-btn.click"]
     end
 
     test "an absolute_layer with no overlays derives only its flow tools" do
@@ -346,9 +347,9 @@ defmodule Raxol.MCP.TreeWalkerTest do
         overlays: []
       }
 
-      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+      tools = TreeWalker.derive_tools(tree, @ctx)
 
-      assert [%{name: "flow-btn.click"}] = tools
+      assert [%{name: "s.flow-btn.click"}] = tools
     end
   end
 end

@@ -159,7 +159,7 @@ defmodule Raxol.MCP.TestTest do
     }
 
     # Derive and register tools
-    context = %{dispatcher_pid: nil, type_map: @type_map}
+    context = %{dispatcher_pid: nil, session_id: "test", type_map: @type_map}
     tools = Raxol.MCP.TreeWalker.derive_tools(view_tree, context)
     :ok = Registry.register_tools(registry, tools)
 
@@ -210,15 +210,15 @@ defmodule Raxol.MCP.TestTest do
       tools = Test.get_tools(session)
       names = Enum.map(tools, & &1[:name])
 
-      assert "name_input.type_into" in names
-      assert "name_input.clear" in names
-      assert "name_input.get_value" in names
-      assert "search_input.type_into" in names
-      assert "submit_btn.click" in names
-      assert "agree_chk.toggle" in names
+      assert "test.name_input.type_into" in names
+      assert "test.name_input.clear" in names
+      assert "test.name_input.get_value" in names
+      assert "test.search_input.type_into" in names
+      assert "test.submit_btn.click" in names
+      assert "test.agree_chk.toggle" in names
 
       # Disabled button should NOT have tools
-      refute "disabled_btn.click" in names
+      refute "test.disabled_btn.click" in names
     end
   end
 
@@ -294,7 +294,7 @@ defmodule Raxol.MCP.TestTest do
 
   describe "call_tool/3" do
     test "calls arbitrary tool by name", %{session: session} do
-      result = Test.call_tool(session, "name_input.get_value", %{})
+      result = Test.call_tool(session, "test.name_input.get_value", %{})
       assert %Session{} = result
     end
 
@@ -325,7 +325,7 @@ defmodule Raxol.MCP.TestTest do
 
   describe "assert_tool_available/2" do
     test "passes for registered tool", %{session: session} do
-      assert_tool_available(session, "submit_btn.click")
+      assert_tool_available(session, "test.submit_btn.click")
     end
 
     test "fails for missing tool", %{session: session} do
@@ -337,8 +337,8 @@ defmodule Raxol.MCP.TestTest do
     test "is pipe-friendly", %{session: session} do
       result =
         session
-        |> assert_tool_available("submit_btn.click")
-        |> assert_tool_available("name_input.type_into")
+        |> assert_tool_available("test.submit_btn.click")
+        |> assert_tool_available("test.name_input.type_into")
 
       assert %Session{} = result
     end
@@ -346,12 +346,12 @@ defmodule Raxol.MCP.TestTest do
 
   describe "refute_tool_available/2" do
     test "passes for missing tool", %{session: session} do
-      refute_tool_available(session, "disabled_btn.click")
+      refute_tool_available(session, "test.disabled_btn.click")
     end
 
     test "fails for registered tool", %{session: session} do
       assert_raise ExUnit.AssertionError, ~r/not to be available/, fn ->
-        refute_tool_available(session, "submit_btn.click")
+        refute_tool_available(session, "test.submit_btn.click")
       end
     end
   end
@@ -450,12 +450,12 @@ defmodule Raxol.MCP.TestTest do
   describe "interaction + assertion chaining" do
     test "full workflow in a single pipe", %{session: session} do
       session
-      |> assert_tool_available("name_input.type_into")
+      |> assert_tool_available("test.name_input.type_into")
       |> Test.type_into("name_input", "Bob")
       |> assert_component("name_input")
       |> Test.click("submit_btn")
-      |> assert_tool_available("submit_btn.click")
-      |> refute_tool_available("disabled_btn.click")
+      |> assert_tool_available("test.submit_btn.click")
+      |> refute_tool_available("test.disabled_btn.click")
       |> assert_screenshot_matches([
         %{type: :text_input, id: "name_input"},
         %{type: :button, id: "submit_btn"},

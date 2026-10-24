@@ -335,14 +335,14 @@ defmodule Raxol.UI.Components.Input.ScrubberTest do
 
       names =
         node
-        |> TreeWalker.derive_tools(%{dispatcher_pid: nil})
+        |> TreeWalker.derive_tools(%{dispatcher_pid: nil, session_id: "s"})
         |> Enum.map(& &1.name)
 
       assert names == [
-               "replay.seek",
-               "replay.play",
-               "replay.pause",
-               "replay.get_position"
+               "s.replay.seek",
+               "s.replay.play",
+               "s.replay.pause",
+               "s.replay.get_position"
              ]
     end
 
@@ -364,7 +364,7 @@ defmodule Raxol.UI.Components.Input.ScrubberTest do
       node = Raxol.View.Components.scrubber(min: 0, max: 47)
 
       assert node.id == nil
-      assert TreeWalker.derive_tools(node, %{dispatcher_pid: nil}) == []
+      assert TreeWalker.derive_tools(node, %{dispatcher_pid: nil, session_id: "s"}) == []
     end
   end
 

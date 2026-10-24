@@ -46,14 +46,14 @@ defmodule Raxol.MCP.TreeWalkerChildrenTest do
   end
 
   test "TreeWalker derives tools through single-map :children" do
-    context = %{dispatcher_pid: nil, type_map: %{button: ClickProvider}}
+    context = %{dispatcher_pid: nil, session_id: "s", type_map: %{button: ClickProvider}}
 
     names =
       tree_with_map_children()
       |> TreeWalker.derive_tools(context)
       |> Enum.map(& &1.name)
 
-    assert "nested_btn.click" in names
+    assert "s.nested_btn.click" in names
   end
 
   test "StructuredScreenshot summarizes through single-map :children" do

@@ -27,7 +27,8 @@ defmodule Raxol.Headless do
       # Stop
       :ok = Raxol.Headless.stop("demo")
 
-  Session ids are binaries. The `raxol_start` MCP tool accepts only ids
+  Session ids are binaries. A session's MCP tools are named under its id
+  (`"demo.table.sort"`), and the `raxol_start` MCP tool accepts only ids
   matching `^[a-z][a-z0-9]{0,6}$`; Elixir callers may use any binary.
 
   ## Processes

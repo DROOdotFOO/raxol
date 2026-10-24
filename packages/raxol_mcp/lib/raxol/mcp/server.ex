@@ -93,6 +93,7 @@ defmodule Raxol.MCP.Server do
 
   alias Raxol.MCP.Authorizer
   alias Raxol.MCP.Deployment
+  alias Raxol.MCP.FocusLens
   alias Raxol.MCP.Protocol
   alias Raxol.MCP.Registry
   alias Raxol.MCP.ResourceRouter
@@ -780,7 +781,7 @@ defmodule Raxol.MCP.Server do
   defp execute_async({:authorize_tool, id, name, arguments, registry, authorizer, ctx, conn_id}) do
     case safe_decide(authorizer, name, arguments, ctx) do
       :allow ->
-        {:response, call_tool_response(id, name, Registry.call_tool(registry, name, arguments))}
+        {:response, call_tool_response(id, name, call_tool(registry, name, arguments))}
 
       {:ask, prompt} ->
         {:ask, id, name, arguments, prompt, conn_id}
@@ -791,7 +792,7 @@ defmodule Raxol.MCP.Server do
   end
 
   defp execute_async({:call_tool, id, name, arguments, registry}) do
-    {:response, call_tool_response(id, name, Registry.call_tool(registry, name, arguments))}
+    {:response, call_tool_response(id, name, call_tool(registry, name, arguments))}
   end
 
   defp execute_async({:read_operation, id, method, detail, operation, read_authorizer, ctx}) do
@@ -1320,6 +1321,16 @@ defmodule Raxol.MCP.Server do
           "Tool not found: #{name}"
         )
 
+      {:error, {:session_not_running, session}} ->
+        content = [
+          %{
+            type: "text",
+            text: "session `#{session}` is not running in this server; call raxol_list"
+          }
+        ]
+
+        Protocol.response(id, %{content: content, isError: true})
+
       {:error, :circuit_open} ->
         content = [
           %{
@@ -1334,6 +1345,40 @@ defmodule Raxol.MCP.Server do
         content = [%{type: "text", text: "Error: #{inspect(reason)}"}]
         Protocol.response(id, %{content: content, isError: true})
     end
+  end
+
+  # A derived tool is `<session>.<widget>.<action>` and a session's meta-tool
+  # `<session>.discover_tools`. A client keeps the names it listed last (OMP
+  # caches them across runs), so a call to one whose session is gone is an
+  # answer the caller can act on, not an unknown method. A session is running
+  # in this server while its `<session>.discover_tools` is registered here.
+  defp call_tool(registry, name, arguments) do
+    case Registry.call_tool(registry, name, arguments) do
+      {:error, :tool_not_found} -> tool_not_found(registry, name)
+      result -> result
+    end
+  end
+
+  defp tool_not_found(registry, name) do
+    with {:ok, session} <- session_scoped(name),
+         false <- session_running?(registry, session) do
+      {:error, {:session_not_running, session}}
+    else
+      _scoped_and_running_or_unscoped -> {:error, :tool_not_found}
+    end
+  end
+
+  defp session_scoped(name) do
+    case String.split(name, ".") do
+      [session, "discover_tools"] when session != "" -> {:ok, session}
+      [session, _widget, _action | _] when session != "" -> {:ok, session}
+      _ -> :error
+    end
+  end
+
+  defp session_running?(registry, session) do
+    discover = FocusLens.discover_tools_name(session)
+    registry |> Registry.list_tools() |> Enum.any?(&(&1.name == discover))
   end
 
   defp do_read_resource(id, uri, state) do

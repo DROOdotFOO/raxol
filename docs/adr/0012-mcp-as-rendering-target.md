@@ -83,6 +83,8 @@ Built-in implementations for all existing Components:
 
 A tree walker traverses the `view(model)` output, collects tools from each Component, namespaces by Component ID (`component.search_input.type_into`), and registers with `MCP.Registry`. Tool set updates on every render via `tools/list_changed` notification.
 
+**Amended by [ADR-0042](0042-lean-on-omp.md), 2026-10-24.** Derived tools are named per headless session, `<session>.<widget>.<action>` (`demo.search_input.type_into`), and each session's `discover_tools` is `<session>.discover_tools`, searching that session only. Two sessions rendering the same Component used to share one tool name, so the later session's tool replaced the earlier one's and stopping either removed it for both. A name a client would merge with an existing one after its own renaming (OMP's `[^a-z0-9_]` to `_`) is refused at registration.
+
 **3. Focus lens** (attention-aware tool filtering)
 
 A complex UI could expose 100+ tools. LLM tool selection degrades past ~20. The MCP server applies an attention-aware filter:

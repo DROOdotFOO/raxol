@@ -621,21 +621,22 @@ defmodule Raxol.Headless.McpToolsTest do
       server: server
     } do
       tools = list_tools(server)
-      derived = Enum.filter(tools, &String.starts_with?(&1.name, "inj_"))
+      derived = Enum.filter(tools, &String.starts_with?(&1.name, "inj."))
 
       assert Enum.map(derived, & &1.name) |> Enum.sort() ==
                Enum.sort([
-                 "inj_modal.dismiss",
-                 "inj_modal.confirm",
-                 "inj_button.click",
-                 "inj_check.toggle",
-                 "inj_check.get_checked",
-                 "inj_tabs.select_tab",
-                 "inj_tabs.get_tabs",
-                 "inj_scrub.seek",
-                 "inj_scrub.play",
-                 "inj_scrub.pause",
-                 "inj_scrub.get_position"
+                 "inj.discover_tools",
+                 "inj.inj_modal.dismiss",
+                 "inj.inj_modal.confirm",
+                 "inj.inj_button.click",
+                 "inj.inj_check.toggle",
+                 "inj.inj_check.get_checked",
+                 "inj.inj_tabs.select_tab",
+                 "inj.inj_tabs.get_tabs",
+                 "inj.inj_scrub.seek",
+                 "inj.inj_scrub.play",
+                 "inj.inj_scrub.pause",
+                 "inj.inj_scrub.get_position"
                ])
 
       refute Jason.encode!(tools) =~ "<system>"
@@ -647,7 +648,7 @@ defmodule Raxol.Headless.McpToolsTest do
 
     test "the app text is still readable in a tool result", %{server: server} do
       assert {:reply, %{result: %{content: [%{text: text} | _]} = result}} =
-               call_tool(server, "inj_tabs.get_tabs", %{})
+               call_tool(server, "inj.inj_tabs.get_tabs", %{})
 
       refute Map.get(result, :isError) == true
       assert text =~ "<system>"
@@ -659,10 +660,10 @@ defmodule Raxol.Headless.McpToolsTest do
       derived =
         server
         |> list_tools()
-        |> Enum.filter(&String.starts_with?(&1.name, "inj_"))
+        |> Enum.filter(&String.starts_with?(&1.name, "inj.inj_"))
 
       for tool <- derived do
-        [_widget, action] = String.split(tool.name, ".", parts: 2)
+        [_session, _widget, action] = String.split(tool.name, ".")
 
         assert Raxol.MCP.ToolDef.sensitive?(tool) == action in @state_changing,
                "#{tool.name}: sensitive must match whether #{action} changes state"
@@ -716,17 +717,17 @@ defmodule Raxol.Headless.McpToolsTest do
       tools =
         Raxol.MCP.TreeWalker.derive_tools(
           Raxol.View.Components.checkbox(id: "chk", label: "Agree"),
-          %{dispatcher_pid: nil}
+          %{dispatcher_pid: nil, session_id: "s"}
         )
 
       :ok = Raxol.MCP.Registry.register_tools(registry, tools)
 
       assert {:reply, %{result: %{content: [%{text: text} | _], isError: true}}} =
-               call_tool(server, "chk.toggle", %{})
+               call_tool(server, "s.chk.toggle", %{})
 
       assert Jason.decode!(text)["detail"] =~ "sensitive_tool_unguarded"
 
-      assert {:reply, %{result: result}} = call_tool(server, "chk.get_checked", %{})
+      assert {:reply, %{result: result}} = call_tool(server, "s.chk.get_checked", %{})
       refute Map.get(result, :isError) == true
     end
   end

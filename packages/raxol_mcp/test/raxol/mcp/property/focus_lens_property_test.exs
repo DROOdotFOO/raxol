@@ -4,6 +4,8 @@ defmodule Raxol.MCP.Property.FocusLensTest do
 
   alias Raxol.MCP.FocusLens
 
+  @sid "s"
+
   # -- Generators --
 
   defp widget_id_gen do
@@ -19,12 +21,12 @@ defmodule Raxol.MCP.Property.FocusLensTest do
     member_of(~w(click type_into clear get_value select toggle sort))
   end
 
-  defp tool_gen(widget_id) do
+  defp tool_gen(session_id, widget_id) do
     gen all(action <- action_gen()) do
       noop = fn _ -> {:ok, "ok"} end
 
       %{
-        name: "#{widget_id}.#{action}",
+        name: "#{session_id}.#{widget_id}.#{action}",
         description: "#{action} on #{widget_id}",
         inputSchema: %{type: "object", properties: %{}},
         callback: noop
@@ -52,13 +54,19 @@ defmodule Raxol.MCP.Property.FocusLensTest do
           widget_tools <-
             fixed_list(
               Enum.map(widget_ids, fn id ->
-                list_of(tool_gen(id), min_length: 1, max_length: 3)
+                list_of(tool_gen(@sid, id), min_length: 1, max_length: 3)
               end)
             ),
+          foreign_tools <- foreign_tools_gen(widget_ids),
           globals <- list_of(global_tool_gen(), min_length: 0, max_length: 2)
         ) do
-      List.flatten(widget_tools) ++ globals
+      List.flatten(widget_tools) ++ foreign_tools ++ globals
     end
+  end
+
+  # Another session's tools for the same widget ids.
+  defp foreign_tools_gen(widget_ids) do
+    list_of(bind(member_of(widget_ids), &tool_gen("other", &1)), max_length: 3)
   end
 
   # -- Properties --
@@ -95,12 +103,12 @@ defmodule Raxol.MCP.Property.FocusLensTest do
               focused_id <- widget_id_gen(),
               max_runs: 500
             ) do
-        result = FocusLens.filter(tools, mode: :focused, focused_id: focused_id)
+        result = FocusLens.filter(tools, mode: :focused, session_id: @sid, focused_id: focused_id)
 
         for tool <- result do
-          is_focused = String.starts_with?(tool.name, "#{focused_id}.")
+          is_focused = String.starts_with?(tool.name, "#{@sid}.#{focused_id}.")
           is_global = not String.contains?(tool.name, ".")
-          is_discover = tool.name == "discover_tools"
+          is_discover = tool.name == "#{@sid}.discover_tools"
 
           assert is_focused or is_global or is_discover,
                  "Unexpected tool '#{tool.name}' when focused on '#{focused_id}'"
@@ -115,19 +123,21 @@ defmodule Raxol.MCP.Property.FocusLensTest do
               max_runs: 500
             ) do
         # Pick an ID that actually exists in the tools
-        namespaced = Enum.filter(tools, &String.contains?(&1.name, "."))
+        namespaced = Enum.filter(tools, &String.starts_with?(&1.name, "#{@sid}."))
 
         if namespaced != [] do
           target = hd(namespaced)
-          focused_id = target.name |> String.split(".", parts: 2) |> hd()
+          focused_id = target.name |> String.split(".", parts: 3) |> Enum.at(1)
 
-          result = FocusLens.filter(tools, mode: :focused, focused_id: focused_id)
+          result =
+            FocusLens.filter(tools, mode: :focused, session_id: @sid, focused_id: focused_id)
+
           result_names = Enum.map(result, & &1.name)
 
           # All tools for the focused widget should be present
           expected =
             tools
-            |> Enum.filter(&String.starts_with?(&1.name, "#{focused_id}."))
+            |> Enum.filter(&String.starts_with?(&1.name, "#{@sid}.#{focused_id}."))
             |> Enum.map(& &1.name)
 
           for name <- expected do
@@ -150,7 +160,7 @@ defmodule Raxol.MCP.Property.FocusLensTest do
         opts =
           case mode do
             :all -> [mode: :all, max_tools: max]
-            :focused -> [mode: :focused, focused_id: "btn1", max_tools: max]
+            :focused -> [mode: :focused, session_id: @sid, focused_id: "btn1", max_tools: max]
           end
 
         result = FocusLens.filter(tools, opts)
@@ -162,9 +172,9 @@ defmodule Raxol.MCP.Property.FocusLensTest do
   describe "discover_tools_spec" do
     test "spec has required fields" do
       {:ok, registry} = Raxol.MCP.Registry.start_link(name: nil)
-      spec = FocusLens.discover_tools_spec(registry)
+      spec = FocusLens.discover_tools_spec(registry, @sid)
 
-      assert is_binary(spec.name)
+      assert spec.name == "#{@sid}.discover_tools"
       assert is_binary(spec.description)
       assert is_map(spec.inputSchema)
       assert is_function(spec.callback, 1)

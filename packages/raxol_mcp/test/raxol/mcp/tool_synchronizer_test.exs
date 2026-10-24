@@ -37,7 +37,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      assert "discover_tools" in names
+      assert "test_session.discover_tools" in names
 
       GenServer.stop(pid)
     end
@@ -65,7 +65,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      assert "discover_tools" in names
+      assert "test_sync.discover_tools" in names
 
       GenServer.stop(pid)
     end
@@ -92,7 +92,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       # Should still have discover_tools
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      assert "discover_tools" in names
+      assert "test_telemetry.discover_tools" in names
 
       GenServer.stop(pid)
     end
@@ -146,7 +146,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       # discover_tools should be gone (it was registered by this synchronizer)
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
-      refute "discover_tools" in names
+      refute "test_cleanup.discover_tools" in names
     end
   end
 

@@ -222,7 +222,7 @@ defmodule Raxol.HeadlessTest do
           |> Raxol.MCP.Registry.list_tools()
           |> Enum.map(& &1.name)
 
-        assert "cold_start_button.click" in names
+        assert "#{id}.cold_start_button.click" in names
         assert :ok = Headless.stop(id)
       end
     end

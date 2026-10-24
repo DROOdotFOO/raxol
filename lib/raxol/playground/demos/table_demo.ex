@@ -44,9 +44,9 @@ defmodule Raxol.Playground.Demos.TableDemo do
   @border_cycle [:grid, :inner, :none]
   @page_size 4
 
-  # The id MCP tools are derived under ("playground_table.sort", ...). Tool
-  # arguments arrive as strings and map to columns and directions through these
-  # static tables, never `String.to_atom/1`.
+  # The widget id MCP tools are derived under ("<session>.playground_table.sort",
+  # ...). Tool arguments arrive as strings and map to columns and directions
+  # through these static tables, never `String.to_atom/1`.
   @tool_id "playground_table"
   @sort_columns Map.new(@columns, &{Atom.to_string(&1.id), &1.id})
   @sort_directions %{"asc" => :asc, "desc" => :desc}
