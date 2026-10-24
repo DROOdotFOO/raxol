@@ -774,8 +774,13 @@ defmodule Raxol.Headless.McpTools do
         |> maybe_add(args, "alt", :alt)
         |> maybe_add(args, "shift", :shift)
 
-      case Raxol.Headless.send_key_and_screenshot(id, key, opts) do
-        {:ok, text} -> {:ok, text}
+      # Settled before it answers, so a key that changed the session's tool
+      # set (a modal opening) has changed it by then, and `Raxol.MCP.Server`
+      # holds this result for the client's re-list.
+      with {:ok, text} <- Raxol.Headless.send_key_and_screenshot(id, key, opts),
+           :ok <- Raxol.Headless.settle(id) do
+        {:ok, text}
+      else
         {:error, reason} -> {:error, inspect(reason)}
       end
     end)
