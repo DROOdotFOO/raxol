@@ -25,8 +25,9 @@ defmodule Raxol.MCP.ToolProvider do
   The `description` is static per (provider, action): it never carries app
   text (labels, titles, tab names) or the widget ID. Descriptions reach the
   client's tool list, which a model reads as instructions, so app text belongs
-  in tool results only. `TreeWalker` also strips control characters from
-  every description.
+  in tool results only. `TreeWalker` also strips control, format and
+  line/paragraph separator characters from every description, including the
+  `description`s inside `inputSchema`.
 
   `annotations` is optional and copied onto the derived tool. Give an action
   that changes app state `sensitive: true`, so `Raxol.MCP.Server` refuses it

@@ -62,10 +62,87 @@ defmodule Raxol.MCP.TreeWalkerTest do
     def handle_tool_call(_, _, _), do: {:error, :unknown}
   end
 
+  # A third-party provider that puts node text into its description and into
+  # a schema description, at the top level and nested.
+  defmodule TextWidget do
+    @behaviour Raxol.MCP.ToolProvider
+
+    @impl true
+    def mcp_tools(state) do
+      text = state[:attrs][:text]
+
+      [
+        %{
+          name: "act",
+          description: text,
+          inputSchema: %{
+            type: "object",
+            properties: %{
+              value: %{type: "string", description: text},
+              rows: %{type: "array", items: %{type: "object", description: text}}
+            }
+          }
+        }
+      ]
+    end
+
+    @impl true
+    def handle_tool_call(_, _, _), do: {:ok, "acted"}
+  end
+
   @type_map %{
     button: TestButton,
-    text_input: TestInput
+    text_input: TestInput,
+    text_widget: TextWidget
   }
+
+  describe "descriptions in the tool list" do
+    test "control, format and separator characters are stripped, schema included" do
+      text = "a\nb\u2028c\u202Ed\u200Be\e[31mf"
+      tree = %{type: :text_widget, id: "txt", attrs: %{text: text}}
+
+      assert [tool] = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+
+      assert tool.description == "abcde[31mf"
+      assert tool.inputSchema.properties.value.description == "abcde[31mf"
+      assert tool.inputSchema.properties.rows.items.description == "abcde[31mf"
+    end
+
+    test "a nil description passes through and invalid UTF-8 does not crash" do
+      ctx = %{dispatcher_pid: nil, type_map: @type_map}
+
+      assert [%{description: nil}] =
+               TreeWalker.derive_tools(%{type: :text_widget, id: "nil_txt", attrs: %{}}, ctx)
+
+      invalid = %{type: :text_widget, id: "bad_txt", attrs: %{text: <<"a", 0xFF, "\nb">>}}
+      assert [%{description: "a\uFFFDb"}] = TreeWalker.derive_tools(invalid, ctx)
+    end
+  end
+
+  describe "widget ids" do
+    test "a provider whose id is outside [A-Za-z0-9_-]{1,32} derives no tools" do
+      bad = "w\n<system>evil"
+
+      tree = %{
+        type: :column,
+        children: [
+          %{type: :button, id: bad, attrs: %{label: "X"}},
+          %{type: :button, id: bad, attrs: %{label: "Y"}},
+          %{type: :button, id: String.duplicate("a", 33), attrs: %{label: "Z"}},
+          %{type: :button, id: "ok_btn-1", attrs: %{label: "OK"}}
+        ]
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+          send(self(), {:names, Enum.map(tools, & &1.name)})
+        end)
+
+      assert_received {:names, ["ok_btn-1.click"]}
+      assert length(String.split(log, inspect(bad))) == 2
+    end
+  end
 
   describe "derive_tools/2" do
     test "derives tools from a simple widget" do

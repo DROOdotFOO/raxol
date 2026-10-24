@@ -9,11 +9,11 @@ defmodule Raxol.MCP.ToolProviderTest do
     @impl true
     def mcp_tools(%{attrs: %{disabled: true}}), do: []
 
-    def mcp_tools(state) do
+    def mcp_tools(_state) do
       [
         %{
           name: "click",
-          description: "Click the '#{state[:attrs][:label] || "Button"}' button",
+          description: "Click the button",
           inputSchema: %{type: "object", properties: %{}}
         }
       ]
@@ -73,8 +73,7 @@ defmodule Raxol.MCP.ToolProviderTest do
       state = %{type: :button, id: "btn1", attrs: %{label: "Submit", disabled: false}}
       tools = MockWidget.mcp_tools(state)
 
-      assert [%{name: "click", description: desc, inputSchema: schema}] = tools
-      assert desc =~ "Submit"
+      assert [%{name: "click", description: "Click the button", inputSchema: schema}] = tools
       assert schema == %{type: "object", properties: %{}}
     end
 

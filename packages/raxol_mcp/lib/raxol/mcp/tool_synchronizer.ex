@@ -49,7 +49,10 @@ defmodule Raxol.MCP.ToolSynchronizer do
     pending_view_tree: nil,
     pending_model: nil,
     focused_id: nil,
-    hover_id: nil
+    hover_id: nil,
+    # Widget ids `TreeWalker` refused (see `TreeWalker.derive/2`), each
+    # warned about once for this session rather than on every render.
+    refused_widget_ids: MapSet.new()
   ]
 
   @doc "Start a ToolSynchronizer linked to the calling process."
@@ -280,13 +283,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   defp do_sync(view_tree, model, state) do
-    context = %{
-      dispatcher_pid: state.dispatcher_pid,
-      session_id: state.session_id
-    }
-
     # Tool sync (existing behavior)
-    new_tools = TreeWalker.derive_tools(view_tree, context)
+    {new_tools, state} = derive_tools(view_tree, state)
     new_tool_names = MapSet.new(Enum.map(new_tools, & &1.name))
     new_tool_names = MapSet.put(new_tool_names, "discover_tools")
 
@@ -315,6 +313,16 @@ defmodule Raxol.MCP.ToolSynchronizer do
         current_view_tree: view_tree,
         current_model: model
     }
+  end
+
+  # Widget ids TreeWalker refuses are warned about once per session, not on
+  # every render.
+  defp derive_tools(view_tree, state) do
+    context = %{dispatcher_pid: state.dispatcher_pid, session_id: state.session_id}
+    {tools, refused_ids} = TreeWalker.derive(view_tree, context)
+    new_ids = MapSet.difference(refused_ids, state.refused_widget_ids)
+    Enum.each(new_ids, &TreeWalker.warn_refused_id/1)
+    {tools, %{state | refused_widget_ids: MapSet.union(state.refused_widget_ids, new_ids)}}
   end
 
   # -- Private: model resources --
