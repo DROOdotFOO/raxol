@@ -144,6 +144,18 @@ defmodule Raxol.MCP.Server do
   `-32600`, and such a notification is dropped. `logging/setLevel` answers an
   unknown `level` with `-32602`, and is otherwise gated by `:read_authorizer`
   like the other read surfaces.
+
+  ## Tool-set changes
+
+  A `tools/call` after which the registry lists a different tool set (a
+  session started or stopped, a widget's tools first seen) is held until
+  this connection's next `tools/list` has been answered, or for
+  `:list_changed_hold_ms` (default 1,000 ms), whichever comes first. The
+  change also sends `notifications/tools/list_changed`, and a client that
+  re-lists on it (OMP does) then has the new tools before the result reaches
+  its model, so its next request can call them. Only a connection with a
+  subscriber, which can hear the notification, is held. A held result
+  emits `[:raxol, :mcp, :server, :tool_result_held]`.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -184,6 +196,7 @@ defmodule Raxol.MCP.Server do
   @default_max_parked_elicitations 32
   @default_max_parked_elicitations_total 256
   @default_callback_timeout_ms 300_000
+  @default_list_changed_hold_ms 1_000
 
   # The implicit single connection. stdio has exactly one peer and the OS
   # process boundary IS the principal, so it never names a connection and every
@@ -213,7 +226,10 @@ defmodule Raxol.MCP.Server do
     max_in_flight: @default_max_in_flight,
     max_parked_elicitations: @default_max_parked_elicitations,
     max_parked_elicitations_total: @default_max_parked_elicitations_total,
-    callback_timeout_ms: @default_callback_timeout_ms
+    callback_timeout_ms: @default_callback_timeout_ms,
+    list_changed_hold_ms: @default_list_changed_hold_ms,
+    # Tool results held for a re-list: ref => %{entry, response, conn, timer}.
+    held: %{}
   ]
 
   @typedoc """
@@ -275,7 +291,9 @@ defmodule Raxol.MCP.Server do
           max_in_flight: pos_integer(),
           max_parked_elicitations: pos_integer(),
           max_parked_elicitations_total: pos_integer(),
-          callback_timeout_ms: pos_integer()
+          callback_timeout_ms: pos_integer(),
+          list_changed_hold_ms: pos_integer(),
+          held: %{reference() => map()}
         }
 
   @typedoc """
@@ -532,7 +550,9 @@ defmodule Raxol.MCP.Server do
        max_parked_elicitations: max_parked,
        max_parked_elicitations_total: max_parked_total,
        callback_timeout_ms:
-         positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms)
+         positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms),
+       list_changed_hold_ms:
+         positive_option!(opts, :list_changed_hold_ms, @default_list_changed_hold_ms)
      }}
   end
 
@@ -693,6 +713,10 @@ defmodule Raxol.MCP.Server do
   # Linked callback workers are also monitored. EXIT is lifecycle coupling
   # only; result and failure attribution is driven by the monitor ref above.
   def handle_manager_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
+  def handle_manager_info({:release_held, hold_ref}, state) do
+    {:noreply, release_held(state, [hold_ref])}
+  end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
@@ -935,18 +959,36 @@ defmodule Raxol.MCP.Server do
   defp start_async_call(work, request_ref, delivery, state) do
     case start_worker(state, request_ref, work, delivery) do
       {:ok, state} ->
-        {:noreply, state}
+        {:noreply, awaiting_list(state, request_ref, work)}
 
       :busy ->
         {:reply, {:reply, callback_error(work, :server_busy)}, state}
     end
   end
 
+  # A `tools/list` that arrives while results are held for its connection is
+  # the re-list they wait for: they are released once it has been answered.
+  defp awaiting_list(
+         state,
+         request_ref,
+         {:read_operation, _id, "tools/list", _detail, _op, _authorizer, %{conn_id: conn}}
+       ) do
+    case for {hold_ref, %{conn: ^conn}} <- state.held, do: hold_ref do
+      [] -> state
+      held -> update_in(state.in_flight[request_ref], &Map.put(&1, :releases, held))
+    end
+  end
+
+  defp awaiting_list(state, _request_ref, _work), do: state
+
   defp start_async_push(work, pending, state) do
     {request_ref, delivery} = push_delivery(pending)
 
     case start_worker(state, request_ref, work, delivery) do
+      # The approved call carries no connection; its owner's is the one a
+      # changed tool set holds (see "Tool-set changes").
       {:ok, state} ->
+        state = update_in(state.in_flight[request_ref], &Map.put(&1, :conn, pending.owner))
         {:reply, {:reply, nil}, state}
 
       :busy ->
@@ -1010,7 +1052,7 @@ defmodule Raxol.MCP.Server do
   defp execute_async({:authorize_tool, id, name, arguments, tools, authorizer, ctx, conn_id}) do
     case safe_decide(authorizer, name, arguments, ctx) do
       :allow ->
-        {:response, call_tool_response(id, name, call_tool(tools, name, arguments))}
+        run_tool(id, name, arguments, tools)
 
       {:ask, prompt} ->
         {:ask, id, name, arguments, prompt, conn_id}
@@ -1021,7 +1063,7 @@ defmodule Raxol.MCP.Server do
   end
 
   defp execute_async({:call_tool, id, name, arguments, tools}) do
-    {:response, call_tool_response(id, name, call_tool(tools, name, arguments))}
+    run_tool(id, name, arguments, tools)
   end
 
   defp execute_async({:read_operation, id, method, detail, operation, read_authorizer, ctx}) do
@@ -1036,6 +1078,19 @@ defmodule Raxol.MCP.Server do
         {:response, authz_error_response(id, method, reason)}
     end
   end
+
+  # Whether the call changed the listed tool set is read off the registry, which
+  # a derived tool's synchronizer has updated before the call answers.
+  defp run_tool(id, name, arguments, {registry, _unknown_tool_reply} = tools) do
+    before = listed_tools(registry)
+    response = call_tool_response(id, name, call_tool(tools, name, arguments))
+
+    if listed_tools(registry) == before,
+      do: {:response, response},
+      else: {:tools_changed, response}
+  end
+
+  defp listed_tools(registry), do: registry |> Registry.list_tools() |> MapSet.new()
 
   defp execute_read_operation(id, {:tools_list, registry, nil}, _ctx) do
     {:response, Protocol.response(id, %{tools: Registry.list_tools(registry)})}
@@ -1088,6 +1143,9 @@ defmodule Raxol.MCP.Server do
   defp complete_async(entry, {:response, response}, state),
     do: deliver_async(entry, response, state)
 
+  defp complete_async(entry, {:tools_changed, response}, state),
+    do: hold_for_list(entry, response, state)
+
   # A call that parks is answered now with `nil`, unless its caller came
   # through `request/3`: that request stays outstanding until whatever closes
   # the elicitation answers it.
@@ -1126,12 +1184,53 @@ defmodule Raxol.MCP.Server do
     deliver_async(entry, callback_error(entry.work, :invalid_callback_result), state)
   end
 
-  defp deliver_async(%{delivery: {:push, pending}}, response, state),
+  defp deliver_async(entry, response, state) do
+    state = deliver(entry, response, state)
+    release_held(state, Map.get(entry, :releases, []))
+  end
+
+  defp deliver(%{delivery: {:push, pending}}, response, state),
     do: answer_parked(state, pending, response)
 
-  defp deliver_async(%{delivery: delivery}, response, state) do
+  defp deliver(%{delivery: delivery}, response, state) do
     GenServer.reply(reply_to(delivery), {:reply, response})
     state
+  end
+
+  # A connection that can hear `list_changed` waits for its re-list (see
+  # "Tool-set changes"); one that cannot gets its result now.
+  defp hold_for_list(entry, response, state) do
+    conn = delivery_conn(entry)
+
+    if Map.has_key?(state.subscribers, conn) do
+      hold_ref = make_ref()
+      timer = Process.send_after(self(), {:release_held, hold_ref}, state.list_changed_hold_ms)
+
+      :telemetry.execute([:raxol, :mcp, :server, :tool_result_held], %{}, %{conn_id: conn})
+
+      held = %{entry: entry, response: response, conn: conn, timer: timer}
+      %{state | held: Map.put(state.held, hold_ref, held)}
+    else
+      deliver_async(entry, response, state)
+    end
+  end
+
+  defp delivery_conn(%{conn: conn}), do: conn
+
+  defp delivery_conn(%{work: {:authorize_tool, _id, _name, _args, _tools, _authz, _ctx, conn}}),
+    do: conn
+
+  defp release_held(state, hold_refs) do
+    Enum.reduce(hold_refs, state, fn hold_ref, state ->
+      case Map.pop(state.held, hold_ref) do
+        {nil, _held} ->
+          state
+
+        {held, rest} ->
+          Process.cancel_timer(held.timer)
+          deliver_async(held.entry, held.response, %{state | held: rest})
+      end
+    end)
   end
 
   defp reply_to({:reply, from}), do: from
