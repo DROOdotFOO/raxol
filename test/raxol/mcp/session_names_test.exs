@@ -103,17 +103,54 @@ defmodule Raxol.MCP.SessionNamesTest do
     end
   end
 
-  test "a widget whose client-side name is already taken is refused", %{
+  # Only a segment `raxol_start` could have accepted is reported as a stopped
+  # session; anything else is an unknown tool, and is not echoed as a session.
+  test "a call whose session segment is not a session id is tool-not-found", %{
+    server: server
+  } do
+    for name <- ["Bad.w.a", "abcdefgh.w.a", "a_b.w.a", "x`y\n.discover_tools"] do
+      assert {:reply, %{error: %{code: -32_601}}} =
+               request(server, "tools/call", %{"name" => name, "arguments" => %{}})
+    end
+  end
+
+  test "raxol_start refuses the reserved ids raxol and agent", %{server: server} do
+    before = Headless.list()
+
+    for id <- ["raxol", "agent"] do
+      assert {:reply, %{result: %{isError: true, content: [%{text: text}]}}} =
+               call(server, "raxol_start", %{"module" => @table, "id" => id})
+
+      assert text =~ "is reserved"
+      assert text =~ id
+    end
+
+    assert Headless.list() == before
+  end
+
+  test "a widget whose client-side name is already taken is refused, and logged once", %{
     server: server,
     registry: registry
   } do
     id = fresh_id()
-    {:ok, ^id} = Headless.start(CollidingApp, id: id, registry: registry)
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        {:ok, ^id} = Headless.start(CollidingApp, id: id, registry: registry)
+
+        # Every render offers the refused tool again.
+        for _ <- 1..3 do
+          :ok = Headless.send_key(id, "z")
+          :ok = Headless.settle(id)
+        end
+      end)
 
     # One of the pair registers (the walk decides which); the other is refused.
     pair = ["#{id}.x_y.click", "#{id}.x.y.click"]
     assert [held] = Enum.filter(pair, &(&1 in tool_names(server)))
     [refused] = pair -- [held]
+
+    assert length(String.split(log, "Session #{inspect(id)}: refused")) == 2
 
     tool = %{name: refused, description: "d", inputSchema: %{}, callback: & &1}
 

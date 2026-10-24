@@ -364,5 +364,61 @@ defmodule Raxol.MCP.RegistryTest do
       assert :ok = Registry.register_all(r, resources: [sample_resource()])
       assert length(Registry.list_resources(r)) == 1
     end
+
+    test "a colliding pair in the batch registers nothing", %{registry: r} do
+      assert Registry.register_all(r,
+               tools: [sample_tool("q.a.b"), sample_tool("q.a_b")],
+               resources: [sample_resource()]
+             ) == {:error, {:name_collision, [{"q.a_b", "q.a.b"}]}}
+
+      assert Registry.list_tools(r) == []
+      assert Registry.list_resources(r) == []
+    end
+
+    test "a tool colliding with a registered one registers nothing", %{registry: r} do
+      :ok = Registry.register_tools(r, [sample_tool("q.a.b")])
+
+      assert Registry.register_all(r,
+               tools: [sample_tool("z"), sample_tool("q.a_b")],
+               resources: [sample_resource()]
+             ) == {:error, {:name_collision, [{"q.a_b", "q.a.b"}]}}
+
+      assert Enum.map(Registry.list_tools(r), & &1.name) == ["q.a.b"]
+      assert Registry.list_resources(r) == []
+    end
+  end
+
+  describe "omp_name/1" do
+    # Pairs from OMP 18.12.6's own rename (`mcp/tool-bridge.ts`), replayed on
+    # each input. The 64-character hash form is applied by OMP to the
+    # prefixed name, so long names stay whole here.
+    @omp_names [
+      {"A.B.C", "a_b_c"},
+      {"s.X_Y.click", "s_x_y_click"},
+      {"s.x-y.click", "s_x_y_click"},
+      {"a1.b2.c3", "a1_b2_c3"},
+      {"1abc.w.a", "1abc_w_a"},
+      {"s..w.a", "s_w_a"},
+      {"_s.w.a_", "s_w_a"},
+      {"s.w.a.", "s_w_a"},
+      {"s.w\u00E9.a", "s_w_a"},
+      {"s.\u0130x.a", "s_i_x_a"},
+      {"s.\u212Aelvin.a", "s_kelvin_a"},
+      {"s.\u00DF.a", "s_a"},
+      {"s.\u{1F600}.a", "s_a"},
+      {"s.w\u0000.a", "s_w_a"},
+      {"s.\u00C5NGSTR\u00D6M.a", "s_ngstr_m_a"},
+      {"", "tool"},
+      {"...", "tool"},
+      {"___", "tool"},
+      {String.duplicate("a", 64), String.duplicate("a", 64)},
+      {String.duplicate("a", 65), String.duplicate("a", 65)}
+    ]
+
+    test "matches OMP's rename" do
+      for {name, omp} <- @omp_names do
+        assert {name, Registry.omp_name(name)} == {name, omp}
+      end
+    end
   end
 end

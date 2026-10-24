@@ -3,11 +3,12 @@ defmodule Raxol.MCP.Test.Assertions do
   ExUnit assertion macros for Raxol MCP tests.
 
   All assertions are pipe-friendly -- they return the session on success,
-  so you can chain them:
+  so you can chain them. Tool names are `<session>.<widget>.<action>`; the
+  examples use a session started with `id: "demo"`:
 
       session
       |> click("btn")
-      |> assert_tool_available("btn.click")
+      |> assert_tool_available("demo.btn.click")
       |> assert_component("status", fn c -> c[:content] == "done" end)
 
   ## Usage
@@ -80,7 +81,7 @@ defmodule Raxol.MCP.Test.Assertions do
   @doc """
   Asserts a tool with the given name is available in the MCP registry.
 
-      assert_tool_available(session, "search_input.type_into")
+      assert_tool_available(session, "demo.search_input.type_into")
   """
   defmacro assert_tool_available(session, tool_name) do
     quote do
@@ -102,7 +103,7 @@ defmodule Raxol.MCP.Test.Assertions do
   @doc """
   Asserts a tool is NOT available in the MCP registry.
 
-      refute_tool_available(session, "disabled_btn.click")
+      refute_tool_available(session, "demo.disabled_btn.click")
   """
   defmacro refute_tool_available(session, tool_name) do
     quote do

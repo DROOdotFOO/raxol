@@ -130,13 +130,12 @@ defmodule Raxol.MCP.AdaptiveTools do
   end
 
   @doc "Registers adaptive tools with the MCP registry."
-  @spec register(GenServer.server()) :: :ok
+  @spec register(GenServer.server()) ::
+          :ok | {:error, {:name_collision, [{String.t(), String.t()}]}}
   def register(registry \\ Raxol.MCP.Registry) do
-    if Code.ensure_loaded?(Raxol.MCP.Registry) do
-      Raxol.MCP.Registry.register_tools(registry, tools())
-    end
-
-    :ok
+    if Code.ensure_loaded?(Raxol.MCP.Registry),
+      do: Raxol.MCP.Registry.register_tools(registry, tools()),
+      else: :ok
   end
 
   # -- Callbacks --

@@ -35,9 +35,13 @@ defmodule Raxol.Telegram.Guardian.MCPTools do
   Registers all four Guardian tools with the given MCP registry.
 
   Returns `:ok` on success, `{:error, :raxol_mcp_not_available}` when
-  `raxol_mcp` is not loaded.
+  `raxol_mcp` is not loaded, and `Raxol.MCP.Registry.register_tools/2`'s
+  `{:error, {:name_collision, _}}` when a tool's client-side name is taken.
   """
-  @spec register(GenServer.server() | nil) :: :ok | {:error, :raxol_mcp_not_available}
+  @spec register(GenServer.server() | nil) ::
+          :ok
+          | {:error, :raxol_mcp_not_available}
+          | {:error, {:name_collision, [{String.t(), String.t()}]}}
   def register(registry \\ nil) do
     if Code.ensure_loaded?(Raxol.MCP.Registry) do
       target = registry || Raxol.MCP.Registry

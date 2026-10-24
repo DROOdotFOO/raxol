@@ -73,6 +73,14 @@ defmodule Raxol.Headless.McpTools do
   @session_id_rule "1 to #{@session_id_max} characters, a lowercase letter " <>
                      "then lowercase letters or digits (no underscores or dots)"
 
+  @reserved_session_ids %{
+    "raxol" =>
+      "raxol is this server's key in OMP, which strips a leading raxol_ from " <>
+        "tool names, so this session's tools would reach OMP under another " <>
+        "session's names",
+    "agent" => "agent.* names are the agent bridge's tools"
+  }
+
   @doc """
   Returns the list of Raxol MCP tool definitions.
 
@@ -123,7 +131,9 @@ defmodule Raxol.Headless.McpTools do
             id: %{
               type: "string",
               pattern: @session_id_pattern,
-              description: "Session identifier: " <> @session_id_rule
+              description:
+                "Session identifier: " <>
+                  @session_id_rule <> "; raxol and agent are reserved"
             },
             width: %{
               type: "integer",
@@ -618,6 +628,17 @@ defmodule Raxol.Headless.McpTools do
   # both become `a_b_c`), and 7 characters leave the longest demo widget and
   # action within OMP's 64. Refused, never replaced: a caller that named a
   # session must not find its tools under another name.
+  #
+  # Two ids that pass the pattern are reserved. `raxol` is this server's key
+  # in an OMP config, and OMP strips an exact `<server>_` prefix from a tool
+  # name once, so session `raxol`'s `raxol.nav_menu.click` would reach it as
+  # session `nav`'s `nav.menu.click`. `agent.` prefixes the agent
+  # bridge's tools (`agent.list`, `agent.send`).
+  defp session_id(%{"id" => id}) when is_map_key(@reserved_session_ids, id),
+    do:
+      {:error,
+       "session id #{inspect(id)} is reserved: " <> @reserved_session_ids[id]}
+
   defp session_id(%{"id" => id}) when is_binary(id) do
     if Regex.match?(@session_id_format, id),
       do: {:ok, id},

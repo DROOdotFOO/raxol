@@ -1634,12 +1634,20 @@ defmodule Raxol.MCP.Server do
     end
   end
 
+  # The id `raxol_start` accepts. A segment outside it names no session this
+  # server could have started, so it is not echoed back as one.
+  @session_id_format ~r/\A[a-z][a-z0-9]{0,6}\z/
+
   defp session_scoped(name) do
     case String.split(name, ".") do
-      [session, "discover_tools"] when session != "" -> {:ok, session}
-      [session, _widget, _action | _] when session != "" -> {:ok, session}
+      [session, "discover_tools"] -> session_id(session)
+      [session, _widget, _action | _] -> session_id(session)
       _ -> :error
     end
+  end
+
+  defp session_id(session) do
+    if Regex.match?(@session_id_format, session), do: {:ok, session}, else: :error
   end
 
   defp session_running?(registry, session) do
