@@ -26,15 +26,16 @@ defmodule Raxol.Headless.McpTools do
 
   ## Startable modules
 
-  `raxol_start` starts a module only when it is on `startable/0`: the
-  playground demos except `Raxol.Playground.Demos.ReplDemo`, plus whatever
-  `config :raxol, :headless_startable` lists. An app author adds their own
-  app there:
+  `raxol_start` starts a module only when it is on `startable/0`. That is
+  `config :raxol, :headless_startable` when it is set, and the playground
+  demos except `Raxol.Playground.Demos.ReplDemo` when it is not. A set list
+  REPLACES the demos, so a deployment names exactly what clients may start:
 
       config :raxol, :headless_startable, [MyApp]
 
-  The list binds the MCP tool, which starts a module for an untrusted caller.
-  Elixir callers of `Raxol.Headless.start/2` (`Raxol.MCP.Test`,
+  To keep the demos as well, list them too (`default_startable/0` returns
+  them). The list binds the MCP tool, which starts a module for an untrusted
+  caller. Elixir callers of `Raxol.Headless.start/2` (`Raxol.MCP.Test`,
   `Raxol.Recording.Video`) are trusted and start any Raxol application.
   """
 
@@ -48,8 +49,8 @@ defmodule Raxol.Headless.McpTools do
         name: "raxol_start",
         description: """
         Starts a headless Raxol session from a module name. The module must be
-        on this server's startable list (the playground demos, plus the apps
-        the deployment adds) and a Raxol application: it has to export init/1,
+        on this server's startable list (the playground demos unless the
+        deployment sets its own) and a Raxol application: it has to export init/1,
         update/2 and view/1. Returns the session ID.
 
         A "path" argument also exists, but it is DISABLED unless the deployment
@@ -228,18 +229,43 @@ defmodule Raxol.Headless.McpTools do
   end
 
   @doc """
-  The modules `raxol_start` may start: every playground demo except
-  `Raxol.Playground.Demos.ReplDemo`, which evaluates Elixir, plus the modules
-  listed under `config :raxol, :headless_startable`.
+  The modules `raxol_start` may start: `config :raxol, :headless_startable`
+  when set (it replaces the default), else `default_startable/0`. Raises
+  `ArgumentError` when the configured value is not a list of modules.
   """
   @spec startable() :: [module()]
   def startable do
-    demos =
-      for %{module: module} <- Raxol.Playground.Catalog.list_components(),
-          module != Raxol.Playground.Demos.ReplDemo,
-          do: module
+    case Application.fetch_env(:raxol, :headless_startable) do
+      :error ->
+        default_startable()
 
-    Enum.uniq(demos ++ Application.get_env(:raxol, :headless_startable, []))
+      {:ok, modules} when is_list(modules) ->
+        if Enum.all?(modules, &is_atom/1),
+          do: modules,
+          else: invalid_startable!(modules)
+
+      {:ok, other} ->
+        invalid_startable!(other)
+    end
+  end
+
+  @doc """
+  Every playground demo except `Raxol.Playground.Demos.ReplDemo`, which
+  evaluates Elixir: what `raxol_start` may start when
+  `config :raxol, :headless_startable` is not set.
+  """
+  @spec default_startable() :: [module()]
+  def default_startable do
+    for %{module: module} <- Raxol.Playground.Catalog.list_components(),
+        module != Raxol.Playground.Demos.ReplDemo,
+        do: module
+  end
+
+  @spec invalid_startable!(term()) :: no_return()
+  defp invalid_startable!(value) do
+    raise ArgumentError,
+          "config :raxol, :headless_startable must be a list of modules, got: " <>
+            inspect(value)
   end
 
   @doc """
@@ -646,9 +672,9 @@ defmodule Raxol.Headless.McpTools do
     case Enum.find(startable(), &(Atom.to_string(&1) == prefixed)) do
       nil ->
         {:error,
-         "module #{inspect(mod)} is not startable over MCP: only the playground " <>
-           "demos (except ReplDemo) and the modules listed in config :raxol, " <>
-           ":headless_startable are"}
+         "module #{inspect(mod)} is not startable over MCP: only the modules in " <>
+           "config :raxol, :headless_startable are (when unset, the playground " <>
+           "demos except ReplDemo)"}
 
       module ->
         {:ok, module}

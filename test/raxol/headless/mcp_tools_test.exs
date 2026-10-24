@@ -4,6 +4,34 @@ defmodule Raxol.Headless.McpToolsTest do
 
   alias Raxol.Headless.McpTools
 
+  # The test apps `raxol_start` starts over MCP. A set `:headless_startable`
+  # replaces the default demo list, so they are listed alongside the demos,
+  # for this module's tests only. BufferServer is not an app: it is listed so
+  # the tool's contract refusal stays reachable.
+  @test_startable [
+    Raxol.Headless.McpToolsTest.SizedApp,
+    Raxol.Headless.McpToolsTest.InjectedTextApp,
+    Raxol.Headless.McpToolsTest.UnloadedProbe,
+    Raxol.Terminal.Buffer.BufferServer
+  ]
+
+  setup do
+    put_startable(McpTools.default_startable() ++ @test_startable)
+  end
+
+  # Sets `:headless_startable` for the current test and restores it after.
+  defp put_startable(value) do
+    previous = Application.fetch_env(:raxol, :headless_startable)
+    Application.put_env(:raxol, :headless_startable, value)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, old} -> Application.put_env(:raxol, :headless_startable, old)
+        :error -> Application.delete_env(:raxol, :headless_startable)
+      end
+    end)
+  end
+
   # Its update/2 on "x" starts a linked process that raises with a credential
   # in the message, then waits: the link takes the dispatcher down with the
   # exception, stacktrace and all, as its exit reason.
@@ -337,8 +365,16 @@ defmodule Raxol.Headless.McpToolsTest do
     test "a listed module that is compiled but not loaded starts" do
       dir = compile_out_of_vm("Raxol.Headless.McpToolsTest.UnloadedProbe")
 
-      # Listed in config/test.exs, so its atom exists; nothing has loaded it.
+      # Listed by this module's setup, so its atom exists; nothing has loaded it.
       refute :code.is_loaded(Raxol.Headless.McpToolsTest.UnloadedProbe)
+
+      # Unloaded again afterwards, so a repeat in this VM finds it unloaded
+      # too. Registered before the session's stop below, so it runs after it.
+      on_exit(fn ->
+        :code.purge(Raxol.Headless.McpToolsTest.UnloadedProbe)
+        :code.delete(Raxol.Headless.McpToolsTest.UnloadedProbe)
+        :code.purge(Raxol.Headless.McpToolsTest.UnloadedProbe)
+      end)
 
       Code.append_path(dir)
       on_exit(fn -> Code.delete_path(dir) end)
@@ -538,6 +574,38 @@ defmodule Raxol.Headless.McpToolsTest do
 
       assert message =~ "startable_table"
       assert :startable_table in Raxol.Headless.list()
+    end
+
+    # Owner decision (2026-10-24): a set list replaces the demos.
+    test "a configured list replaces the playground demos" do
+      put_startable([Raxol.Playground.Demos.TableDemo])
+
+      assert {:error, message} =
+               start_tool_result(%{
+                 "module" => "Raxol.Playground.Demos.TabsDemo",
+                 "id" => "replaced_tabs"
+               })
+
+      assert message =~ "is not startable over MCP"
+      refute :replaced_tabs in Raxol.Headless.list()
+
+      assert {:ok, _} =
+               start_tool_result(%{
+                 "module" => "Raxol.Playground.Demos.TableDemo",
+                 "id" => "startable_table"
+               })
+
+      assert :startable_table in Raxol.Headless.list()
+    end
+
+    test "a configured value that is not a list of modules is a config error" do
+      for bad <- [Raxol.Playground.Demos.TableDemo, ["Raxol.Playground.Demos.TableDemo"]] do
+        put_startable(bad)
+
+        assert_raise ArgumentError, ~r/:headless_startable must be a list of modules/, fn ->
+          McpTools.startable()
+        end
+      end
     end
   end
 
@@ -947,6 +1015,50 @@ defmodule Raxol.Headless.McpToolsTest do
                  registry: registry,
                  authorizer: Raxol.MCP.Authorizer.allow_all()
                )
+    end
+
+    # Owner decision (2026-10-24): the boot refusal scans static tools only.
+    # An embedder with no authorizer and live sessions has derived sensitive
+    # tools registered when its Server restarts; refusing to boot on them used
+    # to exhaust the restart intensity and take the whole MCP tree down.
+    test "an unguarded Server restarts with derived sensitive tools and still refuses them" do
+      unique = System.unique_integer([:positive])
+      registry = :"reg_#{unique}"
+      server_name = :"srv_#{unique}"
+
+      sup =
+        start_supervised!(
+          {Raxol.MCP.Supervisor, registry_name: registry, server_name: server_name}
+        )
+
+      tools =
+        Raxol.MCP.TreeWalker.derive_tools(
+          Raxol.Core.Renderer.View.button("Go", id: "restart_btn", on_click: :go),
+          %{dispatcher_pid: nil}
+        )
+
+      assert [%{name: "restart_btn.click", annotations: %{sensitive: true}}] = tools
+      :ok = Raxol.MCP.Registry.register_tools(registry, tools)
+
+      server = Process.whereis(server_name)
+      ref = Process.monitor(server)
+      Process.exit(server, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^server, :killed}
+
+      # The supervisor handles the exit before this call, restarting the Server.
+      assert {Raxol.MCP.Server, restarted, :worker, _} =
+               sup
+               |> Supervisor.which_children()
+               |> List.keyfind(Raxol.MCP.Server, 0)
+
+      assert is_pid(restarted) and restarted != server
+
+      assert {:reply, %{result: %{content: [%{text: text} | _], isError: true}}} =
+               call_tool(server_name, "restart_btn.click", %{})
+
+      payload = Jason.decode!(text)
+      assert payload["error"] == "authorization_required"
+      assert payload["detail"] =~ "sensitive_tool_unguarded"
     end
 
     # Booting and satisfying the SSE gate are different questions, and an

@@ -56,9 +56,13 @@ defmodule Raxol.MCP.Server do
 
   A tool annotated `destructiveHint: true` or `sensitive: true` (see
   `Raxol.MCP.ToolDef.sensitive?/1`) must not be served without an authorizer.
-  The server REFUSES TO BOOT when one is already registered, and denies at
-  `tools/call` for one registered afterwards -- the boot check alone would be
-  bypassable by registering late.
+  The server REFUSES TO BOOT when a static one is already registered, and
+  denies at `tools/call` for one registered afterwards -- the boot check
+  alone would be bypassable by registering late. Derived widget tools
+  (dotted names such as `"save_btn.click"`, see `Raxol.MCP.TreeWalker`) are
+  left out of the boot check: they come and go with a session's view, so a
+  restart of this server with live sessions would otherwise refuse to boot.
+  The `tools/call` refusal still covers them.
 
   ## Client capabilities
 
@@ -1625,11 +1629,17 @@ defmodule Raxol.MCP.Server do
 
   defp refuse_unguarded_reads!(_transport, _read_authorizer), do: :ok
 
+  # Static tools only: a derived widget tool's name is dotted
+  # ("widget.action"). A Server restarted under its supervisor while sessions
+  # are live finds their derived sensitive tools registered, and refusing to
+  # boot on them would exhaust the restart intensity and take the whole MCP
+  # tree down. The `tools/call` refusal (`sensitive_tool?/2`) still holds them.
   defp sensitive_tool_names(registry) do
     registry
     |> Registry.list_tools()
     |> Enum.filter(&ToolDef.sensitive?/1)
     |> Enum.map(&(Map.get(&1, :name) || Map.get(&1, "name")))
+    |> Enum.reject(&(is_binary(&1) and String.contains?(&1, ".")))
   catch
     # A registry that is not up yet cannot be scanned. Absence of evidence is
     # not evidence of absence, but refusing to boot on it would make the server

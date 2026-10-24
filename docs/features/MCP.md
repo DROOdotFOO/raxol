@@ -180,19 +180,23 @@ The read seam itself still answers `:allow` when no read authorizer is configure
 
 A tool annotated `destructiveHint: true` or `sensitive: true` never runs without an authorizer, enforced twice: the server refuses to boot when such a tool is already registered, and refuses the call itself for one registered afterwards. The runtime half needs the tool registry to be reachable to classify a tool, and fails closed when it is not, so a call during a registry restart is refused rather than treated as non-sensitive. Of the headless tools, `raxol_start`, `raxol_send_key`, and `raxol_stop` carry the annotation; the three read tools do not.
 
-Derived tools copy the `annotations` of their tool spec. Every built-in action that changes app state is `sensitive: true`: `click`, `type_into`, `clear`, `toggle`, `select`, `select_row`, `select_node`, `select_tab`, `sort`, `expand`, `collapse`, `dismiss`, `confirm`, `seek`, `play`, `pause` and `scroll_to`. The `get_*` reads are not. So a server embedded with no authorizer (`Raxol.MCP.Supervisor` or `Raxol.MCP.Server` without `:authorizer`) still lists and reads widgets, but refuses to drive them with `sensitive_tool_unguarded`.
+Derived tools copy the `annotations` of their tool spec. Every built-in action that changes app state is `sensitive: true`: `click`, `type_into`, `clear`, `toggle`, `select`, `select_row`, `select_node`, `select_tab`, `sort`, `expand`, `collapse`, `dismiss`, `confirm`, `seek`, `play`, `pause` and `scroll_to`. The `get_*` reads are not. So a server embedded with no authorizer (`Raxol.MCP.Supervisor` or `Raxol.MCP.Server` without `:authorizer`) still lists and reads widgets, but refuses to drive them with `sensitive_tool_unguarded`. The boot refusal scans static tools only: derived tools (dotted names) come and go with the view, and a Server restarted while sessions are live must still boot, so for them the `tools/call` refusal is what holds.
 
 A network deployment needs a function authorizer, not just a name allowlist. Derived tool names come and go with the view, so a fixed `mcp_allowed_tools` list cannot name them, and `allow_all` hands every widget to every client. SSE connections also share sessions: every connection reaches every headless session and its derived tools, and the connection id comes from the client's `mcp-session-id` header, so it is not an identity to authorize on.
 
-Derived tool descriptions are static per provider and action. App text (labels, titles, tab names) and widget ids never appear in them, only in tool results such as `get_tabs`, and `Raxol.MCP.TreeWalker` strips control characters from every description. A model reads the tool list as part of its instructions, so app text there would be a prompt injection with the app's authority.
+Derived tool descriptions are static per provider and action. App text (labels, titles, tab names) and widget ids never appear in them, only in tool results such as `get_tabs`. `Raxol.MCP.TreeWalker` strips control, format (bidi overrides, zero-width characters, BOM, tag characters) and line/paragraph separator characters from every description, including each `description` inside a tool's `inputSchema`. A model reads the tool list as part of its instructions, so app text there would be a prompt injection with the app's authority.
+
+A widget id becomes part of the tool name, so a provider widget whose id is not 1-32 characters of `[A-Za-z0-9_-]` derives no tools, and a warning names the id.
 
 ### Startable modules
 
-`raxol_start` starts a module for whichever client called it, so it only starts a module on `Raxol.Headless.McpTools.startable/0`: the playground demos except `Raxol.Playground.Demos.ReplDemo` (it evaluates Elixir), plus the modules listed under `:headless_startable`. Add your own app there:
+`raxol_start` starts a module for whichever client called it, so it only starts a module on `Raxol.Headless.McpTools.startable/0`. That is the list under `:headless_startable` when it is set, and otherwise the playground demos except `Raxol.Playground.Demos.ReplDemo` (it evaluates Elixir). A set list replaces the demos, so a deployment names exactly what clients may start:
 
 ```elixir
 config :raxol, :headless_startable, [MyApp]
 ```
+
+To keep the demos as well, list them alongside your app; `Raxol.Headless.McpTools.default_startable/0` returns them. A value that is not a list of modules raises a config error at the next `raxol_start`.
 
 Anything else is refused before the name is resolved, so an unlisted name never becomes an atom. Elixir callers of `Raxol.Headless.start/2`, such as `Raxol.MCP.Test` and `Raxol.Recording.Video`, are trusted and are not limited by the list. The `path` argument is a separate opt-in (`RAXOL_HEADLESS_PATH_ROOT`) and does not consult the list, because the module is only known after the file is compiled.
 

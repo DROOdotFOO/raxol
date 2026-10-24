@@ -116,13 +116,3 @@ config :ex_unit,
 
 # Show debug logs during tests
 config :logger, level: :debug
-
-# Test apps the `raxol_start` tests start over MCP, on top of the playground
-# demos `Raxol.Headless.McpTools.startable/0` always allows. BufferServer is
-# not an app: it is listed so the tool's contract refusal stays reachable.
-config :raxol, :headless_startable, [
-  Raxol.Headless.McpToolsTest.SizedApp,
-  Raxol.Headless.McpToolsTest.InjectedTextApp,
-  Raxol.Headless.McpToolsTest.UnloadedProbe,
-  Raxol.Terminal.Buffer.BufferServer
-]
