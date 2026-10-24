@@ -116,3 +116,7 @@ config :ex_unit,
 
 # Show debug logs during tests
 config :logger, level: :debug
+
+# Headless sessions sync their MCP tool set on each render, not after a
+# debounce timer, so a test barrier through the synchronizer sees it.
+config :raxol_mcp, :tool_synchronizer, debounce_ms: 0

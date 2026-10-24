@@ -1602,6 +1602,13 @@ defmodule Raxol.MCP.Server do
       {:unknown_tool_reply, text} ->
         Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
 
+      # A derived tool whose widget is not as it was (see
+      # `Raxol.MCP.TreeWalker`). The id is checked at derivation
+      # (`[A-Za-z0-9_-]{1,32}`), so it is safe to echo.
+      {:error, {:widget_unavailable, widget, why}} ->
+        content = [%{type: "text", text: "widget `#{widget}` #{widget_unavailable(why)}"}]
+        Protocol.response(id, %{content: content, isError: true})
+
       {:error, :circuit_open} ->
         content = [
           %{
@@ -1617,6 +1624,10 @@ defmodule Raxol.MCP.Server do
         Protocol.response(id, %{content: content, isError: true})
     end
   end
+
+  defp widget_unavailable(:absent), do: "is not in the session's current view"
+  defp widget_unavailable(:disabled), do: "does not offer this action now (disabled)"
+  defp widget_unavailable(:type_changed), do: "is now a different kind of widget"
 
   # `tools` is the registry and the `:unknown_tool_reply` function (see
   # "Unknown tools" in the moduledoc).

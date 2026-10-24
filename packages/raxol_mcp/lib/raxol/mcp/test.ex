@@ -28,9 +28,9 @@ defmodule Raxol.MCP.Test do
   `click/2` and `type_into/3` call the session's tools
   (`"session_id.component_id.action"`) through the registry, exercising the
   full MCP pipeline. Each helper returns once the app has handled the
-  action, rendered the result and brought its tool set (the tool names) up to
-  that frame (`Raxol.Headless.settle/1`), so the next step sees its effect. A
-  tool whose name survives the frame keeps the callback it was derived with.
+  action, rendered the result and brought its tool set up to that frame
+  (`Raxol.Headless.settle/1`), so the next step sees its effect. Each call
+  acts on its widget as the current model renders it.
 
   For unit tests that don't need a running app, use the lower-level
   modules directly: `TreeWalker.derive_tools/2`, `Registry.call_tool/3`.

@@ -5,7 +5,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
   When an app module is provided, pulls the current model and derives its
   initial tools synchronously before startup returns. Subsequent
   `[:raxol, :runtime, :view_tree_updated]` telemetry events refresh tools from
-  the rendered view tree. Rapid renders are debounced for 50ms.
+  the rendered view tree. Rapid renders are debounced (`:debounce_ms`).
 
   Also manages model-projected resources when the app implements
   `Raxol.MCP.ResourceProvider`, and registers context tree + widget tree
@@ -35,6 +35,32 @@ defmodule Raxol.MCP.ToolSynchronizer do
   memory bounded and is warned about again only for an item that comes back
   after 256 newer ones.
 
+  ## Sticky tool sets
+
+  A session's tool set is every tool its views have derived so far, keyed by
+  name, provider module and a hash of the listed definition (description,
+  input schema, annotations). A widget that leaves the view keeps its tools,
+  so a modal opened, dismissed and opened again changes the set once; a tool
+  whose provider or definition changes is registered again. Each change sends
+  one `notifications/tools/list_changed` to the `:server`. The whole set is
+  unregistered when the session stops, and the Registry removes it if this
+  process dies without stopping (it registers as the tools' `:owner`).
+
+  With an app module, a derived tool resolves its widget at call time from a
+  fresh `view/1` of the dispatcher's current model, so it always acts on the
+  widget as it is now (see `Raxol.MCP.TreeWalker`), and a call that dispatched
+  messages syncs this session's tool set with their effect before it answers.
+
+  ## Options
+
+    * `:registry`, `:dispatcher_pid`, `:session_id` - required
+    * `:app_module` - the session's TEA module
+    * `:server` - the `Raxol.MCP.Server` that `list_changed` notifications go
+      to (default `Raxol.MCP.Server`)
+    * `:debounce_ms` - how long a render waits for the next before it is
+      synced; `0` syncs each render as it arrives, with no timer. Default:
+      `config :raxol_mcp, :tool_synchronizer, debounce_ms: ...`, else 50.
+
   ## Usage
 
       {:ok, pid} = ToolSynchronizer.start_link(
@@ -53,7 +79,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   alias Raxol.MCP.{ContextTree, Diff, FocusLens, Registry, StructuredScreenshot, TreeWalker}
 
-  @debounce_ms 50
+  @default_debounce_ms 50
 
   # Below `GenServer.call/2`'s default 5 s, so a flush whose sender does not
   # answer still answers its caller.
@@ -66,7 +92,10 @@ defmodule Raxol.MCP.ToolSynchronizer do
     :app_module,
     :telemetry_handler_id,
     :debounce_ref,
-    current_tool_names: MapSet.new(),
+    server: Raxol.MCP.Server,
+    debounce_ms: @default_debounce_ms,
+    # The session's tool set: name => {provider, definition hash}.
+    tools: %{},
     # Tool name => the name holding its client-side name, from the last sync.
     name_collisions: %{},
     current_resource_uris: MapSet.new(),
@@ -101,8 +130,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
   Applies a view-tree update still waiting out the debounce now, and returns
   once the registry reflects it.
 
-  A barrier: once `flush/2` returns, the session's tool set (the tool names)
-  matches the last view tree that reached this process. Messages from one
+  A barrier: once `flush/2` returns, the session's tool set includes every
+  tool the last view tree that reached this process derives. Messages from one
   process to another arrive in the order sent, but nothing orders the
   caller's flush after a view tree another process sent. `sender` names that
   process (the session's rendering engine, whose render casts the view tree):
@@ -180,20 +209,15 @@ defmodule Raxol.MCP.ToolSynchronizer do
       dispatcher_pid: dispatcher_pid,
       session_id: session_id,
       app_module: app_module,
+      server: Keyword.get(opts, :server, Raxol.MCP.Server),
+      debounce_ms: Keyword.get_lazy(opts, :debounce_ms, &configured_debounce_ms/0),
       telemetry_handler_id: handler_id
     }
 
     if not TreeWalker.id?(session_id), do: TreeWalker.warn_refused_session_id(session_id)
 
     # Register the session's discover_tools meta-tool
-    offered = discover_tool(state)
-    refused = registry |> register(offered) |> note_refused(session_id, %{})
-
-    state = %{
-      state
-      | current_tool_names: offered |> MapSet.new(& &1.name) |> drop_refused(refused),
-        name_collisions: refused
-    }
+    {meta_registered?, state} = offer(state, discover_tool(state))
 
     # Register session-level resources (context tree, widget tree)
     resource_uris =
@@ -203,7 +227,15 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
     # Seed tools synchronously so callers never observe a meta-tool-only
     # session when the engine's first render preceded telemetry attachment.
-    {:ok, sync_initial_view(state)}
+    {changed?, state} = sync_initial_view(state)
+    if changed? or meta_registered?, do: notify_tools_changed(state)
+    {:ok, state}
+  end
+
+  defp configured_debounce_ms do
+    :raxol_mcp
+    |> Application.get_env(:tool_synchronizer, [])
+    |> Keyword.get(:debounce_ms, @default_debounce_ms)
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -224,26 +256,34 @@ defmodule Raxol.MCP.ToolSynchronizer do
     {:noreply, state}
   end
 
+  # A derived tool's call has dispatched its messages: bring the tool set up
+  # to date with the model they produced before the call answers. A render
+  # still waiting out the debounce is older than that model, so it is dropped.
+  def handle_manager_call(:sync_view, _from, %{app_module: nil} = state) do
+    {:reply, :ok, apply_pending(state)}
+  end
+
+  def handle_manager_call(:sync_view, _from, state) do
+    state = cancel_pending(state)
+
+    case live_view(state) do
+      {:ok, view_tree, model} -> {:reply, :ok, apply_sync(view_tree, model, state)}
+      :none -> {:reply, :ok, state}
+    end
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:view_tree_updated, view_tree, model}, state) do
-    # Debounce: cancel previous timer, start new one
-    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
-
-    ref = Process.send_after(self(), :debounce_fire, @debounce_ms)
-    {:noreply, %{state | pending_view_tree: view_tree, pending_model: model, debounce_ref: ref}}
+    {:noreply, pend(state, view_tree, model)}
   end
 
   def handle_manager_cast({:view_tree_updated, view_tree}, state) do
-    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
-
-    ref = Process.send_after(self(), :debounce_fire, @debounce_ms)
-    {:noreply, %{state | pending_view_tree: view_tree, debounce_ref: ref}}
+    {:noreply, pend(state, view_tree, state.pending_model)}
   end
 
   def handle_manager_cast({:sync_now, view_tree}, state) do
-    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
-    new_state = do_sync(view_tree, state.pending_model || state.current_model, state)
-    {:noreply, %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}}
+    model = state.pending_model || state.current_model
+    {:noreply, apply_sync(view_tree, model, cancel_pending(state))}
   end
 
   def handle_manager_cast({:focus_changed, widget_id}, state) do
@@ -280,10 +320,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   def handle_manager_info(:debounce_fire, state) do
-    new_state =
-      do_sync(state.pending_view_tree, state.pending_model || state.current_model, state)
-
-    {:noreply, %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}}
+    {:noreply, apply_pending(state)}
   end
 
   def handle_manager_info({:flush_reply, from}, state) do
@@ -298,12 +335,13 @@ defmodule Raxol.MCP.ToolSynchronizer do
   def terminate(_reason, state) do
     :telemetry.detach(state.telemetry_handler_id)
 
-    # Clean up all tools registered by this session
-    names = MapSet.to_list(state.current_tool_names)
+    # The session's whole tool set goes with it.
+    names = Map.keys(state.tools)
 
     if names != [] do
       try do
         Registry.unregister_tools(state.registry, names)
+        notify_tools_changed(state)
       catch
         :exit, _ -> :ok
       end
@@ -354,78 +392,114 @@ defmodule Raxol.MCP.ToolSynchronizer do
   defp apply_pending(%{pending_view_tree: nil} = state), do: state
 
   defp apply_pending(state) do
-    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
-
-    new_state =
-      do_sync(state.pending_view_tree, state.pending_model || state.current_model, state)
-
-    %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}
+    view_tree = state.pending_view_tree
+    model = state.pending_model || state.current_model
+    apply_sync(view_tree, model, cancel_pending(state))
   end
 
   # -- Private: sync --
 
-  defp sync_initial_view(%{app_module: nil} = state), do: state
+  # A render to sync: now with no debounce, else when the renders pause.
+  defp pend(%{debounce_ms: 0} = state, view_tree, model) do
+    apply_sync(view_tree, model || state.current_model, state)
+  end
+
+  defp pend(state, view_tree, model) do
+    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
+    ref = Process.send_after(self(), :debounce_fire, state.debounce_ms)
+    %{state | pending_view_tree: view_tree, pending_model: model, debounce_ref: ref}
+  end
+
+  defp cancel_pending(state) do
+    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
+    %{state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}
+  end
+
+  defp apply_sync(view_tree, model, state) do
+    {changed?, state} = do_sync(view_tree, model, state)
+    if changed?, do: notify_tools_changed(state)
+    state
+  end
+
+  defp sync_initial_view(%{app_module: nil} = state), do: {false, state}
 
   defp sync_initial_view(state) do
+    case live_view(state) do
+      {:ok, view_tree, model} -> do_sync(view_tree, model, state)
+      :none -> {false, state}
+    end
+  end
+
+  # The app's view of the dispatcher's current model, as the engine renders it.
+  defp live_view(state) do
     case GenServer.call(state.dispatcher_pid, :get_model) do
       {:ok, model} ->
         case state.app_module.view(model) do
-          nil -> state
-          view_tree -> do_sync(view_tree, model, state)
+          nil -> :none
+          view_tree -> {:ok, view_tree, model}
         end
 
       {:error, reason} ->
         Logger.warning(
-          "[MCP.ToolSynchronizer] Initial model pull failed for #{inspect(state.session_id)}: #{inspect(reason)}"
+          "[MCP.ToolSynchronizer] Model pull failed for #{inspect(state.session_id)}: #{inspect(reason)}"
         )
 
-        state
+        :none
     end
   rescue
     exception ->
       Logger.warning(
-        "[MCP.ToolSynchronizer] Initial view sync failed for #{inspect(state.session_id)}: #{Exception.message(exception)}"
+        "[MCP.ToolSynchronizer] View sync failed for #{inspect(state.session_id)}: #{Exception.message(exception)}"
       )
 
-      state
+      :none
   catch
     kind, reason ->
       Logger.warning(
-        "[MCP.ToolSynchronizer] Initial view sync failed for #{inspect(state.session_id)}: #{inspect({kind, reason})}"
+        "[MCP.ToolSynchronizer] View sync failed for #{inspect(state.session_id)}: #{inspect({kind, reason})}"
       )
 
-      state
+      :none
   end
 
+  # Answers whether the session's tool set changed, and the state.
   defp do_sync(view_tree, model, state) do
-    # Tool sync (existing behavior)
-    {current_tool_names, state} = sync_tools(view_tree, state)
+    {changed?, state} = sync_tools(view_tree, state)
 
     # Resource sync (model projections)
     state = sync_model_resources(model, state)
 
-    %{
-      state
-      | current_tool_names: current_tool_names,
-        current_view_tree: view_tree,
-        current_model: model
-    }
+    {changed?, %{state | current_view_tree: view_tree, current_model: model}}
   end
 
-  # Answers the session's tool names after the sync, and the state, holding
-  # the tools refused. The meta-tool is offered with the derived tools, so a
-  # refused one is registered as soon as its client-side name is free.
+  # The meta-tool is offered with the derived tools, so a refused one is
+  # registered as soon as its client-side name is free.
   defp sync_tools(view_tree, state) do
     {derived, state} = derive_tools(view_tree, state)
-    new_tools = discover_tool(state) ++ derived
-    new_tool_names = MapSet.new(new_tools, & &1.name)
+    offer(state, discover_tool(state) ++ derived)
+  end
 
-    removed = MapSet.difference(state.current_tool_names, new_tool_names)
-    added_tools = Enum.filter(new_tools, &(not MapSet.member?(state.current_tool_names, &1.name)))
-    {added_names, refused} = apply_tool_changes(state, removed, added_tools)
+  # The set only grows: a tool is registered when its name is new to the
+  # session or its provider or listed definition changed, and is never
+  # unregistered here because its widget left the view. Answers whether any
+  # was registered, and the state, holding the tools refused.
+  defp offer(state, offered) do
+    changed = Enum.reject(offered, &(Map.get(state.tools, &1.name) == tool_key(&1)))
 
-    current = state.current_tool_names |> MapSet.difference(removed) |> MapSet.union(added_names)
-    {current, %{state | name_collisions: refused}}
+    refused =
+      state.registry
+      |> register(changed)
+      |> note_refused(state.session_id, state.name_collisions)
+
+    registered = Enum.reject(changed, &Map.has_key?(refused, &1.name))
+    tools = Enum.reduce(registered, state.tools, &Map.put(&2, &1.name, tool_key(&1)))
+    {registered != [], %{state | tools: tools, name_collisions: refused}}
+  end
+
+  # The meta-tool has no provider.
+  defp tool_key(tool) do
+    {Map.get(tool, :provider),
+     :erlang.phash2({tool.description, tool.inputSchema, Map.get(tool, :annotations)})}
   end
 
   # The session's `discover_tools` meta-tool, or none for a session whose id
@@ -449,8 +523,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
   # stays or when it leaves the view and comes back (a modal, a conditional
   # widget), unless @max_warned more recently derived ones pushed it out.
   defp derive_tools(view_tree, state) do
-    context = %{dispatcher_pid: state.dispatcher_pid, session_id: state.session_id}
-    {tools, refusals} = TreeWalker.derive_with_refusals(view_tree, context)
+    {tools, refusals} = TreeWalker.derive_with_refusals(view_tree, tool_context(state))
 
     long_names =
       for %{name: name} <- tools,
@@ -503,28 +576,45 @@ defmodule Raxol.MCP.ToolSynchronizer do
     )
   end
 
-  # Answers the names of the added tools the registry took, and the refused
-  # tools (name => holder).
-  defp apply_tool_changes(state, removed, added_tools) do
-    if MapSet.size(removed) > 0 do
-      Registry.unregister_tools(state.registry, MapSet.to_list(removed))
-    end
-
-    refused =
-      state.registry
-      |> register(added_tools)
-      |> note_refused(state.session_id, state.name_collisions)
-
-    added_names = added_tools |> MapSet.new(& &1.name) |> drop_refused(refused)
-
-    if MapSet.size(removed) > 0 or MapSet.size(added_names) > 0 do
-      server_notify("notifications/tools/list_changed", %{})
-    end
-
-    {added_names, refused}
+  defp tool_context(%{app_module: nil} = state) do
+    %{dispatcher_pid: state.dispatcher_pid, session_id: state.session_id}
   end
 
-  defp drop_refused(names, refused), do: MapSet.reject(names, &Map.has_key?(refused, &1))
+  # Calls resolve their widget from the app's view of the current model, and
+  # a call that dispatched messages syncs this process before it answers.
+  defp tool_context(state) do
+    %{dispatcher_pid: dispatcher_pid, app_module: app_module, session_id: session_id} = state
+    synchronizer = self()
+
+    %{
+      dispatcher_pid: dispatcher_pid,
+      session_id: session_id,
+      view: fn -> current_view(dispatcher_pid, app_module) end,
+      synced: fn -> sync_after_write(synchronizer, session_id) end
+    }
+  end
+
+  defp current_view(dispatcher_pid, app_module) do
+    with {:ok, model} <- GenServer.call(dispatcher_pid, :get_model),
+         do: {:ok, app_module.view(model)}
+  end
+
+  # The call's messages have reached update/2 by now, so its answer stands
+  # whether or not the tool set can follow: a session stopping meanwhile
+  # takes its tool set with it.
+  defp sync_after_write(synchronizer, session_id) do
+    GenServer.call(synchronizer, :sync_view)
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[MCP.ToolSynchronizer] Session #{inspect(session_id)}: tool set not synced after a call: " <>
+          Exception.format_exit(reason)
+      )
+  end
+
+  defp notify_tools_changed(state) do
+    server_notify(state.server, "notifications/tools/list_changed", %{})
+  end
 
   # Answers the registry's refusals as `{name, holder}`. A refused tool is not
   # the session's, so it is neither listed in its set nor unregistered with
@@ -533,7 +623,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
   defp register(_registry, []), do: []
 
   defp register(registry, tools) do
-    case Registry.register_tools(registry, tools, derived: true) do
+    case Registry.register_tools(registry, tools, derived: true, owner: self()) do
       :ok -> []
       {:error, {:name_collision, collisions}} -> collisions
     end
@@ -607,7 +697,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
           end)
 
         if resources != [] do
-          Registry.register_resources(state.registry, resources)
+          Registry.register_resources(state.registry, resources, owner: self())
         end
 
         new_uris = Enum.map(resources, & &1.uri) |> MapSet.new()
@@ -618,7 +708,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
           |> MapSet.difference(removed_uri_set)
           |> MapSet.union(new_uris)
 
-        server_notify("notifications/raxol/model_changed", %{
+        server_notify(state.server, "notifications/raxol/model_changed", %{
           session_id: state.session_id,
           changed_keys: Map.keys(diff.changed),
           added_keys: Map.keys(diff.added),
@@ -702,7 +792,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
       }
     ]
 
-    Registry.register_resources(registry, resources)
+    Registry.register_resources(registry, resources, owner: self())
     MapSet.new([context_uri, widgets_uri])
   end
 
@@ -729,14 +819,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   defp model_uri(session_id, key), do: "raxol://session/#{session_id}/model/#{key}"
 
-  defp server_notify(method, params) do
-    if Code.ensure_loaded?(Raxol.MCP.Server) and
-         function_exported?(Raxol.MCP.Server, :notify, 3) do
-      try do
-        Raxol.MCP.Server.notify(Raxol.MCP.Server, method, params)
-      catch
-        :exit, _ -> :ok
-      end
-    end
+  defp server_notify(server, method, params) do
+    Raxol.MCP.Server.notify(server, method, params)
+  catch
+    :exit, _ -> :ok
   end
 end
