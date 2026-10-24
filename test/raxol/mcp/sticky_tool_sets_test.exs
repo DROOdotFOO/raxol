@@ -12,6 +12,7 @@ defmodule Raxol.MCP.StickyToolSetsTest do
   @moduletag :capture_log
 
   alias Raxol.Headless
+  alias Raxol.Headless.McpTools
   alias Raxol.MCP.{Authorizer, Registry, Server, ToolSynchronizer}
   alias Raxol.Playground.Demos.{ModalDemo, TableDemo}
 
@@ -229,6 +230,103 @@ defmodule Raxol.MCP.StickyToolSetsTest do
     refute Enum.any?(tool_names(server), &String.starts_with?(&1, "#{other}."))
     uris = registry |> Registry.list_resources() |> Enum.map(& &1.uri)
     refute "raxol://session/#{other}/context" in uris
+  end
+
+  describe "a call that changes the tool set" do
+    setup %{registry: registry} do
+      :ok = McpTools.register(registry)
+      handler = "held_#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:raxol, :mcp, :server, :tool_result_held],
+        &__MODULE__.forward_held/4,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    # The bound is ten minutes, so only the re-list can release the result
+    # before `Task.await/1` gives up.
+    test "answers once the client has listed tools again", %{registry: registry} do
+      server = subscribed_server(registry, list_changed_hold_ms: 600_000)
+      id = fresh_id()
+
+      task =
+        Task.async(fn ->
+          call(server, "raxol_start", %{"module" => inspect(TableDemo), "id" => id})
+        end)
+
+      assert_receive {:tool_result_held, ^server, %{conn_id: :default}}
+      assert Task.yield(task, 0) == nil
+
+      assert "#{id}.playground_table.sort" in tool_names(server)
+      assert ok_text(Task.await(task)) == "Session started: #{id}"
+    end
+
+    test "answers anyway when no re-list comes", %{registry: registry} do
+      server = subscribed_server(registry, list_changed_hold_ms: 1)
+      id = fresh_id()
+
+      assert ok_text(call(server, "raxol_start", %{"module" => inspect(TableDemo), "id" => id})) ==
+               "Session started: #{id}"
+
+      assert_received {:tool_result_held, ^server, %{conn_id: :default}}
+    end
+
+    test "raxol_send_key that opens a modal is held for the re-list", %{registry: registry} = ctx do
+      id = start!(ModalDemo, ctx)
+      server = subscribed_server(registry, list_changed_hold_ms: 600_000)
+
+      task = Task.async(fn -> call(server, "raxol_send_key", %{"id" => id, "key" => "o"}) end)
+
+      assert_receive {:tool_result_held, ^server, %{conn_id: :default}}
+      assert "#{id}.confirm.dismiss" in tool_names(server)
+      assert ok_text(Task.await(task)) =~ "Modal Demo"
+    end
+
+    test "a call cancelled while its result is held is answered nil", %{registry: registry} do
+      server = subscribed_server(registry, list_changed_hold_ms: 600_000)
+      id = fresh_id()
+
+      message = %{
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: %{
+          "name" => "raxol_start",
+          "arguments" => %{"module" => inspect(TableDemo), "id" => id}
+        }
+      }
+
+      {request, request_ref} = Server.request(server, message)
+
+      assert_receive {:tool_result_held, ^server, %{conn_id: :default}}
+      :ok = Server.cancel(server, request_ref)
+      :sys.get_state(server)
+
+      assert :gen_server.receive_response(request, 0) == {:reply, {:reply, nil}}
+    end
+  end
+
+  @doc false
+  def forward_held(_event, _measurements, metadata, test_pid),
+    do: send(test_pid, {:tool_result_held, self(), metadata})
+
+  # A second server in front of the test's registry, `:default` subscribed.
+  defp subscribed_server(registry, opts) do
+    {:ok, server} =
+      Server.start_link(
+        [
+          name: :"sticky_hold_#{System.unique_integer([:positive])}",
+          registry: registry,
+          authorizer: Authorizer.allow_all()
+        ] ++ opts
+      )
+
+    :ok = Server.subscribe(server, self())
+    server
   end
 
   defp start!(module, %{registry: registry, server: server}) do

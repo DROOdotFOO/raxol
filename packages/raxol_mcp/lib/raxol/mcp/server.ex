@@ -155,7 +155,13 @@ defmodule Raxol.MCP.Server do
   re-lists on it (OMP does) then has the new tools before the result reaches
   its model, so its next request can call them. Only a connection with a
   subscriber, which can hear the notification, is held. A held result
-  emits `[:raxol, :mcp, :server, :tool_result_held]`.
+  emits `[:raxol, :mcp, :server, :tool_result_held]`, and a call cancelled
+  while its result is held is answered `nil`.
+
+  The check compares the whole registry before and after the call, so a
+  change made meanwhile by anything else (another session starting, another
+  connection's call) holds this result too. That costs at most one bound,
+  and nothing for a client that re-lists on the notification it also gets.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -228,7 +234,8 @@ defmodule Raxol.MCP.Server do
     max_parked_elicitations_total: @default_max_parked_elicitations_total,
     callback_timeout_ms: @default_callback_timeout_ms,
     list_changed_hold_ms: @default_list_changed_hold_ms,
-    # Tool results held for a re-list: ref => %{entry, response, conn, timer}.
+    # Tool results held for a re-list, by the request's `request_ref` (so a
+    # cancel finds them): request_ref => %{entry, response, conn, timer}.
     held: %{}
   ]
 
@@ -1036,7 +1043,8 @@ defmodule Raxol.MCP.Server do
         timer: timer,
         delivery: delivery,
         work: work,
-        caller_monitor: caller_monitor
+        caller_monitor: caller_monitor,
+        request_ref: request_ref
       }
 
       {:ok,
@@ -1203,7 +1211,7 @@ defmodule Raxol.MCP.Server do
     conn = delivery_conn(entry)
 
     if Map.has_key?(state.subscribers, conn) do
-      hold_ref = make_ref()
+      hold_ref = entry.request_ref
       timer = Process.send_after(self(), {:release_held, hold_ref}, state.list_changed_hold_ms)
 
       :telemetry.execute([:raxol, :mcp, :server, :tool_result_held], %{}, %{conn_id: conn})
@@ -1284,7 +1292,7 @@ defmodule Raxol.MCP.Server do
         state
 
       :error ->
-        cancel_parked(state, request_ref)
+        state |> cancel_parked(request_ref) |> cancel_held(request_ref)
     end
   end
 
@@ -1311,6 +1319,21 @@ defmodule Raxol.MCP.Server do
 
       nil ->
         state
+    end
+  end
+
+  # A cancelled call whose result waits for a re-list is answered `nil`, and
+  # the result is dropped. Only a call some caller can cancel is found: a
+  # parked call pushed to its connection is held under a ref no caller has.
+  defp cancel_held(state, request_ref) do
+    case Map.pop(state.held, request_ref) do
+      {nil, _held} ->
+        state
+
+      {held, rest} ->
+        Process.cancel_timer(held.timer)
+        reply_cancelled(held.entry)
+        %{state | held: rest}
     end
   end
 
