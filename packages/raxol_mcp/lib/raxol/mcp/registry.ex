@@ -65,6 +65,20 @@ defmodule Raxol.MCP.Registry do
   A callback that raises or exits answers `{:error, {:callback_raised,
   module}}` or `{:error, {:callback_exited, atom}}`. The exception message is
   logged, never returned, because the return value reaches a model.
+
+  ## Owners
+
+  `register_tools/3`, `register_resources/3` and `register_prompts/3` take an
+  `owner: pid`. The registry monitors each owner, and when one exits it
+  removes everything the owner still holds and, if that included tools,
+  sends one `notifications/tools/list_changed` to its `:server` (start
+  option, default `Raxol.MCP.Server`). Registering a name again moves it to
+  the new registration's owner, or to none. A registration without an owner
+  is never removed automatically, so a short-lived caller (a test, a task)
+  does not take its tools with it when it exits.
+
+  Unregistering, by name or by an owner's exit, also forgets the entry's
+  circuit-breaker state.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -99,7 +113,12 @@ defmodule Raxol.MCP.Registry do
 
   # -- Client API ---------------------------------------------------------------
 
-  @doc "Start the registry, linked to the calling process."
+  @doc """
+  Start the registry, linked to the calling process.
+
+  `:server` names the `Raxol.MCP.Server` told when an owner's exit removes
+  tools (default `Raxol.MCP.Server`).
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -129,6 +148,8 @@ defmodule Raxol.MCP.Registry do
   `tools/call` refusal still holds them). It is for
   `Raxol.MCP.ToolSynchronizer` alone: a tool registered with it skips the
   check that refuses to boot an unguarded server on a sensitive tool.
+
+  `owner: pid` makes the registration owned (see "Owners").
   """
   @spec register_tools(GenServer.server(), [tool_def()], keyword()) ::
           :ok
@@ -136,8 +157,8 @@ defmodule Raxol.MCP.Registry do
           | {:error, {:invalid_tool_name, term()}}
   def register_tools(registry \\ __MODULE__, tools, opts \\ []) do
     if Keyword.get(opts, :derived, false) == true,
-      do: GenServer.call(registry, {:register_derived_tools, tools}),
-      else: GenServer.call(registry, {:register_tools, tools})
+      do: GenServer.call(registry, {:register_derived_tools, tools, owner(opts)}),
+      else: GenServer.call(registry, {:register_tools, tools, owner(opts)})
   end
 
   @doc """
@@ -213,7 +234,7 @@ defmodule Raxol.MCP.Registry do
   defp register_whole(_registry, []), do: :ok
 
   defp register_whole(registry, tools),
-    do: GenServer.call(registry, {:register_tools, tools, :all_or_nothing})
+    do: GenServer.call(registry, {:register_tools, tools, nil, :all_or_nothing})
 
   defp validate_tools(tools) do
     tools
@@ -277,7 +298,13 @@ defmodule Raxol.MCP.Registry do
   @doc "Register one or more resources."
   @spec register_resources(GenServer.server(), [resource_def()]) :: :ok
   def register_resources(registry \\ __MODULE__, resources) do
-    GenServer.call(registry, {:register_resources, resources})
+    register_resources(registry, resources, [])
+  end
+
+  @doc "`register_resources/2` with `owner: pid` (see \"Owners\")."
+  @spec register_resources(GenServer.server(), [resource_def()], keyword()) :: :ok
+  def register_resources(registry, resources, opts) when is_list(opts) do
+    GenServer.call(registry, {:register_resources, resources, owner(opts)})
   end
 
   @doc "Unregister resources by URI."
@@ -318,7 +345,21 @@ defmodule Raxol.MCP.Registry do
   @doc "Register one or more prompts."
   @spec register_prompts(GenServer.server(), [prompt_def()]) :: :ok
   def register_prompts(registry \\ __MODULE__, prompts) do
-    GenServer.call(registry, {:register_prompts, prompts})
+    register_prompts(registry, prompts, [])
+  end
+
+  @doc "`register_prompts/2` with `owner: pid` (see \"Owners\")."
+  @spec register_prompts(GenServer.server(), [prompt_def()], keyword()) :: :ok
+  def register_prompts(registry, prompts, opts) when is_list(opts) do
+    GenServer.call(registry, {:register_prompts, prompts, owner(opts)})
+  end
+
+  defp owner(opts) do
+    case Keyword.get(opts, :owner) do
+      nil -> nil
+      pid when is_pid(pid) -> pid
+      other -> raise ArgumentError, "owner must be a pid, got: #{inspect(other)}"
+    end
   end
 
   @doc "Unregister prompts by name."
@@ -386,54 +427,41 @@ defmodule Raxol.MCP.Registry do
     breaker_name = :"#{table_name}_breakers"
     breaker_table = CircuitBreaker.new(breaker_name)
 
-    {:ok, %{table: table, breaker_table: breaker_table}}
+    {:ok,
+     %{
+       table: table,
+       breaker_table: breaker_table,
+       server: Keyword.get(opts, :server, Raxol.MCP.Server),
+       # owner pid => %{ref: monitor, keys: entries it holds}; `held_by` is
+       # the reverse map. Entries are ETS keys: {:tool | :resource | :prompt, _}.
+       owners: %{},
+       held_by: %{}
+     }}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:register_tools, tools}, _from, state) do
-    reply =
-      case refuse_invalid_names(tools) do
-        :ok -> insert_tools(state.table, tools, false)
-        refusal -> refusal
-      end
-
-    {:reply, reply, state}
+  def handle_manager_call({:register_tools, tools, owner}, _from, state) do
+    register_each(state, tools, false, owner)
   end
 
-  @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:register_derived_tools, tools}, _from, state) do
-    reply =
-      case refuse_invalid_names(tools) do
-        :ok -> insert_tools(state.table, tools, true)
-        refusal -> refusal
-      end
-
-    {:reply, reply, state}
+  def handle_manager_call({:register_derived_tools, tools, owner}, _from, state) do
+    register_each(state, tools, true, owner)
   end
 
   # `register_all/2`'s batch: checked whole before anything is inserted, so a
   # refusal leaves the table as it was.
-  @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:register_tools, tools, :all_or_nothing}, _from, state) do
-    reply =
-      with :ok <- refuse_invalid_names(tools),
-           [] <- collisions(state.table, tools) do
-        insert_tools(state.table, tools, false)
-      else
-        [_ | _] = refused -> {:error, {:name_collision, refused}}
-        refusal -> refusal
-      end
-
-    {:reply, reply, state}
+  def handle_manager_call({:register_tools, tools, owner, :all_or_nothing}, from, state) do
+    with :ok <- refuse_invalid_names(tools),
+         [] <- collisions(state.table, tools) do
+      handle_manager_call({:register_tools, tools, owner}, from, state)
+    else
+      [_ | _] = refused -> {:reply, {:error, {:name_collision, refused}}, state}
+      refusal -> {:reply, refusal, state}
+    end
   end
 
-  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:unregister_tools, names}, _from, state) do
-    for name <- names do
-      :ets.delete(state.table, tool_key(name))
-      # A name `register_tools/3` would refuse has no client-side name row.
-      if is_binary(name), do: :ets.delete_object(state.table, {omp_key(name), name})
-    end
+    state = Enum.reduce(names, state, &remove(&2, tool_key(&1)))
 
     :telemetry.execute(
       [:raxol, :mcp, :registry, :tools_changed],
@@ -444,49 +472,69 @@ defmodule Raxol.MCP.Registry do
     {:reply, :ok, state}
   end
 
-  @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:register_resources, resources}, _from, state) do
-    for resource <- resources do
-      entry =
-        {:resource, resource.uri, resource_definition(resource), resource.callback,
-         fault_classifier(resource)}
+  def handle_manager_call({:register_resources, resources, owner}, _from, state) do
+    state =
+      Enum.reduce(resources, state, fn resource, state ->
+        entry =
+          {:resource, resource.uri, resource_definition(resource), resource.callback,
+           fault_classifier(resource)}
 
-      :ets.insert(state.table, {resource_key(resource.uri), entry})
-    end
+        :ets.insert(state.table, {resource_key(resource.uri), entry})
+        own(state, resource_key(resource.uri), owner)
+      end)
 
     {:reply, :ok, state}
   end
 
-  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:unregister_resources, uris}, _from, state) do
-    for uri <- uris do
-      :ets.delete(state.table, resource_key(uri))
-    end
+    {:reply, :ok, Enum.reduce(uris, state, &remove(&2, resource_key(&1)))}
+  end
+
+  def handle_manager_call({:register_prompts, prompts, owner}, _from, state) do
+    state =
+      Enum.reduce(prompts, state, fn prompt, state ->
+        entry =
+          {:prompt, prompt.name, prompt_definition(prompt), prompt.callback,
+           fault_classifier(prompt)}
+
+        :ets.insert(state.table, {prompt_key(prompt.name), entry})
+        own(state, prompt_key(prompt.name), owner)
+      end)
 
     {:reply, :ok, state}
   end
 
-  @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:register_prompts, prompts}, _from, state) do
-    for prompt <- prompts do
-      entry =
-        {:prompt, prompt.name, prompt_definition(prompt), prompt.callback,
-         fault_classifier(prompt)}
-
-      :ets.insert(state.table, {prompt_key(prompt.name), entry})
-    end
-
-    {:reply, :ok, state}
-  end
-
-  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:unregister_prompts, names}, _from, state) do
-    for name <- names do
-      :ets.delete(state.table, prompt_key(name))
-    end
-
-    {:reply, :ok, state}
+    {:reply, :ok, Enum.reduce(names, state, &remove(&2, prompt_key(&1)))}
   end
+
+  # An owner exited: everything it still holds goes, and a client listing
+  # tools hears once that they changed.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:DOWN, ref, :process, pid, _reason}, state) do
+    case Map.fetch(state.owners, pid) do
+      {:ok, %{ref: ^ref, keys: keys}} ->
+        state = Enum.reduce(keys, state, &remove(&2, &1))
+        tool_names = for {:tool, name} <- keys, do: name
+
+        if tool_names != [] do
+          :telemetry.execute(
+            [:raxol, :mcp, :registry, :tools_changed],
+            %{count: length(tool_names)},
+            %{action: :unregister, names: tool_names}
+          )
+
+          Raxol.MCP.Server.notify(state.server, "notifications/tools/list_changed", %{})
+        end
+
+        {:noreply, state}
+
+      _stale ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Private -----------------------------------------------------------------
 
@@ -507,6 +555,18 @@ defmodule Raxol.MCP.Registry do
     end)
   end
 
+  defp register_each(state, tools, derived?, owner) do
+    case refuse_invalid_names(tools) do
+      :ok ->
+        {reply, registered} = insert_tools(state.table, tools, derived?)
+        {:reply, reply, Enum.reduce(registered, state, &own(&2, tool_key(&1), owner))}
+
+      refusal ->
+        {:reply, refusal, state}
+    end
+  end
+
+  # Answers the reply and the names inserted, in order.
   defp insert_tools(table, tools, derived?) do
     {registered, refused} =
       Enum.reduce(tools, {[], []}, fn tool, {registered, refused} ->
@@ -525,8 +585,68 @@ defmodule Raxol.MCP.Registry do
     )
 
     case refused do
-      [] -> :ok
-      _ -> {:error, {:name_collision, Enum.reverse(refused)}}
+      [] -> {:ok, registered}
+      _ -> {{:error, {:name_collision, Enum.reverse(refused)}}, registered}
+    end
+  end
+
+  # Deletes an entry, its circuit-breaker row and its ownership.
+  defp remove(state, {:tool, name} = key) do
+    # A name `register_tools/3` would refuse has no client-side name row.
+    if is_binary(name), do: :ets.delete_object(state.table, {omp_key(name), name})
+    remove_entry(state, key)
+  end
+
+  defp remove(state, key), do: remove_entry(state, key)
+
+  defp remove_entry(state, key) do
+    :ets.delete(state.table, key)
+    CircuitBreaker.reset(state.breaker_table, key)
+    disown(state, key)
+  end
+
+  # The latest registration of an entry decides its owner, or that it has none.
+  defp own(state, key, owner) do
+    if Map.get(state.held_by, key) == owner do
+      state
+    else
+      state |> disown(key) |> hold(key, owner)
+    end
+  end
+
+  defp hold(state, _key, nil), do: state
+
+  defp hold(state, key, owner) do
+    entry =
+      Map.get_lazy(state.owners, owner, fn ->
+        %{ref: Process.monitor(owner), keys: MapSet.new()}
+      end)
+
+    %{
+      state
+      | owners: Map.put(state.owners, owner, %{entry | keys: MapSet.put(entry.keys, key)}),
+        held_by: Map.put(state.held_by, key, owner)
+    }
+  end
+
+  defp disown(state, key) do
+    case Map.pop(state.held_by, key) do
+      {nil, _held_by} ->
+        state
+
+      {owner, held_by} ->
+        %{ref: ref, keys: keys} = entry = Map.fetch!(state.owners, owner)
+        keys = MapSet.delete(keys, key)
+
+        owners =
+          if MapSet.size(keys) == 0 do
+            Process.demonitor(ref, [:flush])
+            Map.delete(state.owners, owner)
+          else
+            Map.put(state.owners, owner, %{entry | keys: keys})
+          end
+
+        %{state | held_by: held_by, owners: owners}
     end
   end
 

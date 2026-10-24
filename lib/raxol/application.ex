@@ -1075,23 +1075,28 @@ defmodule Raxol.Application do
     end
   end
 
+  # The process running `start/2` lives on as the application master's for
+  # the application's lifetime, so it owns the static tools: they leave the
+  # registry when the application stops.
   defp maybe_register_mcp_tools do
     if module_available?(Raxol.MCP.Registry) and
          Process.whereis(Raxol.MCP.Registry) != nil do
+      owned = [owner: self()]
+
       if Code.ensure_loaded?(Raxol.Headless.McpTools) do
         Raxol.MCP.Registry
-        |> Raxol.Headless.McpTools.register()
+        |> Raxol.Headless.McpTools.register(owned)
         |> warn_on_refused_tools(Raxol.Headless.McpTools)
       end
 
       if Code.ensure_loaded?(Raxol.Headless.DocsResource) do
-        Raxol.Headless.DocsResource.register(Raxol.MCP.Registry)
+        Raxol.Headless.DocsResource.register(Raxol.MCP.Registry, owned)
       end
 
       if Code.ensure_loaded?(Raxol.MCP.AdaptiveTools) and
            Raxol.MCP.AdaptiveTools.available?() do
         Raxol.MCP.Registry
-        |> Raxol.MCP.AdaptiveTools.register()
+        |> Raxol.MCP.AdaptiveTools.register(owned)
         |> warn_on_refused_tools(Raxol.MCP.AdaptiveTools)
       end
 

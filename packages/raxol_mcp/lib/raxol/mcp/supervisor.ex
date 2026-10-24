@@ -43,7 +43,7 @@ defmodule Raxol.MCP.Supervisor do
 
     children = [
       Raxol.MCP.Client.Tables,
-      {Raxol.MCP.Registry, name: registry_name},
+      {Raxol.MCP.Registry, name: registry_name, server: server_name},
       {Raxol.MCP.Server,
        [
          name: server_name,

@@ -445,4 +445,75 @@ defmodule Raxol.MCP.RegistryTest do
       end
     end
   end
+
+  describe "owners" do
+    setup do
+      unique = System.unique_integer([:positive])
+      server = :"owners_server_#{unique}"
+      {:ok, registry} = Registry.start_link(name: :"owners_registry_#{unique}", server: server)
+      {:ok, _} = Raxol.MCP.Server.start_link(name: server, registry: registry)
+      :ok = Raxol.MCP.Server.subscribe(server, self())
+      :sys.get_state(server)
+      %{owned: registry, server: server}
+    end
+
+    test "an owner's exit removes what it still holds and sends one list_changed", %{
+      owned: r,
+      server: server
+    } do
+      first = owner()
+      second = owner()
+
+      :ok = Registry.register_tools(r, [sample_tool("a"), sample_tool("moved")], owner: first)
+      :ok = Registry.register_resources(r, [sample_resource("raxol://a")], owner: first)
+      :ok = Registry.register_prompts(r, [prompt("p")], owner: first)
+      :ok = Registry.register_tools(r, [sample_tool("moved")], owner: second)
+      :ok = Registry.register_tools(r, [sample_tool("unowned")])
+
+      ref = Process.monitor(first)
+      Process.exit(first, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^first, :killed}
+      :sys.get_state(r)
+      :sys.get_state(server)
+
+      assert r |> Registry.list_tools() |> Enum.map(& &1.name) |> Enum.sort() ==
+               ["moved", "unowned"]
+
+      assert Registry.list_resources(r) == []
+      assert Registry.list_prompts(r) == []
+      assert_received {:mcp_notification, %{method: "notifications/tools/list_changed"}}
+      refute_received {:mcp_notification, _}
+    end
+
+    test "an unowned registration outlives the process that made it", %{owned: r} do
+      {caller, ref} =
+        spawn_monitor(fn -> :ok = Registry.register_tools(r, [sample_tool("kept")]) end)
+
+      assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
+      :sys.get_state(r)
+
+      assert [%{name: "kept"}] = Registry.list_tools(r)
+    end
+  end
+
+  test "unregistering a tool forgets its circuit", %{registry: r} do
+    tool = %{sample_tool() | callback: fn _args -> {:error, :down} end}
+    :ok = Registry.register_tools(r, [tool])
+    for _ <- 1..5, do: Registry.call_tool(r, "test_tool", %{})
+    assert %{state: :open} = Registry.circuit_status(r, {:tool, "test_tool"})
+
+    :ok = Registry.unregister_tools(r, ["test_tool"])
+
+    assert %{state: :closed, failures: 0} = Registry.circuit_status(r, {:tool, "test_tool"})
+  end
+
+  defp owner do
+    pid = spawn(fn -> receive do: (:never -> :ok) end)
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    pid
+  end
+
+  defp prompt(name) do
+    %{name: name, description: "A prompt", arguments: [], callback: fn _ -> {:ok, []} end}
+  end
 end
