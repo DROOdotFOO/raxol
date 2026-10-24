@@ -427,7 +427,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
   end
 
   defp with_session(view, fun) do
-    id = :"engine_process_components_#{System.unique_integer([:positive])}"
+    id = "engine_process_components_#{System.unique_integer([:positive])}"
     {:ok, ^id} = Headless.start(ShowApp, id: id, width: 100, height: 8)
 
     try do

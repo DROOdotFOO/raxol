@@ -128,9 +128,10 @@ defmodule Raxol.Headless.McpToolsTest do
 
     # The tool reaches `Raxol.Headless` only once resolution ACCEPTS the path,
     # and whether that server is running is not what these assert on. Catching
-    # the exit keeps the subject the refusal, not the session manager.
+    # the exit keeps the subject the refusal, not the session manager. Every
+    # call carries a valid id, so the refusal is never the id's.
     defp call_start(args) do
-      start_tool().(args)
+      start_tool().(Map.put_new(args, "id", "path"))
     catch
       :exit, reason -> {:reached_headless, reason}
     end
@@ -323,7 +324,7 @@ defmodule Raxol.Headless.McpToolsTest do
       assert {:error, message} =
                start_tool_result(%{
                  "module" => "Raxol.Terminal.Buffer.BufferServer",
-                 "id" => "not_an_app"
+                 "id" => "notapp"
                })
 
       assert message =~ "is not a Raxol application"
@@ -334,12 +335,12 @@ defmodule Raxol.Headless.McpToolsTest do
     # versus go pick a different module -- so the wording has to separate them.
     test "an unlisted module and a non-application module read differently" do
       assert {:error, unlisted} =
-               start_tool_result(%{"module" => "NoSuchHeadlessAppAtAll"})
+               start_tool_result(%{"module" => "NoSuchHeadlessAppAtAll", "id" => "nosuch"})
 
       assert {:error, not_an_app} =
                start_tool_result(%{
                  "module" => "Raxol.Terminal.Buffer.BufferServer",
-                 "id" => "not_an_app_again"
+                 "id" => "notapp2"
                })
 
       assert unlisted =~ "is not startable over MCP"
@@ -385,10 +386,11 @@ defmodule Raxol.Headless.McpToolsTest do
 
       assert {:ok, message} =
                start_tool_result(%{
-                 "module" => "Raxol.Headless.McpToolsTest.UnloadedProbe"
+                 "module" => "Raxol.Headless.McpToolsTest.UnloadedProbe",
+                 "id" => "probe"
                })
 
-      assert message =~ "unloaded_probe"
+      assert message =~ "probe"
 
       # The session dies with the `Raxol.Headless` the setup started, so in the
       # normal case there is nothing to clean up -- and an unguarded stop races
@@ -397,7 +399,7 @@ defmodule Raxol.Headless.McpToolsTest do
       # the session really would outlive this test.
       on_exit(fn ->
         if Process.whereis(Raxol.Headless),
-          do: Raxol.Headless.stop(:unloaded_probe)
+          do: Raxol.Headless.stop("probe")
       end)
     end
 
@@ -456,7 +458,7 @@ defmodule Raxol.Headless.McpToolsTest do
 
       on_exit(fn ->
         if Process.whereis(Raxol.Headless),
-          do: Raxol.Headless.stop(:sized_ok)
+          do: Raxol.Headless.stop("sizedok")
       end)
 
       :ok
@@ -475,7 +477,7 @@ defmodule Raxol.Headless.McpToolsTest do
         assert {:error, message} =
                  start_tool_result(%{
                    "module" => inspect(SizedApp),
-                   "id" => "sized_refused",
+                   "id" => "sizedno",
                    "width" => w,
                    "height" => h
                  })
@@ -483,7 +485,7 @@ defmodule Raxol.Headless.McpToolsTest do
         assert message =~ "width at most 512"
         assert message =~ "height at most 256"
         assert message =~ "131072 cells"
-        refute :sized_refused in Raxol.Headless.list()
+        refute "sizedno" in Raxol.Headless.list()
       end
     end
 
@@ -491,13 +493,13 @@ defmodule Raxol.Headless.McpToolsTest do
       assert {:ok, message} =
                start_tool_result(%{
                  "module" => inspect(SizedApp),
-                 "id" => "sized_ok",
+                 "id" => "sizedok",
                  "width" => 512,
                  "height" => 256
                })
 
-      assert message =~ "sized_ok"
-      assert {:ok, buffer} = Raxol.Headless.get_buffer(:sized_ok)
+      assert message =~ "sizedok"
+      assert {:ok, buffer} = Raxol.Headless.get_buffer("sizedok")
       assert {buffer.width, buffer.height} == {512, 256}
     end
 
@@ -537,7 +539,7 @@ defmodule Raxol.Headless.McpToolsTest do
 
       on_exit(fn ->
         if Process.whereis(Raxol.Headless),
-          do: Raxol.Headless.stop(:startable_table)
+          do: Raxol.Headless.stop("sttable")
       end)
 
       :ok
@@ -547,7 +549,7 @@ defmodule Raxol.Headless.McpToolsTest do
       before = Raxol.Headless.list()
 
       assert {:error, message} =
-               start_tool_result(%{"module" => inspect(UnlistedApp)})
+               start_tool_result(%{"module" => inspect(UnlistedApp), "id" => "unlist"})
 
       assert message =~ "is not startable over MCP"
       assert message =~ ":headless_startable"
@@ -560,9 +562,9 @@ defmodule Raxol.Headless.McpToolsTest do
     test "the REPL and BEAM dashboard demos are refused although every other demo is listed" do
       before = Raxol.Headless.list()
 
-      for demo <- ["ReplDemo", "BeamDashboardDemo"] do
+      for {demo, id} <- [{"ReplDemo", "repl"}, {"BeamDashboardDemo", "beam"}] do
         assert {:error, message} =
-                 start_tool_result(%{"module" => "Raxol.Playground.Demos." <> demo})
+                 start_tool_result(%{"module" => "Raxol.Playground.Demos." <> demo, "id" => id})
 
         assert message =~ "is not startable over MCP"
       end
@@ -598,11 +600,11 @@ defmodule Raxol.Headless.McpToolsTest do
       assert {:ok, message} =
                start_tool_result(%{
                  "module" => "Raxol.Playground.Demos.TableDemo",
-                 "id" => "startable_table"
+                 "id" => "sttable"
                })
 
-      assert message =~ "startable_table"
-      assert :startable_table in Raxol.Headless.list()
+      assert message =~ "sttable"
+      assert "sttable" in Raxol.Headless.list()
     end
 
     # Owner decision (2026-10-24): a set list replaces the demos.
@@ -735,11 +737,11 @@ defmodule Raxol.Headless.McpToolsTest do
       assert {:ok, _} =
                start_tool_result(%{
                  "module" => inspect(InjectedTextApp),
-                 "id" => Atom.to_string(:inj_text)
+                 "id" => "inj"
                })
 
       on_exit(fn ->
-        if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop(:inj_text)
+        if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop("inj")
       end)
 
       %{server: server}
@@ -962,7 +964,7 @@ defmodule Raxol.Headless.McpToolsTest do
         pid -> pid
       end
 
-      {:ok, id} = Raxol.Headless.start(LeakyApp, id: :leaky_send_key)
+      {:ok, id} = Raxol.Headless.start(LeakyApp, id: "leaky")
 
       on_exit(fn ->
         if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop(id)
@@ -976,7 +978,7 @@ defmodule Raxol.Headless.McpToolsTest do
       send_key = Enum.find(McpTools.tools(), &(&1.name == "raxol_send_key"))
 
       assert {:error, message} =
-               send_key.callback.(%{"id" => Atom.to_string(id), "key" => "x"})
+               send_key.callback.(%{"id" => id, "key" => "x"})
 
       refute message =~ "LEAK-MARKER-7Q"
       assert message == inspect({:dispatch_failed, :unknown})

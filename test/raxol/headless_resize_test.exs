@@ -61,12 +61,12 @@ defmodule Raxol.HeadlessResizeTest do
 
   test "send_resize reaches app update/2 and resizes the engine buffer" do
     {:ok, id} =
-      Headless.start(ResizeApp, id: :resize_e2e, width: 80, height: 24)
+      Headless.start(ResizeApp, id: "resize_e2e", width: 80, height: 24)
 
     on_exit(fn ->
       # Headless may already be gone if it was started via start_supervised!
       try do
-        Headless.stop(:resize_e2e)
+        Headless.stop("resize_e2e")
       catch
         :exit, _ -> :ok
       end
@@ -94,6 +94,6 @@ defmodule Raxol.HeadlessResizeTest do
   end
 
   test "send_resize on unknown session returns an error" do
-    assert {:error, :not_found} = Headless.send_resize(:nope, 80, 24)
+    assert {:error, :not_found} = Headless.send_resize("nope", 80, 24)
   end
 end

@@ -102,7 +102,7 @@ defmodule Raxol.ExamplesRenderTest do
   # The examples' other compiler warnings are not this test's subject, and
   # would bury its output; they go to stderr, so capture it and hand it back.
   defp first_frame(path) do
-    id = :"example_#{System.unique_integer([:positive])}"
+    id = "example_#{System.unique_integer([:positive])}"
 
     {result, compile_output} =
       with_io(:stderr, fn ->

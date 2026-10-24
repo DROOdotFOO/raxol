@@ -415,7 +415,7 @@ defmodule GenLandingFrames do
 
       {:ok, id} =
         Raxol.Headless.start(module,
-          id: :"hero_#{name}",
+          id: "hero_#{name}",
           width: w,
           height: h,
           subscriptions: false
@@ -519,7 +519,7 @@ defmodule GenLandingFrames do
     end
   end
 
-  defp interval_messages(id, module) when is_atom(id) do
+  defp interval_messages(id, module) when is_binary(id) do
     {:ok, model} = Raxol.Headless.get_model(id)
     interval_messages(model, module)
   end
@@ -581,7 +581,7 @@ defmodule GenLandingFrames do
       slug = slug(comp.name)
 
       with {:ok, height} <- preview_height(comp.module, slug),
-           id = String.to_atom("preview_#{slug}"),
+           id = "preview_#{slug}",
            {:ok, id} <- safe_start(comp.module, id, @preview_width, height) do
         try do
           record_preview(dir, slug, id, comp)
@@ -599,7 +599,7 @@ defmodule GenLandingFrames do
   # would let a later frame's content fall off the bottom, and sizing each
   # frame to itself would make the card jump as it plays.
   defp preview_height(module, slug) do
-    id = String.to_atom("probe_#{slug}")
+    id = "probe_#{slug}"
 
     case safe_start(module, id, @preview_width, @preview_probe_height) do
       {:ok, id} ->

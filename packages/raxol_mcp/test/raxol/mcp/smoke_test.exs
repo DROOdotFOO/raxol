@@ -227,7 +227,9 @@ defmodule Raxol.MCP.SmokeTest do
           type_map: @type_map
         })
 
-      focused = FocusLens.filter(tools, mode: :focused, focused_id: "search_input")
+      focused =
+        FocusLens.filter(tools, mode: :focused, focused_id: "search_input")
+
       names = Enum.map(focused, & &1.name)
 
       assert "search_input.type_into" in names
@@ -321,7 +323,7 @@ defmodule Raxol.MCP.SmokeTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :smoke_test
+          session_id: "smoke_test"
         )
 
       # Simulate a render cycle emitting telemetry
@@ -331,8 +333,7 @@ defmodule Raxol.MCP.SmokeTest do
         %{view_tree: search_app_tree(), dispatcher_pid: self()}
       )
 
-      # Wait for debounce + processing
-      Process.sleep(100)
+      :ok = ToolSynchronizer.flush(sync)
 
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
@@ -356,7 +357,7 @@ defmodule Raxol.MCP.SmokeTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :smoke_cleanup
+          session_id: "smoke_cleanup"
         )
 
       # discover_tools should be registered
@@ -380,7 +381,7 @@ defmodule Raxol.MCP.SmokeTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :smoke_ignore
+          session_id: "smoke_ignore"
         )
 
       before_count = length(Registry.list_tools(registry))
@@ -392,7 +393,7 @@ defmodule Raxol.MCP.SmokeTest do
         %{view_tree: search_app_tree(), dispatcher_pid: other_pid}
       )
 
-      Process.sleep(100)
+      :ok = ToolSynchronizer.flush(sync)
 
       after_count = length(Registry.list_tools(registry))
       assert before_count == after_count
@@ -444,7 +445,7 @@ defmodule Raxol.MCP.SmokeTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :smoke_update
+          session_id: "smoke_update"
         )
 
       # First tree: just a button
@@ -452,13 +453,13 @@ defmodule Raxol.MCP.SmokeTest do
 
       # Force sync bypassing debounce
       ToolSynchronizer.sync(sync, tree_v1)
-      Process.sleep(30)
+      :ok = ToolSynchronizer.flush(sync)
 
       # Second tree: button removed, input added
       tree_v2 = %{type: :text_input, id: "inp", attrs: %{value: "hello"}}
 
       ToolSynchronizer.sync(sync, tree_v2)
-      Process.sleep(30)
+      :ok = ToolSynchronizer.flush(sync)
 
       # Note: Without the real widget modules loaded, TreeWalker won't find
       # tools via default type_map. This test verifies the synchronizer handles

@@ -32,7 +32,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_session
+          session_id: "test_session"
         )
 
       tools = Registry.list_tools(registry)
@@ -49,7 +49,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_sync
+          session_id: "test_sync"
         )
 
       view_tree = %{
@@ -61,8 +61,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       # Use sync_now to bypass debounce
       ToolSynchronizer.sync(pid, view_tree)
-      # Give the cast time to process
-      Process.sleep(20)
+      :ok = ToolSynchronizer.flush(pid)
 
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
@@ -78,7 +77,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_telemetry
+          session_id: "test_telemetry"
         )
 
       # Simulate the telemetry event that the rendering engine emits
@@ -88,8 +87,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         %{view_tree: %{type: :column, children: []}, dispatcher_pid: self()}
       )
 
-      # Wait for debounce
-      Process.sleep(80)
+      :ok = ToolSynchronizer.flush(pid)
 
       # Should still have discover_tools
       tools = Registry.list_tools(registry)
@@ -106,7 +104,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_ignore
+          session_id: "test_ignore"
         )
 
       initial_tools = Registry.list_tools(registry)
@@ -118,7 +116,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         %{view_tree: %{type: :button, id: "x", attrs: %{}}, dispatcher_pid: other_pid}
       )
 
-      Process.sleep(80)
+      :ok = ToolSynchronizer.flush(pid)
 
       after_tools = Registry.list_tools(registry)
       assert length(initial_tools) == length(after_tools)
@@ -134,13 +132,13 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_cleanup
+          session_id: "test_cleanup"
         )
 
       # Sync some tools
       view_tree = %{type: :column, children: []}
       ToolSynchronizer.sync(pid, view_tree)
-      Process.sleep(20)
+      :ok = ToolSynchronizer.flush(pid)
 
       # Stop -- should clean up
       GenServer.stop(pid)
@@ -158,17 +156,15 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_debounce
+          session_id: "test_debounce"
         )
 
       # Send multiple rapid updates
-      for i <- 1..5 do
+      for _ <- 1..5 do
         GenServer.cast(pid, {:view_tree_updated, %{type: :column, children: []}})
-        if i < 5, do: Process.sleep(5)
       end
 
-      # Wait for debounce to fire
-      Process.sleep(80)
+      :ok = ToolSynchronizer.flush(pid)
 
       # Should still be alive and functional
       assert Process.alive?(pid)

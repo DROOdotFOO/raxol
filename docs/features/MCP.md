@@ -200,6 +200,8 @@ To keep the demos as well, list them alongside your app; `Raxol.Headless.McpTool
 
 Anything else is refused before the name is resolved, so an unlisted name never becomes an atom. Elixir callers of `Raxol.Headless.start/2`, such as `Raxol.MCP.Test` and `Raxol.Recording.Video`, are trusted and are not limited by the list. The `path` argument is a separate opt-in (`RAXOL_HEADLESS_PATH_ROOT`) and does not consult the list, because the module is only known after the file is compiled.
 
+`raxol_start` requires an `id` matching `^[a-z][a-z0-9]{0,6}$` and refuses any other id rather than substituting one. No `_` or `.` keeps the session boundary clear after OMP's renaming (`a_b.c` and `a.b_c` would both become `a_b_c`), and seven characters keep the longest demo tool name within OMP's 64. Session ids are binaries only and never become atoms; Elixir callers of `Raxol.Headless.start/2` may use any binary.
+
 ### Transports
 
 stdio is exempt by design, since it already inherits the OS process boundary.

@@ -44,7 +44,7 @@ defmodule Raxol.MCP.AgentBridgeSendTest do
     if is_nil(Process.whereis(Headless)),
       do: start_supervised!({Headless, [name: Headless]})
 
-    {:ok, id} = Headless.start(BlockingApp, id: :bridge_blocked)
+    {:ok, id} = Headless.start(BlockingApp, id: "bridge_blocked")
     on_exit(fn -> if Process.whereis(Headless), do: Headless.stop(id) end)
     %{id: id}
   end
@@ -59,7 +59,7 @@ defmodule Raxol.MCP.AgentBridgeSendTest do
 
     assert {:ok, [%{text: text}]} =
              agent_send.callback.(%{
-               "id" => Atom.to_string(id),
+               "id" => id,
                "message" => "bb"
              })
 

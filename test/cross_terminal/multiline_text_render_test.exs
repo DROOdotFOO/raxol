@@ -89,7 +89,7 @@ defmodule Raxol.CrossTerminal.MultilineTextRenderTest do
 
   test "multiline text lines all start at the element's x column" do
     {:ok, id} =
-      Headless.start(CodePanelApp, id: :ml_text, width: 60, height: 20)
+      Headless.start(CodePanelApp, id: "ml_text", width: 60, height: 20)
 
     {:ok, buffer} = Headless.get_buffer(id)
     text = Queries.get_text(buffer)
@@ -135,7 +135,7 @@ defmodule Raxol.CrossTerminal.MultilineTextRenderTest do
 
   test "layout reserves a row per line so a following sibling isn't overlapped" do
     {:ok, id} =
-      Headless.start(StackedSiblingApp, id: :ml_stack, width: 40, height: 20)
+      Headless.start(StackedSiblingApp, id: "ml_stack", width: 40, height: 20)
 
     {:ok, buffer} = Headless.get_buffer(id)
     text = Queries.get_text(buffer)
