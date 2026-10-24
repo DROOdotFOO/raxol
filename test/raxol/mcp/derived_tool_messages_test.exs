@@ -12,6 +12,31 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   alias Raxol.MCP.Server
   alias Raxol.Playground.Demos
 
+  # Buttons whose clicks cannot honestly report success: one without an
+  # `on_click`, one whose `on_click` is a function (no message), and one whose
+  # message makes update/2 raise.
+  defmodule ProbeApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{}
+
+    @impl true
+    def update(:boom, _model), do: raise("boom")
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model) do
+      column(
+        children: [
+          button("Silent", id: "silent"),
+          button("Fn", id: "fn", on_click: fn -> :clicked end),
+          button("Boom", id: "boom", on_click: :boom)
+        ]
+      )
+    end
+  end
+
   setup do
     headless = Process.whereis(Headless) || start_supervised!({Headless, [name: Headless]})
 
@@ -85,6 +110,29 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
     assert Process.alive?(dispatcher)
   end
 
+  test "table sort takes a column label in any case and refuses unknown input" do
+    id = start_demo(Demos.TableDemo, :table_sort_validation)
+
+    assert %{content: [%{text: text}]} =
+             result =
+             call_tool("playground_table.sort", %{"column" => "Stars", "direction" => "sideways"})
+
+    assert error?(result) and text =~ "direction"
+
+    assert %{content: [%{text: text}]} =
+             result = call_tool("playground_table.sort", %{"column" => "rank"})
+
+    assert error?(result) and text =~ "Unknown column"
+
+    {:ok, model} = Headless.get_model(id)
+    assert model.table.sort_by == nil
+
+    refute error?(call_tool("playground_table.sort", %{"column" => "Stars", "direction" => "desc"}))
+
+    {:ok, model} = Headless.get_model(id)
+    assert {model.table.sort_by, model.table.sort_direction} == {:stars, :desc}
+  end
+
   test "select_list_pick: select confirms the option" do
     id = start_demo(Demos.SelectListDemo, :select_list_pick)
 
@@ -116,6 +164,27 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
     refute error?(call_tool("tabs.select_tab", %{"index" => 2}))
 
     assert {:ok, %{active: 2}} = Headless.get_model(id)
+  end
+
+  test "click on a button without an on_click message is an error result" do
+    start_demo(ProbeApp, :probe_no_message)
+
+    for {name, label} <- [{"silent.click", "Silent"}, {"fn.click", "Fn"}] do
+      assert %{content: [%{text: text}]} = result = call_tool(name, %{})
+      assert error?(result)
+      assert text =~ "Button '#{label}' has no on_click message"
+    end
+  end
+
+  test "a message whose update/2 raises is an error result; the dispatcher survives" do
+    id = start_demo(ProbeApp, :probe_update_failed)
+    dispatcher = dispatcher_pid(id)
+
+    assert %{content: [%{text: "Error: :update_failed"}]} = result = call_tool("boom.click", %{})
+    assert error?(result)
+
+    assert dispatcher_pid(id) == dispatcher
+    assert Process.alive?(dispatcher)
   end
 
   defp start_demo(module, id) do

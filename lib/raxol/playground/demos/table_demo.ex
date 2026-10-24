@@ -46,9 +46,13 @@ defmodule Raxol.Playground.Demos.TableDemo do
 
   # The id MCP tools are derived under ("playground_table.sort", ...). Tool
   # arguments arrive as strings and map to columns and directions through these
-  # static tables, never `String.to_atom/1`.
+  # static tables, never `String.to_atom/1`. A column matches its key or its
+  # label, ignoring case (the Table provider accepts both).
   @tool_id "playground_table"
-  @sort_columns Map.new(@columns, &{Atom.to_string(&1.id), &1.id})
+  @sort_columns for col <- @columns,
+                    name <- [Atom.to_string(col.id), col.label],
+                    into: %{},
+                    do: {String.downcase(name), col.id}
   @sort_directions %{"asc" => :asc, "desc" => :desc}
 
   @impl true
@@ -99,7 +103,7 @@ defmodule Raxol.Playground.Demos.TableDemo do
 
         {%{model | table: table}, []}
 
-      {:sort, @tool_id, column, direction} ->
+      {:sort, @tool_id, column, direction} when is_binary(column) ->
         {tool_sort(model, column, direction), []}
 
       {:select_row, @tool_id, index}
@@ -145,7 +149,7 @@ defmodule Raxol.Playground.Demos.TableDemo do
   # Sets the column and direction outright: `Table.update({:sort, col}, ...)`
   # toggles the direction when the column is already the sort column.
   defp tool_sort(model, column, direction) do
-    with {:ok, sort_by} <- Map.fetch(@sort_columns, column),
+    with {:ok, sort_by} <- Map.fetch(@sort_columns, String.downcase(column)),
          {:ok, sort_direction} <- Map.fetch(@sort_directions, direction) do
       table = %{model.table | sort_by: sort_by, sort_direction: sort_direction}
 
@@ -257,14 +261,16 @@ defmodule Raxol.Playground.Demos.TableDemo do
   end
 
   # `Table.render/2` returns an id-less box. `Raxol.MCP.TreeWalker` derives the
-  # Table tools from this wrapper: its id, the provider marker and the rows
-  # (read by `get_rows`). A column, since the layout engine sizes a box that
-  # carries `:attrs` from those attrs alone.
+  # Table tools from this wrapper: its id, the provider marker, the columns
+  # (which `sort` checks its column against) and the rows (read by
+  # `get_rows`). A column, since the layout engine sizes a box that carries
+  # `:attrs` from those attrs alone.
   defp table_node(table) do
     [children: [Table.render(table, %{})]]
     |> column()
     |> Map.merge(%{
       id: @tool_id,
+      columns: table.columns,
       data: table.data,
       attrs: %{component_module: Table}
     })

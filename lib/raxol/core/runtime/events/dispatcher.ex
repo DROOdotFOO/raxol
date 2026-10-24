@@ -800,13 +800,17 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   # A derived MCP tool's message (`Raxol.MCP.ToolProvider`): an app term such
-  # as `{:sort, id, column, direction}`, not an `%Event{}`, so it takes the
-  # raw path straight to update/2 (the full event path reads `event.type`
-  # after the fold, which raises on a tuple). A call, so the tool returns
-  # once update/2 has folded the message.
+  # as `{:sort, id, column, direction}`, not an `%Event{}`, so it goes straight
+  # to update/2 (the full event path reads `event.type` after the fold, which
+  # raises on a tuple). A call, so the tool returns once update/2 has folded
+  # the message, and an update/2 that raised or returned something invalid
+  # (already logged) answers `{:error, :update_failed}` instead of `:ok`.
   @impl true
   def handle_manager_call({:dispatch_tool_message, msg}, _from_caller, state) do
-    msg |> dispatch_raw_message(state) |> to_call_reply()
+    case process_app_update(state, msg, msg) do
+      {:ok, new_state, _commands} -> {:reply, :ok, new_state}
+      {:error, _reason} -> {:reply, {:error, :update_failed}, state}
+    end
   end
 
   @impl true
