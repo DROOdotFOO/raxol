@@ -41,18 +41,20 @@ defmodule Raxol.Agent.Supervisor do
   @impl true
   def init(_opts) do
     children =
-      [
-        {Registry, keys: :unique, name: Raxol.Agent.Registry},
-        {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one},
-        {Task.Supervisor, name: Raxol.Agent.TaskSupervisor},
-        Raxol.Agent.SessionStreamer,
-        Raxol.Agent.Orchestrator
-      ] ++
-        memory_children() ++
-        skills_children() ++
-        curator_children() ++
-        scheduler_children() ++
+      Enum.concat([
+        [
+          {Registry, keys: :unique, name: Raxol.Agent.Registry},
+          {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one},
+          {Task.Supervisor, name: Raxol.Agent.TaskSupervisor},
+          Raxol.Agent.SessionStreamer,
+          Raxol.Agent.Orchestrator
+        ],
+        memory_children(),
+        skills_children(),
+        curator_children(),
+        scheduler_children(),
         [Raxol.Agent.Backend.OmpGateway]
+      ])
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
