@@ -1302,7 +1302,7 @@ defmodule Raxol.Headless.McpToolsTest do
       assert [%{annotations: %{sensitive: true}}] =
                registry
                |> Raxol.MCP.Registry.list_tools()
-               |> Enum.filter(&(&1.name == "restart_btn.click"))
+               |> Enum.filter(&(&1.name == "restart_#{unique}.restart_btn.click"))
 
       server = Process.whereis(server_name)
       ref = Process.monitor(server)
@@ -1318,7 +1318,7 @@ defmodule Raxol.Headless.McpToolsTest do
       assert is_pid(restarted) and restarted != server
 
       assert {:reply, %{result: %{content: [%{text: text} | _], isError: true}}} =
-               call_tool(server_name, "restart_btn.click", %{})
+               call_tool(server_name, "restart_#{unique}.restart_btn.click", %{})
 
       payload = Jason.decode!(text)
       assert payload["error"] == "authorization_required"

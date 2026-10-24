@@ -115,19 +115,19 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
 
     assert %{content: [%{text: text}]} =
              result =
-             call_tool("playground_table.sort", %{"column" => "Stars", "direction" => "sideways"})
+             call_tool("#{id}.playground_table.sort", %{"column" => "Stars", "direction" => "sideways"})
 
     assert error?(result) and text =~ "direction"
 
     assert %{content: [%{text: text}]} =
-             result = call_tool("playground_table.sort", %{"column" => "rank"})
+             result = call_tool("#{id}.playground_table.sort", %{"column" => "rank"})
 
     assert error?(result) and text =~ "Unknown column"
 
     {:ok, model} = Headless.get_model(id)
     assert model.table.sort_by == nil
 
-    refute error?(call_tool("playground_table.sort", %{"column" => "Stars", "direction" => "desc"}))
+    refute error?(call_tool("#{id}.playground_table.sort", %{"column" => "Stars", "direction" => "desc"}))
 
     {:ok, model} = Headless.get_model(id)
     assert {model.table.sort_by, model.table.sort_direction} == {:stars, :desc}
@@ -167,10 +167,10 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "click on a button without an on_click message is an error result" do
-    start_demo(ProbeApp, "probe_no_message")
+    id = start_demo(ProbeApp, "probe_no_message")
 
     for {name, label} <- [{"silent.click", "Silent"}, {"fn.click", "Fn"}] do
-      assert %{content: [%{text: text}]} = result = call_tool(name, %{})
+      assert %{content: [%{text: text}]} = result = call_tool("#{id}.#{name}", %{})
       assert error?(result)
       assert text =~ "Button '#{label}' has no on_click message"
     end
@@ -180,7 +180,8 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
     id = start_demo(ProbeApp, "probe_update_failed")
     dispatcher = dispatcher_pid(id)
 
-    assert %{content: [%{text: "Error: :update_failed"}]} = result = call_tool("boom.click", %{})
+    assert %{content: [%{text: "Error: :update_failed"}]} =
+             result = call_tool("#{id}.boom.click", %{})
     assert error?(result)
 
     assert dispatcher_pid(id) == dispatcher

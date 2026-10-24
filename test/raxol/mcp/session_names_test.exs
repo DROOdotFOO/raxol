@@ -15,8 +15,8 @@ defmodule Raxol.MCP.SessionNamesTest do
 
   @table "Raxol.Playground.Demos.TableDemo"
 
-  # Two widgets whose tool names differ only where OMP turns `.` and `_`
-  # alike into `_`: `<id>.x_y.click` and `<id>.x.y.click` reach it as one name.
+  # Two widgets whose tool names differ only where OMP turns `-` and `_`
+  # alike into `_`: `<id>.x_y.click` and `<id>.x-y.click` reach it as one name.
   defmodule CollidingApp do
     use Raxol.Core.Runtime.Application
 
@@ -33,7 +33,7 @@ defmodule Raxol.MCP.SessionNamesTest do
       View.column(
         children: [
           View.button("first", id: "x_y", on_click: :first),
-          View.button("second", id: "x.y", on_click: :second)
+          View.button("second", id: "x-y", on_click: :second)
         ]
       )
     end
@@ -146,7 +146,7 @@ defmodule Raxol.MCP.SessionNamesTest do
       end)
 
     # One of the pair registers (the walk decides which); the other is refused.
-    pair = ["#{id}.x_y.click", "#{id}.x.y.click"]
+    pair = ["#{id}.x_y.click", "#{id}.x-y.click"]
     assert [held] = Enum.filter(pair, &(&1 in tool_names(server)))
     [refused] = pair -- [held]
 
