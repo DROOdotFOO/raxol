@@ -5,15 +5,20 @@ defmodule Raxol.Agent.OMP.Version do
 
   Accepts `omp --version` output (`omp/X.Y.Z`) and the bare `version` string
   of the `omp auth-gateway stdio` ready line (`{"ready":true,"version":"X.Y.Z"}`).
-  A different major is refused; a minor above the tested pin is accepted with a
-  warning; anything else on the same major is accepted silently. Pure: the
-  caller runs the binary and decides how to surface a warning.
+  A different major is refused; a minor above or below the tested pin is
+  accepted with a warning; the pinned minor with any patch (prereleases and
+  build metadata included) is accepted silently. Pure: the caller runs the
+  binary and decides how to surface a warning.
   """
 
   @tested "18.12.6"
 
-  @typedoc "A minor above the tested pin: `{:newer_minor, found, tested}`."
-  @type warning :: {:newer_minor, String.t(), String.t()}
+  @typedoc """
+  A minor above the tested pin, `{:newer_minor, found, tested}`, or below it,
+  `{:older_minor, found, tested}`.
+  """
+  @type warning ::
+          {:newer_minor, String.t(), String.t()} | {:older_minor, String.t(), String.t()}
 
   @typedoc "Why a version is refused."
   @type error :: :unparseable_version | {:unsupported_major, String.t(), String.t()}
@@ -42,8 +47,9 @@ defmodule Raxol.Agent.OMP.Version do
   @doc """
   Parse `input` and check it against the tested pin.
 
-  `{:ok, version, []}` for the same major at or below the pin's minor,
-  `{:ok, version, [{:newer_minor, found, tested}]}` for a higher minor, and
+  `{:ok, version, []}` for the pinned major and minor with any patch,
+  `{:ok, version, [{:newer_minor, found, tested}]}` for a higher minor,
+  `{:ok, version, [{:older_minor, found, tested}]}` for a lower minor, and
   `{:error, {:unsupported_major, found, tested}}` for a different major.
   """
   @spec check(term()) :: {:ok, Elixir.Version.t(), [warning()]} | {:error, error()}
@@ -60,6 +66,10 @@ defmodule Raxol.Agent.OMP.Version do
   defp compare(%{minor: minor} = version, %{minor: tested_minor})
        when minor > tested_minor,
        do: {:ok, version, [{:newer_minor, to_string(version), @tested}]}
+
+  defp compare(%{minor: minor} = version, %{minor: tested_minor})
+       when minor < tested_minor,
+       do: {:ok, version, [{:older_minor, to_string(version), @tested}]}
 
   defp compare(version, _tested), do: {:ok, version, []}
 end

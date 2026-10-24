@@ -50,17 +50,27 @@ defmodule Raxol.Agent.OMP.VersionTest do
       assert {:ok, _, []} = Version.check(Version.tested())
     end
 
-    test "same major, lower minor or any patch at the pinned minor is ok", %{
+    test "any patch, prerelease or build of the pinned minor is ok", %{
       major: major,
       minor: minor
     } do
       assert {:ok, _, []} = Version.check("omp/#{major}.#{minor}.0")
       assert {:ok, _, []} = Version.check("omp/#{major}.#{minor}.999")
-      assert {:ok, _, []} = Version.check("#{major}.0.0")
+      assert {:ok, _, []} = Version.check("#{Version.tested()}-rc.1")
+      assert {:ok, _, []} = Version.check("omp/#{Version.tested()}+build.7")
+    end
 
-      if minor > 0 do
-        assert {:ok, _, []} = Version.check("#{major}.#{minor - 1}.99")
-      end
+    @tag skip: Elixir.Version.parse!(Version.tested()).minor == 0 && "the pin has no lower minor"
+    test "a lower minor is ok with an older_minor warning", %{major: major, minor: minor} do
+      tested = Version.tested()
+      lower = "#{major}.#{minor - 1}.99"
+      lowest = "#{major}.0.0"
+
+      assert {:ok, %Elixir.Version{minor: found_minor}, [{:older_minor, ^lower, ^tested}]} =
+               Version.check("omp/#{lower}")
+
+      assert found_minor == minor - 1
+      assert {:ok, _, [{:older_minor, ^lowest, ^tested}]} = Version.check(lowest)
     end
 
     test "a higher minor is ok with a newer_minor warning", %{major: major, minor: minor} do
