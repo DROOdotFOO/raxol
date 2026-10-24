@@ -1,6 +1,7 @@
 # Capture OMP protocol fixtures (ADR-0042, TODO "Fixtures").
 #
 #   elixir scripts/omp_fixtures/capture.exs f1|f3 [--with-model] [--write]
+#   elixir scripts/omp_fixtures/capture.exs f1|f3 --rescrub [--write]
 #
 # Runs the pinned `omp` (`omp --version` must equal the pin in
 # `Raxol.Agent.OMP.Version`) in a `mktemp -d` cwd with `--no-rules --no-skills
@@ -13,7 +14,10 @@
 # Every transcript is scrubbed (scrub_version below), headed with
 # `{omp_version, command, scrub_version}`, scanned with `gitleaks detect`
 # (required) and diffed against the committed fixtures. `--write` replaces the
-# committed files with the capture.
+# committed files with the capture. `--rescrub` runs no `omp` at all: it
+# applies the current scrub to the committed transcripts (both `in` and `out`
+# lines) and stamps them with the current scrub_version, so a scrub rule added
+# later reaches fixtures that cost a model call without recapturing them.
 #
 # Transcript format (JSONL): line 1 is the header; then `{"in": line}` for a
 # line written to omp's stdin, `{"out": line}` for a line it printed (in the
@@ -31,7 +35,9 @@
 
 defmodule OmpFixtures.Capture do
   @repo Path.expand("../..", __DIR__)
-  @scrub_version 1
+  # 2: also zeroes `completedAt`, `duration`, `ttft` and `credentialId`, and
+  # numbers `extension_ui_request`/`extension_ui_response` ids.
+  @scrub_version 2
   @smol "anthropic/claude-haiku-5-5"
   @max_model_tokens 64
   @isolation ["--no-rules", "--no-skills", "--no-extensions"]
@@ -41,6 +47,7 @@ defmodule OmpFixtures.Capture do
   @rpc_line_bytes 2_097_152
   @rpc_step_ms 120_000
   @frame_bytes 1_048_576
+  @ui_frames ["extension_ui_request", "extension_ui_response"]
 
   @targets %{
     "f1" => "packages/raxol_agent/test/fixtures/omp/gateway",
@@ -52,10 +59,27 @@ defmodule OmpFixtures.Capture do
     with_model? = "--with-model" in flags
     write? = "--write" in flags
 
-    unknown = flags -- ["--with-model", "--write"]
+    unknown = flags -- ["--with-model", "--write", "--rescrub"]
     if unknown != [], do: fail("unknown flags: #{Enum.join(unknown, " ")}")
-    if targets == [], do: fail("usage: capture.exs f1|f3 [--with-model] [--write]")
 
+    if targets == [],
+      do: fail("usage: capture.exs f1|f3 [--with-model | --rescrub] [--write]")
+
+    if "--rescrub" in flags do
+      if with_model?, do: fail("--rescrub makes no capture, with or without a model")
+      tmp = mktemp!()
+
+      try do
+        Enum.each(targets, &rescrub(&1, tmp, write?))
+      after
+        File.rm_rf!(tmp)
+      end
+    else
+      capture_all(targets, with_model?, write?)
+    end
+  end
+
+  defp capture_all(targets, with_model?, write?) do
     omp = System.find_executable("omp") || fail("omp is not on PATH")
     version = check_pin!(omp)
     tmp = mktemp!()
@@ -84,6 +108,10 @@ defmodule OmpFixtures.Capture do
       IO.puts("captured #{target}/#{name}")
     end
 
+    publish(out, dir, write?)
+  end
+
+  defp publish(out, dir, write?) do
     gitleaks!(out)
     committed = Path.join(@repo, dir)
     diff(committed, out)
@@ -93,6 +121,40 @@ defmodule OmpFixtures.Capture do
       for file <- File.ls!(out), do: File.cp!(Path.join(out, file), Path.join(committed, file))
       IO.puts("wrote #{dir}")
     end
+  end
+
+  # The committed transcripts, scrubbed again with the current rules.
+  defp rescrub(target, tmp, write?) do
+    dir = Map.get(@targets, target) || fail("unknown target #{target}")
+    committed = Path.join(@repo, dir)
+    out = Path.join(tmp, "out/#{target}")
+    File.mkdir_p!(out)
+
+    for file <- committed |> File.ls!() |> Enum.sort(), Path.extname(file) == ".jsonl" do
+      [header | events] =
+        committed |> Path.join(file) |> File.read!() |> String.split("\n", trim: true)
+
+      header = header |> JSON.decode!() |> Map.put("scrub_version", @scrub_version)
+
+      {events, _seen} =
+        Enum.map_reduce(events, %{}, fn line, seen ->
+          case JSON.decode!(line) do
+            %{"out" => out} -> scrub_event("out", out, seen, tmp)
+            # F1 records deliberately malformed requests; they stay as sent.
+            %{"in" => "{" <> _ = line} -> scrub_event("in", line, seen, tmp)
+            event -> {event, seen}
+          end
+        end)
+
+      File.write!(Path.join(out, file), Enum.map([header | events], &[JSON.encode!(&1), ?\n]))
+    end
+
+    publish(out, dir, write?)
+  end
+
+  defp scrub_event(key, line, seen, tmp) do
+    {line, seen} = scrub_line(line, seen, tmp)
+    {%{key => line}, seen}
   end
 
   # F1: `omp auth-gateway stdio`.
@@ -324,12 +386,8 @@ defmodule OmpFixtures.Capture do
       rec.log
       |> Enum.reverse()
       |> Enum.map_reduce(%{}, fn
-        {:in, line}, seen ->
-          {%{"in" => line}, seen}
-
-        {:out, line}, seen ->
-          {line, seen} = scrub_line(line, seen, tmp)
-          {%{"out" => line}, seen}
+        {:in, line}, seen -> scrub_event("in", line, seen, tmp)
+        {:out, line}, seen -> scrub_event("out", line, seen, tmp)
       end)
 
     [header | events]
@@ -500,16 +558,25 @@ defmodule OmpFixtures.Capture do
     if scrubbed == decoded, do: {line, seen}, else: {JSON.encode!(scrubbed), seen}
   end
 
-  defp scrub(map, seen, tmp) when is_map(map) do
-    {pairs, seen} =
-      Enum.map_reduce(map, seen, fn
-        {"systemPrompt", _value}, seen -> {{"systemPrompt", "<systemPrompt>"}, seen}
-        {key, value}, seen when is_integer(value) -> {{key, scrub_number(key, value)}, seen}
-        {key, value}, seen -> scrub(value, seen, tmp) |> then(fn {v, s} -> {{key, v}, s} end)
+  # A dialog's id, and a `cancel`'s `targetId`, numbered in order of first
+  # appearance, so a request and its response keep matching.
+  defp scrub(%{"type" => type} = map, seen, tmp) when type in @ui_frames do
+    {map, seen} =
+      Enum.reduce(["id", "targetId"], {map, seen}, fn key, {map, seen} ->
+        case map do
+          %{^key => id} when is_binary(id) ->
+            {stable, seen} = stable(id, "ui-", seen)
+            {%{map | key => stable}, seen}
+
+          _ ->
+            {map, seen}
+        end
       end)
 
-    {Map.new(pairs), seen}
+    scrub_pairs(map, seen, tmp)
   end
+
+  defp scrub(map, seen, tmp) when is_map(map), do: scrub_pairs(map, seen, tmp)
 
   defp scrub(list, seen, tmp) when is_list(list),
     do: Enum.map_reduce(list, seen, &scrub(&1, &2, tmp))
@@ -517,8 +584,22 @@ defmodule OmpFixtures.Capture do
   defp scrub(string, seen, tmp) when is_binary(string), do: scrub_string(string, seen, tmp)
   defp scrub(other, seen, _tmp), do: {other, seen}
 
+  defp scrub_pairs(map, seen, tmp) do
+    {pairs, seen} =
+      Enum.map_reduce(map, seen, fn
+        {"systemPrompt", _value}, seen -> {{"systemPrompt", "<systemPrompt>"}, seen}
+        {key, value}, seen when is_number(value) -> {{key, scrub_number(key, value)}, seen}
+        {key, value}, seen -> scrub(value, seen, tmp) |> then(fn {v, s} -> {{key, v}, s} end)
+      end)
+
+    {Map.new(pairs), seen}
+  end
+
+  # Timestamps, timings and the account's credential slot.
   defp scrub_number(key, value) do
-    if String.match?(key, ~r/time|created|updated/i), do: 0, else: value
+    if String.match?(key, ~r/time|created|updated|completed|duration|ttft|credentialId/i),
+      do: 0,
+      else: value
   end
 
   @placeholders [
