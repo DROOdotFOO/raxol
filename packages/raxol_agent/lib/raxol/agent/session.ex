@@ -254,14 +254,25 @@ defmodule Raxol.Agent.Session do
   end
 
   # Agent turn contract (see `Raxol.Agent.Comm`). The session stands in as
-  # the prompt's caller so it can answer, and abort, the turn itself.
+  # the prompt's caller so it can answer, and abort, the turn itself. The
+  # metadata form (`Comm.send/3` with `:from`) is a turn too: passed through,
+  # it would hand the agent's turn to the sender, outside the session.
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast(
         {:send_message, {:call, caller, ref, {:acp_prompt, text, approver}}},
         state
       )
       when is_pid(caller) and is_reference(ref) do
-    {:noreply, start_turn(state, caller, ref, text, approver)}
+    {:noreply, start_turn(state, caller, ref, text, approver, %{})}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(
+        {:send_message, {:call, caller, ref, {:acp_prompt, text, approver}}, metadata},
+        state
+      )
+      when is_pid(caller) and is_reference(ref) and is_map(metadata) do
+    {:noreply, start_turn(state, caller, ref, text, approver, metadata)}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -312,26 +323,27 @@ defmodule Raxol.Agent.Session do
         :ok
 
       dispatcher_pid ->
-        # `from` is the SENDER's id when the sender attributed itself; nil
-        # otherwise. It must never default to state.id — that is the
-        # receiver, and stamping it here would fabricate a sender.
-        {from, metadata} = Map.pop(metadata, :from)
-        payload = {:agent_message, from, message}
-
-        cast =
-          if map_size(metadata) == 0,
-            do: {:dispatch, payload},
-            else: {:dispatch, payload, metadata}
-
-        GenServer.cast(dispatcher_pid, cast)
+        GenServer.cast(dispatcher_pid, dispatch_cast(message, metadata))
     end
 
     {:noreply, state}
   end
 
+  defp dispatch_cast(message, metadata) do
+    # `from` is the SENDER's id when the sender attributed itself; nil
+    # otherwise. It must never default to state.id: that is the
+    # receiver, and stamping it here would fabricate a sender.
+    {from, metadata} = Map.pop(metadata, :from)
+    payload = {:agent_message, from, message}
+
+    if map_size(metadata) == 0,
+      do: {:dispatch, payload},
+      else: {:dispatch, payload, metadata}
+  end
+
   # Validation sits here, where the prompt enters the agent. An accepted
   # prompt reaches `update/2` with this session as its caller.
-  defp start_turn(state, caller, ref, text, approver) do
+  defp start_turn(state, caller, ref, text, approver, metadata) do
     cond do
       not is_binary(text) or not is_function(approver, 3) ->
         Comm.reply(caller, ref, {:error, :invalid_prompt})
@@ -342,11 +354,11 @@ defmodule Raxol.Agent.Session do
         state
 
       true ->
-        dispatch_prompt(state, caller, ref, text, approver)
+        dispatch_prompt(state, caller, ref, text, approver, metadata)
     end
   end
 
-  defp dispatch_prompt(state, caller, ref, text, approver) do
+  defp dispatch_prompt(state, caller, ref, text, approver, metadata) do
     case get_dispatcher(state.lifecycle_pid) do
       nil ->
         Comm.reply(caller, ref, {:error, :no_dispatcher})
@@ -354,7 +366,7 @@ defmodule Raxol.Agent.Session do
 
       dispatcher_pid ->
         prompt = {:call, self(), ref, {:acp_prompt, text, approver}}
-        GenServer.cast(dispatcher_pid, {:dispatch, {:agent_message, nil, prompt}})
+        GenServer.cast(dispatcher_pid, dispatch_cast(prompt, metadata))
         turn = %{caller: caller, caller_mref: Process.monitor(caller), pid: nil, mref: nil}
         put_in(state.turns[ref], turn)
     end

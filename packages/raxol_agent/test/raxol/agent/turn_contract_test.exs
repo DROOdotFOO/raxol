@@ -187,6 +187,23 @@ defmodule Raxol.Agent.TurnContractTest do
     assert {:ok, {:ok, "count: 1", _}} = prompt(id, "increment", ToolPolicy.allow_all())
   end
 
+  test "a prompt sent with from: is still a turn the session owns", %{id: id} do
+    ref = make_ref()
+
+    :ok =
+      Comm.send(id, {:call, self(), ref, {:acp_prompt, "hold", authorizing(self())}},
+        from: "editor"
+      )
+
+    assert_receive {:authorizing, Counter.Hold, worker}, 5_000
+    worker_mon = Process.monitor(worker)
+
+    assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:agent_reply, ^ref, {:error, :cancelled}}, 5_000
+    refute_received {:acp_run, ^ref, _fun}
+  end
+
   # Start a `hold` prompt and return once its action is being authorized,
   # i.e. the turn is in flight in `worker`.
   defp hold(id, ref) do
