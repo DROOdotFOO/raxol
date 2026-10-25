@@ -892,7 +892,10 @@ defmodule Raxol.UI.Components.Table do
         inputSchema: %{
           type: "object",
           properties: %{
-            column: %{type: "string", description: "Column key to sort by"},
+            column: %{
+              type: "string",
+              description: "Column key or label to sort by (case-insensitive)"
+            },
             direction: %{
               type: "string",
               enum: ["asc", "desc"],
@@ -919,12 +922,41 @@ defmodule Raxol.UI.Components.Table do
     column = args["column"]
     direction = args["direction"] || "asc"
 
-    {:ok, "Sorted by #{column} #{direction}",
-     [{:sort, context.widget_id, column, direction}]}
+    cond do
+      direction not in ["asc", "desc"] ->
+        {:error, "Sort direction must be \"asc\" or \"desc\""}
+
+      not known_column?(context.widget_state, column) ->
+        {:error, "Unknown column #{inspect(column)}; use a column key or label"}
+
+      true ->
+        {:ok, "Sorted by #{column} #{direction}",
+         [{:sort, context.widget_id, column, direction}]}
+    end
   end
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  # A column the node itself declares, ignoring case: a column's id or label
+  # (`:columns`, as Table state carries them) or a DSL table's `:headers`.
+  defp known_column?(node, column) when is_binary(column) do
+    wanted = String.downcase(column)
+    node |> column_names() |> Enum.any?(&(String.downcase(&1) == wanted))
+  end
+
+  defp known_column?(_node, _column), do: false
+
+  defp column_names(node) do
+    from_columns =
+      for %{} = col <- node[:columns] || [],
+          name <- [col[:id], col[:label]],
+          do: name
+
+    for name <- from_columns ++ (node[:headers] || []),
+        is_binary(name) or (is_atom(name) and not is_nil(name)),
+        do: to_string(name)
+  end
 
   @impl Raxol.Core.Accessibility.Provider
   def a11y_node(node) do

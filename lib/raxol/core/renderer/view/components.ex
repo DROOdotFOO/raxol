@@ -62,6 +62,7 @@ defmodule Raxol.Core.Renderer.View.Components do
   Creates a text input element.
 
   ## Options
+    * `:id` - Unique identifier for the input
     * `:value` - Current value of the input (default: "")
     * `:placeholder` - Placeholder text
     * `:on_change` - Event handler for change events
@@ -77,6 +78,7 @@ defmodule Raxol.Core.Renderer.View.Components do
   def text_input(opts \\ []) do
     %{
       type: :text_input,
+      id: Keyword.get(opts, :id),
       value: Keyword.get(opts, :value, ""),
       placeholder: Keyword.get(opts, :placeholder),
       on_change: Keyword.get(opts, :on_change),

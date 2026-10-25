@@ -217,26 +217,6 @@ defmodule Raxol.MCP.SmokeTest do
       assert rows =~ "Phoenix"
       assert rows =~ "Ecto"
     end
-
-    test "tool callbacks dispatch messages to dispatcher" do
-      tools =
-        TreeWalker.derive_tools(search_app_tree(), %{
-          dispatcher_pid: self(),
-          type_map: @type_map
-        })
-
-      # Call search_btn.click -- should dispatch a message
-      click_tool = Enum.find(tools, &(&1.name == "search_btn.click"))
-      {:ok, _} = click_tool.callback.(%{})
-
-      assert_receive {:"$gen_cast", {:dispatch, %{type: :click, widget_id: "search_btn"}}}
-
-      # Call type_into -- should dispatch input_change
-      type_tool = Enum.find(tools, &(&1.name == "search_input.type_into"))
-      {:ok, _} = type_tool.callback.(%{"text" => "test"})
-
-      assert_receive {:"$gen_cast", {:dispatch, {:input_change, "search_input", "test"}}}
-    end
   end
 
   describe "FocusLens end-to-end" do

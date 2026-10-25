@@ -237,8 +237,9 @@ defmodule Raxol.MCP.TreeWalker do
 
         case module.handle_tool_call(action_name, args, tool_context) do
           {:ok, result, messages} ->
-            dispatch_messages(messages, context[:dispatcher_pid])
-            {:ok, format_result(result)}
+            with :ok <- dispatch_messages(messages, context[:dispatcher_pid]) do
+              {:ok, format_result(result)}
+            end
 
           {:ok, result} ->
             {:ok, format_result(result)}
@@ -250,11 +251,21 @@ defmodule Raxol.MCP.TreeWalker do
     }
   end
 
+  # A call, not a cast: each message has been through the app's update/2 by
+  # the time the tool answers. An update/2 that failed answers
+  # `{:error, :update_failed}`, which stops the remaining messages and becomes
+  # the tool's error result. A dispatcher that is gone or does not answer
+  # exits here, and `Raxol.MCP.Registry` turns that exit into an error result.
   defp dispatch_messages(messages, dispatcher_pid)
        when is_pid(dispatcher_pid) do
-    for msg <- messages, msg != nil do
-      GenServer.cast(dispatcher_pid, {:dispatch, msg})
-    end
+    messages
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reduce_while(:ok, fn msg, :ok ->
+      case GenServer.call(dispatcher_pid, {:dispatch_tool_message, msg}) do
+        :ok -> {:cont, :ok}
+        {:error, :update_failed} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp dispatch_messages(_messages, _pid), do: :ok

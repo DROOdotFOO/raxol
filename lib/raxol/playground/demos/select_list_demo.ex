@@ -2,6 +2,7 @@ defmodule Raxol.Playground.Demos.SelectListDemo do
   @moduledoc "Playground demo: dropdown select list with keyboard navigation."
   use Raxol.Core.Runtime.Application
   alias Raxol.Playground.DemoHelpers
+  alias Raxol.UI.Components.Input.SelectList
 
   @dropdown_width 30
 
@@ -41,6 +42,11 @@ defmodule Raxol.Playground.Demos.SelectListDemo do
         value = Enum.at(model.options, model.selected)
         {%{model | confirmed: value, open: false}, []}
 
+      {:select_option, "lang", index}
+      when is_integer(index) and index >= 0 and index < length(model.options) ->
+        value = Enum.at(model.options, index)
+        {%{model | selected: index, confirmed: value, open: false}, []}
+
       _ ->
         {model, []}
     end
@@ -72,15 +78,33 @@ defmodule Raxol.Playground.Demos.SelectListDemo do
         text("SelectList Demo", style: [:bold]),
         divider(),
         text("Selected: #{display}", style: [:bold]),
-        box style: %{border: :single, padding: 1, width: @dropdown_width} do
-          column style: %{gap: 0} do
-            [text("[#{arrow}] #{current}") | dropdown_items]
-          end
-        end,
+        lang_dropdown(model, [text("[#{arrow}] #{current}") | dropdown_items]),
         confirmed_view(model.confirmed),
         text("[o] open/close  [j/k] navigate  [enter] confirm", style: [:dim])
       ]
     end
+  end
+
+  # `Raxol.MCP.TreeWalker` derives the SelectList tools ("lang.select", ...)
+  # from this wrapper: its id, the provider marker and the options as label
+  # maps. A column, since the layout engine sizes a box that carries `:attrs`
+  # from those attrs alone.
+  defp lang_dropdown(model, rows) do
+    dropdown =
+      box style: %{border: :single, padding: 1, width: @dropdown_width} do
+        column style: %{gap: 0} do
+          rows
+        end
+      end
+
+    [children: [dropdown]]
+    |> column()
+    |> Map.merge(%{
+      id: "lang",
+      options: Enum.map(model.options, &%{label: &1}),
+      selected_index: model.selected,
+      attrs: %{component_module: SelectList}
+    })
   end
 
   defp confirmed_view(nil), do: text("")
