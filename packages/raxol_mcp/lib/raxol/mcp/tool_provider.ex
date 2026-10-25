@@ -20,16 +20,20 @@ defmodule Raxol.MCP.ToolProvider do
       }
 
   The `name` is the action name (e.g., "click", "type_into"). The
-  TreeWalker namespaces it with the widget ID: `"submit_btn.click"`.
+  TreeWalker namespaces it with the widget ID: `"submit_btn.click"`. A name
+  that is not a lowercase letter followed by up to 31 of `[a-z0-9_]` derives
+  no tool, and TreeWalker logs a warning naming it.
 
   The `description` is static per (provider, action): it never carries app
   text (labels, titles, tab names) or the widget ID. Descriptions reach the
   client's tool list, which a model reads as instructions, so app text belongs
-  in tool results only. `TreeWalker` also strips control, format and
-  line/paragraph separator characters from every description, including the
-  `description`s inside `inputSchema`.
+  in tool results only. `TreeWalker` also strips control, format, separator,
+  private-use and invisible filler characters from the description and from
+  every string and key inside `inputSchema`.
 
-  `annotations` is optional and copied onto the derived tool. Give an action
+  `annotations` is optional. Of it the derived tool keeps only
+  `sensitive: true` and `destructiveHint: true`; any other key or value
+  (`title`, `readOnlyHint`, `sensitive: false`) is dropped. Give an action
   that changes app state `sensitive: true`, so `Raxol.MCP.Server` refuses it
   when no authorizer is configured.
 

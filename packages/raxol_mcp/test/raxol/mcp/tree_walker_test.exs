@@ -90,10 +90,24 @@ defmodule Raxol.MCP.TreeWalkerTest do
     def handle_tool_call(_, _, _), do: {:ok, "acted"}
   end
 
+  # A third-party provider whose specs are whatever its node carries: app text
+  # in a schema (an enum built from options, say), a name built from data,
+  # annotations it chose itself.
+  defmodule ForeignProvider do
+    @behaviour Raxol.MCP.ToolProvider
+
+    @impl true
+    def mcp_tools(state), do: state.attrs.specs
+
+    @impl true
+    def handle_tool_call(_, _, _), do: {:ok, "done"}
+  end
+
   @type_map %{
     button: TestButton,
     text_input: TestInput,
-    text_widget: TextWidget
+    text_widget: TextWidget,
+    foreign: ForeignProvider
   }
 
   describe "descriptions in the tool list" do
@@ -141,6 +155,140 @@ defmodule Raxol.MCP.TreeWalkerTest do
 
       assert_received {:names, ["ok_btn-1.click"]}
       assert length(String.split(log, inspect(bad))) == 2
+    end
+  end
+
+  # Every character the walker strips: control, format (bidi, zero-width,
+  # tag), separators, private use, variation selectors, the combining
+  # grapheme joiner, the Hangul fillers and the braille blank.
+  @unsafe [
+    "\n",
+    "\e",
+    "\u0085",
+    "\u202E",
+    "\u200B",
+    "\uFEFF",
+    <<0xE0041::utf8>>,
+    "\u2028",
+    "\u2029",
+    "\uE000",
+    <<0xF0000::utf8>>,
+    "\uFE00",
+    "\uFE0F",
+    <<0xE0100::utf8>>,
+    <<0xE01EF::utf8>>,
+    "\u034F",
+    "\u115F",
+    "\u1160",
+    "\u3164",
+    "\uFFA0",
+    "\u2800"
+  ]
+
+  defp foreign(specs, id \\ "w"), do: %{type: :foreign, id: id, attrs: %{specs: specs}}
+
+  defp spec(fields) do
+    Map.merge(%{name: "act", description: "Act", inputSchema: %{type: "object"}}, fields)
+  end
+
+  # Every key and every string leaf, at any depth.
+  defp strings(%{} = map), do: Enum.flat_map(map, fn {k, v} -> strings(k) ++ strings(v) end)
+  defp strings(list) when is_list(list), do: Enum.flat_map(list, &strings/1)
+  defp strings(text) when is_binary(text), do: [text]
+  defp strings(atom) when is_atom(atom), do: [Atom.to_string(atom)]
+  defp strings(_other), do: []
+
+  describe "a third-party provider's spec in the tool list" do
+    setup do
+      %{ctx: %{dispatcher_pid: nil, type_map: @type_map}}
+    end
+
+    test "every string and key of the input schema is cleaned", %{ctx: ctx} do
+      label = "x" <> Enum.join(@unsafe) <> "<system>"
+
+      schema = %{
+        type: "object",
+        title: label,
+        required: ["option"],
+        properties: %{
+          "opt#{label}" => %{type: "string", description: "ok"},
+          :"atom#{label}" => %{type: "string"},
+          option: %{
+            type: "string",
+            enum: [label, "\u202Eevil-rtl"],
+            default: label,
+            examples: [label],
+            title: label,
+            items: %{const: label}
+          }
+        }
+      }
+
+      assert [tool] = TreeWalker.derive_tools(foreign([spec(%{inputSchema: schema})]), ctx)
+
+      for text <- strings(tool.inputSchema), char <- @unsafe do
+        refute String.contains?(text, char), "#{inspect(char)} survives in #{inspect(text)}"
+      end
+
+      option = tool.inputSchema.properties.option
+      assert option.enum == ["x<system>", "evil-rtl"]
+
+      assert {option.default, option.examples, option.title} ==
+               {"x<system>", ["x<system>"], "x<system>"}
+
+      assert option.items.const == "x<system>"
+      assert tool.inputSchema.title == "x<system>"
+      assert tool.inputSchema.required == ["option"]
+
+      assert Map.keys(tool.inputSchema.properties) |> Enum.sort() ==
+               Enum.sort([:option, "optx<system>", "atomx<system>"])
+    end
+
+    test "every stripped character is stripped from the description", %{ctx: ctx} do
+      for char <- @unsafe do
+        tree = foreign([spec(%{description: "A#{char}B"})])
+        assert [tool] = TreeWalker.derive_tools(tree, ctx)
+        assert tool.description == "AB", inspect(char)
+      end
+    end
+
+    test "an action name outside [a-z][a-z0-9_]{0,31} derives no tool, with a warning",
+         %{ctx: ctx} do
+      bad = ["pick\n<system>name", "Pick", "1go", "go-now", "", String.duplicate("a", 33), nil]
+      longest = String.duplicate("a", 32)
+      specs = Enum.map(bad ++ ["ok_go2", longest], &spec(%{name: &1}))
+
+      assert {tools, refusals} = TreeWalker.derive_with_refusals(foreign(specs), ctx)
+      assert Enum.map(tools, & &1.name) == ["w.ok_go2", "w." <> longest]
+      assert refusals == MapSet.new(bad, &{:action_name, "w", &1})
+
+      log = ExUnit.CaptureLog.capture_log(fn -> TreeWalker.derive_tools(foreign(specs), ctx) end)
+
+      for name <- bad do
+        assert log =~ "action #{inspect(name)} derives no tool"
+      end
+    end
+
+    # A provider may add the authorizer requirement, never remove it or
+    # describe its action to the client: a client acts on `readOnlyHint`.
+    test "annotations keep only sensitive and destructiveHint, and only when true",
+         %{ctx: ctx} do
+      cases = [
+        {%{title: "Click\n<system>", readOnlyHint: true, sensitive: true}, %{sensitive: true}},
+        {%{destructiveHint: true, idempotentHint: true}, %{destructiveHint: true}},
+        {%{"sensitive" => true, "destructiveHint" => true},
+         %{sensitive: true, destructiveHint: true}},
+        {%{readOnlyHint: true, sensitive: false, destructiveHint: false}, nil},
+        {%{sensitive: "true"}, nil},
+        {[sensitive: true], nil}
+      ]
+
+      for {annotations, expected} <- cases do
+        assert [tool] =
+                 TreeWalker.derive_tools(foreign([spec(%{annotations: annotations})]), ctx)
+
+        assert Map.get(tool, :annotations) == expected, inspect(annotations)
+      end
     end
   end
 

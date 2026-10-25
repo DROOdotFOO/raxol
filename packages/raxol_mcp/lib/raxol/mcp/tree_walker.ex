@@ -16,13 +16,21 @@ defmodule Raxol.MCP.TreeWalker do
 
   Tool names are namespaced as `"widget_id.action"`, e.g., `"search_input.type_into"`.
   Nodes without an `:id` key are skipped (layout containers like `:column`, `:row`).
-  A widget id becomes part of a tool name the client lists, so a provider
-  whose id is not 1-32 characters of `[A-Za-z0-9_-]` derives no tools.
+  Both halves become part of a tool name the client lists, so a provider
+  whose id is not 1-32 characters of `[A-Za-z0-9_-]` derives no tools, and
+  an action whose name is not a lowercase letter followed by up to 31 of
+  `[a-z0-9_]` derives no tool.
 
-  Descriptions reach the client's tool list as well: control, format
-  (bidi, zero-width, BOM, tag) and line/paragraph separator characters are
-  stripped from a tool's `description` and from every `description` inside
-  its `inputSchema`.
+  Everything else a provider writes reaches the client's tool list as well,
+  which a model reads as instructions. Control, format (bidi, zero-width,
+  BOM, tag), line/paragraph separator, private-use and invisible filler
+  characters (variation selectors, combining grapheme joiner, Hangul
+  fillers, braille blank) are stripped from a tool's `description` and from
+  every string and every key inside its `inputSchema` (titles, enums,
+  defaults, examples, property names). Of a spec's `annotations` only
+  `sensitive: true` and `destructiveHint: true` are kept: they can only add
+  the authorizer requirement, while any other key (`title`, `readOnlyHint`,
+  ...) is a provider's self-report a client would act on.
 
   ## Excluding Widgets
 
@@ -107,12 +115,21 @@ defmodule Raxol.MCP.TreeWalker do
   @spec default_type_map() :: %{atom() => module()}
   def default_type_map, do: @default_type_map
 
+  @typedoc """
+  Why a provider derived less than it declared: `{:widget_id, id}` for a
+  widget whose id derives no tools, `{:action_name, widget_id, name}` for
+  one spec whose action name derives no tool.
+  """
+  @type refusal :: {:widget_id, String.t()} | {:action_name, String.t(), term()}
+
   @doc """
-  Derives MCP tool definitions from a view element tree.
+  Derives MCP tool definitions from a view element tree, and logs every
+  refusal (a widget id or action name that derives nothing) as a warning.
 
   Returns a list of `Registry.tool_def()` maps with namespaced names and
-  wrapped callbacks that dispatch TEA messages. Logs a warning, once per id
-  per call, for each provider widget refused for its id (see `derive/2`).
+  wrapped callbacks that dispatch TEA messages. A caller that derives on
+  every render and wants each refusal logged once uses
+  `derive_with_refusals/2` instead.
 
   ## Options in context
 
@@ -123,34 +140,50 @@ defmodule Raxol.MCP.TreeWalker do
           Raxol.MCP.Registry.tool_def()
         ]
   def derive_tools(tree, context) do
-    {tools, refused_ids} = derive(tree, context)
-    Enum.each(refused_ids, &warn_refused_id/1)
+    {tools, refusals} = derive_with_refusals(tree, context)
+    Enum.each(refusals, &warn_refusal/1)
     tools
   end
 
   @doc """
-  `derive_tools/2` without logging: returns the tools and the set of ids of
-  provider widgets that derived none because their id is not 1-32
-  characters of `[A-Za-z0-9_-]`. A caller that derives on every render
-  (`Raxol.MCP.ToolSynchronizer`) warns once per id with `warn_refused_id/1`.
+  `derive_tools/2` without logging: returns the tools and the set of
+  refusals (see `t:refusal/0`) instead. A caller that derives on every
+  render (`Raxol.MCP.ToolSynchronizer`) logs each new refusal once with
+  `warn_refusal/1`.
   """
-  @spec derive(map() | [map()], context()) ::
-          {[Raxol.MCP.Registry.tool_def()], MapSet.t(String.t())}
-  def derive(tree, context) do
+  @spec derive_with_refusals(map() | [map()], context()) ::
+          {[Raxol.MCP.Registry.tool_def()], MapSet.t(refusal())}
+  def derive_with_refusals(tree, context) do
     type_map = Map.get(context, :type_map, @default_type_map)
     do_walk(tree, context, type_map, {[], MapSet.new()})
   end
 
-  @doc "Logs that the provider widget `id` derived no tools because of its id."
-  @spec warn_refused_id(String.t()) :: :ok
-  def warn_refused_id(id) do
+  @doc "Logs why `refusal` derived nothing."
+  @spec warn_refusal(refusal()) :: :ok
+  def warn_refusal({:widget_id, id}) do
     Logger.warning(
       "[MCP.TreeWalker] widget id #{inspect(id)} derives no tools: an id must be " <>
         "1-32 characters of [A-Za-z0-9_-]"
     )
   end
 
+  def warn_refusal({:action_name, widget_id, name}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
+        "no tool: an action name must be a lowercase letter followed by up to 31 " <>
+        "of [a-z0-9_]"
+    )
+  end
+
+  # A widget id is one segment of a listed tool name, so the cap bounds that
+  # segment: a view cannot list names of unbounded length. 32 is a bound, not
+  # a fit to any client's name limit; session prefix + id + action can still
+  # exceed one (OMP's 64, which counts its own prefix too).
   @widget_id ~r/\A[A-Za-z0-9_-]{1,32}\z/
+
+  # The other segment. Every built-in action (`click`, `get_visible_range`,
+  # ...) is lowercase snake case; the same 32 bounds it.
+  @action_name ~r/\A[a-z][a-z0-9_]{0,31}\z/
 
   defp do_walk(nodes, context, type_map, acc) when is_list(nodes) do
     Enum.reduce(nodes, acc, &do_walk(&1, context, type_map, &2))
@@ -184,13 +217,17 @@ defmodule Raxol.MCP.TreeWalker do
 
   defp add_widget_tools(nil, _node, _id, _context, acc), do: acc
 
-  defp add_widget_tools({module, specs}, node, id, context, {tools, refused_ids}) do
+  defp add_widget_tools({module, specs}, node, id, context, {tools, refusals}) do
     if Regex.match?(@widget_id, id) do
-      {Enum.map(specs, &build_tool_def(&1, id, module, node, context)) ++ tools, refused_ids}
+      {named, misnamed} = Enum.split_with(specs, &action_name?(Map.get(&1, :name)))
+      refusals = Enum.into(misnamed, refusals, &{:action_name, id, Map.get(&1, :name)})
+      {Enum.map(named, &build_tool_def(&1, id, module, node, context)) ++ tools, refusals}
     else
-      {tools, MapSet.put(refused_ids, id)}
+      {tools, MapSet.put(refusals, {:widget_id, id})}
     end
   end
+
+  defp action_name?(name), do: is_binary(name) and Regex.match?(@action_name, name)
 
   # The View DSL allows :children to be a list or a single element map
   # (e.g. a box whose do-block is one column). Mirror the Bubbler's
@@ -257,21 +294,24 @@ defmodule Raxol.MCP.TreeWalker do
     end
   end
 
-  # A description reaches the client's tool list verbatim, which a model reads
-  # as instructions: a forged line break, a bidi override or invisible tag
-  # characters there are a prompt-injection channel. The built-in providers
-  # keep descriptions static per action; this holds for any other provider as
-  # well. Control (C0, C1, DEL), format (bidi, zero-width, BOM, tag) and
-  # line/paragraph separator characters.
-  @unsafe_chars ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+  # The tool list is read by a model as instructions: a forged line break, a
+  # bidi override, invisible tag characters or variation selectors (which can
+  # carry arbitrary bytes invisibly) there are a prompt-injection channel. The
+  # built-in providers keep their specs static per action; this holds for any
+  # other provider as well. Control (C0, C1, DEL), format (bidi, zero-width,
+  # BOM, tag), line/paragraph separator and private-use characters, the
+  # variation selectors (U+FE00-FE0F, U+E0100-E01EF), the combining grapheme
+  # joiner (U+034F), the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0) and
+  # the braille blank (U+2800).
+  @unsafe_chars ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{034F}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]/u
 
   defp build_tool_def(spec, widget_id, module, node, context) do
     action_name = spec.name
 
     %{
       name: "#{widget_id}.#{action_name}",
-      description: sanitize_description(spec.description),
-      inputSchema: sanitize_schema(spec.inputSchema),
+      description: sanitize_text(Map.get(spec, :description)),
+      inputSchema: sanitize_schema(Map.get(spec, :inputSchema)),
       callback: fn args ->
         tool_context = %{
           widget_id: widget_id,
@@ -296,31 +336,53 @@ defmodule Raxol.MCP.TreeWalker do
     |> put_annotations(Map.get(spec, :annotations))
   end
 
-  defp put_annotations(tool, nil), do: tool
-  defp put_annotations(tool, annotations), do: Map.put(tool, :annotations, annotations)
+  # Only the two flags `Raxol.MCP.ToolDef.sensitive?/1` reads, and only when
+  # `true`: a provider declaring its action dangerous is credible, one
+  # declaring it safe (`readOnlyHint`, `destructiveHint: false`) is not, and a
+  # client acts on the hints it finds (OMP's plan mode reads `readOnlyHint`).
+  # No built-in provider sets any other key.
+  @kept_annotations [:sensitive, :destructiveHint]
+
+  defp put_annotations(tool, annotations) when is_map(annotations) do
+    kept =
+      for key <- @kept_annotations,
+          (Map.get(annotations, key) || Map.get(annotations, Atom.to_string(key))) == true,
+          into: %{},
+          do: {key, true}
+
+    if kept == %{}, do: tool, else: Map.put(tool, :annotations, kept)
+  end
+
+  defp put_annotations(tool, _annotations), do: tool
 
   # A non-binary description (nil, say) passes through as before; invalid
   # UTF-8 is replaced first, since the `u` regex refuses it.
-  defp sanitize_description(text) when is_binary(text) do
+  defp sanitize_text(text) when is_binary(text) do
     text |> String.replace_invalid() |> String.replace(@unsafe_chars, "")
   end
 
-  defp sanitize_description(other), do: other
+  defp sanitize_text(other), do: other
 
-  # Every `description` in the schema, at any depth (property descriptions,
-  # nested objects, array `items`).
+  # Every key and every string leaf, at any depth (titles, enums, defaults,
+  # examples, property names, nested objects, array `items`). An atom is
+  # encoded as its name, so one whose name changes is replaced by the
+  # cleaned string.
   defp sanitize_schema(%{} = map) when not is_struct(map) do
-    Map.new(map, fn
-      {key, text} when key in [:description, "description"] and is_binary(text) ->
-        {key, sanitize_description(text)}
-
-      {key, value} ->
-        {key, sanitize_schema(value)}
-    end)
+    Map.new(map, fn {key, value} -> {sanitize_leaf(key), sanitize_schema(value)} end)
   end
 
   defp sanitize_schema(list) when is_list(list), do: Enum.map(list, &sanitize_schema/1)
-  defp sanitize_schema(other), do: other
+  defp sanitize_schema(other), do: sanitize_leaf(other)
+
+  defp sanitize_leaf(text) when is_binary(text), do: sanitize_text(text)
+
+  defp sanitize_leaf(atom) when is_atom(atom) and atom not in [nil, true, false] do
+    name = Atom.to_string(atom)
+    clean = sanitize_text(name)
+    if clean == name, do: atom, else: clean
+  end
+
+  defp sanitize_leaf(other), do: other
 
   # A call, not a cast: each message has been through the app's update/2 by
   # the time the tool answers. An update/2 that failed answers
