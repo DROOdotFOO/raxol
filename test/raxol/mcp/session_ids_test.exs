@@ -30,7 +30,7 @@ defmodule Raxol.MCP.SessionIdsTest do
       for id <- Headless.list(), String.starts_with?(id, "n"), do: Headless.stop(id)
     end)
 
-    %{server: server}
+    %{server: server, registry: registry}
   end
 
   test "an id outside the pattern is refused, never replaced", %{server: server} do
@@ -84,6 +84,31 @@ defmodule Raxol.MCP.SessionIdsTest do
 
     assert complete(server, id) == [id]
     assert complete(server, 5) == []
+  end
+
+  # The ids are what `raxol_list` answers, so a caller the tool authorizer
+  # keeps from calling it does not get them by completion either.
+  test "session id completion follows the authorizer's raxol_list decision", %{
+    server: server,
+    registry: registry
+  } do
+    id = fresh_id()
+    start!(server, @table, id)
+
+    hidden = :"server_#{System.unique_integer([:positive])}"
+    shown = :"server_#{System.unique_integer([:positive])}"
+
+    for {name, allowed} <- [{hidden, "raxol_stop"}, {shown, "raxol_list"}] do
+      {:ok, _} =
+        Server.start_link(
+          name: name,
+          registry: registry,
+          authorizer: Authorizer.allowlist([allowed])
+        )
+    end
+
+    assert complete(hidden, id) == []
+    assert complete(shown, id) == [id]
   end
 
   test "no session id becomes an atom", %{server: server} do
