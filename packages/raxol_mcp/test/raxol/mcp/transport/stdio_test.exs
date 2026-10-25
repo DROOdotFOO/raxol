@@ -197,6 +197,25 @@ defmodule Raxol.MCP.Transport.StdioTest do
 
       assert_eof_stops(ctx)
     end
+
+    test "a request reusing an in-flight id is refused, and the first stays cancellable",
+         %{io: io, registry: r} = ctx do
+      register_blocking_tool(r)
+      {worker, worker_ref} = call_blocking_tool(io, 7)
+
+      push(io, Protocol.request(7, "tools/call", %{"name" => "block", "arguments" => %{}}))
+      resp = next_frame(io)
+      assert resp.id == 7
+      assert resp.error["code"] == Protocol.invalid_request()
+      assert resp.error["message"] == "duplicate request id in flight"
+
+      push(io, Protocol.notification("notifications/cancelled", %{"requestId" => 7}))
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+
+      # The duplicate never reached the server, so no second worker started.
+      refute_received {:entered, _}
+      assert_eof_stops(ctx)
+    end
   end
 
   describe "a tools/call parked for elicitation" do

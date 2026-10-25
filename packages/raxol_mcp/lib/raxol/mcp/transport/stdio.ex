@@ -19,7 +19,8 @@ defmodule Raxol.MCP.Transport.Stdio do
   `notifications/cancelled` cancels the named in-flight request, which kills
   its callback worker. That holds for a `tools/call` waiting on an elicitation
   answer too: it stays in flight until it is answered, so a cancel drops it
-  unanswered, or kills its tool once the answer approved it. At
+  unanswered, or kills its tool once the answer approved it. A request that
+  reuses the id of one still in flight is answered `-32600` and not run. At
   end of input every reply already produced is still written (methods the
   server answers inline, such as `initialize` and `ping`, and worker-run
   requests that finished first); every request still running in a callback
@@ -183,6 +184,16 @@ defmodule Raxol.MCP.Transport.Stdio do
   end
 
   # -- Private -----------------------------------------------------------------
+
+  # Ids are how a cancel and a reply find their request, so two in flight under
+  # one id would leave the first unreachable. The second is refused, not run.
+  defp send_request(state, %{id: id, method: _method}) when is_map_key(state.in_flight, id) do
+    error =
+      Protocol.error_response(id, Protocol.invalid_request(), "duplicate request id in flight")
+
+    write_reply(state.output_device, id, error)
+    state
+  end
 
   defp send_request(state, message) do
     {req_id, request_ref} = Server.request(state.server, message)
