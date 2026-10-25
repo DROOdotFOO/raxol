@@ -195,6 +195,10 @@ defmodule Raxol.Headless do
       `send_key/3`. This is what makes a recording reproducible: with a
       timer running, which tick a sampled frame shows is a property of
       scheduler timing rather than of the caller. (default: `true`)
+    * `:debounce_ms` - the session's `Raxol.MCP.ToolSynchronizer`
+      `:debounce_ms`, a non-negative integer; anything else is
+      `{:error, {:invalid_debounce_ms, value}}`. (default: the
+      synchronizer's configured value)
   """
   @spec start(module() | String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -468,6 +472,7 @@ defmodule Raxol.Headless do
            named_mcp(opts, :registry, Raxol.MCP.Registry, :invalid_registry),
          {:ok, server} <-
            named_mcp(opts, :server, Raxol.MCP.Server, :invalid_server),
+         {:ok, sync_opts} <- synchronizer_opts(opts),
          {:ok, module} <- resolve_module(module_or_path),
          {:ok, id} <- session_id(opts, module) do
       if Map.has_key?(state.sessions, id) do
@@ -482,7 +487,7 @@ defmodule Raxol.Headless do
           id,
           {width, height},
           subscriptions,
-          {registry, server},
+          {registry, server, sync_opts},
           state
         )
       end
@@ -529,6 +534,14 @@ defmodule Raxol.Headless do
   end
 
   defp validate_name(name, error), do: {:error, {error, name}}
+
+  defp synchronizer_opts(opts) do
+    case Keyword.fetch(opts, :debounce_ms) do
+      :error -> {:ok, []}
+      {:ok, ms} when is_integer(ms) and ms >= 0 -> {:ok, [debounce_ms: ms]}
+      {:ok, other} -> {:error, {:invalid_debounce_ms, other}}
+    end
+  end
 
   # Asked about the process, never sent to it: a message a server of another
   # kind does not expect can crash that server. `$initial_call` names the
@@ -582,13 +595,18 @@ defmodule Raxol.Headless do
          id,
          {width, height},
          subscriptions,
-         {registry, server},
+         {registry, server, sync_opts},
          state
        ) do
     case start_headless_app(module, width, height, subscriptions) do
       {:ok, lifecycle_pid} ->
         synchronizer_pid =
-          start_tool_synchronizer(lifecycle_pid, id, module, registry, server)
+          start_tool_synchronizer(
+            lifecycle_pid,
+            id,
+            module,
+            {registry, server, sync_opts}
+          )
 
         session = %Session{
           id: id,
@@ -1155,8 +1173,7 @@ defmodule Raxol.Headless do
          lifecycle_pid,
          session_id,
          app_module,
-         registry,
-         server
+         {registry, server, sync_opts}
        ) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
          pid when is_pid(pid) <- GenServer.whereis(registry),
@@ -1164,11 +1181,13 @@ defmodule Raxol.Headless do
            get_dispatcher_pid(lifecycle_pid),
          {:ok, sync_pid} <-
            Raxol.MCP.ToolSynchronizer.start_link(
-             registry: pid,
-             server: server,
-             dispatcher_pid: dispatcher_pid,
-             session_id: session_id,
-             app_module: app_module
+             [
+               registry: pid,
+               server: server,
+               dispatcher_pid: dispatcher_pid,
+               session_id: session_id,
+               app_module: app_module
+             ] ++ sync_opts
            ) do
       sync_pid
     else
