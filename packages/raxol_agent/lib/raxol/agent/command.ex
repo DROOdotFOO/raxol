@@ -55,7 +55,7 @@ defmodule Raxol.Agent.Command do
   is U5's job; here we validate and dispatch.
   """
 
-  alias Raxol.Agent.Code.EventCodec
+  alias Raxol.Agent.Command.EventCodec
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.Reattach

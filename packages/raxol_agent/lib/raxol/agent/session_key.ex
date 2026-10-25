@@ -4,7 +4,7 @@ defmodule Raxol.Agent.SessionKey do
 
   One authority, because a session key is a filesystem path in two places at
   once: `Raxol.Agent.Journal.FileStore.session_dir/2` joins it onto the
-  journal base, and `Raxol.Agent.Code.Store` uses it as a filename. Two
+  journal base, and a surface's own session store uses it as a filename. Two
   surfaces mint these -- the coding TUI and the ACP agent -- and a key minted
   in one has to be resolvable by the other, so the format cannot live in each
   of them separately.
@@ -26,14 +26,21 @@ defmodule Raxol.Agent.SessionKey do
 
   ## Validity
 
-  `valid?/1` is `Raxol.Agent.Code.ShareToken.valid_session_id?/1` -- delegated
-  rather than restated, so the pattern that decides what may become a path is
-  defined once. Use it on any key that arrived from outside this VM (a
-  `session/load` request names one) BEFORE it reaches `session_dir/2`, which
-  joins without sanitizing.
+  `valid?/1` is the one pattern that decides what may become a path; the
+  share token's session-id check delegates here rather than restating it. Use
+  it on any key that arrived from outside this VM (a `session/load` request
+  names one) BEFORE it reaches `session_dir/2`, which joins without
+  sanitizing.
   """
 
-  alias Raxol.Agent.Code.ShareToken
+  # Ids ride inside signed share tokens too, so they refuse anything that could
+  # not name a journal directory (a `:` would also break the token's
+  # `v2:<scope>:<id>:<exp>` framing, so an unvalidated id mints a permanently
+  # unverifiable token). `.` and `..` match the charset but are dot segments,
+  # not names: the same pair `Raxol.SSH.Server.sanitize_tenant/1` refuses,
+  # excluded here so the two id validators cannot disagree.
+  @key_re ~r/\A[A-Za-z0-9._-]+\z/
+  @dot_segments [".", ".."]
 
   @doc """
   Mint a fresh session key.
@@ -50,10 +57,10 @@ defmodule Raxol.Agent.SessionKey do
   Whether `key` is a shape safe to use as a journal directory or a store
   filename.
 
-  Delegates to `Raxol.Agent.Code.ShareToken.valid_session_id?/1` so there is a
-  single pattern behind every check. Total: any term is answerable, and a
+  A single pattern behind every check. Total: any term is answerable, and a
   non-binary is simply invalid.
   """
   @spec valid?(term()) :: boolean()
-  def valid?(key), do: ShareToken.valid_session_id?(key)
+  def valid?(key),
+    do: is_binary(key) and key not in @dot_segments and Regex.match?(@key_re, key)
 end

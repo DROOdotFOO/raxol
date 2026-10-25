@@ -29,7 +29,7 @@ defmodule Raxol.Agent.Sandbox.Shell do
   pipelines must use a predicate (which sees the whole string and can make
   its own decision), and a policy that must hold against a hostile command
   author needs OS-level confinement -- a separate uid, a container, a chroot --
-  not string matching. `Raxol.Agent.Actions.Code.shell_allow/2` is where the
+  not string matching. `Raxol.Agent.Policy.Grants.shell_allow/2` is where the
   jail rule that reflects that lives.
 
   ## Constructors

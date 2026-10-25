@@ -28,7 +28,7 @@ defmodule Raxol.Agent.Shell.Jobs do
   There is no session identity in the Action context; the tenancy marker this
   codebase already uses is `:cwd` (each connection's App carries its own, and
   `:jail` refuses the shell surface outright — see
-  `Raxol.Agent.Actions.Code.shell_jail_allow/1`). So `:owner` is the resolved
+  `Raxol.Agent.Policy.Grants.shell_jail_allow/1`). So `:owner` is the resolved
   working directory, and every lookup takes it. Without that, one session could
   read another's command output, or kill its build, through a job id it
   guessed. It is also what makes the tests isolated: a temp dir per test means

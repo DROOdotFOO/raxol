@@ -1,4 +1,4 @@
-defmodule Raxol.Agent.Code.EventCodec do
+defmodule Raxol.Agent.Command.EventCodec do
   @moduledoc """
   Decode persisted durable contract events back into the projection wire
   shape, so a resumed session can rebuild its visual transcript.

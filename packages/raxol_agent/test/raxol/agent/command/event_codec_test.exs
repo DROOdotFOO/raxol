@@ -1,7 +1,7 @@
-defmodule Raxol.Agent.Code.EventCodecTest do
+defmodule Raxol.Agent.Command.EventCodecTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.Agent.Code.EventCodec
+  alias Raxol.Agent.Command.EventCodec
   alias Raxol.Agent.Contract
   alias Raxol.Harness.EventBoundary
   alias Raxol.Harness.Projection

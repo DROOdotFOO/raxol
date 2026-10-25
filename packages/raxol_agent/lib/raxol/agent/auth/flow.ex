@@ -38,14 +38,10 @@ defmodule Raxol.Agent.Auth.Flow do
   alias Raxol.Agent.Auth.OpenRouter
   alias Raxol.Agent.Auth.Pkce
   alias Raxol.Agent.Auth.Robinhood
-  alias Raxol.Agent.Setup
 
   # Long enough for a real sign-in (password manager, MFA, an account switch),
   # short enough that an abandoned tab returns the port.
   @default_timeout 180_000
-
-  # The 1Password write, not the sign-in: see `default_store/2`.
-  @store_timeout 120_000
 
   @providers [:openrouter]
 
@@ -161,7 +157,7 @@ defmodule Raxol.Agent.Auth.Flow do
   # validation outcome (including "could not check right now") is a success:
   # the credential resolves, and the first turn is where a bad one surfaces.
   defp store(provider, key, opts) do
-    store_fn = Keyword.get(opts, :store_fn, &default_store/2)
+    store_fn = Keyword.get(opts, :store_fn, &OpenRouter.store_key/2)
 
     case store_fn.(provider, key) do
       {:ok, _provider, _ref, {:rejected, status}} ->
@@ -173,15 +169,6 @@ defmodule Raxol.Agent.Auth.Flow do
       {:error, reason} ->
         {:error, {:store_failed, reason}}
     end
-  end
-
-  # 1Password raises its approval prompt at the worst moment in this flow: the
-  # instant the user gets back from a browser tab, attention still there. The
-  # default `op` budget is 15s, and losing that race discards a key the
-  # provider has already minted -- so the user pays for the round trip twice
-  # and leaves a dangling key behind. This path buys a lot more room.
-  defp default_store(provider, key) do
-    Setup.connect_key(provider, key, timeout_ms: @store_timeout)
   end
 
   # -- browser ----------------------------------------------------------------
