@@ -441,7 +441,9 @@ defmodule Raxol.SSH.Server do
     with {:ok, auth_opts} <- auth_daemon_opts(opts),
          [] <- missing_anonymous_caps(opts),
          {:ok, size_ceiling} <- terminal_size_ceiling(opts) do
-      start_daemon(opts, auth_opts, size_ceiling)
+      opts
+      |> start_daemon(auth_opts, size_ceiling)
+      |> bind_tenants(tenants_dir(opts, auth_opts))
     else
       refusal -> {:stop, init_refusal(refusal)}
     end
@@ -542,9 +544,6 @@ defmodule Raxol.SSH.Server do
           app_module: app_module,
           bind: bind,
           auth: auth_mode(auth_opts),
-          # Only when the daemon really binds usernames: anonymous wins.
-          tenants_dir:
-            if(auth_opts[:user_dir_fun], do: Keyword.fetch!(opts, :tenants_dir)),
           host_keys_dir: host_keys_dir,
           max_connections: max_connections,
           max_per_ip: max_per_ip,
@@ -561,6 +560,15 @@ defmodule Raxol.SSH.Server do
   # idleness is enforced by the CLIHandler timer.
   defp idle_time_opt(ms) when is_integer(ms) and ms > 0, do: [idle_time: ms]
   defp idle_time_opt(_), do: []
+
+  # Only when the daemon really binds usernames: anonymous wins.
+  defp tenants_dir(opts, auth_opts),
+    do: if(auth_opts[:user_dir_fun], do: Keyword.fetch!(opts, :tenants_dir))
+
+  defp bind_tenants({:ok, state}, tenants_dir),
+    do: {:ok, %{state | tenants_dir: tenants_dir}}
+
+  defp bind_tenants(stop, _tenants_dir), do: stop
 
   defp auth_mode(auth_opts) do
     if Keyword.get(auth_opts, :no_auth_needed) == true,
