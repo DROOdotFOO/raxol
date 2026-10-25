@@ -388,6 +388,30 @@ defmodule Raxol.MCP.RegistryTest do
     end
   end
 
+  describe "a tool name that is not a binary" do
+    test "refuses the batch and the registry keeps serving", %{registry: r} do
+      :ok = Registry.register_tools(r, [sample_tool("kept")])
+
+      assert Registry.register_tools(r, [sample_tool("new"), sample_tool(:atom_tool)]) ==
+               {:error, {:invalid_tool_name, :atom_tool}}
+
+      assert Registry.register_tools(r, [Map.delete(sample_tool(), :name)]) ==
+               {:error, {:invalid_tool_name, nil}}
+
+      assert Registry.register_all(r, tools: [sample_tool(42)]) ==
+               {:error, {:invalid_tool, 0, [:missing_name]}}
+
+      assert Enum.map(Registry.list_tools(r), & &1.name) == ["kept"]
+      assert {:ok, _} = Registry.call_tool(r, "kept", %{})
+    end
+
+    test "unregistering one leaves the registry serving", %{registry: r} do
+      :ok = Registry.register_tools(r, [sample_tool("kept")])
+      assert Registry.unregister_tools(r, [:atom_tool, 42]) == :ok
+      assert Enum.map(Registry.list_tools(r), & &1.name) == ["kept"]
+    end
+  end
+
   describe "omp_name/1" do
     # Pairs from OMP 18.12.6's own rename (`mcp/tool-bridge.ts`), replayed on
     # each input. The 64-character hash form is applied by OMP to the
