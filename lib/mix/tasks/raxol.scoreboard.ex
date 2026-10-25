@@ -47,9 +47,6 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
     opts = parse_args!(args)
 
     Mix.Task.run("app.config")
-    # The agent tasks run real sessions; their info and debug logs (on in
-    # the test environment) would bury the record.
-    Logger.configure(level: :warning)
 
     if opts[:bless], do: bless()
 
@@ -87,11 +84,25 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
 
   defp agent_metrics(opts) do
     if Keyword.get(opts, :agent_tasks, true) do
-      {metrics, failures} = Raxol.Scoreboard.AgentTasks.collect()
+      {metrics, failures} = quietly(&Raxol.Scoreboard.AgentTasks.collect/0)
       Enum.each(failures, &Mix.shell().error("raxol.scoreboard: " <> &1))
       metrics
     else
       %{}
+    end
+  end
+
+  # The agent tasks run real sessions; their info and debug logs (on in the
+  # test environment) would bury the record. The level is the node's, so it
+  # is put back however the run ends.
+  defp quietly(fun) do
+    previous = Logger.level()
+    Logger.configure(level: :warning)
+
+    try do
+      fun.()
+    after
+      Logger.configure(level: previous)
     end
   end
 
