@@ -739,7 +739,8 @@ defmodule Raxol.HeadlessTest do
     # The synchronizer was linked to Headless, which does not trap exits: one
     # synchronizer dying took the manager down, every session's tools with it,
     # and left every Lifecycle running, unlisted and unstoppable. Now it ends
-    # its own session only.
+    # its own session only. Killed, it never runs its `terminate/2`, so
+    # Headless releases its telemetry handler and the session's resources.
     test "a synchronizer that dies ends its session and no other" do
       registry =
         Process.whereis(Raxol.MCP.Registry) ||
@@ -751,8 +752,23 @@ defmodule Raxol.HeadlessTest do
       {:ok, killed} = Headless.start(TestApp, id: :sync_killed)
       {:ok, survivor} = Headless.start(StaticToolApp, id: :sync_survivor)
 
-      %{synchronizer_pid: sync_pid} = :sys.get_state(Headless).sessions[killed]
+      sessions = :sys.get_state(Headless).sessions
+      %{synchronizer_pid: sync_pid} = sessions[killed]
+      %{synchronizer_pid: survivor_sync_pid} = sessions[survivor]
       assert is_pid(sync_pid)
+      assert is_pid(survivor_sync_pid)
+
+      killed_uris =
+        Enum.map(~w(context widgets), &"raxol://session/#{killed}/#{&1}")
+
+      survivor_uri = "raxol://session/#{survivor}/context"
+
+      assert Enum.all?(
+               [survivor_uri | killed_uris],
+               &(&1 in resource_uris(registry))
+             )
+
+      assert [_] = sync_handler_ids(sync_pid)
 
       pids = session_pids(killed)
 
@@ -789,6 +805,57 @@ defmodule Raxol.HeadlessTest do
                  "cold_start_button.click",
                  %{}
                )
+
+      assert sync_handler_ids(sync_pid) == []
+      assert [_] = sync_handler_ids(survivor_sync_pid)
+      uris = resource_uris(registry)
+      refute Enum.any?(killed_uris, &(&1 in uris))
+      assert survivor_uri in uris
+    end
+
+    # Unlinked from Headless, a synchronizer must still end with it, as it did
+    # when linked; left running it would outlive the manager, still publishing
+    # the session's tools. It monitors its owner and stops the normal way, so
+    # its `terminate/2` also releases what it registered. A private manager,
+    # so the suite's own goes on serving the other tests.
+    test "a synchronizer stops when its Headless exits" do
+      registry =
+        Process.whereis(Raxol.MCP.Registry) ||
+          start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      name = Module.concat(__MODULE__, OwnerHeadless)
+
+      headless =
+        start_supervised!(
+          Supervisor.child_spec({Headless, [name: name]}, id: name)
+        )
+
+      {:ok, id} =
+        GenServer.call(headless, {:start_session, TestApp, [id: :owner_exit]})
+
+      %{synchronizer_pid: sync_pid, lifecycle_pid: lifecycle} =
+        :sys.get_state(headless).sessions[id]
+
+      # Headless leaves the Lifecycle running when it exits; this test stops it.
+      on_exit(fn ->
+        try do
+          GenServer.stop(lifecycle)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      assert is_pid(sync_pid)
+      assert [_] = sync_handler_ids(sync_pid)
+      context_uri = "raxol://session/#{id}/context"
+      assert context_uri in resource_uris(registry)
+
+      sync_ref = Process.monitor(sync_pid)
+      :ok = stop_supervised(name)
+      assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, :normal}, 5_000
+
+      assert sync_handler_ids(sync_pid) == []
+      refute context_uri in resource_uris(registry)
     end
 
     # The Lifecycle can end between `Raxol.Headless` naming the session and the
@@ -839,6 +906,12 @@ defmodule Raxol.HeadlessTest do
 
   defp resource_uris(registry) do
     registry |> Raxol.MCP.Registry.list_resources() |> Enum.map(& &1.uri)
+  end
+
+  defp sync_handler_ids(sync_pid) do
+    for %{id: handler_id, config: %{synchronizer: ^sync_pid}} <-
+          :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
+        do: handler_id
   end
 
   describe "file loading" do

@@ -11,8 +11,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
   `Raxol.MCP.ResourceProvider`, and registers context tree + widget tree
   resources for the session.
 
-  Started by `Raxol.Headless` when creating a session. Linked to the
-  session lifecycle -- dies when the session dies, cleaning up its tools.
+  Started by `Raxol.Headless` when creating a session, which passes itself as
+  `:owner`: when the owner exits, the synchronizer stops and its `terminate/2`
+  unregisters the session's tools and resources.
 
   Every tool it registers is named under the session id: derived tools are
   `"session_id.widget_id.action"` and the meta-tool is
@@ -91,6 +92,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     :session_id,
     :app_module,
     :telemetry_handler_id,
+    :owner_ref,
     :debounce_ref,
     server: Raxol.MCP.Server,
     debounce_ms: @default_debounce_ms,
@@ -195,6 +197,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
     session_id = Keyword.fetch!(opts, :session_id)
     app_module = Keyword.get(opts, :app_module)
 
+    owner_ref =
+      case Keyword.get(opts, :owner) do
+        nil -> nil
+        owner -> Process.monitor(owner)
+      end
+
     handler_id = "tool_sync_#{session_id}_#{System.unique_integer([:positive])}"
 
     :telemetry.attach(
@@ -211,7 +219,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
       app_module: app_module,
       server: Keyword.get(opts, :server, Raxol.MCP.Server),
       debounce_ms: Keyword.get_lazy(opts, :debounce_ms, &configured_debounce_ms/0),
-      telemetry_handler_id: handler_id
+      telemetry_handler_id: handler_id,
+      owner_ref: owner_ref
     }
 
     if not TreeWalker.id?(session_id), do: TreeWalker.warn_refused_session_id(session_id)
@@ -329,6 +338,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
     {:noreply, state}
   end
 
+  def handle_manager_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state),
+    do: {:stop, :normal, state}
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer

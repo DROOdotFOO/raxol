@@ -453,7 +453,8 @@ defmodule Raxol.Headless do
         pid in [session.lifecycle_pid, session.synchronizer_pid]
       end)
 
-    Enum.each(down, fn {_id, session} ->
+    Enum.each(down, fn {id, session} ->
+      if pid == session.synchronizer_pid, do: release_synchronizer(id, pid)
       stop_synchronizer(session.synchronizer_pid)
       stop_lifecycle(session.lifecycle_pid)
     end)
@@ -1130,7 +1131,36 @@ defmodule Raxol.Headless do
     :exit, _ -> :ok
   end
 
-  @compile {:no_warn_undefined, Raxol.MCP.ToolSynchronizer}
+  # A synchronizer killed untrappably never ran its `terminate/2`, so what it
+  # holds under this session's name is released here: its telemetry handler and
+  # the `raxol://session/<id>/` resources. Its tools are not: tool names are
+  # global, and another session may have registered the same ones. A registry
+  # that is gone holds nothing left to release.
+  defp release_synchronizer(session_id, sync_pid) do
+    for %{id: handler_id, config: %{synchronizer: ^sync_pid}} <-
+          :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
+        do: :telemetry.detach(handler_id)
+
+    with registry when is_pid(registry) <- Process.whereis(Raxol.MCP.Registry) do
+      prefix = "raxol://session/#{session_id}/"
+
+      uris =
+        for %{uri: uri} <- Raxol.MCP.Registry.list_resources(registry),
+            String.starts_with?(uri, prefix),
+            do: uri
+
+      if uris != [], do: Raxol.MCP.Registry.unregister_resources(registry, uris)
+    end
+
+    :ok
+  rescue
+    ArgumentError -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  @compile {:no_warn_undefined,
+            [Raxol.MCP.ToolSynchronizer, Raxol.MCP.Registry]}
 
   defp render_and_flush_tools(session, engine_pid) do
     with {:ok, _buffer} <- render_frame(session, engine_pid),
@@ -1171,7 +1201,8 @@ defmodule Raxol.Headless do
              server: server,
              dispatcher_pid: dispatcher_pid,
              session_id: session_id,
-             app_module: app_module
+             app_module: app_module,
+             owner: self()
            ) do
       Process.monitor(sync_pid)
       sync_pid
