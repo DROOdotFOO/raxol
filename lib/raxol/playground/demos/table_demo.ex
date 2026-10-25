@@ -7,7 +7,8 @@ defmodule Raxol.Playground.Demos.TableDemo do
     * `:inner` — column/row rules only (no outer frame)
     * `:none`  — padded content; `header_separator` toggles the `─` rule
 
-  Keys route through `Table.handle_event/3`. Sort cycles via
+  Keys route through `Table.handle_event/3`. `s` cycles the sort through
+  each column ascending, then descending, then the next column, via
   `Table.update({:sort, col}, …)` (component has no sort keybinding).
   """
   use Raxol.Core.Runtime.Application
@@ -173,6 +174,14 @@ defmodule Raxol.Playground.Demos.TableDemo do
         "page=#{table.current_page} sort=#{inspect(table.sort_by)}/#{table.sort_direction}"
 
     {table, DemoHelpers.log_event(model, outcome)}
+  end
+
+  # An ascending column turns descending (`Table.update/2` toggles the
+  # direction of the current sort column); otherwise the next column, asc.
+  defp cycle_sort(%{sort_by: col, sort_direction: :asc} = table)
+       when not is_nil(col) do
+    {:ok, table} = Table.update({:sort, col}, table)
+    {table, "sort cycle -> #{col}/#{table.sort_direction}"}
   end
 
   defp cycle_sort(table) do
