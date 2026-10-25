@@ -88,11 +88,23 @@ defmodule Raxol.Headless do
   @default_compile_timeout_ms 2_000
   @max_compile_timeout_ms 4_500
 
-  # `use GenServer` gives this server 5 s to stop before its supervisor kills
-  # it: `terminate/2` gives the sessions 4 s to stop the way `stop/1` stops
-  # one, then kills the rest and releases their synchronizers within 1 s.
+  # Each `GenServer.stop/3` of a session's synchronizer or Lifecycle.
+  @stop_timeout_ms 5_000
+
+  # `terminate/2` gives the sessions this long to stop the way `stop/1` stops
+  # one, then kills the rest and releases their synchronizers within
+  # `@kill_budget_ms`.
   @shutdown_budget_ms 4_000
   @kill_budget_ms 1_000
+
+  # Trapping exits, Headless reaches `terminate/2` only once the callback in
+  # hand returns, and its supervisor's shutdown clock runs from the exit
+  # signal. The longest bounded callbacks stop a synchronizer and then a
+  # Lifecycle (`stop/1`, a session's `:DOWN`), or compile and then ask the new
+  # Lifecycle for its dispatcher (`start/2`); `use GenServer`'s 5 s default
+  # left a teardown that followed one of them no time at all.
+  @child_shutdown_ms max(2 * @stop_timeout_ms, @max_compile_timeout_ms + 5_000) +
+                       @shutdown_budget_ms + @kill_budget_ms + 1_000
 
   defmodule Session do
     @moduledoc false
@@ -100,6 +112,10 @@ defmodule Raxol.Headless do
   end
 
   # --- Public API ---
+
+  @doc false
+  def child_spec(init_arg),
+    do: Supervisor.child_spec(super(init_arg), shutdown: @child_shutdown_ms)
 
   @doc "Starts the Headless session manager."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -1184,13 +1200,13 @@ defmodule Raxol.Headless do
   defp stop_synchronizer(nil), do: :ok
 
   defp stop_synchronizer(pid) do
-    GenServer.stop(pid, :normal, 5_000)
+    GenServer.stop(pid, :normal, @stop_timeout_ms)
   catch
     :exit, _ -> :ok
   end
 
   defp stop_lifecycle(pid) do
-    GenServer.stop(pid, :normal, 5_000)
+    GenServer.stop(pid, :normal, @stop_timeout_ms)
   catch
     :exit, _ -> :ok
   end

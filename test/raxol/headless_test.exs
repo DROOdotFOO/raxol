@@ -963,6 +963,68 @@ defmodule Raxol.HeadlessTest do
       assert session_uris(registry, id) == []
     end
 
+    # The supervisor's shutdown clock runs from its exit signal, but a
+    # trapping Headless reaches `terminate/2` only once the callback in hand
+    # returns. Here that callback is `stop/1` of a session whose synchronizer
+    # does not stop, so it takes the full stop timeout, and the session left
+    # is stuck too, so the teardown after it takes its whole budget. The 5 s
+    # default killed Headless mid-teardown and orphaned that Lifecycle.
+    test "a shutdown that arrives mid-callback still stops every session" do
+      registry =
+        Process.whereis(Raxol.MCP.Registry) ||
+          start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      name = Module.concat(__MODULE__, BusyHeadless)
+
+      headless =
+        start_supervised!(
+          Supervisor.child_spec({Headless, [name: name]}, id: name)
+        )
+
+      [stopping, left] =
+        sessions =
+        for id <- [:busy_stopping, :busy_left] do
+          {:ok, ^id} =
+            GenServer.call(headless, {:start_session, TestApp, [id: id]})
+
+          :sys.get_state(headless).sessions[id]
+        end
+
+      on_exit(fn ->
+        kill_all(Enum.flat_map(sessions, &[&1.synchronizer_pid, &1.lifecycle_pid]))
+      end)
+
+      Enum.each(sessions, &hold(&1.synchronizer_pid))
+      held = stopping.synchronizer_pid
+      :erlang.trace(held, true, [:receive])
+
+      test = self()
+
+      spawn(fn ->
+        reply =
+          try do
+            GenServer.call(headless, {:stop_session, stopping.id}, :infinity)
+          catch
+            :exit, reason -> {:exit, reason}
+          end
+
+        send(test, {:stop_reply, reply})
+      end)
+
+      # Headless is inside that call once its stop reaches the synchronizer.
+      assert_receive {:trace, ^held, :receive, {:system, _, {:terminate, :normal}}},
+                     5_000
+
+      lifecycle = left.lifecycle_pid
+      lifecycle_ref = Process.monitor(lifecycle)
+      :ok = stop_supervised(name)
+
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed}, 5_000
+      assert_receive {:stop_reply, :ok}
+      assert sync_handler_ids(left.synchronizer_pid) == []
+      assert session_uris(registry, left.id) == []
+    end
+
     # The Lifecycle can end between `Raxol.Headless` naming the session and the
     # caller asking the Lifecycle for its processes: an app that quits does
     # exactly that, and the manager drops the session only when its `:DOWN`
