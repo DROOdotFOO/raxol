@@ -312,9 +312,13 @@ defmodule Raxol.Headless.McpToolsTest do
       :ok
     end
 
-    defp start_tool_result(args),
+    # `raxol_start` runs as a callback of the registry it is registered in,
+    # so it always starts sessions under a running one.
+    defp start_tool_result(args), do: start_tool_result(args, registry!())
+
+    defp start_tool_result(args, registry),
       do:
-        Enum.find(McpTools.tools(), &(&1.name == "raxol_start")).callback.(args)
+        Enum.find(McpTools.tools(registry), &(&1.name == "raxol_start")).callback.(args)
 
     # A `BaseManager` GenServer, so it exports `init/1` and nothing else the
     # runtime wants. It is one of the 527 modules on this tree that would have
@@ -735,10 +739,10 @@ defmodule Raxol.Headless.McpToolsTest do
         )
 
       assert {:ok, _} =
-               start_tool_result(%{
-                 "module" => inspect(InjectedTextApp),
-                 "id" => "inj"
-               })
+               start_tool_result(
+                 %{"module" => inspect(InjectedTextApp), "id" => "inj"},
+                 registry
+               )
 
       on_exit(fn ->
         if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop("inj")

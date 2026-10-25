@@ -304,6 +304,54 @@ defmodule Raxol.HeadlessTest do
       refute "bad_registry" in Headless.list()
       assert {:ok, "good_registry"} = Headless.start(TestApp, id: "good_registry")
     end
+
+    test "refuses a registry name no process has, and keeps serving" do
+      headless = Process.whereis(Headless)
+      registry = :"no_registry_#{System.unique_integer([:positive])}"
+
+      assert {:error, {:invalid_registry, ^registry}} =
+               Headless.start(TestApp, id: "typo_registry", registry: registry)
+
+      assert Process.whereis(Headless) == headless
+      refute "typo_registry" in Headless.list()
+    end
+
+    test "refuses a live process that is no MCP registry, leaving it untouched" do
+      headless = Process.whereis(Headless)
+      name = :"not_a_registry_#{System.unique_integer([:positive])}"
+
+      agent =
+        start_supervised!(%{
+          id: name,
+          start: {Agent, :start_link, [fn -> %{} end, [name: name]]}
+        })
+
+      for registry <- [name, agent] do
+        assert {:error, {:invalid_registry, ^registry}} =
+                 Headless.start(TestApp,
+                   id: "other_registry",
+                   registry: registry
+                 )
+      end
+
+      assert Process.whereis(Headless) == headless
+      assert Process.alive?(agent)
+      assert {:message_queue_len, 0} = Process.info(agent, :message_queue_len)
+      refute "other_registry" in Headless.list()
+    end
+
+    test "accepts a running MCP registry by pid" do
+      registry = start_supervised!({Raxol.MCP.Registry, name: nil})
+
+      assert {:ok, "pid_registry"} =
+               Headless.start(StaticToolApp,
+                 id: "pid_registry",
+                 registry: registry
+               )
+
+      :ok = Headless.settle("pid_registry")
+      assert "cold_start_button.click" in tool_names(registry)
+    end
   end
 
   describe "settle/1" do
@@ -964,8 +1012,10 @@ defmodule Raxol.HeadlessTest do
       assert {state.buffer.width, state.buffer.height} == {4096, 256}
 
       :ok = Headless.send_resize("oversize_resize", 120, 40)
+
       assert {:ok, %{resized: {120, 40}}} =
                Headless.get_model("oversize_resize")
+
       assert {:ok, frame} = Headless.get_buffer("oversize_resize")
       assert {frame.width, frame.height} == {120, 40}
     end

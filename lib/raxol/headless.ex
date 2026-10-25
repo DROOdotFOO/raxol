@@ -160,8 +160,11 @@ defmodule Raxol.Headless do
     * `:height` - Screen height (default: 40)
     * `:registry` - the `Raxol.MCP.Registry` the session's tools are
       registered in, as a name or pid (an atom, a pid, `{:global, name}` or
-      `{:via, module, name}`); anything else is `{:error, {:invalid_registry,
-      registry}}`. (default: `Raxol.MCP.Registry`, when it is running)
+      `{:via, module, name}`). A registry given here must be a running
+      `Raxol.MCP.Registry`; any other value, a name no process has, or a
+      process of another kind is `{:error, {:invalid_registry, registry}}`,
+      and the process is never messaged. (default: `Raxol.MCP.Registry`,
+      when it is running; without it the session has no tools)
     * `:subscriptions` - `false` boots the app with its declared
       subscriptions (timers, event sources) unarmed, so the model advances
       only on messages delivered explicitly via `send_message/2` or
@@ -424,9 +427,7 @@ defmodule Raxol.Headless do
   # --- Private Helpers ---
 
   defp do_start_session(module_or_path, opts, state) do
-    registry = Keyword.get(opts, :registry, Raxol.MCP.Registry)
-
-    with :ok <- validate_registry(registry),
+    with {:ok, registry} <- session_registry(opts),
          {:ok, module} <- resolve_module(module_or_path),
          {:ok, id} <- session_id(opts, module) do
       if Map.has_key?(state.sessions, id) do
@@ -448,6 +449,27 @@ defmodule Raxol.Headless do
     end
   end
 
+  # The implicit default may be absent: a node without the MCP stack runs
+  # sessions with no tools. A registry the caller NAMED must be a running
+  # `Raxol.MCP.Registry`. The session's synchronizer is linked to this
+  # process, so a server of another kind crashes it and every session it
+  # holds, and a name that resolves to nothing would leave the session
+  # silently without tools while `settle/1` reports them in step.
+  defp session_registry(opts) do
+    case Keyword.fetch(opts, :registry) do
+      {:ok, registry} -> named_registry(registry)
+      :error -> {:ok, Raxol.MCP.Registry}
+    end
+  end
+
+  defp named_registry(registry) do
+    with :ok <- validate_registry(registry) do
+      if mcp_registry?(registry),
+        do: {:ok, registry},
+        else: {:error, {:invalid_registry, registry}}
+    end
+  end
+
   # The registry is looked up with `GenServer.whereis/1` in this process,
   # where a value that names no server would crash it and every session it
   # holds.
@@ -465,6 +487,35 @@ defmodule Raxol.Headless do
   end
 
   defp validate_registry(registry), do: {:error, {:invalid_registry, registry}}
+
+  # Asked about the process, never sent to it: a message a server of another
+  # kind does not expect can crash that server. `$initial_call` names the
+  # module a `GenServer` was started with, so `:proc_lib.initial_call/1`
+  # answers without touching the process's mailbox. `:erpc` bounds the read
+  # and reaches a `{:global, _}` registry on another node. A dead pid answers
+  # `false`.
+  @registry_check_timeout_ms 1_000
+
+  defp mcp_registry?(registry) do
+    case GenServer.whereis(registry) do
+      pid when is_pid(pid) ->
+        match?(
+          {Raxol.MCP.Registry, :init, _},
+          :erpc.call(
+            node(pid),
+            :proc_lib,
+            :initial_call,
+            [pid],
+            @registry_check_timeout_ms
+          )
+        )
+
+      _ ->
+        false
+    end
+  catch
+    _kind, _reason -> false
+  end
 
   defp session_id(opts, module) do
     case Keyword.get(opts, :id, module_to_id(module)) do
