@@ -33,12 +33,21 @@ defmodule Raxol.Agent.Comm do
   `{:call, session_pid, ref, {:acp_prompt, text, approver}}` and answers it
   inline with `reply/3`, or with `run_turn/3` for work that blocks. A
   `{:acp_cancel, ref}` (via `send/3`, or `call/3` for an `:ok` that returns
-  once the turn's process is dead) kills that process, answers the prompt
-  `{:error, :cancelled}` and is then forwarded to `update/2`. Pass
-  `ref: ref` to `call/4` to know the prompt's ref; it must be a fresh
-  `make_ref/0`, used for one call only. A prompt is also cancelled when its
-  caller goes down, or when `call/4` times out (the `{:error, :cancelled}`
-  answer may then arrive in the caller's mailbox as a stray reply).
+  once the turn's process is dead) kills that process and answers the prompt
+  `{:error, :cancelled}`. Pass `ref: ref` to `call/4` to know the prompt's
+  ref; it must be a fresh `make_ref/0`, used for one call only. A prompt is
+  also cancelled when its caller goes down, or when `call/4` times out (the
+  `{:error, :cancelled}` answer may then arrive in the caller's mailbox as a
+  stray reply). A prompt sent with `send/3` as
+  `{:call, pid, ref, {:acp_prompt, text, approver}}` is a turn of the same
+  kind, answered to `pid`.
+
+  Whenever a turn ends without its reply (cancelled, or its `run_turn/3`
+  process crashed or was killed), `update/2` then receives
+  `{:acp_cancel, ref}`, so an agent drops what it tracks for the turn in one
+  place. The session does not check a reply's shape: whatever the agent
+  passes to `reply/3`, or `run_turn/3`'s function returns, reaches the
+  caller as is.
 
   An agent consults `approver`, and runs the actions it gates, in the
   `run_turn/3` process, never inline in `update/2`: an inline ask would
@@ -58,6 +67,10 @@ defmodule Raxol.Agent.Comm do
       is starting or restarting)
     * `{:error, :turn_failed}` - the `run_turn/3` process crashed or was
       killed from outside
+    * `{:error, :agent_down}` - the agent's lifecycle went down while the
+      turn was in flight (a standalone session; under
+      `Raxol.Agent.Session.Supervisor` the session restarts with it and the
+      call itself returns `{:error, :agent_down}`)
     * `{:error, :cancelled}` - the turn was cancelled
 
   A cancel sent with `call/3` answers `:ok`, or `{:error, :not_found}` when
