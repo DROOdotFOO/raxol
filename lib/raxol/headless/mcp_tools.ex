@@ -62,7 +62,16 @@ defmodule Raxol.Headless.McpTools do
     Raxol.Playground.Demos.BeamDashboardDemo
   ]
 
-  @session_id_format ~r/\A[a-z][a-z0-9]{0,6}\z/
+  # One session-id rule, three renderings: the check, the JSON Schema
+  # `pattern` clients validate against, and the prose a refusal quotes.
+  # `\A`/`\z` in the check, because a regex `$` also matches before a final
+  # newline; a JSON Schema pattern is ECMA-262, where `$` does not.
+  @session_id_max 7
+  @session_id_body "[a-z][a-z0-9]{0,#{@session_id_max - 1}}"
+  @session_id_format Regex.compile!("\\A" <> @session_id_body <> "\\z")
+  @session_id_pattern "^" <> @session_id_body <> "$"
+  @session_id_rule "1 to #{@session_id_max} characters, a lowercase letter " <>
+                     "then lowercase letters or digits (no underscores or dots)"
 
   @doc """
   Returns the list of Raxol MCP tool definitions.
@@ -112,10 +121,8 @@ defmodule Raxol.Headless.McpTools do
             },
             id: %{
               type: "string",
-              pattern: "^[a-z][a-z0-9]{0,6}$",
-              description:
-                "Session identifier: 1 to 7 characters, a lowercase letter then " <>
-                  "lowercase letters or digits (no underscores or dots)"
+              pattern: @session_id_pattern,
+              description: "Session identifier: " <> @session_id_rule
             },
             width: %{
               type: "integer",
@@ -328,8 +335,7 @@ defmodule Raxol.Headless.McpTools do
   `config :raxol, :headless_startable` is invalid (see `startable/0`), so a
   bad config stops the boot instead of surfacing at the first `raxol_start`.
   """
-  @spec register(GenServer.server()) ::
-          :ok | {:error, {:name_collision, [{String.t(), String.t()}]}}
+  @spec register(GenServer.server()) :: :ok
   def register(registry \\ Raxol.MCP.Registry) do
     case startable() do
       {:ok, _modules} -> :ok
@@ -620,14 +626,10 @@ defmodule Raxol.Headless.McpTools do
   defp session_id(%{"id" => id}), do: {:error, id_refusal(id)}
 
   defp session_id(_args),
-    do: {:error, "'id' is required: " <> id_rule()}
+    do: {:error, "'id' is required: " <> @session_id_rule}
 
-  defp id_refusal(id), do: "session id #{inspect(id)} is refused: " <> id_rule()
-
-  defp id_rule,
-    do:
-      "1 to 7 characters, a lowercase letter then lowercase letters or digits " <>
-        "(no underscores or dots)"
+  defp id_refusal(id),
+    do: "session id #{inspect(id)} is refused: " <> @session_id_rule
 
   # Refused, not clamped: the caller named this size, so it is told the range
   # rather than handed a smaller screen than it asked for. The ceiling is the
