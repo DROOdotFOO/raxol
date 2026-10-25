@@ -703,7 +703,7 @@ defmodule Raxol.HeadlessTest do
       refute "monitor_test" in Headless.list()
     end
 
-    # The ToolSynchronizer is linked to Headless, not to the lifecycle, so
+    # The ToolSynchronizer is monitored by Headless, not linked to the lifecycle, so
     # nothing but Headless's own `:DOWN` handling can stop it when the app dies
     # on its own. Left running, it keeps its telemetry handler and the session's
     # MCP resources registered for a session `list/0` no longer reports.
@@ -734,6 +734,61 @@ defmodule Raxol.HeadlessTest do
                :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
                &String.starts_with?(&1.id, "tool_sync_#{id}_")
              )
+    end
+
+    # The synchronizer was linked to Headless, which does not trap exits: one
+    # synchronizer dying took the manager down, every session's tools with it,
+    # and left every Lifecycle running, unlisted and unstoppable. Now it ends
+    # its own session only.
+    test "a synchronizer that dies ends its session and no other" do
+      registry =
+        Process.whereis(Raxol.MCP.Registry) ||
+          start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      headless = Process.whereis(Headless)
+      headless_ref = Process.monitor(headless)
+
+      {:ok, killed} = Headless.start(TestApp, id: :sync_killed)
+      {:ok, survivor} = Headless.start(StaticToolApp, id: :sync_survivor)
+
+      %{synchronizer_pid: sync_pid} = :sys.get_state(Headless).sessions[killed]
+      assert is_pid(sync_pid)
+
+      pids = session_pids(killed)
+
+      process_refs =
+        Map.new(pids, fn {role, pid} -> {role, Process.monitor(pid)} end)
+
+      sync_ref = Process.monitor(sync_pid)
+      Process.exit(sync_pid, :kill)
+      assert_receive {:DOWN, ^sync_ref, :process, _, :killed}
+
+      # Headless stops the Lifecycle while handling the synchronizer's
+      # `:DOWN`, so the Lifecycle's own `:DOWN` arriving means Headless is in
+      # or past that handler; the `:sys` call returns once it has finished.
+      lifecycle_ref = process_refs.lifecycle
+      assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
+      :sys.get_state(Headless)
+
+      for role <- [:dispatcher, :engine] do
+        ref = Map.fetch!(process_refs, role)
+        assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+      end
+
+      refute_received {:DOWN, ^headless_ref, :process, _, _}
+      assert Process.whereis(Headless) == headless
+      assert Headless.list() == [survivor]
+      assert {:error, :not_found} = Headless.screenshot(killed)
+
+      assert {:ok, screen} = Headless.screenshot(survivor)
+      assert screen =~ "Ready"
+
+      assert {:ok, _} =
+               Raxol.MCP.Registry.call_tool(
+                 registry,
+                 "cold_start_button.click",
+                 %{}
+               )
     end
 
     # The Lifecycle can end between `Raxol.Headless` naming the session and the

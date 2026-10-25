@@ -440,20 +440,22 @@ defmodule Raxol.Headless do
     {:reply, Map.keys(state.sessions), state}
   end
 
-  # A lifecycle that exits on its own gets the same teardown as `stop/1`, minus
-  # stopping the already-dead lifecycle: the synchronizer is linked to Headless,
-  # not to the app, so nothing else would detach its telemetry handler or drop
-  # the session's MCP tools and resources. `stop/1` deletes the session before
-  # this `:DOWN` arrives, so the two paths never stop a synchronizer twice.
+  # A lifecycle that exits on its own gets the same teardown as `stop/1`: the
+  # synchronizer is monitored by Headless, not linked to the app, so nothing
+  # else would detach its telemetry handler or drop the session's MCP tools and
+  # resources. A synchronizer that exits takes its session with it rather than
+  # Headless and every other session. `stop/1` deletes the session before
+  # either `:DOWN` arrives, so the paths never tear a session down twice.
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     {down, alive} =
       Enum.split_with(state.sessions, fn {_id, session} ->
-        session.lifecycle_pid == pid
+        pid in [session.lifecycle_pid, session.synchronizer_pid]
       end)
 
     Enum.each(down, fn {_id, session} ->
       stop_synchronizer(session.synchronizer_pid)
+      stop_lifecycle(session.lifecycle_pid)
     end)
 
     {:noreply, %{state | sessions: Map.new(alive)}}
@@ -1164,13 +1166,14 @@ defmodule Raxol.Headless do
          dispatcher_pid when is_pid(dispatcher_pid) <-
            get_dispatcher_pid(lifecycle_pid),
          {:ok, sync_pid} <-
-           Raxol.MCP.ToolSynchronizer.start_link(
+           GenServer.start(Raxol.MCP.ToolSynchronizer,
              registry: pid,
              server: server,
              dispatcher_pid: dispatcher_pid,
              session_id: session_id,
              app_module: app_module
            ) do
+      Process.monitor(sync_pid)
       sync_pid
     else
       _ -> nil
