@@ -921,6 +921,48 @@ defmodule Raxol.HeadlessTest do
       end
     end
 
+    # A session still stopping when the shutdown budget runs out is killed,
+    # and a killed synchronizer runs no `terminate/2`. Its `:DOWN` reaches a
+    # Headless already inside its own `terminate/2`, which never handles it,
+    # so Headless releases the telemetry handler and the session's resources
+    # there. The synchronizer is held so its stop outlasts the real budget.
+    test "a session stuck at shutdown is killed and its synchronizer released" do
+      registry =
+        Process.whereis(Raxol.MCP.Registry) ||
+          start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      name = Module.concat(__MODULE__, StuckHeadless)
+
+      headless =
+        start_supervised!(
+          Supervisor.child_spec({Headless, [name: name]}, id: name)
+        )
+
+      {:ok, id} =
+        GenServer.call(
+          headless,
+          {:start_session, TestApp, [id: :stuck_at_shutdown]}
+        )
+
+      %{synchronizer_pid: sync_pid, lifecycle_pid: lifecycle} =
+        :sys.get_state(headless).sessions[id]
+
+      on_exit(fn -> kill_all([sync_pid, lifecycle]) end)
+
+      assert [_] = sync_handler_ids(sync_pid)
+      assert "raxol://session/#{id}/context" in session_uris(registry, id)
+
+      hold(sync_pid)
+      sync_ref = Process.monitor(sync_pid)
+      lifecycle_ref = Process.monitor(lifecycle)
+      :ok = stop_supervised(name)
+
+      assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, :killed}, 5_000
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed}, 5_000
+      assert sync_handler_ids(sync_pid) == []
+      assert session_uris(registry, id) == []
+    end
+
     # The Lifecycle can end between `Raxol.Headless` naming the session and the
     # caller asking the Lifecycle for its processes: an app that quits does
     # exactly that, and the manager drops the session only when its `:DOWN`
@@ -975,6 +1017,42 @@ defmodule Raxol.HeadlessTest do
     for %{id: handler_id, config: %{synchronizer: ^sync_pid}} <-
           :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
         do: handler_id
+  end
+
+  defp session_uris(registry, id) do
+    prefix = "raxol://session/#{id}/"
+    registry |> resource_uris() |> Enum.filter(&String.starts_with?(&1, prefix))
+  end
+
+  # Holds `pid` inside a `:sys.replace_state/3` callback until it is killed,
+  # so a `GenServer.stop/3` of it waits out its timeout. `:sys.suspend/1`
+  # would not: a suspended process still answers `terminate`.
+  defp hold(pid) do
+    test = self()
+
+    spawn(fn ->
+      try do
+        :sys.replace_state(
+          pid,
+          fn state ->
+            send(test, {:held, self()})
+
+            receive do
+              :never -> state
+            end
+          end,
+          :infinity
+        )
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    assert_receive {:held, ^pid}
+  end
+
+  defp kill_all(pids) do
+    for pid <- pids, is_pid(pid), do: Process.exit(pid, :kill)
   end
 
   describe "file loading" do

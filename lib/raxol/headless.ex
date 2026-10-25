@@ -89,8 +89,10 @@ defmodule Raxol.Headless do
   @max_compile_timeout_ms 4_500
 
   # `use GenServer` gives this server 5 s to stop before its supervisor kills
-  # it, so `terminate/2` stops the sessions within a shorter budget.
+  # it: `terminate/2` gives the sessions 4 s to stop the way `stop/1` stops
+  # one, then kills the rest and releases their synchronizers within 1 s.
   @shutdown_budget_ms 4_000
+  @kill_budget_ms 1_000
 
   defmodule Session do
     @moduledoc false
@@ -498,25 +500,32 @@ defmodule Raxol.Headless do
   # Headless unlinks every Lifecycle, so nothing else ends them with it. Each
   # session stops the way `stop/1` stops one, all at once and within the
   # shutdown budget; a session still stopping at the deadline is killed
-  # rather than left running without its manager.
+  # rather than left running without its manager, and its synchronizer's
+  # leftovers released here, since its `:DOWN` arrives after this returns.
   @impl true
   def terminate(_reason, state) do
-    sessions = Map.values(state.sessions)
+    state.sessions
+    |> Map.values()
+    |> each_session_within(@shutdown_budget_ms, fn session ->
+      stop_synchronizer(session.synchronizer_pid)
+      stop_lifecycle(session.lifecycle_pid)
+    end)
+    |> Enum.map(fn {session, reason} ->
+      Logger.warning(
+        "[#{inspect(__MODULE__)}] session #{inspect(session.id)} did not " <>
+          "stop within #{@shutdown_budget_ms} ms of shutdown (" <>
+          Exception.format_exit(reason) <> "); killing it"
+      )
 
-    sessions
-    |> Task.async_stream(
-      fn session ->
-        stop_synchronizer(session.synchronizer_pid)
-        stop_lifecycle(session.lifecycle_pid)
-      end,
-      max_concurrency: max(length(sessions), 1),
-      timeout: @shutdown_budget_ms,
-      on_timeout: :kill_task
-    )
-    |> Enum.zip(sessions)
-    |> Enum.each(fn
-      {{:ok, _}, _session} -> :ok
-      {{:exit, reason}, session} -> kill_session(session, reason)
+      session
+    end)
+    |> each_session_within(@kill_budget_ms, &kill_session/1)
+    |> Enum.each(fn {session, reason} ->
+      Logger.error(
+        "[#{inspect(__MODULE__)}] session #{inspect(session.id)} was not " <>
+          "killed and released within #{@kill_budget_ms} ms (" <>
+          Exception.format_exit(reason) <> ")"
+      )
     end)
   end
 
@@ -1186,17 +1195,35 @@ defmodule Raxol.Headless do
     :exit, _ -> :ok
   end
 
-  defp kill_session(session, reason) do
-    Logger.warning(
-      "[#{inspect(__MODULE__)}] session #{inspect(session.id)} did not stop " <>
-        "within #{@shutdown_budget_ms} ms of shutdown (" <>
-        Exception.format_exit(reason) <> "); killing it"
+  # Runs `fun` on every session at once and answers `{session, reason}` for
+  # each one whose run did not finish within `timeout_ms`; that run is killed.
+  defp each_session_within(sessions, timeout_ms, fun) do
+    sessions
+    |> Task.async_stream(fun,
+      max_concurrency: max(length(sessions), 1),
+      timeout: timeout_ms,
+      on_timeout: :kill_task
     )
+    |> Enum.zip(sessions)
+    |> Enum.flat_map(fn
+      {{:ok, _}, _session} -> []
+      {{:exit, reason}, session} -> [{session, reason}]
+    end)
+  end
 
-    if session.synchronizer_pid,
-      do: Process.exit(session.synchronizer_pid, :kill)
+  defp kill_session(%Session{synchronizer_pid: nil} = session),
+    do: Process.exit(session.lifecycle_pid, :kill)
 
+  defp kill_session(%Session{synchronizer_pid: sync_pid} = session) do
+    ref = Process.monitor(sync_pid)
+    Process.exit(sync_pid, :kill)
     Process.exit(session.lifecycle_pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^sync_pid, _reason} -> :ok
+    end
+
+    release_synchronizer(session.id, sync_pid)
   end
 
   # A synchronizer killed untrappably never ran its `terminate/2`, so what it
