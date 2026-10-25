@@ -230,6 +230,17 @@ defmodule Raxol.Agent.TurnContractTest do
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
   end
 
+  test "a change that no live turn sent is dropped", %{id: id} do
+    assert {:ok, {:ok, "count: 1", _}} = prompt(id, "increment", ToolPolicy.allow_all())
+    [{lifecycle, _}] = Registry.lookup(Raxol.Agent.Registry, {:lifecycle, id})
+    %{dispatcher_pid: agent} = GenServer.call(lifecycle, :get_full_state)
+
+    send(agent, {:command_result, {:counter_change, make_ref(), %{set: 0}}})
+
+    # Same sender, so the forged change is handled before this call.
+    assert {:ok, %{count: 1}} = GenServer.call(agent, :get_model)
+  end
+
   test "a prompt sent with from: is still a turn the session owns", %{id: id} do
     ref = make_ref()
 

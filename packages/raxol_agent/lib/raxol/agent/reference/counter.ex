@@ -18,8 +18,11 @@ defmodule Raxol.Agent.Reference.Counter do
   blocked approver holds up only its turn, and a cancel kills it. `increment`
   and `reset` return a change that the turn process sends back to `update/2`,
   which applies it and hands the new count to the turn for its reply, so a
-  turn cancelled before its change is sent changes nothing. Usage is always
-  zero: no model is called.
+  turn cancelled before its change is sent changes nothing. `update/2`
+  applies a change only for a turn it still tracks: it forgets a turn once
+  the change is applied, the approver denies it, or `{:acp_cancel, ref}`
+  arrives (the turn was cancelled or failed), so no other process can change
+  the count. Usage is always zero: no model is called.
   """
 
   use Raxol.Agent
@@ -62,38 +65,48 @@ defmodule Raxol.Agent.Reference.Counter do
   @usage %{input_tokens: 0, output_tokens: 0}
   @help "commands: increment, get, reset, hold, release"
 
-  def init(_context), do: %{count: 0, holds: MapSet.new()}
+  def init(_context), do: %{count: 0, holds: MapSet.new(), changes: %{}}
 
   def available_actions, do: @actions
 
-  def update({:agent_message, _from, {:call, caller, ref, {:acp_prompt, text, approver}}}, model),
-    do: prompt(String.trim(text), caller, ref, approver, model)
+  def update(
+        {:agent_message, _from, {:call, session, ref, {:acp_prompt, text, approver}}},
+        model
+      ),
+      do: prompt(String.trim(text), session, ref, approver, model)
 
-  def update({:agent_message, _from, {:acp_cancel, ref}}, model),
-    do: {%{model | holds: MapSet.delete(model.holds, ref)}, []}
-
-  # An approved change from a turn process: apply it, then let the turn reply.
-  def update({:command_result, {:counter_change, caller, ref, change}}, model) do
-    count = apply_change(change, model.count)
-    Comm.send_turn(caller, ref, {:count, count})
-    {%{model | count: count}, []}
+  def update({:agent_message, _from, {:acp_cancel, ref}}, model) do
+    model = %{model | holds: MapSet.delete(model.holds, ref)}
+    {%{model | changes: Map.delete(model.changes, ref)}, []}
   end
+
+  # An approved change from a live turn: apply it, then let the turn reply.
+  def update({:command_result, {:counter_change, ref, change}}, %{changes: changes} = model)
+      when is_map_key(changes, ref) do
+    {session, changes} = Map.pop(changes, ref)
+    count = apply_change(change, model.count)
+    Comm.send_turn(session, ref, {:count, count})
+    {%{model | count: count, changes: changes}, []}
+  end
+
+  def update({:command_result, {:counter_denied, ref}}, model),
+    do: {%{model | changes: Map.delete(model.changes, ref)}, []}
 
   def update(_msg, model), do: {model, []}
 
-  defp prompt(command, caller, ref, approver, model) when command in ["increment", "reset"] do
+  defp prompt(command, session, ref, approver, model) when command in ["increment", "reset"] do
     agent = self()
-    Comm.run_turn(caller, ref, fn -> change_turn(agent, caller, ref, command, approver) end)
+    Comm.run_turn(session, ref, fn -> change_turn(agent, ref, command, approver) end)
+    {%{model | changes: Map.put(model.changes, ref, session)}, []}
+  end
+
+  defp prompt("get", session, ref, _approver, model) do
+    Comm.reply(session, ref, {:ok, "count: #{model.count}", @usage})
     {model, []}
   end
 
-  defp prompt("get", caller, ref, _approver, model) do
-    Comm.reply(caller, ref, {:ok, "count: #{model.count}", @usage})
-    {model, []}
-  end
-
-  defp prompt("hold", caller, ref, approver, model) do
-    Comm.run_turn(caller, ref, fn ->
+  defp prompt("hold", session, ref, approver, model) do
+    Comm.run_turn(session, ref, fn ->
       case dispatch("hold", approver) do
         {:ok, _released} -> {:ok, "released", @usage}
         {:error, reason} -> {:ok, ToolConverter.public_error("hold", reason), @usage}
@@ -103,29 +116,37 @@ defmodule Raxol.Agent.Reference.Counter do
     {%{model | holds: MapSet.put(model.holds, ref)}, []}
   end
 
-  defp prompt("release", caller, ref, _approver, model) do
-    Enum.each(model.holds, &Comm.send_turn(caller, &1, :release))
-    Comm.reply(caller, ref, {:ok, "released #{MapSet.size(model.holds)}", @usage})
+  defp prompt("release", session, ref, _approver, model) do
+    Enum.each(model.holds, &Comm.send_turn(session, &1, :release))
+    Comm.reply(session, ref, {:ok, "released #{MapSet.size(model.holds)}", @usage})
     {%{model | holds: MapSet.new()}, []}
   end
 
-  defp prompt(_unknown, caller, ref, _approver, model) do
-    Comm.reply(caller, ref, {:ok, @help, @usage})
+  defp prompt(_unknown, session, ref, _approver, model) do
+    Comm.reply(session, ref, {:ok, @help, @usage})
     {model, []}
   end
 
   # Runs in the turn process: the approver is asked here, and only an approved
-  # change is sent to the agent (`agent`, the process running `update/2`).
-  defp change_turn(agent, caller, ref, command, approver) do
+  # change is sent to the agent (`agent`, the process running `update/2`). The
+  # turn watches the agent, so it ends if the agent dies before replying.
+  defp change_turn(agent, ref, command, approver) do
     case dispatch(command, approver) do
       {:ok, change} ->
-        send(agent, {:command_result, {:counter_change, caller, ref, change}})
+        agent_mref = Process.monitor(agent)
+        send(agent, {:command_result, {:counter_change, ref, change}})
 
         receive do
-          {:count, count} -> {:ok, "count: #{count}", @usage}
+          {:count, count} ->
+            Process.demonitor(agent_mref, [:flush])
+            {:ok, "count: #{count}", @usage}
+
+          {:DOWN, ^agent_mref, :process, ^agent, _reason} ->
+            {:error, :agent_down}
         end
 
       {:error, reason} ->
+        send(agent, {:command_result, {:counter_denied, ref}})
         {:ok, ToolConverter.public_error(command, reason), @usage}
     end
   end
