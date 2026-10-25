@@ -427,6 +427,52 @@ defmodule Raxol.MCP.ElicitationTest do
       refute_receive {:mcp_notification, %{method: "elicitation/create"}}, 200
     end
 
+    test "a connection going away kills the tool its approval started", %{
+      server: server,
+      registry: registry,
+      b: b
+    } do
+      parent = self()
+
+      :ok =
+        Registry.register_tools(registry, [
+          %{
+            name: "spend",
+            description: "move money slowly",
+            inputSchema: %{type: "object"},
+            callback: fn _args ->
+              send(parent, {:approved_tool_entered, self()})
+
+              receive do
+                :release -> {:ok, "spent eventually"}
+              end
+            end
+          }
+        ])
+
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: 9,
+                   method: "tools/call",
+                   params: %{"name" => "spend", "arguments" => %{}}
+                 },
+                 "conn-b"
+               )
+
+      assert_receive {:b_got, %{method: "elicitation/create", id: elicit_id}}, 500
+      assert {:reply, nil} = answer_as(server, "conn-b", elicit_id)
+      assert_receive {:approved_tool_entered, worker}, 2_000
+      worker_ref = Process.monitor(worker)
+
+      # Its result could only be pushed to B, and B is gone.
+      Process.unlink(b)
+      Process.exit(b, :kill)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 2_000
+    end
+
     defp call_a(server) do
       Server.handle_message(
         server,

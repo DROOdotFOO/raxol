@@ -17,12 +17,21 @@ defmodule Raxol.MCP.Transport.Stdio do
   answered `server_busy`.
 
   `notifications/cancelled` cancels the named in-flight request, which kills
-  its callback worker. At end of input every reply already produced is still
-  written (methods the server answers inline, such as `initialize` and `ping`,
-  and worker-run requests that finished first); every request still running
-  in a callback worker (`tools/*`, `resources/*`, `prompts/*`,
-  `completion/complete`) is cancelled and gets no reply. The transport stops
-  `:normal` once nothing is outstanding; halting the VM is the caller's job.
+  its callback worker. That holds for a `tools/call` waiting on an elicitation
+  answer too: it stays in flight until it is answered, so a cancel drops it
+  unanswered, or kills its tool once the answer approved it. At
+  end of input every reply already produced is still written (methods the
+  server answers inline, such as `initialize` and `ping`, and worker-run
+  requests that finished first); every request still running in a callback
+  worker (`tools/*`, `resources/*`, `prompts/*`, `completion/complete`) or
+  waiting on an elicitation answer is cancelled and gets no reply. The
+  transport stops `:normal` once nothing is outstanding; halting the VM is the
+  caller's job.
+
+  If the transport dies any other way (killed, the server going down, a crash),
+  the server cancels its outstanding requests, since it monitors every
+  `Raxol.MCP.Server.request/3` caller, and the linked reader exits with it
+  rather than go on consuming input.
 
   ## Notifications
 
@@ -49,7 +58,7 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   defstruct [
     :server,
-    :reader_ref,
+    :reader,
     :io_device,
     :output_device,
     :requests,
@@ -59,7 +68,7 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   @type t :: %__MODULE__{
           server: GenServer.server(),
-          reader_ref: reference() | nil,
+          reader: pid() | nil,
           io_device: IO.device(),
           output_device: IO.device(),
           requests: :gen_server.request_id_collection(),
@@ -89,6 +98,9 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
+    # The reader is linked so that it cannot outlive this process; trapping its
+    # exit keeps a reader crash a clean close rather than a crash here.
+    Process.flag(:trap_exit, true)
     server = Keyword.get(opts, :server, Server)
     io_device = Keyword.get(opts, :io_device, :stdio)
     output_device = Keyword.get(opts, :output_device, :stdio)
@@ -110,13 +122,9 @@ defmodule Raxol.MCP.Transport.Stdio do
 
     parent = self()
     io_device = state.io_device
+    reader = spawn_link(fn -> read_loop(io_device, parent) end)
 
-    {_pid, ref} =
-      spawn_monitor(fn ->
-        read_loop(io_device, parent)
-      end)
-
-    {:noreply, %{state | reader_ref: ref}}
+    {:noreply, %{state | reader: reader}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -146,13 +154,10 @@ defmodule Raxol.MCP.Transport.Stdio do
   end
 
   # The reader exits after reporting end of input; that exit is expected.
-  def handle_manager_info(
-        {:DOWN, ref, :process, _pid, _reason},
-        %{reader_ref: ref, closing: true} = state
-      ),
-      do: {:noreply, state}
+  def handle_manager_info({:EXIT, pid, _reason}, %{reader: pid, closing: true} = state),
+    do: {:noreply, state}
 
-  def handle_manager_info({:DOWN, ref, :process, _pid, reason}, %{reader_ref: ref} = state) do
+  def handle_manager_info({:EXIT, pid, reason}, %{reader: pid} = state) do
     Logger.info("[MCP.Stdio] Reader process exited: #{inspect(reason)}")
     close(state)
   end
@@ -210,7 +215,8 @@ defmodule Raxol.MCP.Transport.Stdio do
   end
 
   # The server answers every request exactly once, a cancelled one with
-  # `{:reply, nil}`, so draining the collection ends.
+  # `{:reply, nil}` (one parked for an elicitation answer included), so
+  # draining the collection ends.
   defp close(state) do
     cancel_all(state)
     maybe_stop(%{state | closing: true})

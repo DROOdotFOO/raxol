@@ -11,8 +11,12 @@ defmodule Raxol.MCP.Transport.StdioTest do
     {:ok, _registry} = Registry.start_link(name: registry_name)
     {:ok, _server} = Server.start_link(name: server_name, registry: registry_name)
 
-    # One device serves as stdin and stdout: the test pushes each input line
-    # and receives each written frame as a message.
+    Map.put(start_transport(server_name), :registry, registry_name)
+  end
+
+  # One device serves as stdin and stdout: the test pushes each input line
+  # and receives each written frame as a message.
+  defp start_transport(server_name) do
     {:ok, io} = PushIO.start_link()
 
     {:ok, transport} =
@@ -20,7 +24,6 @@ defmodule Raxol.MCP.Transport.StdioTest do
 
     %{
       server: server_name,
-      registry: registry_name,
       io: io,
       transport: transport,
       transport_ref: Process.monitor(transport)
@@ -193,6 +196,125 @@ defmodule Raxol.MCP.Transport.StdioTest do
       assert :sys.get_state(server).in_flight == %{}
 
       assert_eof_stops(ctx)
+    end
+  end
+
+  describe "a tools/call parked for elicitation" do
+    setup %{registry: registry} do
+      server_name = :"ask_server_#{System.unique_integer([:positive])}"
+
+      {:ok, _server} =
+        Server.start_link(
+          name: server_name,
+          registry: registry,
+          authorizer: fn _tool, _args, _ctx -> {:ask, "Run it?"} end
+        )
+
+      register_blocking_tool(registry)
+      ctx = start_transport(server_name)
+
+      push(ctx.io, Protocol.request(1, "initialize", %{capabilities: %{elicitation: %{}}}))
+      assert next_frame(ctx.io).id == 1
+
+      push(ctx.io, Protocol.request(7, "tools/call", %{"name" => "block", "arguments" => %{}}))
+      assert %{method: "elicitation/create", id: elicit_id} = next_frame(ctx.io)
+
+      Map.put(ctx, :elicit_id, elicit_id)
+    end
+
+    test "cancelled while waiting: never answered, and a later approval runs nothing",
+         %{io: io, server: server, elicit_id: elicit_id} = ctx do
+      push(io, Protocol.notification("notifications/cancelled", %{"requestId" => 7}))
+      push(io, approval(elicit_id))
+
+      # The server handles one sender's messages in order, so by this reply it
+      # has seen the cancel and the approval: nothing is parked or running.
+      push(io, Protocol.request(3, "ping"))
+      assert next_frame(io).id == 3
+      assert %{pending_elicitations: pending, in_flight: in_flight} = :sys.get_state(server)
+      assert pending == %{}
+      assert in_flight == %{}
+
+      assert_eof_stops(ctx)
+    end
+
+    test "cancelled once approved: the tool is killed and nothing is written",
+         %{io: io, elicit_id: elicit_id} = ctx do
+      {worker, worker_ref} = approve(io, elicit_id)
+
+      push(io, Protocol.notification("notifications/cancelled", %{"requestId" => 7}))
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+
+      push(io, Protocol.request(3, "ping"))
+      assert next_frame(io).id == 3
+      assert_eof_stops(ctx)
+    end
+
+    test "end of input once approved kills the tool",
+         %{io: io, elicit_id: elicit_id, transport: transport, transport_ref: ref} do
+      {worker, worker_ref} = approve(io, elicit_id)
+
+      PushIO.push(io, :eof)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+      assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
+      refute_received {:push_io, ^io, _}
+    end
+  end
+
+  defp approval(elicit_id),
+    do: %{jsonrpc: "2.0", id: elicit_id, result: %{action: "accept", content: %{approve: true}}}
+
+  defp approve(io, elicit_id) do
+    push(io, approval(elicit_id))
+    assert_receive {:entered, worker}, @timeout
+    {worker, Process.monitor(worker)}
+  end
+
+  # These kill a process the test is linked to, so each unlinks it first.
+  describe "abnormal exits" do
+    test "a killed transport takes its reader and its in-flight workers with it",
+         %{io: io, registry: r, transport: transport, transport_ref: ref} do
+      register_blocking_tool(r)
+      {worker, worker_ref} = call_blocking_tool(io, 1)
+      reader = :sys.get_state(transport).reader
+      reader_ref = Process.monitor(reader)
+
+      Process.unlink(transport)
+      Process.exit(transport, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^transport, :killed}, @timeout
+      assert_receive {:DOWN, ^reader_ref, :process, ^reader, :killed}, @timeout
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+    end
+
+    @tag :capture_log
+    test "the server going down stops the transport with {:server_down, reason}",
+         %{io: io, registry: r, server: server, transport: transport, transport_ref: ref} do
+      register_blocking_tool(r)
+      call_blocking_tool(io, 1)
+      reader = :sys.get_state(transport).reader
+      reader_ref = Process.monitor(reader)
+      server_pid = Process.whereis(server)
+
+      Process.unlink(transport)
+      Process.unlink(server_pid)
+      Process.exit(server_pid, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^transport, {:server_down, :killed}}, @timeout
+      assert_receive {:DOWN, ^reader_ref, :process, ^reader, {:server_down, :killed}}, @timeout
+    end
+
+    @tag :capture_log
+    test "the reader dying closes the transport like end of input",
+         %{io: io, registry: r, transport: transport, transport_ref: ref} do
+      register_blocking_tool(r)
+      {worker, worker_ref} = call_blocking_tool(io, 1)
+
+      Process.exit(:sys.get_state(transport).reader, :kill)
+
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+      assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
+      refute_received {:push_io, ^io, _}
     end
   end
 end
