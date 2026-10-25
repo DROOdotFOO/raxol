@@ -17,18 +17,35 @@ defmodule Raxol.Agent.OMP.Lane do
   takes), `:session_id` (required; a non-empty string), `:rpc` (the
   `Raxol.Agent.OMP.RPC.start_link/1` options, without `:subscriber` and
   `:principal`, which the lane sets), `:name`. The RPC session is linked:
-  when it stops, the lane stops with it.
+  when it stops, the lane stops with it. When the principal's process
+  exits, the lane stops with `{:shutdown, :principal_down}`; the RPC session
+  denies its open approvals and aborts OMP as it stops.
+
+  ## Trust
+
+  The principal check guards misuse (a surface wired to an unauthenticated
+  sender), not a hostile process in the same VM: anything holding the
+  session map can send the RPC session raw requests (`session.rpc`), and
+  `RPC.answer/3` trusts the principal's pid. A surface routes only its
+  principal's messages to the lane: it compares the sender (for a gateway,
+  `route.user_id`) with the principal's id before `prompt/2` or
+  `RPC.answer/3`.
 
   ## The seam
 
   `session/1` returns the `Raxol.Harness.SessionLane.session()` map, which
-  also carries the RPC session's pid (`:rpc`).
+  also carries the RPC session's pid (`:rpc`). `prompt/2`, `interrupt/2`
+  and `steer/2` wait at most 5000 ms for OMP's acknowledgement
+  (`{:error, {:rpc_timeout, 5000}}`), so a stuck OMP never blocks the
+  driver; their outcome is event-observed anyway.
 
     * `subscribe/1`: the caller receives `{:session_event, session_id,
       event}` (a `Raxol.Agent.Contract.Event`) until it exits.
-    * `prompt/2`: OMP `prompt` with the payload's `:text`; `:ok` once OMP
-      admits it, or the request's error (`{:error, :not_ready}` before the
-      handshake finished).
+    * `prompt/2`: re-authenticates the principal first
+      (`{:error, {:unauthenticated_principal, reason}}` once the grant or
+      the SSH tenant binding is gone), then OMP `prompt` with the payload's
+      `:text`; `:ok` once OMP admits it, or the request's error
+      (`{:error, :not_ready}` before the handshake finished).
     * `interrupt/2`: OMP `abort`; the turn's end is event-observed.
     * `steer/2`: OMP `steer` with the request's `:text`, answered
       `{:ok, {:accepted, %{client_msg_id: id}}}` once OMP queued it. OMP's
@@ -78,6 +95,8 @@ defmodule Raxol.Agent.OMP.Lane do
   # A message's blocks in transcript order: reasoning before the answer.
   @blocks [{"thinking", :reasoning}, {"text", :message}]
   @deltas %{"thinking_delta" => {"thinking", :reasoning}, "text_delta" => {"text", :message}}
+  # How long a command waits for OMP's acknowledgement (moduledoc).
+  @command_timeout_ms 5_000
 
   @doc "Start a lane; see the moduledoc."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -102,23 +121,32 @@ defmodule Raxol.Agent.OMP.Lane do
   end
 
   @impl Raxol.Harness.SessionLane
-  def prompt(%{rpc: rpc}, payload) when is_map(payload) do
+  def prompt(%{pid: lane, rpc: rpc}, payload) when is_map(payload) do
     with {:ok, text} <- text(payload),
-         {:ok, _data} <- RPC.request(rpc, %{"type" => "prompt", "message" => text}),
+         :ok <- reauthenticate(lane),
+         {:ok, _data} <- command(rpc, %{"type" => "prompt", "message" => text}),
          do: :ok
   end
 
   @impl Raxol.Harness.SessionLane
   def interrupt(%{rpc: rpc}, payload) when is_map(payload) do
-    with {:ok, _data} <- RPC.request(rpc, %{"type" => "abort"}), do: :ok
+    with {:ok, _data} <- command(rpc, %{"type" => "abort"}), do: :ok
   end
 
   @impl Raxol.Harness.SessionLane
   def steer(%{rpc: rpc}, request) when is_map(request) do
     with {:ok, text} <- text(request),
-         {:ok, _data} <- RPC.request(rpc, %{"type" => "steer", "message" => text}) do
+         {:ok, _data} <- command(rpc, %{"type" => "steer", "message" => text}) do
       {:ok, {:accepted, %{client_msg_id: field(request, :client_msg_id)}}}
     end
+  end
+
+  defp command(rpc, command), do: RPC.request(rpc, command, @command_timeout_ms)
+
+  defp reauthenticate(lane) do
+    GenServer.call(lane, :authenticate)
+  catch
+    :exit, _reason -> {:error, :lane_down}
   end
 
   @impl Raxol.Harness.SessionLane
@@ -152,6 +180,8 @@ defmodule Raxol.Agent.OMP.Lane do
        %{
          session_id: session_id,
          rpc: rpc,
+         claim: Keyword.get(opts, :principal),
+         principal_ref: Process.monitor(principal.pid),
          subscribers: %{},
          seq: 0,
          turn: 0,
@@ -171,6 +201,14 @@ defmodule Raxol.Agent.OMP.Lane do
   def handle_call(:session, _from, state),
     do: {:reply, %{session_id: state.session_id, pid: self(), rpc: state.rpc}, state}
 
+  # The grant or the tenant binding may be gone since the lane started.
+  def handle_call(:authenticate, _from, state) do
+    case Principal.authenticate(state.claim) do
+      {:ok, _principal} -> {:reply, :ok, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call(:subscribe, {pid, _tag}, state) do
     subscribers =
       if is_map_key(state.subscribers, pid),
@@ -185,6 +223,9 @@ defmodule Raxol.Agent.OMP.Lane do
 
   def handle_info({:EXIT, rpc, reason}, %{rpc: rpc} = state),
     do: {:stop, if(reason == :normal, do: :normal, else: {:shutdown, reason}), state}
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{principal_ref: ref} = state),
+    do: {:stop, {:shutdown, :principal_down}, state}
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state),
     do: {:noreply, %{state | subscribers: Map.delete(state.subscribers, pid)}}

@@ -149,6 +149,49 @@ defmodule Raxol.Agent.OMP.LaneTest do
     assert Enum.map(events, & &1.id) == Enum.to_list(1..length(events))
   end
 
+  test "the lane stops when its principal exits", %{dir: dir} do
+    {server, connection} = ssh_connection(dir, :tenants_dir, "alice")
+    test = self()
+
+    principal =
+      spawn(fn ->
+        receive do: ({:omp_rpc_approval, _rpc, ui_id, _frame} -> send(test, {:asked, ui_id}))
+      end)
+
+    {:ok, lane} =
+      start_supervised(
+        {Lane,
+         principal: {:ssh, server, connection, principal}, session_id: "s", rpc: rpc_opts(dir)}
+      )
+
+    session = Lane.session(lane)
+    lane_ref = Lane.monitor(session)
+    rpc_ref = Process.monitor(session.rpc)
+    assert :ok = RPC.await_ready(session.rpc)
+    assert :ok = Lane.prompt(session, %{text: @prompt})
+
+    # The principal took the approval and exited without answering.
+    assert_receive {:asked, _ui_id}, 30_000
+    assert_receive {:DOWN, ^lane_ref, :process, ^lane, {:shutdown, :principal_down}}, 5_000
+    assert_receive {:DOWN, ^rpc_ref, :process, _rpc, _reason}, 5_000
+  end
+
+  test "prompt/2 refuses once the principal no longer authenticates", %{dir: dir} do
+    {server, connection} = ssh_connection(dir, :tenants_dir, "alice")
+
+    {:ok, lane} =
+      start_supervised(
+        {Lane, principal: {:ssh, server, connection, self()}, session_id: "s", rpc: rpc_opts(dir)}
+      )
+
+    session = Lane.session(lane)
+    assert :ok = RPC.await_ready(session.rpc)
+    stop_supervised!(Raxol.SSH.Server)
+
+    assert {:error, {:unauthenticated_principal, :ssh_server_down}} =
+             Lane.prompt(session, %{text: @prompt})
+  end
+
   describe "an unauthenticated principal is refused before omp starts" do
     test "SSH without :tenants_dir", %{dir: dir} do
       {server, connection} = ssh_connection(dir, :authorized_keys_dir, "alice")

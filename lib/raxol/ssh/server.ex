@@ -334,6 +334,10 @@ defmodule Raxol.SSH.Server do
   `:authorized_keys_dir` server, where a keyholder may claim any username),
   `:foreign_connection` (a connection to another daemon),
   `:no_authenticated_user` and `:ssh_server_down`.
+
+  A connection is matched to this daemon by its local port only: a
+  connection to another daemon on the same port number (another interface
+  or network namespace) is not told apart.
   """
   @spec tenant(GenServer.server(), term()) ::
           {:ok, String.t()} | {:error, atom()}

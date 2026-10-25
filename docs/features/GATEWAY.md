@@ -246,15 +246,21 @@ allow-everyone platform is refused with `{:error, {:unauthenticated_principal, r
 before OMP is spawned.
 
 ```elixir
+# One lane per person: the route key names the chat, so add the user.
 Raxol.Agent.OMP.Lane.start_link(
   principal: {:gateway, Raxol.Gateway.Pairing, route, approver_pid},
-  session_id: Raxol.Gateway.Route.key(route),
+  session_id: "#{Raxol.Gateway.Route.key(route)}:#{route.user_id}",
   rpc: [profile: "telegram", cwd: "/var/lib/raxol/omp/telegram"]
 )
 ```
 
-Route only that user's messages to the lane: in a group chat, other members arrive as
-other routes.
+The lane is bound to one person, but a chat is not: in a group, other members arrive on the
+same chat as routes with their own `user_id`. A handler MUST compare an inbound route's
+`user_id` with the principal's id before it calls `prompt/2` or `RPC.answer/3`, and drop
+the message otherwise. `prompt/2` also re-checks the grant, so a revoked user is refused
+(`{:error, {:unauthenticated_principal, :not_granted}}`). The check guards a misrouted
+surface, not a hostile process in the same VM: anything holding the lane's session map can
+reach the RPC session directly.
 
 ## Delivery
 
