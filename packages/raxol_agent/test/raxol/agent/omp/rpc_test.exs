@@ -6,8 +6,11 @@ defmodule Raxol.Agent.OMP.RPCTest do
   # is inside it, so a session there is refused).
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Agent.OMP.RPC
   alias Raxol.Agent.OMP.RPC.Codec
+  alias Raxol.Agent.OMP.Version
   alias Raxol.Agent.OMPTranscriptBinary
 
   @fixtures Path.expand("../../../fixtures/omp/rpc", __DIR__)
@@ -279,6 +282,28 @@ defmodule Raxol.Agent.OMP.RPCTest do
       rpc = start_linked(dir, "handshake", mode: "never-answer")
       assert :ok = RPC.close(rpc)
       assert_receive {:EXIT, ^rpc, :normal}, 5_000
+    end
+
+    @tag skip: Elixir.Version.parse!(Version.tested()).minor == 0 && "the pin has no lower minor"
+    test "a minor below the pin logs a warning and the handshake completes", %{dir: dir} do
+      %{major: major, minor: minor} = Elixir.Version.parse!(Version.tested())
+      older = "#{major}.#{minor - 1}.0"
+      pinned = ~s("omp_version":"#{Version.tested()}")
+      recorded = File.read!(Path.join(@fixtures, "handshake.jsonl"))
+      assert [_, _] = String.split(recorded, pinned)
+
+      fixture = Path.join(dir, "older_minor.jsonl")
+      File.write!(fixture, String.replace(recorded, pinned, ~s("omp_version":"#{older}")))
+      path = OMPTranscriptBinary.write(dir, fixture, "play")
+      opts = [path: path, cwd: session_dir(dir), profile: "raxol-test", subscriber: self()]
+
+      log =
+        capture_log(fn ->
+          {:ok, rpc} = start_supervised({RPC, opts})
+          assert :ok = RPC.await_ready(rpc)
+        end)
+
+      assert log =~ "omp #{older} is older than the tested #{Version.tested()}; continuing"
     end
   end
 

@@ -6,7 +6,7 @@ defmodule Raxol.Agent.OMP.RPC do
   (`Raxol.Agent.Backend.OmpGateway.resolve_binary/1`) and returns at once.
   The handshake then runs in the session process: `omp --version` is
   checked against the tested pin (`Raxol.Agent.OMP.Version`; a different
-  major is refused, a newer minor logged), `omp --mode rpc --approval-mode
+  major is refused, another minor logged), `omp --mode rpc --approval-mode
   write --profile <profile>` is spawned in a dedicated working directory,
   the ready frame must offer protocol v2, and `negotiate_protocol` v2 must
   succeed. `await_ready/2` waits for that; a request sent before it is
@@ -800,6 +800,9 @@ defmodule Raxol.Agent.OMP.RPC do
 
   defp warn({:newer_minor, found, tested}),
     do: Logger.warning("omp #{found} is newer than the tested #{tested}; continuing")
+
+  defp warn({:older_minor, found, tested}),
+    do: Logger.warning("omp #{found} is older than the tested #{tested}; continuing")
 
   defp deadline(ms), do: System.monotonic_time(:millisecond) + ms
   defp remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
