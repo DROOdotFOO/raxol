@@ -193,7 +193,7 @@ defmodule Raxol.Scoreboard.AgentTasks do
       {:ok, _server} =
         Supervisor.start_child(sup, {Server, name: @server, registry: registry})
 
-      maybe_start_headless(sup)
+      :ok = maybe_start_headless(sup)
       fun.(registry)
     after
       Supervisor.stop(sup)
@@ -201,8 +201,15 @@ defmodule Raxol.Scoreboard.AgentTasks do
   end
 
   defp maybe_start_headless(sup) do
-    if is_nil(Process.whereis(Headless)) do
-      {:ok, _headless} = Supervisor.start_child(sup, {Headless, name: Headless})
+    case Process.whereis(Headless) do
+      nil ->
+        {:ok, _headless} =
+          Supervisor.start_child(sup, {Headless, name: Headless})
+
+        :ok
+
+      _running ->
+        :ok
     end
   end
 
@@ -292,13 +299,15 @@ defmodule Raxol.Scoreboard.AgentTasks do
   defp key_path(task) do
     with {:ok, screen} <- screenshot() do
       task.key_path
-      |> Enum.reduce_while({:ok, [screen]}, fn key, {:ok, stream} ->
-        case send_key(key) do
-          {:ok, request, screen} -> {:cont, {:ok, [screen, request | stream]}}
-          error -> {:halt, error}
-        end
-      end)
+      |> Enum.reduce_while({:ok, [screen]}, &key_step/2)
       |> measured(length(task.key_path))
+    end
+  end
+
+  defp key_step(key, {:ok, stream}) do
+    case send_key(key) do
+      {:ok, request, screen} -> {:cont, {:ok, [screen, request | stream]}}
+      error -> {:halt, error}
     end
   end
 
