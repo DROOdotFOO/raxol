@@ -7,11 +7,11 @@ defmodule Raxol.Headless.McpToolsTest do
   # The test apps `raxol_start` starts over MCP. A set `:headless_startable`
   # replaces the default demo list, so they are listed alongside the demos,
   # for this module's tests only. BufferServer is not an app: it is listed so
-  # the tool's contract refusal stays reachable.
+  # the tool's contract refusal stays reachable. Every entry must be loadable,
+  # so the out-of-VM probe is listed only by its own test.
   @test_startable [
     Raxol.Headless.McpToolsTest.SizedApp,
     Raxol.Headless.McpToolsTest.InjectedTextApp,
-    Raxol.Headless.McpToolsTest.UnloadedProbe,
     Raxol.Terminal.Buffer.BufferServer
   ]
 
@@ -347,12 +347,12 @@ defmodule Raxol.Headless.McpToolsTest do
       refute not_an_app =~ "is not startable over MCP"
     end
 
-    # Loading is `Raxol.Headless.start/2`'s job, not the list's. Interactive
-    # code loading -- `mix mcp.server`, the documented workflow -- is the
-    # normal case, so a listed module is often compiled and on the code path
-    # but not yet loaded, and refusing it for that refuses what `raxol_start`
-    # asks for. An OTP release boots `:embedded` with everything pre-loaded, so
-    # this hides on fly.io and shows up locally.
+    # A listed module may be compiled and on the code path but not loaded yet:
+    # interactive code loading -- `mix mcp.server`, the documented workflow --
+    # is the normal case, and refusing such a module refuses what
+    # `raxol_start` asks for. `startable/0` loads it (`Code.ensure_loaded?/1`)
+    # when it checks the list. An OTP release boots `:embedded` with
+    # everything pre-loaded, so this hides on fly.io and shows up locally.
     #
     # It lives in THIS describe, behind a real `Raxol.Headless`, because the
     # contract gate runs server-side. Asserted from a block with no server, the
@@ -365,7 +365,6 @@ defmodule Raxol.Headless.McpToolsTest do
     test "a listed module that is compiled but not loaded starts" do
       dir = compile_out_of_vm("Raxol.Headless.McpToolsTest.UnloadedProbe")
 
-      # Listed by this module's setup, so its atom exists; nothing has loaded it.
       refute :code.is_loaded(Raxol.Headless.McpToolsTest.UnloadedProbe)
 
       # Unloaded again afterwards, so a repeat in this VM finds it unloaded
@@ -378,6 +377,11 @@ defmodule Raxol.Headless.McpToolsTest do
 
       Code.append_path(dir)
       on_exit(fn -> Code.delete_path(dir) end)
+
+      put_startable([
+        Raxol.Headless.McpToolsTest.UnloadedProbe
+        | McpTools.default_startable() ++ @test_startable
+      ])
 
       assert {:ok, message} =
                start_tool_result(%{
@@ -550,19 +554,44 @@ defmodule Raxol.Headless.McpToolsTest do
       assert Raxol.Headless.list() == before
     end
 
-    # The REPL demo evaluates Elixir. It is a playground demo and a Raxol
-    # application, and still never startable by an MCP client.
-    test "the REPL demo is refused although every other demo is listed" do
+    # The REPL demo evaluates Elixir; the BEAM dashboard sets the VM-wide
+    # `:scheduler_wall_time` flag and shows VM internals. Both are playground
+    # demos and Raxol applications, and still never startable by an MCP client.
+    test "the REPL and BEAM dashboard demos are refused although every other demo is listed" do
       before = Raxol.Headless.list()
 
-      assert {:error, message} =
-               start_tool_result(%{"module" => "Raxol.Playground.Demos.ReplDemo"})
+      for demo <- ["ReplDemo", "BeamDashboardDemo"] do
+        assert {:error, message} =
+                 start_tool_result(%{"module" => "Raxol.Playground.Demos." <> demo})
 
-      assert message =~ "is not startable over MCP"
+        assert message =~ "is not startable over MCP"
+      end
+
       assert Raxol.Headless.list() == before
+    end
 
-      refute Raxol.Playground.Demos.ReplDemo in McpTools.startable()
-      assert Raxol.Playground.Demos.TableDemo in McpTools.startable()
+    # Pinned so that a new demo is a reviewed change to what any MCP client may
+    # start, not a silent one. Adding a demo to the Catalog fails this test:
+    # list it here if clients may start it, or exclude it in `McpTools`.
+    test "the default list is exactly these demos" do
+      put_startable([])
+      Application.delete_env(:raxol, :headless_startable)
+
+      expected =
+        ~w(BarChartDemo ButtonDemo CheckboxDemo CodeBlockDemo ContainerDemo
+           CursorTrailDemo EasingDemo FlexLayoutDemo FocusRingDemo
+           HarnessApprovalDemo HarnessDiffDemo HarnessPanelsDemo HarnessStatusDemo
+           HarnessToolBlocksDemo HarnessTranscriptDemo HeatmapDemo LineChartDemo
+           MarkdownDemo MenuDemo ModalDemo OscAmbientDemo PanelHighlightsDemo
+           PasswordFieldDemo ProgressDemo RadioGroupDemo SalienceDemo
+           ScatterChartDemo ScrollAnchorDemo ScrubberDemo SelectListDemo
+           SparklineDemo SplitPaneDemo StatusBarDemo TableDemo TabsDemo
+           TextAreaDemo TextDemo TextInputDemo TreeDemo VfsDemo)
+        |> Enum.map(&Module.concat(Raxol.Playground.Demos, &1))
+
+      assert {:ok, startable} = McpTools.startable()
+      assert Enum.sort(startable) == Enum.sort(expected)
+      assert McpTools.default_startable() == startable
     end
 
     test "a playground demo starts" do
@@ -598,14 +627,47 @@ defmodule Raxol.Headless.McpToolsTest do
       assert :startable_table in Raxol.Headless.list()
     end
 
-    test "a configured value that is not a list of modules is a config error" do
-      for bad <- [Raxol.Playground.Demos.TableDemo, ["Raxol.Playground.Demos.TableDemo"]] do
+    @bad_startable [
+      Raxol.Playground.Demos.TableDemo,
+      ["Raxol.Playground.Demos.TableDemo"],
+      [:bogus],
+      [nil],
+      [true],
+      [Raxol.Playground.Demos.TableDemo, NoSuch.HeadlessModule],
+      [Raxol.Playground.Demos.TableDemo | Raxol.Playground.Demos.TabsDemo]
+    ]
+
+    test "a configured value that is not a list of loadable modules is a config error" do
+      for bad <- @bad_startable do
         put_startable(bad)
 
-        assert_raise ArgumentError, ~r/:headless_startable must be a list of modules/, fn ->
-          McpTools.startable()
-        end
+        assert {:error, message} = McpTools.startable()
+        assert message =~ ":headless_startable must be a list of loadable modules"
+
+        assert {:error, ^message} =
+                 start_tool_result(%{"module" => "Raxol.Playground.Demos.TableDemo"})
+
+        assert_raise ArgumentError, message, fn -> McpTools.register(registry!()) end
       end
+    end
+
+    # A raise inside the callback counted as a fault: five calls opened the
+    # tool's circuit for every client, and it stayed open after the fix.
+    test "a config error neither raises nor opens the circuit" do
+      registry = registry!()
+      :ok = McpTools.register(registry)
+      put_startable(Raxol.Playground.Demos.TableDemo)
+      args = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "startable_table"}
+
+      for _ <- 1..7 do
+        assert {:error, message} = Raxol.MCP.Registry.call_tool(registry, "raxol_start", args)
+        assert message =~ ":headless_startable must be a list of loadable modules"
+      end
+
+      put_startable([Raxol.Playground.Demos.TableDemo])
+
+      assert {:ok, _} = Raxol.MCP.Registry.call_tool(registry, "raxol_start", args)
+      assert :startable_table in Raxol.Headless.list()
     end
   end
 
@@ -765,6 +827,48 @@ defmodule Raxol.Headless.McpToolsTest do
                  "#{inspect(module)}.#{spec.name}"
         end
       end
+    end
+
+    # TreeWalker refuses an action name outside `[a-z][a-z0-9_]{0,31}` and
+    # keeps only `sensitive`/`destructiveHint: true` annotations; neither may
+    # cost a built-in provider a tool or a flag.
+    test "every built-in action derives its tool with its annotations" do
+      for {type, module} <- Raxol.MCP.TreeWalker.default_type_map() do
+        node = %{type: type, id: "w", attrs: %{}}
+        specs = module.mcp_tools(node)
+
+        assert {tools, refusals} =
+                 Raxol.MCP.TreeWalker.derive_with_refusals(node, %{dispatcher_pid: nil})
+
+        assert refusals == MapSet.new(), inspect(module)
+
+        assert Enum.map(tools, &{&1.name, Map.get(&1, :annotations)}) ==
+                 Enum.map(specs, &{"w." <> &1.name, Map.get(&1, :annotations)}),
+               inspect(module)
+      end
+    end
+
+    # A masked input holds a secret, and `get_value` is an ungated read, so a
+    # masked input has none, like PasswordField.
+    test "a masked text input derives no get_value and refuses one" do
+      masked = %{type: :text_input, id: "pin", attrs: %{mask_char: "*"}, value: "hunter2"}
+      ctx = %{dispatcher_pid: nil}
+
+      names = Enum.map(Raxol.MCP.TreeWalker.derive_tools(masked, ctx), & &1.name)
+      assert names == ["pin.type_into", "pin.clear"]
+
+      for node <- [masked, %{masked | attrs: %{}} |> Map.put(:mask_char, "*")] do
+        assert {:error, message} =
+                 Raxol.UI.Components.Input.TextInput.handle_tool_call("get_value", %{}, %{
+                   widget_id: "pin",
+                   widget_state: node
+                 })
+
+        refute message =~ "hunter2"
+      end
+
+      plain = %{masked | attrs: %{}}
+      assert "pin.get_value" in Enum.map(Raxol.MCP.TreeWalker.derive_tools(plain, ctx), & &1.name)
     end
 
     # The other half of the breaking change: an embedder with no authorizer
