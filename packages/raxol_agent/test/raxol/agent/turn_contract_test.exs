@@ -18,6 +18,10 @@ defmodule Raxol.Agent.TurnContractTest do
   @usage %{input_tokens: 0, output_tokens: 0}
 
   setup do
+    # App-level singletons the agent's runtime Lifecycle uses (the Dispatcher
+    # reads the theme from UserPreferences; the rendering engine starts its
+    # component processes under Raxol.DynamicSupervisor). Other suites share
+    # them, so they are started unlinked and an already-running one is kept.
     ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
     ensure_running({DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one})
 
@@ -98,17 +102,24 @@ defmodule Raxol.Agent.TurnContractTest do
 
   test "a prompt whose caller times out is cancelled", %{id: id} do
     ref = make_ref()
+    [{session, _}] = Registry.lookup(Raxol.Agent.Registry, id)
 
-    # The test process is the caller; its timeout sends the cancel.
+    # With the session suspended nothing can answer the hold, so a zero
+    # timeout expires deterministically: the call casts the prompt, then its
+    # cancel, and returns. The session sees both, in that order, on resume.
+    :ok = :sys.suspend(session)
+
     assert {:error, :timeout} =
-             Comm.call(id, {:acp_prompt, "hold", authorizing(self())}, 1_000, ref: ref)
+             Comm.call(id, {:acp_prompt, "hold", authorizing(self())}, 0, ref: ref)
 
-    assert_receive {:authorizing, Counter.Hold, worker}, 5_000
-    # The cancel answers the abandoned prompt only after the worker is dead.
+    :ok = :sys.resume(session)
+
+    # The abandoned prompt is answered as cancelled (a stray reply), the turn
+    # is gone, and the agent saw the cancel: it holds nothing.
     assert_receive {:agent_reply, ^ref, {:error, :cancelled}}, 5_000
-    refute Process.alive?(worker)
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
     assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", ToolPolicy.allow_all())
+    refute_received {:authorizing, Counter.Hold, _worker}
   end
 
   test "a prompt whose caller goes down is cancelled", %{id: id} do
@@ -140,8 +151,7 @@ defmodule Raxol.Agent.TurnContractTest do
     assert_receive {:DOWN, ^asker_mon, :process, ^asker, :killed}, 5_000
     assert {:ok, {:error, :cancelled}} = Task.await(held)
 
-    # Approving now reaches nobody: the ask died with its turn.
-    send(asker, :approve)
+    # The ask died with its turn, so the reset never reached the count.
     assert {:ok, {:ok, "count: 1", _}} = prompt(id, "get", ToolPolicy.allow_all())
   end
 
