@@ -79,6 +79,12 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       :ok
     end
 
+    @impl true
+    def prompt(%{test: test_pid}, payload) do
+      send(test_pid, {:prompt_dispatched, payload})
+      :ok
+    end
+
     # A wedged lane: neither replies nor crashes. Models the exact case
     # the driver's steer-timeout backstop exists for -- a live steer call
     # that hangs forever, which without an expiry would pin the

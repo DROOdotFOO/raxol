@@ -44,6 +44,22 @@ defmodule Raxol.Agent.Harness.SessionLane do
   end
 
   @doc """
+  Fire-and-forget prompt dispatch: the wire map `%{"type" => "prompt",
+  "payload" => payload}` through `Raxol.Agent.Command.decode/1` (which
+  requires a non-empty `text`) and `Raxol.Agent.Command.route/2`, the same
+  seam `interrupt/2` uses. `:ok` once routed; the turn's events are the
+  acknowledgment.
+  """
+  @impl Raxol.Harness.SessionLane
+  @spec prompt(session(), map()) :: :ok | {:error, term()}
+  def prompt(session, payload) when is_map(payload) do
+    with {:ok, cmd} <- Command.decode(%{"type" => "prompt", "payload" => payload}) do
+      Command.route(cmd, session)
+      :ok
+    end
+  end
+
+  @doc """
   Fire-and-forget interrupt dispatch: builds the wire map `%{"type" =>
   "interrupt", "payload" => payload}` and runs it through
   `Raxol.Agent.Command.decode/1` (the one validation seam) before

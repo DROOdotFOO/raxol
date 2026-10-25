@@ -8,9 +8,9 @@ defmodule Raxol.Harness.SessionLane do
 
   ## The asymmetry: `interrupt/2` is event-observed, `steer/2` is a reply
 
-  The two commands this behaviour exposes are deliberately NOT symmetric
-  in how their outcome reaches the caller, and that asymmetry is the
-  whole point, not an oversight:
+  `interrupt/2` and `steer/2` are deliberately NOT symmetric in how their
+  outcome reaches the caller, and that asymmetry is the whole point, not an
+  oversight (`prompt/2` is event-observed like `interrupt/2`):
 
     * **`interrupt/2` is fire-and-forget.** Its acknowledgment is
       EVENT-OBSERVED: the staged supervised kill this seam dispatches
@@ -60,6 +60,15 @@ defmodule Raxol.Harness.SessionLane do
   reaches the projection/status-strip pipeline.
   """
   @callback subscribe(session()) :: :ok | {:error, term()}
+
+  @doc """
+  Fire-and-forget dispatch of a prompt: start a turn with the payload's
+  `:text` (mirroring `Raxol.Agent.Command`'s `:prompt`). Like `interrupt/2`
+  its outcome is EVENT-OBSERVED (the turn's events on the stream
+  `subscribe/1` delivers); the reply says only whether the prompt was
+  dispatched, or admitted where the lane has an admission step.
+  """
+  @callback prompt(session(), payload :: map()) :: :ok | {:error, term()}
 
   @doc """
   Fire-and-forget dispatch of an interrupt command -- the supervised kill
