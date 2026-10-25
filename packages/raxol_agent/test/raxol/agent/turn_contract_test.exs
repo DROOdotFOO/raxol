@@ -122,6 +122,17 @@ defmodule Raxol.Agent.TurnContractTest do
     refute_received {:authorizing, Counter.Hold, _worker}
   end
 
+  test "a prompt needs an explicit timeout", %{id: id} do
+    allow = ToolPolicy.allow_all()
+
+    # Refused before it reaches the agent: the hold below is never taken.
+    assert {:error, :timeout_required} = Comm.call(id, {:acp_prompt, "hold", allow})
+    assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", allow)
+
+    # Other messages keep the default timeout.
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, make_ref()})
+  end
+
   test "a prompt whose caller goes down is cancelled", %{id: id} do
     ref = make_ref()
     approver = authorizing(self())
@@ -211,7 +222,7 @@ defmodule Raxol.Agent.TurnContractTest do
     end
   end
 
-  defp prompt(id, text, approver), do: Comm.call(id, {:acp_prompt, text, approver})
+  defp prompt(id, text, approver), do: Comm.call(id, {:acp_prompt, text, approver}, 5_000)
 
   defp uniq, do: System.unique_integer([:positive])
 

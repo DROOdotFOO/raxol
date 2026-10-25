@@ -24,7 +24,10 @@ defmodule Raxol.Agent.Comm do
   `call(agent, {:acp_prompt, text, approver}, timeout)` asks the agent for
   one turn, answered `{:ok, text, usage}` (so the call returns
   `{:ok, {:ok, text, usage}}`). `approver` is an arity-3 `:tool_authorizer`
-  (see `Raxol.Agent.ToolPolicy`) that the turn's tool calls must pass.
+  (see `Raxol.Agent.ToolPolicy`) that the turn's tool calls must pass. The
+  timeout is required, as a timeout cancels the turn: `call/2` refuses a
+  prompt with `{:error, :timeout_required}` without sending it (other
+  messages keep the 5 s default). Pass `:infinity` for a turn with no limit.
 
   The session proxies the turn: the agent's `update/2` sees
   `{:call, session_pid, ref, {:acp_prompt, text, approver}}` and answers it
@@ -75,6 +78,19 @@ defmodule Raxol.Agent.Comm do
   end
 
   @doc """
+  `call/4` with the default 5 s timeout, for any message except an
+  `{:acp_prompt, text, approver}`: a prompt needs an explicit timeout (it
+  cancels the turn), so it is refused with `{:error, :timeout_required}`
+  and never sent.
+  """
+  @spec call(term(), term()) ::
+          {:ok, term()} | {:error, :timeout | :not_found | :agent_down | :timeout_required}
+  def call(target_id, message)
+
+  def call(_target_id, {:acp_prompt, _text, _approver}), do: {:error, :timeout_required}
+  def call(target_id, message), do: call(target_id, message, 5_000)
+
+  @doc """
   Synchronous request-reply with another agent.
 
   The target agent must answer with `reply/3` (see the module doc);
@@ -93,7 +109,7 @@ defmodule Raxol.Agent.Comm do
   """
   @spec call(term(), term(), timeout(), keyword()) ::
           {:ok, term()} | {:error, :timeout | :not_found | :agent_down}
-  def call(target_id, message, timeout \\ 5_000, opts \\ []) do
+  def call(target_id, message, timeout, opts \\ []) do
     ref = call_ref(opts)
 
     case Registry.lookup(Raxol.Agent.Registry, target_id) do
