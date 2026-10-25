@@ -641,6 +641,20 @@ defmodule Raxol.MCP.Server do
     end
   end
 
+  # Every handler reads `params` as an object; JSON-RPC also allows an array,
+  # which no MCP method takes. Refused here, before any handler, so a malformed
+  # frame from one client cannot crash the server every connection shares.
+  defp async_action(%{params: params} = message, _state, _conn_id) when not is_map(params) do
+    case message do
+      %{id: id, method: _method} ->
+        {:reply,
+         Protocol.error_response(id, Protocol.invalid_params(), "params must be an object")}
+
+      _notification ->
+        {:reply, nil}
+    end
+  end
+
   defp async_action(
          %{method: "tools/call", id: id, params: params},
          state,

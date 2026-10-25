@@ -502,5 +502,26 @@ defmodule Raxol.MCP.ServerTest do
     test "empty map returns nil", %{server: s} do
       {:reply, nil} = Server.handle_message(s, %{})
     end
+
+    test "non-object params are refused as invalid params, not a crash", %{server: s} do
+      for {id, method, params} <- [
+            {50, "tools/call", []},
+            {51, "resources/read", "raxol://x"},
+            {52, "prompts/get", nil},
+            {53, "ping", [1]}
+          ] do
+        assert {:reply, resp} =
+                 Server.handle_message(s, %{id: id, method: method, params: params})
+
+        assert resp.id == id
+        assert resp.error.code == Protocol.invalid_params()
+      end
+
+      assert {:reply, nil} =
+               Server.handle_message(s, %{method: "notifications/initialized", params: []})
+
+      assert {:reply, %{id: 54, result: %{}}} =
+               Server.handle_message(s, %{id: 54, method: "ping"})
+    end
   end
 end
