@@ -996,7 +996,6 @@ defmodule Raxol.HeadlessTest do
 
       Enum.each(sessions, &hold(&1.synchronizer_pid))
       held = stopping.synchronizer_pid
-      :erlang.trace(held, true, [:receive])
 
       test = self()
 
@@ -1012,8 +1011,7 @@ defmodule Raxol.HeadlessTest do
       end)
 
       # Headless is inside that call once its stop reaches the synchronizer.
-      assert_receive {:trace, ^held, :receive, {:system, _, {:terminate, :normal}}},
-                     5_000
+      assert_receive {:stop_reached, ^held}, 5_000
 
       lifecycle = left.lifecycle_pid
       lifecycle_ref = Process.monitor(lifecycle)
@@ -1088,7 +1086,8 @@ defmodule Raxol.HeadlessTest do
 
   # Holds `pid` inside a `:sys.replace_state/3` callback until it is killed,
   # so a `GenServer.stop/3` of it waits out its timeout. `:sys.suspend/1`
-  # would not: a suspended process still answers `terminate`.
+  # would not: a suspended process still answers `terminate`. Each stop that
+  # reaches it is reported as `{:stop_reached, pid}` and left unanswered.
   defp hold(pid) do
     test = self()
 
@@ -1096,12 +1095,9 @@ defmodule Raxol.HeadlessTest do
       try do
         :sys.replace_state(
           pid,
-          fn state ->
+          fn _state ->
             send(test, {:held, self()})
-
-            receive do
-              :never -> state
-            end
+            held_until_killed(test)
           end,
           :infinity
         )
@@ -1111,6 +1107,14 @@ defmodule Raxol.HeadlessTest do
     end)
 
     assert_receive {:held, ^pid}
+  end
+
+  defp held_until_killed(test) do
+    receive do
+      {:system, _from, {:terminate, _reason}} ->
+        send(test, {:stop_reached, self()})
+        held_until_killed(test)
+    end
   end
 
   defp kill_all(pids) do
