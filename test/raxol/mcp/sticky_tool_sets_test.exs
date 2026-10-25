@@ -275,8 +275,11 @@ defmodule Raxol.MCP.StickyToolSetsTest do
       assert_received {:tool_result_held, ^server, %{conn_id: :default}}
     end
 
+    # The session's renders wait ten minutes for their sync, so only the
+    # settle in `raxol_send_key` can bring the modal's tools in before the
+    # call answers.
     test "raxol_send_key that opens a modal is held for the re-list", %{registry: registry} = ctx do
-      id = start!(ModalDemo, ctx)
+      id = start!(ModalDemo, ctx, debounce_ms: 600_000)
       server = subscribed_server(registry, list_changed_hold_ms: 600_000)
 
       task = Task.async(fn -> call(server, "raxol_send_key", %{"id" => id, "key" => "o"}) end)
@@ -329,9 +332,9 @@ defmodule Raxol.MCP.StickyToolSetsTest do
     server
   end
 
-  defp start!(module, %{registry: registry, server: server}) do
+  defp start!(module, %{registry: registry, server: server}, opts \\ []) do
     id = fresh_id()
-    {:ok, ^id} = Headless.start(module, id: id, registry: registry, server: server)
+    {:ok, ^id} = Headless.start(module, [id: id, registry: registry, server: server] ++ opts)
     barrier(id, server)
     drain_notifications()
     id
