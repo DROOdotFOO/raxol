@@ -154,6 +154,8 @@ MIX_ENV=test scripts/scoreboard-canaries.sh [NAME...]   # on a clean tree
 | `skips_a_changed_row` | a diff frame leaves out a changed row | replay check refuses |
 | `drops_dim_attribute` | the encoder stops emitting dim (the bug #1133 fixed) | replay check refuses |
 | `table_draws_fewer_rows` | the table demo shows three rows, not four | screen pins refuse |
+| `tool_results_quoted` | derived-tool results go out `inspect`-quoted | every agent task's tool bytes (+0.17% to +0.29%) |
+| `screenshots_keep_trailing_blanks` | text screenshots keep each line's trailing blanks | every agent task's key bytes (+78% to +189%) |
 
 A canary that is not caught, or whose patch no longer applies, fails the run.
 CI runs it when a change touches the scoreboard's own files or a file a canary
