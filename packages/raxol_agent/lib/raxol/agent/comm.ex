@@ -171,20 +171,24 @@ defmodule Raxol.Agent.Comm do
   @doc """
   Answer an `{:acp_prompt, text, approver}` call by running `fun` in a turn
   process the session owns; `fun`'s return is the reply. `{:acp_cancel, ref}`
-  kills that process. Call it from `update/2` with the prompt's `caller` and
-  `ref`.
+  kills that process. Call it from `update/2` with the prompt's `ref` and
+  `session`, the pid in the prompt's caller position (the session stands in
+  for the real caller).
   """
   @spec run_turn(pid(), reference(), (-> term())) :: :ok
-  def run_turn(caller, ref, fun)
-      when is_pid(caller) and is_reference(ref) and is_function(fun, 0) do
-    Kernel.send(caller, {:acp_run, ref, fun})
+  def run_turn(session, ref, fun)
+      when is_pid(session) and is_reference(ref) and is_function(fun, 0) do
+    Kernel.send(session, {:acp_run, ref, fun})
     :ok
   end
 
-  @doc "Send `message` to the process running turn `ref` (see `run_turn/3`)."
+  @doc """
+  Send `message` to the process running turn `ref` of `session` (see
+  `run_turn/3`).
+  """
   @spec send_turn(pid(), reference(), term()) :: :ok
-  def send_turn(caller, ref, message) when is_pid(caller) and is_reference(ref) do
-    Kernel.send(caller, {:acp_turn_message, ref, message})
+  def send_turn(session, ref, message) when is_pid(session) and is_reference(ref) do
+    Kernel.send(session, {:acp_turn_message, ref, message})
     :ok
   end
 
