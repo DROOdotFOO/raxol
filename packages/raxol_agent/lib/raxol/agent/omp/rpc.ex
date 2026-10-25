@@ -48,7 +48,10 @@ defmodule Raxol.Agent.OMP.RPC do
   variables. Everything else (a bot token, `OP_SERVICE_ACCOUNT_TOKEN`, a
   wallet or provider key) is unset in the spawned process, because a port's
   `:env` only overlays the parent's environment. A variable OMP needs
-  beyond these is passed explicitly with `:env`.
+  beyond these is passed explicitly with `:env` (names
+  `[A-Za-z_][A-Za-z0-9_]*`, values UTF-8 without NUL). The proxy variables
+  are inherited as they are, so a proxy URL carrying credentials reaches
+  OMP and its tools.
 
   ## Requests and events
 
@@ -95,7 +98,8 @@ defmodule Raxol.Agent.OMP.RPC do
   run can keep it unsettled. To end it anyway, send `%{"type" => "abort"}`
   and close again, or stop the process (`GenServer.stop/1`).
 
-  However the process stops, it first sends OMP `abort` and `abort_bash`,
+  However the process stops, it first denies every open approval, then
+  sends OMP `abort` and `abort_bash`,
   then closes OMP's stdin. On EOF OMP finishes the commands it accepted
   before it exits, so without the aborts an RPC `bash` in flight would still
   run to its end after its caller was told `{:error, :rpc_down}`. A session
@@ -331,7 +335,7 @@ defmodule Raxol.Agent.OMP.RPC do
   defp env?(env) when is_map(env) do
     Enum.all?(env, fn {name, value} ->
       is_binary(name) and Regex.match?(@env_name, name) and is_binary(value) and
-        not String.contains?(value, <<0>>)
+        String.valid?(value) and not String.contains?(value, <<0>>)
     end)
   end
 
@@ -629,7 +633,9 @@ defmodule Raxol.Agent.OMP.RPC do
   # `bash` in flight is aborted first rather than left to finish after its
   # caller was told `:rpc_down`.
   @impl true
-  def terminate(_reason, %{port: port, phase: :ready}) when is_port(port) do
+  def terminate(_reason, %{port: port, phase: :ready} = state) when is_port(port) do
+    deny_all(state, :closing)
+
     for type <- @aborts do
       {:ok, ^type, encoded} = Codec.encode_command(%{"type" => type})
       write(port, Codec.frame(type, encoded))
@@ -664,6 +670,10 @@ defmodule Raxol.Agent.OMP.RPC do
   end
 
   defp redact_state(state), do: state
+
+  # The handshake's config carries the `:env` values.
+  defp redact_message({:continue, {:handshake, path, _config}}),
+    do: {:continue, {:handshake, path, :redacted}}
 
   defp redact_message({:request, type, _encoded, timeout_ms}),
     do: {:request, type, :redacted, timeout_ms}
@@ -815,6 +825,11 @@ defmodule Raxol.Agent.OMP.RPC do
 
   defp ui_request(state, frame, {:approval, ui_id, options}) do
     send(state.principal, {:omp_rpc_approval, self(), ui_id, Map.put(frame, "options", options)})
+
+    # A repeated id replaces the open approval; its old deadline must not
+    # deny the new one.
+    with {_options, old} <- state.approvals[ui_id], do: cancel(old)
+
     timer = Process.send_after(self(), {:approval_deadline, ui_id}, state.approval_timeout_ms)
     %{state | approvals: Map.put(state.approvals, ui_id, {options, timer})}
   end

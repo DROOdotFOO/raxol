@@ -423,5 +423,18 @@ defmodule Raxol.Agent.OMP.RPCTest do
       assert {:error, {{:invalid_option, :subscriber}, _}} =
                start_rpc(dir, "handshake", subscriber: nil)
     end
+
+    # Before: a non-UTF-8 value crashed the handshake, and the crash report
+    # printed every `:env` value.
+    test "an :env the port cannot carry, without logging its values", %{dir: dir} do
+      for env <- [%{"TOKEN" => <<0xFF>>}, %{"TOKEN" => "a\0b"}, %{"BAD=NAME" => "x"}] do
+        log =
+          capture_log(fn ->
+            assert {:error, {{:invalid_option, :env}, _}} = start_rpc(dir, "handshake", env: env)
+          end)
+
+        refute log =~ "TOKEN"
+      end
+    end
   end
 end
