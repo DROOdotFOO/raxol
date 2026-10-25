@@ -88,6 +88,10 @@ defmodule Raxol.Headless do
   @default_compile_timeout_ms 2_000
   @max_compile_timeout_ms 4_500
 
+  # `use GenServer` gives this server 5 s to stop before its supervisor kills
+  # it, so `terminate/2` stops the sessions within a shorter budget.
+  @shutdown_budget_ms 4_000
+
   defmodule Session do
     @moduledoc false
     defstruct [:id, :module, :lifecycle_pid, :synchronizer_pid, :width, :height]
@@ -398,8 +402,12 @@ defmodule Raxol.Headless do
 
   # --- GenServer Callbacks ---
 
+  # A `start_link` whose `init` fails sends its caller an exit signal, which
+  # killed this manager and every session with it when one app's Lifecycle
+  # failed to start. Trapping, `start/2` answers that app `{:error, reason}`.
   @impl true
   def init(_opts) do
+    Process.flag(:trap_exit, true)
     {:ok, %{sessions: %{}}}
   end
 
@@ -462,8 +470,55 @@ defmodule Raxol.Headless do
     {:noreply, %{state | sessions: Map.new(alive)}}
   end
 
+  # Trapping, Headless still receives the `EXIT` of a Lifecycle that ends
+  # between `start_link` and `Process.unlink/1`, of any other process linked
+  # to it, and any exit signal another process sends it. A session's teardown
+  # belongs to its `:DOWN`, so this only logs. The parent's `EXIT` never
+  # arrives here: `GenServer` stops on it.
+  @impl true
+  def handle_info({:EXIT, pid, reason}, state) do
+    session =
+      Enum.find_value(state.sessions, :none, fn
+        {id, %{lifecycle_pid: ^pid}} -> id
+        _other -> nil
+      end)
+
+    Logger.warning(
+      "[#{inspect(__MODULE__)}] exit signal from #{inspect(pid)} " <>
+        "(session: #{inspect(session)}) ignored: " <>
+        Exception.format_exit(reason)
+    )
+
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # Headless unlinks every Lifecycle, so nothing else ends them with it. Each
+  # session stops the way `stop/1` stops one, all at once and within the
+  # shutdown budget; a session still stopping at the deadline is killed
+  # rather than left running without its manager.
+  @impl true
+  def terminate(_reason, state) do
+    sessions = Map.values(state.sessions)
+
+    sessions
+    |> Task.async_stream(
+      fn session ->
+        stop_synchronizer(session.synchronizer_pid)
+        stop_lifecycle(session.lifecycle_pid)
+      end,
+      max_concurrency: max(length(sessions), 1),
+      timeout: @shutdown_budget_ms,
+      on_timeout: :kill_task
+    )
+    |> Enum.zip(sessions)
+    |> Enum.each(fn
+      {{:ok, _}, _session} -> :ok
+      {{:exit, reason}, session} -> kill_session(session, reason)
+    end)
+  end
 
   # --- Private Helpers ---
 
@@ -1129,6 +1184,19 @@ defmodule Raxol.Headless do
     GenServer.stop(pid, :normal, 5_000)
   catch
     :exit, _ -> :ok
+  end
+
+  defp kill_session(session, reason) do
+    Logger.warning(
+      "[#{inspect(__MODULE__)}] session #{inspect(session.id)} did not stop " <>
+        "within #{@shutdown_budget_ms} ms of shutdown (" <>
+        Exception.format_exit(reason) <> "); killing it"
+    )
+
+    if session.synchronizer_pid,
+      do: Process.exit(session.synchronizer_pid, :kill)
+
+    Process.exit(session.lifecycle_pid, :kill)
   end
 
   # A synchronizer killed untrappably never ran its `terminate/2`, so what it

@@ -193,6 +193,19 @@ defmodule Raxol.HeadlessTest do
     def view(_model), do: Raxol.Core.Renderer.View.text("plus")
   end
 
+  # Its `init/1` refuses, so the runtime's `Lifecycle.init/1` stops.
+  defmodule RefusingApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: {:error, :refused}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("never")
+  end
   setup do
     # The app-level Headless may or may not be running depending on
     # test mode. Ensure one exists, clean slate for each test.
@@ -814,10 +827,11 @@ defmodule Raxol.HeadlessTest do
     end
 
     # Unlinked from Headless, a synchronizer must still end with it, as it did
-    # when linked; left running it would outlive the manager, still publishing
-    # the session's tools. It monitors its owner and stops the normal way, so
-    # its `terminate/2` also releases what it registered. A private manager,
-    # so the suite's own goes on serving the other tests.
+    # when linked, even when Headless is killed and runs no `terminate/2`;
+    # left running it would outlive the manager, still publishing the
+    # session's tools. It monitors its owner and stops the normal way, so its
+    # `terminate/2` also releases what it registered. A private manager, so
+    # the suite's own goes on serving the other tests.
     test "a synchronizer stops when its Headless exits" do
       registry =
         Process.whereis(Raxol.MCP.Registry) ||
@@ -827,7 +841,10 @@ defmodule Raxol.HeadlessTest do
 
       headless =
         start_supervised!(
-          Supervisor.child_spec({Headless, [name: name]}, id: name)
+          Supervisor.child_spec({Headless, [name: name]},
+            id: name,
+            restart: :temporary
+          )
         )
 
       {:ok, id} =
@@ -836,7 +853,7 @@ defmodule Raxol.HeadlessTest do
       %{synchronizer_pid: sync_pid, lifecycle_pid: lifecycle} =
         :sys.get_state(headless).sessions[id]
 
-      # Headless leaves the Lifecycle running when it exits; this test stops it.
+      # Killed, Headless cannot stop the Lifecycle; this test does.
       on_exit(fn ->
         try do
           GenServer.stop(lifecycle)
@@ -851,11 +868,57 @@ defmodule Raxol.HeadlessTest do
       assert context_uri in resource_uris(registry)
 
       sync_ref = Process.monitor(sync_pid)
-      :ok = stop_supervised(name)
+      Process.exit(headless, :kill)
       assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, :normal}, 5_000
 
       assert sync_handler_ids(sync_pid) == []
       refute context_uri in resource_uris(registry)
+    end
+
+    # `Lifecycle.init/1` stops when the app's runtime fails to initialize, and
+    # a `start_link` whose `init` stops sends its caller an exit signal: that
+    # killed Headless, and every session with it. Trapping exits, Headless
+    # answers the caller with the error and carries on.
+    test "an app whose runtime fails to start is refused, not fatal" do
+      headless = Process.whereis(Headless)
+      headless_ref = Process.monitor(headless)
+      {:ok, survivor} = Headless.start(TestApp, id: :init_survivor)
+
+      assert {:error, {:app_init_failed, :refused}} =
+               Headless.start(RefusingApp, id: :init_refused)
+
+      assert Headless.list() == [survivor]
+      refute_received {:DOWN, ^headless_ref, :process, _, _}
+      assert Process.whereis(Headless) == headless
+      assert {:ok, screen} = Headless.screenshot(survivor)
+      assert screen =~ "Count: 0"
+    end
+
+    # Headless unlinks every Lifecycle it starts, so when it exited they all
+    # kept running, out of reach of `list/0` and `stop/1`. Its `terminate/2`
+    # stops every session the way `stop/1` does. A private manager, as above.
+    test "every session's lifecycle stops when its Headless shuts down" do
+      name = Module.concat(__MODULE__, ShutdownHeadless)
+
+      headless =
+        start_supervised!(
+          Supervisor.child_spec({Headless, [name: name]}, id: name)
+        )
+
+      lifecycles =
+        for id <- [:shutdown_a, :shutdown_b] do
+          {:ok, ^id} =
+            GenServer.call(headless, {:start_session, TestApp, [id: id]})
+
+          lifecycle = :sys.get_state(headless).sessions[id].lifecycle_pid
+          {lifecycle, Process.monitor(lifecycle)}
+        end
+
+      :ok = stop_supervised(name)
+
+      for {lifecycle, ref} <- lifecycles do
+        assert_receive {:DOWN, ^ref, :process, ^lifecycle, :normal}, 5_000
+      end
     end
 
     # The Lifecycle can end between `Raxol.Headless` naming the session and the
