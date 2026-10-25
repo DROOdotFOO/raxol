@@ -4,9 +4,12 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
   # recorded from the real gateway. Each test gets its own server and binary.
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Agent.Backend.OmpGateway
   alias Raxol.Agent.Backend.OmpGateway.Codec
   alias Raxol.Agent.Backend.OmpGateway.Server
+  alias Raxol.Agent.OMP.Version
 
   @moduletag :tmp_dir
 
@@ -14,13 +17,15 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
   @player Path.expand("../../../support/gateway_transcript_player.exs", __DIR__)
   @smol "anthropic/claude-haiku-5-5"
 
+  defp write_binary(dir, transcript, mode),
+    do: write_player(dir, Path.join(@fixtures, "#{transcript}.jsonl"), mode)
+
   # Writes `omp` into the test's tmp dir: a shell script that runs the player
-  # on `transcript` in `mode`, so the backend spawns and vets it like the real
+  # on `fixture` in `mode`, so the backend spawns and vets it like the real
   # binary. Rewriting it changes what the NEXT spawn runs.
-  defp write_binary(dir, transcript, mode) do
+  defp write_player(dir, fixture, mode) do
     path = Path.join(dir, "omp")
     elixir = System.find_executable("elixir")
-    fixture = Path.join(@fixtures, "#{transcript}.jsonl")
 
     File.write!(path, """
     #!/bin/sh
@@ -62,6 +67,32 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
     assert response.metadata.backend == :omp_gateway
     assert response.metadata.cost_source == :flat_table
     assert response.metadata.cost_usd > 0
+  end
+
+  @tag skip: Elixir.Version.parse!(Version.tested()).minor == 0 && "the pin has no lower minor"
+  test "a ready line a minor below the pin logs a warning and serves the request",
+       %{tmp_dir: dir} do
+    %{major: major, minor: minor} = Elixir.Version.parse!(Version.tested())
+    older = "#{major}.#{minor - 1}.0"
+    pinned = ~s(\\"version\\":\\"#{Version.tested()}\\")
+    recorded = File.read!(Path.join(@fixtures, "messages_text.jsonl"))
+    assert [_, _] = String.split(recorded, pinned)
+
+    fixture = Path.join(dir, "older_minor.jsonl")
+    File.write!(fixture, String.replace(recorded, pinned, ~s(\\"version\\":\\"#{older}\\")))
+    server = start_supervised!({Server, name: nil, path: write_player(dir, fixture, "play")})
+
+    log =
+      capture_log(fn ->
+        assert {:ok, %{content: "pong"}} =
+                 OmpGateway.complete([user("Reply with the single word pong.")],
+                   model: @smol,
+                   max_tokens: 16,
+                   server: server
+                 )
+      end)
+
+    assert log =~ "omp #{older} is older than the tested #{Version.tested()}; continuing"
   end
 
   test "a tool_use reply comes back as tool calls", %{tmp_dir: dir} do

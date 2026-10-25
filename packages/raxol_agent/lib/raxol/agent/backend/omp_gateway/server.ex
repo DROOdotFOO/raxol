@@ -313,6 +313,9 @@ defmodule Raxol.Agent.Backend.OmpGateway.Server do
   defp warn({:newer_minor, found, tested}),
     do: Logger.warning("omp #{found} is newer than the tested #{tested}; continuing")
 
+  defp warn({:older_minor, found, tested}),
+    do: Logger.warning("omp #{found} is older than the tested #{tested}; continuing")
+
   defp cancel(nil), do: :ok
   defp cancel(timer), do: Process.cancel_timer(timer)
 end
