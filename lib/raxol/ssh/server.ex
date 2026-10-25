@@ -75,6 +75,9 @@ defmodule Raxol.SSH.Server do
   winning over the server-level `:app_opts`) or `{:error, reason}` (the
   connection is refused). This is how a multi-tenant host assigns each
   user their own cwd jail, session store, and spending identity.
+
+  Every connection's app also gets `ssh_connection: {server, connection}`,
+  which `tenant/2` resolves to the user the connection authenticated as.
   """
 
   use GenServer
@@ -85,6 +88,7 @@ defmodule Raxol.SSH.Server do
     :port,
     :bind,
     :auth,
+    :tenants_dir,
     :host_keys_dir,
     :max_connections,
     :max_per_ip,
@@ -320,6 +324,43 @@ defmodule Raxol.SSH.Server do
     end
   end
 
+  @doc """
+  The tenant an SSH `connection` to `server` authenticated as, for a
+  surface that must know who is connected (an OMP lane's principal):
+  `{:ok, name}` only when `server` runs with `:tenants_dir`, where the key
+  that authenticated the connection is filed under that username.
+
+  Errors: `:no_tenants_dir` (an anonymous or single-tenant
+  `:authorized_keys_dir` server, where a keyholder may claim any username),
+  `:foreign_connection` (a connection to another daemon),
+  `:no_authenticated_user` and `:ssh_server_down`.
+  """
+  @spec tenant(GenServer.server(), term()) ::
+          {:ok, String.t()} | {:error, atom()}
+  def tenant(server, connection) do
+    case GenServer.call(server, :tenant_binding) do
+      {:ok, port} -> connection_tenant(connection, port)
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    :exit, _reason -> {:error, :ssh_server_down}
+  end
+
+  # The connection's own end must be this daemon's port: a connection to a
+  # single-tenant daemon in the same VM must not pass as a tenant's.
+  defp connection_tenant(connection, port) do
+    info = :ssh.connection_info(connection, [:user, :sockname])
+
+    case {Keyword.get(info, :sockname),
+          sanitize_tenant(Keyword.get(info, :user, ""))} do
+      {{_ip, ^port}, tenant} when is_binary(tenant) -> {:ok, tenant}
+      {{_ip, _other}, _tenant} -> {:error, :foreign_connection}
+      _ -> {:error, :no_authenticated_user}
+    end
+  catch
+    _kind, _reason -> {:error, :no_authenticated_user}
+  end
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -501,6 +542,9 @@ defmodule Raxol.SSH.Server do
           app_module: app_module,
           bind: bind,
           auth: auth_mode(auth_opts),
+          # Only when the daemon really binds usernames: anonymous wins.
+          tenants_dir:
+            if(auth_opts[:user_dir_fun], do: Keyword.fetch!(opts, :tenants_dir)),
           host_keys_dir: host_keys_dir,
           max_connections: max_connections,
           max_per_ip: max_per_ip,
@@ -564,6 +608,13 @@ defmodule Raxol.SSH.Server do
   def handle_call(:port, _from, state) do
     {:reply, state.port, state}
   end
+
+  @impl true
+  def handle_call(:tenant_binding, _from, %{tenants_dir: nil} = state),
+    do: {:reply, {:error, :no_tenants_dir}, state}
+
+  def handle_call(:tenant_binding, _from, state),
+    do: {:reply, {:ok, state.port}, state}
 
   @impl true
   def handle_call({:register_connection, peer_ip}, _from, %__MODULE__{} = state) do

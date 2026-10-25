@@ -74,8 +74,23 @@ defmodule Raxol.SSH.Session do
       width: width,
       height: height
     ] ++
+      ssh_connection(opts) ++
       Keyword.get(opts, :tenant_opts, []) ++
       Keyword.get(opts, :app_opts, [])
+  end
+
+  # `{server, connection}` for `Raxol.SSH.Server.tenant/2`.
+  defp ssh_connection(opts) do
+    case Keyword.fetch(opts, :connection_ref) do
+      {:ok, connection} ->
+        [
+          ssh_connection:
+            {Keyword.get(opts, :server, Raxol.SSH.Server), connection}
+        ]
+
+      :error ->
+        []
+    end
   end
 
   @impl true

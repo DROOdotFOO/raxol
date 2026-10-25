@@ -162,6 +162,7 @@ defmodule Raxol.SSH.CLIHandler do
             app_opts: state.app_opts,
             tenant_opts: tenant_opts,
             connection_ref: state.connection_ref,
+            server: state.server,
             channel_id: state.channel_id,
             width: width,
             height: height

@@ -230,6 +230,32 @@ decides `authorize/2` in this order:
 4. the user is in the global allowlist, else
 5. deny.
 
+A DM pairing and the global allowlist match the user id on every platform, and an
+allow-everyone platform admits anyone. `Raxol.Gateway.Pairing.platform_granted?/2` answers
+the narrower question "is this id granted on this route's platform": only an id seeded in
+`:platform_users` or added with `allow(server, id, {:platform, platform})` counts.
+
+### Fronting an OMP session
+
+An OMP session runs tools on the host, so `Raxol.Agent.OMP.Lane` (in `raxol_agent`) starts
+only for an authenticated principal (ADR-0042, decision 7). Over the gateway that is
+`{:gateway, pairing, route, pid}`, accepted only when `platform_granted?/2` is true for the
+route; `pid` receives every exec-tier approval and answers it with
+`Raxol.Agent.OMP.RPC.answer/3`. A route with no user id, a DM pairing, a global grant or an
+allow-everyone platform is refused with `{:error, {:unauthenticated_principal, reason}}`
+before OMP is spawned.
+
+```elixir
+Raxol.Agent.OMP.Lane.start_link(
+  principal: {:gateway, Raxol.Gateway.Pairing, route, approver_pid},
+  session_id: Raxol.Gateway.Route.key(route),
+  rpc: [profile: "telegram", cwd: "/var/lib/raxol/omp/telegram"]
+)
+```
+
+Route only that user's messages to the lane: in a group chat, other members arrive as
+other routes.
+
 ## Delivery
 
 `Raxol.Gateway.Delivery.deliver/3` resolves four outbound destinations:

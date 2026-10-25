@@ -259,6 +259,9 @@ Raxol.Harness.SessionLane   (behaviour in main raxol: the seam main satisfies
                              without depending on raxol_agent)
   ← Raxol.Agent.Harness.SessionLane   (agent-side impl: SessionStreamer out,
                                        Raxol.Agent.Command in)
+  <- Raxol.Agent.OMP.Lane   (one `omp --mode rpc` session; refuses to start
+                            without an authenticated principal, maps OMP
+                            frames to contract events)
 Raxol.Harness.LiveSessionDriver   (the process loop; input-first receive)
   → live events through EventBoundary.normalize/1  (the untrusted-input seam)
   → Raxol.Harness.StreamCadence   (decouples token ingest from render egress)

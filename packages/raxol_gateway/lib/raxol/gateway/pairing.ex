@@ -104,6 +104,19 @@ defmodule Raxol.Gateway.Pairing do
   @spec authorize(GenServer.server(), Route.t()) :: :allow | :deny
   def authorize(server, %Route{} = route), do: GenServer.call(server, {:authorize, route})
 
+  @doc """
+  Whether `route`'s user holds a grant scoped to `route`'s platform: an id
+  seeded in `:platform_users` or added with `allow/3` and
+  `{:platform, platform}`. Unlike `authorize/2`, a DM pairing, the global
+  allowlist and an allow-everyone platform do not count, since none of them
+  says "this id, on this platform". For a caller that must know which person
+  is behind a route, such as an OMP lane's principal
+  (`Raxol.Agent.OMP.Principal`).
+  """
+  @spec platform_granted?(GenServer.server(), Route.t()) :: boolean()
+  def platform_granted?(server, %Route{} = route),
+    do: GenServer.call(server, {:platform_granted?, route})
+
   @doc "Whether a user is paired."
   @spec paired?(GenServer.server(), String.t()) :: boolean()
   def paired?(server, user_id), do: GenServer.call(server, {:paired?, to_string(user_id)})
@@ -178,6 +191,15 @@ defmodule Raxol.Gateway.Pairing do
 
   def handle_manager_call({:allow, user_id, :global}, _from, state) do
     {:reply, :ok, %{state | allow_global: MapSet.put(state.allow_global, user_id)}}
+  end
+
+  def handle_manager_call(
+        {:platform_granted?, %Route{platform: platform, user_id: id}},
+        _from,
+        state
+      ) do
+    user_id = scalar_id(id)
+    {:reply, user_id != nil and in_platform_allow?(state, platform, user_id), state}
   end
 
   def handle_manager_call({:allow, user_id, {:platform, platform}}, _from, state) do

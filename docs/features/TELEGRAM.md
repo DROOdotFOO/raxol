@@ -180,6 +180,16 @@ router or `Bot.handle_update/2`. Callbacks, keyboards, and media stay on the
 TEA surface (this package's `Session`); the gateway path is text-first. See
 [Gateway](GATEWAY.md) for the full wiring example.
 
+## Fronting an OMP session
+
+Telegram fronts an OMP session only through the gateway route: the route
+`GatewayAdapter` builds carries the sender's `from.id`, and
+`Raxol.Agent.OMP.Lane` accepts it as a principal only when
+`Raxol.Gateway.Pairing` grants that id on `:telegram` (see
+[Gateway](GATEWAY.md#fronting-an-omp-session)). `allowed_chat_ids` never
+authenticates an OMP principal: it names chats, not people, so a group chat
+admits every member, and nil admits every chat.
+
 ## See also
 
 - [Gateway](GATEWAY.md): multi-platform gateway; Telegram is the first adapter behind the frozen contract
