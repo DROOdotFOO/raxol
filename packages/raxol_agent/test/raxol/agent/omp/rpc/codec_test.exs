@@ -216,6 +216,30 @@ defmodule Raxol.Agent.OMP.RPC.CodecTest do
       end
     end
 
+    # Synthetic: the option list omp 18.12.6 builds when grants are offered
+    # (S:588021-588075; F3's approval offers none).
+    test "a grant omp would persist is never offered to the principal" do
+      options = [
+        "Approve Directory: src",
+        "Approve File",
+        "Always Approve Directory: src",
+        "Always Approve File",
+        "Approve Once",
+        "Approve edit for this session",
+        "Deny"
+      ]
+
+      assert {:approval, "u1",
+              [
+                "Approve Directory: src",
+                "Approve File",
+                "Approve Once",
+                "Approve edit for this session",
+                "Deny"
+              ]} =
+               Codec.ui_request(ui("select", %{"options" => options}))
+    end
+
     test "every other dialog is cancelled, presentation frames need no answer" do
       assert {:dialog, "u1"} = Codec.ui_request(ui("select", %{"options" => ["Red", "Deny"]}))
 

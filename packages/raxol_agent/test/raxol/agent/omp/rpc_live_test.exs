@@ -188,6 +188,24 @@ defmodule Raxol.Agent.OMP.RPCLiveTest do
     refute File.exists?(marker)
   end
 
+  test "omp and its tools see only the environment allowlist and :env", %{opts: opts} do
+    secret = "RAXOL_RPC_LIVE_BOT_TOKEN"
+    System.put_env(secret, "leaked")
+    on_exit(fn -> System.delete_env(secret) end)
+
+    rpc = start_ready(Keyword.put(opts, :env, %{"RAXOL_RPC_LIVE_EXPLICIT" => "passed"}))
+
+    assert {:ok, %{"output" => output}} =
+             RPC.request(rpc, %{"type" => "bash", "command" => "env"})
+
+    names = for line <- String.split(output, "\n"), [name | _] = String.split(line, "="), do: name
+
+    refute secret in names
+    assert "RAXOL_RPC_LIVE_EXPLICIT=passed" in String.split(output, "\n")
+    assert "HOME" in names and "PATH" in names
+    assert :ok = RPC.close(rpc)
+  end
+
   test "the BEAM's .omp/extensions never run; the session's own cwd is used",
        %{dir: dir, opts: opts} do
     beam_cwd = Path.join(dir, "beam")

@@ -165,6 +165,11 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
   OMP marks no approval as such on the wire. Its approval select always
   offers `"Approve"` (`"Approve Once"` when grants are listed) and ends with
   `"Deny"`, optionally with `"Approve <tool> for this session"` between.
+
+  `options` are the ones a principal may pick. A grant OMP would persist
+  beyond this session (its `alwaysLabel`: `"Always Approve"`, `"Always
+  Approve File"`, `"Always Approve Directory: <dir>"`) is withheld, so no
+  answer can grant it.
   """
   @spec ui_request(map()) :: ui_request()
   def ui_request(%{
@@ -174,7 +179,9 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
         "options" => options
       })
       when is_binary(id) and is_list(options) do
-    if approval_options?(options), do: {:approval, id, options}, else: {:dialog, id}
+    if approval_options?(options),
+      do: {:approval, id, Enum.reject(options, &persistent_grant?/1)},
+      else: {:dialog, id}
   end
 
   def ui_request(%{"type" => "extension_ui_request", "id" => id, "method" => method})
@@ -186,6 +193,9 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
   defp approval_options?(options) do
     List.last(options) == "Deny" and Enum.any?(options, &(&1 in ["Approve", "Approve Once"]))
   end
+
+  defp persistent_grant?(option),
+    do: is_binary(option) and String.starts_with?(option, "Always Approve")
 
   @doc "The answer that denies an approval."
   @spec deny() :: String.t()

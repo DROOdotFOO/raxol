@@ -39,6 +39,17 @@ defmodule Raxol.Agent.OMP.RPC do
   under a state directory whose ancestors hold no context files, never
   under a workspace.
 
+  ## The environment
+
+  OMP and every tool it runs see only an allowlist of the BEAM's
+  environment: `HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`,
+  `TERM`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, the XDG base directories,
+  OMP's own `PI_CODING_AGENT_DIR` and `PI_CONFIG_DIR`, and the HTTP proxy
+  variables. Everything else (a bot token, `OP_SERVICE_ACCOUNT_TOKEN`, a
+  wallet or provider key) is unset in the spawned process, because a port's
+  `:env` only overlays the parent's environment. A variable OMP needs
+  beyond these is passed explicitly with `:env`.
+
   ## Requests and events
 
   `request/3` sends one command and waits for the response with the same
@@ -59,22 +70,30 @@ defmodule Raxol.Agent.OMP.RPC do
   approval select goes to the principal (`:principal`) as
   `{:omp_rpc_approval, pid, ui_id, frame}`; the principal answers with one
   of the frame's `options` through `answer/3`, which refuses an answer from
-  any other process (the subscriber sees the frame too). With no principal, or once
-  the principal exits, approvals are denied. Every other dialog is
-  cancelled. Presentation frames (`setWidget`, `notify`, ...) need no
-  answer and are only forwarded.
+  any other process (the subscriber sees the frame too). The relayed
+  `options` never offer a grant OMP would persist beyond the session (its
+  `alwaysLabel` options, `Codec.ui_request/1`), and `answer/3` refuses one.
+
+  An approval is denied when nobody can answer it: with no principal, once
+  the principal exits, when `:approval_timeout_ms` passes without an answer
+  (the deadline is this process's timer, so it holds whatever the principal
+  does), and on `close/2`. The principal then gets
+  `{:omp_rpc_approval_closed, pid, ui_id, reason}` (`:timeout`, `:closing`,
+  or `:cancelled` when OMP withdrew the dialog). Every other dialog is
+  cancelled. Presentation frames (`setWidget`, `notify`, ...) need no answer
+  and are only forwarded.
 
   ## Teardown
 
-  `close/2` tears the session down once it is settled: after OMP's
+  `close/2` denies every open approval, and every approval asked while it
+  waits, then tears the session down once it is settled: after OMP's
   `session_settled` frame, or, for a prompt that never reached the agent,
   its `prompt_result` with `sessionSettled: true` (OMP sends no
   `session_settled` then). A session with no agent activity is settled. If
   the session does not settle in time, `close/2` returns
   `{:error, {:settle_timeout, ms}}` and the session keeps running: an agent
-  run or an approval nobody answers can keep it unsettled. To end it anyway,
-  send `%{"type" => "abort"}` and close again, or stop the process
-  (`GenServer.stop/1`).
+  run can keep it unsettled. To end it anyway, send `%{"type" => "abort"}`
+  and close again, or stop the process (`GenServer.stop/1`).
 
   However the process stops, it first sends OMP `abort` and `abort_bash`,
   then closes OMP's stdin. On EOF OMP finishes the commands it accepted
@@ -88,7 +107,8 @@ defmodule Raxol.Agent.OMP.RPC do
 
   From `start_link/1` (the process stops with the same reason):
   `{:invalid_option, name}` (`:subscriber`, `:principal`, `:path`,
-  `:ready_timeout_ms`), `:invalid_profile`, `{:invalid_cwd, reason}`
+  `:ready_timeout_ms`, `:approval_timeout_ms`, `:env`), `:invalid_profile`,
+  `{:invalid_cwd, reason}`
   (`:not_absolute`, `:beam_cwd`, `:inside_beam_cwd`,
   `{:not_a_directory, type}`, `{:not_owned, uid}`,
   `{:group_or_other_writable, mode}` or a posix error) and every
@@ -127,6 +147,7 @@ defmodule Raxol.Agent.OMP.RPC do
   alias Raxol.Agent.SpawnedPort
 
   @default_ready_timeout_ms 15_000
+  @default_approval_timeout_ms 120_000
   @default_request_timeout_ms 30_000
   @default_close_timeout_ms 60_000
   @version_timeout_ms 10_000
@@ -139,6 +160,12 @@ defmodule Raxol.Agent.OMP.RPC do
   @max_timeout_ms 4_294_967_295
   @profile ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z/
   @prompts ["prompt", "abort_and_prompt"]
+  # What OMP and its tools inherit from the BEAM's environment (moduledoc).
+  @env_allowlist ~w(HOME PATH USER LOGNAME SHELL TMPDIR TERM LANG LC_ALL LC_CTYPE TZ
+                    XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
+                    PI_CODING_AGENT_DIR PI_CONFIG_DIR
+                    HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy)
+  @env_name ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/
 
   @doc """
   Start a session; the handshake runs after this returns (see the
@@ -148,8 +175,11 @@ defmodule Raxol.Agent.OMP.RPC do
   the session's absolute working directory), `:subscriber` (required; the
   pid that receives frames), `:path` (the `omp` binary; as for
   `OmpGateway.resolve_binary/1`), `:principal` (pid answering approvals;
-  default none, so every approval is denied), `:ready_timeout_ms` (default
-  #{@default_ready_timeout_ms}), `:name`.
+  default none, so every approval is denied), `:approval_timeout_ms` (how
+  long the principal has to answer an approval before it is denied; default
+  #{@default_approval_timeout_ms}), `:env` (a map of extra environment
+  variables for OMP, name to value; default none), `:ready_timeout_ms`
+  (default #{@default_ready_timeout_ms}), `:name`.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -251,8 +281,10 @@ defmodule Raxol.Agent.OMP.RPC do
   # `:ready_deadline` bounds them.
   @impl true
   def handle_continue({:handshake, path, config}, state) do
-    with :ok <- check_version(path, config.cwd),
-         {:ok, port} <- open_port(path, config) do
+    env = port_env(config.env)
+
+    with :ok <- check_version(path, config.cwd, env),
+         {:ok, port} <- open_port(path, config, env) do
       timer = Process.send_after(self(), :ready_deadline, config.ready_timeout_ms)
       {:noreply, %{state | port: port, os_pid: os_pid(port), ready_timer: timer}}
     else
@@ -265,7 +297,9 @@ defmodule Raxol.Agent.OMP.RPC do
       path: Keyword.get(opts, :path),
       subscriber: Keyword.get(opts, :subscriber),
       principal: Keyword.get(opts, :principal),
-      ready_timeout_ms: Keyword.get(opts, :ready_timeout_ms, @default_ready_timeout_ms)
+      ready_timeout_ms: Keyword.get(opts, :ready_timeout_ms, @default_ready_timeout_ms),
+      approval_timeout_ms: Keyword.get(opts, :approval_timeout_ms, @default_approval_timeout_ms),
+      env: Keyword.get(opts, :env, %{})
     }
 
     with {:ok, profile} <- profile(Keyword.get(opts, :profile)),
@@ -281,13 +315,40 @@ defmodule Raxol.Agent.OMP.RPC do
       principal: is_nil(config.principal) or is_pid(config.principal),
       path: is_nil(config.path) or is_binary(config.path),
       ready_timeout_ms:
-        is_integer(config.ready_timeout_ms) and config.ready_timeout_ms in 0..@max_timeout_ms
+        is_integer(config.ready_timeout_ms) and config.ready_timeout_ms in 0..@max_timeout_ms,
+      approval_timeout_ms:
+        is_integer(config.approval_timeout_ms) and
+          config.approval_timeout_ms in 0..@max_timeout_ms,
+      env: env?(config.env)
     ]
 
     case Enum.find(checks, fn {_option, valid?} -> not valid? end) do
       nil -> :ok
       {option, false} -> {:error, {:invalid_option, option}}
     end
+  end
+
+  defp env?(env) when is_map(env) do
+    Enum.all?(env, fn {name, value} ->
+      is_binary(name) and Regex.match?(@env_name, name) and is_binary(value) and
+        not String.contains?(value, <<0>>)
+    end)
+  end
+
+  defp env?(_env), do: false
+
+  # A port's `:env` only overlays the BEAM's environment, so every variable
+  # outside the allowlist is unset explicitly.
+  defp port_env(extra) do
+    unset =
+      for {name, _value} <- System.get_env(),
+          name not in @env_allowlist and not is_map_key(extra, name),
+          do: {String.to_charlist(name), false}
+
+    unset ++
+      Enum.map(extra, fn {name, value} ->
+        {String.to_charlist(name), String.to_charlist(value)}
+      end)
   end
 
   # A name that cannot be read as a flag or a path.
@@ -337,10 +398,15 @@ defmodule Raxol.Agent.OMP.RPC do
 
   defp identity(%File.Stat{major_device: device, inode: inode}), do: {device, inode}
 
-  # `omp --version` in the session's cwd, stdin on /dev/null, bounded.
-  defp check_version(path, cwd) do
+  # `omp --version` in the session's cwd and environment, stdin on
+  # /dev/null, bounded. `env` also unsets the shell variables the spec's
+  # own `:env` would.
+  defp check_version(path, cwd, env) do
     spec = SpawnedPort.spawn_spec(path, ["--version"])
-    opts = [:binary, :exit_status, :hide, {:args, spec.args}, {:cd, cwd}] ++ spec.opts
+
+    opts =
+      [:binary, :exit_status, :hide, {:args, spec.args}, {:cd, cwd}, {:env, env}] ++
+        List.keydelete(spec.opts, :env, 0)
 
     with {:ok, port} <- spawn(spec.path, opts),
          {:ok, output} <- collect_version(port, [], deadline(@version_timeout_ms)),
@@ -373,7 +439,7 @@ defmodule Raxol.Agent.OMP.RPC do
 
   # stdin stays a pipe: commands are written to it. stderr is inherited.
   # The working directory is the session's, never the BEAM's.
-  defp open_port(path, config) do
+  defp open_port(path, config, env) do
     args = ["--mode", "rpc", "--approval-mode", "write", "--profile", config.profile]
 
     spawn(path, [
@@ -382,7 +448,8 @@ defmodule Raxol.Agent.OMP.RPC do
       :hide,
       {:line, @line_bytes},
       {:args, args},
-      {:cd, config.cwd}
+      {:cd, config.cwd},
+      {:env, env}
     ])
   end
 
@@ -407,6 +474,7 @@ defmodule Raxol.Agent.OMP.RPC do
       os_pid: nil,
       subscriber: config.subscriber,
       principal: config.principal,
+      approval_timeout_ms: config.approval_timeout_ms,
       principal_ref: principal_ref,
       phase: :starting,
       handshake_error: nil,
@@ -473,8 +541,9 @@ defmodule Raxol.Agent.OMP.RPC do
 
   def handle_call({:answer, ui_id, value}, _from, state) do
     case Map.fetch(state.approvals, ui_id) do
-      {:ok, options} ->
+      {:ok, {options, timer}} ->
         if value in options do
+          cancel(timer)
           write(state.port, Codec.ui_answer(ui_id, value))
           {:reply, :ok, %{state | approvals: Map.delete(state.approvals, ui_id)}}
         else
@@ -490,6 +559,8 @@ defmodule Raxol.Agent.OMP.RPC do
     do: {:reply, {:error, :already_closing}, state}
 
   def handle_call({:close, timeout_ms}, from, state) do
+    state = deny_all(state, :closing)
+
     if state.phase != :ready or settled?(state) do
       {:stop, :normal, :ok, state}
     else
@@ -534,13 +605,21 @@ defmodule Raxol.Agent.OMP.RPC do
     {:noreply, %{state | closing: nil}}
   end
 
+  def handle_info({:approval_deadline, ui_id}, state) do
+    case Map.pop(state.approvals, ui_id) do
+      {{_options, _timer}, approvals} ->
+        deny(state, ui_id, :timeout)
+        {:noreply, %{state | approvals: approvals}}
+
+      {nil, _approvals} ->
+        {:noreply, state}
+    end
+  end
+
   # The principal is gone: nobody can answer its open approvals.
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{principal_ref: ref} = state) do
-    Enum.each(state.approvals, fn {ui_id, _options} ->
-      write(state.port, Codec.ui_answer(ui_id, Codec.deny()))
-    end)
-
-    {:noreply, %{state | principal: nil, principal_ref: nil, approvals: %{}}}
+    state = deny_all(%{state | principal: nil, principal_ref: nil}, :principal_down)
+    {:noreply, state}
   end
 
   # A closed port's late messages and a stale timer land here.
@@ -723,14 +802,21 @@ defmodule Raxol.Agent.OMP.RPC do
 
   defp admit(state, _type, _id, _result), do: state
 
-  defp ui_request(%{principal: nil} = state, _frame, {:approval, ui_id, _options}) do
+  # Nobody can answer: no principal, or the session is closing.
+  defp ui_request(
+         %{principal: principal, closing: closing} = state,
+         _frame,
+         {:approval, ui_id, _}
+       )
+       when is_nil(principal) or not is_nil(closing) do
     write(state.port, Codec.ui_answer(ui_id, Codec.deny()))
     state
   end
 
   defp ui_request(state, frame, {:approval, ui_id, options}) do
-    send(state.principal, {:omp_rpc_approval, self(), ui_id, frame})
-    %{state | approvals: Map.put(state.approvals, ui_id, options)}
+    send(state.principal, {:omp_rpc_approval, self(), ui_id, Map.put(frame, "options", options)})
+    timer = Process.send_after(self(), {:approval_deadline, ui_id}, state.approval_timeout_ms)
+    %{state | approvals: Map.put(state.approvals, ui_id, {options, timer})}
   end
 
   defp ui_request(state, _frame, {:dialog, ui_id}) do
@@ -739,10 +825,36 @@ defmodule Raxol.Agent.OMP.RPC do
   end
 
   # OMP withdrew a dialog (its signal aborted): an answer is no longer due.
-  defp ui_request(state, %{"method" => "cancel", "targetId" => target}, :none),
-    do: %{state | approvals: Map.delete(state.approvals, target)}
+  defp ui_request(state, %{"method" => "cancel", "targetId" => target}, :none) do
+    case Map.pop(state.approvals, target) do
+      {{_options, timer}, approvals} ->
+        cancel(timer)
+        send(state.principal, {:omp_rpc_approval_closed, self(), target, :cancelled})
+        %{state | approvals: approvals}
+
+      {nil, _approvals} ->
+        state
+    end
+  end
 
   defp ui_request(state, _frame, :none), do: state
+
+  # Deny every open approval on the principal's behalf.
+  defp deny_all(state, reason) do
+    Enum.each(state.approvals, fn {ui_id, {_options, timer}} ->
+      cancel(timer)
+      deny(state, ui_id, reason)
+    end)
+
+    %{state | approvals: %{}}
+  end
+
+  defp deny(state, ui_id, reason) do
+    write(state.port, Codec.ui_answer(ui_id, Codec.deny()))
+
+    if state.principal,
+      do: send(state.principal, {:omp_rpc_approval_closed, self(), ui_id, reason})
+  end
 
   defp forward(state, frame), do: send(state.subscriber, {:omp_rpc, self(), frame})
 

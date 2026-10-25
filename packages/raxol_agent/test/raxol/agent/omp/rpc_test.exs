@@ -167,19 +167,16 @@ defmodule Raxol.Agent.OMP.RPCTest do
       "message" => "Use the bash tool to run `echo raxol`. Do not write any text."
     }
 
-    test "go to the principal, and close waits for session_settled", %{dir: dir} do
+    test "go to the principal, whose answer reaches omp", %{dir: dir} do
       rpc = start_ready(dir, "approval", principal: self())
 
       assert {:ok, nil} = RPC.request(rpc, @prompt)
-      closing = Task.async(fn -> RPC.close(rpc, 60_000) end)
 
       assert_receive {:omp_rpc_approval, ^rpc, ui_id,
                       %{"method" => "select", "options" => ["Approve" | _] = options}},
                      30_000
 
       assert "Deny" in options
-      # The session cannot settle before the answer: omp waits for it.
-      assert Task.yield(closing, 0) == nil
 
       # The subscriber sees the frame too, but only the principal answers.
       not_principal = Task.async(fn -> RPC.answer(rpc, ui_id, "Approve") end)
@@ -189,8 +186,10 @@ defmodule Raxol.Agent.OMP.RPCTest do
       assert :ok = RPC.answer(rpc, ui_id, "Deny")
       assert {:error, :unknown_request} = RPC.answer(rpc, ui_id, "Deny")
 
-      assert :ok = Task.await(closing, 60_000)
-      assert_receive {:omp_rpc, ^rpc, %{"type" => "session_settled"}}, 5_000
+      # The player answers nothing more unless the next line is the recorded
+      # `Deny`, so the session settling proves the answer was sent.
+      assert_receive {:omp_rpc, ^rpc, %{"type" => "session_settled"}}, 30_000
+      assert :ok = RPC.close(rpc, 60_000)
 
       assert_received {:omp_rpc, ^rpc,
                        %{
@@ -203,13 +202,32 @@ defmodule Raxol.Agent.OMP.RPCTest do
                        %{"type" => "tool_execution_end", "toolName" => "bash", "isError" => true}}
     end
 
-    # The player answers nothing more unless the next line is the recorded
-    # `Deny`, so the session settling proves the answer was sent.
+    test "are denied when the principal does not answer in time", %{dir: dir} do
+      rpc = start_ready(dir, "approval", principal: self(), approval_timeout_ms: 0)
+      assert {:ok, nil} = RPC.request(rpc, @prompt)
+
+      assert_receive {:omp_rpc_approval, ^rpc, ui_id, _frame}, 30_000
+      assert_receive {:omp_rpc_approval_closed, ^rpc, ^ui_id, :timeout}, 5_000
+      assert_receive {:omp_rpc, ^rpc, %{"type" => "session_settled"}}, 30_000
+      assert {:error, :unknown_request} = RPC.answer(rpc, ui_id, "Approve")
+    end
+
+    test "are denied by close", %{dir: dir} do
+      rpc = start_ready(dir, "approval", principal: self())
+      assert {:ok, nil} = RPC.request(rpc, @prompt)
+      assert_receive {:omp_rpc_approval, ^rpc, ui_id, _frame}, 30_000
+
+      assert :ok = RPC.close(rpc, 60_000)
+      assert_received {:omp_rpc_approval_closed, ^rpc, ^ui_id, :closing}
+      assert_received {:omp_rpc, ^rpc, %{"type" => "session_settled"}}
+    end
+
+    # Settled before `close/2`, which would deny the approval itself.
     test "are denied when there is no principal", %{dir: dir} do
       rpc = start_ready(dir, "approval")
 
       assert {:ok, nil} = RPC.request(rpc, @prompt)
-      assert :ok = RPC.close(rpc, 60_000)
+      assert_receive {:omp_rpc, ^rpc, %{"type" => "session_settled"}}, 30_000
       refute_received {:omp_rpc_approval, _, _, _}
     end
 
@@ -218,7 +236,7 @@ defmodule Raxol.Agent.OMP.RPCTest do
       rpc = start_ready(dir, "approval", principal: principal)
 
       assert {:ok, nil} = RPC.request(rpc, @prompt)
-      assert :ok = RPC.close(rpc, 60_000)
+      assert_receive {:omp_rpc, ^rpc, %{"type" => "session_settled"}}, 30_000
     end
 
     test "an open approval shows in the session's status only as a count", %{dir: dir} do
