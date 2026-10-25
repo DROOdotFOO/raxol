@@ -393,6 +393,21 @@ defmodule Raxol.Agent.Session do
     end
   end
 
+  # The turn's process crashed or was killed: answer the prompt once, and
+  # forward `{:acp_cancel, ref}` as a cancel would, so the agent drops what
+  # it tracks for the turn whichever way the turn ended without its reply.
+  defp fail_turn(state, ref) do
+    {turn, turns} = Map.pop(state.turns, ref)
+    Process.demonitor(turn.caller_mref, [:flush])
+    Process.demonitor(turn.mref, [:flush])
+    Comm.reply(turn.caller, ref, {:error, :turn_failed})
+
+    {:noreply, state} =
+      forward_to_dispatcher(%{state | turns: turns}, {:acp_cancel, ref}, %{})
+
+    state
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(:get_model, _from, state) do
     result =
@@ -486,6 +501,13 @@ defmodule Raxol.Agent.Session do
     {:noreply, state}
   end
 
+  # The turn's worker crashed or was killed; its owner logged the reason.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:acp_turn_failed, ref}, %__MODULE__{turns: turns} = state)
+      when is_map_key(turns, ref) do
+    {:noreply, fail_turn(state, ref)}
+  end
+
   # The session's emit bridge went down. Graceful stops (:normal/:shutdown)
   # need no reaction — the session itself is usually terminating. On a crash,
   # restart the bridge (same session_id, so it re-registers and re-subscribes)
@@ -509,29 +531,39 @@ defmodule Raxol.Agent.Session do
     end
   end
 
+  # The agent is gone, so no turn of it can be answered any more: answer each
+  # one now and stop its process, which would otherwise run on, unanswered.
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info(
         {:DOWN, _ref, :process, pid, reason},
         %__MODULE__{lifecycle_pid: pid} = state
       ) do
     Logger.warning(
-      "[Agent.Session] Lifecycle for #{inspect(state.id)} crashed: #{inspect(reason)}"
+      "[Agent.Session] Lifecycle for #{inspect(state.id)} crashed: " <>
+        PromptTurn.failure_shape(reason)
     )
 
-    {:noreply, %{state | lifecycle_pid: nil}}
+    Enum.each(state.turns, fn {ref, turn} ->
+      Process.demonitor(turn.caller_mref, [:flush])
+      if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
+      Comm.reply(turn.caller, ref, {:error, :agent_down})
+    end)
+
+    {:noreply, %{state | lifecycle_pid: nil, turns: %{}}}
   end
 
-  # A turn process went down without reporting (it was killed from outside):
+  # A turn's owner went down without reporting (it was killed from outside):
   # the prompt still gets exactly one answer. A prompt caller that went down
   # cancels its turn.
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:DOWN, mref, :process, _pid, reason}, state) do
     case Enum.find(state.turns, fn {_ref, turn} -> mref in [turn.mref, turn.caller_mref] end) do
-      {ref, %{mref: ^mref} = turn} ->
-        Logger.warning("[Agent.Session] turn #{inspect(ref)} died: #{inspect(reason)}")
-        Process.demonitor(turn.caller_mref, [:flush])
-        Comm.reply(turn.caller, ref, {:error, :turn_failed})
-        {:noreply, %{state | turns: Map.delete(state.turns, ref)}}
+      {ref, %{mref: ^mref}} ->
+        Logger.warning(
+          "[Agent.Session] turn #{inspect(ref)} died: #{PromptTurn.failure_shape(reason)}"
+        )
+
+        {:noreply, fail_turn(state, ref)}
 
       {ref, _turn} ->
         {_result, state} = cancel_turn(state, ref, %{})

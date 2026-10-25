@@ -10,6 +10,8 @@ defmodule Raxol.Agent.TurnContractTest do
 
   @moduletag :capture_log
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Agent.Comm
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
@@ -41,7 +43,7 @@ defmodule Raxol.Agent.TurnContractTest do
         journal_opts: [base_dir: base]
       )
 
-    %{id: id}
+    %{id: id, base: base}
   end
 
   test "a prompt round-trips to {:ok, text, usage}", %{id: id} do
@@ -185,6 +187,47 @@ defmodule Raxol.Agent.TurnContractTest do
 
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
     assert {:ok, {:ok, "count: 1", _}} = prompt(id, "increment", ToolPolicy.allow_all())
+  end
+
+  test "a failed turn logs the reason's shape, not its content", %{id: id} do
+    raising = fn _tool, _params, _context -> raise "token=sk-live-123" end
+
+    log =
+      capture_log(fn ->
+        assert {:ok, {:error, :turn_failed}} =
+                 Comm.call(id, {:acp_prompt, "reset", raising}, 5_000)
+      end)
+
+    assert log =~ "failed: RuntimeError"
+    refute log =~ "sk-live-123"
+  end
+
+  test "a turn killed from outside fails and the agent drops it", %{id: id} do
+    {held, worker} = hold(id, make_ref())
+
+    Process.exit(worker, :kill)
+    assert {:ok, {:error, :turn_failed}} = Task.await(held)
+
+    # The agent saw the turn end, so release finds nothing held.
+    assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", ToolPolicy.allow_all())
+  end
+
+  test "a standalone session answers its turns when its agent goes down", %{base: base} do
+    id = "standalone-#{uniq()}"
+
+    start_supervised!(
+      {Session, app_module: Counter, id: id, session_id: id, journal_opts: [base_dir: base]}
+    )
+
+    ref = make_ref()
+    {held, worker} = hold(id, ref)
+    worker_mon = Process.monitor(worker)
+    [{lifecycle, _}] = Registry.lookup(Raxol.Agent.Registry, {:lifecycle, id})
+
+    Process.exit(lifecycle, :kill)
+    assert {:ok, {:error, :agent_down}} = Task.await(held)
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
   end
 
   test "a prompt sent with from: is still a turn the session owns", %{id: id} do
