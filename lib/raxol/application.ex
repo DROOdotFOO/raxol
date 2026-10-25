@@ -349,7 +349,10 @@ defmodule Raxol.Application do
       authorizer: resolve_mcp_authorizer(:mcp_authorizer, production?),
       read_authorizer:
         resolve_mcp_authorizer(:mcp_read_authorizer, production?),
-      authorizer_source: mcp_authorizer_source()
+      authorizer_source: mcp_authorizer_source(),
+      # Headless sessions name their tools; a call to one of a stopped
+      # session says so instead of answering `-32601`.
+      unknown_tool_reply: &Raxol.Headless.McpTools.unknown_tool_reply/1
     ]
   end
 

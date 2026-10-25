@@ -55,6 +55,8 @@ defmodule Raxol.Headless.McpTools do
   `Raxol.Recording.Video`) are trusted and start any Raxol application.
   """
 
+  alias Raxol.MCP.TreeWalker
+
   @startable_config_error "config :raxol, :headless_startable must be a list of loadable modules"
 
   @never_default_startable [
@@ -98,7 +100,8 @@ defmodule Raxol.Headless.McpTools do
         on this server's startable list (the playground demos unless the
         deployment sets its own) and a Raxol application: it has to export init/1,
         update/2 and view/1. The session's widget tools are named
-        <id>.<widget>.<action>.
+        <id>.<widget>.<action>; a start whose tools would reach the client under
+        a name another tool already holds is refused.
 
         A "path" argument also exists, but it is DISABLED unless the deployment
         sets RAXOL_HEADLESS_PATH_ROOT, because starting from a path compiles the
@@ -280,6 +283,39 @@ defmodule Raxol.Headless.McpTools do
         callback: &list_sessions/1
       }
     ]
+  end
+
+  @doc """
+  The `Raxol.MCP.Server` `:unknown_tool_reply` for Headless sessions
+  (`Raxol.Application` passes it).
+
+  A client keeps the tool names it listed last (OMP caches them across runs),
+  so a call to `<session>.<widget>.<action>` or `<session>.discover_tools`
+  whose session is not in `Raxol.Headless.list/0` answers "session
+  `<session>` is not running in this server; call raxol_list", which the
+  caller can act on. A name of that shape whose session is running, or whose
+  segments no session could derive (`Raxol.MCP.TreeWalker.id?/1`), and any
+  other name answer `nil`: the server's `-32601`. The server also hosts any
+  dotted tools an embedder registers, so an unknown one of that shape is
+  answered as a stopped session too.
+  """
+  @spec unknown_tool_reply(String.t()) :: String.t() | nil
+  def unknown_tool_reply(name) when is_binary(name) do
+    case String.split(name, ".") do
+      [session, "discover_tools"] ->
+        stopped_session_reply(session)
+
+      [session, widget, _action] ->
+        if TreeWalker.id?(widget), do: stopped_session_reply(session)
+
+      _other ->
+        nil
+    end
+  end
+
+  defp stopped_session_reply(session) do
+    if TreeWalker.id?(session) and session not in Raxol.Headless.list(),
+      do: "session `#{session}` is not running in this server; call raxol_list"
   end
 
   @doc """
@@ -626,8 +662,10 @@ defmodule Raxol.Headless.McpTools do
   # 17-character `mcp__raxol_raxol_`. No `_` or `.` in the id keeps the
   # session boundary unambiguous after that rename (`a_b.c` and `a.b_c` would
   # both become `a_b_c`), and 7 characters leave the longest demo widget and
-  # action within OMP's 64. Refused, never replaced: a caller that named a
-  # session must not find its tools under another name.
+  # action within OMP's 64 (a widget id past 21 characters can still exceed
+  # it, which `Raxol.MCP.ToolSynchronizer` warns about). Refused, never
+  # replaced: a caller that named a session must not find its tools under
+  # another name.
   #
   # Two ids that pass the pattern are reserved. `raxol` is this server's key
   # in an OMP config, and OMP strips an exact `<server>_` prefix from a tool
@@ -683,7 +721,7 @@ defmodule Raxol.Headless.McpTools do
   defp do_start(module_or_path, opts) do
     case Raxol.Headless.start(module_or_path, opts) do
       {:ok, session_id} ->
-        {:ok, "Session started: #{session_id}"}
+        keep_if_whole(session_id)
 
       # Spelled out rather than `inspect`ed because this is the refusal an
       # operator is most likely to hit by naming a real module that simply is
@@ -696,6 +734,31 @@ defmodule Raxol.Headless.McpTools do
 
       {:error, reason} ->
         {:error, inspect(reason)}
+    end
+  end
+
+  # A session the registry refused tools of (their client-side names are
+  # held by another session's or a static tool) would run without them, its
+  # `discover_tools` included, while the client reads "started": the start is
+  # refused and the session stopped.
+  defp keep_if_whole(session_id) do
+    case Raxol.Headless.refused_tools(session_id) do
+      {:ok, []} ->
+        {:ok, "Session started: #{session_id}"}
+
+      {:ok, refused} ->
+        :ok = Raxol.Headless.stop(session_id)
+
+        {:error,
+         "session #{session_id} was not started: these of its tools would reach " <>
+           "the client under a name another tool already holds: " <>
+           Enum.map_join(refused, ", ", fn {name, holder} ->
+             "#{name} (held by #{holder})"
+           end)}
+
+      {:error, reason} ->
+        :ok = Raxol.Headless.stop(session_id)
+        {:error, "session #{session_id} was not started: #{inspect(reason)}"}
     end
   end
 

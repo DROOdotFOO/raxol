@@ -89,6 +89,23 @@ defmodule Raxol.MCP.FocusLensTest do
       refute "other.input1.type_into" in names
     end
 
+    # The session is the whole first segment, not a prefix of the name.
+    test "selects a session by its exact first segment" do
+      noop = fn _ -> {:ok, "ok"} end
+
+      tools =
+        for name <- ["t.v2.w.click", "t.w.click", "global_action"],
+            do: %{name: name, description: "d", inputSchema: %{}, callback: noop}
+
+      names = fn opts ->
+        tools |> FocusLens.filter([mode: :focused] ++ opts) |> Enum.map(& &1.name)
+      end
+
+      assert names.(session_id: "t.v2") == ["global_action"]
+      assert names.(session_id: "t.v2", focused_id: "w") == ["global_action"]
+      assert names.(session_id: "t", focused_id: "w") == ["t.w.click", "global_action"]
+    end
+
     test "includes discover_tools when registry provided" do
       {:ok, registry} = Raxol.MCP.Registry.start_link(name: nil)
 
@@ -169,6 +186,21 @@ defmodule Raxol.MCP.FocusLensTest do
       assert text =~ "s.btn.click"
       refute text =~ "s.input.type"
       refute text =~ "other.btn.click"
+
+      GenServer.stop(registry)
+    end
+
+    test "the callback matches the session by its exact first segment" do
+      {:ok, registry} = Raxol.MCP.Registry.start_link(name: nil)
+
+      tools =
+        for name <- ["t.v2.w.click", "t.w.click"],
+            do: %{name: name, description: "Click", inputSchema: %{}, callback: &{:ok, &1}}
+
+      :ok = Raxol.MCP.Registry.register_tools(registry, tools)
+      spec = FocusLens.discover_tools_spec(registry, "t.v2")
+
+      assert spec.callback.(%{"query" => "click"}) == {:ok, [%{type: "text", text: "[]"}]}
 
       GenServer.stop(registry)
     end

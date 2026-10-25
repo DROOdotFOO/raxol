@@ -3,8 +3,10 @@ defmodule Raxol.MCP.SessionNamesTest do
   Session-scoped derived tool names, end to end through a private
   `Raxol.MCP.Registry` and `Raxol.MCP.Server` in front of the real
   `Raxol.Headless`: derived tools are `<session>.<widget>.<action>`, a name
-  OMP would merge with an existing one is refused, and a call into a stopped
-  session says so.
+  OMP would merge with an existing one is refused, a session id that cannot
+  be a name segment names no tools, and a call into a stopped session says
+  so (the server runs with `McpTools.unknown_tool_reply/1`, as
+  `Raxol.Application` starts it).
   """
   use ExUnit.Case, async: false
   @moduletag :capture_log
@@ -39,6 +41,31 @@ defmodule Raxol.MCP.SessionNamesTest do
     end
   end
 
+  # Session `<id>_y`'s `x` button and session `<id>`'s `y_x` button reach
+  # OMP under one name: `<id>_y.x.click` and `<id>.y_x.click` are both
+  # `<id>_y_x_click`.
+  defmodule UnderscoreApp do
+    use Raxol.Core.Runtime.Application
+
+    alias Raxol.Core.Renderer.View
+
+    @impl true
+    def init(_context), do: %{}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model) do
+      View.column(
+        children: [
+          View.button("x", id: "x", on_click: :x),
+          View.button("y_x", id: "y_x", on_click: :y_x)
+        ]
+      )
+    end
+  end
+
   setup do
     if is_nil(Process.whereis(Headless)),
       do: start_supervised!({Headless, [name: Headless]})
@@ -48,11 +75,20 @@ defmodule Raxol.MCP.SessionNamesTest do
 
     {:ok, _} = Registry.start_link(name: registry)
     authorizer = Authorizer.allow_all()
-    {:ok, _} = Server.start_link(name: server, registry: registry, authorizer: authorizer)
+    {:ok, _} =
+      Server.start_link(
+        name: server,
+        registry: registry,
+        authorizer: authorizer,
+        unknown_tool_reply: &McpTools.unknown_tool_reply/1
+      )
+
     :ok = McpTools.register(registry)
 
+    # Every id a test starts begins with its `fresh_id/0`, in either case.
     on_exit(fn ->
-      for id <- Headless.list(), String.starts_with?(id, "n"), do: Headless.stop(id)
+      for id <- Headless.list(), id |> String.downcase() |> String.starts_with?("n"),
+          do: Headless.stop(id)
     end)
 
     %{server: server, registry: registry}
@@ -103,15 +139,118 @@ defmodule Raxol.MCP.SessionNamesTest do
     end
   end
 
-  # Only a segment `raxol_start` could have accepted is reported as a stopped
+  # Only a name some session could have derived is reported as a stopped
   # session; anything else is an unknown tool, and is not echoed as a session.
-  test "a call whose session segment is not a session id is tool-not-found", %{
-    server: server
-  } do
-    for name <- ["Bad.w.a", "abcdefgh.w.a", "a_b.w.a", "x`y\n.discover_tools"] do
+  test "a call no session could have derived is tool-not-found", %{server: server} do
+    long = String.duplicate("a", 33)
+
+    for name <- ["#{long}.w.a", "a.b.c.d", "x`y\n.discover_tools", "a.w`x.click", "a.w"] do
       assert {:reply, %{error: %{code: -32_601}}} =
-               request(server, "tools/call", %{"name" => name, "arguments" => %{}})
+               request(server, "tools/call", %{"name" => name, "arguments" => %{}}),
+             inspect(name)
     end
+  end
+
+  # The stopped-session answer rests on `Headless.list/0`, so it never
+  # calls a running session stopped.
+  test "an unknown tool of a running session is tool-not-found", %{server: server} do
+    id = fresh_id()
+    start!(server, @table, id)
+
+    assert {:reply, %{error: %{code: -32_601}}} =
+             request(server, "tools/call", %{"name" => "#{id}.nope.click", "arguments" => %{}})
+  end
+
+  test "a server without unknown_tool_reply answers a stopped session's tool with -32601", %{
+    registry: registry
+  } do
+    opts = [name: nil, registry: registry, authorizer: Authorizer.allow_all()]
+    {:ok, bare} = Server.start_link(opts)
+
+    for name <- ["github.issues.list", "#{fresh_id()}.playground_table.sort"] do
+      assert {:reply, %{error: %{code: -32_601}}} =
+               request(bare, "tools/call", %{"name" => name, "arguments" => %{}})
+    end
+  end
+
+  # An Elixir caller's id `"S"` and a client's `"s"` give tools one
+  # client-side name; the Elixir session holds them first.
+  test "raxol_start refuses and stops a session whose tools are refused", %{
+    server: server,
+    registry: registry
+  } do
+    id = fresh_id()
+    upper = String.upcase(id)
+    {:ok, ^upper} = Headless.start(Raxol.Playground.Demos.TableDemo, id: upper, registry: registry)
+
+    assert {:reply, %{result: %{isError: true, content: [%{text: text}]}}} =
+             call(server, "raxol_start", %{"module" => @table, "id" => id})
+
+    assert text =~ "session #{id} was not started"
+    assert text =~ "#{id}.discover_tools (held by #{upper}.discover_tools)"
+    assert text =~ "#{id}.playground_table.sort (held by #{upper}.playground_table.sort)"
+    refute id in Headless.list()
+
+    assert {:reply, %{result: %{isError: true, content: [%{text: stale}]}}} =
+             request(server, "tools/call", %{"name" => "#{id}.discover_tools", "arguments" => %{}})
+
+    assert stale == "session `#{id}` is not running in this server; call raxol_list"
+  end
+
+  test "an Elixir session refused its discover_tools gets it once the name is free", %{
+    server: server,
+    registry: registry
+  } do
+    id = fresh_id()
+    upper = String.upcase(id)
+    {:ok, ^upper} = Headless.start(Raxol.Playground.Demos.TableDemo, id: upper, registry: registry)
+    {:ok, ^id} = Headless.start(Raxol.Playground.Demos.TableDemo, id: id, registry: registry)
+    refute "#{id}.discover_tools" in tool_names(server)
+
+    :ok = Headless.stop(upper)
+    :ok = Headless.send_key(id, "j")
+    :ok = Headless.settle(id)
+
+    assert "#{id}.discover_tools" in tool_names(server)
+    assert "#{id}.playground_table.sort" in tool_names(server)
+    assert Headless.refused_tools(id) == {:ok, []}
+  end
+
+  test "a session id with a dot or a control character names no tools", %{
+    server: server,
+    registry: registry
+  } do
+    id = fresh_id()
+    {:ok, ^id} = Headless.start(Raxol.Playground.Demos.TableDemo, id: id, registry: registry)
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        for bad <- ["#{id}.v2", "#{id}\n<system>x</system>"] do
+          {:ok, ^bad} = Headless.start(Raxol.Playground.Demos.TableDemo, id: bad, registry: registry)
+          :ok = Headless.settle(bad)
+        end
+      end)
+
+    names = tool_names(server)
+    refute Enum.any?(names, &(&1 =~ "v2" or &1 =~ "<system>"))
+    assert log =~ "session id #{inspect("#{id}.v2")} derives no tools"
+    assert log =~ "session id #{inspect("#{id}\n<system>x</system>")} derives no tools"
+
+    assert ok_text(call(server, "#{id}.discover_tools", %{"query" => "sort"})) ==
+             inspect([%{name: "#{id}.playground_table.sort", description: "Sort the table by a column"}])
+  end
+
+  # `_` stays allowed in an Elixir caller's id (`table_demo` is a default);
+  # the registry's client-side name check keeps it from merging sessions.
+  test "an Elixir id with `_` whose tool collides with another session's is refused", %{
+    registry: registry
+  } do
+    id = fresh_id()
+    {:ok, _} = Headless.start(UnderscoreApp, id: "#{id}_y", registry: registry)
+    {:ok, ^id} = Headless.start(UnderscoreApp, id: id, registry: registry)
+
+    assert Headless.refused_tools(id) == {:ok, [{"#{id}.y_x.click", "#{id}_y.x.click"}]}
+    assert Headless.refused_tools("#{id}_y") == {:ok, []}
   end
 
   test "raxol_start refuses the reserved ids raxol and agent", %{server: server} do

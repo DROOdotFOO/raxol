@@ -14,11 +14,14 @@ defmodule Raxol.MCP.FocusLens do
       hovered widget + globals
 
   Derived tool names are `"session_id.widget_id.action"`. In `:focused` and
-  `:hover` modes the widget prefixes are matched inside `:session_id`, so
-  another session's tools for a widget with the same ID never leak in. A
-  global tool is one with no `.` in its name (a server-level tool such as
-  `raxol_list`), and the session's `"session_id.discover_tools"` meta-tool is
-  always included so agents can search the session's full set by keyword.
+  `:hover` modes a tool belongs to the session when the first `.` segment of
+  its name is exactly `:session_id`, and to a widget when the second is
+  exactly the widget ID, so another session's tools for a widget with the
+  same ID never leak in. A session or widget ID never holds a `.`
+  (`Raxol.MCP.TreeWalker.id?/1`). A global tool is one with no `.` in its
+  name (a server-level tool such as `raxol_list`), and the session's
+  `"session_id.discover_tools"` meta-tool is always included so agents can
+  search the session's full set by keyword.
 
   ## Usage
 
@@ -95,8 +98,6 @@ defmodule Raxol.MCP.FocusLens do
   """
   @spec discover_tools_spec(GenServer.server(), String.t()) :: tool_def()
   def discover_tools_spec(registry, session_id) do
-    prefix = "#{session_id}."
-
     %{
       name: discover_tools_name(session_id),
       description:
@@ -121,7 +122,7 @@ defmodule Raxol.MCP.FocusLens do
           |> Enum.filter(fn tool ->
             name = tool[:name] || ""
 
-            String.starts_with?(name, prefix) and
+            in_session?(name, session_id) and
               (String.downcase(name) =~ query or
                  String.downcase(tool[:description] || "") =~ query)
           end)
@@ -172,14 +173,18 @@ defmodule Raxol.MCP.FocusLens do
   end
 
   defp session_tools(tools, session_id) do
-    prefix = "#{session_id}."
-    Enum.filter(tools, &String.starts_with?(&1.name, prefix))
+    Enum.filter(tools, &in_session?(&1.name, session_id))
   end
 
   defp widget_tools(tools, session_id, widget_id) do
-    prefix = "#{session_id}.#{widget_id}."
-    Enum.filter(tools, &String.starts_with?(&1.name, prefix))
+    Enum.filter(
+      tools,
+      &match?([^session_id, ^widget_id, _], String.split(&1.name, ".", parts: 3))
+    )
   end
+
+  defp in_session?(name, session_id),
+    do: match?([^session_id, _], String.split(name, ".", parts: 2))
 
   defp global_tools(tools) do
     Enum.reject(tools, &String.contains?(&1.name, "."))

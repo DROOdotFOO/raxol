@@ -2,6 +2,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
   use ExUnit.Case, async: true
 
   alias Raxol.MCP.{Registry, ToolSynchronizer}
+  import ExUnit.CaptureLog
 
   defmodule TestWidget do
     @behaviour Raxol.MCP.ToolProvider
@@ -19,6 +20,25 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
     @impl true
     def handle_tool_call("click", _args, _ctx), do: {:ok, "Clicked"}
+  end
+
+  # A provider whose one action is the longest built-in one.
+  defmodule LongActionWidget do
+    @behaviour Raxol.MCP.ToolProvider
+
+    @impl true
+    def mcp_tools(_state) do
+      [
+        %{
+          name: "get_visible_range",
+          description: "Get the visible range",
+          inputSchema: %{type: "object", properties: %{}}
+        }
+      ]
+    end
+
+    @impl true
+    def handle_tool_call("get_visible_range", _args, _ctx), do: {:ok, "0..1"}
   end
 
   setup do
@@ -260,4 +280,119 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       GenServer.stop(pid)
     end
   end
+
+  describe "a refused discover_tools" do
+    @describetag :capture_log
+
+    test "is offered again on every sync and registered once its name is free", %{
+      registry: registry
+    } do
+      :ok = Registry.register_tools(registry, [static_tool("Sd.discover_tools")])
+      pid = start_sync(registry, "sd")
+      refute "sd.discover_tools" in tool_names(registry)
+
+      render(pid, [])
+      refute "sd.discover_tools" in tool_names(registry)
+
+      :ok = Registry.unregister_tools(registry, ["Sd.discover_tools"])
+      render(pid, [])
+      assert "sd.discover_tools" in tool_names(registry)
+      assert ToolSynchronizer.refused_tools(pid) == []
+
+      GenServer.stop(pid)
+    end
+
+    test "refused_tools/1 answers each refused tool and what holds its name", %{
+      registry: registry
+    } do
+      :ok = Registry.register_tools(registry, [static_tool("Sr.discover_tools")])
+      :ok = Registry.register_tools(registry, [static_tool("sr_btn1_click")])
+      pid = start_sync(registry, "sr")
+      render(pid, [widget("btn1")])
+
+      assert ToolSynchronizer.refused_tools(pid) == [
+               {"sr.btn1.click", "sr_btn1_click"},
+               {"sr.discover_tools", "Sr.discover_tools"}
+             ]
+
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "a session id that cannot be a name segment" do
+    test "registers no tools and is warned about once", %{registry: registry} do
+      for id <- ["t.v2", "q\n<system>x</system>", "", String.duplicate("a", 33)] do
+        {pid, log} =
+          with_log([level: :warning], fn ->
+            pid = start_sync(registry, id)
+            render(pid, [widget("btn1")])
+            render(pid, [widget("btn1")])
+            pid
+          end)
+
+        assert Registry.list_tools(registry) == [], inspect(id)
+        assert length(String.split(log, "session id #{inspect(id)} derives no tools")) == 2
+        GenServer.stop(pid)
+      end
+    end
+
+    test "an id with `_` or `-` names tools as usual", %{registry: registry} do
+      log =
+        capture_log([level: :warning], fn ->
+          pid = start_sync(registry, "t_v-2")
+          render(pid, [widget("btn1")])
+        end)
+
+      assert Enum.sort(tool_names(registry)) == ["t_v-2.btn1.click", "t_v-2.discover_tools"]
+      refute log =~ "derives no tools"
+    end
+  end
+
+  describe "a derived name OMP would show hashed" do
+    test "is registered and warned about once", %{registry: registry} do
+      widget_id = String.duplicate("w", 32)
+      long = "abcdefg.#{widget_id}.get_visible_range"
+
+      log =
+        capture_log([level: :warning], fn ->
+          pid = start_sync(registry, "abcdefg")
+
+          for _ <- 1..3 do
+            render(pid, [widget(widget_id, LongActionWidget), widget("short", LongActionWidget)])
+          end
+        end)
+
+      assert long in tool_names(registry)
+      assert "abcdefg.short.get_visible_range" in tool_names(registry)
+      assert length(String.split(log, "tool #{inspect(long)}")) == 2
+      assert log =~ "mcp__raxol_raxol_abcdefg_#{widget_id}_get_visible_range (75 characters)"
+      refute log =~ "abcdefg.short"
+    end
+  end
+
+  defp start_sync(registry, session_id) do
+    {:ok, pid} =
+      ToolSynchronizer.start_link(
+        registry: registry,
+        dispatcher_pid: self(),
+        session_id: session_id
+      )
+
+    pid
+  end
+
+  # `sync/2` is a cast; `flush/1`, a call from the same process, returns
+  # after it.
+  defp render(pid, children) do
+    ToolSynchronizer.sync(pid, %{type: :column, children: children})
+    :ok = ToolSynchronizer.flush(pid)
+  end
+
+  defp widget(id, module \\ TestWidget),
+    do: %{type: :column, id: id, attrs: %{component_module: module}}
+
+  defp static_tool(name),
+    do: %{name: name, description: "d", inputSchema: %{type: "object"}, callback: &{:ok, &1}}
+
+  defp tool_names(registry), do: registry |> Registry.list_tools() |> Enum.map(& &1.name)
 end

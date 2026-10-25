@@ -28,10 +28,11 @@ defmodule Raxol.Headless do
       :ok = Raxol.Headless.stop("demo")
 
   Session ids are binaries of 1-32 characters of `[A-Za-z0-9_-]`, the rule
-  a widget id follows (`Raxol.MCP.TreeWalker`): an id reaches MCP clients
-  verbatim, in `raxol_list`, session-id completion, resource URIs and tool
-  names. A session's MCP tools are named under its id (`"demo.table.sort"`).
-  The `raxol_start` MCP tool narrows it to `^[a-z][a-z0-9]{0,6}$`.
+  a widget id follows (`Raxol.MCP.TreeWalker.id?/1`): an id reaches MCP
+  clients verbatim, in `raxol_list`, session-id completion, resource URIs and
+  tool names. A session's MCP tools are named under its id
+  (`"demo.table.sort"`). The `raxol_start` MCP tool narrows it to
+  `^[a-z][a-z0-9]{0,6}$`.
 
   ## Processes
 
@@ -350,6 +351,19 @@ defmodule Raxol.Headless do
          {:ok, _model} <- read_model(session) do
       with_engine(session, &render_and_flush_tools(session, &1))
     end
+  end
+
+  @doc """
+  The session's MCP tools the registry refused at its last tool sync, as
+  `{name, holder}`: `holder` already has the same client-side name (see
+  `Raxol.MCP.ToolSynchronizer.refused_tools/1`). `[]` for a session with no
+  MCP registry. Answers the same errors as `get_model/1`.
+  """
+  @spec refused_tools(String.t()) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, term()}
+  def refused_tools(id) when is_binary(id) do
+    with {:ok, session} <- lookup_session(id),
+         do: synchronizer_refusals(session)
   end
 
   @doc "Stops a headless session."
@@ -1083,6 +1097,12 @@ defmodule Raxol.Headless do
            session_call(session, session.synchronizer_pid, {:flush, engine_pid}),
          do: :ok
   end
+
+  # `:refused_tools` is `Raxol.MCP.ToolSynchronizer.refused_tools/1`'s request.
+  defp synchronizer_refusals(%{synchronizer_pid: nil}), do: {:ok, []}
+
+  defp synchronizer_refusals(session),
+    do: session_call(session, session.synchronizer_pid, :refused_tools)
 
   defp start_tool_synchronizer(lifecycle_pid, session_id, app_module, registry) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
