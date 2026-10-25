@@ -22,7 +22,9 @@ defmodule Raxol.MCP.AgentBridge do
   Convert a list of Action modules to MCP tool definitions.
 
   Each Action module must implement `__action_meta__/0` and `call/2`.
-  Tools are namespaced with `agent.` prefix.
+  Tools are namespaced with `agent.` prefix. An Action whose meta says
+  `sensitive: true` becomes a tool annotated `sensitive: true`, so
+  `Raxol.MCP.Server` refuses it when no authorizer is configured.
   """
   @spec actions_to_mcp_tools([module()], map()) :: [
           Raxol.MCP.Registry.tool_def()
@@ -51,8 +53,12 @@ defmodule Raxol.MCP.AgentBridge do
           end
         end
       }
+      |> put_sensitive(Map.get(meta, :sensitive) == true)
     end)
   end
+
+  defp put_sensitive(tool, true), do: Map.put(tool, :annotations, %{sensitive: true})
+  defp put_sensitive(tool, false), do: tool
 
   @doc """
   Returns meta-tools for agent management: list, send, get_model.
@@ -80,6 +86,9 @@ defmodule Raxol.MCP.AgentBridge do
             }
           }
         },
+        # Types the message as keystrokes into any Headless session, the same
+        # input surface `raxol_send_key` drives, so it is gated the same way.
+        annotations: %{sensitive: true},
         callback: &send_to_agent/1
       },
       %{
