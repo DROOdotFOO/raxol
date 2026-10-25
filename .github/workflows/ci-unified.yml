@@ -126,7 +126,7 @@ jobs:
             done)
             while IFS= read -r -d '' file; do
               case "$file" in
-                lib/raxol/scoreboard.ex|lib/mix/tasks/raxol.scoreboard.ex|priv/scoreboard/*|bench/core/buffer_gate.exs|bench/scoreboard_canaries/*|scripts/scoreboard-canaries.sh|.github/scripts/scoreboard.mjs|.github/workflows/scoreboard-canaries.yml)
+                lib/raxol/scoreboard.ex|lib/raxol/scoreboard/*|lib/mix/tasks/raxol.scoreboard.ex|priv/scoreboard/*|bench/core/buffer_gate.exs|bench/scoreboard_canaries/*|scripts/scoreboard-canaries.sh|.github/scripts/scoreboard.mjs|.github/workflows/scoreboard-canaries.yml)
                   return 0 ;;
               esac
               if grep -qxF -- "$file" <<< "$targets"; then return 0; fi
@@ -810,8 +810,9 @@ jobs:
   #
   # The scoreboard (`mix raxol.scoreboard`, see lib/raxol/scoreboard.ex)
   # records deterministic counters -- bytes emitted and BEAM reductions per
-  # frame of a reference demo, plus the gate's memory rows -- and uploads
-  # them as the `scoreboard` artifact. It does not gate on the numbers. It
+  # frame of a reference demo, the agent tasks' calls and bytes
+  # (lib/raxol/scoreboard/agent_tasks.ex), plus the gate's memory rows -- and
+  # uploads them as the `scoreboard` artifact. It does not gate on the numbers. It
   # fails when collecting fails, including when a frame replayed through the
   # terminal emulator does not reproduce its screen. scoreboard.yml (a `workflow_run` on
   # this workflow) compares a pull request's record against master's on the

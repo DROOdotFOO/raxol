@@ -1,0 +1,17 @@
+Regression: Derived-tool results go out inspect/1-quoted instead of as plain text: two bytes
+  more per call, every agent task's tool path pays them.
+Expect-worse: agent.table_sort_stars_desc.tool_bytes agent.select_list_pick.tool_bytes agent.modal_dismiss.tool_bytes agent.text_input_fill.tool_bytes agent.tabs_switch.tool_bytes
+
+diff --git a/packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex b/packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex
+index e70f57644..3924dbbb3 100644
+--- a/packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex
++++ b/packages/raxol_mcp/lib/raxol/mcp/tree_walker.ex
+@@ -435,7 +435,7 @@ defmodule Raxol.MCP.TreeWalker do
+   defp dispatch_messages(_messages, _pid), do: :ok
+ 
+   defp format_result(result) when is_binary(result) do
+-    [%{type: "text", text: result}]
++    [%{type: "text", text: inspect(result)}]
+   end
+ 
+   defp format_result(result) do

@@ -74,6 +74,23 @@ base commit on its base branch (and saying so when that is not the base commit
 itself), and appends master's records to `scoreboard/records.jsonl` on the
 `gh-pages` branch; releases list the change since the previous tag.
 
+### Agent tasks
+
+`Raxol.Scoreboard.AgentTasks` asks "can an AI use your app?" without a model.
+Five playground tasks (sort the table by stars descending, pick an option in a
+select list, dismiss a modal, fill a text input, switch tabs) are each solved
+twice in a fresh headless session at 80x24 with subscriptions off: once with
+the app's derived MCP tools, called on the session's tool registry, and once
+with keys through `Raxol.Headless.send_key_and_screenshot/3`, which answers a
+screenshot per key. Both must leave the model in the task's goal state. The
+metrics `agent.<task>.{tool_calls,tool_bytes,key_calls,key_bytes}` count
+calls and what an agent reads and writes, bytes standing in for tokens: the
+tool list, requests and results on one side, a first screenshot, requests and
+one screenshot per key on the other. They are exact and report-only. A path
+that does not reach its goal is printed and left out of the record, which
+the comparison shows as not measured. A changed demo screen, tool description
+or result text moves the numbers, as it should.
+
 ### History
 
 The `gh-pages` history reaches back past the scoreboard itself.

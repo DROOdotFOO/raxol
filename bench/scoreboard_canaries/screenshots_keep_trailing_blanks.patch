@@ -1,0 +1,17 @@
+Regression: Text screenshots keep every line's trailing blanks, so each key the agent
+  sends answers a full-width screen.
+Expect-worse: agent.table_sort_stars_desc.key_bytes agent.select_list_pick.key_bytes agent.modal_dismiss.key_bytes agent.text_input_fill.key_bytes agent.tabs_switch.key_bytes
+
+diff --git a/lib/raxol/headless/text_capture.ex b/lib/raxol/headless/text_capture.ex
+index 769f17b73..921e4b505 100644
+--- a/lib/raxol/headless/text_capture.ex
++++ b/lib/raxol/headless/text_capture.ex
+@@ -18,7 +18,7 @@ defmodule Raxol.Headless.TextCapture do
+   def capture(%ScreenBuffer{} = buffer) do
+     Queries.get_text(buffer)
+     |> String.split("\n")
+-    |> Enum.map_join("\n", &String.trim_trailing/1)
++    |> Enum.join("\n")
+     |> String.trim_trailing("\n")
+   end
+ 
