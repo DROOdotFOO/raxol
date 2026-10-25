@@ -1137,20 +1137,23 @@ defmodule Raxol.Headless do
   # global, and another session may have registered the same ones. A registry
   # that is gone holds nothing left to release.
   defp release_synchronizer(session_id, sync_pid) do
-    for %{id: handler_id, config: %{synchronizer: ^sync_pid}} <-
-          :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
-        do: :telemetry.detach(handler_id)
+    [:raxol, :runtime, :view_tree_updated]
+    |> :telemetry.list_handlers()
+    |> Enum.filter(&match?(%{config: %{synchronizer: ^sync_pid}}, &1))
+    |> Enum.each(&:telemetry.detach(&1.id))
 
-    with registry when is_pid(registry) <- Process.whereis(Raxol.MCP.Registry) do
-      prefix = "raxol://session/#{session_id}/"
+    _ =
+      with registry when is_pid(registry) <- Process.whereis(Raxol.MCP.Registry) do
+        prefix = "raxol://session/#{session_id}/"
 
-      uris =
-        for %{uri: uri} <- Raxol.MCP.Registry.list_resources(registry),
-            String.starts_with?(uri, prefix),
-            do: uri
+        uris =
+          for %{uri: uri} <- Raxol.MCP.Registry.list_resources(registry),
+              String.starts_with?(uri, prefix),
+              do: uri
 
-      if uris != [], do: Raxol.MCP.Registry.unregister_resources(registry, uris)
-    end
+        if uris != [],
+          do: Raxol.MCP.Registry.unregister_resources(registry, uris)
+      end
 
     :ok
   rescue
