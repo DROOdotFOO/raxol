@@ -118,7 +118,7 @@ for commit in "$@"; do
     gate_rc=0
     mix run --no-start bench/core/buffer_gate.exs --json "$gate" > /dev/null || gate_rc=$?
     if [ "$gate_rc" -gt 1 ] || [ ! -s "$gate" ]; then exit 4; fi
-    if ! mix raxol.scoreboard --include "$gate" --commit "$sha" \
+    if ! mix raxol.scoreboard --no-agent-tasks --include "$gate" --commit "$sha" \
       --output "$out/$sha.json" > "$out/$sha.log" 2>&1; then
       skip "$sha" "$(grep -m1 -E '^\*\* ' "$out/$sha.log" || tail -1 "$out/$sha.log")"
       rm -f "$out/$sha.json"

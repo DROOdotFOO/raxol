@@ -94,6 +94,146 @@
       "unit": "bytes",
       "better": "lower",
       "tolerance": 0
+    },
+    {
+      "id": "agent.table_sort_stars_desc.tool_calls",
+      "label": "Agent task with derived tools: calls to sort the table demo by stars, descending",
+      "unit": "calls",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.table_sort_stars_desc.tool_bytes",
+      "label": "Agent task with derived tools: bytes read and written to sort the table demo by stars, descending (tool list, requests, results)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.table_sort_stars_desc.key_calls",
+      "label": "Agent task with keys: keystrokes to sort the table demo by stars, descending",
+      "unit": "keys",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.table_sort_stars_desc.key_bytes",
+      "label": "Agent task with keys: bytes read and written to sort the table demo by stars, descending (requests, a screenshot before and after each key)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.select_list_pick.tool_calls",
+      "label": "Agent task with derived tools: calls to pick Python in the select list demo",
+      "unit": "calls",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.select_list_pick.tool_bytes",
+      "label": "Agent task with derived tools: bytes read and written to pick Python in the select list demo (tool list, requests, results)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.select_list_pick.key_calls",
+      "label": "Agent task with keys: keystrokes to pick Python in the select list demo",
+      "unit": "keys",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.select_list_pick.key_bytes",
+      "label": "Agent task with keys: bytes read and written to pick Python in the select list demo (requests, a screenshot before and after each key)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.modal_dismiss.tool_calls",
+      "label": "Agent task with derived tools: calls to dismiss the modal demo's dialog",
+      "unit": "calls",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.modal_dismiss.tool_bytes",
+      "label": "Agent task with derived tools: bytes read and written to dismiss the modal demo's dialog (tool list, requests, results)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.modal_dismiss.key_calls",
+      "label": "Agent task with keys: keystrokes to dismiss the modal demo's dialog",
+      "unit": "keys",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.modal_dismiss.key_bytes",
+      "label": "Agent task with keys: bytes read and written to dismiss the modal demo's dialog (requests, a screenshot before and after each key)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.text_input_fill.tool_calls",
+      "label": "Agent task with derived tools: calls to fill the text input demo with hello",
+      "unit": "calls",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.text_input_fill.tool_bytes",
+      "label": "Agent task with derived tools: bytes read and written to fill the text input demo with hello (tool list, requests, results)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.text_input_fill.key_calls",
+      "label": "Agent task with keys: keystrokes to fill the text input demo with hello",
+      "unit": "keys",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.text_input_fill.key_bytes",
+      "label": "Agent task with keys: bytes read and written to fill the text input demo with hello (requests, a screenshot before and after each key)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.tabs_switch.tool_calls",
+      "label": "Agent task with derived tools: calls to switch the tabs demo to Settings",
+      "unit": "calls",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.tabs_switch.tool_bytes",
+      "label": "Agent task with derived tools: bytes read and written to switch the tabs demo to Settings (tool list, requests, results)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.tabs_switch.key_calls",
+      "label": "Agent task with keys: keystrokes to switch the tabs demo to Settings",
+      "unit": "keys",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
+      "id": "agent.tabs_switch.key_bytes",
+      "label": "Agent task with keys: bytes read and written to switch the tabs demo to Settings (requests, a screenshot before and after each key)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
     }
   ]
 }

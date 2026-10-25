@@ -19,21 +19,37 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
       scenario screens before collecting. Use it only when a scenario is
       meant to draw something different, and commit the file with the change:
       a different screen is a different benchmark.
+    * `--no-agent-tasks` -- skip the agent tasks (`Raxol.Scoreboard.AgentTasks`).
+      `scripts/scoreboard-backfill.sh` passes it: the commits it measures
+      predate the derived tools the tasks call.
 
   The application is configured but not started: the scenarios call the
   render pipeline directly, and a started application would add processes
-  and user preferences that have nothing to do with the measurement.
+  and user preferences that have nothing to do with the measurement. The
+  agent tasks (`Raxol.Scoreboard.AgentTasks`) then start the runtime they
+  need under their own supervisor and stop it. A task path that does not
+  reach its goal is printed and left out of the record, so the comparison
+  shows its metrics as not measured.
   """
 
   use Mix.Task
 
-  @switches [output: :string, include: :keep, commit: :string, bless: :boolean]
+  @switches [
+    output: :string,
+    include: :keep,
+    commit: :string,
+    bless: :boolean,
+    agent_tasks: :boolean
+  ]
 
   @impl true
   def run(args) do
     opts = parse_args!(args)
 
     Mix.Task.run("app.config")
+    # The agent tasks run real sessions; their info and debug logs (on in
+    # the test environment) would bury the record.
+    Logger.configure(level: :warning)
 
     if opts[:bless], do: bless()
 
@@ -42,7 +58,11 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
       |> Keyword.get_values(:include)
       |> Enum.reduce(%{}, fn path, acc -> Map.merge(acc, read_include(path)) end)
 
-    metrics = Map.merge(Raxol.Scoreboard.collect(), included)
+    metrics =
+      Raxol.Scoreboard.collect()
+      |> Map.merge(agent_metrics(opts))
+      |> Map.merge(included)
+
     record = Raxol.Scoreboard.record(metrics, opts[:commit] || head_commit())
 
     print(record)
@@ -62,6 +82,16 @@ defmodule Mix.Tasks.Raxol.Scoreboard do
         Mix.raise(
           "raxol.scoreboard: unexpected arguments #{inspect(rest ++ invalid)}"
         )
+    end
+  end
+
+  defp agent_metrics(opts) do
+    if Keyword.get(opts, :agent_tasks, true) do
+      {metrics, failures} = Raxol.Scoreboard.AgentTasks.collect()
+      Enum.each(failures, &Mix.shell().error("raxol.scoreboard: " <> &1))
+      metrics
+    else
+      %{}
     end
   end
 
