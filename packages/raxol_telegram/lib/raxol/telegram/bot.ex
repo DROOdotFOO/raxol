@@ -12,7 +12,10 @@ defmodule Raxol.Telegram.Bot do
 
   Pass `allowed_chat_ids: [id1, id2]` to restrict which chats can
   interact with the bot. When set, updates from unlisted chats are
-  silently ignored. When omitted or `nil`, all chats are allowed.
+  silently ignored. When omitted or `nil`, all chats are allowed, and each
+  admitted update logs a warning: every chat, and every member of a group,
+  can drive the bot. A chat id names a chat, not a person, so this list
+  never authenticates an OMP principal (`Raxol.Agent.OMP.Principal`).
   """
 
   alias Raxol.Telegram.{Guardian, InputAdapter, SessionRouter}
@@ -139,6 +142,10 @@ defmodule Raxol.Telegram.Bot do
   defp chat_allowed?(chat_id, opts) do
     case Keyword.get(opts, :allowed_chat_ids) do
       nil ->
+        Logger.warning(
+          "Raxol.Telegram.Bot: allowed_chat_ids is nil, so every chat and every group member is admitted (chat #{chat_id}). Pass allowed_chat_ids: [...] to restrict it."
+        )
+
         true
 
       ids when is_list(ids) ->

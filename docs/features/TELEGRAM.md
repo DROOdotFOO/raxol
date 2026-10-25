@@ -30,7 +30,7 @@ Send a message to the bot from an allowed chat and the router spawns a `Session`
 
 ## Access control
 
-`allowed_chat_ids` is optional. If set, the `Bot` update handler drops messages from other chats before they reach the router. Leave it out to accept all chats, not recommended unless the bot is public-facing.
+`allowed_chat_ids` is optional. If set, the `Bot` update handler drops messages from other chats before they reach the router. Leave it out to accept all chats, not recommended unless the bot is public-facing; every update admitted that way logs a warning.
 
 ## Session lifecycle
 

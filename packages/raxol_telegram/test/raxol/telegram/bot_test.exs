@@ -34,10 +34,16 @@ defmodule Raxol.Telegram.BotTest do
       assert :ok = Bot.handle_update(update, allowed_chat_ids: %{42 => true})
     end
 
-    test "explicit nil allowed_chat_ids allows everyone" do
+    test "explicit nil allowed_chat_ids allows everyone, with a warning" do
       # Unknown command path so we don't need SessionRouter running.
       update = %{message: %{text: "/notarealcmd", chat: %{id: 1}}}
-      assert :ok = Bot.handle_update(update, allowed_chat_ids: nil)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Bot.handle_update(update, allowed_chat_ids: nil)
+        end)
+
+      assert log =~ "allowed_chat_ids is nil"
     end
   end
 
