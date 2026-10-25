@@ -50,8 +50,11 @@ the first frame's: an incremental renderer sits far below 1, and the table
 demo is at 0.98 today. Bytes and memory are exact. Reductions are not quite:
 runs on one machine agree within a few hundredths of a percent, but two CI runs
 of the same commit have differed by up to 0.2%, so reduction metrics count a
-change only beyond 0.5%. `--include` merges the buffer gate's memory
-rows. Metric ids, labels and which direction is better are in
+change only beyond 0.5%. `table.screen.heap_bytes_per_cell` is the memory of
+the screen buffer the engine holds after the table script, per cell.
+`--include` merges the buffer gate's memory rows, which measure
+`Raxol.Terminal.Buffer`, a different structure from the render path's. Metric
+ids, labels and which direction is better are in
 `priv/scoreboard/metrics.json`; add a metric there before emitting it.
 
 Each scenario frame's screen is also pinned: its fingerprint (every cell's
@@ -109,6 +112,40 @@ batching. Per keystroke it sends 16 times fewer bytes than v2.6.0, which
 cleared and redrew the whole screen on every frame. v2.4.0 and v2.5.0 are
 missing because their locked dependencies build on neither their pinned OTP 26
 (cowlib) nor OTP 29 (meck).
+
+### Canaries
+
+Each file in `bench/scoreboard_canaries/` is a deliberate regression: a patch
+with a `Regression:` line saying what it breaks and either `Expect-worse:` (the
+metrics the comparison must call worse) or `Expect-refused:` (text the
+scoreboard's refusal to measure must contain). The script measures the
+checkout, then applies, measures and reverts each patch in turn, and checks
+the verdict with the classification the pull request comment uses:
+
+```bash
+MIX_ENV=test scripts/scoreboard-canaries.sh [NAME...]   # on a clean tree
+```
+
+| Canary | Breaks | Caught by |
+| --- | --- | --- |
+| `keyframe_every_frame` | every frame redraws every row | bytes per keystroke (+397%) |
+| `redundant_reset` | 4 extra bytes on every emitted row | all three byte metrics (+2.5%) |
+| `encodes_rows_twice` | every emitted row encoded twice | work per keystroke (+1.7%), first frames |
+| `row_rebuilt_twice` | every cell write rebuilds its row twice | all reduction metrics (+14% to +23%) |
+| `cell_grows_a_field` | the render path's `%Raxol.Terminal.Cell{}` gains a field | screen memory (+2.6%) |
+| `buffer_cell_grows_a_field` | the gate's `%Raxol.Terminal.Buffer.Cell{}` gains a field | buffer gate memory (+3.3% to +3.5%) |
+| `skips_a_changed_row` | a diff frame leaves out a changed row | replay check refuses |
+| `drops_dim_attribute` | the encoder stops emitting dim (the bug #1133 fixed) | replay check refuses |
+| `table_draws_fewer_rows` | the table demo shows three rows, not four | screen pins refuse |
+
+A canary that is not caught, or whose patch no longer applies, fails the run.
+CI runs it when a change touches the scoreboard's own files or a file a canary
+patches, and gates on it; the nightly runs it every night. A stale patch is
+regenerated with `git diff` after making the same edit to today's code.
+
+`encodes_rows_twice` also shows a limit of `table.keystroke.work_ratio`: a
+slower first frame lowers the ratio, so that regression reads as a 6.4% better
+keystroke cost. Read the ratio next to the reductions it divides.
 
 ## Suites
 

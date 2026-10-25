@@ -54,6 +54,13 @@
       "tolerance": 0.005
     },
     {
+      "id": "table.screen.heap_bytes_per_cell",
+      "label": "Memory per cell of the screen the engine holds (table demo, 120x40, shared heap)",
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0
+    },
+    {
       "id": "buffer.80x24.heap_bytes_per_cell",
       "label": "Memory per screen cell, 80x24 buffer (shared heap)",
       "unit": "bytes",

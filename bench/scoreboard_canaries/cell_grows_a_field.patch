@@ -1,0 +1,18 @@
+Regression: The render path's %Raxol.Terminal.Cell{} gains a field, which every
+  written cell of the screen the engine holds pays for.
+Expect-worse: table.screen.heap_bytes_per_cell
+
+diff --git a/packages/raxol_terminal/lib/raxol/terminal/cell.ex b/packages/raxol_terminal/lib/raxol/terminal/cell.ex
+index b76af9e41..adb3c3b52 100644
+--- a/packages/raxol_terminal/lib/raxol/terminal/cell.ex
++++ b/packages/raxol_terminal/lib/raxol/terminal/cell.ex
+@@ -29,7 +29,8 @@ defmodule Raxol.Terminal.Cell do
+     :style,
+     :dirty,
+     wide_placeholder: false,
+-    sixel: false
++    sixel: false,
++    hyperlink: nil
+   ]
+ 
+   @doc """

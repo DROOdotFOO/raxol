@@ -1,0 +1,25 @@
+Regression: Every cell write rebuilds its row twice: the buffer gate's row-rebuild
+  canary (bench/core/buffer_gate.exs) at 2x instead of 10x.
+Expect-worse: table.keystroke.reductions table.keyframe.reductions flex.keyframe.reductions
+
+diff --git a/packages/raxol_terminal/lib/raxol/terminal/buffer/writer.ex b/packages/raxol_terminal/lib/raxol/terminal/buffer/writer.ex
+index 800638d0d..c3a60085c 100644
+--- a/packages/raxol_terminal/lib/raxol/terminal/buffer/writer.ex
++++ b/packages/raxol_terminal/lib/raxol/terminal/buffer/writer.ex
+@@ -106,11 +106,11 @@ defmodule Raxol.Terminal.Buffer.Writer do
+           1..2
+         ) :: list(list(Cell.t()))
+   def update_cells(buffer, x, y, char, cell_style, width) do
+-    List.update_at(
+-      buffer.cells,
+-      y,
+-      &update_row(&1, x, char, cell_style, width, buffer.width)
+-    )
++    List.update_at(buffer.cells, y, fn row ->
++      row
++      |> update_row(x, char, cell_style, width, buffer.width)
++      |> update_row(x, char, cell_style, width, buffer.width)
++    end)
+   end
+ 
+   @doc """

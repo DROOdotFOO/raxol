@@ -1,0 +1,18 @@
+Regression: Every emitted row is ANSI-encoded twice and one copy thrown away.
+  About 2% more work per keystroke, a few times the 0.5% reduction tolerance:
+  the smallest work regression here.
+Expect-worse: table.keystroke.reductions table.keyframe.reductions flex.keyframe.reductions
+
+diff --git a/lib/raxol/core/runtime/rendering/backends.ex b/lib/raxol/core/runtime/rendering/backends.ex
+index a098053f7..2437835e3 100644
+--- a/lib/raxol/core/runtime/rendering/backends.ex
++++ b/lib/raxol/core/runtime/rendering/backends.ex
+@@ -95,6 +95,8 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
+ 
+   defp emit_rows(renderer, rows) do
+     Enum.map_join(rows, "", fn y ->
++      _ = Raxol.Terminal.Renderer.render_row(renderer, y)
++
+       "\e[#{y + 1};1H\e[0m\e[2K" <>
+         Raxol.Terminal.Renderer.render_row(renderer, y)
+     end)
