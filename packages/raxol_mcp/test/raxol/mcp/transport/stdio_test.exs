@@ -323,6 +323,40 @@ defmodule Raxol.MCP.Transport.StdioTest do
       assert_receive {:DOWN, ^reader_ref, :process, ^reader, :killed}, @timeout
     end
 
+    # A restarted server knows nothing of this transport's subscription, so a
+    # transport that outlived it would never see a notification again.
+    @tag :capture_log
+    test "the server going down while nothing is pending stops the transport too",
+         %{io: io, server: server, transport: transport, transport_ref: ref} do
+      push(io, Protocol.request(1, "ping"))
+      assert next_frame(io).id == 1
+      reader = :sys.get_state(transport).reader
+      reader_ref = Process.monitor(reader)
+      server_pid = Process.whereis(server)
+
+      Process.unlink(transport)
+      Process.unlink(server_pid)
+      Process.exit(server_pid, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^transport, {:server_down, :killed}}, @timeout
+      assert_receive {:DOWN, ^reader_ref, :process, ^reader, :killed}, @timeout
+    end
+
+    @tag :capture_log
+    test "a transport started with no server running stops with {:server_down, :noproc}" do
+      {:ok, io} = PushIO.start_link()
+      Process.flag(:trap_exit, true)
+
+      {:ok, transport} =
+        Transport.Stdio.start_link(
+          server: :"missing_#{System.unique_integer([:positive])}",
+          io_device: io,
+          output_device: io
+        )
+
+      assert_receive {:EXIT, ^transport, {:server_down, :noproc}}, @timeout
+    end
+
     @tag :capture_log
     test "the reader dying closes the transport like end of input",
          %{io: io, registry: r, transport: transport, transport_ref: ref} do

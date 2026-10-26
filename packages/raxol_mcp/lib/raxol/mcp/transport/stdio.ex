@@ -29,10 +29,18 @@ defmodule Raxol.MCP.Transport.Stdio do
   transport stops `:normal` once nothing is outstanding; halting the VM is the
   caller's job.
 
-  If the transport dies any other way (killed, the server going down, a crash),
-  the server cancels its outstanding requests, since it monitors every
-  `Raxol.MCP.Server.request/3` caller, and the linked reader exits with it
-  rather than go on consuming input.
+  If the transport dies any other way (killed, a crash), the server cancels its
+  outstanding requests, since it monitors every `Raxol.MCP.Server.request/3`
+  caller, and the linked reader exits with it rather than go on consuming
+  input.
+
+  The transport monitors the server it subscribed to and stops with
+  `{:server_down, reason}` when that server goes down, whether or not a request
+  is pending, and with `{:server_down, :noproc}` at start if no server is
+  running. A restarted server (`Raxol.MCP.Supervisor` restarts it under the
+  same name) knows nothing of this transport's subscription, so carrying on
+  would leave it unable to receive notifications or be asked for an
+  elicitation; stopping lets the client restart the whole server process.
 
   The transport traps exits (to see its reader's), and keeps ordinary link
   semantics otherwise: when the process that started it exits, it stops with
@@ -68,6 +76,7 @@ defmodule Raxol.MCP.Transport.Stdio do
     :reader,
     :io_device,
     :output_device,
+    :server_monitor,
     :requests,
     in_flight: %{},
     closing: false
@@ -76,6 +85,7 @@ defmodule Raxol.MCP.Transport.Stdio do
   @type t :: %__MODULE__{
           server: GenServer.server(),
           reader: pid() | nil,
+          server_monitor: reference() | nil,
           io_device: IO.device(),
           output_device: IO.device(),
           requests: :gen_server.request_id_collection(),
@@ -124,14 +134,23 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   @impl GenServer
   def handle_continue(:start_reader, state) do
-    # Subscribe to server notifications
-    Server.subscribe(state.server, self())
+    case GenServer.whereis(state.server) do
+      nil ->
+        Logger.error("[MCP.Stdio] MCP server not running: #{inspect(state.server)}")
+        {:stop, {:server_down, :noproc}, state}
 
-    parent = self()
-    io_device = state.io_device
-    reader = spawn_link(fn -> read_loop(io_device, parent) end)
+      server ->
+        # Monitor and subscribe the same process, so a restart between the two
+        # cannot leave this transport subscribed to a server it is not watching.
+        server_monitor = Process.monitor(server)
+        Server.subscribe(server, self())
 
-    {:noreply, %{state | reader: reader}}
+        parent = self()
+        io_device = state.io_device
+        reader = spawn_link(fn -> read_loop(io_device, parent) end)
+
+        {:noreply, %{state | reader: reader, server_monitor: server_monitor}}
+    end
   end
 
   # A `:normal` stop does not take the linked reader down (it is not trapping,
@@ -178,6 +197,11 @@ defmodule Raxol.MCP.Transport.Stdio do
   def handle_manager_info({:EXIT, pid, reason}, %{reader: pid} = state) do
     Logger.info("[MCP.Stdio] Reader process exited: #{inspect(reason)}")
     close(state)
+  end
+
+  def handle_manager_info({:DOWN, ref, :process, _server, reason}, %{server_monitor: ref} = state) do
+    Logger.error("[MCP.Stdio] MCP server down: #{inspect(reason)}")
+    {:stop, {:server_down, reason}, state}
   end
 
   # Trapping exits must not swallow a linked process's crash. The parent's exit
