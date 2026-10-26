@@ -871,6 +871,45 @@ defmodule Raxol.Headless.McpToolsTest do
       assert "pin.get_value" in Enum.map(Raxol.MCP.TreeWalker.derive_tools(plain, ctx), & &1.name)
     end
 
+    # The same secret through the session's resources: `widgets` is built
+    # from each Component's accessibility node, `context` from the raw view
+    # tree. Both stay readable without a read authorizer.
+    test "a masked or password value is in neither the widgets nor the context resource" do
+      registry = registry!()
+      session = "masked_#{System.unique_integer([:positive])}"
+
+      {:ok, sync} =
+        Raxol.MCP.ToolSynchronizer.start_link(
+          registry: registry,
+          dispatcher_pid: self(),
+          session_id: session
+        )
+
+      tree = %{
+        type: :column,
+        children: [
+          %{type: :text_input, id: "pin", value: "SECRET-node", mask_char: "*"},
+          %{type: :text_input, id: "pin2", attrs: %{mask_char: "*", value: "SECRET-attrs"}},
+          %{type: :password_field, id: "pw", value: "SECRET-pw", attrs: %{value: "SECRET-pwa"}},
+          %{type: :text_input, id: "name", value: "visible-name"}
+        ]
+      }
+
+      :ok = Raxol.MCP.ToolSynchronizer.sync(sync, tree)
+      # A call after the cast: the render has been handled.
+      _state = :sys.get_state(sync)
+
+      for resource <- ["widgets", "context"] do
+        uri = "raxol://session/#{session}/#{resource}"
+        assert {:ok, value} = Raxol.MCP.Registry.read_resource(registry, uri)
+        json = Jason.encode!(value)
+        refute json =~ "SECRET", "#{resource}: #{json}"
+        assert json =~ "visible-name", resource
+      end
+
+      GenServer.stop(sync)
+    end
+
     # The other half of the breaking change: an embedder with no authorizer
     # can still read a widget, but no longer drive one.
     test "an unguarded server refuses a derived state change and runs a read" do

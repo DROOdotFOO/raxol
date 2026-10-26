@@ -8,8 +8,15 @@ defmodule Raxol.MCP.ContextTree do
 
   ## Sources
 
-  - `:model` -- TEA model projections from registered resources
-  - `:widgets` -- current widget tree (types, IDs, bounds)
+  - `:model` -- TEA model projections from registered resources: what the
+    app chose to expose in `mcp_resources/0`, each also readable at its own
+    `raxol://session/<id>/model/<key>` URI. A secret an app projects there is
+    exposed by that choice; nothing here redacts it.
+  - `:widgets` -- current widget tree (types, IDs, bounds), without
+    callbacks, and without the `:value` (on the node or in its `:attrs`) of
+    a node that holds a secret: a `:password_field`, or a node with a
+    `mask_char` (on the node or in its `:attrs`), as a masked
+    `:text_input` has
   - `:tools` -- list of available MCP tools
   - `:session` -- session metadata (id, uptime)
 
@@ -98,10 +105,12 @@ defmodule Raxol.MCP.ContextTree do
     }
   end
 
-  # Strip callbacks and non-serializable values from a view tree
+  # Strip callbacks and non-serializable values from a view tree, and the
+  # value of a secret node: masked text is still the plaintext in the tree.
   defp sanitize_tree(node) when is_map(node) do
     node
     |> Map.drop([:callback, :on_click, :on_change, :on_submit])
+    |> drop_secret_value()
     |> Map.new(fn {k, v} -> {k, sanitize_tree(v)} end)
   end
 
@@ -110,4 +119,22 @@ defmodule Raxol.MCP.ContextTree do
   end
 
   defp sanitize_tree(other), do: other
+
+  defp drop_secret_value(node) do
+    attrs = Map.get(node, :attrs)
+
+    if Map.get(node, :type) == :password_field or masked?(node) or
+         (is_map(attrs) and masked?(attrs)) do
+      node |> Map.delete(:value) |> drop_attrs_value()
+    else
+      node
+    end
+  end
+
+  defp masked?(map), do: Map.get(map, :mask_char) != nil
+
+  defp drop_attrs_value(%{attrs: %{} = attrs} = node),
+    do: %{node | attrs: Map.delete(attrs, :value)}
+
+  defp drop_attrs_value(node), do: node
 end

@@ -238,6 +238,9 @@ defmodule Raxol.UI.Components.Input.TextInput do
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
 
+  # A masked input's value is a secret (see `masked?/1`): like
+  # `PasswordField`, its node reports none, so the widgets resource built
+  # from it does not carry the plaintext.
   @impl Raxol.Core.Accessibility.Provider
   def a11y_node(node) do
     attrs = Map.get(node, :attrs, %{})
@@ -247,7 +250,7 @@ defmodule Raxol.UI.Components.Input.TextInput do
       label:
         node[:aria_label] || attrs[:aria_label] || node[:label] || attrs[:label] ||
           node[:placeholder] || attrs[:placeholder],
-      value: node[:value] || attrs[:value],
+      value: if(masked?(node), do: nil, else: node[:value] || attrs[:value]),
       state: %{
         focused?: (node[:focused] || attrs[:focused]) == true,
         required?: (node[:required] || attrs[:required]) == true
