@@ -16,13 +16,20 @@ defmodule Raxol.Agent.Session.PromptTurn do
     spawn_monitor(fn -> own(session, ref, fun) end)
   end
 
-  @doc "Kill the turn's worker and wait until the owner is down."
+  @doc """
+  Kill the turn's worker and wait until the owner is down. `mref` is
+  removed without `:flush`; the caller drops its DOWN if one was queued.
+  """
   @spec abort(pid(), reference()) :: :ok
   def abort(owner, mref) do
+    # A monitor made here lets the receive skip every message queued before
+    # it, so an abort does not scan a mailbox full of other turns' DOWNs.
+    Process.demonitor(mref)
+    down = Process.monitor(owner)
     send(owner, :abort)
 
     receive do
-      {:DOWN, ^mref, :process, ^owner, _reason} -> :ok
+      {:DOWN, ^down, :process, ^owner, _reason} -> :ok
     end
   end
 

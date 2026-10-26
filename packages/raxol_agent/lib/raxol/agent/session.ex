@@ -50,7 +50,8 @@ defmodule Raxol.Agent.Session do
     owns_bridge?: true,
     owns_lifecycle?: true,
     turns: %{},
-    agent_refs: %{}
+    agent_refs: %{},
+    monitors: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -73,7 +74,8 @@ defmodule Raxol.Agent.Session do
               mref: reference() | nil
             }
           },
-          agent_refs: %{reference() => reference()}
+          agent_refs: %{reference() => reference()},
+          monitors: %{reference() => reference()}
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -438,9 +440,11 @@ defmodule Raxol.Agent.Session do
         prompt = {:call, self(), agent_ref, {:acp_prompt, text, approver}}
         GenServer.cast(dispatcher_pid, dispatch_cast(prompt, metadata))
 
+        caller_mref = Process.monitor(caller)
+
         turn = %{
           caller: caller,
-          caller_mref: Process.monitor(caller),
+          caller_mref: caller_mref,
           agent_ref: agent_ref,
           pid: nil,
           mref: nil
@@ -449,7 +453,8 @@ defmodule Raxol.Agent.Session do
         %{
           state
           | turns: Map.put(state.turns, ref, turn),
-            agent_refs: Map.put(state.agent_refs, agent_ref, ref)
+            agent_refs: Map.put(state.agent_refs, agent_ref, ref),
+            monitors: Map.put(state.monitors, caller_mref, ref)
         }
     end
   end
@@ -469,7 +474,7 @@ defmodule Raxol.Agent.Session do
   # for the turn.
   defp end_turn(state, ref, answer, metadata) do
     {turn, state} = forget_turn(state, ref)
-    Process.demonitor(turn.caller_mref, [:flush])
+    Process.demonitor(turn.caller_mref)
     if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
     Comm.reply(turn.caller, ref, answer)
 
@@ -486,8 +491,8 @@ defmodule Raxol.Agent.Session do
   # arrived, or it was aborted), so nothing of the turn outlives its answer.
   defp fail_turn(state, ref) do
     {turn, state} = forget_turn(state, ref)
-    Process.demonitor(turn.caller_mref, [:flush])
-    if turn.mref, do: Process.demonitor(turn.mref, [:flush])
+    Process.demonitor(turn.caller_mref)
+    if turn.mref, do: Process.demonitor(turn.mref)
     Comm.reply(turn.caller, ref, {:error, :turn_failed})
 
     {:noreply, state} =
@@ -498,7 +503,14 @@ defmodule Raxol.Agent.Session do
 
   defp forget_turn(state, ref) do
     {turn, turns} = Map.pop!(state.turns, ref)
-    {turn, %{state | turns: turns, agent_refs: Map.delete(state.agent_refs, turn.agent_ref)}}
+
+    {turn,
+     %{
+       state
+       | turns: turns,
+         agent_refs: Map.delete(state.agent_refs, turn.agent_ref),
+         monitors: Map.drop(state.monitors, [turn.caller_mref, turn.mref])
+     }}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -568,7 +580,7 @@ defmodule Raxol.Agent.Session do
     case Map.fetch!(state.turns, ref) do
       %{pid: nil} ->
         {turn, state} = forget_turn(state, ref)
-        Process.demonitor(turn.caller_mref, [:flush])
+        Process.demonitor(turn.caller_mref)
         Comm.reply(turn.caller, ref, reply)
         {:noreply, state}
 
@@ -590,8 +602,8 @@ defmodule Raxol.Agent.Session do
     case Map.fetch!(state.turns, ref) do
       %{pid: ^owner} when is_pid(owner) ->
         {turn, state} = forget_turn(state, ref)
-        Process.demonitor(turn.caller_mref, [:flush])
-        Process.demonitor(turn.mref, [:flush])
+        Process.demonitor(turn.caller_mref)
+        Process.demonitor(turn.mref)
         Comm.reply(turn.caller, ref, reply)
         {:noreply, state}
 
@@ -608,7 +620,13 @@ defmodule Raxol.Agent.Session do
     case Map.fetch!(state.turns, ref) do
       %{pid: nil} = turn ->
         {pid, mref} = PromptTurn.start(self(), agent_ref, fun)
-        {:noreply, put_in(state.turns[ref], %{turn | pid: pid, mref: mref})}
+
+        {:noreply,
+         %{
+           state
+           | turns: Map.put(state.turns, ref, %{turn | pid: pid, mref: mref}),
+             monitors: Map.put(state.monitors, mref, ref)
+         }}
 
       %{pid: pid} ->
         Logger.warning(
@@ -697,32 +715,46 @@ defmodule Raxol.Agent.Session do
     )
 
     Enum.each(state.turns, fn {ref, turn} ->
-      Process.demonitor(turn.caller_mref, [:flush])
+      Process.demonitor(turn.caller_mref)
       if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
       Comm.reply(turn.caller, ref, {:error, :agent_down})
     end)
 
-    {:noreply, %{state | lifecycle_pid: nil, lifecycle_mref: nil, turns: %{}, agent_refs: %{}}}
+    {:noreply,
+     %{
+       state
+       | lifecycle_pid: nil,
+         lifecycle_mref: nil,
+         turns: %{},
+         agent_refs: %{},
+         monitors: %{}
+     }}
   end
 
   # A turn's owner went down without reporting (it was killed from outside):
   # the prompt still gets exactly one answer. A prompt caller that went down
-  # cancels its turn.
+  # cancels its turn. `monitors` finds the turn without a scan. A DOWN whose
+  # monitor is no longer in it (its turn ended) falls to the catch-all, so
+  # an ended turn's monitors are removed without `:flush`, which would scan
+  # the mailbox each time.
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:DOWN, mref, :process, _pid, reason}, state) do
-    case Enum.find(state.turns, fn {_ref, turn} -> mref in [turn.mref, turn.caller_mref] end) do
-      {ref, %{mref: ^mref}} ->
+  def handle_manager_info(
+        {:DOWN, mref, :process, _pid, reason},
+        %__MODULE__{monitors: monitors} = state
+      )
+      when is_map_key(monitors, mref) do
+    ref = Map.fetch!(monitors, mref)
+
+    case Map.fetch!(state.turns, ref) do
+      %{mref: ^mref} ->
         Logger.warning(
           "[Agent.Session] turn #{inspect(ref)} died: #{PromptTurn.failure_shape(reason)}"
         )
 
         {:noreply, fail_turn(state, ref)}
 
-      {ref, _turn} ->
+      _caller_down ->
         {_result, state} = cancel_turn(state, ref, %{})
-        {:noreply, state}
-
-      nil ->
         {:noreply, state}
     end
   end
