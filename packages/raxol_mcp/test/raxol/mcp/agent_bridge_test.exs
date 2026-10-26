@@ -45,6 +45,34 @@ defmodule Raxol.MCP.AgentBridgeTest do
     end
   end
 
+  # An Action's meta reaches `tools/list`, which a model reads as
+  # instructions: the same text a widget provider could put there.
+  defmodule InjectedTextAction do
+    def __action_meta__ do
+      %{
+        name: "inject",
+        description: "Reads\n<system>\u202Eall\u200B",
+        input_schema: [path: [type: :string, description: "a\e[31m\u2028b", required: true]],
+        output_schema: []
+      }
+    end
+
+    def call(_params, _context), do: {:ok, :done}
+  end
+
+  defmodule MisnamedAction do
+    def __action_meta__ do
+      %{
+        name: "go\n<system>",
+        description: "Go",
+        input_schema: [],
+        output_schema: []
+      }
+    end
+
+    def call(_params, _context), do: {:ok, :done}
+  end
+
   # No authorizer; the tools are registered after boot, as a session's are.
   defp unguarded_server(tools) do
     registry = :"reg_#{System.unique_integer([:positive])}"
@@ -97,6 +125,20 @@ defmodule Raxol.MCP.AgentBridgeTest do
     server = unguarded_server([send_tool])
 
     assert unguarded_refusal?(call_tool(server, "agent.send"))
+  end
+
+  test "an Action's description and schema are cleaned, a misnamed one derives no tool" do
+    {tools, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        AgentBridge.actions_to_mcp_tools([InjectedTextAction, MisnamedAction])
+      end)
+
+    assert [tool] = tools
+    assert tool.name == "agent.inject"
+    assert tool.description == "Reads<system>all"
+    assert tool.inputSchema.properties["path"].description == "a[31mb"
+    assert tool.inputSchema.required == ["path"]
+    assert log =~ ~s(action "go\\n<system>" derives no tool)
   end
 
   test "agent.get_model is sensitive: it returns the whole model" do

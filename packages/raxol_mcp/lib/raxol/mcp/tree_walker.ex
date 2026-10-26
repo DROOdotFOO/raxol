@@ -247,6 +247,13 @@ defmodule Raxol.MCP.TreeWalker do
   end
 
   @doc """
+  Whether `name` may name an action: a lowercase letter followed by up to 31
+  of `[a-z0-9_]`. It becomes part of a listed tool name.
+  """
+  @spec action_name?(term()) :: boolean()
+  def action_name?(name), do: is_binary(name) and Regex.match?(@action_name, name)
+
+  @doc """
   An action spec's `description` and `inputSchema` as the client's tool list
   gets them: cleaned as the moduledoc describes, or the `t:spec_fault/0`
   that refuses the spec. `Raxol.MCP.AgentBridge` applies it to an Action's
@@ -312,8 +319,6 @@ defmodule Raxol.MCP.TreeWalker do
       {:error, fault} -> {[], MapSet.put(refusals, {:action_spec, id, spec.name, fault})}
     end
   end
-
-  defp action_name?(name), do: is_binary(name) and Regex.match?(@action_name, name)
 
   # The View DSL allows :children to be a list or a single element map
   # (e.g. a box whose do-block is one column). Mirror the Bubbler's
