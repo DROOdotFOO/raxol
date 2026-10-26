@@ -32,6 +32,19 @@ defmodule Raxol.MCP.TreeWalker do
   the authorizer requirement, while any other key (`title`, `readOnlyHint`,
   ...) is a provider's self-report a client would act on.
 
+  An atom is encoded as its name, so it is cleaned as that name: a
+  `description` atom becomes its cleaned name, and a schema key or leaf
+  atom stays an atom when its name is clean and becomes the cleaned string
+  otherwise. A spec derives no tool, and is refused like a misnamed action,
+  when its `description` is neither a string nor an atom (`nil` means none),
+  when its `inputSchema` holds anything JSON cannot encode (a tuple, a
+  struct, a pid, a function, an improper list, a key that is neither a
+  string nor an atom), or when two keys of one map are equal once cleaned
+  and stringified (`:amount` and `"amount"`, or `"amount"` and
+  `"amount\\u200B"`). One such spec would otherwise make every client's
+  `tools/list` unencodable, or let one property definition silently replace
+  another.
+
   ## Excluding Widgets
 
   Set `mcp_exclude: true` in a widget's attrs to suppress tool derivation:
@@ -118,13 +131,25 @@ defmodule Raxol.MCP.TreeWalker do
   @typedoc """
   Why a provider derived less than it declared: `{:widget_id, id}` for a
   widget whose id derives no tools, `{:action_name, widget_id, name}` for
-  one spec whose action name derives no tool.
+  one spec whose action name derives no tool, `{:action_spec, widget_id,
+  name, fault}` for one whose description or input schema does (see the
+  moduledoc).
   """
-  @type refusal :: {:widget_id, String.t()} | {:action_name, String.t(), term()}
+  @type refusal ::
+          {:widget_id, String.t()}
+          | {:action_name, String.t(), term()}
+          | {:action_spec, String.t(), String.t(), spec_fault()}
+
+  @typedoc """
+  `:not_json` for a term JSON cannot encode, `{:duplicate_key, key}` for two
+  keys that are both `key` once cleaned.
+  """
+  @type spec_fault :: :not_json | {:duplicate_key, String.t()}
 
   @doc """
   Derives MCP tool definitions from a view element tree, and logs every
-  refusal (a widget id or action name that derives nothing) as a warning.
+  refusal (a widget id, action name or action spec that derives nothing) as
+  a warning.
 
   Returns a list of `Registry.tool_def()` maps with namespaced names and
   wrapped callbacks that dispatch TEA messages. A caller that derives on
@@ -175,6 +200,22 @@ defmodule Raxol.MCP.TreeWalker do
     )
   end
 
+  def warn_refusal({:action_spec, widget_id, name, :not_json}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
+        "no tool: its description is not a string or atom, or its inputSchema holds " <>
+        "a term JSON cannot encode (a tuple, struct, pid, function, improper list or " <>
+        "a key that is not a string or atom)"
+    )
+  end
+
+  def warn_refusal({:action_spec, widget_id, name, {:duplicate_key, key}}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
+        "no tool: two inputSchema keys of one map are both #{inspect(key)} once cleaned"
+    )
+  end
+
   # A widget id is one segment of a listed tool name, so the cap bounds that
   # segment: a view cannot list names of unbounded length. 32 is a bound, not
   # a fit to any client's name limit; session prefix + id + action can still
@@ -221,7 +262,16 @@ defmodule Raxol.MCP.TreeWalker do
     if Regex.match?(@widget_id, id) do
       {named, misnamed} = Enum.split_with(specs, &action_name?(Map.get(&1, :name)))
       refusals = Enum.into(misnamed, refusals, &{:action_name, id, Map.get(&1, :name)})
-      {Enum.map(named, &build_tool_def(&1, id, module, node, context)) ++ tools, refusals}
+
+      {built, refusals} =
+        Enum.flat_map_reduce(named, refusals, fn spec, refusals ->
+          case build_tool_def(spec, id, module, node, context) do
+            {:ok, tool} -> {[tool], refusals}
+            {:error, fault} -> {[], MapSet.put(refusals, {:action_spec, id, spec.name, fault})}
+          end
+        end)
+
+      {built ++ tools, refusals}
     else
       {tools, MapSet.put(refusals, {:widget_id, id})}
     end
@@ -308,32 +358,36 @@ defmodule Raxol.MCP.TreeWalker do
   defp build_tool_def(spec, widget_id, module, node, context) do
     action_name = spec.name
 
-    %{
-      name: "#{widget_id}.#{action_name}",
-      description: sanitize_text(Map.get(spec, :description)),
-      inputSchema: sanitize_schema(Map.get(spec, :inputSchema)),
-      callback: fn args ->
-        tool_context = %{
-          widget_id: widget_id,
-          widget_state: node,
-          dispatcher_pid: context[:dispatcher_pid]
-        }
+    with {:ok, description} <- clean_description(Map.get(spec, :description)),
+         {:ok, schema} <- clean_schema(Map.get(spec, :inputSchema)) do
+      %{
+        name: "#{widget_id}.#{action_name}",
+        description: description,
+        inputSchema: schema,
+        callback: fn args ->
+          tool_context = %{
+            widget_id: widget_id,
+            widget_state: node,
+            dispatcher_pid: context[:dispatcher_pid]
+          }
 
-        case module.handle_tool_call(action_name, args, tool_context) do
-          {:ok, result, messages} ->
-            with :ok <- dispatch_messages(messages, context[:dispatcher_pid]) do
+          case module.handle_tool_call(action_name, args, tool_context) do
+            {:ok, result, messages} ->
+              with :ok <- dispatch_messages(messages, context[:dispatcher_pid]) do
+                {:ok, format_result(result)}
+              end
+
+            {:ok, result} ->
               {:ok, format_result(result)}
-            end
 
-          {:ok, result} ->
-            {:ok, format_result(result)}
-
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              {:error, reason}
+          end
         end
-      end
-    }
-    |> put_annotations(Map.get(spec, :annotations))
+      }
+      |> put_annotations(Map.get(spec, :annotations))
+      |> then(&{:ok, &1})
+    end
   end
 
   # Only the two flags `Raxol.MCP.ToolDef.sensitive?/1` reads, and only when
@@ -355,34 +409,87 @@ defmodule Raxol.MCP.TreeWalker do
 
   defp put_annotations(tool, _annotations), do: tool
 
-  # A non-binary description (nil, say) passes through as before; invalid
-  # UTF-8 is replaced first, since the `u` regex refuses it.
-  defp sanitize_text(text) when is_binary(text) do
+  # Invalid UTF-8 is replaced first, since the `u` regex refuses it.
+  defp sanitize_text(text) do
     text |> String.replace_invalid() |> String.replace(@unsafe_chars, "")
   end
 
-  defp sanitize_text(other), do: other
+  defp clean_description(nil), do: {:ok, nil}
+  defp clean_description(text) when is_binary(text), do: {:ok, sanitize_text(text)}
+  defp clean_description(atom) when is_atom(atom), do: {:ok, sanitize_text(Atom.to_string(atom))}
+  defp clean_description(_other), do: {:error, :not_json}
 
   # Every key and every string leaf, at any depth (titles, enums, defaults,
-  # examples, property names, nested objects, array `items`). An atom is
-  # encoded as its name, so one whose name changes is replaced by the
-  # cleaned string.
-  defp sanitize_schema(%{} = map) when not is_struct(map) do
-    Map.new(map, fn {key, value} -> {sanitize_leaf(key), sanitize_schema(value)} end)
+  # examples, property names, nested objects, array `items`), or the fault
+  # that refuses the spec.
+  defp clean_schema(%{} = map) when not is_struct(map) do
+    Enum.reduce_while(map, {:ok, %{}, MapSet.new()}, fn {key, value}, {:ok, clean, seen} ->
+      case clean_entry(key, value, seen) do
+        {:ok, key, name, value} ->
+          {:cont, {:ok, Map.put(clean, key, value), MapSet.put(seen, name)}}
+
+        error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, clean, _seen} -> {:ok, clean}
+      error -> error
+    end
   end
 
-  defp sanitize_schema(list) when is_list(list), do: Enum.map(list, &sanitize_schema/1)
-  defp sanitize_schema(other), do: sanitize_leaf(other)
+  defp clean_schema(list) when is_list(list), do: clean_list(list, [])
+  defp clean_schema(text) when is_binary(text), do: {:ok, sanitize_text(text)}
+  defp clean_schema(literal) when literal in [nil, true, false], do: {:ok, literal}
+  defp clean_schema(atom) when is_atom(atom), do: {:ok, clean_atom(atom)}
+  defp clean_schema(number) when is_number(number), do: {:ok, number}
+  defp clean_schema(_other), do: {:error, :not_json}
 
-  defp sanitize_leaf(text) when is_binary(text), do: sanitize_text(text)
+  # `name` is the key as JSON writes it, so `:a` and `"a"` collide.
+  defp clean_entry(key, value, seen) do
+    with {:ok, key, name} <- clean_key(key),
+         :ok <- unseen(name, seen),
+         {:ok, value} <- clean_schema(value) do
+      {:ok, key, name, value}
+    end
+  end
 
-  defp sanitize_leaf(atom) when is_atom(atom) and atom not in [nil, true, false] do
+  defp unseen(name, seen) do
+    if MapSet.member?(seen, name), do: {:error, {:duplicate_key, name}}, else: :ok
+  end
+
+  defp clean_key(key) when is_binary(key) do
+    clean = sanitize_text(key)
+    {:ok, clean, clean}
+  end
+
+  defp clean_key(key) when is_atom(key) do
+    case clean_atom(key) do
+      ^key -> {:ok, key, Atom.to_string(key)}
+      clean -> {:ok, clean, clean}
+    end
+  end
+
+  defp clean_key(_other), do: {:error, :not_json}
+
+  # An atom is encoded as its name, so one whose name changes is replaced by
+  # the cleaned string.
+  defp clean_atom(atom) do
     name = Atom.to_string(atom)
     clean = sanitize_text(name)
     if clean == name, do: atom, else: clean
   end
 
-  defp sanitize_leaf(other), do: other
+  defp clean_list([], acc), do: {:ok, Enum.reverse(acc)}
+
+  defp clean_list([item | rest], acc) do
+    case clean_schema(item) do
+      {:ok, clean} -> clean_list(rest, [clean | acc])
+      error -> error
+    end
+  end
+
+  defp clean_list(_improper_tail, _acc), do: {:error, :not_json}
 
   # A call, not a cast: each message has been through the app's update/2 by
   # the time the tool answers. An update/2 that failed answers

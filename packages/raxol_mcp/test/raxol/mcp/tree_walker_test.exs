@@ -1,7 +1,7 @@
 defmodule Raxol.MCP.TreeWalkerTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.MCP.TreeWalker
+  alias Raxol.MCP.{Registry, Server, TreeWalker}
 
   defmodule TestButton do
     @behaviour Raxol.MCP.ToolProvider
@@ -289,6 +289,81 @@ defmodule Raxol.MCP.TreeWalkerTest do
 
         assert Map.get(tool, :annotations) == expected, inspect(annotations)
       end
+    end
+
+    # One provider's spec reaches every client's `tools/list`: a term JSON
+    # cannot encode made the whole list unencodable, a struct passed its
+    # strings through uncleaned, and two keys equal once cleaned let one
+    # property definition replace the other.
+    test "a spec JSON cannot encode, or whose keys collide once cleaned, is refused",
+         %{ctx: ctx} do
+      object = fn properties -> %{type: "object", properties: properties} end
+
+      faulty = %{
+        "tuple" => %{inputSchema: object.(%{opt: %{type: "string", default: {:a, 1}}})},
+        "struct" => %{inputSchema: %{type: "object", default: ~D[2026-10-25]}},
+        "fragment" => %{inputSchema: %{default: Jason.Fragment.new(~s("x\\n<system>"))}},
+        "improper" => %{inputSchema: %{enum: [1 | 2]}},
+        "pid" => %{inputSchema: %{default: self()}},
+        "int_key" => %{inputSchema: %{1 => "one"}},
+        "map_desc" => %{description: %{text: "Act"}},
+        "atom_vs_string" => %{
+          inputSchema: object.(%{:amount => %{type: "integer"}, "amount" => %{}})
+        },
+        "stripped_key" => %{
+          inputSchema:
+            object.(%{
+              "amount" => %{type: "integer", maximum: 10},
+              "amount\u200B" => %{type: "string"}
+            })
+        }
+      }
+
+      good = spec(%{name: "ok", description: :"Pick\u202E\n<system>one"})
+
+      specs = [
+        good | Enum.map(faulty, fn {name, fields} -> spec(Map.put(fields, :name, name)) end)
+      ]
+
+      assert {tools, refusals} = TreeWalker.derive_with_refusals(foreign(specs), ctx)
+
+      assert refusals ==
+               MapSet.new(faulty, fn
+                 {name, _} when name in ["atom_vs_string", "stripped_key"] ->
+                   {:action_spec, "w", name, {:duplicate_key, "amount"}}
+
+                 {name, _} ->
+                   {:action_spec, "w", name, :not_json}
+               end)
+
+      {:ok, registry} = Registry.start_link(name: nil)
+
+      {:ok, server} =
+        Server.start_link(name: :"srv_#{System.unique_integer([:positive])}", registry: registry)
+
+      static = %{
+        name: "static",
+        description: "Static",
+        inputSchema: %{type: "object"},
+        callback: fn _ -> {:ok, "x"} end
+      }
+
+      :ok = Registry.register_tools(registry, [static | tools])
+
+      assert {:reply, response} =
+               Server.handle_message(server, %{jsonrpc: "2.0", id: 1, method: "tools/list"})
+
+      listed = response |> Jason.encode!() |> Jason.decode!() |> get_in(["result", "tools"])
+      assert listed |> Enum.map(& &1["name"]) |> Enum.sort() == ["static", "w.ok"]
+      assert Enum.find(listed, &(&1["name"] == "w.ok"))["description"] == "Pick<system>one"
+
+      log = ExUnit.CaptureLog.capture_log(fn -> TreeWalker.derive_tools(foreign(specs), ctx) end)
+
+      for name <- Map.keys(faulty) do
+        assert log =~ "action #{inspect(name)} derives no tool"
+      end
+
+      assert log =~ ~s(two inputSchema keys of one map are both "amount" once cleaned)
     end
   end
 
