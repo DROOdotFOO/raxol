@@ -24,6 +24,11 @@ defmodule Raxol.Agent.Session do
 
   A cancelled turn is answered `{:error, :cancelled}`, but a change its
   process already sent to the agent is not rolled back.
+
+  The turn's agent ref is not a secret inside the node: it travels in the
+  Dispatcher's durable `:turn_started` event (with the prompt) and in the
+  journal, so any process that reads those can answer or message the turn.
+  The node is the trust boundary; the caller's own ref can only cancel.
   """
 
   use Raxol.Core.Behaviours.BaseManager
