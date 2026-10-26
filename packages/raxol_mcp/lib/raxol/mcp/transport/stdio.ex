@@ -34,6 +34,12 @@ defmodule Raxol.MCP.Transport.Stdio do
   `Raxol.MCP.Server.request/3` caller, and the linked reader exits with it
   rather than go on consuming input.
 
+  The transport traps exits (to see its reader's), and keeps ordinary link
+  semantics otherwise: when the process that started it exits, it stops with
+  the same reason, as any OTP process that traps exits does, and an abnormal
+  exit of any other linked process stops it with that reason (a `:normal` one
+  is ignored, as an untrapped link would ignore it).
+
   ## Notifications
 
   Subscribes to the MCP Server for push notifications (e.g. `notifications/tools/list_changed`).
@@ -128,6 +134,17 @@ defmodule Raxol.MCP.Transport.Stdio do
     {:noreply, %{state | reader: reader}}
   end
 
+  # A `:normal` stop does not take the linked reader down (it is not trapping,
+  # so it ignores a normal exit), and a reader left blocked in `IO.gets/2`
+  # would go on consuming input meant for whatever runs next.
+  @impl GenServer
+  def terminate(_reason, %{reader: reader}) when is_pid(reader) do
+    Process.exit(reader, :kill)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:stdio_line, line}, state) do
     case Protocol.decode(line) do
@@ -162,6 +179,11 @@ defmodule Raxol.MCP.Transport.Stdio do
     Logger.info("[MCP.Stdio] Reader process exited: #{inspect(reason)}")
     close(state)
   end
+
+  # Trapping exits must not swallow a linked process's crash. The parent's exit
+  # never gets here: `gen_server` handles it before any callback.
+  def handle_manager_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+  def handle_manager_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
 
   def handle_manager_info(msg, state) do
     case :gen_server.check_response(msg, state.requests, true) do

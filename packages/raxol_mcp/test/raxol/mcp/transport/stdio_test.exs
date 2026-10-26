@@ -320,7 +320,7 @@ defmodule Raxol.MCP.Transport.StdioTest do
       Process.exit(server_pid, :kill)
 
       assert_receive {:DOWN, ^ref, :process, ^transport, {:server_down, :killed}}, @timeout
-      assert_receive {:DOWN, ^reader_ref, :process, ^reader, {:server_down, :killed}}, @timeout
+      assert_receive {:DOWN, ^reader_ref, :process, ^reader, :killed}, @timeout
     end
 
     @tag :capture_log
@@ -334,6 +334,48 @@ defmodule Raxol.MCP.Transport.StdioTest do
       assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
       assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
       refute_received {:push_io, ^io, _}
+    end
+
+    @tag :capture_log
+    test "a linked process's crash stops the transport with its reason",
+         %{io: io, registry: r, transport: transport, transport_ref: ref} do
+      register_blocking_tool(r)
+      {worker, worker_ref} = call_blocking_tool(io, 1)
+      reader_ref = Process.monitor(:sys.get_state(transport).reader)
+      Process.unlink(transport)
+
+      # The link and the exit come from one process, so they arrive in order.
+      spawn(fn ->
+        Process.link(transport)
+        exit(:boom)
+      end)
+
+      assert_receive {:DOWN, ^ref, :process, ^transport, :boom}, @timeout
+      assert_receive {:DOWN, ^reader_ref, :process, _reader, :killed}, @timeout
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
+    end
+
+    test "the starting process exiting stops the transport and its reader", %{server: server} do
+      {:ok, io} = PushIO.start_link()
+      test_pid = self()
+
+      parent =
+        spawn(fn ->
+          {:ok, transport} =
+            Transport.Stdio.start_link(server: server, io_device: io, output_device: io)
+
+          send(test_pid, {:started, transport})
+          receive do: (:exit -> :ok)
+        end)
+
+      assert_receive {:started, transport}, @timeout
+      ref = Process.monitor(transport)
+      reader_ref = Process.monitor(:sys.get_state(transport).reader)
+
+      send(parent, :exit)
+
+      assert_receive {:DOWN, ^ref, :process, ^transport, :normal}, @timeout
+      assert_receive {:DOWN, ^reader_ref, :process, _reader, :killed}, @timeout
     end
   end
 end
