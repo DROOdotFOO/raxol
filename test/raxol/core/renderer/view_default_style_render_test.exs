@@ -105,7 +105,7 @@ defmodule Raxol.Core.Renderer.ViewDefaultStyleRenderTest do
   end
 
   defp start(form) do
-    id = "view_default_style_#{form}"
+    id = "style_#{form}"
     {:ok, ^id} = Headless.start(FormApp, id: id, width: 12, height: 5)
     :ok = Headless.send_message(id, {:show, form})
     id

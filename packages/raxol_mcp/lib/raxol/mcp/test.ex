@@ -54,7 +54,8 @@ defmodule Raxol.MCP.Test do
 
   ## Options
 
-    * `:id` - session ID, a binary (default: a unique `"t..."` id)
+    * `:id` - session ID, 1-32 characters of `[A-Za-z0-9_-]` as
+      `Raxol.Headless.start/2` requires (default: a unique `"t..."` id)
     * `:width` - terminal width (default: 120)
     * `:height` - terminal height (default: 40)
   """

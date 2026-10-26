@@ -27,9 +27,10 @@ defmodule Raxol.Headless do
       # Stop
       :ok = Raxol.Headless.stop("demo")
 
-  Session ids are binaries. The `raxol_start` MCP tool accepts only ids
-  matching `^[a-z][a-z0-9]{0,6}$`; Elixir callers may use any non-empty
-  binary.
+  Session ids are binaries of 1-32 characters of `[A-Za-z0-9_-]`, the rule
+  a widget id follows (`Raxol.MCP.TreeWalker`): an id reaches MCP clients
+  verbatim, in `raxol_list`, session-id completion, resource URIs and tool
+  names. The `raxol_start` MCP tool narrows it to `^[a-z][a-z0-9]{0,6}$`.
 
   ## Processes
 
@@ -155,9 +156,12 @@ defmodule Raxol.Headless do
 
   ## Options
 
-    * `:id` - Session identifier, a non-empty binary (default: the module's
-      last segment, underscored: `"table_demo"` for `TableDemo`). Any other
-      value is `{:error, {:invalid_session_id, id}}`.
+    * `:id` - Session identifier, 1-32 characters of `[A-Za-z0-9_-]`
+      (default: the module's last segment, underscored: `"table_demo"` for
+      `TableDemo`; a character outside the rule becomes `_`, and a name over
+      32 characters becomes its first 23, `_` and 8 hex digits of the
+      module's hash). Any other value is
+      `{:error, {:invalid_session_id, id}}` and starts nothing.
     * `:width` - Screen width (default: 120)
     * `:height` - Screen height (default: 40)
     * `:registry` - the `Raxol.MCP.Registry` the session's tools are
@@ -520,11 +524,25 @@ defmodule Raxol.Headless do
     _kind, _reason -> false
   end
 
+  # One rule for every session id, the widget-id rule of
+  # `Raxol.MCP.TreeWalker` (its `@widget_id`): an id reaches every client
+  # verbatim, in `raxol_list`, session-id completion, resource URIs and tool
+  # names, so it holds only characters each of them can encode and show as
+  # they are. `raxol_start` narrows it further for ids a client picks.
+  @session_id ~r/\A[A-Za-z0-9_-]{1,32}\z/
+
   defp session_id(opts, module) do
-    case Keyword.get(opts, :id, module_to_id(module)) do
-      id when is_binary(id) and id != "" -> {:ok, id}
-      other -> {:error, {:invalid_session_id, other}}
+    case Keyword.fetch(opts, :id) do
+      :error -> {:ok, module_to_id(module)}
+      {:ok, id} when is_binary(id) -> check_session_id(id)
+      {:ok, other} -> {:error, {:invalid_session_id, other}}
     end
+  end
+
+  defp check_session_id(id) do
+    if Regex.match?(@session_id, id),
+      do: {:ok, id},
+      else: {:error, {:invalid_session_id, id}}
   end
 
   defp create_session(
@@ -783,11 +801,33 @@ defmodule Raxol.Headless do
   defp module_def?({:defmodule, _, _}), do: true
   defp module_def?(_), do: false
 
+  # The module's last segment, underscored, made to satisfy `@session_id`:
+  # each character outside `[A-Za-z0-9_-]` becomes `_`, and a result longer
+  # than 32 characters keeps its first 23 and appends `_` and 8 hex digits of
+  # the module's hash, so two long names sharing a prefix still differ.
+  @default_id_prefix 23
+
   defp module_to_id(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
+    id =
+      module
+      |> Atom.to_string()
+      |> String.split(".")
+      |> List.last()
+      |> Macro.underscore()
+      |> String.replace(~r/[^A-Za-z0-9_-]/u, "_")
+
+    if byte_size(id) in 1..32, do: id, else: shortened_id(id, module)
+  end
+
+  defp shortened_id(id, module) do
+    hash =
+      module
+      |> :erlang.phash2(0x1_0000_0000)
+      |> Integer.to_string(16)
+      |> String.downcase()
+      |> String.pad_leading(8, "0")
+
+    binary_part(id, 0, min(byte_size(id), @default_id_prefix)) <> "_" <> hash
   end
 
   defp start_headless_app(module, width, height, subscriptions) do
