@@ -66,4 +66,17 @@ defmodule Raxol.MCP.SupervisorTest do
     [content] = resp.result.content
     assert content.text == "sum: 3"
   end
+
+  test "refuses a per-connection parked cap above the total", %{sup: sup} do
+    :ok = Supervisor.stop(sup)
+    Process.flag(:trap_exit, true)
+
+    assert {:error, {:shutdown, {:failed_to_start_child, Server, {%ArgumentError{}, _}}}} =
+             Raxol.MCP.Supervisor.start_link(
+               registry_name: :"registry_#{System.unique_integer([:positive])}",
+               server_name: :"server_#{System.unique_integer([:positive])}",
+               max_parked_elicitations: 64,
+               max_parked_elicitations_total: 8
+             )
+  end
 end

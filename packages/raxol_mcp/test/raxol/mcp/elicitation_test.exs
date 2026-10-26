@@ -743,6 +743,20 @@ defmodule Raxol.MCP.ElicitationTest do
       assert Process.alive?(server)
     end
 
+    test "the per-connection cap may not exceed the total", %{registry: registry} do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               Server.start_link(
+                 name: nil,
+                 registry: registry,
+                 max_parked_elicitations: 64,
+                 max_parked_elicitations_total: 8
+               )
+
+      assert message =~ ":max_parked_elicitations (64) must not exceed"
+    end
+
     test "a connection taken over starts with no parked calls", %{server: server} do
       assert {:reply, nil} = spend_as(server, "conn-a")
       assert {:reply, nil} = spend_as(server, "conn-a")

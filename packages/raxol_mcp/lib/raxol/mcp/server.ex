@@ -149,7 +149,9 @@ defmodule Raxol.MCP.Server do
   # A parked call holds no worker, so `:max_in_flight` does not bound it. One
   # client is held to a share, and the server to a total: elicitation-capable
   # connections are limited only by `:max_client_capabilities`, and a network
-  # transport can mint a new one per stream.
+  # transport can mint a new one per stream. The total is eight connections'
+  # full share (8 x 32): a parked call costs a timer and one entry here, so 256
+  # stays small while eight clients can each park their whole share at once.
   @default_max_parked_elicitations 32
   @default_max_parked_elicitations_total 256
   @default_callback_timeout_ms 300_000
@@ -473,6 +475,8 @@ defmodule Raxol.MCP.Server do
     refuse_unguarded_sensitive_tools!(registry, authorizer)
     refuse_unguarded_reads!(transport, read_authorizer)
 
+    {max_parked, max_parked_total} = parked_caps!(opts)
+
     {:ok,
      %__MODULE__{
        registry: registry,
@@ -491,14 +495,8 @@ defmodule Raxol.MCP.Server do
            Keyword.get(opts, :max_client_capabilities, @default_max_client_capabilities)
          ),
        max_in_flight: positive_option!(opts, :max_in_flight, @default_max_in_flight),
-       max_parked_elicitations:
-         positive_option!(opts, :max_parked_elicitations, @default_max_parked_elicitations),
-       max_parked_elicitations_total:
-         positive_option!(
-           opts,
-           :max_parked_elicitations_total,
-           @default_max_parked_elicitations_total
-         ),
+       max_parked_elicitations: max_parked,
+       max_parked_elicitations_total: max_parked_total,
        callback_timeout_ms:
          positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms)
      }}
@@ -1825,6 +1823,28 @@ defmodule Raxol.MCP.Server do
               "Raxol.MCP.Server #{inspect(key)} must be a positive integer, " <>
                 "got: #{inspect(other)}"
     end
+  end
+
+  # A per-connection share larger than the total cannot be used, and
+  # configuring one says the operator misread which cap is which.
+  defp parked_caps!(opts) do
+    max_parked =
+      positive_option!(opts, :max_parked_elicitations, @default_max_parked_elicitations)
+
+    max_parked_total =
+      positive_option!(
+        opts,
+        :max_parked_elicitations_total,
+        @default_max_parked_elicitations_total
+      )
+
+    if max_parked > max_parked_total do
+      raise ArgumentError,
+            "Raxol.MCP.Server :max_parked_elicitations (#{max_parked}) must not exceed " <>
+              ":max_parked_elicitations_total (#{max_parked_total})"
+    end
+
+    {max_parked, max_parked_total}
   end
 
   # Registering a tool that declares itself destructive/sensitive while no
