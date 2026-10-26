@@ -651,7 +651,10 @@ defmodule Raxol.Headless.McpToolsTest do
         assert message =~ ":headless_startable must be a list of loadable modules"
 
         assert {:error, ^message} =
-                 start_tool_result(%{"module" => "Raxol.Playground.Demos.TableDemo"})
+                 start_tool_result(%{
+                   "module" => "Raxol.Playground.Demos.TableDemo",
+                   "id" => "sttable"
+                 })
 
         assert_raise ArgumentError, message, fn -> McpTools.register(registry!()) end
       end
@@ -663,7 +666,7 @@ defmodule Raxol.Headless.McpToolsTest do
       registry = registry!()
       :ok = McpTools.register(registry)
       put_startable(Raxol.Playground.Demos.TableDemo)
-      args = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "startable_table"}
+      args = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "sttable"}
 
       for _ <- 1..7 do
         assert {:error, message} = Raxol.MCP.Registry.call_tool(registry, "raxol_start", args)
@@ -673,7 +676,7 @@ defmodule Raxol.Headless.McpToolsTest do
       put_startable([Raxol.Playground.Demos.TableDemo])
 
       assert {:ok, _} = Raxol.MCP.Registry.call_tool(registry, "raxol_start", args)
-      assert :startable_table in Raxol.Headless.list()
+      assert "sttable" in Raxol.Headless.list()
     end
   end
 
