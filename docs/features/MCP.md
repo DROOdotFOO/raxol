@@ -52,6 +52,8 @@ A call to a derived name whose session is not running in this server answers a t
 
 OMP's `tools.approval` deny and prompt entries also match a digit-free legacy form of each name, so sessions `a1` and `a2` share legacy names and one legacy entry applies to both.
 
+Session ids are not secret from a connected client. Gating `raxol_list` hides only the list itself: ids still show up in tool and resource names (`tools/list`, `resources/list`, completion), in `raxol_start`'s refusals and in the stale-session reply. Per-connection session ownership (a client sees and controls only the sessions it started) is planned as the single rule for this; until then, treat every session in a server as visible to every client of that server.
+
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
 ## Focus lens
