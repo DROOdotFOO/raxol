@@ -50,9 +50,10 @@ defmodule Raxol.MCP.Server do
   that request. Until then `cancel/2` with the call's `request_ref` reaches it,
   whether it is still waiting for the answer or, once approved, running.
 
-  A parked call is always closed, exactly once, by one of four paths: an
+  A parked call is always closed, exactly once, by one of five paths: an
   approval (runs the tool), a decline/cancel/unapproved accept, an error
-  response, or a timeout (`:elicitation_timeout_ms`, default 60s). Every path
+  response, a timeout (`:elicitation_timeout_ms`, default 60s), or, on a full
+  server, making room for another connection's call (see below). Every path
   but approval resolves to the same deny -- silence is not consent. Dropping
   it is the exception: `cancel/2`, its `request/3` caller exiting, or its
   connection going away ends it with no answer, and kills the tool if an
@@ -64,9 +65,26 @@ defmodule Raxol.MCP.Server do
   connection. A parked call holds no callback worker, so without the first a
   client could park calls as fast as it sent them; without the second, every
   connection that can be asked (up to `:max_client_capabilities`) could park
-  its full share. Past either cap an ASK gets the same `authorization_required`
-  deny, with the detail `too many elicitations pending` (per connection) or
-  `too many elicitations pending on this server` (server-wide).
+  its full share. The total defaults to eight connections' full share: each
+  parked call is a timer and a small entry in the server's state, so 256
+  bounds that state while eight clients can each use their whole share at
+  once. The per-connection cap may not exceed the total; the server refuses to
+  start if it does.
+
+  Past the per-connection cap an ASK gets the `authorization_required` deny
+  with the detail `too many elicitations pending`. The total is shared by
+  every client, so it is not first come, first served: when the server is
+  full, an ASK from a connection holding fewer parked calls than the
+  connection holding the most closes that connection's oldest parked call
+  (with the deny and the detail `too many elicitations pending on this
+  server`) and parks in its place. Any other ASK on a full server gets that
+  deny itself. So a client that spreads its calls over several connections
+  (a network transport mints one per stream) cannot hold every other
+  client's approvals; it only crowds out its own. What remains: a client
+  with more elicitation-capable connections than the total, each holding one
+  call, can still keep a newcomer's call from lasting. Bounding that needs a
+  per-peer identity no transport gives the server (`Transport.SSE` trusts
+  the client's session id, and a remote address is shared behind a proxy).
 
   ## Sensitive tools
 
@@ -260,7 +278,8 @@ defmodule Raxol.MCP.Server do
   `owner` is the connection that made it. Only `owner` may answer, and the
   answer goes only to `owner`: pushed to its subscriber, or, when the call came
   through `request/3`, sent as the reply to `caller` (the call's `from` and
-  `request_ref`, plus the monitor on the calling process).
+  `request_ref`, plus the monitor on the calling process). `parked_at` orders
+  parked calls, so a full server can tell its oldest.
   """
   @type pending_elicitation :: %{
           request_id: term(),
@@ -268,7 +287,8 @@ defmodule Raxol.MCP.Server do
           arguments: map(),
           timer: reference(),
           owner: conn_id(),
-          caller: caller() | nil
+          caller: caller() | nil,
+          parked_at: integer()
         }
 
   @typedoc false
@@ -1942,28 +1962,75 @@ defmodule Raxol.MCP.Server do
   # A parked call holds no worker, so `:max_in_flight` never bounded how many
   # one client could park: only the elicitation timeout did. A connection may
   # have at most `:max_parked_elicitations` calls parked and the server at most
-  # `:max_parked_elicitations_total`; past either an ASK is the same deny, with
-  # a detail saying which. Both counts are kept as they change, so an ASK does
-  # not scan every parked call in this process every connection shares.
+  # `:max_parked_elicitations_total`. Both counts are kept as they change, so an
+  # ASK on a server below the total does not scan every parked call in this
+  # process every connection shares; only an ASK on a full one looks for a call
+  # to close.
   defp ask(id, tool, arguments, prompt, state, conn_id, caller) do
+    parked = Map.get(state.parked_counts, conn_id, 0)
+
     cond do
       not elicitation_capable?(state, conn_id) ->
         {authorization_required(id, tool, :ask, prompt), state}
 
-      Map.get(state.parked_counts, conn_id, 0) >= state.max_parked_elicitations ->
+      parked >= state.max_parked_elicitations ->
         {authorization_required(id, tool, :ask, "too many elicitations pending"), state}
 
-      map_size(state.pending_elicitations) >= state.max_parked_elicitations_total ->
-        {authorization_required(
-           id,
-           tool,
-           :ask,
-           "too many elicitations pending on this server"
-         ), state}
+      map_size(state.pending_elicitations) < state.max_parked_elicitations_total ->
+        start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
 
       true ->
-        start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
+        case crowding_call(state, parked) do
+          {:ok, elicit_id} ->
+            state = close_for_room(state, elicit_id)
+            start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
+
+          :none ->
+            {authorization_required(
+               id,
+               tool,
+               :ask,
+               "too many elicitations pending on this server"
+             ), state}
+        end
     end
+  end
+
+  # The total is shared by every client, so a full server is not first come,
+  # first served: a client parking through several connections would otherwise
+  # deny every other client's approvals for as long as it kept re-parking. A
+  # connection holding fewer parked calls than the largest holder takes the
+  # place of that holder's oldest call. Among several largest holders the
+  # oldest call goes, so a newcomer's call is the last of theirs to be closed.
+  defp crowding_call(state, parked) do
+    largest = state.parked_counts |> Map.values() |> Enum.max()
+
+    if largest > parked do
+      {elicit_id, _pending} =
+        state.pending_elicitations
+        |> Enum.filter(fn {_id, p} -> Map.fetch!(state.parked_counts, p.owner) == largest end)
+        |> Enum.min_by(fn {_id, p} -> p.parked_at end)
+
+      {:ok, elicit_id}
+    else
+      :none
+    end
+  end
+
+  defp close_for_room(state, elicit_id) do
+    {pending, state} = take_pending(state, elicit_id)
+    Process.cancel_timer(pending.timer)
+
+    answer_parked(
+      state,
+      pending,
+      authorization_required(
+        pending.request_id,
+        pending.tool,
+        :ask,
+        "too many elicitations pending on this server"
+      )
+    )
   end
 
   defp elicitation_capable?(state, conn_id) do
@@ -2047,7 +2114,8 @@ defmodule Raxol.MCP.Server do
       arguments: arguments,
       timer: timer,
       owner: conn_id,
-      caller: caller
+      caller: caller,
+      parked_at: System.unique_integer([:monotonic])
     }
 
     state = %{

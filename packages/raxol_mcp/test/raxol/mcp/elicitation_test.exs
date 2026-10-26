@@ -628,12 +628,12 @@ defmodule Raxol.MCP.ElicitationTest do
       :ok
     end
 
-    defp spend_as(server, conn_id) do
+    defp spend_as(server, conn_id, id \\ 21) do
       Server.handle_message(
         server,
         %{
           jsonrpc: "2.0",
-          id: 21,
+          id: id,
           method: "tools/call",
           params: %{"name" => "spend", "arguments" => %{"amount" => 5}}
         },
@@ -683,35 +683,48 @@ defmodule Raxol.MCP.ElicitationTest do
       assert {:reply, nil} = spend_as(server, "conn-b")
     end
 
-    test "the server parks at most :max_parked_elicitations_total calls across connections",
+    test "a full server closes the largest holder's oldest call for a smaller holder",
          %{server: server} do
-      assert {:reply, nil} = spend_as(server, "conn-a")
-      first = await_elicit_id()
-      assert {:reply, nil} = spend_as(server, "conn-a")
-      assert {:reply, nil} = spend_as(server, "conn-b")
+      assert {:reply, nil} = spend_as(server, "conn-a", 31)
+      _ = await_elicit_id()
+      assert {:reply, nil} = spend_as(server, "conn-a", 32)
+      a_second = await_elicit_id()
+      assert {:reply, nil} = spend_as(server, "conn-b", 33)
+      _ = await_elicit_id()
 
-      # conn-b and conn-c are each under their own share; the server is full.
-      for conn_id <- ["conn-b", "conn-c"] do
-        assert {:reply, response} = spend_as(server, conn_id)
+      # Full. conn-b holds fewer than conn-a, so conn-a's oldest call makes room.
+      assert {:reply, nil} = spend_as(server, "conn-b", 34)
+      assert_receive {:mcp_notification, %{id: 31, result: %{isError: true}} = closed}, 500
 
-        assert %{"decision" => "ask", "detail" => "too many elicitations pending on this server"} =
-                 decoded_payload(response)
-      end
+      assert %{"decision" => "ask", "detail" => "too many elicitations pending on this server"} =
+               decoded_payload(closed)
+
+      # conn-b now holds the most, so the newcomer conn-c takes its oldest place.
+      assert {:reply, nil} = spend_as(server, "conn-c", 35)
+      assert_receive {:mcp_notification, %{id: 33, result: %{isError: true}}}, 500
+
+      # Every connection holds one: nobody holds more than the asker.
+      assert {:reply, response} = spend_as(server, "conn-a", 36)
+
+      assert %{"decision" => "ask", "detail" => "too many elicitations pending on this server"} =
+               decoded_payload(response)
+
+      assert :sys.get_state(server).parked_counts == %{
+               "conn-a" => 1,
+               "conn-b" => 1,
+               "conn-c" => 1
+             }
 
       # Closing a parked call frees its place in both counts.
       assert {:reply, nil} =
                Server.handle_message(
                  server,
-                 %{jsonrpc: "2.0", id: first, result: %{action: "decline"}},
+                 %{jsonrpc: "2.0", id: a_second, result: %{action: "decline"}},
                  "conn-a"
                )
 
-      assert_receive {:mcp_notification, %{id: 21, result: %{isError: true}}}, 500
-      assert {:reply, nil} = spend_as(server, "conn-c")
-      assert {:reply, response} = spend_as(server, "conn-a")
-
-      assert %{"detail" => "too many elicitations pending on this server"} =
-               decoded_payload(response)
+      assert_receive {:mcp_notification, %{id: 32, result: %{isError: true}}}, 500
+      assert {:reply, nil} = spend_as(server, "conn-a", 37)
     end
 
     test "a tool name or answer that is not a string is rendered, not a crash",
@@ -788,6 +801,46 @@ defmodule Raxol.MCP.ElicitationTest do
                )
 
       assert :erlang.read_timer(timer) == false
+    end
+  end
+
+  # One client opens eight streams, parks 32 calls on each, and so fills the
+  # default total that every other client shares.
+  describe "a client spread over several connections, default caps" do
+    setup %{registry: registry} do
+      ask = fn _tool, _args, _ctx -> {:ask, "Approve moving money?"} end
+
+      server =
+        start_supervised!(
+          {Server,
+           name: :"spread_#{System.unique_integer([:positive])}",
+           registry: registry,
+           authorizer: ask},
+          id: :spread_server
+        )
+
+      {:ok, server: server}
+    end
+
+    test "cannot deny a newcomer's approval, however it re-parks", %{server: server} do
+      hogs = for k <- 1..8, do: "hog-#{k}"
+
+      for conn_id <- ["newcomer" | hogs] do
+        :ok = initialize(server, %{elicitation: %{}}, conn_id)
+        :ok = subscribe(server, self(), conn_id)
+      end
+
+      for conn_id <- hogs, _ <- 1..32, do: assert({:reply, nil} = spend_as(server, conn_id))
+      assert map_size(:sys.get_state(server).pending_elicitations) == 256
+
+      assert {:reply, nil} = spend_as(server, "newcomer", 99)
+
+      for conn_id <- hogs, do: spend_as(server, conn_id)
+
+      state = :sys.get_state(server)
+      assert map_size(state.pending_elicitations) == 256
+      assert state.parked_counts["newcomer"] == 1
+      refute_received {:mcp_notification, %{id: 99}}
     end
   end
 
