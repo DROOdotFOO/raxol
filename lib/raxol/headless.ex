@@ -332,21 +332,18 @@ defmodule Raxol.Headless do
   registered keeps the callback it was derived with.
 
   Three barriers in order: a model read at the dispatcher, a synchronous
-  render at the engine (whose view-tree telemetry reaches the session's
+  render at the engine (which casts the frame's view tree to the session's
   `Raxol.MCP.ToolSynchronizer` before the render answers), and a flush at the
-  synchronizer. Commands `update/2` started are not awaited. Answers the same
-  errors as `get_model/1` and `screenshot/1`.
-
-  Relies on the engine's telemetry cast reaching the synchronizer before the
-  caller's flush: true on a single node in practice, though the BEAM does
-  not promise ordering between two senders.
+  synchronizer that first takes a reply from that engine, so the cast has
+  arrived before the flush applies it (`Raxol.MCP.ToolSynchronizer.flush/2`).
+  Commands `update/2` started are not awaited. Answers the same errors as
+  `get_model/1` and `screenshot/1`.
   """
   @spec settle(String.t()) :: :ok | {:error, term()}
   def settle(id) when is_binary(id) do
     with {:ok, session} <- lookup_session(id),
-         {:ok, _model} <- read_model(session),
-         {:ok, _buffer} <- with_engine(session, &render_frame(session, &1)) do
-      flush_tools(session)
+         {:ok, _model} <- read_model(session) do
+      with_engine(session, &render_and_flush_tools(session, &1))
     end
   end
 
@@ -1030,13 +1027,19 @@ defmodule Raxol.Headless do
 
   @compile {:no_warn_undefined, Raxol.MCP.ToolSynchronizer}
 
-  # A session started with no MCP registry running has no synchronizer and
-  # so no tools to bring up to date. `:flush` is
-  # `Raxol.MCP.ToolSynchronizer.flush/1`'s request.
-  defp flush_tools(%{synchronizer_pid: nil}), do: :ok
+  defp render_and_flush_tools(session, engine_pid) do
+    with {:ok, _buffer} <- render_frame(session, engine_pid),
+         do: flush_tools(session, engine_pid)
+  end
 
-  defp flush_tools(session) do
-    with {:ok, :ok} <- session_call(session, session.synchronizer_pid, :flush),
+  # A session started with no MCP registry running has no synchronizer and
+  # so no tools to bring up to date. `{:flush, engine_pid}` is
+  # `Raxol.MCP.ToolSynchronizer.flush/2`'s request.
+  defp flush_tools(%{synchronizer_pid: nil}, _engine_pid), do: :ok
+
+  defp flush_tools(session, engine_pid) do
+    with {:ok, :ok} <-
+           session_call(session, session.synchronizer_pid, {:flush, engine_pid}),
          do: :ok
   end
 

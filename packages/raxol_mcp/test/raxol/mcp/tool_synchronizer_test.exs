@@ -124,6 +124,46 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       Process.exit(other_pid, :kill)
       GenServer.stop(pid)
     end
+
+    # In a session the view tree comes from the rendering engine, another
+    # process than the one flushing, and nothing orders the two senders'
+    # messages. `flush/2` takes a reply from the sender first, which arrives
+    # after everything the sender cast before it. The flush request
+    # (`flush/2`'s `{:flush, sender}`) goes out before the sender is let go,
+    # so the view tree is cast after the request.
+    test "flush/2 applies a view tree its sender cast before answering", %{registry: registry} do
+      {:ok, sender} = Agent.start_link(fn -> nil end)
+
+      {:ok, pid} =
+        ToolSynchronizer.start_link(
+          registry: registry,
+          dispatcher_pid: sender,
+          session_id: "test_flush_sender"
+        )
+
+      view_tree = %{type: :column, id: "late", attrs: %{component_module: TestWidget}}
+
+      Agent.cast(sender, fn agent_state ->
+        receive do: (:go -> :ok)
+
+        :telemetry.execute(
+          [:raxol, :runtime, :view_tree_updated],
+          %{},
+          %{view_tree: view_tree, dispatcher_pid: self()}
+        )
+
+        agent_state
+      end)
+
+      flush = :gen_server.send_request(pid, {:flush, sender})
+      send(sender, :go)
+      assert :gen_server.receive_response(flush, 5_000) == {:reply, :ok}
+
+      names = registry |> Registry.list_tools() |> Enum.map(& &1[:name])
+      assert "late.click" in names
+
+      GenServer.stop(pid)
+    end
   end
 
   describe "cleanup on terminate" do
