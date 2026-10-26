@@ -365,6 +365,42 @@ defmodule Raxol.MCP.TreeWalkerTest do
 
       assert log =~ ~s(two inputSchema keys of one map are both "amount" once cleaned)
     end
+
+    # Cleaning walks the whole schema on every render, and a provider's schema
+    # is unbounded (a shared subterm doubles per level as a tree). Past 32
+    # levels of maps and lists, or 10,000 values, the spec derives no tool.
+    test "a schema past the depth or size cap is refused", %{ctx: ctx} do
+      nest = fn levels -> Enum.reduce(1..levels, %{"type" => "string"}, &%{"n#{&1}" => &2}) end
+      # The enum map and its list count two values, each item one.
+      values = fn count -> %{"enum" => Enum.to_list(1..(count - 2))} end
+      shared = Enum.reduce(1..14, "x", fn _, acc -> %{"a" => acc, "b" => acc} end)
+
+      specs = [
+        spec(%{name: "deep_ok", inputSchema: nest.(31)}),
+        spec(%{name: "deep", inputSchema: nest.(32)}),
+        spec(%{name: "list_deep", inputSchema: Enum.reduce(1..33, [], &[&2 | [&1]])}),
+        spec(%{name: "wide_ok", inputSchema: values.(10_000)}),
+        spec(%{name: "wide", inputSchema: values.(10_001)}),
+        spec(%{name: "wide_map", inputSchema: Map.new(1..10_000, &{"k#{&1}", 1})}),
+        spec(%{name: "shared", inputSchema: shared})
+      ]
+
+      assert {tools, refusals} = TreeWalker.derive_with_refusals(foreign(specs), ctx)
+      assert Enum.map(tools, & &1.name) |> Enum.sort() == ["w.deep_ok", "w.wide_ok"]
+
+      assert refusals ==
+               MapSet.new(
+                 ["deep", "list_deep", "wide", "wide_map", "shared"],
+                 &{:action_spec, "w", &1, :too_large}
+               )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          TreeWalker.derive_tools(foreign([spec(%{inputSchema: shared})]), ctx)
+        end)
+
+      assert log =~ ~s(action "act" derives no tool: its inputSchema nests deeper than 32)
+    end
   end
 
   describe "derive_tools/2" do
