@@ -132,11 +132,20 @@ defmodule Raxol.MCP.SessionIdsTest do
   end
 
   # Unique per test and per run, and inside the `raxol_start` pattern: "n"
-  # then the base-36 digits of a fresh integer.
+  # then the base-36 digits of a fresh integer. Some of those are atoms
+  # already (`"nil"` is 669, `"node"` 31586), which "no session id becomes an
+  # atom" could not tell from one a call minted, so they are skipped.
   defp fresh_id do
     id = "n" <> String.downcase(Integer.to_string(System.unique_integer([:positive]), 36))
     assert id =~ ~r/\A[a-z][a-z0-9]{0,6}\z/
-    id
+    if existing_atom?(id), do: fresh_id(), else: id
+  end
+
+  defp existing_atom?(name) do
+    _ = String.to_existing_atom(name)
+    true
+  rescue
+    ArgumentError -> false
   end
 
   defp start!(server, module, id) do
