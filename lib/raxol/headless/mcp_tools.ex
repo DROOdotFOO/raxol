@@ -89,7 +89,8 @@ defmodule Raxol.Headless.McpTools do
             module: %{
               type: "string",
               description:
-                "Module name as a string (e.g. \"RaxolDemo\"). Mutually exclusive with path."
+                "Module name as a string (e.g. \"Raxol.Playground.Demos.TableDemo\"). " <>
+                  "Mutually exclusive with path."
             },
             path: %{
               type: "string",
