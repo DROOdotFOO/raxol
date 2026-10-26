@@ -58,11 +58,15 @@ defmodule Raxol.MCP.Server do
   connection going away ends it with no answer, and kills the tool if an
   approval already started it.
 
-  A connection may have at most `:max_in_flight` (default 32) calls parked at
-  once. A parked call holds no callback worker, so without this a client could
-  park calls as fast as it sent them. Past the cap an ASK gets the same
-  `authorization_required` deny, with the detail `too many elicitations
-  pending`.
+  Parked calls are capped twice. A connection may have at most
+  `:max_parked_elicitations` (default 32) calls parked at once, and the server
+  at most `:max_parked_elicitations_total` (default 256) across every
+  connection. A parked call holds no callback worker, so without the first a
+  client could park calls as fast as it sent them; without the second, every
+  connection that can be asked (up to `:max_client_capabilities`) could park
+  its full share. Past either cap an ASK gets the same `authorization_required`
+  deny, with the detail `too many elicitations pending` (per connection) or
+  `too many elicitations pending on this server` (server-wide).
 
   ## Sensitive tools
 
@@ -97,7 +101,8 @@ defmodule Raxol.MCP.Server do
   server remains responsive to other clients, notifications, subscriber exits,
   and elicitation timers while callback work is pending.
 
-  `:max_in_flight` bounds concurrent callback workers (default 32).
+  `:max_in_flight` bounds concurrent callback workers across every connection
+  (default 32); it does not count parked calls, which hold no worker.
   `:callback_timeout_ms` bounds each worker's lifetime (default 300,000 ms).
   Work above the concurrency bound receives a structured busy error. A finite
   timeout passed to `handle_message/4` also cancels that call's worker if the
@@ -136,6 +141,13 @@ defmodule Raxol.MCP.Server do
   # and lifetime bounded so one wedged callback cannot occupy the shared MCP
   # router forever.
   @default_max_in_flight 32
+
+  # A parked call holds no worker, so `:max_in_flight` does not bound it. One
+  # client is held to a share, and the server to a total: elicitation-capable
+  # connections are limited only by `:max_client_capabilities`, and a network
+  # transport can mint a new one per stream.
+  @default_max_parked_elicitations 32
+  @default_max_parked_elicitations_total 256
   @default_callback_timeout_ms 300_000
 
   # The implicit single connection. stdio has exactly one peer and the OS
@@ -156,12 +168,15 @@ defmodule Raxol.MCP.Server do
     resource_subscriptions: %{},
     client_capabilities: %{},
     pending_elicitations: %{},
+    parked_counts: %{},
     in_flight: %{},
     worker_refs: %{},
     caller_refs: %{},
     elicitation_timeout_ms: @default_elicitation_timeout_ms,
     max_client_capabilities: @default_max_client_capabilities,
     max_in_flight: @default_max_in_flight,
+    max_parked_elicitations: @default_max_parked_elicitations,
+    max_parked_elicitations_total: @default_max_parked_elicitations_total,
     callback_timeout_ms: @default_callback_timeout_ms
   ]
 
@@ -214,12 +229,15 @@ defmodule Raxol.MCP.Server do
           resource_subscriptions: %{String.t() => boolean()},
           client_capabilities: %{conn_id() => {integer(), map()}},
           pending_elicitations: %{String.t() => pending_elicitation()},
+          parked_counts: %{conn_id() => pos_integer()},
           in_flight: %{reference() => map()},
           worker_refs: %{reference() => reference()},
           caller_refs: %{reference() => reference()},
           elicitation_timeout_ms: pos_integer(),
           max_client_capabilities: pos_integer(),
           max_in_flight: pos_integer(),
+          max_parked_elicitations: pos_integer(),
+          max_parked_elicitations_total: pos_integer(),
           callback_timeout_ms: pos_integer()
         }
 
@@ -461,6 +479,14 @@ defmodule Raxol.MCP.Server do
            Keyword.get(opts, :max_client_capabilities, @default_max_client_capabilities)
          ),
        max_in_flight: positive_option!(opts, :max_in_flight, @default_max_in_flight),
+       max_parked_elicitations:
+         positive_option!(opts, :max_parked_elicitations, @default_max_parked_elicitations),
+       max_parked_elicitations_total:
+         positive_option!(
+           opts,
+           :max_parked_elicitations_total,
+           @default_max_parked_elicitations_total
+         ),
        callback_timeout_ms:
          positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms)
      }}
@@ -1846,25 +1872,32 @@ defmodule Raxol.MCP.Server do
   # merely holding a stream open satisfied the subscriber half for everyone, and
   # any client's `initialize` satisfied the capability half.
   #
-  # A parked call holds no worker, so `:max_in_flight` alone never bounded how
-  # many one client could park: only the elicitation timeout did. Each
-  # connection may have at most `:max_in_flight` calls parked; past that an ASK
-  # is the same deny, with a detail saying why.
+  # A parked call holds no worker, so `:max_in_flight` never bounded how many
+  # one client could park: only the elicitation timeout did. A connection may
+  # have at most `:max_parked_elicitations` calls parked and the server at most
+  # `:max_parked_elicitations_total`; past either an ASK is the same deny, with
+  # a detail saying which. Both counts are kept as they change, so an ASK does
+  # not scan every parked call in this process every connection shares.
   defp ask(id, tool, arguments, prompt, state, conn_id, caller) do
     cond do
       not elicitation_capable?(state, conn_id) ->
         {authorization_required(id, tool, :ask, prompt), state}
 
-      parked_count(state, conn_id) >= state.max_in_flight ->
+      Map.get(state.parked_counts, conn_id, 0) >= state.max_parked_elicitations ->
         {authorization_required(id, tool, :ask, "too many elicitations pending"), state}
+
+      map_size(state.pending_elicitations) >= state.max_parked_elicitations_total ->
+        {authorization_required(
+           id,
+           tool,
+           :ask,
+           "too many elicitations pending on this server"
+         ), state}
 
       true ->
         start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
     end
   end
-
-  defp parked_count(state, conn_id),
-    do: Enum.count(state.pending_elicitations, fn {_id, p} -> p.owner == conn_id end)
 
   defp elicitation_capable?(state, conn_id) do
     Map.has_key?(state.subscribers, conn_id) and
@@ -1953,6 +1986,7 @@ defmodule Raxol.MCP.Server do
     state = %{
       state
       | pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending),
+        parked_counts: Map.update(state.parked_counts, conn_id, 1, &(&1 + 1)),
         caller_refs: caller_refs
     }
 
@@ -2011,7 +2045,8 @@ defmodule Raxol.MCP.Server do
     %{
       state
       | subscribers: Map.delete(state.subscribers, conn_id),
-        client_capabilities: Map.delete(state.client_capabilities, conn_id)
+        client_capabilities: Map.delete(state.client_capabilities, conn_id),
+        parked_counts: Map.delete(state.parked_counts, conn_id)
     }
   end
 
@@ -2065,7 +2100,17 @@ defmodule Raxol.MCP.Server do
 
   defp take_pending(state, id) do
     {pending, rest} = Map.pop(state.pending_elicitations, id)
-    {pending, release_pending_caller(%{state | pending_elicitations: rest}, pending)}
+    state = %{state | pending_elicitations: rest, parked_counts: unpark(state, pending)}
+    {pending, release_pending_caller(state, pending)}
+  end
+
+  defp unpark(state, nil), do: state.parked_counts
+
+  defp unpark(state, %{owner: owner}) do
+    case Map.fetch!(state.parked_counts, owner) do
+      1 -> Map.delete(state.parked_counts, owner)
+      count -> Map.put(state.parked_counts, owner, count - 1)
+    end
   end
 
   # Approved answers are intercepted by `async_action/3` and run in a worker.

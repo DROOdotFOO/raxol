@@ -642,8 +642,8 @@ defmodule Raxol.MCP.ElicitationTest do
     end
   end
 
-  # A parked call holds no callback worker, so `:max_in_flight` alone never
-  # bounded how many calls one connection could park.
+  # A parked call holds no callback worker, so `:max_in_flight` does not bound
+  # how many calls are parked; two caps of their own do.
   describe "parked calls" do
     setup %{registry: registry} do
       ask = fn _tool, _args, _ctx -> {:ask, "Approve moving money?"} end
@@ -655,11 +655,13 @@ defmodule Raxol.MCP.ElicitationTest do
            registry: registry,
            authorizer: ask,
            elicitation_timeout_ms: 30_000,
-           max_in_flight: 2},
+           max_in_flight: 1,
+           max_parked_elicitations: 2,
+           max_parked_elicitations_total: 3},
           id: :parked_server
         )
 
-      for conn_id <- ["conn-a", "conn-b"] do
+      for conn_id <- ["conn-a", "conn-b", "conn-c"] do
         :ok = initialize(server, %{elicitation: %{}}, conn_id)
         :ok = subscribe(server, self(), conn_id)
       end
@@ -667,7 +669,8 @@ defmodule Raxol.MCP.ElicitationTest do
       {:ok, server: server}
     end
 
-    test "a connection may park at most :max_in_flight calls", %{server: server} do
+    test "a connection may park at most :max_parked_elicitations calls, whatever :max_in_flight is",
+         %{server: server} do
       assert {:reply, nil} = spend_as(server, "conn-a")
       assert {:reply, nil} = spend_as(server, "conn-a")
 
@@ -678,7 +681,51 @@ defmodule Raxol.MCP.ElicitationTest do
 
       # The cap is per connection: another one can still be asked.
       assert {:reply, nil} = spend_as(server, "conn-b")
-      assert map_size(:sys.get_state(server).pending_elicitations) == 3
+    end
+
+    test "the server parks at most :max_parked_elicitations_total calls across connections",
+         %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      first = await_elicit_id()
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      assert {:reply, nil} = spend_as(server, "conn-b")
+
+      # conn-b and conn-c are each under their own share; the server is full.
+      for conn_id <- ["conn-b", "conn-c"] do
+        assert {:reply, response} = spend_as(server, conn_id)
+
+        assert %{"decision" => "ask", "detail" => "too many elicitations pending on this server"} =
+                 decoded_payload(response)
+      end
+
+      # Closing a parked call frees its place in both counts.
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{jsonrpc: "2.0", id: first, result: %{action: "decline"}},
+                 "conn-a"
+               )
+
+      assert_receive {:mcp_notification, %{id: 21, result: %{isError: true}}}, 500
+      assert {:reply, nil} = spend_as(server, "conn-c")
+      assert {:reply, response} = spend_as(server, "conn-a")
+
+      assert %{"detail" => "too many elicitations pending on this server"} =
+               decoded_payload(response)
+    end
+
+    test "a connection taken over starts with no parked calls", %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      assert {:reply, nil} = spend_as(server, "conn-a")
+
+      # A new subscriber on the id drops the old connection's parked calls.
+      successor = spawn_link(fn -> receive do: (:stop -> :ok) end)
+      :ok = subscribe(server, successor, "conn-a")
+      :ok = initialize(server, %{elicitation: %{}}, "conn-a")
+
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      send(successor, :stop)
     end
 
     test "an approval stops the call's elicitation timer", %{server: server} do
