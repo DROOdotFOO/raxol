@@ -730,7 +730,15 @@ defmodule Raxol.Headless.McpTools do
   defp do_start(module_or_path, opts) do
     case Raxol.Headless.start(module_or_path, opts) do
       {:ok, session_id} ->
-        keep_if_whole(session_id)
+        {:ok, "Session started: #{session_id}"}
+
+      # `Raxol.Headless.start/2` stopped the session; `refused` are its own
+      # tool names, never their holders.
+      {:error, {:name_collisions, refused}} ->
+        {:error,
+         "session #{Keyword.fetch!(opts, :id)} was not started: these of its tools " <>
+           "would reach the client under a name another tool already holds: " <>
+           Enum.join(refused, ", ")}
 
       # Spelled out rather than `inspect`ed because this is the refusal an
       # operator is most likely to hit by naming a real module that simply is
@@ -743,30 +751,6 @@ defmodule Raxol.Headless.McpTools do
 
       {:error, reason} ->
         {:error, inspect(reason)}
-    end
-  end
-
-  # A session the registry refused tools of (their client-side names are
-  # held by another session's or a static tool) would run without them, its
-  # `discover_tools` included, while the client reads "started": the start is
-  # refused and the session stopped. The reply names only the refused tools:
-  # a holder can be another session's tool, with its exact id and widgets.
-  defp keep_if_whole(session_id) do
-    case Raxol.Headless.name_collisions(session_id) do
-      {:ok, []} ->
-        {:ok, "Session started: #{session_id}"}
-
-      {:ok, refused} ->
-        :ok = Raxol.Headless.stop(session_id)
-
-        {:error,
-         "session #{session_id} was not started: these of its tools would reach " <>
-           "the client under a name another tool already holds: " <>
-           Enum.map_join(refused, ", ", fn {name, _holder} -> name end)}
-
-      {:error, reason} ->
-        :ok = Raxol.Headless.stop(session_id)
-        {:error, "session #{session_id} was not started: #{inspect(reason)}"}
     end
   end
 

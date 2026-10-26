@@ -19,25 +19,25 @@ defmodule Raxol.MCP.SessionNamesTest do
 
   # Two widgets whose tool names differ only where OMP turns `-` and `_`
   # alike into `_`: `<id>.x_y.click` and `<id>.x-y.click` reach it as one name.
+  # The second appears on the first key, so the session starts whole and its
+  # tools collide on a later render.
   defmodule CollidingApp do
     use Raxol.Core.Runtime.Application
 
+    alias Raxol.Core.Events.Event
     alias Raxol.Core.Renderer.View
 
     @impl true
-    def init(_context), do: %{}
+    def init(_context), do: %{shown: false}
 
     @impl true
+    def update(%Event{type: :key}, model), do: {%{model | shown: true}, []}
     def update(_message, model), do: {model, []}
 
     @impl true
-    def view(_model) do
-      View.column(
-        children: [
-          View.button("first", id: "x_y", on_click: :first),
-          View.button("second", id: "x-y", on_click: :second)
-        ]
-      )
+    def view(model) do
+      second = if model.shown, do: [View.button("second", id: "x-y", on_click: :second)], else: []
+      View.column(children: [View.button("first", id: "x_y", on_click: :first) | second])
     end
   end
 
@@ -230,23 +230,36 @@ defmodule Raxol.MCP.SessionNamesTest do
     assert stale == "session `#{id}` is not running in this server; call raxol_list"
   end
 
-  test "an Elixir session refused its discover_tools gets it once the name is free", %{
+  # A client's `"s"` started first holds the client-side names an Elixir
+  # caller's `"S"` would take. `Headless.start/2` refuses `"S"` as
+  # `raxol_start` would, rather than answer `{:ok, "S"}` for a session with
+  # every tool refused, and starts it once the names are free.
+  test "Headless.start refuses and stops a session whose tools' names are held", %{
     server: server,
     registry: registry
   } do
     id = fresh_id()
     upper = String.upcase(id)
-    {:ok, ^upper} = Headless.start(Raxol.Playground.Demos.TableDemo, id: upper, registry: registry)
-    {:ok, ^id} = Headless.start(Raxol.Playground.Demos.TableDemo, id: id, registry: registry)
-    refute "#{id}.discover_tools" in tool_names(server)
+    start!(server, @table, id)
+    held = Enum.filter(tool_names(server), &String.starts_with?(&1, id <> "."))
 
-    :ok = Headless.stop(upper)
-    :ok = Headless.send_key(id, "j")
-    :ok = Headless.settle(id)
+    assert {:error, {:name_collisions, refused}} =
+             Headless.start(Raxol.Playground.Demos.TableDemo, id: upper, registry: registry)
 
-    assert "#{id}.discover_tools" in tool_names(server)
-    assert "#{id}.playground_table.sort" in tool_names(server)
-    assert Headless.name_collisions(id) == {:ok, []}
+    # Its own refused tools, never the holders (a client's session).
+    assert Enum.sort(refused) == Enum.sort(Enum.map(held, &String.replace_prefix(&1, id, upper)))
+    assert "#{upper}.discover_tools" in refused
+    refute upper in Headless.list()
+    refute Enum.any?(tool_names(server), &String.starts_with?(&1, upper <> "."))
+    assert Enum.sort(Enum.filter(tool_names(server), &String.starts_with?(&1, id <> "."))) ==
+             Enum.sort(held)
+
+    :ok = Headless.stop(id)
+
+    assert {:ok, ^upper} =
+             Headless.start(Raxol.Playground.Demos.TableDemo, id: upper, registry: registry)
+
+    assert "#{upper}.playground_table.sort" in tool_names(server)
   end
 
   test "a session id with a dot or a control character names no tools", %{
@@ -304,9 +317,11 @@ defmodule Raxol.MCP.SessionNamesTest do
   } do
     id = fresh_id()
     {:ok, _} = Headless.start(UnderscoreApp, id: "#{id}_y", registry: registry)
-    {:ok, ^id} = Headless.start(UnderscoreApp, id: id, registry: registry)
 
-    assert Headless.name_collisions(id) == {:ok, [{"#{id}.y_x.click", "#{id}_y.x.click"}]}
+    assert Headless.start(UnderscoreApp, id: id, registry: registry) ==
+             {:error, {:name_collisions, ["#{id}.y_x.click"]}}
+
+    refute id in Headless.list()
     assert Headless.name_collisions("#{id}_y") == {:ok, []}
   end
 

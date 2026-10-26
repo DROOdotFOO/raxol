@@ -130,6 +130,13 @@ defmodule Raxol.Headless do
   MCP tools synchronously. A successful return therefore exposes tools from a
   static first view without waiting for another render.
 
+  A session any of whose initial tools the registry refuses, because another
+  tool already holds its client-side name (`Raxol.MCP.Registry.omp_name/1`:
+  a client's session `"s"` holds the names of an Elixir caller's `"S"`), is
+  stopped and answers `{:error, {:name_collisions, names}}`, `names` being
+  its own refused tools. A tool a later render derives into a held name is
+  refused alone and answered by `name_collisions/1`.
+
   ## Passing a path executes code
 
   Compiling a `defmodule` runs its body, so **whoever chooses the path string
@@ -584,12 +591,41 @@ defmodule Raxol.Headless do
           height: height
         }
 
-        Process.monitor(lifecycle_pid)
-        {:ok, id, put_in(state, [:sessions, id], session)}
+        keep_if_whole(session, state)
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # A session the registry refused tools of (their client-side names are held
+  # by another session's or a static tool) would run without them, its
+  # `discover_tools` included, while its caller read `{:ok, id}`: the start is
+  # refused and the session stopped, for `raxol_start` and an Elixir caller
+  # alike. Asked before the session is stored, so no caller reaches it. The
+  # refusal names only the refused tools: a holder can be another session's
+  # tool, with its exact id and widgets.
+  defp keep_if_whole(session, state) do
+    case synchronizer_collisions(session) do
+      {:ok, []} ->
+        Process.monitor(session.lifecycle_pid)
+        {:ok, session.id, put_in(state, [:sessions, session.id], session)}
+
+      {:ok, refused} ->
+        discard(session)
+
+        {:error,
+         {:name_collisions, Enum.map(refused, fn {name, _holder} -> name end)}}
+
+      {:error, reason} ->
+        discard(session)
+        {:error, reason}
+    end
+  end
+
+  defp discard(session) do
+    stop_synchronizer(session.synchronizer_pid)
+    stop_lifecycle(session.lifecycle_pid)
   end
 
   # The gate lives HERE rather than in `Raxol.Headless.McpTools` because this is
