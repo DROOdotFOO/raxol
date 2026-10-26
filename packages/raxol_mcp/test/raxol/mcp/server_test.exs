@@ -537,5 +537,24 @@ defmodule Raxol.MCP.ServerTest do
 
       assert code == Protocol.invalid_params()
     end
+
+    test "a request with string top-level keys is answered invalid_request", %{server: s} do
+      string_keyed = Jason.decode!(~s({"jsonrpc":"2.0","id":70,"method":"ping"}))
+
+      {req_id, _request_ref} = Server.request(s, string_keyed)
+      assert {:reply, {:reply, resp}} = :gen_server.receive_response(req_id, 1_000)
+      assert resp.id == 70
+      assert resp.error.code == Protocol.invalid_request()
+
+      assert {:reply, %{id: 70, error: %{code: code}}} = Server.handle_message(s, string_keyed)
+      assert code == Protocol.invalid_request()
+
+      # A notification or response has no id to answer.
+      assert {:reply, nil} =
+               Server.handle_message(s, Jason.decode!(~s({"jsonrpc":"2.0","method":"x/y"})))
+
+      assert {:reply, nil} =
+               Server.handle_message(s, Jason.decode!(~s({"jsonrpc":"2.0","id":71,"result":{}})))
+    end
   end
 end

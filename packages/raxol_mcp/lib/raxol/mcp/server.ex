@@ -293,7 +293,9 @@ defmodule Raxol.MCP.Server do
   Handle a decoded JSON-RPC message.
 
   Returns `{:reply, response_map}` for requests or `{:reply, nil}` for
-  notifications (no response needed).
+  notifications (no response needed). The message is what
+  `Raxol.MCP.Protocol.decode/1` returns: its top-level keys are atoms. A
+  request with string top-level keys is answered `-32600`.
   """
   @spec handle_message(GenServer.server(), map()) :: {:reply, map() | nil}
   def handle_message(server \\ __MODULE__, message) do
@@ -322,7 +324,7 @@ defmodule Raxol.MCP.Server do
     try do
       GenServer.call(
         server,
-        {:handle_message, message, conn_id, request_ref, timeout},
+        {:handle_message, message, conn_id, request_ref},
         timeout
       )
     catch
@@ -338,6 +340,12 @@ defmodule Raxol.MCP.Server do
   The non-blocking form of `handle_message/3`, for a transport that must keep
   reading while earlier requests run. Messages from one caller reach the
   server in send order, so methods handled inline keep their order.
+
+  `message` must be what `Raxol.MCP.Protocol.decode/1` returns: top-level keys
+  (`:jsonrpc`, `:id`, `:method`, `:params`, `:result`, `:error`) are atoms,
+  anything below them keeps its string keys. A request decoded some other way,
+  with string top-level keys, is answered `-32600`; such a notification or
+  response gets `{:reply, nil}`.
 
   Returns the `:gen_server` request id and the `request_ref` that `cancel/2`
   takes. Collect the reply with `:gen_server.check_response/2,3`: it is
@@ -493,12 +501,8 @@ defmodule Raxol.MCP.Server do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call(
-        {:handle_message, message, conn_id, request_ref, _call_timeout},
-        from,
-        state
-      ),
-      do: handle_request(message, conn_id, request_ref, {:reply, from}, state)
+  def handle_manager_call({:handle_message, message, conn_id, request_ref}, from, state),
+    do: handle_request(message, conn_id, request_ref, {:reply, from}, state)
 
   # A `request/3` caller does not block on its reply, so the reply can wait for
   # whatever the call waits on, an elicitation answer included.
@@ -1474,6 +1478,20 @@ defmodule Raxol.MCP.Server do
   defp dispatch_common(%{id: id}, state, _ctx) do
     error =
       Protocol.error_response(id, Protocol.invalid_request(), "Missing method")
+
+    {error, state}
+  end
+
+  # Top-level keys that are strings mean the message did not come through
+  # `Protocol.decode/1`, so no clause above can read it. A request still names
+  # an id to answer, so its caller learns why instead of getting silence.
+  defp dispatch_common(%{"id" => id, "method" => _method}, state, _ctx) do
+    error =
+      Protocol.error_response(
+        id,
+        Protocol.invalid_request(),
+        "top-level keys must be atoms, as Raxol.MCP.Protocol.decode/1 returns them"
+      )
 
     {error, state}
   end
