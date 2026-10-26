@@ -58,6 +58,12 @@ defmodule Raxol.MCP.Server do
   connection going away ends it with no answer, and kills the tool if an
   approval already started it.
 
+  A connection may have at most `:max_in_flight` (default 32) calls parked at
+  once. A parked call holds no callback worker, so without this a client could
+  park calls as fast as it sent them. Past the cap an ASK gets the same
+  `authorization_required` deny, with the detail `too many elicitations
+  pending`.
+
   ## Sensitive tools
 
   A tool annotated `destructiveHint: true` or `sensitive: true` (see
@@ -97,6 +103,9 @@ defmodule Raxol.MCP.Server do
   timeout passed to `handle_message/4` also cancels that call's worker if the
   caller stops waiting. `request/3` callers cancel explicitly with `cancel/2`,
   and are monitored: when one exits, its outstanding requests are cancelled.
+
+  `params` must be an object. `"params": null` is treated as absent; any other
+  non-object `params` is answered `-32602` before the method is looked at.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -624,12 +633,15 @@ defmodule Raxol.MCP.Server do
   # -- Isolated callback execution ---------------------------------------------
 
   defp handle_request(message, conn_id, request_ref, delivery, state) do
+    message = drop_null_params(message)
+
     case async_action(message, state, conn_id) do
       {:call, work} ->
         start_async_call(work, request_ref, delivery, state)
 
       {:push, pending, work} ->
         {_pending, state} = take_pending(state, message.id)
+        Process.cancel_timer(pending.timer)
         start_async_push(work, pending, state)
 
       {:reply, response} ->
@@ -640,6 +652,11 @@ defmodule Raxol.MCP.Server do
         {:reply, {:reply, response}, state}
     end
   end
+
+  # JSON-RPC lets a client send `"params": null` for a method that takes none;
+  # it means the same as leaving `params` out.
+  defp drop_null_params(%{params: nil} = message), do: Map.delete(message, :params)
+  defp drop_null_params(message), do: message
 
   # Every handler reads `params` as an object; JSON-RPC also allows an array,
   # which no MCP method takes. Refused here, before any handler, so a malformed
@@ -1828,13 +1845,26 @@ defmodule Raxol.MCP.Server do
   # Both conditions are read for THIS connection. Read globally, a second client
   # merely holding a stream open satisfied the subscriber half for everyone, and
   # any client's `initialize` satisfied the capability half.
+  #
+  # A parked call holds no worker, so `:max_in_flight` alone never bounded how
+  # many one client could park: only the elicitation timeout did. Each
+  # connection may have at most `:max_in_flight` calls parked; past that an ASK
+  # is the same deny, with a detail saying why.
   defp ask(id, tool, arguments, prompt, state, conn_id, caller) do
-    if elicitation_capable?(state, conn_id) do
-      start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
-    else
-      {authorization_required(id, tool, :ask, prompt), state}
+    cond do
+      not elicitation_capable?(state, conn_id) ->
+        {authorization_required(id, tool, :ask, prompt), state}
+
+      parked_count(state, conn_id) >= state.max_in_flight ->
+        {authorization_required(id, tool, :ask, "too many elicitations pending"), state}
+
+      true ->
+        start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
     end
   end
+
+  defp parked_count(state, conn_id),
+    do: Enum.count(state.pending_elicitations, fn {_id, p} -> p.owner == conn_id end)
 
   defp elicitation_capable?(state, conn_id) do
     Map.has_key?(state.subscribers, conn_id) and

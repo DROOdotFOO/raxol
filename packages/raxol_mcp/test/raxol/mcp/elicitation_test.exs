@@ -642,6 +642,65 @@ defmodule Raxol.MCP.ElicitationTest do
     end
   end
 
+  # A parked call holds no callback worker, so `:max_in_flight` alone never
+  # bounded how many calls one connection could park.
+  describe "parked calls" do
+    setup %{registry: registry} do
+      ask = fn _tool, _args, _ctx -> {:ask, "Approve moving money?"} end
+
+      server =
+        start_supervised!(
+          {Server,
+           name: :"parked_#{System.unique_integer([:positive])}",
+           registry: registry,
+           authorizer: ask,
+           elicitation_timeout_ms: 30_000,
+           max_in_flight: 2},
+          id: :parked_server
+        )
+
+      for conn_id <- ["conn-a", "conn-b"] do
+        :ok = initialize(server, %{elicitation: %{}}, conn_id)
+        :ok = subscribe(server, self(), conn_id)
+      end
+
+      {:ok, server: server}
+    end
+
+    test "a connection may park at most :max_in_flight calls", %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      assert {:reply, nil} = spend_as(server, "conn-a")
+
+      assert {:reply, response} = spend_as(server, "conn-a")
+
+      assert %{"decision" => "ask", "detail" => "too many elicitations pending"} =
+               decoded_payload(response)
+
+      # The cap is per connection: another one can still be asked.
+      assert {:reply, nil} = spend_as(server, "conn-b")
+      assert map_size(:sys.get_state(server).pending_elicitations) == 3
+    end
+
+    test "an approval stops the call's elicitation timer", %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      [{elicit_id, %{timer: timer}}] = Map.to_list(:sys.get_state(server).pending_elicitations)
+      assert is_integer(:erlang.read_timer(timer))
+
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: elicit_id,
+                   result: %{action: "accept", content: %{approve: true}}
+                 },
+                 "conn-a"
+               )
+
+      assert :erlang.read_timer(timer) == false
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
 
   defp initialize(server, capabilities, conn_id) do

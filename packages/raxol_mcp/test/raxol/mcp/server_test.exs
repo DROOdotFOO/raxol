@@ -507,7 +507,7 @@ defmodule Raxol.MCP.ServerTest do
       for {id, method, params} <- [
             {50, "tools/call", []},
             {51, "resources/read", "raxol://x"},
-            {52, "prompts/get", nil},
+            {52, "prompts/get", 7},
             {53, "ping", [1]}
           ] do
         assert {:reply, resp} =
@@ -522,6 +522,20 @@ defmodule Raxol.MCP.ServerTest do
 
       assert {:reply, %{id: 54, result: %{}}} =
                Server.handle_message(s, %{id: 54, method: "ping"})
+    end
+
+    test "null params are treated as absent", %{server: s} do
+      assert {:reply, %{id: 60, result: %{}}} =
+               Server.handle_message(s, %{id: 60, method: "ping", params: nil})
+
+      assert {:reply, %{id: 61, result: %{tools: []}}} =
+               Server.handle_message(s, %{id: 61, method: "tools/list", params: nil})
+
+      # A method that needs params gets the same answer as one sent without.
+      assert {:reply, %{id: 62, error: %{code: code, message: "tools/call requires params"}}} =
+               Server.handle_message(s, %{id: 62, method: "tools/call", params: nil})
+
+      assert code == Protocol.invalid_params()
     end
   end
 end
