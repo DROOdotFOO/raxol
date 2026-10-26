@@ -556,5 +556,39 @@ defmodule Raxol.MCP.ServerTest do
       assert {:reply, nil} =
                Server.handle_message(s, Jason.decode!(~s({"jsonrpc":"2.0","id":71,"result":{}})))
     end
+
+    # Each of these used to be interpolated into a string inside the server
+    # process, so one frame took down the server every connection shares.
+    test "a non-string method or log level is answered, not a crash", %{server: s} do
+      for {id, method} <- [{80, %{"x" => 1}}, {81, [%{}]}, {82, 7}] do
+        assert {:reply, %{id: ^id, error: %{code: code}}} =
+                 Server.handle_message(s, %{id: id, method: method})
+
+        assert code == Protocol.invalid_request()
+      end
+
+      assert {:reply, nil} = Server.handle_message(s, %{method: %{"x" => 1}})
+
+      for {id, level} <- [{83, %{"x" => 1}}, {84, [%{}]}, {85, "loud"}] do
+        assert {:reply, %{id: ^id, error: %{code: code, message: message}}} =
+                 Server.handle_message(s, %{
+                   id: id,
+                   method: "logging/setLevel",
+                   params: %{"level" => level}
+                 })
+
+        assert code == Protocol.invalid_params()
+        assert message =~ inspect(level)
+      end
+
+      assert {:reply, %{id: 86, result: %{}}} =
+               Server.handle_message(s, %{
+                 id: 86,
+                 method: "logging/setLevel",
+                 params: %{"level" => "debug"}
+               })
+
+      assert :sys.get_state(s).log_level == :debug
+    end
   end
 end

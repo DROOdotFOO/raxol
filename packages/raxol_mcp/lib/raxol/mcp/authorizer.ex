@@ -36,9 +36,9 @@ defmodule Raxol.MCP.Authorizer do
     * `:read_authorizer` -- guards the read/metadata surfaces
       (`resources/read`, `resources/subscribe`, `resources/unsubscribe`,
       `resources/list`, `prompts/get`, `prompts/list`, `tools/list`,
-      `completion/complete`). Receives the METHOD name in the tool-name
-      position, e.g. `"resources/read"` with `%{"uri" => uri}` as the
-      arguments.
+      `completion/complete`, `logging/setLevel`). Receives the METHOD name
+      in the tool-name position, e.g. `"resources/read"` with
+      `%{"uri" => uri}` as the arguments.
 
   They are deliberately separate: a tool allowlist knows nothing about
   method names and would otherwise deny every read. On read surfaces an

@@ -172,6 +172,8 @@ Embedding `Raxol.MCP.Server` or `Raxol.MCP.Supervisor` directly? `:authorizer_so
 
 Reads cannot take the same empty default: `tools/list` is a read, so denying every read would leave an allowlisted tool undiscoverable and the server unusable rather than closed. The split is by what a method discloses. Listing methods reveal names the server already advertises, while `resources/read` streams state.
 
+`logging/setLevel` goes through the read seam too, with the method name and `%{"level" => level}`. It is not in the default list, so a production deployment whose clients set the level adds `"logging/setLevel"` to `mcp_allowed_read_methods`.
+
 `tools/list` is filtered per entry as well as gated as a method. Each tool goes through the same authorizer `tools/call` would consult, and only `:allow` is advertised; `{:ask, _}` hides exactly like `{:deny, _}`, since an entry needing an approval the caller has not got is not callable, and a policy that raises costs that tool its listing rather than failing the whole listing. A nil authorizer advertises everything.
 
 The read seam itself still answers `:allow` when no read authorizer is configured, which is what stdio embedders have always had, so the fail-closed pressure sits at boot instead: `Raxol.MCP.Deployment.enforce_read_authorization!/2` refuses to mount the SSE transport without a `:read_authorizer`, naming `:mcp_read_authorizer` in the refusal, and a server started with `transport: :sse` runs the same check at its own boot. Satisfying the tool gate alone used to be enough to serve live model state, through `resources/read`, to any client that connected.

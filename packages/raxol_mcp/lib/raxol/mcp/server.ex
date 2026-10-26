@@ -111,6 +111,10 @@ defmodule Raxol.MCP.Server do
 
   `params` must be an object. `"params": null` is treated as absent; any other
   non-object `params` is answered `-32602` before the method is looked at.
+  `method` must be a string: a request naming anything else is answered
+  `-32600`, and such a notification is dropped. `logging/setLevel` answers an
+  unknown `level` with `-32602`, and is otherwise gated by `:read_authorizer`
+  like the other read surfaces.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -688,6 +692,19 @@ defmodule Raxol.MCP.Server do
   defp drop_null_params(%{params: nil} = message), do: Map.delete(message, :params)
   defp drop_null_params(message), do: message
 
+  # `method` picks the handler, and the unknown-method reply prints it, so a
+  # frame naming it with a number or an object is refused before either.
+  defp async_action(%{method: method} = message, _state, _conn_id) when not is_binary(method) do
+    case message do
+      %{id: id} ->
+        {:reply,
+         Protocol.error_response(id, Protocol.invalid_request(), "method must be a string")}
+
+      _notification ->
+        {:reply, nil}
+    end
+  end
+
   # Every handler reads `params` as an object; JSON-RPC also allows an array,
   # which no MCP method takes. Refused here, before any handler, so a malformed
   # frame from one client cannot crash the server every connection shares.
@@ -821,6 +838,36 @@ defmodule Raxol.MCP.Server do
       state,
       conn_id
     )
+  end
+
+  # The level is checked before anyone is asked, so whatever the client sent
+  # reaches the authorizer, and this process, only as a known level.
+  defp async_action(
+         %{method: "logging/setLevel", id: id, params: params},
+         state,
+         conn_id
+       ) do
+    level = Map.get(params, "level") || Map.get(params, :level, "info")
+
+    case Map.fetch(@level_map, level) do
+      {:ok, log_level} ->
+        read_action(
+          id,
+          "logging/setLevel",
+          %{"level" => level},
+          {:set_log_level, log_level},
+          state,
+          conn_id
+        )
+
+      :error ->
+        {:reply,
+         Protocol.error_response(
+           id,
+           Protocol.invalid_params(),
+           "Invalid log level: #{inspect(level)}. Valid: #{inspect(@log_levels)}"
+         )}
+    end
   end
 
   defp async_action(%{id: id, result: result}, state, conn_id) do
@@ -1000,6 +1047,9 @@ defmodule Raxol.MCP.Server do
   defp execute_read_operation(id, {:unsubscribe, uri}, _ctx),
     do: {:read_mutation, id, :unsubscribe, uri}
 
+  defp execute_read_operation(id, {:set_log_level, level}, _ctx),
+    do: {:read_mutation, id, :set_log_level, level}
+
   defp complete_async(entry, {:response, response}, state),
     do: deliver_async(entry, response, state)
 
@@ -1017,6 +1067,11 @@ defmodule Raxol.MCP.Server do
     if response == nil and caller != nil,
       do: state,
       else: deliver_async(entry, response, state)
+  end
+
+  defp complete_async(entry, {:read_mutation, id, :set_log_level, level}, state) do
+    Logger.info("[MCP.Server] Log level set to #{level}")
+    deliver_async(entry, Protocol.response(id, %{}), %{state | log_level: level})
   end
 
   defp complete_async(entry, {:read_mutation, id, action, uri}, state) do
@@ -1396,32 +1451,6 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  # -- Logging ---
-
-  defp dispatch_common(
-         %{method: "logging/setLevel", id: id, params: params},
-         state,
-         _ctx
-       ) do
-    level_str = Map.get(params, "level") || Map.get(params, :level, "info")
-
-    case Map.fetch(@level_map, level_str) do
-      {:ok, level} ->
-        Logger.info("[MCP.Server] Log level set to #{level}")
-        {Protocol.response(id, %{}), %{state | log_level: level}}
-
-      :error ->
-        error =
-          Protocol.error_response(
-            id,
-            Protocol.invalid_params(),
-            "Invalid log level: #{level_str}. Valid: #{inspect(@log_levels)}"
-          )
-
-        {error, state}
-    end
-  end
-
   # -- Completion ---
 
   # Gated as a read surface: completions enumerate tool names, resource
@@ -1458,7 +1487,7 @@ defmodule Raxol.MCP.Server do
       Protocol.error_response(
         id,
         Protocol.method_not_found(),
-        "Unknown method: #{method}"
+        "Unknown method: #{inspect(method)}"
       )
 
     {error, state}
@@ -1534,7 +1563,7 @@ defmodule Raxol.MCP.Server do
         Protocol.error_response(
           id,
           Protocol.method_not_found(),
-          "Tool not found: #{name}"
+          "Tool not found: #{inspect(name)}"
         )
 
       {:error, :circuit_open} ->
@@ -1568,7 +1597,7 @@ defmodule Raxol.MCP.Server do
         Protocol.error_response(
           id,
           Protocol.invalid_params(),
-          "Resource not found: #{uri}"
+          "Resource not found: #{inspect(uri)}"
         )
 
       {:error, :circuit_open} ->
@@ -1592,7 +1621,7 @@ defmodule Raxol.MCP.Server do
         Protocol.error_response(
           id,
           Protocol.method_not_found(),
-          "Prompt not found: #{name}"
+          "Prompt not found: #{inspect(name)}"
         )
 
       {:error, reason} ->
@@ -1616,9 +1645,9 @@ defmodule Raxol.MCP.Server do
   end
 
   # Read surfaces (resources/read, resources/subscribe, resources/list,
-  # prompts/get, prompts/list, completion/complete) consult the DEDICATED
-  # :read_authorizer, not the tools/call authorizer: an existing tool
-  # allowlist knows nothing about method names like "resources/read" and
+  # prompts/get, prompts/list, completion/complete, logging/setLevel) consult
+  # the DEDICATED :read_authorizer, not the tools/call authorizer: an existing
+  # tool allowlist knows nothing about method names like "resources/read" and
   # would deny every read if the seams were shared. A nil read_authorizer
   # allows, which is the pre-gate behavior (reads open; stdio inherits the
   # OS boundary). There is no elicitation path here: ASK resolves to deny,
@@ -2090,7 +2119,7 @@ defmodule Raxol.MCP.Server do
         properties: %{
           approve: %{
             type: "boolean",
-            description: "Approve running the #{tool} tool"
+            description: "Approve running the #{inspect(tool)} tool"
           }
         },
         required: ["approve"]
@@ -2140,7 +2169,7 @@ defmodule Raxol.MCP.Server do
       pending.request_id,
       pending.tool,
       :ask,
-      "user #{action || "declined"}"
+      "user #{inspect(action || "declined")}"
     )
   end
 

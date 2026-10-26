@@ -24,10 +24,10 @@ defmodule Raxol.MCP.Transport.Stdio do
   end of input every reply already produced is still written (methods the
   server answers inline, such as `initialize` and `ping`, and worker-run
   requests that finished first); every request still running in a callback
-  worker (`tools/*`, `resources/*`, `prompts/*`, `completion/complete`) or
-  waiting on an elicitation answer is cancelled and gets no reply. The
-  transport stops `:normal` once nothing is outstanding; halting the VM is the
-  caller's job.
+  worker (`tools/*`, `resources/*`, `prompts/*`, `completion/complete`,
+  `logging/setLevel`) or waiting on an elicitation answer is cancelled and
+  gets no reply. The transport stops `:normal` once nothing is outstanding;
+  halting the VM is the caller's job.
 
   If the transport dies any other way (killed, a crash), the server cancels its
   outstanding requests, since it monitors every `Raxol.MCP.Server.request/3`

@@ -124,6 +124,30 @@ defmodule Raxol.MCP.Transport.StdioTest do
       assert_eof_stops(ctx)
     end
 
+    # The transport stops when its server does, so a frame that crashed the
+    # server would take every stdio transport with it.
+    test "malformed frames are answered and leave the server and transport up",
+         %{io: io, server: server} = ctx do
+      server_pid = Process.whereis(server)
+
+      PushIO.push(
+        io,
+        ~s({"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":{"x":1}}})
+      )
+
+      PushIO.push(io, ~s({"jsonrpc":"2.0","id":2,"method":{"x":1}}))
+      PushIO.push(io, ~s({"jsonrpc":"2.0","id":3,"method":[{}]}))
+      push(io, Protocol.request(4, "ping"))
+
+      assert %{id: 1, error: %{"code" => -32_602}} = next_frame(io)
+      assert %{id: 2, error: %{"code" => -32_600}} = next_frame(io)
+      assert %{id: 3, error: %{"code" => -32_600}} = next_frame(io)
+      assert %{id: 4, result: %{}} = next_frame(io)
+      assert Process.whereis(server) == server_pid
+
+      assert_eof_stops(ctx)
+    end
+
     test "skips notifications (no response)", %{io: io} = ctx do
       push(io, Protocol.notification("notifications/initialized"))
       push(io, Protocol.request(1, "ping"))

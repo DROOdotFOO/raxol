@@ -714,6 +714,35 @@ defmodule Raxol.MCP.ElicitationTest do
                decoded_payload(response)
     end
 
+    test "a tool name or answer that is not a string is rendered, not a crash",
+         %{server: server} do
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: 41,
+                   method: "tools/call",
+                   params: %{"name" => %{"x" => 1}, "arguments" => %{}}
+                 },
+                 "conn-a"
+               )
+
+      assert_receive {:mcp_notification, %{method: "elicitation/create"} = request}, 500
+      assert request.params.requestedSchema.properties.approve.description =~ ~s(%{"x" => 1})
+
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{jsonrpc: "2.0", id: request.id, result: %{"action" => %{"x" => 1}}},
+                 "conn-a"
+               )
+
+      assert_receive {:mcp_notification, %{id: 41, result: %{isError: true}} = response}, 500
+      assert %{"detail" => ~s(user %{"x" => 1})} = decoded_payload(response)
+      assert Process.alive?(server)
+    end
+
     test "a connection taken over starts with no parked calls", %{server: server} do
       assert {:reply, nil} = spend_as(server, "conn-a")
       assert {:reply, nil} = spend_as(server, "conn-a")
