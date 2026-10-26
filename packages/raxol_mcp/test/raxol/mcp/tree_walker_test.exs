@@ -200,7 +200,7 @@ defmodule Raxol.MCP.TreeWalkerTest do
 
   describe "a third-party provider's spec in the tool list" do
     setup do
-      %{ctx: %{dispatcher_pid: nil, type_map: @type_map}}
+      %{ctx: @ctx}
     end
 
     test "every string and key of the input schema is cleaned", %{ctx: ctx} do
@@ -259,7 +259,7 @@ defmodule Raxol.MCP.TreeWalkerTest do
       specs = Enum.map(bad ++ ["ok_go2", longest], &spec(%{name: &1}))
 
       assert {tools, refusals} = TreeWalker.derive_with_refusals(foreign(specs), ctx)
-      assert Enum.map(tools, & &1.name) == ["w.ok_go2", "w." <> longest]
+      assert Enum.map(tools, & &1.name) == ["s.w.ok_go2", "s.w." <> longest]
       assert refusals == MapSet.new(bad, &{:action_name, "w", &1})
 
       log = ExUnit.CaptureLog.capture_log(fn -> TreeWalker.derive_tools(foreign(specs), ctx) end)

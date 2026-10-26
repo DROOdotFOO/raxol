@@ -848,12 +848,15 @@ defmodule Raxol.Headless.McpToolsTest do
         specs = module.mcp_tools(node)
 
         assert {tools, refusals} =
-                 Raxol.MCP.TreeWalker.derive_with_refusals(node, %{dispatcher_pid: nil})
+                 Raxol.MCP.TreeWalker.derive_with_refusals(node, %{
+                   dispatcher_pid: nil,
+                   session_id: "s"
+                 })
 
         assert refusals == MapSet.new(), inspect(module)
 
         assert Enum.map(tools, &{&1.name, Map.get(&1, :annotations)}) ==
-                 Enum.map(specs, &{"w." <> &1.name, Map.get(&1, :annotations)}),
+                 Enum.map(specs, &{"s.w." <> &1.name, Map.get(&1, :annotations)}),
                inspect(module)
       end
     end
@@ -862,10 +865,10 @@ defmodule Raxol.Headless.McpToolsTest do
     # masked input has none, like PasswordField.
     test "a masked text input derives no get_value and refuses one" do
       masked = %{type: :text_input, id: "pin", attrs: %{mask_char: "*"}, value: "hunter2"}
-      ctx = %{dispatcher_pid: nil}
+      ctx = %{dispatcher_pid: nil, session_id: "s"}
 
       names = Enum.map(Raxol.MCP.TreeWalker.derive_tools(masked, ctx), & &1.name)
-      assert names == ["pin.type_into", "pin.clear"]
+      assert names == ["s.pin.type_into", "s.pin.clear"]
 
       for node <- [masked, %{masked | attrs: %{}} |> Map.put(:mask_char, "*")] do
         assert {:error, message} =
@@ -878,7 +881,7 @@ defmodule Raxol.Headless.McpToolsTest do
       end
 
       plain = %{masked | attrs: %{}}
-      assert "pin.get_value" in Enum.map(Raxol.MCP.TreeWalker.derive_tools(plain, ctx), & &1.name)
+      assert "s.pin.get_value" in Enum.map(Raxol.MCP.TreeWalker.derive_tools(plain, ctx), & &1.name)
     end
 
     # The same secret through the session's resources: `widgets` is built

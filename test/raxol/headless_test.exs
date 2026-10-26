@@ -415,7 +415,7 @@ defmodule Raxol.HeadlessTest do
                )
 
       :ok = Headless.settle("pid_registry")
-      assert "cold_start_button.click" in tool_names(registry)
+      assert "pid_registry.cold_start_button.click" in tool_names(registry)
     end
   end
 
