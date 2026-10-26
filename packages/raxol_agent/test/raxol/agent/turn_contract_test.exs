@@ -19,6 +19,44 @@ defmodule Raxol.Agent.TurnContractTest do
 
   @usage %{input_tokens: 0, output_tokens: 0}
 
+  # An agent that answers a turn inline while that turn's process runs:
+  # "run" starts a turn process that blocks; "answer" then replies to the
+  # "run" turn from `update/2`. It records every cancel it sees.
+  defmodule InlineAfterRun do
+    @moduledoc false
+    use Raxol.Agent
+
+    alias Raxol.Agent.Comm
+
+    def init(_context), do: %{running: nil, cancelled: []}
+
+    def update(
+          {:agent_message, _from, {:call, session, ref, {:acp_prompt, "run", approver}}},
+          model
+        ) do
+      Comm.run_turn(session, ref, fn ->
+        approver.("run", %{}, %{})
+
+        receive do
+          :never -> :ok
+        end
+      end)
+
+      {%{model | running: ref}, []}
+    end
+
+    def update({:agent_message, _from, {:call, session, ref, {:acp_prompt, "answer", _}}}, model) do
+      Comm.reply(session, model.running, {:ok, "answered inline", %{}})
+      Comm.reply(session, ref, {:ok, "done", %{}})
+      {model, []}
+    end
+
+    def update({:agent_message, _from, {:acp_cancel, ref}}, model),
+      do: {%{model | cancelled: [ref | model.cancelled]}, []}
+
+    def update(_msg, model), do: {model, []}
+  end
+
   setup do
     # App-level singletons the agent's runtime Lifecycle uses (the Dispatcher
     # reads the theme from UserPreferences; the rendering engine starts its
@@ -258,12 +296,14 @@ defmodule Raxol.Agent.TurnContractTest do
     refute_received {:acp_run, ^ref, _fun}
   end
 
-  test "a turn-failed report from another process changes nothing", %{id: id} do
+  test "a turn-failed report with the caller's ref changes nothing", %{id: id} do
     ref = make_ref()
     {held, worker} = hold(id, ref)
     [{session, _}] = Registry.lookup(Raxol.Agent.Registry, id)
+    # The worker's one link is the turn's owner.
+    {:links, [owner]} = Process.info(worker, :links)
 
-    send(session, {:acp_turn_failed, ref})
+    send(session, {:acp_turn_failed, ref, owner})
     send(session, {:acp_turn_failed, ref, self()})
 
     # Same sender, so the session has handled both reports before this call.
@@ -293,6 +333,73 @@ defmodule Raxol.Agent.TurnContractTest do
     assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
     assert_receive {:agent_reply, ^ref, {:error, :cancelled}}, 5_000
     refute_received {:DOWN, ^session_mon, :process, ^session, _reason}
+  end
+
+  test "the caller's ref cancels a turn but cannot answer or steer it", %{id: id} do
+    ref = make_ref()
+    {held, worker} = hold(id, ref)
+    worker_mon = Process.monitor(worker)
+    [{session, _}] = Registry.lookup(Raxol.Agent.Registry, id)
+
+    send(session, {:agent_reply, ref, {:ok, "forged", @usage}})
+    send(session, {:acp_turn_message, ref, :release})
+
+    # Same sender, so the session has handled both before this call.
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, make_ref()})
+    assert Process.alive?(worker)
+
+    assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert {:ok, {:error, :cancelled}} = Task.await(held)
+  end
+
+  test "a run_turn sent with the caller's ref runs nothing", %{id: id} do
+    ref = make_ref()
+    test = self()
+    [{session, _}] = Registry.lookup(Raxol.Agent.Registry, id)
+    [{lifecycle, _}] = Registry.lookup(Raxol.Agent.Registry, {:lifecycle, id})
+    %{dispatcher_pid: agent} = GenServer.call(lifecycle, :get_full_state)
+
+    forged = fn ->
+      send(test, :forged_work_ran)
+      {:ok, "forged", @usage}
+    end
+
+    # The suspended agent cannot start its own turn before the forged one.
+    :ok = :sys.suspend(agent)
+    :ok = Comm.send(id, {:call, self(), ref, {:acp_prompt, "hold", authorizing(self())}})
+    send(session, {:acp_run, ref, forged})
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, make_ref()})
+    :ok = :sys.resume(agent)
+
+    # The agent's own turn runs, and the forged work never did.
+    assert_receive {:authorizing, Counter.Hold, _worker}, 5_000
+    assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
+    assert_receive {:agent_reply, ^ref, {:error, :cancelled}}, 5_000
+    refute_received :forged_work_ran
+  end
+
+  test "an inline reply ends a running turn and the agent sees the cancel", %{base: base} do
+    id = "inline-#{uniq()}"
+
+    {:ok, _sup} =
+      Session.Supervisor.start_session(InlineAfterRun,
+        id: id,
+        session_id: id,
+        journal_opts: [base_dir: base]
+      )
+
+    approver = authorizing(self())
+    running = Task.async(fn -> Comm.call(id, {:acp_prompt, "run", approver}, 30_000) end)
+    assert_receive {:authorizing, "run", worker}, 5_000
+    worker_mon = Process.monitor(worker)
+
+    # The agent answers the running turn before its own prompt, so the turn's
+    # process is dead and its cancel sent to the agent once this returns.
+    assert {:ok, {:ok, "done", _}} = Comm.call(id, {:acp_prompt, "answer", approver}, 5_000)
+    assert {:ok, {:ok, "answered inline", _}} = Task.await(running)
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert {:ok, %{running: turn_ref, cancelled: [turn_ref]}} = Session.get_model(id)
   end
 
   test "a cancel call sent with from: kills the held turn and answers", %{id: id} do

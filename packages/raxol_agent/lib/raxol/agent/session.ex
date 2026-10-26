@@ -5,6 +5,25 @@ defmodule Raxol.Agent.Session do
   Follows the same pattern as `Raxol.SSH.Session`: wraps a Lifecycle
   instance with `environment: :agent`. Agents register in
   `Raxol.Agent.Registry` for discovery by other agents.
+
+  ## Agent turns
+
+  The session runs the agent turn contract (see `Raxol.Agent.Comm`) and
+  intercepts these messages instead of forwarding them to the agent, with
+  or without `:from` metadata:
+
+    * `{:call, pid, ref, {:acp_prompt, text, approver}}` - a prompt. The
+      agent receives it with this session as the caller and a ref the
+      session made for the turn, never `ref`. An envelope whose `pid` is not
+      a pid or whose `ref` is not a reference is dropped.
+    * `{:acp_cancel, ref}` - cancels the in-flight turn whose caller named
+      it `ref`. One that names no in-flight turn is swallowed, so an agent
+      cannot use this shape for its own messages.
+    * `{:call, pid, call_ref, {:acp_cancel, ref}}` - the same cancel,
+      answered `:ok` or `{:error, :not_found}` to `pid`.
+
+  A cancelled turn is answered `{:error, :cancelled}`, but a change its
+  process already sent to the agent is not rolled back.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -24,7 +43,8 @@ defmodule Raxol.Agent.Session do
     bridge_opts: [],
     owns_bridge?: true,
     owns_lifecycle?: true,
-    turns: %{}
+    turns: %{},
+    agent_refs: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -41,10 +61,12 @@ defmodule Raxol.Agent.Session do
             reference() => %{
               caller: pid(),
               caller_mref: reference(),
+              agent_ref: reference(),
               pid: pid() | nil,
               mref: reference() | nil
             }
-          }
+          },
+          agent_refs: %{reference() => reference()}
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -400,49 +422,76 @@ defmodule Raxol.Agent.Session do
         state
 
       dispatcher_pid ->
-        prompt = {:call, self(), ref, {:acp_prompt, text, approver}}
+        # The agent gets a ref of the session's own for the turn, not the
+        # caller's: the caller's ref is enough to cancel the turn, but only a
+        # holder of the agent ref (the agent, the turn's processes, and
+        # readers of the Dispatcher's `:turn_started` event, which carries
+        # the prompt) can answer it, run its work or message its process.
+        agent_ref = make_ref()
+        prompt = {:call, self(), agent_ref, {:acp_prompt, text, approver}}
         GenServer.cast(dispatcher_pid, dispatch_cast(prompt, metadata))
-        turn = %{caller: caller, caller_mref: Process.monitor(caller), pid: nil, mref: nil}
-        put_in(state.turns[ref], turn)
+
+        turn = %{
+          caller: caller,
+          caller_mref: Process.monitor(caller),
+          agent_ref: agent_ref,
+          pid: nil,
+          mref: nil
+        }
+
+        %{
+          state
+          | turns: Map.put(state.turns, ref, turn),
+            agent_refs: Map.put(state.agent_refs, agent_ref, ref)
+        }
+    end
+  end
+
+  defp cancel_turn(state, ref, metadata) do
+    if Map.has_key?(state.turns, ref) do
+      {:ok, end_turn(state, ref, {:error, :cancelled}, metadata)}
+    else
+      {{:error, :not_found}, state}
     end
   end
 
   # Kill the turn's process (if `run_turn/3` started one) before answering,
-  # so `:ok` means that process is dead. Work the agent does inline in
-  # `update/2` is not stopped and may still finish after this. The agent then
-  # sees the cancel too, to drop whatever it tracks for the turn.
-  defp cancel_turn(state, ref, metadata) do
-    case Map.pop(state.turns, ref) do
-      {nil, _turns} ->
-        {{:error, :not_found}, state}
+  # so a cancel's `:ok` means that process is dead. Work the agent does
+  # inline in `update/2` is not stopped and may still finish after this. The
+  # agent then sees `{:acp_cancel, agent_ref}`, to drop whatever it tracks
+  # for the turn.
+  defp end_turn(state, ref, answer, metadata) do
+    {turn, state} = forget_turn(state, ref)
+    Process.demonitor(turn.caller_mref, [:flush])
+    if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
+    Comm.reply(turn.caller, ref, answer)
 
-      {turn, turns} ->
-        Process.demonitor(turn.caller_mref, [:flush])
-        if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
-        Comm.reply(turn.caller, ref, {:error, :cancelled})
+    {:noreply, state} =
+      forward_to_dispatcher(state, {:acp_cancel, turn.agent_ref}, metadata)
 
-        {:noreply, state} =
-          forward_to_dispatcher(%{state | turns: turns}, {:acp_cancel, ref}, metadata)
-
-        {:ok, state}
-    end
+    state
   end
 
   # The turn's process crashed or was killed: answer the prompt once, and
-  # forward `{:acp_cancel, ref}` as a cancel would, so the agent drops what
-  # it tracks for the turn whichever way the turn ended without its reply.
-  # Callers make sure the turn's process is down first (its DOWN arrived, or
-  # it was aborted), so nothing of the turn outlives its answer.
+  # forward `{:acp_cancel, agent_ref}` as a cancel would, so the agent drops
+  # what it tracks for the turn whichever way the turn ended without its
+  # reply. Callers make sure the turn's process is down first (its DOWN
+  # arrived, or it was aborted), so nothing of the turn outlives its answer.
   defp fail_turn(state, ref) do
-    {turn, turns} = Map.pop(state.turns, ref)
+    {turn, state} = forget_turn(state, ref)
     Process.demonitor(turn.caller_mref, [:flush])
     if turn.mref, do: Process.demonitor(turn.mref, [:flush])
     Comm.reply(turn.caller, ref, {:error, :turn_failed})
 
     {:noreply, state} =
-      forward_to_dispatcher(%{state | turns: turns}, {:acp_cancel, ref}, %{})
+      forward_to_dispatcher(state, {:acp_cancel, turn.agent_ref}, %{})
 
     state
+  end
+
+  defp forget_turn(state, ref) do
+    {turn, turns} = Map.pop!(state.turns, ref)
+    {turn, %{state | turns: turns, agent_refs: Map.delete(state.agent_refs, turn.agent_ref)}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -496,25 +545,62 @@ defmodule Raxol.Agent.Session do
   def handle_manager_call(_msg, _from, state),
     do: {:reply, {:error, :unknown_call}, state}
 
-  # The agent answered a prompt inline (`Comm.reply/3` to this session) or its
-  # turn process finished. A ref no longer in `turns` was cancelled, so its
-  # late reply falls through to the catch-all and is dropped.
+  # Messages from the agent and its turn processes name the turn by its
+  # agent ref (see `dispatch_prompt/6`). One naming a ref no longer in
+  # `agent_refs` (the turn ended), or a caller's ref, falls through to the
+  # catch-all and is dropped.
+  #
+  # The agent answered its prompt inline (`Comm.reply/3` to this session).
+  # A `run_turn/3` process still running for the turn is killed first, and
+  # the agent sees `{:acp_cancel, agent_ref}`, as for a cancel.
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:agent_reply, ref, reply}, %__MODULE__{turns: turns} = state)
-      when is_map_key(turns, ref) do
-    {turn, turns} = Map.pop(turns, ref)
-    Process.demonitor(turn.caller_mref, [:flush])
-    if turn.mref, do: Process.demonitor(turn.mref, [:flush])
-    Comm.reply(turn.caller, ref, reply)
-    {:noreply, %{state | turns: turns}}
+  def handle_manager_info({:agent_reply, agent_ref, reply}, %__MODULE__{agent_refs: refs} = state)
+      when is_map_key(refs, agent_ref) do
+    ref = Map.fetch!(refs, agent_ref)
+
+    case Map.fetch!(state.turns, ref) do
+      %{pid: nil} ->
+        {turn, state} = forget_turn(state, ref)
+        Process.demonitor(turn.caller_mref, [:flush])
+        Comm.reply(turn.caller, ref, reply)
+        {:noreply, state}
+
+      %{pid: pid} when is_pid(pid) ->
+        {:noreply, end_turn(state, ref, reply, %{})}
+    end
+  end
+
+  # The turn's process finished. Only the reply naming the turn's owner is
+  # taken; the owner exits right after sending it.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(
+        {:acp_turn_reply, agent_ref, owner, reply},
+        %__MODULE__{agent_refs: refs} = state
+      )
+      when is_map_key(refs, agent_ref) do
+    ref = Map.fetch!(refs, agent_ref)
+
+    case Map.fetch!(state.turns, ref) do
+      %{pid: ^owner} when is_pid(owner) ->
+        {turn, state} = forget_turn(state, ref)
+        Process.demonitor(turn.caller_mref, [:flush])
+        Process.demonitor(turn.mref, [:flush])
+        Comm.reply(turn.caller, ref, reply)
+        {:noreply, state}
+
+      _other ->
+        {:noreply, state}
+    end
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:acp_run, ref, fun}, %__MODULE__{turns: turns} = state)
-      when is_map_key(turns, ref) and is_function(fun, 0) do
-    case Map.fetch!(turns, ref) do
+  def handle_manager_info({:acp_run, agent_ref, fun}, %__MODULE__{agent_refs: refs} = state)
+      when is_map_key(refs, agent_ref) and is_function(fun, 0) do
+    ref = Map.fetch!(refs, agent_ref)
+
+    case Map.fetch!(state.turns, ref) do
       %{pid: nil} = turn ->
-        {pid, mref} = PromptTurn.start(self(), ref, fun)
+        {pid, mref} = PromptTurn.start(self(), agent_ref, fun)
         {:noreply, put_in(state.turns[ref], %{turn | pid: pid, mref: mref})}
 
       %{pid: pid} ->
@@ -528,9 +614,12 @@ defmodule Raxol.Agent.Session do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:acp_turn_message, ref, message}, %__MODULE__{turns: turns} = state)
-      when is_map_key(turns, ref) do
-    case Map.fetch!(turns, ref) do
+  def handle_manager_info(
+        {:acp_turn_message, agent_ref, message},
+        %__MODULE__{agent_refs: refs} = state
+      )
+      when is_map_key(refs, agent_ref) do
+    case Map.fetch!(state.turns, Map.fetch!(refs, agent_ref)) do
       %{pid: pid} when is_pid(pid) -> send(pid, {:turn_message, message})
       %{pid: nil} -> :ok
     end
@@ -539,13 +628,19 @@ defmodule Raxol.Agent.Session do
   end
 
   # The turn's worker crashed or was killed; its owner logged the reason.
-  # Only the turn's own process is believed: anyone else knowing the ref
-  # could otherwise end the turn, or crash the session on a turn not yet run.
-  # The owner exits right after reporting; abort waits until it has.
+  # A report is believed only for the turn's agent ref and only when it
+  # names the turn's owner pid, which, like that ref, is not a secret from
+  # in-node readers: a forged report is no more than a cancel. The owner
+  # exits right after reporting; abort waits until it has.
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:acp_turn_failed, ref, owner}, %__MODULE__{turns: turns} = state)
-      when is_map_key(turns, ref) do
-    case Map.fetch!(turns, ref) do
+  def handle_manager_info(
+        {:acp_turn_failed, agent_ref, owner},
+        %__MODULE__{agent_refs: refs} = state
+      )
+      when is_map_key(refs, agent_ref) do
+    ref = Map.fetch!(refs, agent_ref)
+
+    case Map.fetch!(state.turns, ref) do
       %{pid: ^owner, mref: mref} when is_pid(owner) ->
         PromptTurn.abort(owner, mref)
         {:noreply, fail_turn(state, ref)}
@@ -596,7 +691,7 @@ defmodule Raxol.Agent.Session do
       Comm.reply(turn.caller, ref, {:error, :agent_down})
     end)
 
-    {:noreply, %{state | lifecycle_pid: nil, turns: %{}}}
+    {:noreply, %{state | lifecycle_pid: nil, turns: %{}, agent_refs: %{}}}
   end
 
   # A turn's owner went down without reporting (it was killed from outside):

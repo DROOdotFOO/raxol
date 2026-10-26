@@ -18,14 +18,17 @@ defmodule Raxol.Agent.Reference.Counter do
   blocked approver holds up only its turn, and a cancel kills it. `increment`
   and `reset` return a change that the turn process sends back to `update/2`,
   which applies it and hands the new count to the turn for its reply, so a
-  turn cancelled before its change is sent changes nothing. `update/2`
-  applies a change only for a turn it still tracks: it forgets a turn once
-  the change is applied, the approver denies it, or `{:acp_cancel, ref}`
-  arrives (the turn was cancelled or failed). The turn's ref is the only
-  credential: a process that knows a live turn's ref (the prompt's caller
-  picks it) can still send that turn's change, even before the approver
-  has decided. A denied `hold` is forgotten too, so denied holds do not
-  pile up in the model. Usage is always zero: no model is called.
+  turn cancelled before its change is sent changes nothing; a change already
+  sent when the cancel arrives is still applied, though the prompt is
+  answered `{:error, :cancelled}`. `update/2` applies a change only for a
+  turn it still tracks: it forgets a turn once the change is applied, the
+  approver denies it, or `{:acp_cancel, ref}` arrives (the turn was
+  cancelled or failed). The turn's ref is the only credential. It is the
+  session's ref for the turn, not the one the prompt's caller picked, but a
+  process that learns it (it is in the Dispatcher's `:turn_started` event)
+  can still send that turn's change, even before the approver has decided.
+  A denied `hold` is forgotten too, so denied holds do not pile up in the
+  model. Usage is always zero: no model is called.
   """
 
   use Raxol.Agent

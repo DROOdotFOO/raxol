@@ -30,8 +30,11 @@ defmodule Raxol.Agent.Comm do
   messages keep the 5 s default). Pass `:infinity` for a turn with no limit.
 
   The session proxies the turn: the agent's `update/2` sees
-  `{:call, session_pid, ref, {:acp_prompt, text, approver}}` and answers it
-  inline with `reply/3`, or with `run_turn/3` for work that blocks. A
+  `{:call, session_pid, turn_ref, {:acp_prompt, text, approver}}` and
+  answers it inline with `reply/3`, or with `run_turn/3` for work that
+  blocks. `turn_ref` is the session's own ref for the turn, not the
+  caller's, so a process that knows only the caller's ref can cancel the
+  turn but not answer it, run its work or message its process. A
   `{:acp_cancel, ref}` (via `send/3`, or `call/3` for an `:ok` that returns
   once the turn's process is dead) kills that process and answers the prompt
   `{:error, :cancelled}`. Pass `ref: ref` to `call/4` to know the prompt's
@@ -47,10 +50,12 @@ defmodule Raxol.Agent.Comm do
 
   Whenever a turn ends without its reply (cancelled, or its `run_turn/3`
   process crashed or was killed), `update/2` then receives
-  `{:acp_cancel, ref}`, so an agent drops what it tracks for the turn in one
-  place. The session does not check a reply's shape: whatever the agent
-  passes to `reply/3`, or `run_turn/3`'s function returns, reaches the
-  caller as is.
+  `{:acp_cancel, turn_ref}`, so an agent drops what it tracks for the turn
+  in one place. An inline `reply/3` ends the turn even while its
+  `run_turn/3` process runs: that process is killed first, and `update/2`
+  receives `{:acp_cancel, turn_ref}` too. The session does not check a
+  reply's shape: whatever the agent passes to `reply/3`, or `run_turn/3`'s
+  function returns, reaches the caller as is.
 
   An agent consults `approver`, and runs the actions it gates, in the
   `run_turn/3` process, never inline in `update/2`: an inline ask would
@@ -58,7 +63,9 @@ defmodule Raxol.Agent.Comm do
   `run_turn/3` process, so inline work is neither stopped nor undone. A turn
   process that changes agent state sends the change to the agent process
   (`self()` in `update/2`) as `{:command_result, msg}`, which `update/2`
-  receives; `Raxol.Agent.Reference.Counter` shows the pattern.
+  receives; `Raxol.Agent.Reference.Counter` shows the pattern. A cancel does
+  not roll back such a change: one already sent when the cancel arrives is
+  still applied, though the prompt is answered `{:error, :cancelled}`.
 
   Besides `{:ok, text, usage}`, a prompt can be answered:
 
@@ -187,9 +194,9 @@ defmodule Raxol.Agent.Comm do
   @doc """
   Answer an `{:acp_prompt, text, approver}` call by running `fun` in a turn
   process the session owns; `fun`'s return is the reply. `{:acp_cancel, ref}`
-  kills that process. Call it from `update/2` with the prompt's `ref` and
-  `session`, the pid in the prompt's caller position (the session stands in
-  for the real caller).
+  kills that process. Call it from `update/2` with the ref in the prompt it
+  received (the session's `turn_ref`) and `session`, the pid in the prompt's
+  caller position (the session stands in for the real caller).
   """
   @spec run_turn(pid(), reference(), (-> term())) :: :ok
   def run_turn(session, ref, fun)

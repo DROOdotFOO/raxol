@@ -2,7 +2,7 @@ defmodule Raxol.Agent.Session.PromptTurn do
   @moduledoc false
   # The process behind `Raxol.Agent.Comm.run_turn/3`. An owner that traps
   # exits runs the turn's work in a linked worker and sends the worker's
-  # return to the session as `{:agent_reply, ref, reply}`, or
+  # return to the session as `{:acp_turn_reply, ref, owner, reply}`, or
   # `{:acp_turn_failed, ref, owner}` when the work fails or the worker dies. The
   # owner, not the worker, is what the session monitors, so `abort/2` can
   # return only after the worker is dead, and the work also dies with the
@@ -66,7 +66,7 @@ defmodule Raxol.Agent.Session.PromptTurn do
   defp loop(session, session_mref, ref, worker) do
     receive do
       {:result, ^worker, {:ok, reply}} ->
-        send(session, {:agent_reply, ref, reply})
+        send(session, {:acp_turn_reply, ref, self(), reply})
 
       {:result, ^worker, {:failed, shape}} ->
         failed(session, ref, shape)
