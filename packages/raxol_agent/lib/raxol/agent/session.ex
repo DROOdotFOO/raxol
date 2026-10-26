@@ -22,6 +22,11 @@ defmodule Raxol.Agent.Session do
     * `{:call, pid, call_ref, {:acp_cancel, ref}}` - the same cancel,
       answered `:ok` or `{:error, :not_found}` to `pid`.
 
+  This `{:acp_cancel, ref}` is not the bare `:acp_cancel` atom of the ACP
+  stack, which `Raxol.AgentClientProtocol.Session` sends to the process
+  running a `Raxol.Agent.ClientProtocol.TurnRunner` turn. The session
+  neither sends nor intercepts that atom.
+
   A cancelled turn is answered `{:error, :cancelled}`, but a change its
   process already sent to the agent is not rolled back.
 
