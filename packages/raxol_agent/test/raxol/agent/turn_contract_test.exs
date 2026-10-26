@@ -268,6 +268,32 @@ defmodule Raxol.Agent.TurnContractTest do
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
   end
 
+  test "a forged agent-down with another ref changes nothing", %{id: id, base: base} do
+    standalone = "standalone-#{uniq()}"
+
+    start_supervised!(
+      {Session,
+       app_module: Counter, id: standalone, session_id: standalone, journal_opts: [base_dir: base]}
+    )
+
+    # Supervised (lifecycle not monitored) and standalone (monitored) alike.
+    for id <- [id, standalone] do
+      {held, worker} = hold(id, make_ref())
+      [{session, _}] = Registry.lookup(Raxol.Agent.Registry, id)
+      [{lifecycle, _}] = Registry.lookup(Raxol.Agent.Registry, {:lifecycle, id})
+
+      send(session, {:DOWN, make_ref(), :process, lifecycle, :forged})
+      send(session, {:DOWN, nil, :process, lifecycle, :forged})
+
+      # Same sender, so the session has handled both forged DOWNs before this call.
+      assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, make_ref()})
+      assert Process.alive?(worker)
+      assert {:ok, {:ok, "released 1", _}} = prompt(id, "release", ToolPolicy.allow_all())
+      assert {:ok, {:ok, "released", _}} = Task.await(held)
+      assert {:ok, {:ok, "count: 0", _}} = prompt(id, "get", ToolPolicy.allow_all())
+    end
+  end
+
   test "a change that no live turn sent is dropped", %{id: id} do
     assert {:ok, {:ok, "count: 1", _}} = prompt(id, "increment", ToolPolicy.allow_all())
     [{lifecycle, _}] = Registry.lookup(Raxol.Agent.Registry, {:lifecycle, id})

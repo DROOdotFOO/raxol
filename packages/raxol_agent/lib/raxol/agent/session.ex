@@ -42,6 +42,7 @@ defmodule Raxol.Agent.Session do
     :id,
     :app_module,
     :lifecycle_pid,
+    :lifecycle_mref,
     :team_id,
     :session_id,
     :emit_bridge,
@@ -56,6 +57,7 @@ defmodule Raxol.Agent.Session do
           id: term(),
           app_module: module(),
           lifecycle_pid: pid() | nil,
+          lifecycle_mref: reference() | nil,
           team_id: term() | nil,
           session_id: String.t() | nil,
           emit_bridge: pid() | nil,
@@ -219,17 +221,16 @@ defmodule Raxol.Agent.Session do
     # and standalone sessions alike. Registry cleans the key up on death.
     register_session(session_id, id, app_module)
 
-    lifecycle_pid =
+    {lifecycle_pid, lifecycle_mref} =
       if owns_lifecycle? do
         pid = start_or_reattach_lifecycle(app_module, id, session_id)
-        Process.monitor(pid)
-        pid
+        {pid, Process.monitor(pid)}
       else
         # Tree-owned lifecycle: it started before us under `:rest_for_one` and
         # registered its `{:lifecycle, session_id}` via-name synchronously, so
         # the key is present by the time we init. No monitor: if it crashes,
         # `:rest_for_one` restarts us too, so we always re-resolve a fresh pid.
-        lookup_lifecycle(session_id)
+        {lookup_lifecycle(session_id), nil}
       end
 
     Logger.info(
@@ -241,6 +242,7 @@ defmodule Raxol.Agent.Session do
        id: id,
        app_module: app_module,
        lifecycle_pid: lifecycle_pid,
+       lifecycle_mref: lifecycle_mref,
        team_id: team_id,
        session_id: session_id,
        emit_bridge: emit_bridge,
@@ -680,11 +682,15 @@ defmodule Raxol.Agent.Session do
 
   # The agent is gone, so no turn of it can be answered any more: answer each
   # one now and stop its process, which would otherwise run on, unanswered.
+  # Matched on the monitor ref, which only this session holds, not on the
+  # lifecycle pid, which any in-node process can learn. A session whose tree
+  # owns the lifecycle has no such monitor.
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info(
-        {:DOWN, _ref, :process, pid, reason},
-        %__MODULE__{lifecycle_pid: pid} = state
-      ) do
+        {:DOWN, mref, :process, _pid, reason},
+        %__MODULE__{lifecycle_mref: mref} = state
+      )
+      when is_reference(mref) do
     Logger.warning(
       "[Agent.Session] Lifecycle for #{inspect(state.id)} crashed: " <>
         PromptTurn.failure_shape(reason)
@@ -696,7 +702,7 @@ defmodule Raxol.Agent.Session do
       Comm.reply(turn.caller, ref, {:error, :agent_down})
     end)
 
-    {:noreply, %{state | lifecycle_pid: nil, turns: %{}, agent_refs: %{}}}
+    {:noreply, %{state | lifecycle_pid: nil, lifecycle_mref: nil, turns: %{}, agent_refs: %{}}}
   end
 
   # A turn's owner went down without reporting (it was killed from outside):
