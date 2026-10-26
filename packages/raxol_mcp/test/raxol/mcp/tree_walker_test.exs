@@ -386,7 +386,7 @@ defmodule Raxol.MCP.TreeWalkerTest do
       ]
 
       assert {tools, refusals} = TreeWalker.derive_with_refusals(foreign(specs), ctx)
-      assert Enum.map(tools, & &1.name) |> Enum.sort() == ["w.deep_ok", "w.wide_ok"]
+      assert Enum.map(tools, & &1.name) |> Enum.sort() == ["s.w.deep_ok", "s.w.wide_ok"]
 
       assert refusals ==
                MapSet.new(

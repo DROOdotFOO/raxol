@@ -548,23 +548,20 @@ defmodule Raxol.Headless do
     _kind, _reason -> false
   end
 
-  # One rule for every session id, the widget-id rule of
-  # `Raxol.MCP.TreeWalker` (its `@widget_id`): an id reaches every client
-  # verbatim, in `raxol_list`, session-id completion, resource URIs and tool
-  # names, so it holds only characters each of them can encode and show as
-  # they are. `raxol_start` narrows it further for ids a client picks.
-  @session_id ~r/\A[A-Za-z0-9_-]{1,32}\z/
-
+  # One rule for every session id, the segment rule of tool names
+  # (`Raxol.MCP.TreeWalker.id?/1`): an id reaches every client verbatim, in
+  # `raxol_list`, session-id completion, resource URIs and tool names, so it
+  # holds only characters each of them can encode and show as they are.
+  # `raxol_start` narrows it further for ids a client picks.
   defp session_id(opts, module) do
     case Keyword.fetch(opts, :id) do
       :error -> {:ok, module_to_id(module)}
-      {:ok, id} when is_binary(id) -> check_session_id(id)
-      {:ok, other} -> {:error, {:invalid_session_id, other}}
+      {:ok, id} -> check_session_id(id)
     end
   end
 
   defp check_session_id(id) do
-    if Regex.match?(@session_id, id),
+    if Raxol.MCP.TreeWalker.id?(id),
       do: {:ok, id},
       else: {:error, {:invalid_session_id, id}}
   end
@@ -854,10 +851,11 @@ defmodule Raxol.Headless do
   defp module_def?({:defmodule, _, _}), do: true
   defp module_def?(_), do: false
 
-  # The module's last segment, underscored, made to satisfy `@session_id`:
-  # each character outside `[A-Za-z0-9_-]` becomes `_`, and a result longer
-  # than 32 characters keeps its first 23 and appends `_` and 8 hex digits of
-  # the module's hash, so two long names sharing a prefix still differ.
+  # The module's last segment, underscored, made to satisfy
+  # `Raxol.MCP.TreeWalker.id?/1`: each character outside `[A-Za-z0-9_-]`
+  # becomes `_`, and a result longer than 32 characters keeps its first 23
+  # and appends `_` and 8 hex digits of the module's hash, so two long names
+  # sharing a prefix still differ.
   @default_id_prefix 23
 
   defp module_to_id(module) do

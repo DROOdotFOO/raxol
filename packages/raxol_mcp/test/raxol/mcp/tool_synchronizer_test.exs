@@ -180,7 +180,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       assert :gen_server.receive_response(flush, 5_000) == {:reply, :ok}
 
       names = registry |> Registry.list_tools() |> Enum.map(& &1[:name])
-      assert "late.click" in names
+      assert "test_flush_sender.late.click" in names
 
       GenServer.stop(pid)
     end
