@@ -245,34 +245,19 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
   end
 
   # A view with per-item ids (`"msg-" <> uuid` is past the 32-character cap)
-  # refuses a new id on every render; only the current render's refusals are
-  # kept, and each is still warned about once while it stays in the view.
+  # refuses a new id on every render; each is warned about once, and what
+  # was warned about is remembered for the most recent 256 only.
   describe "refused widget ids" do
-    test "stay bounded by the current render and warn once while they last",
-         %{registry: registry} do
-      {:ok, pid} =
-        ToolSynchronizer.start_link(
-          registry: registry,
-          dispatcher_pid: self(),
-          session_id: "refusals_#{System.unique_integer([:positive])}"
-        )
-
-      widget = fn id -> %{type: :column, id: id, attrs: %{component_module: TestWidget}} end
+    test "warn once each, and stay bounded in what is remembered", %{registry: registry} do
+      pid = start_sync(registry, "refusals_#{System.unique_integer([:positive])}")
       kept = "kept." <> Integer.to_string(System.unique_integer([:positive]))
 
       log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          for i <- 1..300 do
-            tree = %{type: :column, children: [widget.(kept), widget.("item.#{i}")]}
-            ToolSynchronizer.sync(pid, tree)
-          end
-
-          # A call after the casts: every render has been handled.
-          send(self(), {:refusals, :sys.get_state(pid).refusals})
+        capture_log(fn ->
+          for i <- 1..300, do: render(pid, [widget(kept), widget("item.#{i}")])
         end)
 
-      assert_received {:refusals, refusals}
-      assert refusals == MapSet.new([{:widget_id, kept}, {:widget_id, "item.300"}])
+      assert map_size(:sys.get_state(pid).warned) == 256
       assert length(String.split(log, "widget id #{inspect(kept)} derives no tools")) == 2
       assert log =~ "widget id \"item.1\" derives no tools"
       assert log =~ "widget id \"item.300\" derives no tools"
@@ -371,26 +356,31 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       refute log =~ "abcdefg.short"
     end
 
-    # A warned name stays remembered only while a render derives it.
-    test "is remembered for the current render only", %{registry: registry} do
-      [a, b] = for c <- ["a", "b"], do: String.duplicate(c, 32)
+    # A modal or a conditional widget leaves the view and comes back; it is
+    # warned about once, not on every render that brings it back.
+    test "and a refused id that leave the view and come back warn once", %{
+      registry: registry
+    } do
+      widget_id = String.duplicate("w", 32)
+      long = "alt4567.#{widget_id}.get_visible_range"
+      bad = "bad id #{System.unique_integer([:positive])}"
 
-      {pid, log} =
-        with_log([level: :warning], fn ->
-          pid = start_sync(registry, "abcdefg")
-          render(pid, [widget(a, LongActionWidget)])
-          render(pid, [widget(a, LongActionWidget)])
-          render(pid, [widget(b, LongActionWidget)])
-          pid
+      log =
+        capture_log([level: :warning], fn ->
+          pid = start_sync(registry, "alt4567")
+
+          for i <- 1..20 do
+            blink =
+              if rem(i, 2) == 0,
+                do: [widget(widget_id, LongActionWidget), widget(bad, LongActionWidget)],
+                else: []
+
+            render(pid, [widget("short", LongActionWidget) | blink])
+          end
         end)
 
-      assert :sys.get_state(pid).long_tool_names ==
-               MapSet.new(["abcdefg.#{b}.get_visible_range"])
-
-      for id <- [a, b],
-          do: assert(length(String.split(log, "abcdefg.#{id}.get_visible_range\" reaches")) == 2)
-
-      GenServer.stop(pid)
+      assert length(String.split(log, "tool #{inspect(long)}")) == 2
+      assert length(String.split(log, "widget id #{inspect(bad)} derives no tools")) == 2
     end
   end
 

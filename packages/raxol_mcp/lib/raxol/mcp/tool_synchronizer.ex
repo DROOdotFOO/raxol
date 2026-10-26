@@ -28,7 +28,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
   warned about once. A derived tool whose name OMP would show hashed (longer
   than 64 characters with the `mcp__raxol_raxol_` prefix of the recommended
   `raxol:raxol` plugin key) is registered and warned about when a render
-  first derives it.
+  first derives it. That warning and each widget refusal
+  `Raxol.MCP.TreeWalker` reports are given once per session, also when the
+  widget leaves the view and comes back; what was warned about is remembered
+  for the 256 most recently rendered, so a view with per-item ids keeps
+  memory bounded and is warned about again only for an item that comes back
+  after 256 newer ones.
 
   ## Usage
 
@@ -72,13 +77,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
     pending_model: nil,
     focused_id: nil,
     hover_id: nil,
-    # What `TreeWalker` refused on the last render (see
-    # `TreeWalker.derive_with_refusals/2`). Only that render's are kept, so a
-    # view with per-item ids does not grow it.
-    refusals: MapSet.new(),
-    # The last render's derived names OMP would show hashed; a name is warned
-    # about when it enters the set.
-    long_tool_names: MapSet.new()
+    # Each TreeWalker refusal (`{:refusal, refusal}`, see
+    # `TreeWalker.derive_with_refusals/2`) and derived name OMP would show
+    # hashed (`{:long_name, name}`) warned about, => the render that last
+    # derived it. Only the @max_warned most recent are kept.
+    warned: %{},
+    renders: 0
   ]
 
   @doc "Start a ToolSynchronizer linked to the calling process."
@@ -440,25 +444,50 @@ defmodule Raxol.MCP.ToolSynchronizer do
   @omp_prefix "mcp__raxol_raxol_"
   @omp_name_limit 64
 
-  # A refusal TreeWalker reports is warned about on the render it appears in,
-  # not on every render that keeps it; one that leaves the view and comes
-  # back is warned about again. So is a name OMP would show hashed.
+  # Each refusal TreeWalker reports, and each name OMP would show hashed, is
+  # warned about on the first render that derives it, not again while it
+  # stays or when it leaves the view and comes back (a modal, a conditional
+  # widget), unless @max_warned more recently derived ones pushed it out.
   defp derive_tools(view_tree, state) do
     context = %{dispatcher_pid: state.dispatcher_pid, session_id: state.session_id}
     {tools, refusals} = TreeWalker.derive_with_refusals(view_tree, context)
-    Enum.each(MapSet.difference(refusals, state.refusals), &TreeWalker.warn_refusal/1)
 
     long_names =
       for %{name: name} <- tools,
           String.length(omp_visible_name(name)) > @omp_name_limit,
-          into: MapSet.new(),
-          do: name
+          uniq: true,
+          do: {:long_name, name}
 
-    long_names
-    |> MapSet.difference(state.long_tool_names)
-    |> Enum.each(&warn_long_name(&1, state.session_id))
+    derived = Enum.map(refusals, &{:refusal, &1}) ++ long_names
 
-    {tools, %{state | refusals: refusals, long_tool_names: long_names}}
+    derived
+    |> Enum.reject(&Map.has_key?(state.warned, &1))
+    |> Enum.each(&warn(&1, state.session_id))
+
+    {tools, remember_warned(state, derived)}
+  end
+
+  defp warn({:refusal, refusal}, _session_id), do: TreeWalker.warn_refusal(refusal)
+  defp warn({:long_name, name}, session_id), do: warn_long_name(name, session_id)
+
+  # Bounds `warned` for a view with per-item ids, which derives new refusals
+  # or long names on every render; what this render derived is the most
+  # recent, so it is the last to go.
+  @max_warned 256
+
+  defp remember_warned(state, derived) do
+    render = state.renders + 1
+    warned = Enum.reduce(derived, state.warned, &Map.put(&2, &1, render))
+    %{state | warned: drop_oldest(warned), renders: render}
+  end
+
+  defp drop_oldest(warned) when map_size(warned) <= @max_warned, do: warned
+
+  defp drop_oldest(warned) do
+    warned
+    |> Enum.sort_by(fn {_derived, render} -> render end, :desc)
+    |> Enum.take(@max_warned)
+    |> Map.new()
   end
 
   defp omp_visible_name(name), do: @omp_prefix <> Registry.omp_name(name)
