@@ -250,12 +250,16 @@ defmodule Raxol.UI.Components.Input.TextInput do
       label:
         node[:aria_label] || attrs[:aria_label] || node[:label] || attrs[:label] ||
           node[:placeholder] || attrs[:placeholder],
-      value: if(masked?(node), do: nil, else: node[:value] || attrs[:value]),
+      value: a11y_value(node, attrs),
       state: %{
         focused?: (node[:focused] || attrs[:focused]) == true,
         required?: (node[:required] || attrs[:required]) == true
       }
     }
+  end
+
+  defp a11y_value(node, attrs) do
+    if masked?(node), do: nil, else: node[:value] || attrs[:value]
   end
 end
 

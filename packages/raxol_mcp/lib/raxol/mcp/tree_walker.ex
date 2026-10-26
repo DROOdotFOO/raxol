@@ -268,16 +268,18 @@ defmodule Raxol.MCP.TreeWalker do
       refusals = Enum.into(misnamed, refusals, &{:action_name, id, Map.get(&1, :name)})
 
       {built, refusals} =
-        Enum.flat_map_reduce(named, refusals, fn spec, refusals ->
-          case build_tool_def(spec, id, module, node, context) do
-            {:ok, tool} -> {[tool], refusals}
-            {:error, fault} -> {[], MapSet.put(refusals, {:action_spec, id, spec.name, fault})}
-          end
-        end)
+        Enum.flat_map_reduce(named, refusals, &add_action(&1, &2, id, module, node, context))
 
       {built ++ tools, refusals}
     else
       {tools, MapSet.put(refusals, {:widget_id, id})}
+    end
+  end
+
+  defp add_action(spec, refusals, id, module, node, context) do
+    case build_tool_def(spec, id, module, node, context) do
+      {:ok, tool} -> {[tool], refusals}
+      {:error, fault} -> {[], MapSet.put(refusals, {:action_spec, id, spec.name, fault})}
     end
   end
 
@@ -360,39 +362,43 @@ defmodule Raxol.MCP.TreeWalker do
   @unsafe_chars ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{034F}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]/u
 
   defp build_tool_def(spec, widget_id, module, node, context) do
-    action_name = spec.name
-
     with {:ok, description} <- clean_description(Map.get(spec, :description)),
          {:ok, schema} <- clean_schema(Map.get(spec, :inputSchema)) do
       %{
-        name: "#{widget_id}.#{action_name}",
+        name: "#{widget_id}.#{spec.name}",
         description: description,
         inputSchema: schema,
         derived: true,
-        callback: fn args ->
-          tool_context = %{
-            widget_id: widget_id,
-            widget_state: node,
-            dispatcher_pid: context[:dispatcher_pid]
-          }
-
-          case module.handle_tool_call(action_name, args, tool_context) do
-            {:ok, result, messages} ->
-              with :ok <- dispatch_messages(messages, context[:dispatcher_pid]) do
-                {:ok, format_result(result)}
-              end
-
-            {:ok, result} ->
-              {:ok, format_result(result)}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        end
+        callback: tool_callback(spec.name, widget_id, module, node, context)
       }
       |> put_annotations(Map.get(spec, :annotations))
       |> then(&{:ok, &1})
     end
+  end
+
+  defp tool_callback(action_name, widget_id, module, node, context) do
+    fn args ->
+      tool_context = %{
+        widget_id: widget_id,
+        widget_state: node,
+        dispatcher_pid: context[:dispatcher_pid]
+      }
+
+      case module.handle_tool_call(action_name, args, tool_context) do
+        {:ok, result, messages} ->
+          dispatch_and_format(messages, result, context[:dispatcher_pid])
+
+        {:ok, result} ->
+          {:ok, format_result(result)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp dispatch_and_format(messages, result, dispatcher_pid) do
+    with :ok <- dispatch_messages(messages, dispatcher_pid), do: {:ok, format_result(result)}
   end
 
   # Only the two flags `Raxol.MCP.ToolDef.sensitive?/1` reads, and only when
