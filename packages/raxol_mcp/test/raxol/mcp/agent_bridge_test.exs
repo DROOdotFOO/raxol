@@ -98,4 +98,22 @@ defmodule Raxol.MCP.AgentBridgeTest do
 
     assert unguarded_refusal?(call_tool(server, "agent.send"))
   end
+
+  # The boot check leaves out derived widget tools by origin, not by the dot
+  # in their names: `agent.send` is a static tool with a dotted name.
+  test "a Server with no authorizer refuses to boot on the bridge's meta tools" do
+    registry = :"reg_#{System.unique_integer([:positive])}"
+    start_supervised!({Registry, name: registry}, id: registry)
+    :ok = Registry.register_tools(registry, AgentBridge.meta_tools())
+
+    # The raise happens in init/1 of a LINKED process, so it comes back as a
+    # start_link error rather than propagating into this process.
+    Process.flag(:trap_exit, true)
+
+    assert {:error, {%ArgumentError{message: message}, _stack}} =
+             Server.start_link(name: :"srv_#{registry}", registry: registry)
+
+    assert message =~ "refuses to boot"
+    assert message =~ "agent.send"
+  end
 end

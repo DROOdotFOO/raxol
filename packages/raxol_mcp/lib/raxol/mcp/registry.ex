@@ -22,6 +22,10 @@ defmodule Raxol.MCP.Registry do
       ]
       Registry.register_tools(registry, tools)
 
+  A tool def that `Raxol.MCP.TreeWalker` derived from a view carries
+  `derived: true`. The registry keeps the flag off the listed definition;
+  `static_tools/1` lists only the tools without it.
+
   ## Resource Registration
 
       resources = [
@@ -71,7 +75,8 @@ defmodule Raxol.MCP.Registry do
           required(:description) => String.t(),
           required(:inputSchema) => map(),
           required(:callback) => (map() -> {:ok, term()} | {:error, term()}),
-          optional(:fault?) => (term() -> boolean())
+          optional(:fault?) => (term() -> boolean()),
+          optional(:derived) => boolean()
         }
 
   @type resource_def :: %{
@@ -169,7 +174,20 @@ defmodule Raxol.MCP.Registry do
     table = get_table(registry)
 
     :ets.select(table, [
-      {{:"$1", {:tool, :"$2", :"$3", :_, :_}}, [], [:"$3"]}
+      {{:"$1", {:tool, :"$2", :"$3", :_, :_, :_}}, [], [:"$3"]}
+    ])
+  end
+
+  @doc """
+  `list_tools/1` without the tools registered with `derived: true`: the
+  tools an embedder registered itself, rather than a session's view.
+  """
+  @spec static_tools(GenServer.server()) :: [map()]
+  def static_tools(registry \\ __MODULE__) do
+    table = get_table(registry)
+
+    :ets.select(table, [
+      {{:"$1", {:tool, :"$2", :"$3", :_, :_, false}}, [], [:"$3"]}
     ])
   end
 
@@ -182,7 +200,7 @@ defmodule Raxol.MCP.Registry do
     breaker_key = tool_key(name)
 
     case :ets.lookup(table, breaker_key) do
-      [{_key, {:tool, ^name, _def, callback, classifier}}] ->
+      [{_key, {:tool, ^name, _def, callback, classifier, _derived}}] ->
         invoke_with_breaker(breaker_table, breaker_key, classifier, fn ->
           callback.(arguments)
         end)
@@ -310,7 +328,10 @@ defmodule Raxol.MCP.Registry do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:register_tools, tools}, _from, state) do
     for tool <- tools do
-      entry = {:tool, tool.name, tool_definition(tool), tool.callback, fault_classifier(tool)}
+      entry =
+        {:tool, tool.name, tool_definition(tool), tool.callback, fault_classifier(tool),
+         Map.get(tool, :derived) == true}
+
       :ets.insert(state.table, {tool_key(tool.name), entry})
     end
 

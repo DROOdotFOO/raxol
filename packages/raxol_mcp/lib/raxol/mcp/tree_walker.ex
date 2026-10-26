@@ -45,6 +45,10 @@ defmodule Raxol.MCP.TreeWalker do
   `tools/list` unencodable, or let one property definition silently replace
   another.
 
+  Every derived tool def carries `derived: true`. `Raxol.MCP.Registry` keeps
+  it off the listed definition, and `Raxol.MCP.Server`'s boot check reads it
+  to tell a derived tool from a static one.
+
   ## Excluding Widgets
 
   Set `mcp_exclude: true` in a widget's attrs to suppress tool derivation:
@@ -364,6 +368,7 @@ defmodule Raxol.MCP.TreeWalker do
         name: "#{widget_id}.#{action_name}",
         description: description,
         inputSchema: schema,
+        derived: true,
         callback: fn args ->
           tool_context = %{
             widget_id: widget_id,
