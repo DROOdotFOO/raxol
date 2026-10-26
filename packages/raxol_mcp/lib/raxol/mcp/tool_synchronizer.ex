@@ -50,8 +50,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
     pending_model: nil,
     focused_id: nil,
     hover_id: nil,
-    # What `TreeWalker` refused (see `TreeWalker.derive_with_refusals/2`),
-    # each warned about once for this session rather than on every render.
+    # What `TreeWalker` refused on the last render (see
+    # `TreeWalker.derive_with_refusals/2`). Only that render's are kept, so a
+    # view with per-item ids does not grow it.
     refusals: MapSet.new()
   ]
 
@@ -315,14 +316,14 @@ defmodule Raxol.MCP.ToolSynchronizer do
     }
   end
 
-  # Widget ids and action names TreeWalker refuses are warned about once per
-  # session, not on every render.
+  # A refusal TreeWalker reports is warned about on the render it appears in,
+  # not on every render that keeps it; one that leaves the view and comes
+  # back is warned about again.
   defp derive_tools(view_tree, state) do
     context = %{dispatcher_pid: state.dispatcher_pid, session_id: state.session_id}
     {tools, refusals} = TreeWalker.derive_with_refusals(view_tree, context)
-    new_refusals = MapSet.difference(refusals, state.refusals)
-    Enum.each(new_refusals, &TreeWalker.warn_refusal/1)
-    {tools, %{state | refusals: MapSet.union(state.refusals, new_refusals)}}
+    Enum.each(MapSet.difference(refusals, state.refusals), &TreeWalker.warn_refusal/1)
+    {tools, %{state | refusals: refusals}}
   end
 
   # -- Private: model resources --
