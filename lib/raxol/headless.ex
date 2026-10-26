@@ -28,7 +28,8 @@ defmodule Raxol.Headless do
       :ok = Raxol.Headless.stop("demo")
 
   Session ids are binaries. The `raxol_start` MCP tool accepts only ids
-  matching `^[a-z][a-z0-9]{0,6}$`; Elixir callers may use any binary.
+  matching `^[a-z][a-z0-9]{0,6}$`; Elixir callers may use any non-empty
+  binary.
 
   ## Processes
 
@@ -154,8 +155,9 @@ defmodule Raxol.Headless do
 
   ## Options
 
-    * `:id` - Session identifier, a binary (default: the module's last
-      segment, underscored: `"table_demo"` for `TableDemo`)
+    * `:id` - Session identifier, a non-empty binary (default: the module's
+      last segment, underscored: `"table_demo"` for `TableDemo`). Any other
+      value is `{:error, {:invalid_session_id, id}}`.
     * `:width` - Screen width (default: 120)
     * `:height` - Screen height (default: 40)
     * `:registry` - the `Raxol.MCP.Registry` the session's tools are
@@ -163,7 +165,11 @@ defmodule Raxol.Headless do
       `{:via, module, name}`). A registry given here must be a running
       `Raxol.MCP.Registry`; any other value, a name no process has, or a
       process of another kind is `{:error, {:invalid_registry, registry}}`,
-      and the process is never messaged. (default: `Raxol.MCP.Registry`,
+      and the process is never messaged. The check is of identity, not
+      responsiveness: it reads which module the process was started with,
+      so a `Raxol.MCP.Registry` that is suspended or too busy to reply
+      passes it, and the first call that waits on the registry is the one
+      registering the session's tools. (default: `Raxol.MCP.Registry`,
       when it is running; without it the session has no tools)
     * `:subscriptions` - `false` boots the app with its declared
       subscriptions (timers, event sources) unarmed, so the model advances
