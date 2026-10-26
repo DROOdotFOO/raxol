@@ -66,7 +66,7 @@ defmodule RaxolSymphony.MixProject do
       {:yaml_elixir, "~> 2.12"},
 
       # Liquid template rendering for prompt body.
-      {:solid, "~> 0.18", optional: true},
+      {:solid, "~> 1.3", optional: true},
 
       # File watcher for hot-reloading WORKFLOW.md.
       {:file_system, "~> 1.1", optional: true},
