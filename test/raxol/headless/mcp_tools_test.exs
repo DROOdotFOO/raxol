@@ -1026,13 +1026,13 @@ defmodule Raxol.Headless.McpToolsTest do
         pid -> pid
       end
 
-      {:ok, id} = Raxol.Headless.start(MaskedApp, id: :masked_mcp)
+      {:ok, id} = Raxol.Headless.start(MaskedApp, id: "masked_mcp")
 
       on_exit(fn ->
         if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop(id)
       end)
 
-      %{id: Atom.to_string(id), registry: registry!()}
+      %{id: id, registry: registry!()}
     end
 
     test "raxol_screenshot shows the mask, never the value", %{id: id, registry: registry} do
