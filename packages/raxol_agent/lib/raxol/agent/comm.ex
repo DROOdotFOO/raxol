@@ -40,7 +40,10 @@ defmodule Raxol.Agent.Comm do
   `{:error, :cancelled}` answer may then arrive in the caller's mailbox as a
   stray reply). A prompt sent with `send/3` as
   `{:call, pid, ref, {:acp_prompt, text, approver}}` is a turn of the same
-  kind, answered to `pid`.
+  kind, answered to `pid`, and a `{:call, pid, call_ref, {:acp_cancel, ref}}`
+  sent that way is a cancel answered to `pid`. A prompt envelope whose `pid`
+  is not a pid or whose `ref` is not a reference cannot be answered: the
+  session drops it, logging that it did but not the prompt.
 
   Whenever a turn ends without its reply (cancelled, or its `run_turn/3`
   process crashed or was killed), `update/2` then receives

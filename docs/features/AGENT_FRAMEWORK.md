@@ -133,7 +133,7 @@ agent went down mid-turn) and `{:error, :cancelled}`. A cancel sent with
 `Comm.call/3` answers `:ok` or `{:error, :not_found}` (no in-flight turn has that ref).
 `Raxol.Agent.Reference.Counter` is the reference agent (`increment`, `get`, sensitive
 `reset`, `hold` until `release` or a cancel); it applies a change only from a turn it still
-tracks.
+tracks (the turn's ref is the only credential).
 
 ## Teams
 
