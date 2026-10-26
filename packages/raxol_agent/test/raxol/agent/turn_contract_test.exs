@@ -323,6 +323,17 @@ defmodule Raxol.Agent.TurnContractTest do
     refute log =~ "sk-live-777"
   end
 
+  test "a denied hold is not kept", %{id: id} do
+    deny = ToolPolicy.deny_all(:no_grant)
+
+    for _ <- 1..3 do
+      assert {:ok, {:ok, denied, _}} = prompt(id, "hold", deny)
+      assert denied =~ "denied"
+    end
+
+    assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", ToolPolicy.allow_all())
+  end
+
   # Start a `hold` prompt and return once its action is being authorized,
   # i.e. the turn is in flight in `worker`.
   defp hold(id, ref) do

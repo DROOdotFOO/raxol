@@ -21,8 +21,11 @@ defmodule Raxol.Agent.Reference.Counter do
   turn cancelled before its change is sent changes nothing. `update/2`
   applies a change only for a turn it still tracks: it forgets a turn once
   the change is applied, the approver denies it, or `{:acp_cancel, ref}`
-  arrives (the turn was cancelled or failed), so no other process can change
-  the count. Usage is always zero: no model is called.
+  arrives (the turn was cancelled or failed). The turn's ref is the only
+  credential: a process that knows a live turn's ref (the prompt's caller
+  picks it) can still send that turn's change, even before the approver
+  has decided. A denied `hold` is forgotten too, so denied holds do not
+  pile up in the model. Usage is always zero: no model is called.
   """
 
   use Raxol.Agent
@@ -89,8 +92,10 @@ defmodule Raxol.Agent.Reference.Counter do
     {%{model | count: count, changes: changes}, []}
   end
 
-  def update({:command_result, {:counter_denied, ref}}, model),
-    do: {%{model | changes: Map.delete(model.changes, ref)}, []}
+  def update({:command_result, {:counter_denied, ref}}, model) do
+    model = %{model | holds: MapSet.delete(model.holds, ref)}
+    {%{model | changes: Map.delete(model.changes, ref)}, []}
+  end
 
   def update(_msg, model), do: {model, []}
 
@@ -106,10 +111,16 @@ defmodule Raxol.Agent.Reference.Counter do
   end
 
   defp prompt("hold", session, ref, approver, model) do
+    agent = self()
+
     Comm.run_turn(session, ref, fn ->
       case dispatch("hold", approver) do
-        {:ok, _released} -> {:ok, "released", @usage}
-        {:error, reason} -> {:ok, ToolConverter.public_error("hold", reason), @usage}
+        {:ok, _released} ->
+          {:ok, "released", @usage}
+
+        {:error, reason} ->
+          send(agent, {:command_result, {:counter_denied, ref}})
+          {:ok, ToolConverter.public_error("hold", reason), @usage}
       end
     end)
 
