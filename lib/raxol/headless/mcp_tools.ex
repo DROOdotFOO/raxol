@@ -10,8 +10,10 @@ defmodule Raxol.Headless.McpTools do
 
   The three tools that change something -- `raxol_start`, `raxol_send_key`,
   `raxol_stop` -- are annotated sensitive, so `Raxol.MCP.Server` refuses to run
-  them when no authorizer is configured. The other three are reads and are not
-  gated.
+  them when no authorizer is configured. So is `raxol_get_model`, a read that
+  returns the whole model: an app keeps its secrets there, a masked input's
+  plaintext included. `raxol_screenshot` (which draws a masked input as its
+  mask) and `raxol_list` are not gated.
 
   The annotation is only half of it: it does nothing until an authorizer exists
   at the call site, and denies permanently if one never does. `Raxol.Application`
@@ -215,6 +217,9 @@ defmodule Raxol.Headless.McpTools do
             }
           }
         },
+        # The whole model, whatever the app keeps in it: a token, or the
+        # plaintext of a masked input the screen draws as its mask.
+        annotations: %{sensitive: true},
         callback: &get_model/1
       },
       %{

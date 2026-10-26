@@ -101,6 +101,9 @@ defmodule Raxol.MCP.AgentBridge do
             id: %{type: "string", description: "Agent session ID"}
           }
         },
+        # The whole model of any Headless session, as `raxol_get_model`
+        # returns it, so it is gated the same way.
+        annotations: %{sensitive: true},
         callback: &get_agent_model/1
       }
     ]

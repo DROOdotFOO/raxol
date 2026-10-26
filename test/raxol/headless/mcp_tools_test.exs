@@ -983,6 +983,102 @@ defmodule Raxol.Headless.McpToolsTest do
     end
   end
 
+  defmodule MaskedApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{pin: "hunter2-SECRET", name: "visible-name"}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(model) do
+      %{
+        type: :column,
+        children: [
+          %{type: :text_input, id: "name", value: model.name},
+          %{type: :text_input, id: "pin", value: model.pin, mask_char: "*"}
+        ]
+      }
+    end
+
+    @impl true
+    def subscriptions(_model), do: []
+  end
+
+  # A masked input's value is on screen as its mask and in the model as
+  # plaintext. Neither MCP channel hands the plaintext to a client the
+  # deployment did not authorize for it.
+  describe "a masked input over MCP" do
+    setup do
+      case Process.whereis(Raxol.Headless) do
+        nil -> start_supervised!({Raxol.Headless, [name: Raxol.Headless]})
+        pid -> pid
+      end
+
+      {:ok, id} = Raxol.Headless.start(MaskedApp, id: :masked_mcp)
+
+      on_exit(fn ->
+        if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop(id)
+      end)
+
+      %{id: Atom.to_string(id), registry: registry!()}
+    end
+
+    test "raxol_screenshot shows the mask, never the value", %{id: id, registry: registry} do
+      server = serving_server!(registry, Raxol.MCP.Authorizer.allow_all())
+
+      assert {:reply, %{result: %{content: [%{text: text} | _]} = result}} =
+               call_tool(server, "raxol_screenshot", %{"id" => id})
+
+      refute Map.get(result, :isError) == true
+      assert text =~ "visible-name"
+      assert text =~ "**************"
+      refute text =~ "hunter2"
+    end
+
+    test "raxol_get_model is refused when no authorizer is configured", %{
+      id: id,
+      registry: registry
+    } do
+      assert {:reply, %{result: %{content: [%{text: text} | _], isError: true}}} =
+               call_tool(serving_server!(registry, nil), "raxol_get_model", %{"id" => id})
+
+      refute text =~ "hunter2"
+      payload = Jason.decode!(text)
+      assert payload["error"] == "authorization_required"
+      assert payload["detail"] =~ "sensitive_tool_unguarded"
+    end
+
+    test "raxol_get_model answers once an authorizer allows it", %{
+      id: id,
+      registry: registry
+    } do
+      server = serving_server!(registry, Raxol.MCP.Authorizer.allow_all())
+
+      assert {:reply, %{result: %{content: [%{text: text} | _]} = result}} =
+               call_tool(server, "raxol_get_model", %{"id" => id})
+
+      refute Map.get(result, :isError) == true
+      assert text =~ "hunter2-SECRET"
+    end
+  end
+
+  # Booted before the tools are registered, as `Raxol.Application` does: an
+  # unguarded server would refuse to boot on them otherwise.
+  defp serving_server!(registry, authorizer) do
+    {:ok, server} =
+      Raxol.MCP.Server.start_link(
+        name: :"srv_#{System.unique_integer([:positive])}",
+        registry: registry,
+        authorizer: authorizer
+      )
+
+    :ok = McpTools.register(registry)
+    server
+  end
+
   describe "tools/0" do
     test "returns 6 tool definitions" do
       tools = McpTools.tools()
@@ -1034,8 +1130,13 @@ defmodule Raxol.Headless.McpToolsTest do
       end
     end
 
-    test "the three read tools are not gated", %{by_name: by_name} do
-      for name <- ["raxol_screenshot", "raxol_get_model", "raxol_list"] do
+    # It returns the whole model, and a masked input's value lives there.
+    test "raxol_get_model is sensitive", %{by_name: by_name} do
+      assert Raxol.MCP.ToolDef.sensitive?(by_name["raxol_get_model"])
+    end
+
+    test "the screenshot and the session list are not gated", %{by_name: by_name} do
+      for name <- ["raxol_screenshot", "raxol_list"] do
         refute Raxol.MCP.ToolDef.sensitive?(by_name[name]),
                "#{name} is a read; gating it would deny reads for no gain"
       end
@@ -1056,7 +1157,7 @@ defmodule Raxol.Headless.McpToolsTest do
         |> Enum.map(& &1.name)
         |> Enum.sort()
 
-      assert sensitive == ["raxol_send_key", "raxol_start", "raxol_stop"]
+      assert sensitive == ["raxol_get_model", "raxol_send_key", "raxol_start", "raxol_stop"]
     end
   end
 
@@ -1143,7 +1244,7 @@ defmodule Raxol.Headless.McpToolsTest do
 
       assert message =~ "refuses to boot"
 
-      for name <- ["raxol_start", "raxol_send_key", "raxol_stop"] do
+      for name <- ["raxol_start", "raxol_send_key", "raxol_get_model", "raxol_stop"] do
         assert message =~ name
       end
     end

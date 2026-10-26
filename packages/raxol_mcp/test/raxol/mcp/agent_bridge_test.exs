@@ -99,6 +99,13 @@ defmodule Raxol.MCP.AgentBridgeTest do
     assert unguarded_refusal?(call_tool(server, "agent.send"))
   end
 
+  test "agent.get_model is sensitive: it returns the whole model" do
+    model_tool = Enum.find(AgentBridge.meta_tools(), &(&1.name == "agent.get_model"))
+    server = unguarded_server([model_tool])
+
+    assert unguarded_refusal?(call_tool(server, "agent.get_model"))
+  end
+
   # The boot check leaves out derived widget tools by origin, not by the dot
   # in their names: `agent.send` is a static tool with a dotted name.
   test "a Server with no authorizer refuses to boot on the bridge's meta tools" do
@@ -115,5 +122,6 @@ defmodule Raxol.MCP.AgentBridgeTest do
 
     assert message =~ "refuses to boot"
     assert message =~ "agent.send"
+    assert message =~ "agent.get_model"
   end
 end
