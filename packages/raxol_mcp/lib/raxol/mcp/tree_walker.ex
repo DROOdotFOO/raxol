@@ -45,9 +45,9 @@ defmodule Raxol.MCP.TreeWalker do
   `tools/list` unencodable, or let one property definition silently replace
   another.
 
-  Every derived tool def carries `derived: true`. `Raxol.MCP.Registry` keeps
-  it off the listed definition, and `Raxol.MCP.Server`'s boot check reads it
-  to tell a derived tool from a static one.
+  A derived tool is registered as one by `Raxol.MCP.ToolSynchronizer`
+  (`Raxol.MCP.Registry.register_tools/3` with `derived: true`), which is
+  what `Raxol.MCP.Server`'s boot check reads to tell it from a static tool.
 
   ## Excluding Widgets
 
@@ -368,7 +368,6 @@ defmodule Raxol.MCP.TreeWalker do
         name: "#{widget_id}.#{spec.name}",
         description: description,
         inputSchema: schema,
-        derived: true,
         callback: tool_callback(spec.name, widget_id, module, node, context)
       }
       |> put_annotations(Map.get(spec, :annotations))

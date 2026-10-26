@@ -59,11 +59,13 @@ defmodule Raxol.MCP.Server do
   The server REFUSES TO BOOT when a static one is already registered, and
   denies at `tools/call` for one registered afterwards -- the boot check
   alone would be bypassable by registering late. Derived widget tools (the
-  tool defs `Raxol.MCP.TreeWalker` derives, which carry `derived: true`; see
-  `Raxol.MCP.Registry.static_tools/1`) are left out of the boot check: they
-  come and go with a session's view, so a restart of this server with live
-  sessions would otherwise refuse to boot. A static tool with a dotted name
-  (`agent.send`) is still checked. The `tools/call` refusal covers both.
+  tool defs `Raxol.MCP.TreeWalker` derives, which `Raxol.MCP.ToolSynchronizer`
+  registers with `derived: true`; see `Raxol.MCP.Registry.register_tools/3`
+  and `Raxol.MCP.Registry.static_tools/1`) are left out of the boot check:
+  they come and go with a session's view, so a restart of this server with
+  live sessions would otherwise refuse to boot. A static tool with a dotted
+  name (`agent.send`), or one whose tool map carries a `:derived` key, is
+  still checked. The `tools/call` refusal covers both.
 
   ## Client capabilities
 
@@ -1630,11 +1632,12 @@ defmodule Raxol.MCP.Server do
 
   defp refuse_unguarded_reads!(_transport, _read_authorizer), do: :ok
 
-  # Static tools only, by origin: a derived widget tool is registered with
-  # `derived: true`. A Server restarted under its supervisor while sessions
-  # are live finds their derived sensitive tools registered, and refusing to
-  # boot on them would exhaust the restart intensity and take the whole MCP
-  # tree down. The `tools/call` refusal (`sensitive_tool?/2`) still holds them.
+  # Static tools only, by origin: `Raxol.MCP.ToolSynchronizer` registers a
+  # derived widget tool with `derived: true`. A Server restarted under its
+  # supervisor while sessions are live finds their derived sensitive tools
+  # registered, and refusing to boot on them would exhaust the restart
+  # intensity and take the whole MCP tree down. The `tools/call` refusal
+  # (`sensitive_tool?/2`) still holds them.
   defp sensitive_tool_names(registry) do
     registry
     |> Registry.static_tools()

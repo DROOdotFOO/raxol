@@ -298,7 +298,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     end
 
     if added_tools != [] do
-      Registry.register_tools(state.registry, added_tools)
+      Registry.register_tools(state.registry, added_tools, derived: true)
     end
 
     if tools_changed? do

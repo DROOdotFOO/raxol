@@ -1275,14 +1275,24 @@ defmodule Raxol.Headless.McpToolsTest do
           {Raxol.MCP.Supervisor, registry_name: registry, server_name: server_name}
         )
 
-      tools =
-        Raxol.MCP.TreeWalker.derive_tools(
-          Raxol.Core.Renderer.View.button("Go", id: "restart_btn", on_click: :go),
-          %{dispatcher_pid: nil}
+      # Registered the way a session's are: by its synchronizer, the only
+      # caller that marks tools derived.
+      {:ok, sync} =
+        Raxol.MCP.ToolSynchronizer.start_link(
+          registry: registry,
+          dispatcher_pid: self(),
+          session_id: "restart_#{unique}"
         )
 
-      assert [%{name: "restart_btn.click", annotations: %{sensitive: true}}] = tools
-      :ok = Raxol.MCP.Registry.register_tools(registry, tools)
+      button = Raxol.Core.Renderer.View.button("Go", id: "restart_btn", on_click: :go)
+      :ok = Raxol.MCP.ToolSynchronizer.sync(sync, button)
+      # A call after the cast: the render has been handled.
+      _state = :sys.get_state(sync)
+
+      assert [%{annotations: %{sensitive: true}}] =
+               registry
+               |> Raxol.MCP.Registry.list_tools()
+               |> Enum.filter(&(&1.name == "restart_btn.click"))
 
       server = Process.whereis(server_name)
       ref = Process.monitor(server)
