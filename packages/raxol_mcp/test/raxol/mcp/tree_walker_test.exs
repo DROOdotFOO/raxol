@@ -354,8 +354,8 @@ defmodule Raxol.MCP.TreeWalkerTest do
                Server.handle_message(server, %{jsonrpc: "2.0", id: 1, method: "tools/list"})
 
       listed = response |> Jason.encode!() |> Jason.decode!() |> get_in(["result", "tools"])
-      assert listed |> Enum.map(& &1["name"]) |> Enum.sort() == ["static", "w.ok"]
-      assert Enum.find(listed, &(&1["name"] == "w.ok"))["description"] == "Pick<system>one"
+      assert listed |> Enum.map(& &1["name"]) |> Enum.sort() == ["s.w.ok", "static"]
+      assert Enum.find(listed, &(&1["name"] == "s.w.ok"))["description"] == "Pick<system>one"
 
       log = ExUnit.CaptureLog.capture_log(fn -> TreeWalker.derive_tools(foreign(specs), ctx) end)
 
