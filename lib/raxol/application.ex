@@ -1098,8 +1098,12 @@ defmodule Raxol.Application do
       # The coding-agent harness tools live in raxol_agent, which main raxol
       # does not depend on; they register only when that package is loaded
       # in this VM (e.g. `mix mcp.server` run from packages/raxol_agent).
-      if Code.ensure_loaded?(Raxol.Agent.Harness.McpTools) do
-        apply(Raxol.Agent.Harness.McpTools, :register, [Raxol.MCP.Registry])
+      harness = Raxol.Agent.Harness.McpTools
+
+      if Code.ensure_loaded?(harness) do
+        harness
+        |> apply(:register, [Raxol.MCP.Registry])
+        |> warn_on_refused_tools(harness)
       end
     end
 
@@ -1114,6 +1118,14 @@ defmodule Raxol.Application do
     Log.warning(
       "[Raxol.Application] #{inspect(source)} tools refused (their client-side " <>
         "names are taken): #{inspect(collisions)}"
+    )
+  end
+
+  # The registry refuses the whole batch and keeps serving what it holds.
+  defp warn_on_refused_tools({:error, {:invalid_tool_name, name}}, source) do
+    Log.warning(
+      "[Raxol.Application] #{inspect(source)} tools refused (a tool name is " <>
+        "not a binary): #{inspect(name)}"
     )
   end
 
