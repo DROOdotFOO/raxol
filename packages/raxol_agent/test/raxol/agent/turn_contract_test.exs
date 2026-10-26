@@ -324,7 +324,6 @@ defmodule Raxol.Agent.TurnContractTest do
     # process while the reports arrive.
     :ok = :sys.suspend(agent)
     :ok = Comm.send(id, {:call, self(), ref, {:acp_prompt, "hold", authorizing(self())}})
-    send(session, {:acp_turn_failed, ref})
     send(session, {:acp_turn_failed, ref, self()})
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, make_ref()})
     :ok = :sys.resume(agent)
@@ -479,13 +478,6 @@ defmodule Raxol.Agent.TurnContractTest do
   defp prompt(id, text, approver), do: Comm.call(id, {:acp_prompt, text, approver}, 5_000)
 
   defp uniq, do: System.unique_integer([:positive])
-
-  defp ensure_running({DynamicSupervisor, opts}) do
-    case DynamicSupervisor.start_link(opts) do
-      {:ok, pid} -> Process.unlink(pid)
-      {:error, {:already_started, _}} -> :ok
-    end
-  end
 
   defp ensure_running({mod, opts}) do
     case mod.start_link(opts) do
