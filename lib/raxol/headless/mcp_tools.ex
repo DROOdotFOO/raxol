@@ -293,10 +293,11 @@ defmodule Raxol.Headless.McpTools do
   so a call to `<session>.<widget>.<action>` or `<session>.discover_tools`
   whose session is not in `Raxol.Headless.list/0` answers "session
   `<session>` is not running in this server; call raxol_list", which the
-  caller can act on. A name of that shape whose session is running, or whose
-  segments no session could derive (`Raxol.MCP.TreeWalker.id?/1`), and any
-  other name answer `nil`: the server's `-32601`. The server also hosts any
-  dotted tools an embedder registers, so an unknown one of that shape is
+  caller can act on. A name of that shape whose session is running, whose
+  session is one of the ids `raxol_start` reserves (`raxol`, `agent`), or
+  whose segments no session could derive (`Raxol.MCP.TreeWalker.id?/1`), and
+  any other name answer `nil`: the server's `-32601`. The server also hosts
+  any dotted tools an embedder registers, so an unknown one of that shape is
   answered as a stopped session too.
   """
   @spec unknown_tool_reply(String.t()) :: String.t() | nil
@@ -314,8 +315,10 @@ defmodule Raxol.Headless.McpTools do
   end
 
   defp stopped_session_reply(session) do
-    if TreeWalker.id?(session) and session not in Raxol.Headless.list(),
-      do: "session `#{session}` is not running in this server; call raxol_list"
+    if TreeWalker.id?(session) and
+         not is_map_key(@reserved_session_ids, session) and
+         session not in Raxol.Headless.list(),
+       do: "session `#{session}` is not running in this server; call raxol_list"
   end
 
   @doc """
@@ -381,8 +384,14 @@ defmodule Raxol.Headless.McpTools do
   are both running. Raises `ArgumentError` when
   `config :raxol, :headless_startable` is invalid (see `startable/0`), so a
   bad config stops the boot instead of surfacing at the first `raxol_start`.
+
+  Answers `{:error, {:name_collision, [{refused, holder}]}}` when the
+  registry refused some of the tools because another tool, `holder`, already
+  has the same client-side name (`Raxol.MCP.Registry.register_tools/2`); the
+  rest are registered.
   """
-  @spec register(GenServer.server()) :: :ok
+  @spec register(GenServer.server()) ::
+          :ok | {:error, {:name_collision, [{String.t(), String.t()}]}}
   def register(registry \\ Raxol.MCP.Registry) do
     case startable() do
       {:ok, _modules} -> :ok
@@ -740,9 +749,10 @@ defmodule Raxol.Headless.McpTools do
   # A session the registry refused tools of (their client-side names are
   # held by another session's or a static tool) would run without them, its
   # `discover_tools` included, while the client reads "started": the start is
-  # refused and the session stopped.
+  # refused and the session stopped. The reply names only the refused tools:
+  # a holder can be another session's tool, with its exact id and widgets.
   defp keep_if_whole(session_id) do
-    case Raxol.Headless.refused_tools(session_id) do
+    case Raxol.Headless.name_collisions(session_id) do
       {:ok, []} ->
         {:ok, "Session started: #{session_id}"}
 
@@ -752,9 +762,7 @@ defmodule Raxol.Headless.McpTools do
         {:error,
          "session #{session_id} was not started: these of its tools would reach " <>
            "the client under a name another tool already holds: " <>
-           Enum.map_join(refused, ", ", fn {name, holder} ->
-             "#{name} (held by #{holder})"
-           end)}
+           Enum.map_join(refused, ", ", fn {name, _holder} -> name end)}
 
       {:error, reason} ->
         :ok = Raxol.Headless.stop(session_id)

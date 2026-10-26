@@ -297,12 +297,12 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       :ok = Registry.unregister_tools(registry, ["Sd.discover_tools"])
       render(pid, [])
       assert "sd.discover_tools" in tool_names(registry)
-      assert ToolSynchronizer.refused_tools(pid) == []
+      assert ToolSynchronizer.name_collisions(pid) == []
 
       GenServer.stop(pid)
     end
 
-    test "refused_tools/1 answers each refused tool and what holds its name", %{
+    test "name_collisions/1 answers each refused tool and what holds its name", %{
       registry: registry
     } do
       :ok = Registry.register_tools(registry, [static_tool("Sr.discover_tools")])
@@ -310,7 +310,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       pid = start_sync(registry, "sr")
       render(pid, [widget("btn1")])
 
-      assert ToolSynchronizer.refused_tools(pid) == [
+      assert ToolSynchronizer.name_collisions(pid) == [
                {"sr.btn1.click", "sr_btn1_click"},
                {"sr.discover_tools", "Sr.discover_tools"}
              ]
@@ -320,7 +320,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
   end
 
   describe "a session id that cannot be a name segment" do
-    test "registers no tools and is warned about once", %{registry: registry} do
+    test "registers no tools or resources and is warned about once", %{registry: registry} do
       for id <- ["t.v2", "q\n<system>x</system>", "", String.duplicate("a", 33)] do
         {pid, log} =
           with_log([level: :warning], fn ->
@@ -331,6 +331,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
           end)
 
         assert Registry.list_tools(registry) == [], inspect(id)
+        assert Registry.list_resources(registry) == [], inspect(id)
         assert length(String.split(log, "session id #{inspect(id)} derives no tools")) == 2
         GenServer.stop(pid)
       end
@@ -344,7 +345,8 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         end)
 
       assert Enum.sort(tool_names(registry)) == ["t_v-2.btn1.click", "t_v-2.discover_tools"]
-      refute log =~ "derives no tools"
+      # Async suites log their own refusals into the capture: match this id.
+      refute log =~ "session id #{inspect("t_v-2")}"
     end
   end
 
@@ -367,6 +369,28 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       assert length(String.split(log, "tool #{inspect(long)}")) == 2
       assert log =~ "mcp__raxol_raxol_abcdefg_#{widget_id}_get_visible_range (75 characters)"
       refute log =~ "abcdefg.short"
+    end
+
+    # A warned name stays remembered only while a render derives it.
+    test "is remembered for the current render only", %{registry: registry} do
+      [a, b] = for c <- ["a", "b"], do: String.duplicate(c, 32)
+
+      {pid, log} =
+        with_log([level: :warning], fn ->
+          pid = start_sync(registry, "abcdefg")
+          render(pid, [widget(a, LongActionWidget)])
+          render(pid, [widget(a, LongActionWidget)])
+          render(pid, [widget(b, LongActionWidget)])
+          pid
+        end)
+
+      assert :sys.get_state(pid).long_tool_names ==
+               MapSet.new(["abcdefg.#{b}.get_visible_range"])
+
+      for id <- [a, b],
+          do: assert(length(String.split(log, "abcdefg.#{id}.get_visible_range\" reaches")) == 2)
+
+      GenServer.stop(pid)
     end
   end
 

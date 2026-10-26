@@ -8,7 +8,7 @@ defmodule Raxol.MCP.FocusLens do
 
   ## Modes
 
-    * `:all` -- return all tools (default for headless sessions)
+    * `:all` -- the first `:max_tools` tools (default 15), unfiltered
     * `:focused` -- return the session's tools for the focused widget + globals
     * `:hover` -- return the session's tools for the focused widget + the
       hovered widget + globals
@@ -19,9 +19,11 @@ defmodule Raxol.MCP.FocusLens do
   exactly the widget ID, so another session's tools for a widget with the
   same ID never leak in. A session or widget ID never holds a `.`
   (`Raxol.MCP.TreeWalker.id?/1`). A global tool is one with no `.` in its
-  name (a server-level tool such as `raxol_list`), and the session's
-  `"session_id.discover_tools"` meta-tool is always included so agents can
-  search the session's full set by keyword.
+  name (a server-level tool such as `raxol_list`). With `:registry` given,
+  the session's `"session_id.discover_tools"` meta-tool follows the widget
+  tools, so agents can search the session's full set by keyword; without
+  it, the meta-tool is not added. Every mode cuts its result to
+  `:max_tools`.
 
   ## Usage
 

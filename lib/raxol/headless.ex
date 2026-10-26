@@ -354,16 +354,18 @@ defmodule Raxol.Headless do
   end
 
   @doc """
-  The session's MCP tools the registry refused at its last tool sync, as
-  `{name, holder}`: `holder` already has the same client-side name (see
-  `Raxol.MCP.ToolSynchronizer.refused_tools/1`). `[]` for a session with no
-  MCP registry. Answers the same errors as `get_model/1`.
+  The session's MCP tools the registry refused at its last tool sync because
+  another tool, `holder`, already has the same client-side name, as
+  `{:ok, [{name, holder}]}` (see
+  `Raxol.MCP.ToolSynchronizer.name_collisions/1`; only name collisions).
+  `{:ok, []}` for a session with no MCP registry. Answers the same errors as
+  `get_model/1`.
   """
-  @spec refused_tools(String.t()) ::
+  @spec name_collisions(String.t()) ::
           {:ok, [{String.t(), String.t()}]} | {:error, term()}
-  def refused_tools(id) when is_binary(id) do
+  def name_collisions(id) when is_binary(id) do
     with {:ok, session} <- lookup_session(id),
-         do: synchronizer_refusals(session)
+         do: synchronizer_collisions(session)
   end
 
   @doc "Stops a headless session."
@@ -1098,11 +1100,11 @@ defmodule Raxol.Headless do
          do: :ok
   end
 
-  # `:refused_tools` is `Raxol.MCP.ToolSynchronizer.refused_tools/1`'s request.
-  defp synchronizer_refusals(%{synchronizer_pid: nil}), do: {:ok, []}
+  # `:name_collisions` is `Raxol.MCP.ToolSynchronizer.name_collisions/1`'s request.
+  defp synchronizer_collisions(%{synchronizer_pid: nil}), do: {:ok, []}
 
-  defp synchronizer_refusals(session),
-    do: session_call(session, session.synchronizer_pid, :refused_tools)
+  defp synchronizer_collisions(session),
+    do: session_call(session, session.synchronizer_pid, :name_collisions)
 
   defp start_tool_synchronizer(lifecycle_pid, session_id, app_module, registry) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),

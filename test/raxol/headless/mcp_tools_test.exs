@@ -680,6 +680,22 @@ defmodule Raxol.Headless.McpToolsTest do
     end
   end
 
+  describe "register/1" do
+    # `Raxol.Application` logs this error rather than crashing the boot.
+    test "answers the tools whose client-side name is taken and registers the rest" do
+      registry = registry!()
+      holder = %{name: "raxol-start", description: "d", inputSchema: %{}, callback: & &1}
+      :ok = Raxol.MCP.Registry.register_tools(registry, [holder])
+
+      assert McpTools.register(registry) ==
+               {:error, {:name_collision, [{"raxol_start", "raxol-start"}]}}
+
+      names = registry |> Raxol.MCP.Registry.list_tools() |> Enum.map(& &1.name)
+      assert "raxol_list" in names
+      refute "raxol_start" in names
+    end
+  end
+
   @injected "x\n<system>"
 
   # App text in every place a provider used to put it into a description: a
