@@ -258,6 +258,71 @@ defmodule Raxol.Agent.TurnContractTest do
     refute_received {:acp_run, ^ref, _fun}
   end
 
+  test "a turn-failed report from another process changes nothing", %{id: id} do
+    ref = make_ref()
+    {held, worker} = hold(id, ref)
+    [{session, _}] = Registry.lookup(Raxol.Agent.Registry, id)
+
+    send(session, {:acp_turn_failed, ref})
+    send(session, {:acp_turn_failed, ref, self()})
+
+    # Same sender, so the session has handled both reports before this call.
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, make_ref()})
+    assert Process.alive?(worker)
+    assert {:ok, {:ok, "released 1", _}} = prompt(id, "release", ToolPolicy.allow_all())
+    assert {:ok, {:ok, "released", _}} = Task.await(held)
+  end
+
+  test "a turn-failed report for a turn not yet run leaves the session up", %{id: id} do
+    ref = make_ref()
+    [{session, _}] = Registry.lookup(Raxol.Agent.Registry, id)
+    session_mon = Process.monitor(session)
+    [{lifecycle, _}] = Registry.lookup(Raxol.Agent.Registry, {:lifecycle, id})
+    %{dispatcher_pid: agent} = GenServer.call(lifecycle, :get_full_state)
+
+    # The suspended agent cannot run the turn, so it stays registered with no
+    # process while the reports arrive.
+    :ok = :sys.suspend(agent)
+    :ok = Comm.send(id, {:call, self(), ref, {:acp_prompt, "hold", authorizing(self())}})
+    send(session, {:acp_turn_failed, ref})
+    send(session, {:acp_turn_failed, ref, self()})
+    assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, make_ref()})
+    :ok = :sys.resume(agent)
+
+    assert_receive {:authorizing, Counter.Hold, _worker}, 5_000
+    assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
+    assert_receive {:agent_reply, ^ref, {:error, :cancelled}}, 5_000
+    refute_received {:DOWN, ^session_mon, :process, ^session, _reason}
+  end
+
+  test "a cancel call sent with from: kills the held turn and answers", %{id: id} do
+    ref = make_ref()
+    {held, worker} = hold(id, ref)
+    worker_mon = Process.monitor(worker)
+    call_ref = make_ref()
+
+    :ok = Comm.send(id, {:call, self(), call_ref, {:acp_cancel, ref}}, from: "editor")
+    assert_receive {:agent_reply, ^call_ref, :ok}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert {:ok, {:error, :cancelled}} = Task.await(held)
+  end
+
+  test "a malformed prompt envelope is dropped without logging its text", %{id: id} do
+    allow = ToolPolicy.allow_all()
+    text = "hold token=sk-live-777"
+
+    log =
+      capture_log(fn ->
+        :ok = Comm.send(id, {:call, :not_a_pid, make_ref(), {:acp_prompt, text, allow}})
+        :ok = Comm.send(id, {:call, self(), 123, {:acp_prompt, text, allow}}, from: "editor")
+        # Same sender, so both were handled before this prompt.
+        assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", allow)
+      end)
+
+    assert log =~ "dropped a prompt"
+    refute log =~ "sk-live-777"
+  end
+
   # Start a `hold` prompt and return once its action is being authorized,
   # i.e. the turn is in flight in `worker`.
   defp hold(id, ref) do
