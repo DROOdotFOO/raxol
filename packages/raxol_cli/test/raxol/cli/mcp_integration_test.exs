@@ -25,14 +25,19 @@ defmodule Raxol.CLI.MCPIntegrationTest do
   # Booting the whole tree under `mix run` takes seconds; this bounds a hang.
   @reply_ms 120_000
 
-  setup do
+  # `@tag mcp_args: [...]` adds flags after `mcp`; `:dump` stands for a
+  # `--bench-dump` path in this test's directory.
+  setup ctx do
     dir = Path.join(System.tmp_dir!(), "raxol_mcp_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
 
     input = Path.join(dir, "stdin.fifo")
     errors = Path.join(dir, "stderr.fifo")
+    dump = Path.join(dir, "models.bin")
     for fifo <- [input, errors], do: {_, 0} = System.cmd("mkfifo", [fifo])
+
+    argv = ["mcp" | Enum.map(Map.get(ctx, :mcp_args, []), &if(&1 == :dump, do: dump, else: &1))]
 
     sh = System.find_executable("sh")
 
@@ -46,7 +51,7 @@ defmodule Raxol.CLI.MCPIntegrationTest do
           "-c",
           ~s(exec "$0" run --no-compile --no-deps-check -e "$1" < "$2" 2> "$3"),
           System.find_executable("mix"),
-          ~s|System.halt(Raxol.CLI.main(["mcp"]))|,
+          "System.halt(Raxol.CLI.main(#{inspect(argv)}))",
           input,
           errors
         ],
@@ -65,7 +70,7 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     stderr =
       Port.open({:spawn_executable, System.find_executable("cat")}, [:binary, args: [errors]])
 
-    %{server: server, writer: writer, stderr: stderr}
+    %{server: server, writer: writer, stderr: stderr, dir: dir, dump: dump}
   end
 
   test "end of input exits 0, and stdout carries only JSON-RPC", ctx do
@@ -113,6 +118,58 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     assert_json_rpc(seen ++ starting ++ keying ++ rest)
   end
 
+  @tag mcp_args: ["--no-derived"]
+  test "--no-derived lists derived tools nowhere; own sessions can be subscribed", ctx do
+    {_init, seen} = call(ctx, 1, "initialize", %{})
+    table = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "t"}
+    {started, starting} = call(ctx, 2, "tools/call", %{name: "raxol_start", arguments: table})
+    refute started["result"]["isError"], inspect(started)
+
+    # The session resources that list the registry's tools would name the
+    # derived ones `tools/list` hides.
+    replies =
+      for {path, id} <- Enum.zip(~w(context tools resources prompts widgets), 3..7) do
+        {reply, lines} = call(ctx, id, "resources/read", %{uri: "raxol://session/t/#{path}"})
+        {path, reply, lines}
+      end
+
+    for {path, reply, _} <- replies, path != "widgets" do
+      assert reply["error"]["data"]["detail"] =~ "static tools only", "#{path}: #{inspect(reply)}"
+    end
+
+    assert [{"widgets", %{"result" => %{"contents" => [_ | _]}}, _}] =
+             Enum.filter(replies, &(elem(&1, 0) == "widgets"))
+
+    widgets = %{uri: "raxol://session/t/widgets"}
+    {sub, subbing} = call(ctx, 8, "resources/subscribe", widgets)
+    assert sub["result"] == %{}, inspect(sub)
+    {unsub, unsubbing} = call(ctx, 9, "resources/unsubscribe", widgets)
+    assert unsub["result"] == %{}, inspect(unsub)
+    {other, othering} = call(ctx, 10, "resources/subscribe", %{uri: "raxol://session/zz/widgets"})
+    assert other["error"]["data"]["detail"] =~ ~s(no session "zz")
+
+    {status, rest} = end_input(ctx)
+    assert status == 0
+    read_lines = Enum.flat_map(replies, &elem(&1, 2))
+    assert_json_rpc(seen ++ starting ++ read_lines ++ subbing ++ unsubbing ++ othering ++ rest)
+  end
+
+  @tag mcp_args: ["--bench-dump", :dump]
+  test "--bench-dump writes every session's final model, whole, at end of input", ctx do
+    call(ctx, 1, "initialize", %{})
+    table = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "t"}
+    {started, _} = call(ctx, 2, "tools/call", %{name: "raxol_start", arguments: table})
+    refute started["result"]["isError"], inspect(started)
+    refute File.exists?(ctx.dump)
+
+    assert {0, _rest} = end_input(ctx)
+
+    # Renamed into place: the dump and nothing beside it (no temporary file).
+    assert ctx.dir |> File.ls!() |> Enum.sort() == ~w(models.bin stderr.fifo stdin.fifo)
+    assert %{"t" => model} = ctx.dump |> File.read!() |> :erlang.binary_to_term()
+    assert is_map(model)
+  end
+
   # -- plumbing ------------------------------------------------------------------
 
   defp tool_call(id, name, arguments),
@@ -122,6 +179,11 @@ defmodule Raxol.CLI.MCPIntegrationTest do
       method: "tools/call",
       params: %{name: name, arguments: arguments}
     }
+
+  defp call(ctx, id, method, params) do
+    send_line(ctx.writer, %{jsonrpc: "2.0", id: id, method: method, params: params})
+    read_reply(ctx.server, id)
+  end
 
   defp send_line(writer, message), do: Port.command(writer, [Jason.encode!(message), "\n"])
 

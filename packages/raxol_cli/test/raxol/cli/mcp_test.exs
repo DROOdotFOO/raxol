@@ -49,12 +49,24 @@ defmodule Raxol.CLI.MCPTest do
       assert {:deny, _} = MCP.authorize_read("completion/complete", %{}, @ctx)
       assert {:deny, _} = MCP.authorize_read("logging/setLevel", %{"level" => "debug"}, @ctx)
     end
+
+    test "subscribes only to sessions this VM runs" do
+      uri = %{"uri" => "raxol://session/nope/widgets"}
+
+      for method <- ~w(resources/subscribe resources/unsubscribe) do
+        assert {:deny, reason} = MCP.authorize_read(method, uri, @ctx)
+        assert reason =~ ~s(no session "nope")
+      end
+    end
   end
 
   describe "run/1 refusals" do
     setup do
+      mode = System.get_env("RAXOL_MODE")
+
       on_exit(fn ->
         System.delete_env("RAXOL_CLI_INSTALL_DIR")
+        if mode, do: System.put_env("RAXOL_MODE", mode), else: System.delete_env("RAXOL_MODE")
         Application.delete_env(:raxol_cli, :mcp_boot)
       end)
     end
@@ -80,6 +92,24 @@ defmodule Raxol.CLI.MCPTest do
       Application.put_env(:raxol_cli, :mcp_boot, true)
       err = capture_io(:stderr, fn -> assert MCP.run(["--expect-version", "0.0.0"]) == 1 end)
       assert err =~ "this is raxol #{Raxol.CLI.version()}, not the expected 0.0.0"
+    end
+
+    test "refuses when RAXOL_MODE names another mode" do
+      Application.put_env(:raxol_cli, :mcp_boot, true)
+      System.put_env("RAXOL_MODE", "minimal")
+      err = capture_io(:stderr, fn -> assert MCP.run([]) == 1 end)
+      assert err =~ "RAXOL_MODE=minimal overrides the MCP boot mode"
+    end
+
+    test "a VM booted for MCP runs no other command" do
+      Application.put_env(:raxol_cli, :mcp_boot, true)
+
+      err =
+        capture_io(:stderr, fn ->
+          assert capture_io(fn -> assert Raxol.CLI.main(["--version"]) == 1 end) == ""
+        end)
+
+      assert err =~ "booted for `raxol mcp`"
     end
   end
 end
