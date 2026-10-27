@@ -1326,26 +1326,32 @@ defmodule Raxol.Headless do
          pid when is_pid(pid) <- GenServer.whereis(registry),
          dispatcher_pid when is_pid(dispatcher_pid) <-
            get_dispatcher_pid(session.lifecycle_pid) do
-      opts = [
-        registry: pid,
-        server: server,
-        dispatcher_pid: dispatcher_pid,
-        session_id: session.id,
-        app_module: session.module,
-        owner: self()
-      ]
-
-      case GenServer.start(Raxol.MCP.ToolSynchronizer, opts) do
-        {:ok, sync_pid} ->
-          Process.monitor(sync_pid)
-          {:ok, %{session | synchronizer_pid: sync_pid, registry_pid: pid}}
-
-        {:error, reason} ->
-          discard(session)
-          {:error, {:tool_synchronizer_failed, exit_class(reason)}}
-      end
+      start_synchronizer(session, pid, dispatcher_pid, server)
     else
       _ -> {:ok, session}
+    end
+  end
+
+  defp start_synchronizer(session, registry_pid, dispatcher_pid, server) do
+    opts = [
+      registry: registry_pid,
+      server: server,
+      dispatcher_pid: dispatcher_pid,
+      session_id: session.id,
+      app_module: session.module,
+      owner: self()
+    ]
+
+    case GenServer.start(Raxol.MCP.ToolSynchronizer, opts) do
+      {:ok, sync_pid} ->
+        Process.monitor(sync_pid)
+
+        {:ok,
+         %{session | synchronizer_pid: sync_pid, registry_pid: registry_pid}}
+
+      {:error, reason} ->
+        discard(session)
+        {:error, {:tool_synchronizer_failed, exit_class(reason)}}
     end
   end
 
