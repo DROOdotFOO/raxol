@@ -176,21 +176,19 @@ defmodule Raxol.UI.Components.Input.Tabs do
   # -- ToolProvider callbacks --
 
   @impl Raxol.MCP.ToolProvider
-  def mcp_tools(state) do
-    tabs = state[:tabs] || []
-    tab_names = Enum.map_join(tabs, ", ", &tab_label/1)
-
+  def mcp_tools(_state) do
     [
       %{
         name: "select_tab",
-        description: "Select a tab (available: #{tab_names})",
+        description: "Select a tab by index (get_tabs lists the labels)",
         inputSchema: %{
           type: "object",
           properties: %{
             index: %{type: "integer", description: "Tab index (0-based)"}
           },
           required: ["index"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_tabs",

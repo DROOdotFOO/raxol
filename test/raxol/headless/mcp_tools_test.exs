@@ -4,6 +4,34 @@ defmodule Raxol.Headless.McpToolsTest do
 
   alias Raxol.Headless.McpTools
 
+  # The test apps `raxol_start` starts over MCP. A set `:headless_startable`
+  # replaces the default demo list, so they are listed alongside the demos,
+  # for this module's tests only. BufferServer is not an app: it is listed so
+  # the tool's contract refusal stays reachable. Every entry must be loadable,
+  # so the out-of-VM probe is listed only by its own test.
+  @test_startable [
+    Raxol.Headless.McpToolsTest.SizedApp,
+    Raxol.Headless.McpToolsTest.InjectedTextApp,
+    Raxol.Terminal.Buffer.BufferServer
+  ]
+
+  setup do
+    put_startable(McpTools.default_startable() ++ @test_startable)
+  end
+
+  # Sets `:headless_startable` for the current test and restores it after.
+  defp put_startable(value) do
+    previous = Application.fetch_env(:raxol, :headless_startable)
+    Application.put_env(:raxol, :headless_startable, value)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, old} -> Application.put_env(:raxol, :headless_startable, old)
+        :error -> Application.delete_env(:raxol, :headless_startable)
+      end
+    end)
+  end
+
   # Its update/2 on "x" starts a linked process that raises with a credential
   # in the message, then waits: the link takes the dispatcher down with the
   # exception, stacktrace and all, as its exit reason.
@@ -254,11 +282,7 @@ defmodule Raxol.Headless.McpToolsTest do
       name = "NoSuchHeadlessModule#{System.unique_integer([:positive])}"
 
       assert {:error, message} = call_start(%{"module" => name})
-
-      # The refusal says the BEAM is missing, not that the module is unloaded:
-      # unloaded is the ordinary state under `mix mcp.server`, and saying so
-      # sends an operator looking for a loading problem that is not there.
-      assert message =~ "no compiled module by that name is loadable"
+      assert message =~ "is not startable over MCP"
 
       assert_raise ArgumentError, fn ->
         String.to_existing_atom("Elixir." <> name)
@@ -306,10 +330,10 @@ defmodule Raxol.Headless.McpToolsTest do
       assert message =~ "init/1, update/2 and view/1"
     end
 
-    # The two refusals send an operator in opposite directions -- go compile it
+    # The two refusals send an operator in opposite directions -- go list it
     # versus go pick a different module -- so the wording has to separate them.
-    test "a missing module and a non-application module read differently" do
-      assert {:error, missing} =
+    test "an unlisted module and a non-application module read differently" do
+      assert {:error, unlisted} =
                start_tool_result(%{"module" => "NoSuchHeadlessAppAtAll"})
 
       assert {:error, not_an_app} =
@@ -318,18 +342,17 @@ defmodule Raxol.Headless.McpToolsTest do
                  "id" => "not_an_app_again"
                })
 
-      assert missing =~ "unknown module"
-      refute missing =~ "is not a Raxol application"
-      refute not_an_app =~ "unknown module"
+      assert unlisted =~ "is not startable over MCP"
+      refute unlisted =~ "is not a Raxol application"
+      refute not_an_app =~ "is not startable over MCP"
     end
 
-    # The atom table is not the same question as "does this module exist".
-    # Interactive code loading -- `mix mcp.server`, the documented workflow --
-    # is the normal case, and there a module's atom does not exist until
-    # something loads it. Refusing on the atom table alone therefore refuses
-    # modules that are compiled and sitting on the code path, which is what
-    # `raxol_start` asks for. An OTP release boots `:embedded` with everything
-    # pre-loaded, so this hides on fly.io and shows up locally.
+    # A listed module may be compiled and on the code path but not loaded yet:
+    # interactive code loading -- `mix mcp.server`, the documented workflow --
+    # is the normal case, and refusing such a module refuses what
+    # `raxol_start` asks for. `startable/0` loads it (`Code.ensure_loaded?/1`)
+    # when it checks the list. An OTP release boots `:embedded` with
+    # everything pre-loaded, so this hides on fly.io and shows up locally.
     #
     # It lives in THIS describe, behind a real `Raxol.Headless`, because the
     # contract gate runs server-side. Asserted from a block with no server, the
@@ -337,22 +360,33 @@ defmodule Raxol.Headless.McpToolsTest do
     # an artefact of the downed server rather than on the answer an operator
     # gets.
     #
-    # Compiled by a SEPARATE OS PROCESS on purpose: compiling it here would mint
-    # the atom in this VM and the test would pass against either version.
-    test "a compiled-but-unloaded module on the code path starts" do
-      name = "HeadlessUnloadedProbe#{System.unique_integer([:positive])}"
-      dir = compile_out_of_vm(name)
+    # Compiled by a SEPARATE OS PROCESS on purpose: compiling it here would load
+    # it into this VM and the test would pass against either version.
+    test "a listed module that is compiled but not loaded starts" do
+      dir = compile_out_of_vm("Raxol.Headless.McpToolsTest.UnloadedProbe")
 
-      # No one in this VM has ever named it.
-      assert_raise ArgumentError, fn ->
-        String.to_existing_atom("Elixir." <> name)
-      end
+      refute :code.is_loaded(Raxol.Headless.McpToolsTest.UnloadedProbe)
+
+      # Unloaded again afterwards, so a repeat in this VM finds it unloaded
+      # too. Registered before the session's stop below, so it runs after it.
+      on_exit(fn ->
+        :code.purge(Raxol.Headless.McpToolsTest.UnloadedProbe)
+        :code.delete(Raxol.Headless.McpToolsTest.UnloadedProbe)
+        :code.purge(Raxol.Headless.McpToolsTest.UnloadedProbe)
+      end)
 
       Code.append_path(dir)
       on_exit(fn -> Code.delete_path(dir) end)
 
+      put_startable([
+        Raxol.Headless.McpToolsTest.UnloadedProbe
+        | McpTools.default_startable() ++ @test_startable
+      ])
+
       assert {:ok, message} =
-               start_tool_result(%{"module" => name, "id" => "unloaded_probe"})
+               start_tool_result(%{
+                 "module" => "Raxol.Headless.McpToolsTest.UnloadedProbe"
+               })
 
       assert message =~ "unloaded_probe"
 
@@ -363,14 +397,14 @@ defmodule Raxol.Headless.McpToolsTest do
       # the session really would outlive this test.
       on_exit(fn ->
         if Process.whereis(Raxol.Headless),
-          do: Raxol.Headless.stop("unloaded_probe")
+          do: Raxol.Headless.stop(:unloaded_probe)
       end)
     end
 
     # The full TEA triple, not `view/1` alone: this fixture stands in for a real
     # application, and a gate that names `init/1, update/2 and view/1` has to be
     # given something that satisfies it or the test is measuring the gate's
-    # refusal instead of the code-path lookup it is about.
+    # refusal instead of the loading it is about.
     defp compile_out_of_vm(name) do
       dir =
         Path.join(
@@ -476,6 +510,447 @@ defmodule Raxol.Headless.McpToolsTest do
     end
   end
 
+  # A Raxol application that is on no startable list. A test fixture rather
+  # than a module of the tree, so the refusal keeps testing something whatever
+  # later changes delete.
+  defmodule UnlistedApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("unlisted")
+  end
+
+  # `raxol_start` runs a module of the caller's choosing in this VM, so the
+  # caller picks from a list rather than from the code path.
+  describe "raxol_start startable list" do
+    setup do
+      case Process.whereis(Raxol.Headless) do
+        nil -> start_supervised!({Raxol.Headless, [name: Raxol.Headless]})
+        pid -> pid
+      end
+
+      on_exit(fn ->
+        if Process.whereis(Raxol.Headless),
+          do: Raxol.Headless.stop(:startable_table)
+      end)
+
+      :ok
+    end
+
+    test "an unlisted Raxol application is refused and starts nothing" do
+      before = Raxol.Headless.list()
+
+      assert {:error, message} =
+               start_tool_result(%{"module" => inspect(UnlistedApp)})
+
+      assert message =~ "is not startable over MCP"
+      assert message =~ ":headless_startable"
+      assert Raxol.Headless.list() == before
+    end
+
+    # The REPL demo evaluates Elixir; the BEAM dashboard sets the VM-wide
+    # `:scheduler_wall_time` flag and shows VM internals. Both are playground
+    # demos and Raxol applications, and still never startable by an MCP client.
+    test "the REPL and BEAM dashboard demos are refused although every other demo is listed" do
+      before = Raxol.Headless.list()
+
+      for demo <- ["ReplDemo", "BeamDashboardDemo"] do
+        assert {:error, message} =
+                 start_tool_result(%{"module" => "Raxol.Playground.Demos." <> demo})
+
+        assert message =~ "is not startable over MCP"
+      end
+
+      assert Raxol.Headless.list() == before
+    end
+
+    # Pinned so that a new demo is a reviewed change to what any MCP client may
+    # start, not a silent one. Adding a demo to the Catalog fails this test:
+    # list it here if clients may start it, or exclude it in `McpTools`.
+    test "the default list is exactly these demos" do
+      put_startable([])
+      Application.delete_env(:raxol, :headless_startable)
+
+      expected =
+        ~w(BarChartDemo ButtonDemo CheckboxDemo CodeBlockDemo ContainerDemo
+           CursorTrailDemo EasingDemo FlexLayoutDemo FocusRingDemo
+           HarnessApprovalDemo HarnessDiffDemo HarnessPanelsDemo HarnessStatusDemo
+           HarnessToolBlocksDemo HarnessTranscriptDemo HeatmapDemo LineChartDemo
+           MarkdownDemo MenuDemo ModalDemo OscAmbientDemo PanelHighlightsDemo
+           PasswordFieldDemo ProgressDemo RadioGroupDemo SalienceDemo
+           ScatterChartDemo ScrollAnchorDemo ScrubberDemo SelectListDemo
+           SparklineDemo SplitPaneDemo StatusBarDemo TableDemo TabsDemo
+           TextAreaDemo TextDemo TextInputDemo TreeDemo VfsDemo)
+        |> Enum.map(&Module.concat(Raxol.Playground.Demos, &1))
+
+      assert {:ok, startable} = McpTools.startable()
+      assert Enum.sort(startable) == Enum.sort(expected)
+      assert McpTools.default_startable() == startable
+    end
+
+    test "a playground demo starts" do
+      assert {:ok, message} =
+               start_tool_result(%{
+                 "module" => "Raxol.Playground.Demos.TableDemo",
+                 "id" => "startable_table"
+               })
+
+      assert message =~ "startable_table"
+      assert :startable_table in Raxol.Headless.list()
+    end
+
+    # Owner decision (2026-10-24): a set list replaces the demos.
+    test "a configured list replaces the playground demos" do
+      put_startable([Raxol.Playground.Demos.TableDemo])
+
+      assert {:error, message} =
+               start_tool_result(%{
+                 "module" => "Raxol.Playground.Demos.TabsDemo",
+                 "id" => "replaced_tabs"
+               })
+
+      assert message =~ "is not startable over MCP"
+      refute :replaced_tabs in Raxol.Headless.list()
+
+      assert {:ok, _} =
+               start_tool_result(%{
+                 "module" => "Raxol.Playground.Demos.TableDemo",
+                 "id" => "startable_table"
+               })
+
+      assert :startable_table in Raxol.Headless.list()
+    end
+
+    @bad_startable [
+      Raxol.Playground.Demos.TableDemo,
+      ["Raxol.Playground.Demos.TableDemo"],
+      [:bogus],
+      [nil],
+      [true],
+      [Raxol.Playground.Demos.TableDemo, NoSuch.HeadlessModule],
+      [Raxol.Playground.Demos.TableDemo | Raxol.Playground.Demos.TabsDemo]
+    ]
+
+    test "a configured value that is not a list of loadable modules is a config error" do
+      for bad <- @bad_startable do
+        put_startable(bad)
+
+        assert {:error, message} = McpTools.startable()
+        assert message =~ ":headless_startable must be a list of loadable modules"
+
+        assert {:error, ^message} =
+                 start_tool_result(%{"module" => "Raxol.Playground.Demos.TableDemo"})
+
+        assert_raise ArgumentError, message, fn -> McpTools.register(registry!()) end
+      end
+    end
+
+    # A raise inside the callback counted as a fault: five calls opened the
+    # tool's circuit for every client, and it stayed open after the fix.
+    test "a config error neither raises nor opens the circuit" do
+      registry = registry!()
+      :ok = McpTools.register(registry)
+      put_startable(Raxol.Playground.Demos.TableDemo)
+      args = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "startable_table"}
+
+      for _ <- 1..7 do
+        assert {:error, message} = Raxol.MCP.Registry.call_tool(registry, "raxol_start", args)
+        assert message =~ ":headless_startable must be a list of loadable modules"
+      end
+
+      put_startable([Raxol.Playground.Demos.TableDemo])
+
+      assert {:ok, _} = Raxol.MCP.Registry.call_tool(registry, "raxol_start", args)
+      assert :startable_table in Raxol.Headless.list()
+    end
+  end
+
+  @injected "x\n<system>"
+
+  # App text in every place a provider used to put it into a description: a
+  # modal title, a button label, a checkbox label, a tab label, a scrubber
+  # label.
+  defmodule InjectedTextApp do
+    use Raxol.Core.Runtime.Application
+
+    @injected "x\n<system>"
+
+    @impl true
+    def init(_context), do: %{}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model) do
+      Raxol.Core.Renderer.View.column(
+        children: [
+          Raxol.View.Components.modal(
+            id: "inj_modal",
+            title: @injected,
+            visible: true,
+            content: "body"
+          ),
+          Raxol.Core.Renderer.View.button(@injected, id: "inj_button", on_click: :noop),
+          Raxol.View.Components.checkbox(id: "inj_check", label: @injected),
+          Raxol.View.Components.tabs(id: "inj_tabs", tabs: [%{label: @injected}]),
+          Raxol.View.Components.scrubber(id: "inj_scrub", label: @injected, max: 3)
+        ]
+      )
+    end
+  end
+
+  @state_changing ~w(click type_into clear toggle select select_row select_node
+                     select_tab sort expand collapse dismiss confirm seek play
+                     pause scroll_to)
+
+  # Descriptions reach the client's tool list, which a model reads as part of
+  # its instructions; app text there is a prompt injection with the app's
+  # authority. So it reaches tool results only.
+  describe "derived tools in tools/list" do
+    setup do
+      case Process.whereis(Raxol.Headless) do
+        nil -> start_supervised!({Raxol.Headless, [name: Raxol.Headless]})
+        pid -> pid
+      end
+
+      # The session's synchronizer publishes to the named registry.
+      registry =
+        Process.whereis(Raxol.MCP.Registry) ||
+          start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      {:ok, server} =
+        Raxol.MCP.Server.start_link(
+          name: :"srv_#{System.unique_integer([:positive])}",
+          registry: registry,
+          authorizer: Raxol.MCP.Authorizer.allow_all()
+        )
+
+      assert {:ok, _} =
+               start_tool_result(%{
+                 "module" => inspect(InjectedTextApp),
+                 "id" => Atom.to_string(:inj_text)
+               })
+
+      on_exit(fn ->
+        if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop(:inj_text)
+      end)
+
+      %{server: server}
+    end
+
+    test "a modal titled x\\n<system> never appears in tools/list", %{
+      server: server
+    } do
+      tools = list_tools(server)
+      derived = Enum.filter(tools, &String.starts_with?(&1.name, "inj_"))
+
+      assert Enum.map(derived, & &1.name) |> Enum.sort() ==
+               Enum.sort([
+                 "inj_modal.dismiss",
+                 "inj_modal.confirm",
+                 "inj_button.click",
+                 "inj_check.toggle",
+                 "inj_check.get_checked",
+                 "inj_tabs.select_tab",
+                 "inj_tabs.get_tabs",
+                 "inj_scrub.seek",
+                 "inj_scrub.play",
+                 "inj_scrub.pause",
+                 "inj_scrub.get_position"
+               ])
+
+      refute Jason.encode!(tools) =~ "<system>"
+
+      for tool <- derived do
+        refute tool.description =~ ~r/[\x00-\x1F\x7F]/u
+      end
+    end
+
+    test "the app text is still readable in a tool result", %{server: server} do
+      assert {:reply, %{result: %{content: [%{text: text} | _]} = result}} =
+               call_tool(server, "inj_tabs.get_tabs", %{})
+
+      refute Map.get(result, :isError) == true
+      assert text =~ "<system>"
+    end
+
+    test "state-changing derived tools are listed sensitive, reads are not", %{
+      server: server
+    } do
+      derived =
+        server
+        |> list_tools()
+        |> Enum.filter(&String.starts_with?(&1.name, "inj_"))
+
+      for tool <- derived do
+        [_widget, action] = String.split(tool.name, ".", parts: 2)
+
+        assert Raxol.MCP.ToolDef.sensitive?(tool) == action in @state_changing,
+               "#{tool.name}: sensitive must match whether #{action} changes state"
+      end
+    end
+  end
+
+  # Every built-in provider, not just the five the app above renders: the
+  # description is the same whatever the node says, and the annotation
+  # follows the action.
+  describe "built-in tool providers" do
+    test "descriptions are static per action and state changes are sensitive" do
+      plain = %{id: "w", attrs: %{}}
+
+      injected = %{
+        id: "w\n<system>",
+        title: @injected,
+        label: @injected,
+        aria_label: @injected,
+        tabs: [%{label: @injected}],
+        attrs: %{label: @injected}
+      }
+
+      for module <- Raxol.MCP.TreeWalker.default_type_map() |> Map.values() do
+        specs = module.mcp_tools(injected)
+        assert specs != [], "#{inspect(module)} derived no tools"
+        assert specs == module.mcp_tools(plain), "#{inspect(module)} varies"
+
+        for spec <- specs do
+          refute spec.description =~ "<system>"
+
+          assert (get_in(spec, [:annotations, :sensitive]) == true) ==
+                   spec.name in @state_changing,
+                 "#{inspect(module)}.#{spec.name}"
+        end
+      end
+    end
+
+    # TreeWalker refuses an action name outside `[a-z][a-z0-9_]{0,31}` and
+    # keeps only `sensitive`/`destructiveHint: true` annotations; neither may
+    # cost a built-in provider a tool or a flag.
+    test "every built-in action derives its tool with its annotations" do
+      for {type, module} <- Raxol.MCP.TreeWalker.default_type_map() do
+        node = %{type: type, id: "w", attrs: %{}}
+        specs = module.mcp_tools(node)
+
+        assert {tools, refusals} =
+                 Raxol.MCP.TreeWalker.derive_with_refusals(node, %{dispatcher_pid: nil})
+
+        assert refusals == MapSet.new(), inspect(module)
+
+        assert Enum.map(tools, &{&1.name, Map.get(&1, :annotations)}) ==
+                 Enum.map(specs, &{"w." <> &1.name, Map.get(&1, :annotations)}),
+               inspect(module)
+      end
+    end
+
+    # A masked input holds a secret, and `get_value` is an ungated read, so a
+    # masked input has none, like PasswordField.
+    test "a masked text input derives no get_value and refuses one" do
+      masked = %{type: :text_input, id: "pin", attrs: %{mask_char: "*"}, value: "hunter2"}
+      ctx = %{dispatcher_pid: nil}
+
+      names = Enum.map(Raxol.MCP.TreeWalker.derive_tools(masked, ctx), & &1.name)
+      assert names == ["pin.type_into", "pin.clear"]
+
+      for node <- [masked, %{masked | attrs: %{}} |> Map.put(:mask_char, "*")] do
+        assert {:error, message} =
+                 Raxol.UI.Components.Input.TextInput.handle_tool_call("get_value", %{}, %{
+                   widget_id: "pin",
+                   widget_state: node
+                 })
+
+        refute message =~ "hunter2"
+      end
+
+      plain = %{masked | attrs: %{}}
+      assert "pin.get_value" in Enum.map(Raxol.MCP.TreeWalker.derive_tools(plain, ctx), & &1.name)
+    end
+
+    # The same secret through the session's resources: `widgets` is built
+    # from each Component's accessibility node, `context` from the raw view
+    # tree. Both stay readable without a read authorizer.
+    test "a masked or password value is in neither the widgets nor the context resource" do
+      registry = registry!()
+      session = "masked_#{System.unique_integer([:positive])}"
+
+      {:ok, sync} =
+        Raxol.MCP.ToolSynchronizer.start_link(
+          registry: registry,
+          dispatcher_pid: self(),
+          session_id: session
+        )
+
+      tree = %{
+        type: :column,
+        children: [
+          %{type: :text_input, id: "pin", value: "SECRET-node", mask_char: "*"},
+          %{type: :text_input, id: "pin2", attrs: %{mask_char: "*", value: "SECRET-attrs"}},
+          %{type: :password_field, id: "pw", value: "SECRET-pw", attrs: %{value: "SECRET-pwa"}},
+          %{type: :text_input, id: "name", value: "visible-name"}
+        ]
+      }
+
+      :ok = Raxol.MCP.ToolSynchronizer.sync(sync, tree)
+      # A call after the cast: the render has been handled.
+      _state = :sys.get_state(sync)
+
+      for resource <- ["widgets", "context"] do
+        uri = "raxol://session/#{session}/#{resource}"
+        assert {:ok, value} = Raxol.MCP.Registry.read_resource(registry, uri)
+        json = Jason.encode!(value)
+        refute json =~ "SECRET", "#{resource}: #{json}"
+        assert json =~ "visible-name", resource
+      end
+
+      GenServer.stop(sync)
+    end
+
+    # The other half of the breaking change: an embedder with no authorizer
+    # can still read a widget, but no longer drive one.
+    test "an unguarded server refuses a derived state change and runs a read" do
+      registry = registry!()
+
+      {:ok, server} =
+        Raxol.MCP.Server.start_link(
+          name: :"srv_#{System.unique_integer([:positive])}",
+          registry: registry,
+          authorizer: nil
+        )
+
+      tools =
+        Raxol.MCP.TreeWalker.derive_tools(
+          Raxol.View.Components.checkbox(id: "chk", label: "Agree"),
+          %{dispatcher_pid: nil}
+        )
+
+      :ok = Raxol.MCP.Registry.register_tools(registry, tools)
+
+      assert {:reply, %{result: %{content: [%{text: text} | _], isError: true}}} =
+               call_tool(server, "chk.toggle", %{})
+
+      assert Jason.decode!(text)["detail"] =~ "sensitive_tool_unguarded"
+
+      assert {:reply, %{result: result}} = call_tool(server, "chk.get_checked", %{})
+      refute Map.get(result, :isError) == true
+    end
+  end
+
+  defp list_tools(server) do
+    assert {:reply, %{result: %{tools: tools}}} =
+             Raxol.MCP.Server.handle_message(server, %{
+               jsonrpc: "2.0",
+               id: System.unique_integer([:positive]),
+               method: "tools/list"
+             })
+
+    tools
+  end
+
   # A dispatcher that dies on a key takes its exit reason with it, and an
   # exception in that reason carries whatever its message held: a URL, a token.
   # The tool result reaches a model, so it gets the class of the exit and never
@@ -506,6 +981,102 @@ defmodule Raxol.Headless.McpToolsTest do
       refute message =~ "LEAK-MARKER-7Q"
       assert message == inspect({:dispatch_failed, :unknown})
     end
+  end
+
+  defmodule MaskedApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{pin: "hunter2-SECRET", name: "visible-name"}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(model) do
+      %{
+        type: :column,
+        children: [
+          %{type: :text_input, id: "name", value: model.name},
+          %{type: :text_input, id: "pin", value: model.pin, mask_char: "*"}
+        ]
+      }
+    end
+
+    @impl true
+    def subscriptions(_model), do: []
+  end
+
+  # A masked input's value is on screen as its mask and in the model as
+  # plaintext. Neither MCP channel hands the plaintext to a client the
+  # deployment did not authorize for it.
+  describe "a masked input over MCP" do
+    setup do
+      case Process.whereis(Raxol.Headless) do
+        nil -> start_supervised!({Raxol.Headless, [name: Raxol.Headless]})
+        pid -> pid
+      end
+
+      {:ok, id} = Raxol.Headless.start(MaskedApp, id: :masked_mcp)
+
+      on_exit(fn ->
+        if Process.whereis(Raxol.Headless), do: Raxol.Headless.stop(id)
+      end)
+
+      %{id: Atom.to_string(id), registry: registry!()}
+    end
+
+    test "raxol_screenshot shows the mask, never the value", %{id: id, registry: registry} do
+      server = serving_server!(registry, Raxol.MCP.Authorizer.allow_all())
+
+      assert {:reply, %{result: %{content: [%{text: text} | _]} = result}} =
+               call_tool(server, "raxol_screenshot", %{"id" => id})
+
+      refute Map.get(result, :isError) == true
+      assert text =~ "visible-name"
+      assert text =~ "**************"
+      refute text =~ "hunter2"
+    end
+
+    test "raxol_get_model is refused when no authorizer is configured", %{
+      id: id,
+      registry: registry
+    } do
+      assert {:reply, %{result: %{content: [%{text: text} | _], isError: true}}} =
+               call_tool(serving_server!(registry, nil), "raxol_get_model", %{"id" => id})
+
+      refute text =~ "hunter2"
+      payload = Jason.decode!(text)
+      assert payload["error"] == "authorization_required"
+      assert payload["detail"] =~ "sensitive_tool_unguarded"
+    end
+
+    test "raxol_get_model answers once an authorizer allows it", %{
+      id: id,
+      registry: registry
+    } do
+      server = serving_server!(registry, Raxol.MCP.Authorizer.allow_all())
+
+      assert {:reply, %{result: %{content: [%{text: text} | _]} = result}} =
+               call_tool(server, "raxol_get_model", %{"id" => id})
+
+      refute Map.get(result, :isError) == true
+      assert text =~ "hunter2-SECRET"
+    end
+  end
+
+  # Booted before the tools are registered, as `Raxol.Application` does: an
+  # unguarded server would refuse to boot on them otherwise.
+  defp serving_server!(registry, authorizer) do
+    {:ok, server} =
+      Raxol.MCP.Server.start_link(
+        name: :"srv_#{System.unique_integer([:positive])}",
+        registry: registry,
+        authorizer: authorizer
+      )
+
+    :ok = McpTools.register(registry)
+    server
   end
 
   describe "tools/0" do
@@ -559,8 +1130,13 @@ defmodule Raxol.Headless.McpToolsTest do
       end
     end
 
-    test "the three read tools are not gated", %{by_name: by_name} do
-      for name <- ["raxol_screenshot", "raxol_get_model", "raxol_list"] do
+    # It returns the whole model, and a masked input's value lives there.
+    test "raxol_get_model is sensitive", %{by_name: by_name} do
+      assert Raxol.MCP.ToolDef.sensitive?(by_name["raxol_get_model"])
+    end
+
+    test "the screenshot and the session list are not gated", %{by_name: by_name} do
+      for name <- ["raxol_screenshot", "raxol_list"] do
         refute Raxol.MCP.ToolDef.sensitive?(by_name[name]),
                "#{name} is a read; gating it would deny reads for no gain"
       end
@@ -581,7 +1157,7 @@ defmodule Raxol.Headless.McpToolsTest do
         |> Enum.map(& &1.name)
         |> Enum.sort()
 
-      assert sensitive == ["raxol_send_key", "raxol_start", "raxol_stop"]
+      assert sensitive == ["raxol_get_model", "raxol_send_key", "raxol_start", "raxol_stop"]
     end
   end
 
@@ -668,7 +1244,7 @@ defmodule Raxol.Headless.McpToolsTest do
 
       assert message =~ "refuses to boot"
 
-      for name <- ["raxol_start", "raxol_send_key", "raxol_stop"] do
+      for name <- ["raxol_start", "raxol_send_key", "raxol_get_model", "raxol_stop"] do
         assert message =~ name
       end
     end
@@ -683,6 +1259,60 @@ defmodule Raxol.Headless.McpToolsTest do
                  registry: registry,
                  authorizer: Raxol.MCP.Authorizer.allow_all()
                )
+    end
+
+    # Owner decision (2026-10-24): the boot refusal scans static tools only.
+    # An embedder with no authorizer and live sessions has derived sensitive
+    # tools registered when its Server restarts; refusing to boot on them used
+    # to exhaust the restart intensity and take the whole MCP tree down.
+    test "an unguarded Server restarts with derived sensitive tools and still refuses them" do
+      unique = System.unique_integer([:positive])
+      registry = :"reg_#{unique}"
+      server_name = :"srv_#{unique}"
+
+      sup =
+        start_supervised!(
+          {Raxol.MCP.Supervisor, registry_name: registry, server_name: server_name}
+        )
+
+      # Registered the way a session's are: by its synchronizer, the only
+      # caller that marks tools derived.
+      {:ok, sync} =
+        Raxol.MCP.ToolSynchronizer.start_link(
+          registry: registry,
+          dispatcher_pid: self(),
+          session_id: "restart_#{unique}"
+        )
+
+      button = Raxol.Core.Renderer.View.button("Go", id: "restart_btn", on_click: :go)
+      :ok = Raxol.MCP.ToolSynchronizer.sync(sync, button)
+      # A call after the cast: the render has been handled.
+      _state = :sys.get_state(sync)
+
+      assert [%{annotations: %{sensitive: true}}] =
+               registry
+               |> Raxol.MCP.Registry.list_tools()
+               |> Enum.filter(&(&1.name == "restart_btn.click"))
+
+      server = Process.whereis(server_name)
+      ref = Process.monitor(server)
+      Process.exit(server, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^server, :killed}
+
+      # The supervisor handles the exit before this call, restarting the Server.
+      assert {Raxol.MCP.Server, restarted, :worker, _} =
+               sup
+               |> Supervisor.which_children()
+               |> List.keyfind(Raxol.MCP.Server, 0)
+
+      assert is_pid(restarted) and restarted != server
+
+      assert {:reply, %{result: %{content: [%{text: text} | _], isError: true}}} =
+               call_tool(server_name, "restart_btn.click", %{})
+
+      payload = Jason.decode!(text)
+      assert payload["error"] == "authorization_required"
+      assert payload["detail"] =~ "sensitive_tool_unguarded"
     end
 
     # Booting and satisfying the SSE gate are different questions, and an

@@ -252,12 +252,13 @@ defmodule Raxol.UI.Components.Input.Button do
   def mcp_tools(%{attrs: %{disabled: true}}), do: []
   def mcp_tools(%{disabled: true}), do: []
 
-  def mcp_tools(state) do
+  def mcp_tools(_state) do
     [
       %{
         name: "click",
-        description: "Click the '#{tool_label(state)}' button",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Click the button",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       }
     ]
   end

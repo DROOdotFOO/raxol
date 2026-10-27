@@ -320,6 +320,7 @@ defmodule Raxol.UI.Layout.Engine do
       |> Map.take([
         :value,
         :placeholder,
+        :mask_char,
         :on_change,
         :aria_label,
         :aria_description,
@@ -336,8 +337,11 @@ defmodule Raxol.UI.Layout.Engine do
   def process_element(%{type: :text_input, attrs: attrs} = element, space, acc) do
     # Create a text input element composed of box and text
     value = Map.get(attrs, :value, "")
-    placeholder = Map.get(attrs, :placeholder, "")
-    display_text = get_display_text(value, placeholder)
+    # A `mask_char` may sit on the node or in its attrs; either masks it.
+    mask_char = Map.get(attrs, :mask_char) || element[:mask_char]
+
+    display_text =
+      Inputs.text_input_display(Map.put(attrs, :mask_char, mask_char))
 
     # Add component_type, potentially pass placeholder/value info if Renderer needs it
     component_attrs = Map.put(attrs, :component_type, :text_input)
@@ -1099,7 +1103,8 @@ defmodule Raxol.UI.Layout.Engine do
   def measure_element(%{type: :text_input} = element, available_space) do
     attrs_map = %{
       value: Map.get(element, :value, ""),
-      placeholder: Map.get(element, :placeholder, "")
+      placeholder: Map.get(element, :placeholder, ""),
+      mask_char: Map.get(element, :mask_char)
     }
 
     Inputs.measure(:text_input, attrs_map, available_space)
@@ -1181,8 +1186,17 @@ defmodule Raxol.UI.Layout.Engine do
       type when type in [:text, :label, :box, :checkbox] ->
         Elements.measure(type, attrs_map, available_space[:prepared_cache])
 
-      type when type in [:button, :text_input] ->
+      :button ->
         Inputs.measure(type, attrs_map, available_space)
+
+      :text_input ->
+        mask_char = attrs_map[:mask_char] || element[:mask_char]
+
+        Inputs.measure(
+          type,
+          Map.put(attrs_map, :mask_char, mask_char),
+          available_space
+        )
 
       type
       when type in [
@@ -1656,9 +1670,6 @@ defmodule Raxol.UI.Layout.Engine do
       padding: Map.get(style, :padding) || Map.get(flex, :padding, 0)
     }
   end
-
-  defp get_display_text("", placeholder), do: placeholder
-  defp get_display_text(value, _placeholder), do: value
 
   defp get_checkbox_text(true), do: "[x]"
   defp get_checkbox_text(false), do: "[ ]"

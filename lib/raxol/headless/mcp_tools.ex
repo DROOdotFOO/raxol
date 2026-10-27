@@ -10,8 +10,10 @@ defmodule Raxol.Headless.McpTools do
 
   The three tools that change something -- `raxol_start`, `raxol_send_key`,
   `raxol_stop` -- are annotated sensitive, so `Raxol.MCP.Server` refuses to run
-  them when no authorizer is configured. The other three are reads and are not
-  gated.
+  them when no authorizer is configured. So is `raxol_get_model`, a read that
+  returns the whole model: an app keeps its secrets there, a masked input's
+  plaintext included. `raxol_screenshot` (which draws a masked input as its
+  mask) and `raxol_list` are not gated.
 
   The annotation is only half of it: it does nothing until an authorizer exists
   at the call site, and denies permanently if one never does. `Raxol.Application`
@@ -23,7 +25,42 @@ defmodule Raxol.Headless.McpTools do
   `inject_into_tidewave/1` routes through `Raxol.MCP.Server` as well rather than
   handing Tidewave the raw callbacks, so neither surface can drift from the
   policy the other enforces.
+
+  ## Startable modules
+
+  A `"module"` argument starts only a module on `startable/0`. That is
+  `config :raxol, :headless_startable` when it is set, and otherwise the
+  playground demos except `Raxol.Playground.Demos.ReplDemo` (it evaluates
+  Elixir) and `Raxol.Playground.Demos.BeamDashboardDemo` (it sets the
+  VM-wide `:scheduler_wall_time` flag and shows VM internals). A set list
+  REPLACES the demos, so a deployment names exactly what clients may start
+  by module:
+
+      config :raxol, :headless_startable, [MyApp]
+
+  To keep the demos as well, list them too (`default_startable/0` returns
+  them). Every entry must be a loadable module (`Code.ensure_loaded?/1`):
+  `register/1` raises on a value that is not, so a bad config stops the boot,
+  and a value changed at runtime makes `raxol_start` answer with the same
+  config error rather than start anything.
+
+  The list does not bind the `"path"` argument. When a deployment sets
+  `RAXOL_HEADLESS_PATH_ROOT` (or `config :raxol, :headless_path_root`),
+  `raxol_start` compiles and starts any module defined in a file under that
+  root, listed or not, because the module is only known once the file is
+  compiled. Unset, the argument is refused.
+
+  The list binds the MCP tool, which starts a module for an untrusted
+  caller. Elixir callers of `Raxol.Headless.start/2` (`Raxol.MCP.Test`,
+  `Raxol.Recording.Video`) are trusted and start any Raxol application.
   """
+
+  @startable_config_error "config :raxol, :headless_startable must be a list of loadable modules"
+
+  @never_default_startable [
+    Raxol.Playground.Demos.ReplDemo,
+    Raxol.Playground.Demos.BeamDashboardDemo
+  ]
 
   @doc """
   Returns the list of Raxol MCP tool definitions.
@@ -35,17 +72,18 @@ defmodule Raxol.Headless.McpTools do
         name: "raxol_start",
         description: """
         Starts a headless Raxol session from a module name. The module must be
-        a Raxol application: it has to export init/1, update/2 and view/1.
-        Returns the session ID.
+        on this server's startable list (the playground demos unless the
+        deployment sets its own) and a Raxol application: it has to export init/1,
+        update/2 and view/1. Returns the session ID.
 
         A "path" argument also exists, but it is DISABLED unless the deployment
         sets RAXOL_HEADLESS_PATH_ROOT, because starting from a path compiles the
         file. Prefer "module"; the path property below has the details.
 
         Examples:
-          {"module": "RaxolDemo"}
-          {"module": "RaxolDemo", "id": "demo"}
-          {"module": "RaxolDemo", "width": 120, "height": 40}
+          {"module": "Raxol.Playground.Demos.TableDemo"}
+          {"module": "Raxol.Playground.Demos.TableDemo", "id": "demo"}
+          {"module": "Raxol.Playground.Demos.TableDemo", "width": 120, "height": 40}
         """,
         inputSchema: %{
           type: "object",
@@ -53,7 +91,8 @@ defmodule Raxol.Headless.McpTools do
             module: %{
               type: "string",
               description:
-                "Module name as a string (e.g. \"RaxolDemo\"). Mutually exclusive with path."
+                "Module name as a string (e.g. \"Raxol.Playground.Demos.TableDemo\"). " <>
+                  "Mutually exclusive with path."
             },
             path: %{
               type: "string",
@@ -93,7 +132,8 @@ defmodule Raxol.Headless.McpTools do
         # `sensitive`, raxol_mcp's own flag for a tool that must not run
         # unattended. `Raxol.MCP.ToolDef.sensitive?/1` honours either.
         annotations: %{sensitive: true},
-        callback: &start_session/1
+        callback: &start_session/1,
+        fault?: &start_fault?/1
       },
       %{
         name: "raxol_screenshot",
@@ -177,6 +217,9 @@ defmodule Raxol.Headless.McpTools do
             }
           }
         },
+        # The whole model, whatever the app keeps in it: a token, or the
+        # plaintext of a masked input the screen draws as its mask.
+        annotations: %{sensitive: true},
         callback: &get_model/1
       },
       %{
@@ -214,13 +257,84 @@ defmodule Raxol.Headless.McpTools do
   end
 
   @doc """
+  The modules `raxol_start` may start: `config :raxol, :headless_startable`
+  when set (it replaces the default), else `default_startable/0`.
+
+  Answers `{:error, sentence}` when the configured value is not a list of
+  loadable modules (`Code.ensure_loaded?/1`, which loads one that is on the
+  code path but not loaded yet).
+  """
+  @spec startable() :: {:ok, [module()]} | {:error, String.t()}
+  def startable do
+    case Application.fetch_env(:raxol, :headless_startable) do
+      :error ->
+        {:ok, default_startable()}
+
+      {:ok, modules} when is_list(modules) ->
+        if List.improper?(modules),
+          do: {:error, invalid_startable(modules)},
+          else: loadable_startable(modules)
+
+      {:ok, other} ->
+        {:error, invalid_startable(other)}
+    end
+  end
+
+  defp loadable_startable(modules) do
+    case Enum.reject(modules, &(is_atom(&1) and Code.ensure_loaded?(&1))) do
+      [] ->
+        {:ok, modules}
+
+      unloadable ->
+        {:error,
+         @startable_config_error <>
+           "; these entries are not: " <>
+           inspect(unloadable, limit: 10, printable_limit: 200)}
+    end
+  end
+
+  @doc """
+  Every playground demo except `Raxol.Playground.Demos.ReplDemo`, which
+  evaluates Elixir, and `Raxol.Playground.Demos.BeamDashboardDemo`, which
+  sets the VM-wide `:scheduler_wall_time` flag and shows VM internals: what
+  `raxol_start` may start when `config :raxol, :headless_startable` is not
+  set.
+  """
+  @spec default_startable() :: [module()]
+  def default_startable do
+    for %{module: module} <- Raxol.Playground.Catalog.list_components(),
+        module not in @never_default_startable,
+        do: module
+  end
+
+  defp invalid_startable(value) do
+    @startable_config_error <>
+      ", got: " <> inspect(value, limit: 10, printable_limit: 200)
+  end
+
+  # The config error is the deployment's, not the tool's: counted as a fault,
+  # five calls opened `raxol_start`'s circuit for every client, and it stayed
+  # open after the config was fixed. Every other error still counts.
+  defp start_fault?(reason),
+    do:
+      not (is_binary(reason) and
+             String.starts_with?(reason, @startable_config_error))
+
+  @doc """
   Register all headless tools with the given MCP Registry.
 
   Called from `Raxol.Application` after the MCP supervisor and Headless
-  are both running.
+  are both running. Raises `ArgumentError` when
+  `config :raxol, :headless_startable` is invalid (see `startable/0`), so a
+  bad config stops the boot instead of surfacing at the first `raxol_start`.
   """
   @spec register(GenServer.server()) :: :ok
   def register(registry \\ Raxol.MCP.Registry) do
+    case startable() do
+      {:ok, _modules} -> :ok
+      {:error, message} -> raise ArgumentError, message
+    end
+
     if Code.ensure_loaded?(Raxol.MCP.Registry) do
       Raxol.MCP.Registry.register_tools(registry, tools())
     else
@@ -603,32 +717,29 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
-  # `"module"` arrives from an MCP client, and atoms are never garbage collected:
-  # minting one per distinct string lets a caller looping on a wrong name grow the
-  # atom table until the VM aborts. `Raxol.Application` registers these tools at
-  # startup, so this is a reachable surface rather than a dev-only one.
-  #
-  # But the atom table alone answers the wrong question. Under `mix mcp.server`
-  # the VM loads code on demand, so a module that is compiled and sitting on the
-  # code path has no atom until something reaches for it -- and reaching for it
-  # is precisely what this tool is asked to do. So the code path decides, and the
-  # atom is minted only once a beam file for that exact name is found there:
-  # bounded by what is on disk, not by what a caller can type.
+  # `"module"` arrives from an MCP client, which is choosing what this VM runs,
+  # so it is matched by name against `startable/0` before anything resolves it.
+  # An unlisted name is refused without a code-path lookup and without minting
+  # an atom (atoms are never collected); a listed one is already an atom, and
+  # `startable/0` has loaded it. A broken list is the config error, answered
+  # as the tool's error rather than raised.
   defp resolve_module_or_path(%{"module" => _mod, "path" => _path}),
     do: {:error, "'module' and 'path' are mutually exclusive"}
 
   defp resolve_module_or_path(%{"module" => mod}) when is_binary(mod) do
-    case existing_module(mod) do
-      {:ok, module} ->
-        {:ok, module}
+    prefixed = "Elixir." <> mod
 
-      # Not "it is not loaded": the code path is what decided, and a module
-      # being unloaded is the normal state under `mix mcp.server` rather than a
-      # reason to refuse anything. What is missing is the beam itself.
-      :error ->
-        {:error,
-         "unknown module #{inspect(mod)}: no compiled module by that name is " <>
-           "loadable in this VM"}
+    with {:ok, modules} <- startable() do
+      case Enum.find(modules, &(Atom.to_string(&1) == prefixed)) do
+        nil ->
+          {:error,
+           "module #{inspect(mod)} is not startable over MCP: only the modules in " <>
+             "config :raxol, :headless_startable are (when unset, the playground " <>
+             "demos except ReplDemo and BeamDashboardDemo)"}
+
+        module ->
+          {:ok, module}
+      end
     end
   end
 
@@ -671,36 +782,6 @@ defmodule Raxol.Headless.McpTools do
   # trade a refused lookup for something much worse.
   defp resolve_module_or_path(_),
     do: {:error, "Either 'module' or 'path' is required"}
-
-  # `:code.where_is_file/1` walks the code path for the beam, which is what
-  # `Code.ensure_loaded?/1` would have to find anyway -- asking first just means
-  # a name that exists nowhere never becomes an atom.
-  defp existing_module(name) do
-    prefixed = "Elixir." <> name
-
-    case atom_if_exists(prefixed) do
-      {:ok, module} -> {:ok, module}
-      :error -> beam_on_code_path(prefixed)
-    end
-  end
-
-  defp atom_if_exists(prefixed) do
-    {:ok, String.to_existing_atom(prefixed)}
-  rescue
-    ArgumentError -> :error
-  end
-
-  # The mint stays bounded because the file has to be there: `where_is_file/1`
-  # appends the name to each code-path directory and stats it, so the reachable
-  # set is the beams already on disk, which a caller supplying names cannot
-  # grow. The `Elixir.` prefix leads, so a separator-bearing name looks for a
-  # directory literally called `Elixir.<something>` and finds nothing.
-  defp beam_on_code_path(prefixed) do
-    case :code.where_is_file(String.to_charlist(prefixed <> ".beam")) do
-      :non_existing -> :error
-      _path -> {:ok, String.to_atom(prefixed)}
-    end
-  end
 
   # An absolute path is REFUSED here rather than left to `confine/3`.
   #

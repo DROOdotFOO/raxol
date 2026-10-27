@@ -112,6 +112,37 @@ defmodule Raxol.MCP.SensitiveToolGuardTest do
       assert {:ok, server} = start_server(registry, [])
       assert Process.alive?(server)
     end
+
+    # Only `Raxol.MCP.ToolSynchronizer` registers derived tools (with
+    # `derived: true` as a registration option). A `:derived` key in the tool
+    # map is the caller's own claim and must not exempt it from this check.
+    test "a tool map claiming derived: true is still checked at boot" do
+      registry = registry!()
+
+      :ok =
+        Registry.register_tools(registry, [
+          Map.put(tool("wipe_all", %{destructiveHint: true}), :derived, true)
+        ])
+
+      assert ["wipe_all"] == Enum.map(Registry.static_tools(registry), & &1.name)
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _stack}} = start_server(registry, [])
+      assert message =~ "refuses to boot"
+      assert message =~ "wipe_all"
+    end
+
+    test "a tool registered with the derived option is left to the call-time refusal" do
+      registry = registry!()
+
+      :ok =
+        Registry.register_tools(registry, [tool("w.click", %{sensitive: true})], derived: true)
+
+      assert Registry.static_tools(registry) == []
+      assert {:ok, server} = start_server(registry, [])
+      assert Process.alive?(server)
+    end
   end
 
   describe "runtime backstop" do

@@ -176,4 +176,41 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
       GenServer.stop(pid)
     end
   end
+
+  # A view with per-item ids (`"msg-" <> uuid` is past the 32-character cap)
+  # refuses a new id on every render; only the current render's refusals are
+  # kept, and each is still warned about once while it stays in the view.
+  describe "refused widget ids" do
+    test "stay bounded by the current render and warn once while they last",
+         %{registry: registry} do
+      {:ok, pid} =
+        ToolSynchronizer.start_link(
+          registry: registry,
+          dispatcher_pid: self(),
+          session_id: "refusals_#{System.unique_integer([:positive])}"
+        )
+
+      widget = fn id -> %{type: :column, id: id, attrs: %{component_module: TestWidget}} end
+      kept = "kept." <> Integer.to_string(System.unique_integer([:positive]))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          for i <- 1..300 do
+            tree = %{type: :column, children: [widget.(kept), widget.("item.#{i}")]}
+            ToolSynchronizer.sync(pid, tree)
+          end
+
+          # A call after the casts: every render has been handled.
+          send(self(), {:refusals, :sys.get_state(pid).refusals})
+        end)
+
+      assert_received {:refusals, refusals}
+      assert refusals == MapSet.new([{:widget_id, kept}, {:widget_id, "item.300"}])
+      assert length(String.split(log, "widget id #{inspect(kept)} derives no tools")) == 2
+      assert log =~ "widget id \"item.1\" derives no tools"
+      assert log =~ "widget id \"item.300\" derives no tools"
+
+      GenServer.stop(pid)
+    end
+  end
 end

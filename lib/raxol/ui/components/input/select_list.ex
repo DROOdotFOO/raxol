@@ -650,29 +650,28 @@ defmodule Raxol.UI.Components.Input.SelectList do
   # -- ToolProvider callbacks --
 
   @impl Raxol.MCP.ToolProvider
-  def mcp_tools(state) do
-    id = state[:id] || "select_list"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "select",
-        description: "Select an option in '#{id}' by index",
+        description: "Select an option by index",
         inputSchema: %{
           type: "object",
           properties: %{
             index: %{type: "integer", description: "Option index (0-based)"}
           },
           required: ["index"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_selected",
-        description: "Get the currently selected option in '#{id}'",
+        description: "Get the currently selected option",
         inputSchema: %{type: "object", properties: %{}}
       },
       %{
         name: "get_options",
-        description: "Get all available options in '#{id}'",
+        description: "Get all available options",
         inputSchema: %{type: "object", properties: %{}}
       }
     ]

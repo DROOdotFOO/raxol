@@ -16,6 +16,40 @@ defmodule Raxol.MCP.TreeWalker do
 
   Tool names are namespaced as `"widget_id.action"`, e.g., `"search_input.type_into"`.
   Nodes without an `:id` key are skipped (layout containers like `:column`, `:row`).
+  Both halves become part of a tool name the client lists, so a provider
+  whose id is not 1-32 characters of `[A-Za-z0-9_-]` derives no tools, and
+  an action whose name is not a lowercase letter followed by up to 31 of
+  `[a-z0-9_]` derives no tool.
+
+  Everything else a provider writes reaches the client's tool list as well,
+  which a model reads as instructions. Control, format (bidi, zero-width,
+  BOM, tag), line/paragraph separator, private-use and invisible filler
+  characters (variation selectors, combining grapheme joiner, Hangul
+  fillers, braille blank) are stripped from a tool's `description` and from
+  every string and every key inside its `inputSchema` (titles, enums,
+  defaults, examples, property names). Of a spec's `annotations` only
+  `sensitive: true` and `destructiveHint: true` are kept: they can only add
+  the authorizer requirement, while any other key (`title`, `readOnlyHint`,
+  ...) is a provider's self-report a client would act on.
+
+  An atom is encoded as its name, so it is cleaned as that name: a
+  `description` atom becomes its cleaned name, and a schema key or leaf
+  atom stays an atom when its name is clean and becomes the cleaned string
+  otherwise. A spec derives no tool, and is refused like a misnamed action,
+  when its `description` is neither a string nor an atom (`nil` means none),
+  when its `inputSchema` holds anything JSON cannot encode (a tuple, a
+  struct, a pid, a function, an improper list, a key that is neither a
+  string nor an atom), when two keys of one map are equal once cleaned
+  and stringified (`:amount` and `"amount"`, or `"amount"` and
+  `"amount\\u200B"`), or when its `inputSchema` nests maps and lists deeper
+  than 32 levels or holds more than 10,000 values (each map, list and leaf
+  counts one). One such spec would otherwise make every client's
+  `tools/list` unencodable, let one property definition silently replace
+  another, or hold up every render while it is cleaned.
+
+  A derived tool is registered as one by `Raxol.MCP.ToolSynchronizer`
+  (`Raxol.MCP.Registry.register_tools/3` with `derived: true`), which is
+  what `Raxol.MCP.Server`'s boot check reads to tell it from a static tool.
 
   ## Excluding Widgets
 
@@ -40,6 +74,8 @@ defmodule Raxol.MCP.TreeWalker do
   """
 
   alias Raxol.MCP.ToolProvider
+
+  require Logger
 
   # Widget type atoms -> module names. These are in main raxol, so we use
   # @compile to suppress undefined warnings for cross-package references.
@@ -98,11 +134,34 @@ defmodule Raxol.MCP.TreeWalker do
   @spec default_type_map() :: %{atom() => module()}
   def default_type_map, do: @default_type_map
 
+  @typedoc """
+  Why a provider derived less than it declared: `{:widget_id, id}` for a
+  widget whose id derives no tools, `{:action_name, widget_id, name}` for
+  one spec whose action name derives no tool, `{:action_spec, widget_id,
+  name, fault}` for one whose description or input schema does (see the
+  moduledoc).
+  """
+  @type refusal ::
+          {:widget_id, String.t()}
+          | {:action_name, String.t(), term()}
+          | {:action_spec, String.t(), String.t(), spec_fault()}
+
+  @typedoc """
+  `:not_json` for a term JSON cannot encode, `{:duplicate_key, key}` for two
+  keys that are both `key` once cleaned, `:too_large` for an input schema
+  deeper than 32 levels or larger than 10,000 values.
+  """
+  @type spec_fault :: :not_json | {:duplicate_key, String.t()} | :too_large
+
   @doc """
-  Derives MCP tool definitions from a view element tree.
+  Derives MCP tool definitions from a view element tree, and logs every
+  refusal (a widget id, action name or action spec that derives nothing) as
+  a warning.
 
   Returns a list of `Registry.tool_def()` maps with namespaced names and
-  wrapped callbacks that dispatch TEA messages.
+  wrapped callbacks that dispatch TEA messages. A caller that derives on
+  every render and wants each refusal logged once uses
+  `derive_with_refusals/2` instead.
 
   ## Options in context
 
@@ -113,8 +172,99 @@ defmodule Raxol.MCP.TreeWalker do
           Raxol.MCP.Registry.tool_def()
         ]
   def derive_tools(tree, context) do
+    {tools, refusals} = derive_with_refusals(tree, context)
+    Enum.each(refusals, &warn_refusal/1)
+    tools
+  end
+
+  @doc """
+  `derive_tools/2` without logging: returns the tools and the set of
+  refusals (see `t:refusal/0`) instead. A caller that derives on every
+  render (`Raxol.MCP.ToolSynchronizer`) logs each new refusal once with
+  `warn_refusal/1`.
+  """
+  @spec derive_with_refusals(map() | [map()], context()) ::
+          {[Raxol.MCP.Registry.tool_def()], MapSet.t(refusal())}
+  def derive_with_refusals(tree, context) do
     type_map = Map.get(context, :type_map, @default_type_map)
-    do_walk(tree, context, type_map, [])
+    do_walk(tree, context, type_map, {[], MapSet.new()})
+  end
+
+  # A widget id is one segment of a listed tool name, so the cap bounds that
+  # segment: a view cannot list names of unbounded length. 32 is a bound, not
+  # a fit to any client's name limit; session prefix + id + action can still
+  # exceed one (OMP's 64, which counts its own prefix too).
+  @widget_id ~r/\A[A-Za-z0-9_-]{1,32}\z/
+
+  # The other segment. Every built-in action (`click`, `get_visible_range`,
+  # ...) is lowercase snake case; the same 32 bounds it.
+  @action_name ~r/\A[a-z][a-z0-9_]{0,31}\z/
+
+  # Cleaning walks a provider's whole input schema on every render, and a
+  # shared subterm doubles per level once walked as a tree; these bound it.
+  @max_schema_depth 32
+  @max_schema_values 10_000
+
+  @doc "Logs why `refusal` derived nothing."
+  @spec warn_refusal(refusal()) :: :ok
+  def warn_refusal({:widget_id, id}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget id #{inspect(id)} derives no tools: an id must be " <>
+        "1-32 characters of [A-Za-z0-9_-]"
+    )
+  end
+
+  def warn_refusal({:action_name, widget_id, name}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
+        "no tool: an action name must be a lowercase letter followed by up to 31 " <>
+        "of [a-z0-9_]"
+    )
+  end
+
+  def warn_refusal({:action_spec, widget_id, name, :not_json}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
+        "no tool: its description is not a string or atom, or its inputSchema holds " <>
+        "a term JSON cannot encode (a tuple, struct, pid, function, improper list or " <>
+        "a key that is not a string or atom)"
+    )
+  end
+
+  def warn_refusal({:action_spec, widget_id, name, {:duplicate_key, key}}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
+        "no tool: two inputSchema keys of one map are both #{inspect(key)} once cleaned"
+    )
+  end
+
+  def warn_refusal({:action_spec, widget_id, name, :too_large}) do
+    Logger.warning(
+      "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
+        "no tool: its inputSchema nests deeper than #{@max_schema_depth} maps and lists " <>
+        "or holds more than #{@max_schema_values} values"
+    )
+  end
+
+  @doc """
+  Whether `name` may name an action: a lowercase letter followed by up to 31
+  of `[a-z0-9_]`. It becomes part of a listed tool name.
+  """
+  @spec action_name?(term()) :: boolean()
+  def action_name?(name), do: is_binary(name) and Regex.match?(@action_name, name)
+
+  @doc """
+  An action spec's `description` and `inputSchema` as the client's tool list
+  gets them: cleaned as the moduledoc describes, or the `t:spec_fault/0`
+  that refuses the spec. `Raxol.MCP.AgentBridge` applies it to an Action's
+  meta.
+  """
+  @spec clean_spec(term(), term()) :: {:ok, String.t() | nil, term()} | {:error, spec_fault()}
+  def clean_spec(description, input_schema) do
+    with {:ok, description} <- clean_description(description),
+         {:ok, schema, _budget} <- clean_schema(input_schema, 0, @max_schema_values) do
+      {:ok, description, schema}
+    end
   end
 
   defp do_walk(nodes, context, type_map, acc) when is_list(nodes) do
@@ -123,15 +273,8 @@ defmodule Raxol.MCP.TreeWalker do
 
   defp do_walk(%{type: type, id: id} = node, context, type_map, acc)
        when is_atom(type) and is_binary(id) and id != "" do
-    widget_tools =
-      if mcp_excluded?(node) do
-        []
-      else
-        derive_widget_tools(node, type, id, context, type_map)
-      end
-
-    children_acc = do_walk(child_nodes(node), context, type_map, acc)
-    widget_tools ++ children_acc
+    acc = do_walk(child_nodes(node), context, type_map, acc)
+    add_widget_tools(widget_specs(node, type, type_map), node, id, context, acc)
   end
 
   defp do_walk(%{children: _} = node, context, type_map, acc) do
@@ -153,6 +296,29 @@ defmodule Raxol.MCP.TreeWalker do
   end
 
   defp do_walk(_node, _context, _type_map, acc), do: acc
+
+  defp add_widget_tools(nil, _node, _id, _context, acc), do: acc
+
+  defp add_widget_tools({module, specs}, node, id, context, {tools, refusals}) do
+    if Regex.match?(@widget_id, id) do
+      {named, misnamed} = Enum.split_with(specs, &action_name?(Map.get(&1, :name)))
+      refusals = Enum.into(misnamed, refusals, &{:action_name, id, Map.get(&1, :name)})
+
+      {built, refusals} =
+        Enum.flat_map_reduce(named, refusals, &add_action(&1, &2, id, module, node, context))
+
+      {built ++ tools, refusals}
+    else
+      {tools, MapSet.put(refusals, {:widget_id, id})}
+    end
+  end
+
+  defp add_action(spec, refusals, id, module, node, context) do
+    case build_tool_def(spec, id, module, node, context) do
+      {:ok, tool} -> {[tool], refusals}
+      {:error, fault} -> {[], MapSet.put(refusals, {:action_spec, id, spec.name, fault})}
+    end
+  end
 
   # The View DSL allows :children to be a list or a single element map
   # (e.g. a box whose do-block is one column). Mirror the Bubbler's
@@ -192,18 +358,16 @@ defmodule Raxol.MCP.TreeWalker do
     flow ++ overlay_elements
   end
 
-  defp derive_widget_tools(node, type, id, context, type_map) do
-    case resolve_module(node, type, type_map) do
-      nil ->
-        []
+  # The provider module and its specs, or nil for a node that derives nothing
+  # (excluded, no provider, or no specs).
+  defp widget_specs(node, type, type_map) do
+    module = resolve_module(node, type, type_map)
 
-      module ->
-        if ToolProvider.tool_provider?(module) do
-          specs = module.mcp_tools(node)
-          Enum.map(specs, &build_tool_def(&1, id, module, node, context))
-        else
-          []
-        end
+    if not mcp_excluded?(node) and module != nil and ToolProvider.tool_provider?(module) do
+      case module.mcp_tools(node) do
+        [_ | _] = specs -> {module, specs}
+        _none -> nil
+      end
     end
   end
 
@@ -221,35 +385,183 @@ defmodule Raxol.MCP.TreeWalker do
     end
   end
 
+  # The tool list is read by a model as instructions: a forged line break, a
+  # bidi override, invisible tag characters or variation selectors (which can
+  # carry arbitrary bytes invisibly) there are a prompt-injection channel. The
+  # built-in providers keep their specs static per action; this holds for any
+  # other provider as well. Control (C0, C1, DEL), format (bidi, zero-width,
+  # BOM, tag), line/paragraph separator and private-use characters, the
+  # variation selectors (U+FE00-FE0F, U+E0100-E01EF), the combining grapheme
+  # joiner (U+034F), the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0) and
+  # the braille blank (U+2800).
+  @unsafe_chars ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{034F}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]/u
+
   defp build_tool_def(spec, widget_id, module, node, context) do
-    action_name = spec.name
-
-    %{
-      name: "#{widget_id}.#{action_name}",
-      description: spec.description,
-      inputSchema: spec.inputSchema,
-      callback: fn args ->
-        tool_context = %{
-          widget_id: widget_id,
-          widget_state: node,
-          dispatcher_pid: context[:dispatcher_pid]
-        }
-
-        case module.handle_tool_call(action_name, args, tool_context) do
-          {:ok, result, messages} ->
-            with :ok <- dispatch_messages(messages, context[:dispatcher_pid]) do
-              {:ok, format_result(result)}
-            end
-
-          {:ok, result} ->
-            {:ok, format_result(result)}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-      end
-    }
+    with {:ok, description, schema} <-
+           clean_spec(Map.get(spec, :description), Map.get(spec, :inputSchema)) do
+      %{
+        name: "#{widget_id}.#{spec.name}",
+        description: description,
+        inputSchema: schema,
+        callback: tool_callback(spec.name, widget_id, module, node, context)
+      }
+      |> put_annotations(Map.get(spec, :annotations))
+      |> then(&{:ok, &1})
+    end
   end
+
+  defp tool_callback(action_name, widget_id, module, node, context) do
+    fn args ->
+      tool_context = %{
+        widget_id: widget_id,
+        widget_state: node,
+        dispatcher_pid: context[:dispatcher_pid]
+      }
+
+      case module.handle_tool_call(action_name, args, tool_context) do
+        {:ok, result, messages} ->
+          dispatch_and_format(messages, result, context[:dispatcher_pid])
+
+        {:ok, result} ->
+          {:ok, format_result(result)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp dispatch_and_format(messages, result, dispatcher_pid) do
+    with :ok <- dispatch_messages(messages, dispatcher_pid), do: {:ok, format_result(result)}
+  end
+
+  # Only the two flags `Raxol.MCP.ToolDef.sensitive?/1` reads, and only when
+  # `true`: a provider declaring its action dangerous is credible, one
+  # declaring it safe (`readOnlyHint`, `destructiveHint: false`) is not, and a
+  # client acts on the hints it finds (OMP's plan mode reads `readOnlyHint`).
+  # No built-in provider sets any other key.
+  @kept_annotations [:sensitive, :destructiveHint]
+
+  defp put_annotations(tool, annotations) when is_map(annotations) do
+    kept =
+      for key <- @kept_annotations,
+          (Map.get(annotations, key) || Map.get(annotations, Atom.to_string(key))) == true,
+          into: %{},
+          do: {key, true}
+
+    if kept == %{}, do: tool, else: Map.put(tool, :annotations, kept)
+  end
+
+  defp put_annotations(tool, _annotations), do: tool
+
+  # Invalid UTF-8 is replaced first, since the `u` regex refuses it.
+  defp sanitize_text(text) do
+    text |> String.replace_invalid() |> String.replace(@unsafe_chars, "")
+  end
+
+  defp clean_description(nil), do: {:ok, nil}
+  defp clean_description(text) when is_binary(text), do: {:ok, sanitize_text(text)}
+  defp clean_description(atom) when is_atom(atom), do: {:ok, sanitize_text(Atom.to_string(atom))}
+  defp clean_description(_other), do: {:error, :not_json}
+
+  # Every key and every string leaf, at any depth (titles, enums, defaults,
+  # examples, property names, nested objects, array `items`), or the fault
+  # that refuses the spec. `depth` is how many maps and lists enclose the
+  # term, `budget` how many more values (maps, lists, leaves) may be walked;
+  # past either cap the walk stops, so its cost is bounded whatever the
+  # provider hands over.
+  defp clean_schema(_term, _depth, budget) when budget <= 0, do: {:error, :too_large}
+
+  defp clean_schema(%{} = map, depth, budget) when not is_struct(map) do
+    if depth >= @max_schema_depth or map_size(map) >= budget do
+      {:error, :too_large}
+    else
+      clean_map(map, depth + 1, budget - 1)
+    end
+  end
+
+  defp clean_schema(list, depth, budget) when is_list(list) do
+    if depth >= @max_schema_depth,
+      do: {:error, :too_large},
+      else: clean_list(list, depth + 1, budget - 1, [])
+  end
+
+  defp clean_schema(text, _depth, budget) when is_binary(text),
+    do: {:ok, sanitize_text(text), budget - 1}
+
+  defp clean_schema(literal, _depth, budget) when literal in [nil, true, false],
+    do: {:ok, literal, budget - 1}
+
+  defp clean_schema(atom, _depth, budget) when is_atom(atom),
+    do: {:ok, clean_atom(atom), budget - 1}
+
+  defp clean_schema(number, _depth, budget) when is_number(number),
+    do: {:ok, number, budget - 1}
+
+  defp clean_schema(_other, _depth, _budget), do: {:error, :not_json}
+
+  defp clean_map(map, depth, budget) do
+    Enum.reduce_while(map, {:ok, %{}, MapSet.new(), budget}, fn {key, value},
+                                                                {:ok, clean, seen, budget} ->
+      case clean_entry(key, value, seen, depth, budget) do
+        {:ok, key, name, value, budget} ->
+          {:cont, {:ok, Map.put(clean, key, value), MapSet.put(seen, name), budget}}
+
+        error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, clean, _seen, budget} -> {:ok, clean, budget}
+      error -> error
+    end
+  end
+
+  # `name` is the key as JSON writes it, so `:a` and `"a"` collide.
+  defp clean_entry(key, value, seen, depth, budget) do
+    with {:ok, key, name} <- clean_key(key),
+         :ok <- unseen(name, seen),
+         {:ok, value, budget} <- clean_schema(value, depth, budget) do
+      {:ok, key, name, value, budget}
+    end
+  end
+
+  defp unseen(name, seen) do
+    if MapSet.member?(seen, name), do: {:error, {:duplicate_key, name}}, else: :ok
+  end
+
+  defp clean_key(key) when is_binary(key) do
+    clean = sanitize_text(key)
+    {:ok, clean, clean}
+  end
+
+  defp clean_key(key) when is_atom(key) do
+    case clean_atom(key) do
+      ^key -> {:ok, key, Atom.to_string(key)}
+      clean -> {:ok, clean, clean}
+    end
+  end
+
+  defp clean_key(_other), do: {:error, :not_json}
+
+  # An atom is encoded as its name, so one whose name changes is replaced by
+  # the cleaned string.
+  defp clean_atom(atom) do
+    name = Atom.to_string(atom)
+    clean = sanitize_text(name)
+    if clean == name, do: atom, else: clean
+  end
+
+  defp clean_list([], _depth, budget, acc), do: {:ok, Enum.reverse(acc), budget}
+
+  defp clean_list([item | rest], depth, budget, acc) do
+    case clean_schema(item, depth, budget) do
+      {:ok, clean, budget} -> clean_list(rest, depth, budget, [clean | acc])
+      error -> error
+    end
+  end
+
+  defp clean_list(_improper_tail, _depth, _budget, _acc), do: {:error, :not_json}
 
   # A call, not a cast: each message has been through the app's update/2 by
   # the time the tool answers. An update/2 that failed answers

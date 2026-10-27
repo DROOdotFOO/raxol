@@ -345,19 +345,19 @@ defmodule Raxol.UI.Components.Modal do
   @impl Raxol.MCP.ToolProvider
   def mcp_tools(%{visible: false}), do: []
 
-  def mcp_tools(state) do
-    title = state[:title] || "Modal"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "dismiss",
-        description: "Dismiss the '#{title}' modal",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Dismiss the modal",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       },
       %{
         name: "confirm",
-        description: "Confirm/accept the '#{title}' modal",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Confirm/accept the modal",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       }
     ]
   end

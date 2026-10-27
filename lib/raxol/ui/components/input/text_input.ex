@@ -177,31 +177,41 @@ defmodule Raxol.UI.Components.Input.TextInput do
 
   # -- ToolProvider callbacks --
 
+  # A masked input (`mask_char` set) holds a secret, so like
+  # `Raxol.UI.Components.Input.PasswordField` it derives no `get_value`: the
+  # read is ungated, and a client would get the plaintext the screen hides.
   @impl Raxol.MCP.ToolProvider
   def mcp_tools(state) do
-    id = state[:id] || "text_input"
-
     [
       %{
         name: "type_into",
-        description: "Type text into '#{id}'",
+        description: "Type text into the text input",
         inputSchema: %{
           type: "object",
           properties: %{text: %{type: "string", description: "Text to type"}},
           required: ["text"]
-        }
+        },
+        annotations: %{sensitive: true}
       },
       %{
         name: "clear",
-        description: "Clear the text input '#{id}'",
-        inputSchema: %{type: "object", properties: %{}}
-      },
-      %{
-        name: "get_value",
-        description: "Get the current value of '#{id}'",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Clear the text input",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       }
-    ]
+    ] ++ if(masked?(state), do: [], else: [get_value_spec()])
+  end
+
+  defp get_value_spec do
+    %{
+      name: "get_value",
+      description: "Get the current value of the text input",
+      inputSchema: %{type: "object", properties: %{}}
+    }
+  end
+
+  defp masked?(node) do
+    (node[:mask_char] || get_in(node, [:attrs, :mask_char])) != nil
   end
 
   @impl Raxol.MCP.ToolProvider
@@ -214,16 +224,23 @@ defmodule Raxol.UI.Components.Input.TextInput do
   end
 
   def handle_tool_call("get_value", _args, context) do
-    value =
-      context.widget_state[:value] ||
-        get_in(context.widget_state, [:attrs, :value]) || ""
+    if masked?(context.widget_state) do
+      {:error, "A masked text input does not reveal its value"}
+    else
+      value =
+        context.widget_state[:value] ||
+          get_in(context.widget_state, [:attrs, :value]) || ""
 
-    {:ok, value}
+      {:ok, value}
+    end
   end
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
 
+  # A masked input's value is a secret (see `masked?/1`): like
+  # `PasswordField`, its node reports none, so the widgets resource built
+  # from it does not carry the plaintext.
   @impl Raxol.Core.Accessibility.Provider
   def a11y_node(node) do
     attrs = Map.get(node, :attrs, %{})
@@ -233,12 +250,16 @@ defmodule Raxol.UI.Components.Input.TextInput do
       label:
         node[:aria_label] || attrs[:aria_label] || node[:label] || attrs[:label] ||
           node[:placeholder] || attrs[:placeholder],
-      value: node[:value] || attrs[:value],
+      value: a11y_value(node, attrs),
       state: %{
         focused?: (node[:focused] || attrs[:focused]) == true,
         required?: (node[:required] || attrs[:required]) == true
       }
     }
+  end
+
+  defp a11y_value(node, attrs) do
+    if masked?(node), do: nil, else: node[:value] || attrs[:value]
   end
 end
 

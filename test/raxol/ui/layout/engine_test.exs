@@ -639,4 +639,70 @@ defmodule Raxol.UI.Layout.EngineTest do
       assert el.height > 0
     end
   end
+
+  # A masked input's value is a secret the screen hides. Every grid surface
+  # (the terminal buffer, `raxol_screenshot`, the LiveView DOM) is drawn from
+  # these cells, so the engine must draw the mask, not the value.
+  describe "masked text_input" do
+    @secret "hunter2-SECRET"
+
+    defp screen_text(view) do
+      view
+      |> Engine.apply_layout(%{width: 40, height: 5})
+      |> Raxol.UI.Renderer.render_to_cells(Raxol.UI.Theming.Theme.new())
+      |> Enum.sort_by(fn {x, y, _char, _fg, _bg, _attrs} -> {y, x} end)
+      |> Enum.map_join(fn {_x, _y, char, _fg, _bg, _attrs} -> char end)
+    end
+
+    defp liveview_html(view) do
+      view
+      |> Engine.apply_layout(%{width: 40, height: 5})
+      |> Raxol.UI.Renderer.render_to_cells(Raxol.UI.Theming.Theme.new())
+      |> Enum.reduce(Raxol.Core.Buffer.create_blank_buffer(40, 5), fn
+        {x, y, char, _fg, _bg, _attrs}, buffer ->
+          Raxol.Core.Buffer.set_cell(buffer, x, y, char, %{})
+      end)
+      |> Raxol.LiveView.TerminalBridge.buffer_to_html()
+    end
+
+    for {shape, view} <- [
+          top_level: %{
+            type: :text_input,
+            id: "pin",
+            value: @secret,
+            mask_char: "*"
+          },
+          attrs: %{
+            type: :text_input,
+            id: "pin",
+            attrs: %{value: @secret, mask_char: "*"}
+          },
+          mixed: %{
+            type: :text_input,
+            id: "pin",
+            mask_char: "*",
+            attrs: %{value: @secret}
+          }
+        ] do
+      test "draws the mask, never the value (#{shape})" do
+        view = unquote(Macro.escape(view))
+        text = screen_text(view)
+
+        refute text =~ "hunter2"
+        assert text =~ String.duplicate("*", String.length(@secret))
+        refute liveview_html(view) =~ "hunter2"
+      end
+    end
+
+    test "an empty masked input still shows its placeholder" do
+      view = %{type: :text_input, value: "", placeholder: "PIN", mask_char: "*"}
+
+      assert screen_text(view) =~ "PIN"
+    end
+
+    test "an unmasked input still shows its value" do
+      assert screen_text(%{type: :text_input, value: "visible-name"}) =~
+               "visible-name"
+    end
+  end
 end

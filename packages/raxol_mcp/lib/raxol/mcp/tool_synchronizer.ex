@@ -49,7 +49,11 @@ defmodule Raxol.MCP.ToolSynchronizer do
     pending_view_tree: nil,
     pending_model: nil,
     focused_id: nil,
-    hover_id: nil
+    hover_id: nil,
+    # What `TreeWalker` refused on the last render (see
+    # `TreeWalker.derive_with_refusals/2`). Only that render's are kept, so a
+    # view with per-item ids does not grow it.
+    refusals: MapSet.new()
   ]
 
   @doc "Start a ToolSynchronizer linked to the calling process."
@@ -280,13 +284,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   defp do_sync(view_tree, model, state) do
-    context = %{
-      dispatcher_pid: state.dispatcher_pid,
-      session_id: state.session_id
-    }
-
     # Tool sync (existing behavior)
-    new_tools = TreeWalker.derive_tools(view_tree, context)
+    {new_tools, state} = derive_tools(view_tree, state)
     new_tool_names = MapSet.new(Enum.map(new_tools, & &1.name))
     new_tool_names = MapSet.put(new_tool_names, "discover_tools")
 
@@ -299,7 +298,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     end
 
     if added_tools != [] do
-      Registry.register_tools(state.registry, added_tools)
+      Registry.register_tools(state.registry, added_tools, derived: true)
     end
 
     if tools_changed? do
@@ -315,6 +314,16 @@ defmodule Raxol.MCP.ToolSynchronizer do
         current_view_tree: view_tree,
         current_model: model
     }
+  end
+
+  # A refusal TreeWalker reports is warned about on the render it appears in,
+  # not on every render that keeps it; one that leaves the view and comes
+  # back is warned about again.
+  defp derive_tools(view_tree, state) do
+    context = %{dispatcher_pid: state.dispatcher_pid, session_id: state.session_id}
+    {tools, refusals} = TreeWalker.derive_with_refusals(view_tree, context)
+    Enum.each(MapSet.difference(refusals, state.refusals), &TreeWalker.warn_refusal/1)
+    {tools, %{state | refusals: refusals}}
   end
 
   # -- Private: model resources --

@@ -22,6 +22,12 @@ defmodule Raxol.MCP.Registry do
       ]
       Registry.register_tools(registry, tools)
 
+  A tool registered with `register_tools(registry, tools, derived: true)` is a
+  derived tool: `static_tools/1` lists only the others, and that is what
+  `Raxol.MCP.Server`'s boot check scans. Only `Raxol.MCP.ToolSynchronizer`
+  passes the option, for the tools `Raxol.MCP.TreeWalker` derives from a
+  session's view; a `:derived` key in a tool map is ignored.
+
   ## Resource Registration
 
       resources = [
@@ -99,10 +105,20 @@ defmodule Raxol.MCP.Registry do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @doc "Register one or more tools."
-  @spec register_tools(GenServer.server(), [tool_def()]) :: :ok
-  def register_tools(registry \\ __MODULE__, tools) do
-    GenServer.call(registry, {:register_tools, tools})
+  @doc """
+  Register one or more tools.
+
+  `derived: true` registers them as derived, which leaves them out of
+  `static_tools/1` and so out of `Raxol.MCP.Server`'s boot check (the
+  `tools/call` refusal still holds them). It is for
+  `Raxol.MCP.ToolSynchronizer` alone: a tool registered with it skips the
+  check that refuses to boot an unguarded server on a sensitive tool.
+  """
+  @spec register_tools(GenServer.server(), [tool_def()], keyword()) :: :ok
+  def register_tools(registry \\ __MODULE__, tools, opts \\ []) do
+    if Keyword.get(opts, :derived, false) == true,
+      do: GenServer.call(registry, {:register_derived_tools, tools}),
+      else: GenServer.call(registry, {:register_tools, tools})
   end
 
   @doc """
@@ -169,7 +185,20 @@ defmodule Raxol.MCP.Registry do
     table = get_table(registry)
 
     :ets.select(table, [
-      {{:"$1", {:tool, :"$2", :"$3", :_, :_}}, [], [:"$3"]}
+      {{:"$1", {:tool, :"$2", :"$3", :_, :_, :_}}, [], [:"$3"]}
+    ])
+  end
+
+  @doc """
+  `list_tools/1` without the tools registered with `derived: true`: the
+  tools an embedder registered itself, rather than a session's view.
+  """
+  @spec static_tools(GenServer.server()) :: [map()]
+  def static_tools(registry \\ __MODULE__) do
+    table = get_table(registry)
+
+    :ets.select(table, [
+      {{:"$1", {:tool, :"$2", :"$3", :_, :_, false}}, [], [:"$3"]}
     ])
   end
 
@@ -182,7 +211,7 @@ defmodule Raxol.MCP.Registry do
     breaker_key = tool_key(name)
 
     case :ets.lookup(table, breaker_key) do
-      [{_key, {:tool, ^name, _def, callback, classifier}}] ->
+      [{_key, {:tool, ^name, _def, callback, classifier, _derived}}] ->
         invoke_with_breaker(breaker_table, breaker_key, classifier, fn ->
           callback.(arguments)
         end)
@@ -309,18 +338,12 @@ defmodule Raxol.MCP.Registry do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:register_tools, tools}, _from, state) do
-    for tool <- tools do
-      entry = {:tool, tool.name, tool_definition(tool), tool.callback, fault_classifier(tool)}
-      :ets.insert(state.table, {tool_key(tool.name), entry})
-    end
+    {:reply, insert_tools(state.table, tools, false), state}
+  end
 
-    :telemetry.execute(
-      [:raxol, :mcp, :registry, :tools_changed],
-      %{count: length(tools)},
-      %{action: :register, names: Enum.map(tools, & &1.name)}
-    )
-
-    {:reply, :ok, state}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:register_derived_tools, tools}, _from, state) do
+    {:reply, insert_tools(state.table, tools, true), state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -395,6 +418,23 @@ defmodule Raxol.MCP.Registry do
     # back from here to decide what may run unguarded. `Map.take/2` ignores an
     # absent key, so an unannotated tool is unchanged.
     Map.take(tool, [:name, :description, :inputSchema, :annotations])
+  end
+
+  defp insert_tools(table, tools, derived?) do
+    for tool <- tools do
+      entry =
+        {:tool, tool.name, tool_definition(tool), tool.callback, fault_classifier(tool), derived?}
+
+      :ets.insert(table, {tool_key(tool.name), entry})
+    end
+
+    :telemetry.execute(
+      [:raxol, :mcp, :registry, :tools_changed],
+      %{count: length(tools)},
+      %{action: :register, names: Enum.map(tools, & &1.name)}
+    )
+
+    :ok
   end
 
   defp resource_definition(resource) do

@@ -168,18 +168,17 @@ defmodule Raxol.UI.Components.Input.Checkbox do
   @impl Raxol.MCP.ToolProvider
   def mcp_tools(%{disabled: true}), do: []
 
-  def mcp_tools(state) do
-    label = state[:label] || "Checkbox"
-
+  def mcp_tools(_state) do
     [
       %{
         name: "toggle",
-        description: "Toggle checkbox '#{label}'",
-        inputSchema: %{type: "object", properties: %{}}
+        description: "Toggle the checkbox",
+        inputSchema: %{type: "object", properties: %{}},
+        annotations: %{sensitive: true}
       },
       %{
         name: "get_checked",
-        description: "Get whether '#{label}' is checked",
+        description: "Get whether the checkbox is checked",
         inputSchema: %{type: "object", properties: %{}}
       }
     ]
