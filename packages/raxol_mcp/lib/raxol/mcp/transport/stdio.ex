@@ -12,9 +12,10 @@ defmodule Raxol.MCP.Transport.Stdio do
   through `Raxol.MCP.Server.request/3`, so a slow `tools/call` does not hold
   up the `tools/list` behind it, and methods the server handles inline keep
   their order. Replies arrive in this process's mailbox and only this process
-  writes stdout. Requests run concurrently and share the server's
-  `:max_in_flight` cap with every other connection, so a stdio client can be
-  answered `server_busy`.
+  writes stdout. Requests run concurrently, up to the server's
+  `:max_in_flight_per_connection` share of `:max_in_flight` (half, by default),
+  so a stdio client's excess calls are answered `server_busy` while other
+  connections keep the rest.
 
   `notifications/cancelled` cancels the named in-flight request, which kills
   its callback worker. That holds for a `tools/call` waiting on an elicitation

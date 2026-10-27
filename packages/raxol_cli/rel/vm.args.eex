@@ -1,0 +1,6 @@
+## The packaged binary halts from its application start, so Elixir's
+## `start_cli` (which sets stdio to unicode) never runs, and the `user`
+## device keeps the locale's encoding: under `LC_ALL=C` a UTF-8 frame on
+## `raxol mcp`'s wire was double-encoded. prim_tty reads this when kernel
+## starts, which is before any config file could set it.
+-kernel standard_io_encoding unicode

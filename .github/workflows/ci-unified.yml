@@ -731,6 +731,16 @@ jobs:
         working-directory: packages/raxol_agent
         run: mix test --include integration test/raxol/agent/cli_entrypoint_smoke_test.exs
 
+      # `raxol mcp` as an OS process (`:integration`, excluded by
+      # packages/raxol_cli/test/test_helper.exs): end of input exits 0, an
+      # app's OSC output lands on stderr, and every stdout line is JSON-RPC.
+      # Only a process shows a stray byte on the wire. The packaged binary's
+      # boot is smoked separately by mcp-smoke.yml.
+      - name: Run raxol mcp subprocess tests
+        if: matrix.package == 'raxol_cli'
+        working-directory: packages/raxol_cli
+        run: mix test --include integration test/raxol/cli/mcp_integration_test.exs
+
       # Kept as a per-package backstop, and kept LAST. The `format` job checks
       # every package now, so this is redundant on the happy path -- but this
       # job is named "Package Tests" and two of its cells move real money, so a

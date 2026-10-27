@@ -8,45 +8,62 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent code p acp login setup doctor update playground new help)
+  @commands ~w(agent code p acp mcp login setup doctor update playground new help)
 
-  @doc "Dispatch `argv`, returning an exit code."
+  @doc """
+  Dispatch `argv`, returning an exit code.
+
+  A VM booted for `raxol mcp` (`config/runtime.exs`, e.g. `RAXOL_MODE=mcp`
+  left exported) runs nothing else: its stray output goes to stderr and its
+  apps start in MCP mode, so any other command is refused with exit 1.
+  """
   @spec main([String.t()]) :: non_neg_integer()
-  def main([]), do: run_agent([])
-  def main(["agent" | rest]), do: run_agent(rest)
+  def main(argv) do
+    if Application.get_env(:raxol_cli, :mcp_boot, false) and not match?(["mcp" | _], argv) do
+      IO.puts(:stderr, "raxol: this VM booted for `raxol mcp` (RAXOL_MODE=mcp?); only mcp runs")
+      1
+    else
+      dispatch(argv)
+    end
+  end
+
+  defp dispatch([]), do: run_agent([])
+  defp dispatch(["agent" | rest]), do: run_agent(rest)
   # The full coding-agent TUI (approvals, plan mode, sessions, slash
   # commands) — the same launch path as `mix raxol.code`.
-  def main(["code" | rest]), do: run_code(rest)
+  defp dispatch(["code" | rest]), do: run_code(rest)
   # Headless one-shot: prompt on argv, answer to stdout, contract events to
   # stderr. `-p` matches the historical `bin/raxol -p` wrapper spelling.
-  def main(["p" | rest]), do: Raxol.Agent.P.run(rest)
-  def main(["-p" | rest]), do: Raxol.Agent.P.run(rest)
+  defp dispatch(["p" | rest]), do: Raxol.Agent.P.run(rest)
+  defp dispatch(["-p" | rest]), do: Raxol.Agent.P.run(rest)
   # Serve over ACP on stdio, for editors and agent harnesses that spawn us.
-  def main(["acp" | rest]), do: Raxol.Agent.ClientProtocol.Serve.run(rest)
+  defp dispatch(["acp" | rest]), do: Raxol.Agent.ClientProtocol.Serve.run(rest)
+  # Serve Raxol apps as MCP tools on stdio, for OMP and other MCP clients.
+  defp dispatch(["mcp" | rest]), do: Raxol.CLI.MCP.run(rest)
   # The interactive setup an ACP client relaunches us for (Terminal Auth): the
   # args here are the ones `initialize` advertises, so the two cannot drift.
-  def main(["login" | rest]), do: Raxol.Agent.ClientProtocol.Login.run(rest)
+  defp dispatch(["login" | rest]), do: Raxol.Agent.ClientProtocol.Login.run(rest)
   # The headless twin of `login`, and the same code `mix raxol.setup` runs.
   # Reachable from the packaged binary because connecting a provider is the
   # first thing a fresh install needs, and an npm install has no Mix tasks.
-  def main(["setup" | rest]),
+  defp dispatch(["setup" | rest]),
     do: with_app(fn -> Raxol.Agent.Setup.CLI.run(rest) end)
 
-  def main(["doctor" | rest]),
+  defp dispatch(["doctor" | rest]),
     do: with_app(fn -> Raxol.CLI.Doctor.run(rest) end)
 
-  def main(["update" | rest]), do: Raxol.CLI.Update.run(rest)
-  def main(["playground" | _rest]), do: run_playground()
-  def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
+  defp dispatch(["update" | rest]), do: Raxol.CLI.Update.run(rest)
+  defp dispatch(["playground" | _rest]), do: run_playground()
+  defp dispatch(["new" | rest]), do: Raxol.CLI.New.run(rest)
 
-  def main(["--version"]) do
+  defp dispatch(["--version"]) do
     IO.puts("raxol #{version()}")
     0
   end
 
-  def main([help]) when help in ~w(help --help -h), do: help()
+  defp dispatch([help]) when help in ~w(help --help -h), do: help()
 
-  def main([unknown | _]) do
+  defp dispatch([unknown | _]) do
     IO.puts(:stderr, "raxol: unknown command #{inspect(unknown)}\n")
     help()
     1
@@ -352,6 +369,7 @@ defmodule Raxol.CLI do
       code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
       acp           Serve over the Agent Client Protocol on stdio
+      mcp           Serve Raxol apps as MCP tools on stdio (for OMP)
       login         Connect an LLM provider (browser sign-in, or a key)
       setup         Connect/inspect a provider headlessly (CI, remote boxes)
       doctor        Report this install: build, runtime, providers, config

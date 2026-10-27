@@ -21,7 +21,24 @@ defmodule Raxol.MCP.ServerTest do
       assert resp.id == 1
       assert resp.result.protocolVersion == "2024-11-05"
       assert resp.result.serverInfo.name == "raxol"
+      assert resp.result.serverInfo.version == RaxolMcp.version()
       assert resp.result.capabilities.tools.listChanged == true
+    end
+
+    test "reports the configured :server_version", %{registry: r} do
+      server =
+        start_supervised!(
+          {Server,
+           name: :"versioned_#{System.unique_integer([:positive])}",
+           registry: r,
+           server_version: "9.8.7+abc"},
+          id: :versioned_server
+        )
+
+      {:reply, resp} =
+        Server.handle_message(server, %{id: 1, method: "initialize", params: %{}})
+
+      assert resp.result.serverInfo == %{name: "raxol", version: "9.8.7+abc"}
     end
   end
 
@@ -369,6 +386,82 @@ defmodule Raxol.MCP.ServerTest do
       assert text =~ "server_busy"
       send(callback_pid, :release)
       assert {:reply, %{id: 37}} = Task.await(first)
+    end
+
+    # Default share: half of :max_in_flight. The busy connection's next call is
+    # refused while another connection's call still runs.
+    test "one connection holds at most its share of the workers", %{registry: r} do
+      parent = self()
+
+      Registry.register_tools(r, [
+        %{
+          name: "occupy",
+          description: "Holds a worker until released",
+          inputSchema: %{type: "object"},
+          callback: fn _args ->
+            send(parent, {:tool_entered, self()})
+
+            receive do
+              :release -> {:ok, "released"}
+            end
+          end
+        },
+        %{
+          name: "quick",
+          description: "Answers at once",
+          inputSchema: %{type: "object"},
+          callback: fn _args -> {:ok, "ran"} end
+        }
+      ])
+
+      server =
+        start_supervised!(
+          {Server,
+           name: :"shared_#{System.unique_integer([:positive])}", registry: r, max_in_flight: 2},
+          id: :shared_server
+        )
+
+      call = fn id, name, conn ->
+        Server.handle_message(
+          server,
+          %{id: id, method: "tools/call", params: %{"name" => name, "arguments" => %{}}},
+          conn
+        )
+      end
+
+      first = Task.async(fn -> call.(1, "occupy", "conn-a") end)
+      assert_receive {:tool_entered, callback_pid}, 2_000
+
+      assert {:reply, %{id: 2, result: %{isError: true, content: [%{text: text}]}}} =
+               call.(2, "quick", "conn-a")
+
+      assert text =~ "server_busy"
+
+      assert {:reply, %{id: 3, result: %{content: [%{text: "ran"}]} = result}} =
+               call.(3, "quick", "conn-b")
+
+      refute Map.get(result, :isError)
+
+      send(callback_pid, :release)
+      assert {:reply, %{id: 1}} = Task.await(first)
+
+      # The released slot is the connection's again.
+      assert {:reply, %{id: 4, result: %{content: [%{text: "ran"}]}}} =
+               call.(4, "quick", "conn-a")
+    end
+
+    test "refuses a per-connection share above :max_in_flight", %{registry: r} do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _stack}} =
+               Server.start_link(
+                 name: :"oversized_#{System.unique_integer([:positive])}",
+                 registry: r,
+                 max_in_flight: 2,
+                 max_in_flight_per_connection: 3
+               )
+
+      assert message =~ ":max_in_flight_per_connection (3) must not exceed :max_in_flight (2)"
     end
 
     test "terminates callback work at the configured execution timeout", %{registry: r} do
