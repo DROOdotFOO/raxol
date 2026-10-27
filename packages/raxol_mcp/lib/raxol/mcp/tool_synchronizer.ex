@@ -225,12 +225,15 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
     # A registry call that exits (a registry too busy to answer within the
     # call timeout) stops this init, and an init that stops runs no
-    # `terminate/2`: the telemetry handler would outlive this process.
+    # `terminate/2`: the telemetry handler would outlive this process, and
+    # what the registry took before it stalled, or takes once it resumes,
+    # would stay registered.
     try do
       {:ok, register_session(state)}
     catch
       kind, reason ->
         :telemetry.detach(handler_id)
+        withdraw_session(state)
         :erlang.raise(kind, reason, __STACKTRACE__)
     end
   end
@@ -787,8 +790,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     session_id = state.session_id
     registry = state.registry
 
-    context_uri = "raxol://session/#{session_id}/context"
-    widgets_uri = "raxol://session/#{session_id}/widgets"
+    [context_uri, widgets_uri] = session_resource_uris(session_id)
 
     self_pid = self()
 
@@ -825,6 +827,31 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
     Registry.register_resources(registry, resources, owner: self())
     MapSet.new([context_uri, widgets_uri])
+  end
+
+  defp session_resource_uris(session_id),
+    do: ["raxol://session/#{session_id}/context", "raxol://session/#{session_id}/widgets"]
+
+  # Undoes what `register_session/1` registers, sent and not awaited: the
+  # registry may be the process that stopped answering. Each request comes
+  # from this process, so it queues behind the registration it undoes, the
+  # one that timed out included, and is queued before the start is answered,
+  # ahead of this process's exit signal. Owner-scoped, so a name or URI
+  # another owner holds stays. The registry drops anything else this owner
+  # held (tools of an initial view whose registration timed out) when it
+  # sees the exit. `{:unregister_tools, names, owner}` and
+  # `{:unregister_resources, uris, owner}` are `Registry.unregister_tools/3`'s
+  # and `Registry.unregister_resources/3`'s requests. An id outside the rule
+  # registered nothing.
+  defp withdraw_session(state) do
+    if TreeWalker.id?(state.session_id) do
+      names = state |> discover_tool() |> Enum.map(& &1.name)
+      _ = :gen_server.send_request(state.registry, {:unregister_tools, names, self()})
+      uris = session_resource_uris(state.session_id)
+      _ = :gen_server.send_request(state.registry, {:unregister_resources, uris, self()})
+    end
+
+    :ok
   end
 
   defp emit_behavior_event(event_type, data, telemetry_event) do
