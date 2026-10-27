@@ -17,7 +17,7 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
   # OMP's ceiling for a reassembled frame (`maxReassembledFrameBytes`).
   @max_reassembled_bytes 67_108_864
   # The most this client buffers for one physical line, whatever the ready
-  # frame claims: 8x the 1 MiB `maxFrameBytes` that omp 18.12.6 sends.
+  # frame claims: 8x the 1 MiB `maxFrameBytes` that omp 18.13.0 sends.
   @max_frame_bytes 8_388_608
   # OMP's machine-readable error codes (`session_busy`, `stale_cursor`, ...).
   @code ~r/\A[a-z][a-z0-9_]{0,63}\z/
@@ -60,7 +60,7 @@ defmodule Raxol.Agent.OMP.RPC.Codec do
   @doc """
   Check the ready frame: `{:ok, limits}` when it offers protocol v2, else
   `{:error, :unsupported_protocol}` or `{:error, :invalid_ready_frame}`. The
-  physical frame limit is capped at 8 MiB (omp 18.12.6 sends 1 MiB) and the
+  physical frame limit is capped at 8 MiB (omp 18.13.0 sends 1 MiB) and the
   reassembly limit at OMP's own 64 MiB, so a ready frame cannot make the
   client buffer more.
   """
