@@ -1262,9 +1262,8 @@ defmodule Raxol.Headless do
   # A synchronizer killed untrappably never ran its `terminate/2`, so what it
   # holds under this session's name is released here: its telemetry handler and
   # the `raxol://session/<id>/` resources in the registry it registered them
-  # in. Its tools are not: tool names are global, and another session may have
-  # registered the same ones. A registry that is gone holds nothing left to
-  # release.
+  # in. Its tools stay registered until the registry tracks which process
+  # registered them. A registry that is gone holds nothing left to release.
   defp release_synchronizer(%Session{synchronizer_pid: sync_pid} = session) do
     [:raxol, :runtime, :view_tree_updated]
     |> :telemetry.list_handlers()
