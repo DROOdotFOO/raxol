@@ -57,7 +57,7 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
 
   @type_map %{button: P12Button, text_input: P12Input}
 
-  defp context, do: %{dispatcher_pid: nil, type_map: @type_map}
+  defp context, do: %{dispatcher_pid: nil, session_id: "s", type_map: @type_map}
 
   # -- @mcp_exclude tests -----------------------------------------------------
 
@@ -84,7 +84,7 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
 
       tools = TreeWalker.derive_tools(tree, context())
       assert length(tools) == 1
-      assert hd(tools).name == "visible_btn.click"
+      assert hd(tools).name == "s.visible_btn.click"
     end
 
     test "mcp_exclude: false does not suppress tools" do
@@ -120,8 +120,8 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
 
       tools = TreeWalker.derive_tools(tree, context())
       names = Enum.map(tools, & &1.name)
-      refute "excluded_btn.click" in names
-      assert "included_btn.click" in names
+      refute "s.excluded_btn.click" in names
+      assert "s.included_btn.click" in names
     end
 
     test "mixed tree with some excluded widgets" do
@@ -147,10 +147,10 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
       tools = TreeWalker.derive_tools(tree, context())
       names = Enum.map(tools, & &1.name)
 
-      assert "search.type_into" in names
-      assert "search.get_value" in names
-      assert "submit_btn.click" in names
-      refute "internal_btn.click" in names
+      assert "s.search.type_into" in names
+      assert "s.search.get_value" in names
+      assert "s.submit_btn.click" in names
+      refute "s.internal_btn.click" in names
     end
   end
 
@@ -160,31 +160,31 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
     setup do
       tools = [
         %{
-          name: "search.type_into",
+          name: "s.search.type_into",
           description: "Type",
           inputSchema: %{},
           callback: fn _ -> {:ok, "ok"} end
         },
         %{
-          name: "search.clear",
+          name: "s.search.clear",
           description: "Clear",
           inputSchema: %{},
           callback: fn _ -> {:ok, "ok"} end
         },
         %{
-          name: "btn1.click",
+          name: "s.btn1.click",
           description: "Click btn1",
           inputSchema: %{},
           callback: fn _ -> {:ok, "ok"} end
         },
         %{
-          name: "btn2.click",
+          name: "s.btn2.click",
           description: "Click btn2",
           inputSchema: %{},
           callback: fn _ -> {:ok, "ok"} end
         },
         %{
-          name: "table.select_row",
+          name: "s.table.select_row",
           description: "Select",
           inputSchema: %{},
           callback: fn _ -> {:ok, "ok"} end
@@ -201,50 +201,74 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
     end
 
     test "hover returns focused + hovered + globals", %{tools: tools} do
-      result = FocusLens.filter(tools, mode: :hover, focused_id: "search", hover_id: "btn1")
+      result =
+        FocusLens.filter(tools,
+          mode: :hover,
+          session_id: "s",
+          focused_id: "search",
+          hover_id: "btn1"
+        )
+
       names = Enum.map(result, & &1.name)
 
-      assert "search.type_into" in names
-      assert "search.clear" in names
-      assert "btn1.click" in names
+      assert "s.search.type_into" in names
+      assert "s.search.clear" in names
+      assert "s.btn1.click" in names
       assert "global_action" in names
-      refute "btn2.click" in names
-      refute "table.select_row" in names
+      refute "s.btn2.click" in names
+      refute "s.table.select_row" in names
     end
 
     test "hover with nil hover_id falls back to focused mode", %{tools: tools} do
-      result = FocusLens.filter(tools, mode: :hover, focused_id: "search", hover_id: nil)
+      result =
+        FocusLens.filter(tools,
+          mode: :hover,
+          session_id: "s",
+          focused_id: "search",
+          hover_id: nil
+        )
+
       names = Enum.map(result, & &1.name)
 
-      assert "search.type_into" in names
-      assert "search.clear" in names
+      assert "s.search.type_into" in names
+      assert "s.search.clear" in names
       assert "global_action" in names
-      refute "btn1.click" in names
+      refute "s.btn1.click" in names
     end
 
     test "hover where hover_id == focused_id deduplicates", %{tools: tools} do
-      result = FocusLens.filter(tools, mode: :hover, focused_id: "search", hover_id: "search")
+      result =
+        FocusLens.filter(tools,
+          mode: :hover,
+          session_id: "s",
+          focused_id: "search",
+          hover_id: "search"
+        )
+
       names = Enum.map(result, & &1.name)
 
-      assert "search.type_into" in names
-      assert "search.clear" in names
+      assert "s.search.type_into" in names
+      assert "s.search.clear" in names
       # No duplicates
       assert length(names) == length(Enum.uniq(names))
     end
 
     test "hover with nil focused_id shows only hovered + globals", %{tools: tools} do
-      result = FocusLens.filter(tools, mode: :hover, focused_id: nil, hover_id: "btn2")
+      result =
+        FocusLens.filter(tools, mode: :hover, session_id: "s", focused_id: nil, hover_id: "btn2")
+
       names = Enum.map(result, & &1.name)
 
-      assert "btn2.click" in names
+      assert "s.btn2.click" in names
       assert "global_action" in names
-      refute "search.type_into" in names
+      refute "s.search.type_into" in names
     end
 
     test "hover respects max_tools limit", %{tools: tools} do
       result =
         FocusLens.filter(tools,
           mode: :hover,
+          session_id: "s",
           focused_id: "search",
           hover_id: "btn1",
           max_tools: 3
@@ -261,13 +285,14 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
         result =
           FocusLens.filter(tools,
             mode: :hover,
+            session_id: "s",
             focused_id: "search",
             hover_id: "btn1",
             registry: registry
           )
 
         names = Enum.map(result, & &1.name)
-        assert "discover_tools" in names
+        assert "s.discover_tools" in names
       after
         GenServer.stop(registry)
       end

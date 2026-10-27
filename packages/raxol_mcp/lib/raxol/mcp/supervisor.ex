@@ -51,7 +51,8 @@ defmodule Raxol.MCP.Supervisor do
          authorizer: authorizer,
          read_authorizer: read_authorizer,
          transport: transport,
-         authorizer_source: authorizer_source
+         authorizer_source: authorizer_source,
+         unknown_tool_reply: Keyword.get(opts, :unknown_tool_reply)
        ] ++ parked_caps}
     ]
 

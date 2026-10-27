@@ -250,7 +250,7 @@ defmodule Raxol.HeadlessTest do
           |> Raxol.MCP.Registry.list_tools()
           |> Enum.map(& &1.name)
 
-        assert "cold_start_button.click" in names
+        assert "#{id}.cold_start_button.click" in names
         assert :ok = Headless.stop(id)
       end
     end
@@ -415,7 +415,7 @@ defmodule Raxol.HeadlessTest do
                )
 
       :ok = Headless.settle("pid_registry")
-      assert "cold_start_button.click" in tool_names(registry)
+      assert "pid_registry.cold_start_button.click" in tool_names(registry)
     end
   end
 
@@ -433,12 +433,12 @@ defmodule Raxol.HeadlessTest do
         )
 
       :ok = Headless.settle(id)
-      refute "confirm.dismiss" in tool_names(registry)
+      refute "settle_modal.confirm.dismiss" in tool_names(registry)
 
       :ok = Headless.send_key(id, "o", wait: false)
       :ok = Headless.settle(id)
 
-      assert "confirm.dismiss" in tool_names(registry)
+      assert "settle_modal.confirm.dismiss" in tool_names(registry)
     end
   end
 

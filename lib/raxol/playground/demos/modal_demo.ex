@@ -12,8 +12,9 @@ defmodule Raxol.Playground.Demos.ModalDemo do
   @modal_width 40
   @modal_height 17
 
-  # The dialog's id and title: `Raxol.MCP.TreeWalker` derives "confirm.dismiss"
-  # and "confirm.confirm" from the stamped dialog while it is open.
+  # The dialog's id and title: `Raxol.MCP.TreeWalker` derives
+  # "<session>.confirm.dismiss" and "<session>.confirm.confirm" from the
+  # stamped dialog while it is open.
   @dialog_id "confirm"
   @dialog_title "Confirm Action"
 

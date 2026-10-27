@@ -101,6 +101,17 @@ defmodule Raxol.MCP.Server do
   name (`agent.send`), or one whose tool map carries a `:derived` key, is
   still checked. The `tools/call` refusal covers both.
 
+  ## Unknown tools
+
+  A `tools/call` naming no registered tool answers JSON-RPC `-32601`, unless
+  the `:unknown_tool_reply` option says otherwise. It is a 1-arity function
+  given the tool name (a binary); a binary it returns is sent back as an
+  `isError` tool result with that text, and `nil` keeps the `-32601`. An app
+  whose tools come and go uses it to tell a client that cached a name what
+  happened to it: `Raxol.Application` passes
+  `Raxol.Headless.McpTools.unknown_tool_reply/1`, which names a stopped
+  session. The server itself reads nothing into a tool name.
+
   ## Client capabilities
 
   What each connection advertised at `initialize` is kept until that
@@ -184,6 +195,7 @@ defmodule Raxol.MCP.Server do
     :registry,
     :authorizer,
     :read_authorizer,
+    :unknown_tool_reply,
     authorizer_source: :default,
     transport: :unknown,
     initialized: false,
@@ -237,6 +249,7 @@ defmodule Raxol.MCP.Server do
           registry: GenServer.server(),
           authorizer: Authorizer.t() | nil,
           read_authorizer: Authorizer.t() | nil,
+          unknown_tool_reply: (String.t() -> String.t() | nil) | nil,
           authorizer_source: authorizer_source(),
           transport: transport(),
           initialized: boolean(),
@@ -503,6 +516,7 @@ defmodule Raxol.MCP.Server do
        authorizer_source: authorizer_source,
        authorizer: authorizer,
        read_authorizer: read_authorizer,
+       unknown_tool_reply: unknown_tool_reply!(Keyword.get(opts, :unknown_tool_reply)),
        transport: transport,
        elicitation_timeout_ms:
          Keyword.get(
@@ -749,8 +763,8 @@ defmodule Raxol.MCP.Server do
       {:reply, authorization_required(id, name, :deny, :sensitive_tool_unguarded)}
     else
       {:call,
-       {:authorize_tool, id, name, arguments, state.registry, state.authorizer,
-        authz_context(state, conn_id), conn_id}}
+       {:authorize_tool, id, name, arguments, {state.registry, state.unknown_tool_reply},
+        state.authorizer, authz_context(state, conn_id), conn_id}}
     end
   end
 
@@ -893,7 +907,8 @@ defmodule Raxol.MCP.Server do
       {:ok, %{owner: ^conn_id} = pending} ->
         if approved?(result) do
           {:push, pending,
-           {:call_tool, pending.request_id, pending.tool, pending.arguments, state.registry}}
+           {:call_tool, pending.request_id, pending.tool, pending.arguments,
+            {state.registry, state.unknown_tool_reply}}}
         else
           :sync
         end
@@ -992,10 +1007,10 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  defp execute_async({:authorize_tool, id, name, arguments, registry, authorizer, ctx, conn_id}) do
+  defp execute_async({:authorize_tool, id, name, arguments, tools, authorizer, ctx, conn_id}) do
     case safe_decide(authorizer, name, arguments, ctx) do
       :allow ->
-        {:response, call_tool_response(id, name, Registry.call_tool(registry, name, arguments))}
+        {:response, call_tool_response(id, name, call_tool(tools, name, arguments))}
 
       {:ask, prompt} ->
         {:ask, id, name, arguments, prompt, conn_id}
@@ -1005,8 +1020,8 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  defp execute_async({:call_tool, id, name, arguments, registry}) do
-    {:response, call_tool_response(id, name, Registry.call_tool(registry, name, arguments))}
+  defp execute_async({:call_tool, id, name, arguments, tools}) do
+    {:response, call_tool_response(id, name, call_tool(tools, name, arguments))}
   end
 
   defp execute_async({:read_operation, id, method, detail, operation, read_authorizer, ctx}) do
@@ -1157,12 +1172,10 @@ defmodule Raxol.MCP.Server do
     call_tool_response(id, name, {:error, reason})
   end
 
-  defp work_identity(
-         {:authorize_tool, id, name, _arguments, _registry, _authorizer, _ctx, _conn}
-       ),
-       do: {id, name}
+  defp work_identity({:authorize_tool, id, name, _arguments, _tools, _authorizer, _ctx, _conn}),
+    do: {id, name}
 
-  defp work_identity({:call_tool, id, name, _arguments, _registry}), do: {id, name}
+  defp work_identity({:call_tool, id, name, _arguments, _tools}), do: {id, name}
 
   defp cancel_in_flight(state, request_ref) do
     case pop_in_flight(state, request_ref) do
@@ -1586,6 +1599,9 @@ defmodule Raxol.MCP.Server do
           "Tool not found: #{inspect(name)}"
         )
 
+      {:unknown_tool_reply, text} ->
+        Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
+
       {:error, :circuit_open} ->
         content = [
           %{
@@ -1601,6 +1617,24 @@ defmodule Raxol.MCP.Server do
         Protocol.response(id, %{content: content, isError: true})
     end
   end
+
+  # `tools` is the registry and the `:unknown_tool_reply` function (see
+  # "Unknown tools" in the moduledoc).
+  defp call_tool({registry, unknown_tool_reply}, name, arguments) do
+    case Registry.call_tool(registry, name, arguments) do
+      {:error, :tool_not_found} -> tool_not_found(unknown_tool_reply, name)
+      result -> result
+    end
+  end
+
+  defp tool_not_found(reply, name) when is_function(reply, 1) and is_binary(name) do
+    case reply.(name) do
+      text when is_binary(text) -> {:unknown_tool_reply, text}
+      nil -> {:error, :tool_not_found}
+    end
+  end
+
+  defp tool_not_found(_reply, _name), do: {:error, :tool_not_found}
 
   defp do_read_resource(id, uri, state) do
     case ResourceRouter.resolve(state.registry, uri) do
@@ -1832,6 +1866,14 @@ defmodule Raxol.MCP.Server do
   defp max_client_capabilities!(other) do
     raise ArgumentError,
           "Raxol.MCP.Server :max_client_capabilities must be a positive integer, " <>
+            "got: #{inspect(other)}"
+  end
+
+  defp unknown_tool_reply!(reply) when is_nil(reply) or is_function(reply, 1), do: reply
+
+  defp unknown_tool_reply!(other) do
+    raise ArgumentError,
+          "Raxol.MCP.Server :unknown_tool_reply must be a 1-arity function or nil, " <>
             "got: #{inspect(other)}"
   end
 

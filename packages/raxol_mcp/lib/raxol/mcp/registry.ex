@@ -25,8 +25,9 @@ defmodule Raxol.MCP.Registry do
   A tool registered with `register_tools(registry, tools, derived: true)` is a
   derived tool: `static_tools/1` lists only the others, and that is what
   `Raxol.MCP.Server`'s boot check scans. Only `Raxol.MCP.ToolSynchronizer`
-  passes the option, for the tools `Raxol.MCP.TreeWalker` derives from a
-  session's view; a `:derived` key in a tool map is ignored.
+  passes the option, for a session's tools (those `Raxol.MCP.TreeWalker`
+  derives from its view, and its `discover_tools` meta-tool); a `:derived`
+  key in a tool map is ignored.
 
   ## Resource Registration
 
@@ -108,17 +109,63 @@ defmodule Raxol.MCP.Registry do
   @doc """
   Register one or more tools.
 
+  A client may rename tools: OMP (at the version
+  `docs/adr/0042-lean-on-omp.md` pins) lowercases a tool name, turns each run
+  of characters outside `[a-z0-9_]` into `_`, collapses repeated `_` and trims
+  them from both ends (`omp_name/1`). Two distinct names that come out the
+  same there, such as `"s.x_y.click"` and `"s.x.y.click"`, would reach the
+  client as one tool. So a tool whose `omp_name/1` is already held by a
+  differently named tool is refused, and the rest are registered:
+  `{:error, {:name_collision, [{refused_name, holder_name}]}}`. Registering
+  a name again replaces its tool, as before. `register_all/2` refuses the
+  whole batch instead.
+
+  A tool whose `:name` is not a binary (or that has none) refuses the whole
+  batch, `{:error, {:invalid_tool_name, name}}`, and the registry keeps
+  serving the tools it holds.
+
   `derived: true` registers them as derived, which leaves them out of
   `static_tools/1` and so out of `Raxol.MCP.Server`'s boot check (the
   `tools/call` refusal still holds them). It is for
   `Raxol.MCP.ToolSynchronizer` alone: a tool registered with it skips the
   check that refuses to boot an unguarded server on a sensitive tool.
   """
-  @spec register_tools(GenServer.server(), [tool_def()], keyword()) :: :ok
+  @spec register_tools(GenServer.server(), [tool_def()], keyword()) ::
+          :ok
+          | {:error, {:name_collision, [{String.t(), String.t()}]}}
+          | {:error, {:invalid_tool_name, term()}}
   def register_tools(registry \\ __MODULE__, tools, opts \\ []) do
     if Keyword.get(opts, :derived, false) == true,
       do: GenServer.call(registry, {:register_derived_tools, tools}),
       else: GenServer.call(registry, {:register_tools, tools})
+  end
+
+  @doc """
+  The name OMP (`mcp/tool-bridge.ts`, at the version ADR-0042 pins) makes of
+  a tool name before it adds its `mcp__<server>_` prefix: lowercased, each run
+  outside `[a-z0-9_]` turned into `_`, runs of `_` collapsed, `_` trimmed from
+  both ends, and `"tool"` if nothing is left.
+
+  OMP also strips an exact `<server>_` prefix from the result once, which
+  this does not model. Raxol's server key is `raxol`, so `raxol_start`
+  refuses the session id `raxol`: that session's `raxol.nav_menu.click`
+  would reach OMP as session `nav`'s `nav.menu.click`. OMP's 64-character
+  limit (55 characters, `_` and an 8-character hash) applies to the prefixed
+  name and, barring a hash collision, keeps distinct names distinct, so it
+  is not modeled either: past it OMP shows a hashed name, about which
+  `Raxol.MCP.ToolSynchronizer` warns.
+  """
+  @spec omp_name(String.t()) :: String.t()
+  def omp_name(name) do
+    name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9_]+/, "_")
+    |> String.replace(~r/_+/, "_")
+    |> String.trim("_")
+    |> case do
+      "" -> "tool"
+      cleaned -> cleaned
+    end
   end
 
   @doc """
@@ -134,8 +181,11 @@ defmodule Raxol.MCP.Registry do
 
       :ok = Registry.register_all(registry, tools: tools, resources: resources)
 
-  Returns `{:error, {:invalid_tool, index, reasons}}` (no tools or
-  resources registered) when validation fails.
+  Returns `{:error, {:invalid_tool, index, reasons}}` when validation fails
+  and `{:error, {:name_collision, [{refused_name, holder_name}]}}` when a
+  tool's `omp_name/1` is taken, by a registered tool or by another tool in
+  the batch. Either way nothing is registered: no tools, resources or
+  prompts.
 
   Note: this helper requires the `Raxol.MCP.Registry` module to be loaded
   at runtime. Consumers with `raxol_mcp` as an optional dep should still
@@ -144,23 +194,26 @@ defmodule Raxol.MCP.Registry do
   module.
   """
   @spec register_all(GenServer.server(), keyword()) ::
-          :ok | {:error, {:invalid_tool, non_neg_integer(), [atom()]}}
+          :ok
+          | {:error, {:invalid_tool, non_neg_integer(), [atom()]}}
+          | {:error, {:name_collision, [{String.t(), String.t()}]}}
   def register_all(registry \\ __MODULE__, opts) when is_list(opts) do
     tools = Keyword.get(opts, :tools, [])
     resources = Keyword.get(opts, :resources, [])
     prompts = Keyword.get(opts, :prompts, [])
 
-    case validate_tools(tools) do
-      :ok ->
-        if tools != [], do: :ok = register_tools(registry, tools)
-        if resources != [], do: :ok = register_resources(registry, resources)
-        if prompts != [], do: :ok = register_prompts(registry, prompts)
-        :ok
-
-      {:error, _} = err ->
-        err
+    with :ok <- validate_tools(tools),
+         :ok <- register_whole(registry, tools) do
+      if resources != [], do: :ok = register_resources(registry, resources)
+      if prompts != [], do: :ok = register_prompts(registry, prompts)
+      :ok
     end
   end
+
+  defp register_whole(_registry, []), do: :ok
+
+  defp register_whole(registry, tools),
+    do: GenServer.call(registry, {:register_tools, tools, :all_or_nothing})
 
   defp validate_tools(tools) do
     tools
@@ -338,18 +391,48 @@ defmodule Raxol.MCP.Registry do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:register_tools, tools}, _from, state) do
-    {:reply, insert_tools(state.table, tools, false), state}
+    reply =
+      case refuse_invalid_names(tools) do
+        :ok -> insert_tools(state.table, tools, false)
+        refusal -> refusal
+      end
+
+    {:reply, reply, state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:register_derived_tools, tools}, _from, state) do
-    {:reply, insert_tools(state.table, tools, true), state}
+    reply =
+      case refuse_invalid_names(tools) do
+        :ok -> insert_tools(state.table, tools, true)
+        refusal -> refusal
+      end
+
+    {:reply, reply, state}
+  end
+
+  # `register_all/2`'s batch: checked whole before anything is inserted, so a
+  # refusal leaves the table as it was.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:register_tools, tools, :all_or_nothing}, _from, state) do
+    reply =
+      with :ok <- refuse_invalid_names(tools),
+           [] <- collisions(state.table, tools) do
+        insert_tools(state.table, tools, false)
+      else
+        [_ | _] = refused -> {:error, {:name_collision, refused}}
+        refusal -> refusal
+      end
+
+    {:reply, reply, state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:unregister_tools, names}, _from, state) do
     for name <- names do
       :ets.delete(state.table, tool_key(name))
+      # A name `register_tools/3` would refuse has no client-side name row.
+      if is_binary(name), do: :ets.delete_object(state.table, {omp_key(name), name})
     end
 
     :telemetry.execute(
@@ -408,8 +491,86 @@ defmodule Raxol.MCP.Registry do
   # -- Private -----------------------------------------------------------------
 
   defp tool_key(name), do: {:tool, name}
+  defp omp_key(name), do: {:omp_name, omp_name(name)}
   defp resource_key(uri), do: {:resource, uri}
   defp prompt_key(name), do: {:prompt, name}
+
+  # A tool's name keys its row and its client-side name (`omp_name/1` takes a
+  # binary), so a batch holding a tool without a binary name is refused before
+  # anything is inserted. Raising here instead would take the registry, and
+  # every tool it holds, down with the caller's mistake.
+  defp refuse_invalid_names(tools) do
+    Enum.find_value(tools, :ok, fn
+      %{name: name} when is_binary(name) -> nil
+      %{name: name} -> {:error, {:invalid_tool_name, name}}
+      _no_name -> {:error, {:invalid_tool_name, nil}}
+    end)
+  end
+
+  defp insert_tools(table, tools, derived?) do
+    {registered, refused} =
+      Enum.reduce(tools, {[], []}, fn tool, {registered, refused} ->
+        case insert_tool(table, tool, derived?) do
+          :ok -> {[tool.name | registered], refused}
+          {:taken, holder} -> {registered, [{tool.name, holder} | refused]}
+        end
+      end)
+
+    registered = Enum.reverse(registered)
+
+    :telemetry.execute(
+      [:raxol, :mcp, :registry, :tools_changed],
+      %{count: length(registered)},
+      %{action: :register, names: registered}
+    )
+
+    case refused do
+      [] -> :ok
+      _ -> {:error, {:name_collision, Enum.reverse(refused)}}
+    end
+  end
+
+  # The `{:omp_name, _}` row records which tool holds a client-side name.
+  defp insert_tool(table, tool, derived?) do
+    key = omp_key(tool.name)
+
+    case :ets.lookup(table, key) do
+      [{^key, holder}] when holder != tool.name ->
+        {:taken, holder}
+
+      _free_or_own ->
+        entry =
+          {:tool, tool.name, tool_definition(tool), tool.callback, fault_classifier(tool),
+           derived?}
+
+        :ets.insert(table, [{tool_key(tool.name), entry}, {key, tool.name}])
+        :ok
+    end
+  end
+
+  # The refusals `insert_tool/3` would make for `tools`, in order, without
+  # inserting anything: against the table and against earlier tools in the
+  # batch.
+  defp collisions(table, tools) do
+    {_held, refused} =
+      Enum.reduce(tools, {%{}, []}, fn tool, {held, refused} ->
+        key = omp_key(tool.name)
+        holder = Map.get_lazy(held, key, fn -> holder(table, key) end)
+
+        if holder in [nil, tool.name],
+          do: {Map.put(held, key, tool.name), refused},
+          else: {held, [{tool.name, holder} | refused]}
+      end)
+
+    Enum.reverse(refused)
+  end
+
+  defp holder(table, key) do
+    case :ets.lookup(table, key) do
+      [{^key, holder}] -> holder
+      [] -> nil
+    end
+  end
 
   defp tool_definition(tool) do
     # `:annotations` is an MCP spec field (destructiveHint, readOnlyHint, ...)
@@ -418,23 +579,6 @@ defmodule Raxol.MCP.Registry do
     # back from here to decide what may run unguarded. `Map.take/2` ignores an
     # absent key, so an unannotated tool is unchanged.
     Map.take(tool, [:name, :description, :inputSchema, :annotations])
-  end
-
-  defp insert_tools(table, tools, derived?) do
-    for tool <- tools do
-      entry =
-        {:tool, tool.name, tool_definition(tool), tool.callback, fault_classifier(tool), derived?}
-
-      :ets.insert(table, {tool_key(tool.name), entry})
-    end
-
-    :telemetry.execute(
-      [:raxol, :mcp, :registry, :tools_changed],
-      %{count: length(tools)},
-      %{action: :register, names: Enum.map(tools, & &1.name)}
-    )
-
-    :ok
   end
 
   defp resource_definition(resource) do

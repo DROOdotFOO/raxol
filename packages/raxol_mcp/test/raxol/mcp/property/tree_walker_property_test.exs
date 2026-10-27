@@ -138,12 +138,14 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
     end
   end
 
-  defp context, do: %{dispatcher_pid: nil, type_map: @type_map}
+  @sid "s"
+
+  defp context, do: %{dispatcher_pid: nil, session_id: @sid, type_map: @type_map}
 
   # -- Properties --
 
   describe "tool name format" do
-    property "all tool names follow widget_id.action pattern" do
+    property "all tool names follow session_id.widget_id.action pattern" do
       check all(
               tree <- flat_tree_gen(),
               max_runs: 500
@@ -154,7 +156,8 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
           assert String.contains?(tool.name, "."),
                  "Tool name '#{tool.name}' missing dot separator"
 
-          [widget_id, action] = String.split(tool.name, ".", parts: 2)
+          [session_id, widget_id, action] = String.split(tool.name, ".", parts: 3)
+          assert session_id == @sid
           assert String.length(widget_id) > 0
           assert String.length(action) > 0
         end
@@ -215,7 +218,7 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
         tree = %{type: :button, id: id, attrs: %{label: label, disabled: false}}
         tools = TreeWalker.derive_tools(tree, context())
         assert length(tools) == 1
-        assert hd(tools).name == "#{id}.click"
+        assert hd(tools).name == "#{@sid}.#{id}.click"
       end
     end
   end
@@ -240,7 +243,7 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
         widget_ids_with_tools =
           tools
           |> Enum.map(& &1.name)
-          |> Enum.map(&(String.split(&1, ".", parts: 2) |> hd()))
+          |> Enum.map(&(String.split(&1, ".", parts: 3) |> Enum.at(1)))
           |> Enum.uniq()
 
         enabled_ids = Enum.map(enabled_widgets, & &1[:id]) |> Enum.uniq()

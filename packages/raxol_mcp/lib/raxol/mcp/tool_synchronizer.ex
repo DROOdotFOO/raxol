@@ -14,6 +14,27 @@ defmodule Raxol.MCP.ToolSynchronizer do
   Started by `Raxol.Headless` when creating a session. Linked to the
   session lifecycle -- dies when the session dies, cleaning up its tools.
 
+  Every tool it registers is named under the session id: derived tools are
+  `"session_id.widget_id.action"` and the meta-tool is
+  `"session_id.discover_tools"`, so sessions rendering the same widget never
+  share a tool. A tool `Raxol.MCP.Registry` refuses (its client-side name is
+  already taken), the meta-tool included, is left out of the session's set
+  and offered again on every sync; the refusals are logged when they change,
+  not on every sync, and `name_collisions/1` answers them.
+
+  A session whose id is not 1-32 characters of `[A-Za-z0-9_-]`
+  (`Raxol.MCP.TreeWalker.id?/1`) registers no tools, its meta-tool included,
+  and no resources (the id would be in their URIs and descriptions), and is
+  warned about once. A derived tool whose name OMP would show hashed (longer
+  than 64 characters with the `mcp__raxol_raxol_` prefix of the recommended
+  `raxol:raxol` plugin key) is registered and warned about when a render
+  first derives it. That warning and each widget refusal
+  `Raxol.MCP.TreeWalker` reports are given once per session, also when the
+  widget leaves the view and comes back; what was warned about is remembered
+  for the 256 most recently rendered, so a view with per-item ids keeps
+  memory bounded and is warned about again only for an item that comes back
+  after 256 newer ones.
+
   ## Usage
 
       {:ok, pid} = ToolSynchronizer.start_link(
@@ -46,6 +67,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
     :telemetry_handler_id,
     :debounce_ref,
     current_tool_names: MapSet.new(),
+    # Tool name => the name holding its client-side name, from the last sync.
+    name_collisions: %{},
     current_resource_uris: MapSet.new(),
     current_view_tree: nil,
     current_model: nil,
@@ -54,10 +77,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
     pending_model: nil,
     focused_id: nil,
     hover_id: nil,
-    # What `TreeWalker` refused on the last render (see
-    # `TreeWalker.derive_with_refusals/2`). Only that render's are kept, so a
-    # view with per-item ids does not grow it.
-    refusals: MapSet.new()
+    # Each TreeWalker refusal (`{:refusal, refusal}`, see
+    # `TreeWalker.derive_with_refusals/2`) and derived name OMP would show
+    # hashed (`{:long_name, name}`) warned about, => the render that last
+    # derived it. Only the @max_warned most recent are kept.
+    warned: %{},
+    renders: 0
   ]
 
   @doc "Start a ToolSynchronizer linked to the calling process."
@@ -93,10 +118,23 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   @doc """
-  Update the focused widget ID for FocusLens filtering.
+  The session's tools the registry refused at the last sync because another
+  tool, `holder`, has the same client-side name
+  (`Raxol.MCP.Registry.omp_name/1`), as `{name, holder}`. Only name
+  collisions: a widget id or action name `Raxol.MCP.TreeWalker` refuses, or
+  a session id that names no tools, is not here.
+  """
+  @spec name_collisions(GenServer.server()) :: [{String.t(), String.t()}]
+  def name_collisions(synchronizer) do
+    GenServer.call(synchronizer, :name_collisions)
+  end
 
-  When a widget gains focus (keyboard or mouse click), call this to
-  adjust which tools are exposed via `FocusLens`.
+  @doc """
+  Record the focused widget ID.
+
+  When a widget gains focus (keyboard or mouse click), call this. It does
+  not change which tools are registered: every derived tool stays
+  registered whatever has focus.
 
   Emits `:pane_focus` behavior data with the focused ID in `:pane_id`, plus
   `[:raxol, :mcp, :focus_changed]` telemetry.
@@ -107,13 +145,11 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   @doc """
-  Update the hovered widget ID for anticipatory tool exposure.
+  Record the hovered widget ID.
 
-  When the mouse hovers over a widget, call this so `FocusLens`
-  can pre-expose that widget's tools alongside the focused widget's.
-
-  Hover emits a separate `:widget_hover` behavior event and
-  `[:raxol, :mcp, :hover_changed]` telemetry; it does not change adaptive
+  Like `update_focus/2`, it does not change which tools are registered: the
+  ID is only stored. Hover emits a separate `:widget_hover` behavior event
+  and `[:raxol, :mcp, :hover_changed]` telemetry; it does not change adaptive
   keyboard focus.
   """
   @spec update_hover(GenServer.server(), String.t() | nil) :: :ok
@@ -139,21 +175,30 @@ defmodule Raxol.MCP.ToolSynchronizer do
       %{synchronizer: self(), dispatcher_pid: dispatcher_pid}
     )
 
-    # Register the discover_tools meta-tool
-    discover_tool = FocusLens.discover_tools_spec(registry)
-    Registry.register_tools(registry, [discover_tool])
-
     state = %__MODULE__{
       registry: registry,
       dispatcher_pid: dispatcher_pid,
       session_id: session_id,
       app_module: app_module,
-      telemetry_handler_id: handler_id,
-      current_tool_names: MapSet.new(["discover_tools"])
+      telemetry_handler_id: handler_id
+    }
+
+    if not TreeWalker.id?(session_id), do: TreeWalker.warn_refused_session_id(session_id)
+
+    # Register the session's discover_tools meta-tool
+    offered = discover_tool(state)
+    refused = registry |> register(offered) |> note_refused(session_id, %{})
+
+    state = %{
+      state
+      | current_tool_names: offered |> MapSet.new(& &1.name) |> drop_refused(refused),
+        name_collisions: refused
     }
 
     # Register session-level resources (context tree, widget tree)
-    resource_uris = register_session_resources(state)
+    resource_uris =
+      if TreeWalker.id?(session_id), do: register_session_resources(state), else: MapSet.new()
+
     state = %{state | current_resource_uris: resource_uris}
 
     # Seed tools synchronously so callers never observe a meta-tool-only
@@ -162,6 +207,10 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:name_collisions, _from, state) do
+    {:reply, Enum.sort(state.name_collisions), state}
+  end
+
   def handle_manager_call({:flush, nil}, _from, state) do
     {:reply, :ok, apply_pending(state)}
   end
@@ -350,45 +399,162 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   defp do_sync(view_tree, model, state) do
     # Tool sync (existing behavior)
-    {new_tools, state} = derive_tools(view_tree, state)
-    new_tool_names = MapSet.new(Enum.map(new_tools, & &1.name))
-    new_tool_names = MapSet.put(new_tool_names, "discover_tools")
-
-    removed = MapSet.difference(state.current_tool_names, new_tool_names)
-    added_tools = Enum.filter(new_tools, &(not MapSet.member?(state.current_tool_names, &1.name)))
-    tools_changed? = MapSet.size(removed) > 0 or added_tools != []
-
-    if MapSet.size(removed) > 0 do
-      Registry.unregister_tools(state.registry, MapSet.to_list(removed))
-    end
-
-    if added_tools != [] do
-      Registry.register_tools(state.registry, added_tools, derived: true)
-    end
-
-    if tools_changed? do
-      server_notify("notifications/tools/list_changed", %{})
-    end
+    {current_tool_names, state} = sync_tools(view_tree, state)
 
     # Resource sync (model projections)
     state = sync_model_resources(model, state)
 
     %{
       state
-      | current_tool_names: new_tool_names,
+      | current_tool_names: current_tool_names,
         current_view_tree: view_tree,
         current_model: model
     }
   end
 
-  # A refusal TreeWalker reports is warned about on the render it appears in,
-  # not on every render that keeps it; one that leaves the view and comes
-  # back is warned about again.
+  # Answers the session's tool names after the sync, and the state, holding
+  # the tools refused. The meta-tool is offered with the derived tools, so a
+  # refused one is registered as soon as its client-side name is free.
+  defp sync_tools(view_tree, state) do
+    {derived, state} = derive_tools(view_tree, state)
+    new_tools = discover_tool(state) ++ derived
+    new_tool_names = MapSet.new(new_tools, & &1.name)
+
+    removed = MapSet.difference(state.current_tool_names, new_tool_names)
+    added_tools = Enum.filter(new_tools, &(not MapSet.member?(state.current_tool_names, &1.name)))
+    {added_names, refused} = apply_tool_changes(state, removed, added_tools)
+
+    current = state.current_tool_names |> MapSet.difference(removed) |> MapSet.union(added_names)
+    {current, %{state | name_collisions: refused}}
+  end
+
+  # The session's `discover_tools` meta-tool, or none for a session whose id
+  # names no tools (`TreeWalker.id?/1`).
+  defp discover_tool(state) do
+    if TreeWalker.id?(state.session_id),
+      do: [FocusLens.discover_tools_spec(state.registry, state.session_id)],
+      else: []
+  end
+
+  # OMP prefixes `mcp__<server>_` to a tool's sanitized name, `<server>` being
+  # the sanitized server key: `raxol_raxol` for the `raxol:raxol` plugin key
+  # `docs/features/MCP.md` recommends. Past 64 characters it shows the first
+  # 55, `_` and an 8-character hash instead, so the end of the name, the
+  # action that tells a widget's tools apart, is what a reader loses.
+  @omp_prefix "mcp__raxol_raxol_"
+  @omp_name_limit 64
+
+  # Each refusal TreeWalker reports, and each name OMP would show hashed, is
+  # warned about on the first render that derives it, not again while it
+  # stays or when it leaves the view and comes back (a modal, a conditional
+  # widget), unless @max_warned more recently derived ones pushed it out.
   defp derive_tools(view_tree, state) do
     context = %{dispatcher_pid: state.dispatcher_pid, session_id: state.session_id}
     {tools, refusals} = TreeWalker.derive_with_refusals(view_tree, context)
-    Enum.each(MapSet.difference(refusals, state.refusals), &TreeWalker.warn_refusal/1)
-    {tools, %{state | refusals: refusals}}
+
+    long_names =
+      for %{name: name} <- tools,
+          String.length(omp_visible_name(name)) > @omp_name_limit,
+          uniq: true,
+          do: {:long_name, name}
+
+    derived = Enum.map(refusals, &{:refusal, &1}) ++ long_names
+
+    derived
+    |> Enum.reject(&Map.has_key?(state.warned, &1))
+    |> Enum.each(&warn(&1, state.session_id))
+
+    {tools, remember_warned(state, derived)}
+  end
+
+  defp warn({:refusal, refusal}, _session_id), do: TreeWalker.warn_refusal(refusal)
+  defp warn({:long_name, name}, session_id), do: warn_long_name(name, session_id)
+
+  # Bounds `warned` for a view with per-item ids, which derives new refusals
+  # or long names on every render; what this render derived is the most
+  # recent, so it is the last to go.
+  @max_warned 256
+
+  defp remember_warned(state, derived) do
+    render = state.renders + 1
+    warned = Enum.reduce(derived, state.warned, &Map.put(&2, &1, render))
+    %{state | warned: drop_oldest(warned), renders: render}
+  end
+
+  defp drop_oldest(warned) when map_size(warned) <= @max_warned, do: warned
+
+  defp drop_oldest(warned) do
+    warned
+    |> Enum.sort_by(fn {_derived, render} -> render end, :desc)
+    |> Enum.take(@max_warned)
+    |> Map.new()
+  end
+
+  defp omp_visible_name(name), do: @omp_prefix <> Registry.omp_name(name)
+
+  defp warn_long_name(name, session_id) do
+    visible = omp_visible_name(name)
+
+    Logger.warning(
+      "[MCP.ToolSynchronizer] Session #{inspect(session_id)}: tool #{inspect(name)} " <>
+        "reaches OMP as #{visible} (#{String.length(visible)} characters), past " <>
+        "OMP's #{@omp_name_limit}, so OMP lists it under a truncated, hashed name; " <>
+        "a shorter session or widget id keeps it readable"
+    )
+  end
+
+  # Answers the names of the added tools the registry took, and the refused
+  # tools (name => holder).
+  defp apply_tool_changes(state, removed, added_tools) do
+    if MapSet.size(removed) > 0 do
+      Registry.unregister_tools(state.registry, MapSet.to_list(removed))
+    end
+
+    refused =
+      state.registry
+      |> register(added_tools)
+      |> note_refused(state.session_id, state.name_collisions)
+
+    added_names = added_tools |> MapSet.new(& &1.name) |> drop_refused(refused)
+
+    if MapSet.size(removed) > 0 or MapSet.size(added_names) > 0 do
+      server_notify("notifications/tools/list_changed", %{})
+    end
+
+    {added_names, refused}
+  end
+
+  defp drop_refused(names, refused), do: MapSet.reject(names, &Map.has_key?(refused, &1))
+
+  # Answers the registry's refusals as `{name, holder}`. A refused tool is not
+  # the session's, so it is neither listed in its set nor unregistered with
+  # it; the next sync offers it again. Every tool of a session, its meta-tool
+  # included, comes and goes with it, so each is registered as derived.
+  defp register(_registry, []), do: []
+
+  defp register(registry, tools) do
+    case Registry.register_tools(registry, tools, derived: true) do
+      :ok -> []
+      {:error, {:name_collision, collisions}} -> collisions
+    end
+  end
+
+  # Answers the refused tools, name => holder. They are logged only when they
+  # differ from the last sync's: a refused tool is offered and refused again
+  # on every sync for as long as it stays on screen.
+  defp note_refused(collisions, session_id, previous) do
+    refused = Map.new(collisions)
+
+    if collisions != [] and refused != previous do
+      Logger.warning(
+        "[MCP.ToolSynchronizer] Session #{inspect(session_id)}: refused " <>
+          Enum.map_join(collisions, ", ", fn {name, holder} ->
+            "#{inspect(name)} (its client-side name is taken by #{inspect(holder)})"
+          end)
+      )
+    end
+
+    refused
   end
 
   # -- Private: model resources --
@@ -396,7 +562,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
   defp sync_model_resources(nil, state), do: state
 
   defp sync_model_resources(model, state) do
-    projections = get_projections(state.app_module)
+    projections = session_projections(state)
 
     if projections == [] do
       state
@@ -468,6 +634,11 @@ defmodule Raxol.MCP.ToolSynchronizer do
         state
       end
     end
+  end
+
+  # A session id that names no tools names no resources either.
+  defp session_projections(state) do
+    if TreeWalker.id?(state.session_id), do: get_projections(state.app_module), else: []
   end
 
   defp get_projections(nil), do: []

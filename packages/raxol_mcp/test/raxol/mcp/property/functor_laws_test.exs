@@ -126,7 +126,7 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
     end
   end
 
-  defp context, do: %{dispatcher_pid: nil, type_map: @type_map}
+  defp context, do: %{dispatcher_pid: nil, session_id: "s", type_map: @type_map}
 
   defp tool_names(tree) do
     TreeWalker.derive_tools(tree, context())

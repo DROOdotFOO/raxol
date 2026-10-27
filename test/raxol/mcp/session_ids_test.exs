@@ -121,7 +121,7 @@ defmodule Raxol.MCP.SessionIdsTest do
     for id <- ids do
       start!(server, @table, id)
       assert id in Headless.list()
-      ok_text(call(server, "playground_table.sort", sort("stars", "desc")))
+      ok_text(call(server, "#{id}.playground_table.sort", sort("stars", "desc")))
       ok_text(call(server, "raxol_screenshot", %{"id" => id}))
       ok_text(call(server, "raxol_stop", %{"id" => id}))
     end

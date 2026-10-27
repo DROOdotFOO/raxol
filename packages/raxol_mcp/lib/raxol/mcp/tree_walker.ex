@@ -5,21 +5,25 @@ defmodule Raxol.MCP.TreeWalker do
   The view tree is the output of a TEA app's `view/1` function -- nested maps
   with `:type`, `:id`, `:attrs`, `:children` keys. TreeWalker walks this tree,
   finds widgets that implement `Raxol.MCP.ToolProvider`, calls `mcp_tools/1`
-  to get tool specs, namespaces them by widget ID, and wraps callbacks that
-  dispatch TEA messages through the session's Dispatcher.
+  to get tool specs, namespaces them by session and widget ID, and wraps
+  callbacks that dispatch TEA messages through the session's Dispatcher.
 
   ## Usage
 
-      context = %{dispatcher_pid: dispatcher_pid}
+      context = %{dispatcher_pid: dispatcher_pid, session_id: "demo"}
       tools = TreeWalker.derive_tools(view_tree, context)
       Raxol.MCP.Registry.register_tools(tools)
 
-  Tool names are namespaced as `"widget_id.action"`, e.g., `"search_input.type_into"`.
-  Nodes without an `:id` key are skipped (layout containers like `:column`, `:row`).
-  Both halves become part of a tool name the client lists, so a provider
-  whose id is not 1-32 characters of `[A-Za-z0-9_-]` derives no tools, and
-  an action whose name is not a lowercase letter followed by up to 31 of
-  `[a-z0-9_]` derives no tool.
+  Tool names are namespaced as `"session_id.widget_id.action"`, e.g.,
+  `"demo.search_input.type_into"`, so two sessions rendering the same widget
+  each get their own tool. Nodes without an `:id` key are skipped (layout
+  containers like `:column`, `:row`). The session id and the widget id become
+  part of a tool name the client lists, so a session whose id is not 1-32
+  characters of `[A-Za-z0-9_-]` derives no tools at all, and a provider whose
+  widget id is not derives none of its own (`id?/1`). Neither may hold a `.`,
+  so the first segment of a derived name is always its whole session id. The
+  action name is the last segment: one that is not a lowercase letter
+  followed by up to 31 of `[a-z0-9_]` derives no tool.
 
   Everything else a provider writes reaches the client's tool list as well,
   which a model reads as instructions. Control, format (bidi, zero-width,
@@ -119,8 +123,9 @@ defmodule Raxol.MCP.TreeWalker do
   }
 
   @type context :: %{
-          dispatcher_pid: pid() | nil,
-          type_map: %{atom() => module()}
+          required(:session_id) => String.t(),
+          optional(:dispatcher_pid) => pid() | nil,
+          optional(:type_map) => %{atom() => module()}
         }
 
   @doc """
@@ -159,12 +164,14 @@ defmodule Raxol.MCP.TreeWalker do
   a warning.
 
   Returns a list of `Registry.tool_def()` maps with namespaced names and
-  wrapped callbacks that dispatch TEA messages. A caller that derives on
-  every render and wants each refusal logged once uses
-  `derive_with_refusals/2` instead.
+  wrapped callbacks that dispatch TEA messages. Also logs a session id
+  refused (`id?/1`). A caller that derives on every render and wants each
+  refusal logged once uses `derive_with_refusals/2` instead.
 
   ## Options in context
 
+    * `:session_id` - the session's id, the first segment of every tool name
+      (required)
     * `:dispatcher_pid` - pid of the session's Dispatcher (for message dispatch)
     * `:type_map` - optional override for widget type -> module mapping
   """
@@ -172,6 +179,9 @@ defmodule Raxol.MCP.TreeWalker do
           Raxol.MCP.Registry.tool_def()
         ]
   def derive_tools(tree, context) do
+    if not id?(Map.fetch!(context, :session_id)),
+      do: warn_refused_session_id(context.session_id)
+
     {tools, refusals} = derive_with_refusals(tree, context)
     Enum.each(refusals, &warn_refusal/1)
     tools
@@ -179,25 +189,41 @@ defmodule Raxol.MCP.TreeWalker do
 
   @doc """
   `derive_tools/2` without logging: returns the tools and the set of
-  refusals (see `t:refusal/0`) instead. A caller that derives on every
+  refusals (see `t:refusal/0`) instead. A session id that is not (`id?/1`)
+  derives no tools and refuses no widget. A caller that derives on every
   render (`Raxol.MCP.ToolSynchronizer`) logs each new refusal once with
-  `warn_refusal/1`.
+  `warn_refusal/1`, and a refused session id with
+  `warn_refused_session_id/1`.
   """
   @spec derive_with_refusals(map() | [map()], context()) ::
           {[Raxol.MCP.Registry.tool_def()], MapSet.t(refusal())}
   def derive_with_refusals(tree, context) do
-    type_map = Map.get(context, :type_map, @default_type_map)
-    do_walk(tree, context, type_map, {[], MapSet.new()})
+    if id?(Map.fetch!(context, :session_id)) do
+      type_map = Map.get(context, :type_map, @default_type_map)
+      do_walk(tree, context, type_map, {[], MapSet.new()})
+    else
+      {[], MapSet.new()}
+    end
   end
 
-  # A widget id is one segment of a listed tool name, so the cap bounds that
-  # segment: a view cannot list names of unbounded length. 32 is a bound, not
-  # a fit to any client's name limit; session prefix + id + action can still
-  # exceed one (OMP's 64, which counts its own prefix too).
-  @widget_id ~r/\A[A-Za-z0-9_-]{1,32}\z/
+  # A session or widget id is one segment of a listed tool name, so the cap
+  # bounds that segment: a view cannot list names of unbounded length. 32 is
+  # a bound, not a fit to any client's name limit; session prefix + id +
+  # action can still exceed one (OMP's 64, which counts its own prefix too).
+  @id ~r/\A[A-Za-z0-9_-]{1,32}\z/
 
-  # The other segment. Every built-in action (`click`, `get_visible_range`,
-  # ...) is lowercase snake case; the same 32 bounds it.
+  @doc """
+  Whether `id` may be a segment of a derived tool name: a binary of 1-32
+  characters of `[A-Za-z0-9_-]`. The session id and every widget id must be.
+  A segment is the text the client lists, so it holds no `.` (which would
+  read as a segment boundary) and no control or format characters.
+  """
+  @spec id?(term()) :: boolean()
+  def id?(id) when is_binary(id), do: Regex.match?(@id, id)
+  def id?(_id), do: false
+
+  # The last segment, the action name. Every built-in action (`click`,
+  # `get_visible_range`, ...) is lowercase snake case; the same 32 bounds it.
   @action_name ~r/\A[a-z][a-z0-9_]{0,31}\z/
 
   # Cleaning walks a provider's whole input schema on every render, and a
@@ -243,6 +269,15 @@ defmodule Raxol.MCP.TreeWalker do
       "[MCP.TreeWalker] widget #{inspect(widget_id)} action #{inspect(name)} derives " <>
         "no tool: its inputSchema nests deeper than #{@max_schema_depth} maps and lists " <>
         "or holds more than #{@max_schema_values} values"
+    )
+  end
+
+  @doc "Logs that the session `id` derives no tools because of its id."
+  @spec warn_refused_session_id(term()) :: :ok
+  def warn_refused_session_id(id) do
+    Logger.warning(
+      "[MCP.TreeWalker] session id #{inspect(id)} derives no tools: an id must be " <>
+        "1-32 characters of [A-Za-z0-9_-]"
     )
   end
 
@@ -300,7 +335,7 @@ defmodule Raxol.MCP.TreeWalker do
   defp add_widget_tools(nil, _node, _id, _context, acc), do: acc
 
   defp add_widget_tools({module, specs}, node, id, context, {tools, refusals}) do
-    if Regex.match?(@widget_id, id) do
+    if id?(id) do
       {named, misnamed} = Enum.split_with(specs, &action_name?(Map.get(&1, :name)))
       refusals = Enum.into(misnamed, refusals, &{:action_name, id, Map.get(&1, :name)})
 
@@ -400,7 +435,7 @@ defmodule Raxol.MCP.TreeWalker do
     with {:ok, description, schema} <-
            clean_spec(Map.get(spec, :description), Map.get(spec, :inputSchema)) do
       %{
-        name: "#{widget_id}.#{spec.name}",
+        name: "#{Map.fetch!(context, :session_id)}.#{widget_id}.#{spec.name}",
         description: description,
         inputSchema: schema,
         callback: tool_callback(spec.name, widget_id, module, node, context)

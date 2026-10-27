@@ -8,7 +8,7 @@ MCP is a rendering target alongside terminal, browser, and SSH. The Component tr
 mix mcp.server
 ```
 
-This starts an MCP server on stdio, with tools auto-derived from your app's Component tree. Wire it into Claude Code or any MCP client.
+This starts an MCP server on stdio, with tools auto-derived from your app's Component tree and named per session (`<session>.<widget>.<action>`). Wire it into Claude Code or any MCP client.
 
 ```elixir
 # In your app
@@ -44,21 +44,30 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 
 A write action reaches your app's `update/2` as a plain message, such as `{:sort, "results", "stars", "desc"}` from a Table's `sort`, and the tool answers once `update/2` has run. An `update/2` that raises or returns an invalid result makes the call an error result. A call that times out (after 5 s) is an error result too, but `update/2` may still apply the message afterwards, so check the app's state before retrying it. Add `update/2` clauses for the messages your app acts on; `Raxol.MCP.ToolProvider` lists every action's message. A Button's `click` sends the node's `on_click` message as it was when the tool was derived: a later render that changes `on_click` does not change what `click` sends. A button whose `on_click` is missing or a function gives an error result.
 
+Derived tools are named `<session>.<widget>.<action>`: `demo.results.sort` is the `sort` action of the Component with id `results` in the headless session `demo`. Two sessions of one app each get their own tools, and stopping one removes only its own. Each session also gets `<session>.discover_tools`, which searches that session's tools by keyword. The session id is the first segment of every name, so `Raxol.Headless.start/2` refuses an id that is not 1-32 characters of `[A-Za-z0-9_-]` (`Raxol.MCP.TreeWalker.id?/1`), and a `Raxol.MCP.ToolSynchronizer` started directly with one derives no tools at all, `discover_tools` included, registers none of its `raxol://session/<id>/...` resources, and a warning names the id: an id with a `.` (such as `t.v2`) would otherwise read as session `t`, and a control character would reach the client's tool and resource lists.
+
+An MCP client may rename tools. OMP lowercases a name, turns every run of characters outside `[a-z0-9_]` into `_`, collapses and trims `_`, and uses `tool` if nothing is left, so `demo.x_y.click` and `demo.x-y.click` would reach it as one tool. `Raxol.MCP.Registry` computes that name (`Raxol.MCP.Registry.omp_name/1`) at registration and refuses a tool whose name is already taken there by another. The session logs the refusal and offers the tool again on every render, so it registers once the name is free. `raxol_start` and `Raxol.Headless.start/2` refuse to start a session any of whose first render's tools is refused, and stop it, so neither a client nor an Elixir caller holds a session it cannot fully drive: a client's session `s` started first holds the names of an Elixir caller's `S`, whose `start/2` answers `{:error, {:name_collisions, names}}`, naming only its own refused tools. OMP then strips an exact `<server>_` prefix once, which `omp_name/1` does not model: name the server `raxol` in your OMP config (the `raxol:raxol` plugin key, or the `.mcp.json` key `raxol`), which is why `raxol_start` refuses the session id `raxol` (its `raxol.nav_menu.click` would reach OMP as session `nav`'s `nav.menu.click`). The reservation covers only those keys. Under another key that a session id can spell, such as `dev`, session `dev`'s `dev.nav_menu.click` reaches OMP as `nav_menu_click`, the same name as session `nav`'s `nav.menu.click`, and OMP keeps only one of them.
+
+A call to a derived name whose session is not running in this server answers a tool error that names the session and points to `raxol_list`, not an unknown-method error: OMP keeps the names from its last listing, even across runs. Headless decides this, not the generic server: `Raxol.Application` starts `Raxol.MCP.Server` with `unknown_tool_reply: &Raxol.Headless.McpTools.unknown_tool_reply/1`, which answers for a name of the derived shape whose session is not in `Raxol.Headless.list/0` and is not one of the reserved ids `raxol` and `agent`. A server started without that option answers every unknown name with `-32601`.
+
+OMP's `tools.approval` deny and prompt entries also match a digit-free legacy form of each name, so sessions `a1` and `a2` share legacy names and one legacy entry applies to both.
+
+Session ids are not secret from a connected client. Gating `raxol_list` hides only the list itself: ids still show up in tool and resource names (`tools/list`, `resources/list`, completion), in `raxol_start`'s refusals and in the stale-session reply. Per-connection session ownership (a client sees and controls only the sessions it started) is planned as the single rule for this; until then, treat every session in a server as visible to every client of that server.
+
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
 ## Focus lens
 
-A Component tree with 50 Components generates 100+ tools. That's too many for an LLM to reason about. The focus lens filters to ~15 tools per interaction based on:
+A Component tree with 50 Components generates 100+ tools. That's too many for an LLM to reason about. `Raxol.MCP.FocusLens.filter/2` cuts a tool list to about 15 based on:
 
-- Current focused Component
-- Mouse hover (in `:hover` focus mode)
-- Modal stack (modals shadow background Components)
-- Recently interacted-with Components
+- The focused Component (`:focused_id`)
+- The hovered Component (`:hover_id`, in `:hover` mode)
 
 ```elixir
 tools =
   Raxol.MCP.FocusLens.filter(all_tools,
     mode: :focused,
+    session_id: "demo",
     focused_id: "search_input",
     max_tools: 15
   )
@@ -66,7 +75,7 @@ tools =
 length(tools) # ~15, not ~100
 ```
 
-The lens is attention-aware: agents see what a human would see, not a flat dump of every possible action.
+Nothing filters what a client lists for you: the server lists every registered tool, and the lens is for code that builds its own tool list. It works within one session: a tool belongs to the session whose id is exactly the first `.` segment of its name, so another session's tools for a Component with the same id never leak in, and the session's `discover_tools` searches only that session.
 
 ## Resources
 
@@ -184,7 +193,7 @@ A tool annotated `destructiveHint: true` or `sensitive: true` never runs without
 
 Derived tools keep two annotations of their tool spec, and only when `true`: `sensitive` and `destructiveHint`. They can only add the authorizer requirement. Any other key or value (`title`, `readOnlyHint`, `sensitive: false`) is dropped, because it is the provider's own claim and a client acts on it (OMP's plan mode reads `readOnlyHint`). Every built-in action that changes app state is `sensitive: true`: `click`, `type_into`, `clear`, `toggle`, `select`, `select_row`, `select_node`, `select_tab`, `sort`, `expand`, `collapse`, `dismiss`, `confirm`, `seek`, `play`, `pause` and `scroll_to`. The `get_*` reads are not, and a `TextInput` with a `mask_char` derives no `get_value`, as `PasswordField` derives none. No MCP channel a client can use without an authorizer returns either value: `raxol://session/<id>/widgets` reports no value for them, `raxol://session/<id>/context` drops the `value` of a password field or a node with a `mask_char`, the layout engine draws a masked `:text_input` as its mask, so `raxol_screenshot` shows the mask, and `raxol_get_model` and `agent.get_model`, which return the model the plaintext lives in, are `sensitive`. An authorizer that allows those two hands the client the plaintext. The context resource also includes the model projections the app declares in `mcp_resources/0`, so a secret an app projects there is readable. So a server embedded with no authorizer (`Raxol.MCP.Supervisor` or `Raxol.MCP.Server` without `:authorizer`) still lists and reads widgets, but refuses to drive them, or to return a model, with `sensitive_tool_unguarded`. The boot refusal scans static tools only: derived tools come and go with the view, and a Server restarted while sessions are live must still boot, so for them the `tools/call` refusal is what holds. A tool counts as derived by origin, not by a dotted name or a key in its tool map: only `Raxol.MCP.ToolSynchronizer` registers a session's tools as derived (`Raxol.MCP.Registry.register_tools/3` with `derived: true`), so a static tool such as `agent.send`, or one whose map carries `derived: true`, is still checked at boot. `Raxol.MCP.AgentBridge` follows the same rules: an Action declared `sensitive: true` becomes a `sensitive` tool, `agent.send`, which types into any headless session, is `sensitive` like `raxol_send_key`, and an Action's name, description and input schema go through the same checks and cleaning as a widget provider's spec.
 
-A network deployment needs a function authorizer, not just a name allowlist. Derived tool names come and go with the view, so a fixed `mcp_allowed_tools` list cannot name them, and `allow_all` hands every widget to every client. SSE connections also share sessions: every connection reaches every headless session and its derived tools, and the connection id comes from the client's `mcp-session-id` header, so it is not an identity to authorize on.
+A network deployment needs a function authorizer, not just a name allowlist. Derived tool names come and go with the view, so a fixed `mcp_allowed_tools` list cannot name them, and `allow_all` hands every widget to every client. A name the list does hold ties the tool to a session id the client picks, not to an app: `s1.form.click` authorizes that name for whatever startable app a client starts as `s1`. SSE connections also share sessions: every connection reaches every headless session and its derived tools, and the connection id comes from the client's `mcp-session-id` header, so it is not an identity to authorize on.
 
 Derived tool descriptions are static per provider and action. App text (labels, titles, tab names) and widget ids never appear in them, only in tool results such as `get_tabs`. `Raxol.MCP.TreeWalker` strips control, format (bidi overrides, zero-width characters, BOM, tag characters), line/paragraph separator and private-use characters, variation selectors, the combining grapheme joiner, the Hangul fillers and the braille blank from every description, and from every string and every key inside a tool's `inputSchema` (titles, enums, defaults, examples, property names). An atom is cleaned as its name. A model reads the tool list as part of its instructions, so app text there would be a prompt injection with the app's authority.
 
@@ -202,7 +211,9 @@ To keep the demos as well, list them alongside your app; `Raxol.Headless.McpTool
 
 Anything else is refused before the name is resolved, so an unlisted name never becomes an atom. Elixir callers of `Raxol.Headless.start/2`, such as `Raxol.MCP.Test` and `Raxol.Recording.Video`, are trusted and are not limited by the list. The `path` argument is a separate opt-in (`RAXOL_HEADLESS_PATH_ROOT`) and does not consult the list, because the module is only known after the file is compiled.
 
-`raxol_start` requires an `id` matching `^[a-z][a-z0-9]{0,6}$` and refuses any other id rather than substituting one. No `_` or `.` keeps the session boundary clear after OMP's renaming (`a_b.c` and `a.b_c` would both become `a_b_c`), and seven characters keep the longest demo tool name within OMP's 64. Session ids are binaries only and never become atoms. Every session id, Elixir callers' included, is 1-32 characters of `[A-Za-z0-9_-]`, the rule a widget id follows: an id reaches every client verbatim through `raxol_list`, session-id completion, resource URIs and tool names, so `Raxol.Headless.start/2` answers any other `:id` (invalid UTF-8, a newline, a dot, 33 characters) with `{:error, {:invalid_session_id, id}}` and starts nothing. Its default id, the module's last segment underscored, is made to fit: a character outside the rule becomes `_`, and a name over 32 characters becomes its first 23, `_` and 8 hex digits of the module's hash.
+`raxol_start` requires an `id` matching `^[a-z][a-z0-9]{0,6}$` and refuses any other id rather than substituting one. No `_` or `.` keeps the session boundary clear after OMP's renaming (`a_b.c` and `a.b_c` would both become `a_b_c`), and seven characters keep the longest demo tool name within OMP's 64. `raxol` (the server key, see Tool derivation) and `agent` (the agent bridge's `agent.*` tools) are reserved. Session ids are binaries only and never become atoms. Every session id, Elixir callers' included, is 1-32 characters of `[A-Za-z0-9_-]`, the rule a widget id follows: an id reaches every client verbatim through `raxol_list`, session-id completion, resource URIs and tool names, so `Raxol.Headless.start/2` answers any other `:id` (invalid UTF-8, a newline, a dot, 33 characters) with `{:error, {:invalid_session_id, id}}` and starts nothing. Its default id, the module's last segment underscored, is made to fit: a character outside the rule becomes `_`, and a name over 32 characters becomes its first 23, `_` and 8 hex digits of the module's hash.
+
+OMP's 64 counts its `mcp__raxol_raxol_` prefix (17 characters, for the `raxol:raxol` plugin key), which leaves 47 for `<session>_<widget>_<action>`. A widget id may be 32 characters, so a 7-character session, a 32-character widget and the 17-character `get_visible_range` come to 58 characters, 75 with the prefix. Past 64 OMP lists the first 55 characters, `_` and a hash: still callable, but every action of such a widget can look alike to a reader. The session logs a warning, once per name, for each derived tool past 64 with the prefix; widget ids of at most 21 characters keep every built-in action readable under a 7-character session.
 
 ### Transports
 

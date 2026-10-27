@@ -349,7 +349,10 @@ defmodule Raxol.Application do
       authorizer: resolve_mcp_authorizer(:mcp_authorizer, production?),
       read_authorizer:
         resolve_mcp_authorizer(:mcp_read_authorizer, production?),
-      authorizer_source: mcp_authorizer_source()
+      authorizer_source: mcp_authorizer_source(),
+      # Headless sessions name their tools; a call to one of a stopped
+      # session says so instead of answering `-32601`.
+      unknown_tool_reply: &Raxol.Headless.McpTools.unknown_tool_reply/1
     ]
   end
 
@@ -1076,7 +1079,9 @@ defmodule Raxol.Application do
     if module_available?(Raxol.MCP.Registry) and
          Process.whereis(Raxol.MCP.Registry) != nil do
       if Code.ensure_loaded?(Raxol.Headless.McpTools) do
-        Raxol.Headless.McpTools.register(Raxol.MCP.Registry)
+        Raxol.MCP.Registry
+        |> Raxol.Headless.McpTools.register()
+        |> warn_on_refused_tools(Raxol.Headless.McpTools)
       end
 
       if Code.ensure_loaded?(Raxol.Headless.DocsResource) do
@@ -1085,18 +1090,43 @@ defmodule Raxol.Application do
 
       if Code.ensure_loaded?(Raxol.MCP.AdaptiveTools) and
            Raxol.MCP.AdaptiveTools.available?() do
-        Raxol.MCP.AdaptiveTools.register(Raxol.MCP.Registry)
+        Raxol.MCP.Registry
+        |> Raxol.MCP.AdaptiveTools.register()
+        |> warn_on_refused_tools(Raxol.MCP.AdaptiveTools)
       end
 
       # The coding-agent harness tools live in raxol_agent, which main raxol
       # does not depend on; they register only when that package is loaded
       # in this VM (e.g. `mix mcp.server` run from packages/raxol_agent).
-      if Code.ensure_loaded?(Raxol.Agent.Harness.McpTools) do
-        apply(Raxol.Agent.Harness.McpTools, :register, [Raxol.MCP.Registry])
+      harness = Raxol.Agent.Harness.McpTools
+
+      if Code.ensure_loaded?(harness) do
+        harness
+        |> apply(:register, [Raxol.MCP.Registry])
+        |> warn_on_refused_tools(harness)
       end
     end
 
     :ok
+  end
+
+  # The registry registers every other tool, so boot goes on without the
+  # refused ones.
+  defp warn_on_refused_tools(:ok, _source), do: :ok
+
+  defp warn_on_refused_tools({:error, {:name_collision, collisions}}, source) do
+    Log.warning(
+      "[Raxol.Application] #{inspect(source)} tools refused (their client-side " <>
+        "names are taken): #{inspect(collisions)}"
+    )
+  end
+
+  # The registry refuses the whole batch and keeps serving what it holds.
+  defp warn_on_refused_tools({:error, {:invalid_tool_name, name}}, source) do
+    Log.warning(
+      "[Raxol.Application] #{inspect(source)} tools refused (a tool name is " <>
+        "not a binary): #{inspect(name)}"
+    )
   end
 
   # Tidewave dispatches out of its own map, so without this its client sees

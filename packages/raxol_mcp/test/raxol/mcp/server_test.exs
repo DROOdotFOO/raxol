@@ -104,6 +104,46 @@ defmodule Raxol.MCP.ServerTest do
       assert resp.error.message =~ "nope"
     end
 
+    # Dotted names are not the generic server's to interpret: an embedder's
+    # mistyped tool is an unknown tool whatever its shape or case.
+    test "an unknown dotted name is tool-not-found without :unknown_tool_reply", %{server: s} do
+      for name <- ["github.issues.list", "Github.issues.list", "s1.discover_tools"] do
+        msg = %{id: 7, method: "tools/call", params: %{"name" => name, "arguments" => %{}}}
+        {:reply, resp} = Server.handle_message(s, msg)
+
+        assert resp.error.code == Protocol.method_not_found(), name
+      end
+    end
+
+    test ":unknown_tool_reply answers an unknown name it has text for", %{registry: r} do
+      reply = fn
+        "gone." <> _ -> "that tool is gone"
+        _other -> nil
+      end
+
+      {:ok, s} = Server.start_link(name: nil, registry: r, unknown_tool_reply: reply)
+
+      call = fn name ->
+        msg = %{id: 8, method: "tools/call", params: %{"name" => name, "arguments" => %{}}}
+        {:reply, resp} = Server.handle_message(s, msg)
+        resp
+      end
+
+      assert %{result: %{isError: true, content: [%{type: "text", text: "that tool is gone"}]}} =
+               call.("gone.w.a")
+
+      assert call.("github.issues.list").error.code == Protocol.method_not_found()
+    end
+
+    test ":unknown_tool_reply must be a 1-arity function or nil", %{registry: r} do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _stack}} =
+               Server.start_link(name: nil, registry: r, unknown_tool_reply: "not a fun")
+
+      assert message =~ ":unknown_tool_reply"
+    end
+
     test "returns isError for tool callback errors", %{server: s, registry: r} do
       tool = %{
         name: "fail",

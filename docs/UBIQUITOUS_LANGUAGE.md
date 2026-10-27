@@ -234,9 +234,9 @@ role/label/state form that Surfaces serialize for assistive technology.
 | -------------- | --------------------------------------------------------------------------------------------------------- | ------------------------- |
 | **MCP server** | A process that exposes Tools and Resources to AI agents over JSON-RPC (typically stdio).                  | RPC server, agent server  |
 | **MCP client** | A process that consumes an external MCP server's Tools and Resources.                                     | RPC client, integration   |
-| **Tool**       | An MCP-exposed callable: name + input schema + handler. Auto-derived from Components via `ToolProvider`.  | function, action, command |
+| **Tool**       | An MCP-exposed callable: name + input schema + handler. Auto-derived from Components via `ToolProvider`, named per headless session: `<session>.<widget>.<action>`. | function, action, command |
 | **Resource**   | MCP-exposed read-only state: a projection of Model fields, streamed as diffs.                             | data, view, snapshot      |
-| **Focus lens** | An attention-aware filter that narrows the exposed Tool set to those relevant to the current interaction. | tool filter, scope        |
+| **Focus lens** | An attention-aware filter that narrows one session's exposed Tool set to those relevant to the current interaction. | tool filter, scope        |
 
 ### Flagged ambiguities
 
@@ -315,7 +315,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 | **Command**   | (1) TEA side effect; (2) shell command; (3) MCP tool invocation              | **Command** = TEA Command. For shell, say **shell command**. For MCP, say **tool call**.                                    |
 | **Backend**   | (1) Surface implementation (termbox2); (2) LLM provider                      | Always qualify: **terminal backend** or **LLM backend**.                                                                    |
 | **Hook**      | (1) Raxol agent interceptor; (2) Phoenix LiveView JS hook                    | Always qualify: **Raxol hook** or **LiveView hook**.                                                                        |
-| **Tool**      | (1) MCP-exposed tool; (2) Agent Action; (3) generic CLI tool                 | **Tool** = MCP Tool. **Action** = Agent Action. Don't blur the two.                                                         |
+| **Tool**      | (1) MCP-exposed tool; (2) Agent Action; (3) generic CLI tool                 | **Tool** = MCP Tool (a derived one is `<session>.<widget>.<action>`). **Action** = Agent Action. Don't blur the two.        |
 | **Job**       | (1) ACP paid work; (2) generic background task                               | Qualify as **ACP Job** when mixing with Oban / Quantum / generic job-runner talk.                                           |
 | **Replay**    | (1) Session recording playback; (2) time-travel state restore                | **Replay** = recording. **Restore** = time travel.                                                                          |
 | **Swarm**     | (1) Distributed multi-node subsystem; (2) any group of agents                | **Swarm** = distribution. **Agent Team** = local supervision.                                                               |

@@ -20,9 +20,10 @@ defmodule Raxol.MCP.ToolProvider do
       }
 
   The `name` is the action name (e.g., "click", "type_into"). The
-  TreeWalker namespaces it with the widget ID: `"submit_btn.click"`. A name
-  that is not a lowercase letter followed by up to 31 of `[a-z0-9_]` derives
-  no tool, and TreeWalker logs a warning naming it.
+  TreeWalker namespaces it with the session and widget IDs:
+  `"demo.submit_btn.click"`. A name that is not a lowercase letter followed
+  by up to 31 of `[a-z0-9_]` derives no tool, and TreeWalker logs a warning
+  naming it.
 
   The `description` is static per (provider, action): it never carries app
   text (labels, titles, tab names) or the widget ID. Descriptions reach the

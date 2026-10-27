@@ -28,9 +28,11 @@ defmodule Raxol.Headless do
       :ok = Raxol.Headless.stop("demo")
 
   Session ids are binaries of 1-32 characters of `[A-Za-z0-9_-]`, the rule
-  a widget id follows (`Raxol.MCP.TreeWalker`): an id reaches MCP clients
-  verbatim, in `raxol_list`, session-id completion, resource URIs and tool
-  names. The `raxol_start` MCP tool narrows it to `^[a-z][a-z0-9]{0,6}$`.
+  a widget id follows (`Raxol.MCP.TreeWalker.id?/1`): an id reaches MCP
+  clients verbatim, in `raxol_list`, session-id completion, resource URIs and
+  tool names. A session's MCP tools are named under its id
+  (`"demo.table.sort"`). The `raxol_start` MCP tool narrows it to
+  `^[a-z][a-z0-9]{0,6}$`.
 
   ## Processes
 
@@ -127,6 +129,13 @@ defmodule Raxol.Headless do
   When `Raxol.MCP.Registry` is running, startup also derives the app's initial
   MCP tools synchronously. A successful return therefore exposes tools from a
   static first view without waiting for another render.
+
+  A session any of whose initial tools the registry refuses, because another
+  tool already holds its client-side name (`Raxol.MCP.Registry.omp_name/1`:
+  a client's session `"s"` holds the names of an Elixir caller's `"S"`), is
+  stopped and answers `{:error, {:name_collisions, names}}`, `names` being
+  its own refused tools. A tool a later render derives into a held name is
+  refused alone and answered by `name_collisions/1`.
 
   ## Passing a path executes code
 
@@ -351,6 +360,21 @@ defmodule Raxol.Headless do
     end
   end
 
+  @doc """
+  The session's MCP tools the registry refused at its last tool sync because
+  another tool, `holder`, already has the same client-side name, as
+  `{:ok, [{name, holder}]}` (see
+  `Raxol.MCP.ToolSynchronizer.name_collisions/1`; only name collisions).
+  `{:ok, []}` for a session with no MCP registry. Answers the same errors as
+  `get_model/1`.
+  """
+  @spec name_collisions(String.t()) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, term()}
+  def name_collisions(id) when is_binary(id) do
+    with {:ok, session} <- lookup_session(id),
+         do: synchronizer_collisions(session)
+  end
+
   @doc "Stops a headless session."
   @spec stop(String.t()) :: :ok | {:error, term()}
   def stop(id) when is_binary(id) do
@@ -524,23 +548,20 @@ defmodule Raxol.Headless do
     _kind, _reason -> false
   end
 
-  # One rule for every session id, the widget-id rule of
-  # `Raxol.MCP.TreeWalker` (its `@widget_id`): an id reaches every client
-  # verbatim, in `raxol_list`, session-id completion, resource URIs and tool
-  # names, so it holds only characters each of them can encode and show as
-  # they are. `raxol_start` narrows it further for ids a client picks.
-  @session_id ~r/\A[A-Za-z0-9_-]{1,32}\z/
-
+  # One rule for every session id, the segment rule of tool names
+  # (`Raxol.MCP.TreeWalker.id?/1`): an id reaches every client verbatim, in
+  # `raxol_list`, session-id completion, resource URIs and tool names, so it
+  # holds only characters each of them can encode and show as they are.
+  # `raxol_start` narrows it further for ids a client picks.
   defp session_id(opts, module) do
     case Keyword.fetch(opts, :id) do
       :error -> {:ok, module_to_id(module)}
-      {:ok, id} when is_binary(id) -> check_session_id(id)
-      {:ok, other} -> {:error, {:invalid_session_id, other}}
+      {:ok, id} -> check_session_id(id)
     end
   end
 
   defp check_session_id(id) do
-    if Regex.match?(@session_id, id),
+    if Raxol.MCP.TreeWalker.id?(id),
       do: {:ok, id},
       else: {:error, {:invalid_session_id, id}}
   end
@@ -567,12 +588,41 @@ defmodule Raxol.Headless do
           height: height
         }
 
-        Process.monitor(lifecycle_pid)
-        {:ok, id, put_in(state, [:sessions, id], session)}
+        keep_if_whole(session, state)
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # A session the registry refused tools of (their client-side names are held
+  # by another session's or a static tool) would run without them, its
+  # `discover_tools` included, while its caller read `{:ok, id}`: the start is
+  # refused and the session stopped, for `raxol_start` and an Elixir caller
+  # alike. Asked before the session is stored, so no caller reaches it. The
+  # refusal names only the refused tools: a holder can be another session's
+  # tool, with its exact id and widgets.
+  defp keep_if_whole(session, state) do
+    case synchronizer_collisions(session) do
+      {:ok, []} ->
+        Process.monitor(session.lifecycle_pid)
+        {:ok, session.id, put_in(state, [:sessions, session.id], session)}
+
+      {:ok, refused} ->
+        discard(session)
+
+        {:error,
+         {:name_collisions, Enum.map(refused, fn {name, _holder} -> name end)}}
+
+      {:error, reason} ->
+        discard(session)
+        {:error, reason}
+    end
+  end
+
+  defp discard(session) do
+    stop_synchronizer(session.synchronizer_pid)
+    stop_lifecycle(session.lifecycle_pid)
   end
 
   # The gate lives HERE rather than in `Raxol.Headless.McpTools` because this is
@@ -801,10 +851,11 @@ defmodule Raxol.Headless do
   defp module_def?({:defmodule, _, _}), do: true
   defp module_def?(_), do: false
 
-  # The module's last segment, underscored, made to satisfy `@session_id`:
-  # each character outside `[A-Za-z0-9_-]` becomes `_`, and a result longer
-  # than 32 characters keeps its first 23 and appends `_` and 8 hex digits of
-  # the module's hash, so two long names sharing a prefix still differ.
+  # The module's last segment, underscored, made to satisfy
+  # `Raxol.MCP.TreeWalker.id?/1`: each character outside `[A-Za-z0-9_-]`
+  # becomes `_`, and a result longer than 32 characters keeps its first 23
+  # and appends `_` and 8 hex digits of the module's hash, so two long names
+  # sharing a prefix still differ.
   @default_id_prefix 23
 
   defp module_to_id(module) do
@@ -1082,6 +1133,12 @@ defmodule Raxol.Headless do
            session_call(session, session.synchronizer_pid, {:flush, engine_pid}),
          do: :ok
   end
+
+  # `:name_collisions` is `Raxol.MCP.ToolSynchronizer.name_collisions/1`'s request.
+  defp synchronizer_collisions(%{synchronizer_pid: nil}), do: {:ok, []}
+
+  defp synchronizer_collisions(session),
+    do: session_call(session, session.synchronizer_pid, :name_collisions)
 
   defp start_tool_synchronizer(lifecycle_pid, session_id, app_module, registry) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
