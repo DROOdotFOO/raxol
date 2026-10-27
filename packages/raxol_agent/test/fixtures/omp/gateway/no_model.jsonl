@@ -1,4 +1,4 @@
-{"command":"omp --profile raxol-fixtures --no-rules --no-skills --no-extensions auth-gateway stdio","omp_version":"18.13.0","scrub_version":1}
+{"command":"omp --profile raxol-fixtures --no-rules --no-skills --no-extensions auth-gateway stdio","omp_version":"18.13.0","scrub_version":2}
 {"out":"{\"ready\":true,\"version\":\"18.13.0\"}"}
 {"in":"{\"id\":1,\"method\":\"GET\",\"path\":\"/v1/models\"}"}
 {"in":"not json"}
