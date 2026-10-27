@@ -265,8 +265,9 @@ defmodule Raxol.Agent.Backend.Catalog do
     },
     # Codex speaks a stateful `app-server` JSON-RPC protocol (not the
     # stream-json NDJSON interface the native backends share); it is served by
-    # `Raxol.Symphony.Runners.Codex` rather than an agent backend here. It stays
-    # in the catalog so the type accepts it and the selector can answer
+    # Symphony's Codex runner, outside this repository since ADR-0043, rather
+    # than by an agent backend here. It stays in the catalog so the type
+    # accepts it and the selector can answer
     # `{:error, {:backend_not_implemented, :codex}}` instead of pretending the
     # name is a typo.
     %{

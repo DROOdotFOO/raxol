@@ -54,7 +54,6 @@ defmodule Raxol.Release.PackageCheck do
     },
     %{app: :raxol_gateway, path: "packages/raxol_gateway", class: :pre_alpha},
     %{app: :raxol_earn, path: "packages/raxol_earn", class: :pre_alpha},
-    %{app: :raxol_symphony, path: "packages/raxol_symphony", class: :pre_alpha},
     %{app: :raxol_cli, path: "packages/raxol_cli", class: :pre_alpha},
     %{app: :raxol_console, path: "packages/raxol_console", class: :pre_alpha},
     # ADR-0033 leaves publication of `raxol_web3` open, so it starts at 0.1.0,

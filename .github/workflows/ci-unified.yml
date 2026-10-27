@@ -289,9 +289,9 @@ jobs:
           #
           # A locked dependency does not move when upstream publishes. When
           # one did here (phoenix #1048/#1089, phoenix_template #1060, hpax
-          # #1071, mint #1146, finch #1163, always in the root, raxol_symphony
-          # and raxol_telegram locks), the lock held a Hex entry for a sibling
-          # this project takes by path, and Hex unlocks such an entry's whole
+          # #1071, mint #1146, finch #1163, always in the root and two package
+          # locks), the lock held a Hex entry for a sibling this project takes
+          # by path, and Hex unlocks such an entry's whole
           # recorded subtree on every resolve. The guard names those entries
           # before `--check-locked` fails on their consequences; see
           # scripts/check_lock_path_shadows.exs.
@@ -592,7 +592,7 @@ jobs:
         # with `^\s*package: \[...\]` until #906 made that test enumerate
         # packages/*/mix.exs instead. Nothing reads it now; one line keeps the
         # whole gated set on the line a grep for any one package lands on.
-        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony, raxol_web3, raxol_broker, raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor, raxol_speech, raxol_watch]
+        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_web3, raxol_broker, raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor, raxol_speech, raxol_watch]
 
     steps:
       - uses: actions/checkout@v7
@@ -630,26 +630,14 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
-      # raxol_symphony's WorkflowStore watches WORKFLOW.md through `file_system`,
-      # whose Linux backend shells out to `inotifywait`. Without it the backend
-      # declines to start and the two watcher tests self-exclude, so the hot
-      # reload path would be gated by a cell that never exercises it. Only this
-      # package needs it, so only this package pays for it.
-      - name: Install inotify-tools
-        if: matrix.package == 'raxol_symphony'
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
-          sudo apt-get update
-          sudo apt-get install -y inotify-tools
-
       # raxol_terminal's real-pty tests (the ^C / -isig contract, and the input
       # canary, which nothing here excludes) drive a terminal multiplexer
       # through PtyHarness, and the runner image ships neither tmux nor expect.
       # Without one they print "skipped" and pass, so this cell needs one to
       # run them at all. The four full-screen ^C tests #1130 added were caught
       # only by the nightly, because no per-PR job ran their file. The
-      # input-canary job below remains the dedicated OTP-bump signal. Same
-      # reasoning as inotify-tools above.
+      # input-canary job below remains the dedicated OTP-bump signal. Only this
+      # package needs a multiplexer, so only this package pays for it.
       - name: Install tmux
         if: matrix.package == 'raxol_terminal'
         run: |
@@ -660,10 +648,11 @@ jobs:
       # `--check-locked` rather than a bare `deps.get`: a plain fetch REWRITES
       # a stale mix.lock in place and carries on, so a package whose committed
       # lock does not match what resolution produces builds green in CI and
-      # cannot be reproduced anywhere else. raxol_symphony and raxol_telegram
-      # both drifted that way undetected (symphony would not even compile from
-      # its committed lock on a clean checkout). `Lockstep Deps` does not cover
-      # this -- it checks sibling "~> X.Y" constraints, not lock contents.
+      # cannot be reproduced anywhere else. Two package locks (raxol_telegram's
+      # and one since removed) drifted that way undetected (one would not even
+      # compile from its committed lock on a clean checkout). `Lockstep Deps`
+      # does not cover this -- it checks sibling "~> X.Y" constraints, not lock
+      # contents.
       # Fix a failure here by running `mix deps.get` in that package and
       # committing the lock. The shadow guard runs first because the one
       # failure that fix does not cure is a Hex entry for a path sibling: it

@@ -46,7 +46,7 @@ The memo/`Job.Server` model was removed in four steps:
    `HookClient`) never consulted it. Chain kept the legacy addresses for indexer
    back-compat.
 
-The one cross-package consumer, `raxol_symphony`'s ACP auto-resume, was migrated
+The one cross-package consumer, Symphony's ACP auto-resume, was migrated
 to the v2 `[:raxol, :earn, :job_session, :transition]` telemetry in the same PR.
 
 ## Still pending (funds-gated)

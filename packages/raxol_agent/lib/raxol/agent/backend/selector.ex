@@ -9,8 +9,8 @@ defmodule Raxol.Agent.Backend.Selector do
 
   Native CLI backends (`:claude_native`, `:grok_native`, `:cursor`) hand the
   loop to a vendor CLI. `:codex` is reserved -- it speaks a stateful app-server
-  protocol served by `Raxol.Symphony.Runners.Codex` rather than an agent
-  backend -- and resolves to an error.
+  protocol served by Symphony's Codex runner (outside this repository) rather
+  than an agent backend -- and resolves to an error.
   """
 
   alias Raxol.Agent.Backend.Catalog

@@ -43,7 +43,6 @@ roots=(
   packages/raxol_web3/lib
   packages/raxol_broker/lib
   packages/raxol_sensor/lib
-  packages/raxol_symphony/lib
 )
 
 # Discover current registrations (file paths, deduped, sorted) into a tmpfile.

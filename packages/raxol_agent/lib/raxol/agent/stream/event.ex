@@ -158,9 +158,8 @@ defmodule Raxol.Agent.Stream.Event do
 
   All payloads carry `:event` (atom name), `:timestamp`, and a `:message`
   string. Specific events add `:usage` (TurnComplete, Done) or `:payload`
-  (ToolUse, ToolResult) when present. The shape mirrors what
-  `Raxol.Symphony.Orchestrator` already integrates so existing surface
-  consumers don't need to change.
+  (ToolUse, ToolResult) when present. The shape mirrors what Symphony's
+  orchestrator integrated, so existing surface consumers don't need to change.
   """
   @spec to_payload(t() | tuple_event()) :: map()
   def to_payload(%TextDelta{text: text}),

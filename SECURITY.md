@@ -16,9 +16,9 @@ specific number is named here on purpose: the previous revision said `2.7.x`,
 which was not on Hex, and by exclusion withdrew support from the only versions
 that were. Check Hex for what is published.
 
-Pre-alpha packages (`raxol_earn`, `raxol_symphony`, `raxol_gateway`,
-`raxol_cli`, `raxol_console`, `raxol_agent_client_protocol`, `raxol_web3`,
-`raxol_broker`) carry no support commitment yet.
+Pre-alpha packages (`raxol_earn`, `raxol_gateway`, `raxol_cli`,
+`raxol_console`, `raxol_agent_client_protocol`, `raxol_web3`, `raxol_broker`)
+carry no support commitment yet.
 
 ## Scope worth knowing about
 

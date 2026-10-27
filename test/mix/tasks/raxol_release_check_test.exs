@@ -48,7 +48,7 @@ defmodule Mix.Tasks.Raxol.Release.CheckTest do
             Mix.Tasks.Raxol.Release.Check.run([
               "--metadata-only",
               "--only",
-              "raxol_symphony"
+              "raxol_earn"
             ])
           end)
         end

@@ -94,11 +94,11 @@ Supported providers: `claude_native`, `grok_native`, `anthropic`, `openai`,
 `kimi`, `openrouter`, `longcat`, `deepseek`, `lumo`, `ollama`, `lm_studio`,
 `llm7`, `mock`, `cursor`. These are the runnable entries of
 `Raxol.Agent.Backend.Catalog`, which every backend registry derives from
-(ADR-0034); `Catalog.ids/0` adds the reserved `codex`, served by Symphony
-rather than by a backend here. The three vendor-CLI backends
-(`claude_native`, `grok_native`, `cursor`) need no key: the installed CLI
-holds the subscription. `cursor` is nameable but never auto-detected, so
-selecting it is always explicit.
+(ADR-0034); `Catalog.ids/0` adds the reserved `codex`, served by Symphony's
+runner outside this repository rather than by a backend here. The three
+vendor-CLI backends (`claude_native`, `grok_native`, `cursor`) need no key: the
+installed CLI holds the subscription. `cursor` is nameable but never
+auto-detected, so selecting it is always explicit.
 
 A repo can also pin its default provider and model in `.raxol/config.json`
 (read from the working directory, references only, raw keys deliberately
