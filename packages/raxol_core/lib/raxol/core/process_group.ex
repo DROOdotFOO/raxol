@@ -46,10 +46,11 @@ defmodule Raxol.Core.ProcessGroup do
 
   ## Callers
 
-  `Raxol.Symphony.PortReaper` (port children, with an owner-death watcher) and
-  `Raxol.Agent.Interrupt` (the shell tool's staged TERM/KILL escalation). Both
-  used to carry their own copy of this; they disagreed, and the `ps`-based one
-  had the corpse-parent hole described above.
+  `Raxol.Agent.Interrupt` (the shell tool's staged TERM/KILL escalation), and
+  Symphony's `PortReaper` (port children, with an owner-death watcher) until
+  Symphony left this repository. Both used to carry their own copy of this;
+  they disagreed, and the `ps`-based one had the corpse-parent hole described
+  above.
 
   This module deliberately does NOT cover zombie-aware liveness. `kill -0`
   answers "is this pid still allocated", and a zombie still holds its pid, so a

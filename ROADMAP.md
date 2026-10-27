@@ -28,7 +28,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 **`raxol_earn` v0.2 (pre-alpha):** first Elixir/OTP-native Virtuals Agent Commerce Protocol, v2 hook/event model on the deployed Base contracts (v1 memo model retired). `JobSession` state machine (`:open -> :budget_set -> :funded -> :submitted -> :completed` plus `:rejected`/`:expired`), on-chain writes via `HookClient` -> `AgenticCommerceV3` through an injected `ProviderAdapter` (SCA sponsored UserOps / JSONRPC EOA with `NonceServer` / Mock), full ERC-4337 SCA wallet (Alchemy Modular Account v2), Seller stack (`Backend.{InMemory, WebSocket}` + `Queue` + `Runtime`), `mix raxol_earn.bench`. Graduates on the first live Base-mainnet offering.
 
-**Surfaces:** `raxol_telegram` (bot, per-chat router, inline keyboards), `raxol_speech` (TTS + Whisper STT + 21 voice commands), `raxol_watch` (APNS/FCM push, glanceable summaries, tap-to-event). `raxol_symphony` (pre-alpha): OTP port of OpenAI Symphony, a tracker-driven coding-agent orchestrator with two runners (`raxol_agent` + `codex`), three workflow modes (`default`/`graph`/`graph_parallel` batch fan-out), six surfaces, workflow hot-reload, evidence framework. Release-packaged; graduates on the first live run + Hex publish.
+**Surfaces:** `raxol_telegram` (bot, per-chat router, inline keyboards), `raxol_speech` (TTS + Whisper STT + 21 voice commands), `raxol_watch` (APNS/FCM push, glanceable summaries, tap-to-event).
 
 ---
 
@@ -36,12 +36,11 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) move in lockstep on the 2.7.x line, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) have their own 0.x line. `raxol_earn`, `raxol_symphony`, `raxol_gateway`, `raxol_cli`, `raxol_console`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
+The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) move in lockstep on the 2.7.x line, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) have their own 0.x line. `raxol_earn`, `raxol_gateway`, `raxol_cli`, `raxol_console`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |
 | Graduate `raxol_earn`      | Live run on Base mainnet with one offering, then the first Hex release | Medium |
-| Graduate `raxol_symphony` | Parallel dispatch + release packaging landed; remaining: a live run against a real repo (see the package `RUNBOOK.md`), then `mix hex.publish` | Medium |
 
 ### Agent runtime parity
 

@@ -121,7 +121,7 @@ defmodule Raxol.Agent.Backend.SelectorTest do
                Selector.select(ExecutorConfig.new(harness: :cursor))
     end
 
-    test "codex is reserved (served by the symphony app-server runner)" do
+    test "codex is reserved (served by Symphony's runner outside this repository)" do
       cfg = ExecutorConfig.new(harness: :codex)
       assert {:error, {:backend_not_implemented, :codex}} = Selector.select(cfg)
     end

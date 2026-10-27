@@ -258,8 +258,8 @@ A native backend reports `handles_tools_internally?/0` as `true`, which tells th
 not to drive the reasoning loop: the CLI runs its own loop and calls Raxol's tools through an
 injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-config`). The
 `:codex` harness is reserved (it speaks a stateful app-server protocol served by
-`Raxol.Symphony.Runners.Codex`, not an agent backend), so `select/1` returns
-`{:error, {:backend_not_implemented, :codex}}` for it.
+Symphony's Codex runner outside this repository, not an agent backend), so
+`select/1` returns `{:error, {:backend_not_implemented, :codex}}` for it.
 
 ## Authorization (ALLOW/ASK/DENY)
 

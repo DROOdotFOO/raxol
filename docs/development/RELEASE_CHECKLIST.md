@@ -23,9 +23,9 @@ window, and an npm version cannot be reused.
 | `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.10 |
 
 The following projects remain outside the public Hex train:
-`raxol_agent_client_protocol`, `raxol_gateway`, `raxol_earn`,
-`raxol_symphony`, `raxol_cli`, and `raxol_console`. Package-specific gates for
-the candidates closest to publication remain below.
+`raxol_agent_client_protocol`, `raxol_gateway`, `raxol_earn`, `raxol_cli`, and
+`raxol_console`. Package-specific gates for the candidates closest to
+publication remain below.
 
 ## Authorization model
 
@@ -189,32 +189,6 @@ Its only required dependencies are `raxol_core "~> 2.7"`, `telemetry`, and
 `jason`. Everything else (`raxol`, `raxol_agent`, `raxol_speech`, `gen_smtp`,
 `mint_web_socket`, `req`) is optional and gated at runtime, so a consumer who
 wants only the Telegram or in-memory adapter pulls nothing extra.
-
-### `raxol_symphony` 0.2.1
-
-**OPERATOR.** Blocked on driving at least one real tracker issue to a pull
-request and capturing the evidence. The full procedure is
-[`packages/raxol_symphony/RUNBOOK.md`](../../packages/raxol_symphony/RUNBOOK.md).
-The short form:
-
-1. `GITHUB_TOKEN` with `repo` scope on the target repo, plus a backend key for
-   the runner (for example `ANTHROPIC_API_KEY`). `git` and `gh` on `PATH`.
-2. Apply the `state/todo` label to one or two low-risk issues only. The
-   orchestrator dispatches nothing without a label matching
-   `tracker.active_states`, so the label set is the blast radius.
-3. Write `WORKFLOW.md` (template in the runbook) and start the orchestrator:
-   `{:ok, _} = Raxol.Symphony.Supervisor.start_link(workflow_path: "WORKFLOW.md")`.
-   Watch it with `Raxol.Symphony.Orchestrator.snapshot()`.
-4. Capture the PR URL, the CI status, and the asciicast fragments under
-   `<workspace>/.raxol_symphony/`. `Raxol.Symphony.Evidence.collect/2`
-   aggregates them.
-5. Then publish.
-
-Why it cannot be rehearsed: the runbook's own offline path proves the
-orchestrator, the runners, and the pause and resume loop against mocks, and the
-test suite covers all of it. What only a live run can pin is the tracker's real
-field names and phase encoding, and that a paused run resumes against a real
-repository rather than a fixture.
 
 ### `raxol_earn` 0.2.1
 

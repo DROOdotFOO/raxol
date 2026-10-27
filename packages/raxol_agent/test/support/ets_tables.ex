@@ -36,10 +36,6 @@ defmodule Raxol.Agent.Test.EtsTables do
   non-owner delete succeeds, so that branch is unreachable today; it exists so
   that an adapter switching to `:protected` fails loudly rather than silently
   leaking. `test/ets_tables_test.exs` covers it.
-
-  Mirrors `Raxol.Symphony.Test.EtsTables`, which cannot use this one:
-  `test/support` is not shipped with the package. Keep the two `drop/1` bodies
-  identical.
   """
   def drop(tables) when is_list(tables), do: Enum.each(tables, &drop/1)
 

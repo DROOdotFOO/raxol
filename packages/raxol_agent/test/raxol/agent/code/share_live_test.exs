@@ -1,8 +1,8 @@
 defmodule Raxol.Agent.Code.ShareLiveTest do
-  # Callback-level tests (the Symphony DashboardLive pattern): mount and
-  # handle_info are exercised directly; the ~H template is compile-checked
-  # by Phoenix.LiveView itself. async: false — the share secret rides
-  # app env.
+  # Callback-level tests (the pattern of Symphony's DashboardLive tests, outside
+  # this repository): mount and handle_info are exercised directly; the ~H
+  # template is compile-checked by Phoenix.LiveView itself. async: false — the
+  # share secret rides app env.
   use ExUnit.Case, async: false
 
   alias Raxol.Agent.Code.Replay

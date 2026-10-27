@@ -231,4 +231,3 @@ That gates Raxol's tools, not Tidewave's. Tidewave ships its own, and nothing he
 
 - [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md): design rationale
 - [Agent Framework](AGENT_FRAMEWORK.md): agents that consume MCP
-- [Symphony](SYMPHONY.md): orchestrator that exposes its own MCP surface

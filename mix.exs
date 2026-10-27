@@ -551,7 +551,6 @@ defmodule Raxol.MixProject do
         {"docs/features/ACP.md", [title: "Agent Commerce Protocol"]},
         {"docs/features/MCP.md", [title: "MCP"]},
         {"docs/features/PLUGIN_SDK.md", [title: "Plugin SDK"]},
-        {"docs/features/SYMPHONY.md", [title: "Symphony Orchestrator"]},
         {"docs/features/SPEECH.md", [title: "Speech"]},
         {"docs/features/TELEGRAM.md", [title: "Telegram"]},
         {"docs/features/WATCH.md", [title: "Watch"]},
@@ -597,7 +596,6 @@ defmodule Raxol.MixProject do
           docs/features/ACP.md
           docs/features/MCP.md
           docs/features/PLUGIN_SDK.md
-          docs/features/SYMPHONY.md
           docs/features/SPEECH.md
           docs/features/TELEGRAM.md
           docs/features/WATCH.md

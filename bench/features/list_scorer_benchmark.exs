@@ -46,7 +46,7 @@ key_fn = & &1
 
 vocab =
   ~w(harness agent payments gateway terminal render picker session swarm acp
-     symphony core plugin liveview speech watch telegram fix feat chore test
+     journal core plugin liveview speech watch telegram fix feat chore test
      docs refactor)
 
 realistic =

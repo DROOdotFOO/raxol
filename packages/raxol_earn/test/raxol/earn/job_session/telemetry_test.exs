@@ -1,10 +1,10 @@
 defmodule Raxol.Earn.JobSession.TelemetryTest do
   @moduledoc """
   The `[:raxol, :earn, :job_session, :transition]` telemetry event is a
-  cross-package contract: `raxol_symphony`'s `Raxol.Symphony.ResumeOn` /
-  `Raxol.Symphony.Resumer` match on its metadata to auto-resume paused runs.
-  These tests pin the event name and the full metadata shape so a change can't
-  silently break that consumer.
+  cross-package contract: Symphony's `ResumeOn` / `Resumer` (frozen outside
+  this repository since ADR-0043) match on its metadata to auto-resume paused
+  runs. These tests pin the event name and the full metadata shape so a change
+  can't silently break that consumer.
   """
   use ExUnit.Case, async: false
 

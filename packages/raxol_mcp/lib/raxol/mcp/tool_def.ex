@@ -12,8 +12,8 @@ defmodule Raxol.MCP.ToolDef do
   This module catches those mistakes at the seam:
 
       tool =
-        Raxol.MCP.ToolDef.new!("symphony_list_runs",
-          description: "Returns a snapshot of active Symphony runs.",
+        Raxol.MCP.ToolDef.new!("counter_get",
+          description: "Returns the counter's current value.",
           input_schema: %{type: "object", properties: %{}},
           callback: fn _args -> %{ok: true} end
         )

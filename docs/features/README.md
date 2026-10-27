@@ -8,7 +8,6 @@ Use this page to find a feature; each linked page owns its details.
 | Agents | [Coding agent](CODING_AGENT.md) | Interactive, headless, SSH, ACP, and MCP sessions |
 | Agents | [Memory](MEMORY.md) | Recall providers and the user model |
 | Agents | [Self-improvement](SELF_IMPROVEMENT.md) | After-turn review and skill curation |
-| Agents | [Symphony](SYMPHONY.md) | Tracker-driven coding-agent orchestration (pre-alpha) |
 | Protocols | [MCP](MCP.md) | Component trees projected as agent tools |
 | Protocols | [Editor ACP](EDITOR_ACP.md) | Editor-to-agent JSON-RPC (pre-alpha) |
 | Commerce | [Agentic commerce](AGENTIC_COMMERCE.md) | Wallets, spending controls, and HTTP 402 payment |
