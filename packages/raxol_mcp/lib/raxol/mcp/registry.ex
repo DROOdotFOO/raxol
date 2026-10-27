@@ -117,13 +117,28 @@ defmodule Raxol.MCP.Registry do
   Start the registry, linked to the calling process.
 
   `:server` names the `Raxol.MCP.Server` told when an owner's exit removes
-  tools (default `Raxol.MCP.Server`).
+  tools: an atom, a pid, `{:global, name}` or `{:via, module, name}`; any
+  other value is `{:error, {:invalid_server, server}}` and starts nothing.
+  The default is the application's `Raxol.MCP.Server`, so a registry started
+  beside a private server passes that server here, or its owners' exits
+  notify the application's clients instead.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, opts, name: name)
+    server = Keyword.get(opts, :server, Raxol.MCP.Server)
+
+    if server_name?(server),
+      do: GenServer.start_link(__MODULE__, opts, name: name),
+      else: {:error, {:invalid_server, server}}
   end
+
+  # `Raxol.MCP.Server.notify/3` casts to it from the DOWN handler, where a
+  # value that is no server name would raise and take the registry down.
+  defp server_name?(server) when is_atom(server) or is_pid(server), do: true
+  defp server_name?({:global, _name}), do: true
+  defp server_name?({:via, module, _name}) when is_atom(module), do: true
+  defp server_name?(_server), do: false
 
   @doc """
   Register one or more tools.
@@ -247,10 +262,15 @@ defmodule Raxol.MCP.Registry do
     end)
   end
 
-  @doc "Unregister tools by name."
-  @spec unregister_tools(GenServer.server(), [String.t()]) :: :ok
-  def unregister_tools(registry \\ __MODULE__, names) do
-    GenServer.call(registry, {:unregister_tools, names})
+  @doc """
+  Unregister tools by name.
+
+  With `owner: pid`, only the named tools `pid` still owns go (see
+  "Owners"): a name another owner has registered since stays.
+  """
+  @spec unregister_tools(GenServer.server(), [String.t()], keyword()) :: :ok
+  def unregister_tools(registry \\ __MODULE__, names, opts \\ []) do
+    GenServer.call(registry, {:unregister_tools, names, owner(opts)})
   end
 
   @doc "List all registered tools (definitions without callbacks)."
@@ -307,10 +327,13 @@ defmodule Raxol.MCP.Registry do
     GenServer.call(registry, {:register_resources, resources, owner(opts)})
   end
 
-  @doc "Unregister resources by URI."
-  @spec unregister_resources(GenServer.server(), [String.t()]) :: :ok
-  def unregister_resources(registry \\ __MODULE__, uris) do
-    GenServer.call(registry, {:unregister_resources, uris})
+  @doc """
+  Unregister resources by URI. With `owner: pid`, only those `pid` still
+  owns (see `unregister_tools/3`).
+  """
+  @spec unregister_resources(GenServer.server(), [String.t()], keyword()) :: :ok
+  def unregister_resources(registry \\ __MODULE__, uris, opts \\ []) do
+    GenServer.call(registry, {:unregister_resources, uris, owner(opts)})
   end
 
   @doc "List all registered resources (definitions without callbacks)."
@@ -460,7 +483,8 @@ defmodule Raxol.MCP.Registry do
     end
   end
 
-  def handle_manager_call({:unregister_tools, names}, _from, state) do
+  def handle_manager_call({:unregister_tools, names, owner}, _from, state) do
+    names = Enum.filter(names, &held?(state, tool_key(&1), owner))
     state = Enum.reduce(names, state, &remove(&2, tool_key(&1)))
 
     :telemetry.execute(
@@ -486,8 +510,9 @@ defmodule Raxol.MCP.Registry do
     {:reply, :ok, state}
   end
 
-  def handle_manager_call({:unregister_resources, uris}, _from, state) do
-    {:reply, :ok, Enum.reduce(uris, state, &remove(&2, resource_key(&1)))}
+  def handle_manager_call({:unregister_resources, uris, owner}, _from, state) do
+    keys = for uri <- uris, held?(state, resource_key(uri), owner), do: resource_key(uri)
+    {:reply, :ok, Enum.reduce(keys, state, &remove(&2, &1))}
   end
 
   def handle_manager_call({:register_prompts, prompts, owner}, _from, state) do
@@ -612,6 +637,11 @@ defmodule Raxol.MCP.Registry do
     CircuitBreaker.reset(state.breaker_table, key)
     own(state, key, owner)
   end
+
+  # Unregistering without an owner takes the entry whoever holds it; with
+  # one, only if that owner still does.
+  defp held?(_state, _key, nil), do: true
+  defp held?(state, key, owner), do: Map.get(state.held_by, key) == owner
 
   # The latest registration of an entry decides its owner, or that it has none.
   defp own(state, key, owner) do

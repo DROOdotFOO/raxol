@@ -195,6 +195,42 @@ defmodule Raxol.MCP.StickyToolSetsTest do
     assert "raxol://session/#{id}/context" in uris
   end
 
+  test "a stopping synchronizer leaves the tools another synchronizer took over", %{
+    registry: registry,
+    server: server
+  } = ctx do
+    id = start!(TableDemo, ctx)
+    other = fresh_id()
+
+    start_sync = fn ->
+      {:ok, sync} =
+        ToolSynchronizer.start_link(
+          registry: GenServer.whereis(registry),
+          server: server,
+          dispatcher_pid: processes(id).dispatcher,
+          session_id: other,
+          app_module: TableDemo,
+          debounce_ms: 0
+        )
+
+      Process.unlink(sync)
+      sync
+    end
+
+    first = start_sync.()
+    second = start_sync.()
+
+    :ok = GenServer.stop(first)
+    assert "#{other}.playground_table.sort" in tool_names(server)
+    uris = registry |> Registry.list_resources() |> Enum.map(& &1.uri)
+    assert "raxol://session/#{other}/context" in uris
+
+    :ok = GenServer.stop(second)
+    refute Enum.any?(tool_names(server), &String.starts_with?(&1, "#{other}."))
+    uris = registry |> Registry.list_resources() |> Enum.map(& &1.uri)
+    refute "raxol://session/#{other}/context" in uris
+  end
+
   defp start!(module, %{registry: registry, server: server}) do
     id = fresh_id()
     {:ok, ^id} = Headless.start(module, id: id, registry: registry, server: server)

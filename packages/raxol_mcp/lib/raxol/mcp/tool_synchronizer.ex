@@ -335,12 +335,13 @@ defmodule Raxol.MCP.ToolSynchronizer do
   def terminate(_reason, state) do
     :telemetry.detach(state.telemetry_handler_id)
 
-    # The session's whole tool set goes with it.
+    # The session's whole tool set goes with it, but only what this process
+    # still owns: a name another synchronizer registered since is that one's.
     names = Map.keys(state.tools)
 
     if names != [] do
       try do
-        Registry.unregister_tools(state.registry, names)
+        Registry.unregister_tools(state.registry, names, owner: self())
         notify_tools_changed(state)
       catch
         :exit, _ -> :ok
@@ -352,7 +353,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
     if uris != [] do
       try do
-        Registry.unregister_resources(state.registry, uris)
+        Registry.unregister_resources(state.registry, uris, owner: self())
       catch
         :exit, _ -> :ok
       end

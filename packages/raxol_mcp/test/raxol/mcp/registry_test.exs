@@ -494,6 +494,33 @@ defmodule Raxol.MCP.RegistryTest do
 
       assert [%{name: "kept"}] = Registry.list_tools(r)
     end
+
+    test "unregistering with an owner takes only what that owner still holds", %{owned: r} do
+      first = owner()
+      second = owner()
+
+      :ok = Registry.register_tools(r, [sample_tool("a"), sample_tool("moved")], owner: first)
+      :ok = Registry.register_resources(r, [sample_resource("raxol://moved")], owner: first)
+      :ok = Registry.register_tools(r, [sample_tool("moved")], owner: second)
+      :ok = Registry.register_resources(r, [sample_resource("raxol://moved")], owner: second)
+
+      :ok = Registry.unregister_tools(r, ["a", "moved"], owner: first)
+      :ok = Registry.unregister_resources(r, ["raxol://moved"], owner: first)
+
+      assert [%{name: "moved"}] = Registry.list_tools(r)
+      assert [%{uri: "raxol://moved"}] = Registry.list_resources(r)
+    end
+  end
+
+  test "a :server that names no server refuses to start the registry" do
+    name = :"bad_server_registry_#{System.unique_integer([:positive])}"
+
+    for server <- ["Raxol.MCP.Server", {:local, :x}, 42] do
+      assert Registry.start_link(name: name, server: server) ==
+               {:error, {:invalid_server, server}}
+    end
+
+    assert Process.whereis(name) == nil
   end
 
   test "unregistering a tool forgets its circuit", %{registry: r} do
