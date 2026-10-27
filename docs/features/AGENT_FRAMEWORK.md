@@ -103,6 +103,44 @@ alias Raxol.Agent.Comm
 # {:agent_message, nil, {:team_broadcast, :my_team, {:status_update, status}}}
 ```
 
+### Agent turn contract
+
+A prompt is one turn: `Comm.call(agent, {:acp_prompt, text, approver}, timeout)` returns
+`{:ok, {:ok, text, usage}}`. `approver` is an arity-3 `:tool_authorizer` (see
+`Raxol.Agent.ToolPolicy`) that every tool call of the turn must pass. The timeout is required
+(`:infinity` for none): a timeout cancels the turn, so `Comm.call/2` refuses a prompt with
+`{:error, :timeout_required}` without sending it. The session stands in as the caller:
+`update/2` sees the prompt with the session's pid and the session's own ref for the turn (never
+the caller's ref, which can cancel the turn but not answer it, run its work or message its
+process), and answers inline with `Comm.reply/3`, or with `Comm.run_turn/3` for work that blocks.
+`{:acp_cancel, ref}` kills the turn's process and answers the prompt `{:error, :cancelled}`;
+sent with `Comm.call/3`, its `:ok` arrives only after that process is dead. Pass `ref: ref` to
+`Comm.call/4` to know the ref; it must be a fresh `make_ref/0`, used for one call only. A
+prompt is also cancelled when its caller goes down or its `Comm.call/4` times out. Whenever a
+turn ends without its reply (cancelled, or its process crashed or was killed), `update/2`
+receives `{:acp_cancel, ref}` with its own ref for the turn, so the agent drops what it tracks
+for the turn in one place. An inline reply while the turn's process runs kills that process
+first, and `update/2` receives the cancel too. The session does not check a reply's shape: what
+the agent replies reaches the caller as is. The session intercepts the prompt and both cancel
+forms, with or without `:from`; an `{:acp_cancel, x}` naming no in-flight turn is swallowed.
+
+An agent consults `approver`, and runs the actions it gates, in the `Comm.run_turn/3` process,
+never inline in `update/2`: an inline ask would block the whole agent until it is answered, and
+a cancel stops only the turn's process, so inline work is neither stopped nor undone. A turn
+process that changes agent state sends the change to the agent process (`self()` in
+`update/2`) as `{:command_result, msg}`, which `update/2` receives. `{:error, :cancelled}` does
+not roll back such a change: one already sent when the cancel arrives is still applied.
+
+Other answers to a prompt: `{:error, :invalid_prompt}` (`text` not a binary or `approver` not
+arity 3), `{:error, :duplicate_ref}` (the ref already names an in-flight turn),
+`{:error, :no_dispatcher}` (the agent is not running), `{:error, :turn_failed}` (the turn's
+process crashed or was killed from outside), `{:error, :agent_down}` (a standalone session's
+agent went down mid-turn) and `{:error, :cancelled}`. A cancel sent with
+`Comm.call/3` answers `:ok` or `{:error, :not_found}` (no in-flight turn has that ref).
+`Raxol.Agent.Reference.Counter` is the reference agent (`increment`, `get`, sensitive
+`reset`, `hold` until `release` or a cancel); it applies a change only from a turn it still
+tracks (the turn's ref is the only credential).
+
 ## Teams
 
 `Raxol.Agent.Team` is an OTP Supervisor for agent groups:
