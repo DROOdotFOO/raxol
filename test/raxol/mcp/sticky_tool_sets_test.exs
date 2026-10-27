@@ -258,7 +258,7 @@ defmodule Raxol.MCP.StickyToolSetsTest do
           call(server, "raxol_start", %{"module" => inspect(TableDemo), "id" => id})
         end)
 
-      assert_receive {:tool_result_held, ^server, %{conn_id: :default}}
+      assert_receive {:tool_result_held, ^server, %{}}
       assert Task.yield(task, 0) == nil
 
       assert "#{id}.playground_table.sort" in tool_names(server)
@@ -272,7 +272,7 @@ defmodule Raxol.MCP.StickyToolSetsTest do
       assert ok_text(call(server, "raxol_start", %{"module" => inspect(TableDemo), "id" => id})) ==
                "Session started: #{id}"
 
-      assert_received {:tool_result_held, ^server, %{conn_id: :default}}
+      assert_received {:tool_result_held, ^server, %{}}
     end
 
     # The session's renders wait ten minutes for their sync, so only the
@@ -284,7 +284,7 @@ defmodule Raxol.MCP.StickyToolSetsTest do
 
       task = Task.async(fn -> call(server, "raxol_send_key", %{"id" => id, "key" => "o"}) end)
 
-      assert_receive {:tool_result_held, ^server, %{conn_id: :default}}
+      assert_receive {:tool_result_held, ^server, %{}}
       assert "#{id}.confirm.dismiss" in tool_names(server)
       assert ok_text(Task.await(task)) =~ "Modal Demo"
     end
@@ -305,7 +305,7 @@ defmodule Raxol.MCP.StickyToolSetsTest do
 
       {request, request_ref} = Server.request(server, message)
 
-      assert_receive {:tool_result_held, ^server, %{conn_id: :default}}
+      assert_receive {:tool_result_held, ^server, %{}}
       :ok = Server.cancel(server, request_ref)
       :sys.get_state(server)
 

@@ -26,8 +26,10 @@ defmodule Raxol.MCP.Transport.Stdio do
   requests that finished first); every request still running in a callback
   worker (`tools/*`, `resources/*`, `prompts/*`, `completion/complete`,
   `logging/setLevel`) or waiting on an elicitation answer is cancelled and
-  gets no reply. The transport stops `:normal` once nothing is outstanding;
-  halting the VM is the caller's job.
+  gets no reply. So is a `tools/call` that finished but whose result the
+  server holds for a re-list (see "Tool-set changes" in `Raxol.MCP.Server`):
+  its tool ran, and its result is dropped. The transport stops `:normal` once
+  nothing is outstanding; halting the VM is the caller's job.
 
   If the transport dies any other way (killed, a crash), the server cancels its
   outstanding requests, since it monitors every `Raxol.MCP.Server.request/3`

@@ -155,8 +155,11 @@ defmodule Raxol.MCP.Server do
   re-lists on it (OMP does) then has the new tools before the result reaches
   its model, so its next request can call them. Only a connection with a
   subscriber, which can hear the notification, is held. A held result
-  emits `[:raxol, :mcp, :server, :tool_result_held]`, and a call cancelled
-  while its result is held is answered `nil`.
+  emits `[:raxol, :mcp, :server, :tool_result_held]` (no metadata), and a
+  call cancelled while its result is held is answered `nil`. A cancelled or
+  failed re-list releases what it would have. When the connection goes away
+  or its id is taken over, its held results are answered at once, except
+  one that would be pushed to that connection, which is dropped.
 
   The check compares the whole registry before and after the call, so a
   change made meanwhile by anything else (another session starting, another
@@ -437,7 +440,10 @@ defmodule Raxol.MCP.Server do
   is parked for an elicitation answer (a later answer is then ignored), and
   answers the request with `{:reply, nil}`. A `tools/call` approved through
   elicitation runs under its original `request_ref`, so this reaches it at
-  every stage. A request that already completed is left alone.
+  every stage. A `tools/call` whose result is held for a re-list (see
+  "Tool-set changes") is cancelled too: it is answered `{:reply, nil}` and
+  its result is dropped. Any other request that already completed is left
+  alone.
   """
   @spec cancel(GenServer.server(), reference()) :: :ok
   def cancel(server, request_ref) do
@@ -966,7 +972,7 @@ defmodule Raxol.MCP.Server do
   defp start_async_call(work, request_ref, delivery, state) do
     case start_worker(state, request_ref, work, delivery) do
       {:ok, state} ->
-        {:noreply, awaiting_list(state, request_ref, work)}
+        {:noreply, state}
 
       :busy ->
         {:reply, {:reply, callback_error(work, :server_busy)}, state}
@@ -974,28 +980,23 @@ defmodule Raxol.MCP.Server do
   end
 
   # A `tools/list` that arrives while results are held for its connection is
-  # the re-list they wait for: they are released once it has been answered.
-  defp awaiting_list(
+  # the re-list they wait for: they are released once it has been answered
+  # (or cancelled, or failed).
+  defp relist_releases(
          state,
-         request_ref,
          {:read_operation, _id, "tools/list", _detail, _op, _authorizer, %{conn_id: conn}}
-       ) do
-    case for {hold_ref, %{conn: ^conn}} <- state.held, do: hold_ref do
-      [] -> state
-      held -> update_in(state.in_flight[request_ref], &Map.put(&1, :releases, held))
-    end
-  end
+       ),
+       do: for({hold_ref, %{conn: ^conn}} <- state.held, do: hold_ref)
 
-  defp awaiting_list(state, _request_ref, _work), do: state
+  defp relist_releases(_state, _work), do: []
 
   defp start_async_push(work, pending, state) do
     {request_ref, delivery} = push_delivery(pending)
 
-    case start_worker(state, request_ref, work, delivery) do
-      # The approved call carries no connection; its owner's is the one a
-      # changed tool set holds (see "Tool-set changes").
+    # The approved call carries no connection; its owner's is the one a
+    # changed tool set holds (see "Tool-set changes").
+    case start_worker(state, request_ref, work, delivery, pending.owner) do
       {:ok, state} ->
-        state = update_in(state.in_flight[request_ref], &Map.put(&1, :conn, pending.owner))
         {:reply, {:reply, nil}, state}
 
       :busy ->
@@ -1013,7 +1014,7 @@ defmodule Raxol.MCP.Server do
 
   defp push_delivery(pending), do: {make_ref(), {:push, pending}}
 
-  defp start_worker(state, request_ref, work, delivery) do
+  defp start_worker(state, request_ref, work, delivery, conn \\ nil) do
     if map_size(state.in_flight) >= state.max_in_flight do
       :busy
     else
@@ -1044,7 +1045,11 @@ defmodule Raxol.MCP.Server do
         delivery: delivery,
         work: work,
         caller_monitor: caller_monitor,
-        request_ref: request_ref
+        request_ref: request_ref,
+        # The connection a held result belongs to, when `work` names none.
+        conn: conn,
+        # Held results this `tools/list` releases once it is answered.
+        releases: relist_releases(state, work)
       }
 
       {:ok,
@@ -1194,7 +1199,7 @@ defmodule Raxol.MCP.Server do
 
   defp deliver_async(entry, response, state) do
     state = deliver(entry, response, state)
-    release_held(state, Map.get(entry, :releases, []))
+    release_held(state, entry.releases)
   end
 
   defp deliver(%{delivery: {:push, pending}}, response, state),
@@ -1208,25 +1213,27 @@ defmodule Raxol.MCP.Server do
   # A connection that can hear `list_changed` waits for its re-list (see
   # "Tool-set changes"); one that cannot gets its result now.
   defp hold_for_list(entry, response, state) do
-    conn = delivery_conn(entry)
-
-    if Map.has_key?(state.subscribers, conn) do
+    with {:ok, conn} <- delivery_conn(entry),
+         true <- Map.has_key?(state.subscribers, conn) do
       hold_ref = entry.request_ref
       timer = Process.send_after(self(), {:release_held, hold_ref}, state.list_changed_hold_ms)
 
-      :telemetry.execute([:raxol, :mcp, :server, :tool_result_held], %{}, %{conn_id: conn})
+      :telemetry.execute([:raxol, :mcp, :server, :tool_result_held], %{}, %{})
 
       held = %{entry: entry, response: response, conn: conn, timer: timer}
       %{state | held: Map.put(state.held, hold_ref, held)}
     else
-      deliver_async(entry, response, state)
+      _unheld -> deliver_async(entry, response, state)
     end
   end
 
-  defp delivery_conn(%{conn: conn}), do: conn
+  defp delivery_conn(%{conn: conn}) when conn != nil, do: {:ok, conn}
 
   defp delivery_conn(%{work: {:authorize_tool, _id, _name, _args, _tools, _authz, _ctx, conn}}),
-    do: conn
+    do: {:ok, conn}
+
+  # Work that names no connection has no re-list to wait for.
+  defp delivery_conn(_entry), do: :none
 
   defp release_held(state, hold_refs) do
     Enum.reduce(hold_refs, state, fn hold_ref, state ->
@@ -1289,7 +1296,7 @@ defmodule Raxol.MCP.Server do
       {:ok, entry, state} ->
         stop_worker(entry)
         reply_cancelled(entry)
-        state
+        release_held(state, entry.releases)
 
       :error ->
         state |> cancel_parked(request_ref) |> cancel_held(request_ref)
@@ -2361,6 +2368,8 @@ defmodule Raxol.MCP.Server do
   # it started. Its parked calls are dropped unanswered (a `request/3` caller
   # still gets its one `{:reply, nil}`), and a tool an approval started for it
   # is killed: its result could only ever have been pushed to this connection.
+  # A result held for its re-list is dropped too when it would be pushed, and
+  # answered at once otherwise: the re-list it waits for can no longer come.
   defp drop_connection(conn_id, state) do
     {mine, rest} =
       Enum.split_with(state.pending_elicitations, fn {_id, p} -> p.owner == conn_id end)
@@ -2373,6 +2382,7 @@ defmodule Raxol.MCP.Server do
 
     pushed = for {ref, %{delivery: {:push, %{owner: ^conn_id}}}} <- state.in_flight, do: ref
     state = Enum.reduce(pushed, state, &cancel_in_flight(&2, &1))
+    state = drop_held(state, conn_id)
 
     %{
       state
@@ -2380,6 +2390,19 @@ defmodule Raxol.MCP.Server do
         client_capabilities: Map.delete(state.client_capabilities, conn_id),
         parked_counts: Map.delete(state.parked_counts, conn_id)
     }
+  end
+
+  defp drop_held(state, conn_id) do
+    {mine, rest} = Enum.split_with(state.held, fn {_ref, held} -> held.conn == conn_id end)
+
+    Enum.reduce(mine, %{state | held: Map.new(rest)}, fn {_ref, held}, acc ->
+      Process.cancel_timer(held.timer)
+
+      case held.entry.delivery do
+        {:push, _pending} -> acc
+        _reply -> deliver_async(held.entry, held.response, acc)
+      end
+    end)
   end
 
   defp drop_parked(state, %{caller: %{from: from}} = pending) do
