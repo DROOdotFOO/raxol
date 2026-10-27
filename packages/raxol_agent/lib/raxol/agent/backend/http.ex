@@ -33,6 +33,8 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   @behaviour Raxol.Agent.AIBackend
 
+  alias Raxol.Agent.Backend.Anthropic.Wire
+
   @default_timeout Raxol.Core.Defaults.health_check_interval_ms()
   # A reasoning model (LongCat / DeepSeek-style) spends completion tokens on a
   # hidden reasoning channel BEFORE the answer. The old 1024 cap truncated such
@@ -40,7 +42,6 @@ defmodule Raxol.Agent.Backend.HTTP do
   # leaves room for reasoning + answer; `AI_MAX_TOKENS` overrides at the
   # deployment boundary, an explicit `:max_tokens` opt overrides per call.
   @default_max_tokens 4_096
-  @anthropic_api_version "2023-06-01"
   @default_ollama_port "11434"
 
   @impl true
@@ -203,7 +204,7 @@ defmodule Raxol.Agent.Backend.HTTP do
       key when is_binary(key) ->
         base = Keyword.get(opts, :base_url, "https://api.anthropic.com")
 
-        {"#{base}/v1/models", [{"x-api-key", key}, {"anthropic-version", @anthropic_api_version}]}
+        {"#{base}/v1/models", [{"x-api-key", key}, {"anthropic-version", Wire.api_version()}]}
 
       _no_key ->
         :unsupported
@@ -575,33 +576,7 @@ defmodule Raxol.Agent.Backend.HTTP do
   defp bearer_header(opts), do: auth_header(opts, "authorization", &"Bearer #{&1}")
 
   defp build_request(:anthropic, messages, opts) do
-    base_url = Keyword.get(opts, :base_url, "https://api.anthropic.com")
-    model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
-
-    {system_msgs, chat_msgs} = split_system_messages(messages)
-    system_text = Enum.map_join(system_msgs, "\n", & &1.content)
-
-    url = "#{base_url}/v1/messages"
-
-    headers =
-      auth_header(opts, "x-api-key", & &1) ++
-        [
-          {"anthropic-version", @anthropic_api_version},
-          {"content-type", "application/json"}
-        ]
-
-    body = %{
-      model: model,
-      max_tokens: Keyword.get(opts, :max_tokens, default_max_tokens()),
-      messages: Enum.map(chat_msgs, &format_message/1)
-    }
-
-    body =
-      if system_text != "", do: Map.put(body, :system, system_text), else: body
-
-    body = maybe_add_tools(:anthropic, body, opts)
-
-    {url, headers, body}
+    Wire.build_request(messages, Keyword.put_new_lazy(opts, :max_tokens, &default_max_tokens/0))
   end
 
   defp build_request(:openai, messages, opts) do
@@ -676,59 +651,7 @@ defmodule Raxol.Agent.Backend.HTTP do
   # clause that dumps a raw map into `content` -- an unrecognized body is an
   # honest `{:error, marker}` (see the fall-through), never assistant prose.
 
-  # Anthropic tool_use response: stop_reason "tool_use" with tool_use content blocks
-  defp parse_response(
-         :anthropic,
-         %{"content" => content, "stop_reason" => "tool_use"} = body
-       ) do
-    tool_calls =
-      content
-      |> Enum.filter(&(&1["type"] == "tool_use"))
-      |> Enum.map(fn block ->
-        %{
-          "id" => block["id"],
-          "name" => block["name"],
-          "arguments" => block["input"] || %{}
-        }
-      end)
-
-    text =
-      content
-      |> Enum.find_value("", fn
-        %{"type" => "text", "text" => t} -> t
-        _ -> nil
-      end)
-
-    {:ok,
-     %{
-       content: text,
-       tool_calls: tool_calls,
-       usage: Map.get(body, "usage", %{}),
-       metadata: %{
-         backend: :http,
-         provider: :anthropic,
-         model: Map.get(body, "model"),
-         stop_reason: "tool_use"
-       }
-     }}
-  end
-
-  defp parse_response(
-         :anthropic,
-         %{"content" => [%{"text" => text} | _]} = body
-       ) do
-    {:ok,
-     %{
-       content: text,
-       usage: Map.get(body, "usage", %{}),
-       metadata: %{
-         backend: :http,
-         provider: :anthropic,
-         model: Map.get(body, "model"),
-         stop_reason: Map.get(body, "stop_reason")
-       }
-     }}
-  end
+  defp parse_response(:anthropic, body), do: Wire.parse_response(body, :http)
 
   # OpenAI tool_calls response
   defp parse_response(
@@ -800,7 +723,7 @@ defmodule Raxol.Agent.Backend.HTTP do
   # (top-level keys only, never values) rides under `RAXOL_DEBUG` so a raw
   # payload -- possibly carrying secrets -- is never leaked into a transcript.
   defp parse_response(provider, body) do
-    {:error, unparseable_marker(provider, body)}
+    {:error, Wire.unparseable_marker(provider, body)}
   end
 
   # Normalize an OpenAI-shape `tool_calls` list to the downstream contract
@@ -928,7 +851,7 @@ defmodule Raxol.Agent.Backend.HTTP do
   # The accumulated `args` string can fail to decode -- a real fidelity gap,
   # not a zero-arg call. `build_tool_call/3` attaches the honest
   # `arguments_error` marker (never leaking the raw text, matching
-  # `unparseable_marker/2`'s keys-only discipline), identically to the
+  # `Wire.unparseable_marker/2`'s keys-only discipline), identically to the
   # blocking path.
   defp finalize_tool_call(tc) do
     build_tool_call(tc["id"], tc["name"], tc["args"])
@@ -1034,21 +957,6 @@ defmodule Raxol.Agent.Backend.HTTP do
     "⚠ response truncated — hit token limit#{suffix}; raise AI_MAX_TOKENS"
   end
 
-  defp unparseable_marker(provider, body) do
-    base = "⚠ unparseable response from #{provider}"
-    if debug?(), do: base <> " — keys: #{shape_hint(body)}", else: base
-  end
-
-  # Keys only -- never values, never `inspect(body)` -- so the hint can never
-  # reintroduce the `%{...}` dump the fall-through exists to prevent.
-  defp shape_hint(body) when is_map(body),
-    do: body |> Map.keys() |> Enum.map_join(", ", &to_string/1)
-
-  defp shape_hint(body) when is_list(body), do: "list"
-  defp shape_hint(_body), do: "scalar"
-
-  defp debug?, do: System.get_env("RAXOL_DEBUG") in ["1", "true", "yes"]
-
   # -- Helpers ----------------------------------------------------------------
 
   defp do_request(url, headers, body, timeout, plugins) do
@@ -1112,10 +1020,6 @@ defmodule Raxol.Agent.Backend.HTTP do
       provider ->
         provider
     end
-  end
-
-  defp split_system_messages(messages) do
-    Enum.split_with(messages, fn msg -> msg.role == :system end)
   end
 
   defp format_message(%{role: role, content: content}) do
