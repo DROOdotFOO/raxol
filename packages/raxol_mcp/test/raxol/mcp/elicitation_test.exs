@@ -427,6 +427,52 @@ defmodule Raxol.MCP.ElicitationTest do
       refute_receive {:mcp_notification, %{method: "elicitation/create"}}, 200
     end
 
+    test "a connection going away kills the tool its approval started", %{
+      server: server,
+      registry: registry,
+      b: b
+    } do
+      parent = self()
+
+      :ok =
+        Registry.register_tools(registry, [
+          %{
+            name: "spend",
+            description: "move money slowly",
+            inputSchema: %{type: "object"},
+            callback: fn _args ->
+              send(parent, {:approved_tool_entered, self()})
+
+              receive do
+                :release -> {:ok, "spent eventually"}
+              end
+            end
+          }
+        ])
+
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: 9,
+                   method: "tools/call",
+                   params: %{"name" => "spend", "arguments" => %{}}
+                 },
+                 "conn-b"
+               )
+
+      assert_receive {:b_got, %{method: "elicitation/create", id: elicit_id}}, 500
+      assert {:reply, nil} = answer_as(server, "conn-b", elicit_id)
+      assert_receive {:approved_tool_entered, worker}, 2_000
+      worker_ref = Process.monitor(worker)
+
+      # Its result could only be pushed to B, and B is gone.
+      Process.unlink(b)
+      Process.exit(b, :kill)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 2_000
+    end
+
     defp call_a(server) do
       Server.handle_message(
         server,
@@ -582,17 +628,219 @@ defmodule Raxol.MCP.ElicitationTest do
       :ok
     end
 
-    defp spend_as(server, conn_id) do
+    defp spend_as(server, conn_id, id \\ 21) do
       Server.handle_message(
         server,
         %{
           jsonrpc: "2.0",
-          id: 21,
+          id: id,
           method: "tools/call",
           params: %{"name" => "spend", "arguments" => %{"amount" => 5}}
         },
         conn_id
       )
+    end
+  end
+
+  # A parked call holds no callback worker, so `:max_in_flight` does not bound
+  # how many calls are parked; two caps of their own do.
+  describe "parked calls" do
+    setup %{registry: registry} do
+      ask = fn _tool, _args, _ctx -> {:ask, "Approve moving money?"} end
+
+      server =
+        start_supervised!(
+          {Server,
+           name: :"parked_#{System.unique_integer([:positive])}",
+           registry: registry,
+           authorizer: ask,
+           elicitation_timeout_ms: 30_000,
+           max_in_flight: 1,
+           max_parked_elicitations: 2,
+           max_parked_elicitations_total: 3},
+          id: :parked_server
+        )
+
+      for conn_id <- ["conn-a", "conn-b", "conn-c"] do
+        :ok = initialize(server, %{elicitation: %{}}, conn_id)
+        :ok = subscribe(server, self(), conn_id)
+      end
+
+      {:ok, server: server}
+    end
+
+    test "a connection may park at most :max_parked_elicitations calls, whatever :max_in_flight is",
+         %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      assert {:reply, nil} = spend_as(server, "conn-a")
+
+      assert {:reply, response} = spend_as(server, "conn-a")
+
+      assert %{"decision" => "ask", "detail" => "too many elicitations pending"} =
+               decoded_payload(response)
+
+      # The cap is per connection: another one can still be asked.
+      assert {:reply, nil} = spend_as(server, "conn-b")
+    end
+
+    test "a full server closes the largest holder's oldest call for a smaller holder",
+         %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a", 31)
+      _ = await_elicit_id()
+      assert {:reply, nil} = spend_as(server, "conn-a", 32)
+      a_second = await_elicit_id()
+      assert {:reply, nil} = spend_as(server, "conn-b", 33)
+      _ = await_elicit_id()
+
+      # Full. conn-b holds fewer than conn-a, so conn-a's oldest call makes room.
+      assert {:reply, nil} = spend_as(server, "conn-b", 34)
+      assert_receive {:mcp_notification, %{id: 31, result: %{isError: true}} = closed}, 500
+
+      assert %{"decision" => "ask", "detail" => "too many elicitations pending on this server"} =
+               decoded_payload(closed)
+
+      # conn-b now holds the most, so the newcomer conn-c takes its oldest place.
+      assert {:reply, nil} = spend_as(server, "conn-c", 35)
+      assert_receive {:mcp_notification, %{id: 33, result: %{isError: true}}}, 500
+
+      # Every connection holds one: nobody holds more than the asker.
+      assert {:reply, response} = spend_as(server, "conn-a", 36)
+
+      assert %{"decision" => "ask", "detail" => "too many elicitations pending on this server"} =
+               decoded_payload(response)
+
+      assert :sys.get_state(server).parked_counts == %{
+               "conn-a" => 1,
+               "conn-b" => 1,
+               "conn-c" => 1
+             }
+
+      # Closing a parked call frees its place in both counts.
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{jsonrpc: "2.0", id: a_second, result: %{action: "decline"}},
+                 "conn-a"
+               )
+
+      assert_receive {:mcp_notification, %{id: 32, result: %{isError: true}}}, 500
+      assert {:reply, nil} = spend_as(server, "conn-a", 37)
+    end
+
+    test "a tool name or answer that is not a string is rendered, not a crash",
+         %{server: server} do
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: 41,
+                   method: "tools/call",
+                   params: %{"name" => %{"x" => 1}, "arguments" => %{}}
+                 },
+                 "conn-a"
+               )
+
+      assert_receive {:mcp_notification, %{method: "elicitation/create"} = request}, 500
+      assert request.params.requestedSchema.properties.approve.description =~ ~s(%{"x" => 1})
+
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{jsonrpc: "2.0", id: request.id, result: %{"action" => %{"x" => 1}}},
+                 "conn-a"
+               )
+
+      assert_receive {:mcp_notification, %{id: 41, result: %{isError: true}} = response}, 500
+      assert %{"detail" => ~s(user %{"x" => 1})} = decoded_payload(response)
+      assert Process.alive?(server)
+    end
+
+    test "the per-connection cap may not exceed the total", %{registry: registry} do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               Server.start_link(
+                 name: nil,
+                 registry: registry,
+                 max_parked_elicitations: 64,
+                 max_parked_elicitations_total: 8
+               )
+
+      assert message =~ ":max_parked_elicitations (64) must not exceed"
+    end
+
+    test "a connection taken over starts with no parked calls", %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      assert {:reply, nil} = spend_as(server, "conn-a")
+
+      # A new subscriber on the id drops the old connection's parked calls.
+      successor = spawn_link(fn -> receive do: (:stop -> :ok) end)
+      :ok = subscribe(server, successor, "conn-a")
+      :ok = initialize(server, %{elicitation: %{}}, "conn-a")
+
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      send(successor, :stop)
+    end
+
+    test "an approval stops the call's elicitation timer", %{server: server} do
+      assert {:reply, nil} = spend_as(server, "conn-a")
+      [{elicit_id, %{timer: timer}}] = Map.to_list(:sys.get_state(server).pending_elicitations)
+      assert is_integer(:erlang.read_timer(timer))
+
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: elicit_id,
+                   result: %{action: "accept", content: %{approve: true}}
+                 },
+                 "conn-a"
+               )
+
+      assert :erlang.read_timer(timer) == false
+    end
+  end
+
+  # One client opens eight streams, parks 32 calls on each, and so fills the
+  # default total that every other client shares.
+  describe "a client spread over several connections, default caps" do
+    setup %{registry: registry} do
+      ask = fn _tool, _args, _ctx -> {:ask, "Approve moving money?"} end
+
+      server =
+        start_supervised!(
+          {Server,
+           name: :"spread_#{System.unique_integer([:positive])}",
+           registry: registry,
+           authorizer: ask},
+          id: :spread_server
+        )
+
+      {:ok, server: server}
+    end
+
+    test "cannot deny a newcomer's approval, however it re-parks", %{server: server} do
+      hogs = for k <- 1..8, do: "hog-#{k}"
+
+      for conn_id <- ["newcomer" | hogs] do
+        :ok = initialize(server, %{elicitation: %{}}, conn_id)
+        :ok = subscribe(server, self(), conn_id)
+      end
+
+      for conn_id <- hogs, _ <- 1..32, do: assert({:reply, nil} = spend_as(server, conn_id))
+      assert map_size(:sys.get_state(server).pending_elicitations) == 256
+
+      assert {:reply, nil} = spend_as(server, "newcomer", 99)
+
+      for conn_id <- hogs, do: spend_as(server, conn_id)
+
+      state = :sys.get_state(server)
+      assert map_size(state.pending_elicitations) == 256
+      assert state.parked_counts["newcomer"] == 1
+      refute_received {:mcp_notification, %{id: 99}}
     end
   end
 

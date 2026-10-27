@@ -132,6 +132,19 @@ defmodule Raxol.MCP.ReadSurfaceAuthzTest do
       {:reply, resp} = Server.handle_message(s, msg)
       assert resp.error.data["method"] == "completion/complete"
     end
+
+    test "logging/setLevel is refused and leaves the level alone", %{server: s} do
+      {:reply, resp} =
+        Server.handle_message(s, %{
+          id: 16,
+          method: "logging/setLevel",
+          params: %{"level" => "debug"}
+        })
+
+      assert resp.error.code == @authz_denied_code
+      assert resp.error.data["method"] == "logging/setLevel"
+      assert :sys.get_state(s).log_level == :info
+    end
   end
 
   describe "seam separation" do

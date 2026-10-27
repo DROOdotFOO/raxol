@@ -33,8 +33,9 @@ defmodule Raxol.MCP.Server do
   `elicitation/create` request; anything else gets the machine-readable
   `authorization_required` deny.
 
-  The shape matters, because the transport seam is synchronous. `tools/call`
-  returns `nil` **immediately** and the call is parked:
+  A parked call never holds up its caller. A `handle_message/3` caller blocks
+  until it gets a reply, so `tools/call` returns `nil` **immediately** and the
+  call's eventual response is pushed on the subscriber channel:
 
       client                     server                    transport
       tools/call  ------------->  ASK -> park, return nil ->  (unblocked)
@@ -42,15 +43,48 @@ defmodule Raxol.MCP.Server do
       response   ------------->  resume, return nil
                  <-------------  tools/call response (push)
 
-  Returning `nil` is what keeps this from deadlocking: the transport's
-  `handle_message` does not block, so it stays free to READ the client's
-  answer. Both the prompt and the eventual response ride the subscriber
-  channel, so no transport change was needed.
+  Returning `nil` is what keeps such a transport (`Transport.SSE`) from
+  deadlocking: it stays free to READ the client's answer. A `request/3` caller
+  (`Transport.Stdio`) never blocks, so its call simply stays outstanding: the
+  prompt is still pushed, but the call's response, or deny, is the REPLY to
+  that request. Until then `cancel/2` with the call's `request_ref` reaches it,
+  whether it is still waiting for the answer or, once approved, running.
 
-  A parked call is always closed, exactly once, by one of four paths: an
+  A parked call is always closed, exactly once, by one of five paths: an
   approval (runs the tool), a decline/cancel/unapproved accept, an error
-  response, or a timeout (`:elicitation_timeout_ms`, default 60s). Every path
-  but approval resolves to the same deny -- silence is not consent.
+  response, a timeout (`:elicitation_timeout_ms`, default 60s), or, on a full
+  server, making room for another connection's call (see below). Every path
+  but approval resolves to the same deny -- silence is not consent. Dropping
+  it is the exception: `cancel/2`, its `request/3` caller exiting, or its
+  connection going away ends it with no answer, and kills the tool if an
+  approval already started it.
+
+  Parked calls are capped twice. A connection may have at most
+  `:max_parked_elicitations` (default 32) calls parked at once, and the server
+  at most `:max_parked_elicitations_total` (default 256) across every
+  connection. A parked call holds no callback worker, so without the first a
+  client could park calls as fast as it sent them; without the second, every
+  connection that can be asked (up to `:max_client_capabilities`) could park
+  its full share. The total defaults to eight connections' full share: each
+  parked call is a timer and a small entry in the server's state, so 256
+  bounds that state while eight clients can each use their whole share at
+  once. The per-connection cap may not exceed the total; the server refuses to
+  start if it does.
+
+  Past the per-connection cap an ASK gets the `authorization_required` deny
+  with the detail `too many elicitations pending`. The total is shared by
+  every client, so it is not first come, first served: when the server is
+  full, an ASK from a connection holding fewer parked calls than the
+  connection holding the most closes that connection's oldest parked call
+  (with the deny and the detail `too many elicitations pending on this
+  server`) and parks in its place. Any other ASK on a full server gets that
+  deny itself. So a client that spreads its calls over several connections
+  (a network transport mints one per stream) cannot hold every other
+  client's approvals; it only crowds out its own. What remains: a client
+  with more elicitation-capable connections than the total, each holding one
+  call, can still keep a newcomer's call from lasting. Bounding that needs a
+  per-peer identity no transport gives the server (`Transport.SSE` trusts
+  the client's session id, and a remote address is shared behind a proxy).
 
   ## Sensitive tools
 
@@ -85,11 +119,20 @@ defmodule Raxol.MCP.Server do
   server remains responsive to other clients, notifications, subscriber exits,
   and elicitation timers while callback work is pending.
 
-  `:max_in_flight` bounds concurrent callback workers (default 32).
+  `:max_in_flight` bounds concurrent callback workers across every connection
+  (default 32); it does not count parked calls, which hold no worker.
   `:callback_timeout_ms` bounds each worker's lifetime (default 300,000 ms).
   Work above the concurrency bound receives a structured busy error. A finite
   timeout passed to `handle_message/4` also cancels that call's worker if the
-  caller stops waiting.
+  caller stops waiting. `request/3` callers cancel explicitly with `cancel/2`,
+  and are monitored: when one exits, its outstanding requests are cancelled.
+
+  `params` must be an object. `"params": null` is treated as absent; any other
+  non-object `params` is answered `-32602` before the method is looked at.
+  `method` must be a string: a request naming anything else is answered
+  `-32600`, and such a notification is dropped. `logging/setLevel` answers an
+  unknown `level` with `-32602`, and is otherwise gated by `:read_authorizer`
+  like the other read surfaces.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -120,6 +163,15 @@ defmodule Raxol.MCP.Server do
   # and lifetime bounded so one wedged callback cannot occupy the shared MCP
   # router forever.
   @default_max_in_flight 32
+
+  # A parked call holds no worker, so `:max_in_flight` does not bound it. One
+  # client is held to a share, and the server to a total: elicitation-capable
+  # connections are limited only by `:max_client_capabilities`, and a network
+  # transport can mint a new one per stream. The total is eight connections'
+  # full share (8 x 32): a parked call costs a timer and one entry here, so 256
+  # stays small while eight clients can each park their whole share at once.
+  @default_max_parked_elicitations 32
+  @default_max_parked_elicitations_total 256
   @default_callback_timeout_ms 300_000
 
   # The implicit single connection. stdio has exactly one peer and the OS
@@ -140,11 +192,15 @@ defmodule Raxol.MCP.Server do
     resource_subscriptions: %{},
     client_capabilities: %{},
     pending_elicitations: %{},
+    parked_counts: %{},
     in_flight: %{},
     worker_refs: %{},
+    caller_refs: %{},
     elicitation_timeout_ms: @default_elicitation_timeout_ms,
     max_client_capabilities: @default_max_client_capabilities,
     max_in_flight: @default_max_in_flight,
+    max_parked_elicitations: @default_max_parked_elicitations,
+    max_parked_elicitations_total: @default_max_parked_elicitations_total,
     callback_timeout_ms: @default_callback_timeout_ms
   ]
 
@@ -197,11 +253,15 @@ defmodule Raxol.MCP.Server do
           resource_subscriptions: %{String.t() => boolean()},
           client_capabilities: %{conn_id() => {integer(), map()}},
           pending_elicitations: %{String.t() => pending_elicitation()},
+          parked_counts: %{conn_id() => pos_integer()},
           in_flight: %{reference() => map()},
           worker_refs: %{reference() => reference()},
+          caller_refs: %{reference() => reference()},
           elicitation_timeout_ms: pos_integer(),
           max_client_capabilities: pos_integer(),
           max_in_flight: pos_integer(),
+          max_parked_elicitations: pos_integer(),
+          max_parked_elicitations_total: pos_integer(),
           callback_timeout_ms: pos_integer()
         }
 
@@ -216,15 +276,23 @@ defmodule Raxol.MCP.Server do
   A `tools/call` parked awaiting the client's elicitation answer. `request_id`
   is the ORIGINAL call's id -- the one the client is still waiting on, and
   `owner` is the connection that made it. Only `owner` may answer, and the
-  answer goes only to `owner`.
+  answer goes only to `owner`: pushed to its subscriber, or, when the call came
+  through `request/3`, sent as the reply to `caller` (the call's `from` and
+  `request_ref`, plus the monitor on the calling process). `parked_at` orders
+  parked calls, so a full server can tell its oldest.
   """
   @type pending_elicitation :: %{
           request_id: term(),
           tool: String.t(),
           arguments: map(),
           timer: reference(),
-          owner: conn_id()
+          owner: conn_id(),
+          caller: caller() | nil,
+          parked_at: integer()
         }
+
+  @typedoc false
+  @type caller :: %{from: GenServer.from(), request_ref: reference(), monitor: reference()}
 
   @log_levels [
     :debug,
@@ -251,7 +319,9 @@ defmodule Raxol.MCP.Server do
   Handle a decoded JSON-RPC message.
 
   Returns `{:reply, response_map}` for requests or `{:reply, nil}` for
-  notifications (no response needed).
+  notifications (no response needed). The message is what
+  `Raxol.MCP.Protocol.decode/1` returns: its top-level keys are atoms. A
+  request with string top-level keys is answered `-32600`.
   """
   @spec handle_message(GenServer.server(), map()) :: {:reply, map() | nil}
   def handle_message(server \\ __MODULE__, message) do
@@ -280,7 +350,7 @@ defmodule Raxol.MCP.Server do
     try do
       GenServer.call(
         server,
-        {:handle_message, message, conn_id, request_ref, timeout},
+        {:handle_message, message, conn_id, request_ref},
         timeout
       )
     catch
@@ -288,6 +358,52 @@ defmodule Raxol.MCP.Server do
         GenServer.cast(server, {:cancel_request, request_ref})
         exit(reason)
     end
+  end
+
+  @doc """
+  Send a decoded JSON-RPC message without waiting for the reply.
+
+  The non-blocking form of `handle_message/3`, for a transport that must keep
+  reading while earlier requests run. Messages from one caller reach the
+  server in send order, so methods handled inline keep their order.
+
+  `message` must be what `Raxol.MCP.Protocol.decode/1` returns: top-level keys
+  (`:jsonrpc`, `:id`, `:method`, `:params`, `:result`, `:error`) are atoms,
+  anything below them keeps its string keys. A request decoded some other way,
+  with string top-level keys, is answered `-32600`; such a notification or
+  response gets `{:reply, nil}`.
+
+  Returns the `:gen_server` request id and the `request_ref` that `cancel/2`
+  takes. Collect the reply with `:gen_server.check_response/2,3`: it is
+  `{:reply, map() | nil}`, as `handle_message/3` returns. Every request gets
+  exactly one reply; a cancelled one gets `{:reply, nil}`. Unlike
+  `handle_message/3`, a `tools/call` parked for elicitation is not answered
+  `nil`: it stays outstanding, and its reply is the call's eventual response.
+
+  The server monitors the calling process while it has requests outstanding,
+  and cancels them if it exits.
+  """
+  @spec request(GenServer.server(), map(), conn_id()) ::
+          {:gen_server.request_id(), reference()}
+  def request(server, message, conn_id \\ @default_conn) do
+    request_ref = make_ref()
+    req_id = :gen_server.send_request(server, {:request, message, conn_id, request_ref})
+
+    {req_id, request_ref}
+  end
+
+  @doc """
+  Cancel a request sent with `request/3`.
+
+  Kills the request's callback worker, if it still runs, or drops it while it
+  is parked for an elicitation answer (a later answer is then ignored), and
+  answers the request with `{:reply, nil}`. A `tools/call` approved through
+  elicitation runs under its original `request_ref`, so this reaches it at
+  every stage. A request that already completed is left alone.
+  """
+  @spec cancel(GenServer.server(), reference()) :: :ok
+  def cancel(server, request_ref) do
+    GenServer.cast(server, {:cancel_request, request_ref})
   end
 
   @doc """
@@ -379,6 +495,8 @@ defmodule Raxol.MCP.Server do
     refuse_unguarded_sensitive_tools!(registry, authorizer)
     refuse_unguarded_reads!(transport, read_authorizer)
 
+    {max_parked, max_parked_total} = parked_caps!(opts)
+
     {:ok,
      %__MODULE__{
        registry: registry,
@@ -397,33 +515,21 @@ defmodule Raxol.MCP.Server do
            Keyword.get(opts, :max_client_capabilities, @default_max_client_capabilities)
          ),
        max_in_flight: positive_option!(opts, :max_in_flight, @default_max_in_flight),
+       max_parked_elicitations: max_parked,
+       max_parked_elicitations_total: max_parked_total,
        callback_timeout_ms:
          positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms)
      }}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call(
-        {:handle_message, message, conn_id, request_ref, call_timeout},
-        from,
-        state
-      ) do
-    case async_action(message, state, conn_id) do
-      {:call, work} ->
-        start_async_call(work, from, request_ref, call_timeout, state)
+  def handle_manager_call({:handle_message, message, conn_id, request_ref}, from, state),
+    do: handle_request(message, conn_id, request_ref, {:reply, from}, state)
 
-      {:push, pending, work} ->
-        {_pending, state} = take_pending(state, message.id)
-        start_async_push(work, pending, state)
-
-      {:reply, response} ->
-        {:reply, {:reply, response}, state}
-
-      :sync ->
-        {response, state} = dispatch(message, state, conn_id)
-        {:reply, {:reply, response}, state}
-    end
-  end
+  # A `request/3` caller does not block on its reply, so the reply can wait for
+  # whatever the call waits on, an elicitation answer included.
+  def handle_manager_call({:request, message, conn_id, request_ref}, from, state),
+    do: handle_request(message, conn_id, request_ref, {:request, from, request_ref}, state)
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(:authorization_configured?, _from, state) do
@@ -513,6 +619,12 @@ defmodule Raxol.MCP.Server do
     end
   end
 
+  # A `request/3` caller that exits takes its outstanding request with it:
+  # nobody is left to answer, so it is cancelled like any other.
+  def handle_manager_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.caller_refs, ref),
+      do: {:noreply, cancel_in_flight(state, Map.fetch!(state.caller_refs, ref))}
+
   # Worker monitors and subscriber monitors share this mailbox. Resolve worker
   # refs first; a callback crash fails only its own request. Every other DOWN is
   # the existing subscriber cleanup path.
@@ -571,6 +683,59 @@ defmodule Raxol.MCP.Server do
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Isolated callback execution ---------------------------------------------
+
+  defp handle_request(message, conn_id, request_ref, delivery, state) do
+    message = drop_null_params(message)
+
+    case async_action(message, state, conn_id) do
+      {:call, work} ->
+        start_async_call(work, request_ref, delivery, state)
+
+      {:push, pending, work} ->
+        {_pending, state} = take_pending(state, message.id)
+        Process.cancel_timer(pending.timer)
+        start_async_push(work, pending, state)
+
+      {:reply, response} ->
+        {:reply, {:reply, response}, state}
+
+      :sync ->
+        {response, state} = dispatch(message, state, conn_id)
+        {:reply, {:reply, response}, state}
+    end
+  end
+
+  # JSON-RPC lets a client send `"params": null` for a method that takes none;
+  # it means the same as leaving `params` out.
+  defp drop_null_params(%{params: nil} = message), do: Map.delete(message, :params)
+  defp drop_null_params(message), do: message
+
+  # `method` picks the handler, and the unknown-method reply prints it, so a
+  # frame naming it with a number or an object is refused before either.
+  defp async_action(%{method: method} = message, _state, _conn_id) when not is_binary(method) do
+    case message do
+      %{id: id} ->
+        {:reply,
+         Protocol.error_response(id, Protocol.invalid_request(), "method must be a string")}
+
+      _notification ->
+        {:reply, nil}
+    end
+  end
+
+  # Every handler reads `params` as an object; JSON-RPC also allows an array,
+  # which no MCP method takes. Refused here, before any handler, so a malformed
+  # frame from one client cannot crash the server every connection shares.
+  defp async_action(%{params: params} = message, _state, _conn_id) when not is_map(params) do
+    case message do
+      %{id: id, method: _method} ->
+        {:reply,
+         Protocol.error_response(id, Protocol.invalid_params(), "params must be an object")}
+
+      _notification ->
+        {:reply, nil}
+    end
+  end
 
   defp async_action(
          %{method: "tools/call", id: id, params: params},
@@ -693,6 +858,36 @@ defmodule Raxol.MCP.Server do
     )
   end
 
+  # The level is checked before anyone is asked, so whatever the client sent
+  # reaches the authorizer, and this process, only as a known level.
+  defp async_action(
+         %{method: "logging/setLevel", id: id, params: params},
+         state,
+         conn_id
+       ) do
+    level = Map.get(params, "level") || Map.get(params, :level, "info")
+
+    case Map.fetch(@level_map, level) do
+      {:ok, log_level} ->
+        read_action(
+          id,
+          "logging/setLevel",
+          %{"level" => level},
+          {:set_log_level, log_level},
+          state,
+          conn_id
+        )
+
+      :error ->
+        {:reply,
+         Protocol.error_response(
+           id,
+           Protocol.invalid_params(),
+           "Invalid log level: #{inspect(level)}. Valid: #{inspect(@log_levels)}"
+         )}
+    end
+  end
+
   defp async_action(%{id: id, result: result}, state, conn_id) do
     case Map.fetch(state.pending_elicitations, id) do
       {:ok, %{owner: ^conn_id} = pending} ->
@@ -722,8 +917,8 @@ defmodule Raxol.MCP.Server do
     action == "accept" and fetch_field(content, "approve", false) == true
   end
 
-  defp start_async_call(work, from, request_ref, _call_timeout, state) do
-    case start_worker(state, request_ref, work, {:reply, from}) do
+  defp start_async_call(work, request_ref, delivery, state) do
+    case start_worker(state, request_ref, work, delivery) do
       {:ok, state} ->
         {:noreply, state}
 
@@ -733,9 +928,9 @@ defmodule Raxol.MCP.Server do
   end
 
   defp start_async_push(work, pending, state) do
-    request_ref = make_ref()
+    {request_ref, delivery} = push_delivery(pending)
 
-    case start_worker(state, request_ref, work, {:push, pending}) do
+    case start_worker(state, request_ref, work, delivery) do
       {:ok, state} ->
         {:reply, {:reply, nil}, state}
 
@@ -744,6 +939,15 @@ defmodule Raxol.MCP.Server do
         {:reply, {:reply, nil}, state}
     end
   end
+
+  # A call parked by a `request/3` caller is still outstanding, so the approved
+  # tool runs under that request's ORIGINAL ref: cancelling the request, or its
+  # caller exiting, reaches the tool. Any other caller was answered `nil` at the
+  # park, so the result is pushed to the owning connection.
+  defp push_delivery(%{caller: %{from: from, request_ref: request_ref}}),
+    do: {request_ref, {:request, from, request_ref}}
+
+  defp push_delivery(pending), do: {make_ref(), {:push, pending}}
 
   defp start_worker(state, request_ref, work, delivery) do
     if map_size(state.in_flight) >= state.max_in_flight do
@@ -767,19 +971,23 @@ defmodule Raxol.MCP.Server do
           state.callback_timeout_ms
         )
 
+      caller_monitor = monitor_caller(delivery)
+
       entry = %{
         pid: pid,
         monitor_ref: monitor_ref,
         timer: timer,
         delivery: delivery,
-        work: work
+        work: work,
+        caller_monitor: caller_monitor
       }
 
       {:ok,
        %{
          state
          | in_flight: Map.put(state.in_flight, request_ref, entry),
-           worker_refs: Map.put(state.worker_refs, monitor_ref, request_ref)
+           worker_refs: Map.put(state.worker_refs, monitor_ref, request_ref),
+           caller_refs: track_caller(state.caller_refs, caller_monitor, request_ref)
        }}
     end
   end
@@ -859,45 +1067,78 @@ defmodule Raxol.MCP.Server do
   defp execute_read_operation(id, {:unsubscribe, uri}, _ctx),
     do: {:read_mutation, id, :unsubscribe, uri}
 
+  defp execute_read_operation(id, {:set_log_level, level}, _ctx),
+    do: {:read_mutation, id, :set_log_level, level}
+
   defp complete_async(entry, {:response, response}, state),
     do: deliver_async(entry, response, state)
 
+  # A call that parks is answered now with `nil`, unless its caller came
+  # through `request/3`: that request stays outstanding until whatever closes
+  # the elicitation answers it.
   defp complete_async(
-         %{delivery: {:reply, from}},
+         %{delivery: delivery} = entry,
          {:ask, id, name, arguments, prompt, conn_id},
          state
        ) do
-    {response, state} = ask(id, name, arguments, prompt, state, conn_id)
-    GenServer.reply(from, {:reply, response})
-    state
+    caller = parked_caller(delivery)
+    {response, state} = ask(id, name, arguments, prompt, state, conn_id, caller)
+
+    if response == nil and caller != nil,
+      do: state,
+      else: deliver_async(entry, response, state)
   end
 
-  defp complete_async(
-         %{delivery: {:reply, from}},
-         {:read_mutation, id, action, uri},
-         state
-       ) do
+  defp complete_async(entry, {:read_mutation, id, :set_log_level, level}, state) do
+    Logger.info("[MCP.Server] Log level set to #{level}")
+    deliver_async(entry, Protocol.response(id, %{}), %{state | log_level: level})
+  end
+
+  defp complete_async(entry, {:read_mutation, id, action, uri}, state) do
     resource_subscriptions =
       case action do
         :subscribe -> Map.put_new(state.resource_subscriptions, uri, true)
         :unsubscribe -> Map.delete(state.resource_subscriptions, uri)
       end
 
-    GenServer.reply(from, {:reply, Protocol.response(id, %{})})
-    %{state | resource_subscriptions: resource_subscriptions}
+    deliver_async(entry, Protocol.response(id, %{}), %{
+      state
+      | resource_subscriptions: resource_subscriptions
+    })
   end
 
   defp complete_async(entry, _unexpected, state) do
     deliver_async(entry, callback_error(entry.work, :invalid_callback_result), state)
   end
 
-  defp deliver_async(%{delivery: {:reply, from}}, response, state) do
-    GenServer.reply(from, {:reply, response})
+  defp deliver_async(%{delivery: {:push, pending}}, response, state),
+    do: answer_parked(state, pending, response)
+
+  defp deliver_async(%{delivery: delivery}, response, state) do
+    GenServer.reply(reply_to(delivery), {:reply, response})
     state
   end
 
-  defp deliver_async(%{delivery: {:push, pending}}, response, state),
-    do: answer_parked(state, pending, response)
+  defp reply_to({:reply, from}), do: from
+  defp reply_to({:request, from, _request_ref}), do: from
+
+  defp parked_caller({:request, from, request_ref}), do: {from, request_ref}
+  defp parked_caller(_delivery), do: nil
+
+  defp monitor_caller({:request, {pid, _tag}, _request_ref}), do: Process.monitor(pid)
+  defp monitor_caller(_delivery), do: nil
+
+  defp track_caller(caller_refs, nil, _request_ref), do: caller_refs
+
+  defp track_caller(caller_refs, monitor, request_ref),
+    do: Map.put(caller_refs, monitor, request_ref)
+
+  defp release_caller(caller_refs, nil), do: caller_refs
+
+  defp release_caller(caller_refs, monitor) do
+    Process.demonitor(monitor, [:flush])
+    Map.delete(caller_refs, monitor)
+  end
 
   defp callback_error(
          {:read_operation, id, method, _detail, _operation, _read_authorizer, _ctx},
@@ -927,9 +1168,36 @@ defmodule Raxol.MCP.Server do
     case pop_in_flight(state, request_ref) do
       {:ok, entry, state} ->
         stop_worker(entry)
+        reply_cancelled(entry)
         state
 
       :error ->
+        cancel_parked(state, request_ref)
+    end
+  end
+
+  defp reply_cancelled(%{delivery: {:push, _pending}}), do: :ok
+
+  defp reply_cancelled(%{delivery: delivery}),
+    do: GenServer.reply(reply_to(delivery), {:reply, nil})
+
+  # A `request/3` call parked for an elicitation answer is dropped, not denied:
+  # its client cancelled it or its caller is gone, so it gets no response, and a
+  # later answer to its prompt finds nothing to resume.
+  defp cancel_parked(state, request_ref) do
+    parked =
+      Enum.find(state.pending_elicitations, fn {_id, pending} ->
+        match?(%{caller: %{request_ref: ^request_ref}}, pending)
+      end)
+
+    case parked do
+      {id, pending} ->
+        {_pending, state} = take_pending(state, id)
+        Process.cancel_timer(pending.timer)
+        GenServer.reply(pending.caller.from, {:reply, nil})
+        state
+
+      nil ->
         state
     end
   end
@@ -948,7 +1216,8 @@ defmodule Raxol.MCP.Server do
          %{
            state
            | in_flight: in_flight,
-             worker_refs: Map.delete(state.worker_refs, entry.monitor_ref)
+             worker_refs: Map.delete(state.worker_refs, entry.monitor_ref),
+             caller_refs: release_caller(state.caller_refs, entry.caller_monitor)
          }}
     end
   end
@@ -1202,32 +1471,6 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  # -- Logging ---
-
-  defp dispatch_common(
-         %{method: "logging/setLevel", id: id, params: params},
-         state,
-         _ctx
-       ) do
-    level_str = Map.get(params, "level") || Map.get(params, :level, "info")
-
-    case Map.fetch(@level_map, level_str) do
-      {:ok, level} ->
-        Logger.info("[MCP.Server] Log level set to #{level}")
-        {Protocol.response(id, %{}), %{state | log_level: level}}
-
-      :error ->
-        error =
-          Protocol.error_response(
-            id,
-            Protocol.invalid_params(),
-            "Invalid log level: #{level_str}. Valid: #{inspect(@log_levels)}"
-          )
-
-        {error, state}
-    end
-  end
-
   # -- Completion ---
 
   # Gated as a read surface: completions enumerate tool names, resource
@@ -1264,7 +1507,7 @@ defmodule Raxol.MCP.Server do
       Protocol.error_response(
         id,
         Protocol.method_not_found(),
-        "Unknown method: #{method}"
+        "Unknown method: #{inspect(method)}"
       )
 
     {error, state}
@@ -1284,6 +1527,20 @@ defmodule Raxol.MCP.Server do
   defp dispatch_common(%{id: id}, state, _ctx) do
     error =
       Protocol.error_response(id, Protocol.invalid_request(), "Missing method")
+
+    {error, state}
+  end
+
+  # Top-level keys that are strings mean the message did not come through
+  # `Protocol.decode/1`, so no clause above can read it. A request still names
+  # an id to answer, so its caller learns why instead of getting silence.
+  defp dispatch_common(%{"id" => id, "method" => _method}, state, _ctx) do
+    error =
+      Protocol.error_response(
+        id,
+        Protocol.invalid_request(),
+        "top-level keys must be atoms, as Raxol.MCP.Protocol.decode/1 returns them"
+      )
 
     {error, state}
   end
@@ -1326,7 +1583,7 @@ defmodule Raxol.MCP.Server do
         Protocol.error_response(
           id,
           Protocol.method_not_found(),
-          "Tool not found: #{name}"
+          "Tool not found: #{inspect(name)}"
         )
 
       {:error, :circuit_open} ->
@@ -1360,7 +1617,7 @@ defmodule Raxol.MCP.Server do
         Protocol.error_response(
           id,
           Protocol.invalid_params(),
-          "Resource not found: #{uri}"
+          "Resource not found: #{inspect(uri)}"
         )
 
       {:error, :circuit_open} ->
@@ -1384,7 +1641,7 @@ defmodule Raxol.MCP.Server do
         Protocol.error_response(
           id,
           Protocol.method_not_found(),
-          "Prompt not found: #{name}"
+          "Prompt not found: #{inspect(name)}"
         )
 
       {:error, reason} ->
@@ -1408,9 +1665,9 @@ defmodule Raxol.MCP.Server do
   end
 
   # Read surfaces (resources/read, resources/subscribe, resources/list,
-  # prompts/get, prompts/list, completion/complete) consult the DEDICATED
-  # :read_authorizer, not the tools/call authorizer: an existing tool
-  # allowlist knows nothing about method names like "resources/read" and
+  # prompts/get, prompts/list, completion/complete, logging/setLevel) consult
+  # the DEDICATED :read_authorizer, not the tools/call authorizer: an existing
+  # tool allowlist knows nothing about method names like "resources/read" and
   # would deny every read if the seams were shared. A nil read_authorizer
   # allows, which is the pre-gate behavior (reads open; stdio inherits the
   # OS boundary). There is no elicitation path here: ASK resolves to deny,
@@ -1590,6 +1847,28 @@ defmodule Raxol.MCP.Server do
     end
   end
 
+  # A per-connection share larger than the total cannot be used, and
+  # configuring one says the operator misread which cap is which.
+  defp parked_caps!(opts) do
+    max_parked =
+      positive_option!(opts, :max_parked_elicitations, @default_max_parked_elicitations)
+
+    max_parked_total =
+      positive_option!(
+        opts,
+        :max_parked_elicitations_total,
+        @default_max_parked_elicitations_total
+      )
+
+    if max_parked > max_parked_total do
+      raise ArgumentError,
+            "Raxol.MCP.Server :max_parked_elicitations (#{max_parked}) must not exceed " <>
+              ":max_parked_elicitations_total (#{max_parked_total})"
+    end
+
+    {max_parked, max_parked_total}
+  end
+
   # Registering a tool that declares itself destructive/sensitive while no
   # authorizer is configured is a REFUSAL, not a warning: the whole point of the
   # annotation is that this tool must not run unattended, and booting anyway
@@ -1681,12 +1960,79 @@ defmodule Raxol.MCP.Server do
   # Both conditions are read for THIS connection. Read globally, a second client
   # merely holding a stream open satisfied the subscriber half for everyone, and
   # any client's `initialize` satisfied the capability half.
-  defp ask(id, tool, arguments, prompt, state, conn_id) do
-    if elicitation_capable?(state, conn_id) do
-      start_elicitation(id, tool, arguments, prompt, state, conn_id)
-    else
-      {authorization_required(id, tool, :ask, prompt), state}
+  #
+  # A parked call holds no worker, so `:max_in_flight` never bounded how many
+  # one client could park: only the elicitation timeout did. A connection may
+  # have at most `:max_parked_elicitations` calls parked and the server at most
+  # `:max_parked_elicitations_total`. Both counts are kept as they change, so an
+  # ASK on a server below the total does not scan every parked call in this
+  # process every connection shares; only an ASK on a full one looks for a call
+  # to close.
+  defp ask(id, tool, arguments, prompt, state, conn_id, caller) do
+    parked = Map.get(state.parked_counts, conn_id, 0)
+
+    cond do
+      not elicitation_capable?(state, conn_id) ->
+        {authorization_required(id, tool, :ask, prompt), state}
+
+      parked >= state.max_parked_elicitations ->
+        {authorization_required(id, tool, :ask, "too many elicitations pending"), state}
+
+      map_size(state.pending_elicitations) < state.max_parked_elicitations_total ->
+        start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
+
+      true ->
+        case crowding_call(state, parked) do
+          {:ok, elicit_id} ->
+            state = close_for_room(state, elicit_id)
+            start_elicitation(id, tool, arguments, prompt, state, conn_id, caller)
+
+          :none ->
+            {authorization_required(
+               id,
+               tool,
+               :ask,
+               "too many elicitations pending on this server"
+             ), state}
+        end
     end
+  end
+
+  # The total is shared by every client, so a full server is not first come,
+  # first served: a client parking through several connections would otherwise
+  # deny every other client's approvals for as long as it kept re-parking. A
+  # connection holding fewer parked calls than the largest holder takes the
+  # place of that holder's oldest call. Among several largest holders the
+  # oldest call goes, so a newcomer's call is the last of theirs to be closed.
+  defp crowding_call(state, parked) do
+    largest = state.parked_counts |> Map.values() |> Enum.max()
+
+    if largest > parked do
+      {elicit_id, _pending} =
+        state.pending_elicitations
+        |> Enum.filter(fn {_id, p} -> Map.fetch!(state.parked_counts, p.owner) == largest end)
+        |> Enum.min_by(fn {_id, p} -> p.parked_at end)
+
+      {:ok, elicit_id}
+    else
+      :none
+    end
+  end
+
+  defp close_for_room(state, elicit_id) do
+    {pending, state} = take_pending(state, elicit_id)
+    Process.cancel_timer(pending.timer)
+
+    answer_parked(
+      state,
+      pending,
+      authorization_required(
+        pending.request_id,
+        pending.tool,
+        :ask,
+        "too many elicitations pending on this server"
+      )
+    )
   end
 
   defp elicitation_capable?(state, conn_id) do
@@ -1746,11 +2092,13 @@ defmodule Raxol.MCP.Server do
     conn_id
   end
 
-  # Park the call and ask. Returning `nil` is what makes this safe on a
-  # synchronous transport: the transport's `handle_message` returns immediately
-  # instead of blocking, so it stays free to READ the client's answer. Both the
-  # prompt and the eventual response go to the OWNING connection only.
-  defp start_elicitation(request_id, tool, arguments, prompt, state, conn_id) do
+  # Park the call and ask. Returning `nil` is what makes this safe for a
+  # transport blocked in `handle_message`: it gets its reply immediately, so it
+  # stays free to READ the client's answer. A `request/3` caller (`caller`) is
+  # not blocked, so it gets no reply until the call closes, and is monitored
+  # meanwhile. Both the prompt and the eventual response go to the OWNING
+  # connection only.
+  defp start_elicitation(request_id, tool, arguments, prompt, state, conn_id, caller) do
     elicit_id = mint_elicit_id()
 
     timer =
@@ -1760,21 +2108,36 @@ defmodule Raxol.MCP.Server do
         state.elicitation_timeout_ms
       )
 
+    {caller, caller_refs} = park_caller(caller, state.caller_refs)
+
     pending = %{
       request_id: request_id,
       tool: tool,
       arguments: arguments,
       timer: timer,
-      owner: conn_id
+      owner: conn_id,
+      caller: caller,
+      parked_at: System.unique_integer([:monotonic])
     }
 
     state = %{
       state
-      | pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending)
+      | pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending),
+        parked_counts: Map.update(state.parked_counts, conn_id, 1, &(&1 + 1)),
+        caller_refs: caller_refs
     }
 
     send_to(state, conn_id, elicitation_request(elicit_id, tool, prompt))
     {nil, state}
+  end
+
+  defp park_caller(nil, caller_refs), do: {nil, caller_refs}
+
+  defp park_caller({{pid, _tag} = from, request_ref}, caller_refs) do
+    monitor = Process.monitor(pid)
+
+    {%{from: from, request_ref: request_ref, monitor: monitor},
+     Map.put(caller_refs, monitor, request_ref)}
   end
 
   # Unguessable, not merely unique. Ownership is what actually decides who may
@@ -1799,20 +2162,42 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  # Forget everything scoped to a connection that has gone away.
+  # Forget everything scoped to a connection that has gone away, and stop what
+  # it started. Its parked calls are dropped unanswered (a `request/3` caller
+  # still gets its one `{:reply, nil}`), and a tool an approval started for it
+  # is killed: its result could only ever have been pushed to this connection.
   defp drop_connection(conn_id, state) do
     {mine, rest} =
       Enum.split_with(state.pending_elicitations, fn {_id, p} -> p.owner == conn_id end)
 
-    Enum.each(mine, fn {_id, p} -> Process.cancel_timer(p.timer) end)
+    state =
+      Enum.reduce(mine, %{state | pending_elicitations: Map.new(rest)}, fn {_id, p}, acc ->
+        Process.cancel_timer(p.timer)
+        drop_parked(acc, p)
+      end)
+
+    pushed = for {ref, %{delivery: {:push, %{owner: ^conn_id}}}} <- state.in_flight, do: ref
+    state = Enum.reduce(pushed, state, &cancel_in_flight(&2, &1))
 
     %{
       state
       | subscribers: Map.delete(state.subscribers, conn_id),
         client_capabilities: Map.delete(state.client_capabilities, conn_id),
-        pending_elicitations: Map.new(rest)
+        parked_counts: Map.delete(state.parked_counts, conn_id)
     }
   end
+
+  defp drop_parked(state, %{caller: %{from: from}} = pending) do
+    GenServer.reply(from, {:reply, nil})
+    release_pending_caller(state, pending)
+  end
+
+  defp drop_parked(state, _pending), do: state
+
+  defp release_pending_caller(state, %{caller: %{monitor: monitor}}),
+    do: %{state | caller_refs: release_caller(state.caller_refs, monitor)}
+
+  defp release_pending_caller(state, _pending), do: state
 
   # A server-initiated id lives in the SERVER's id space; a string prefix keeps
   # it from ever colliding with a client's integer request ids.
@@ -1824,7 +2209,7 @@ defmodule Raxol.MCP.Server do
         properties: %{
           approve: %{
             type: "boolean",
-            description: "Approve running the #{tool} tool"
+            description: "Approve running the #{inspect(tool)} tool"
           }
         },
         required: ["approve"]
@@ -1832,13 +2217,19 @@ defmodule Raxol.MCP.Server do
     })
   end
 
-  # The parked call is answered by PUSH, never as the reply to the message that
-  # unparked it: what arrived was a JSON-RPC *response*, and a response never
-  # gets a reply. This also makes all three resolutions -- answered, errored,
-  # timed out -- take one identical path out.
+  # The parked call is never answered as the reply to the message that unparked
+  # it: what arrived was a JSON-RPC *response*, and a response never gets a
+  # reply. It is pushed, or, for a call still outstanding as a `request/3`
+  # request, sent as that request's reply. This also makes all three
+  # resolutions -- answered, errored, timed out -- take one identical path out.
   # The answer goes to the connection that made the call and nowhere else. The
   # payload is that call's tool RESULT, so broadcasting it handed every other
   # connected client the output of a tool they did not run.
+  defp answer_parked(state, %{caller: %{from: from}}, response) do
+    GenServer.reply(from, {:reply, response})
+    state
+  end
+
   defp answer_parked(state, pending, response) do
     send_to(state, pending.owner, response)
     state
@@ -1846,7 +2237,17 @@ defmodule Raxol.MCP.Server do
 
   defp take_pending(state, id) do
     {pending, rest} = Map.pop(state.pending_elicitations, id)
-    {pending, %{state | pending_elicitations: rest}}
+    state = %{state | pending_elicitations: rest, parked_counts: unpark(state, pending)}
+    {pending, release_pending_caller(state, pending)}
+  end
+
+  defp unpark(state, nil), do: state.parked_counts
+
+  defp unpark(state, %{owner: owner}) do
+    case Map.fetch!(state.parked_counts, owner) do
+      1 -> Map.delete(state.parked_counts, owner)
+      count -> Map.put(state.parked_counts, owner, count - 1)
+    end
   end
 
   # Approved answers are intercepted by `async_action/3` and run in a worker.
@@ -1858,7 +2259,7 @@ defmodule Raxol.MCP.Server do
       pending.request_id,
       pending.tool,
       :ask,
-      "user #{action || "declined"}"
+      "user #{inspect(action || "declined")}"
     )
   end
 

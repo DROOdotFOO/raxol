@@ -502,5 +502,93 @@ defmodule Raxol.MCP.ServerTest do
     test "empty map returns nil", %{server: s} do
       {:reply, nil} = Server.handle_message(s, %{})
     end
+
+    test "non-object params are refused as invalid params, not a crash", %{server: s} do
+      for {id, method, params} <- [
+            {50, "tools/call", []},
+            {51, "resources/read", "raxol://x"},
+            {52, "prompts/get", 7},
+            {53, "ping", [1]}
+          ] do
+        assert {:reply, resp} =
+                 Server.handle_message(s, %{id: id, method: method, params: params})
+
+        assert resp.id == id
+        assert resp.error.code == Protocol.invalid_params()
+      end
+
+      assert {:reply, nil} =
+               Server.handle_message(s, %{method: "notifications/initialized", params: []})
+
+      assert {:reply, %{id: 54, result: %{}}} =
+               Server.handle_message(s, %{id: 54, method: "ping"})
+    end
+
+    test "null params are treated as absent", %{server: s} do
+      assert {:reply, %{id: 60, result: %{}}} =
+               Server.handle_message(s, %{id: 60, method: "ping", params: nil})
+
+      assert {:reply, %{id: 61, result: %{tools: []}}} =
+               Server.handle_message(s, %{id: 61, method: "tools/list", params: nil})
+
+      # A method that needs params gets the same answer as one sent without.
+      assert {:reply, %{id: 62, error: %{code: code, message: "tools/call requires params"}}} =
+               Server.handle_message(s, %{id: 62, method: "tools/call", params: nil})
+
+      assert code == Protocol.invalid_params()
+    end
+
+    test "a request with string top-level keys is answered invalid_request", %{server: s} do
+      string_keyed = Jason.decode!(~s({"jsonrpc":"2.0","id":70,"method":"ping"}))
+
+      {req_id, _request_ref} = Server.request(s, string_keyed)
+      assert {:reply, {:reply, resp}} = :gen_server.receive_response(req_id, 1_000)
+      assert resp.id == 70
+      assert resp.error.code == Protocol.invalid_request()
+
+      assert {:reply, %{id: 70, error: %{code: code}}} = Server.handle_message(s, string_keyed)
+      assert code == Protocol.invalid_request()
+
+      # A notification or response has no id to answer.
+      assert {:reply, nil} =
+               Server.handle_message(s, Jason.decode!(~s({"jsonrpc":"2.0","method":"x/y"})))
+
+      assert {:reply, nil} =
+               Server.handle_message(s, Jason.decode!(~s({"jsonrpc":"2.0","id":71,"result":{}})))
+    end
+
+    # Each of these used to be interpolated into a string inside the server
+    # process, so one frame took down the server every connection shares.
+    test "a non-string method or log level is answered, not a crash", %{server: s} do
+      for {id, method} <- [{80, %{"x" => 1}}, {81, [%{}]}, {82, 7}] do
+        assert {:reply, %{id: ^id, error: %{code: code}}} =
+                 Server.handle_message(s, %{id: id, method: method})
+
+        assert code == Protocol.invalid_request()
+      end
+
+      assert {:reply, nil} = Server.handle_message(s, %{method: %{"x" => 1}})
+
+      for {id, level} <- [{83, %{"x" => 1}}, {84, [%{}]}, {85, "loud"}] do
+        assert {:reply, %{id: ^id, error: %{code: code, message: message}}} =
+                 Server.handle_message(s, %{
+                   id: id,
+                   method: "logging/setLevel",
+                   params: %{"level" => level}
+                 })
+
+        assert code == Protocol.invalid_params()
+        assert message =~ inspect(level)
+      end
+
+      assert {:reply, %{id: 86, result: %{}}} =
+               Server.handle_message(s, %{
+                 id: 86,
+                 method: "logging/setLevel",
+                 params: %{"level" => "debug"}
+               })
+
+      assert :sys.get_state(s).log_level == :debug
+    end
   end
 end
