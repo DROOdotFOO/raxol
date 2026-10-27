@@ -13,6 +13,10 @@ on:
     paths:
       - 'packages/raxol_cli/**'
       - 'packages/raxol_mcp/**'
+      # Root lib decides the :mcp children and the harness gate.
+      - 'lib/**'
+      - 'docker/Dockerfile.raxol-cli'
+      - 'mix.lock'
       - '.github/workflows/mcp-smoke.yml'
   workflow_dispatch:
 
@@ -36,7 +40,10 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       # The release workflow's build, read from its cache when warm. Writes go
-      # to a scope of their own, so a pull request never seeds a release build.
+      # to a scope of their own, so a pull request never seeds a release build,
+      # and `mode=min` keeps only the final layers so per-PR caches stay small.
+      # The Dockerfile's `COPY . .` precedes `deps.get` and the release, so
+      # every run still rebuilds those; only the apt and Zig layers hit.
       - name: Build runtime binary
         uses: docker/build-push-action@v7
         with:
@@ -47,7 +54,7 @@ jobs:
           cache-from: |
             type=gha,scope=cli-amd64
             type=gha,scope=mcp-smoke-amd64
-          cache-to: type=gha,mode=max,scope=mcp-smoke-amd64
+          cache-to: type=gha,mode=min,scope=mcp-smoke-amd64
 
       - name: Set up Node
         uses: actions/setup-node@v7
