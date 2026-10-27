@@ -135,8 +135,11 @@ defmodule Raxol.MCP.Server do
   `:max_in_flight` bounds concurrent callback workers across every connection
   (default 32); it does not count parked calls, which hold no worker. One
   connection may hold at most `:max_in_flight_per_connection` of them (default
-  half of `:max_in_flight`, at least 1), so a client running many slow calls
-  at once (a stdio peer included) leaves room for every other connection. The
+  half of `:max_in_flight`, at least 1), so one client running many slow calls
+  at once (a stdio peer included) leaves the rest to other connections. It is
+  a share per connection id, not per peer: `handle_message/2` callers use the
+  stdio transport's `:default` id and so share its slots, and connections
+  together can still fill `:max_in_flight` (two at the default share do). The
   share may not exceed `:max_in_flight`; the server refuses to start if it
   does. Both counts are kept in this process and checked when a worker
   starts, so concurrent requests cannot both pass a check meant for one.
@@ -204,6 +207,9 @@ defmodule Raxol.MCP.Server do
     :authorizer,
     :read_authorizer,
     :unknown_tool_reply,
+    # Both set by `init_manager/1`; `in_flight_caps!/1` owns the share default.
+    :max_in_flight_per_connection,
+    :server_version,
     authorizer_source: :default,
     transport: :unknown,
     initialized: false,
@@ -220,11 +226,9 @@ defmodule Raxol.MCP.Server do
     elicitation_timeout_ms: @default_elicitation_timeout_ms,
     max_client_capabilities: @default_max_client_capabilities,
     max_in_flight: @default_max_in_flight,
-    max_in_flight_per_connection: div(@default_max_in_flight, 2),
     max_parked_elicitations: @default_max_parked_elicitations,
     max_parked_elicitations_total: @default_max_parked_elicitations_total,
-    callback_timeout_ms: @default_callback_timeout_ms,
-    server_version: nil
+    callback_timeout_ms: @default_callback_timeout_ms
   ]
 
   @typedoc """
