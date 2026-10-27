@@ -206,6 +206,7 @@ defmodule Raxol.HeadlessTest do
     @impl true
     def view(_model), do: Raxol.Core.Renderer.View.text("never")
   end
+
   setup do
     # The app-level Headless may or may not be running depending on
     # test mode. Ensure one exists, clean slate for each test.
@@ -762,8 +763,8 @@ defmodule Raxol.HeadlessTest do
       headless = Process.whereis(Headless)
       headless_ref = Process.monitor(headless)
 
-      {:ok, killed} = Headless.start(TestApp, id: :sync_killed)
-      {:ok, survivor} = Headless.start(StaticToolApp, id: :sync_survivor)
+      {:ok, killed} = Headless.start(TestApp, id: "sync_killed")
+      {:ok, survivor} = Headless.start(StaticToolApp, id: "sync_survivor")
 
       sessions = :sys.get_state(Headless).sessions
       %{synchronizer_pid: sync_pid} = sessions[killed]
@@ -815,7 +816,7 @@ defmodule Raxol.HeadlessTest do
       assert {:ok, _} =
                Raxol.MCP.Registry.call_tool(
                  registry,
-                 "cold_start_button.click",
+                 "#{survivor}.cold_start_button.click",
                  %{}
                )
 
@@ -848,7 +849,7 @@ defmodule Raxol.HeadlessTest do
         )
 
       {:ok, id} =
-        GenServer.call(headless, {:start_session, TestApp, [id: :owner_exit]})
+        GenServer.call(headless, {:start_session, TestApp, [id: "owner_exit"]})
 
       %{synchronizer_pid: sync_pid, lifecycle_pid: lifecycle} =
         :sys.get_state(headless).sessions[id]
@@ -882,10 +883,10 @@ defmodule Raxol.HeadlessTest do
     test "an app whose runtime fails to start is refused, not fatal" do
       headless = Process.whereis(Headless)
       headless_ref = Process.monitor(headless)
-      {:ok, survivor} = Headless.start(TestApp, id: :init_survivor)
+      {:ok, survivor} = Headless.start(TestApp, id: "init_survivor")
 
       assert {:error, {:app_init_failed, :refused}} =
-               Headless.start(RefusingApp, id: :init_refused)
+               Headless.start(RefusingApp, id: "init_refused")
 
       assert Headless.list() == [survivor]
       refute_received {:DOWN, ^headless_ref, :process, _, _}
@@ -906,7 +907,7 @@ defmodule Raxol.HeadlessTest do
         )
 
       lifecycles =
-        for id <- [:shutdown_a, :shutdown_b] do
+        for id <- ["shutdown_a", "shutdown_b"] do
           {:ok, ^id} =
             GenServer.call(headless, {:start_session, TestApp, [id: id]})
 
@@ -941,7 +942,7 @@ defmodule Raxol.HeadlessTest do
       {:ok, id} =
         GenServer.call(
           headless,
-          {:start_session, TestApp, [id: :stuck_at_shutdown]}
+          {:start_session, TestApp, [id: "stuck_at_shutdown"]}
         )
 
       %{synchronizer_pid: sync_pid, lifecycle_pid: lifecycle} =
@@ -983,7 +984,7 @@ defmodule Raxol.HeadlessTest do
 
       [stopping, left] =
         sessions =
-        for id <- [:busy_stopping, :busy_left] do
+        for id <- ["busy_stopping", "busy_left"] do
           {:ok, ^id} =
             GenServer.call(headless, {:start_session, TestApp, [id: id]})
 
