@@ -29,16 +29,16 @@ defmodule Raxol.Agent.OMP.VersionTest do
             "",
             "omp/",
             "omp/18",
-            "omp/18.12",
-            "omp 18.12.6",
-            "v18.12.6",
+            "omp/18.13",
+            "omp 18.13.0",
+            "v18.13.0",
             "omp/x.y.z",
             "garbage"
           ] do
         assert Version.parse(input) == {:error, :unparseable_version}, inspect(input)
       end
 
-      for input <- [nil, 18, %{"version" => "18.12.6"}, ["omp/18.12.6"]] do
+      for input <- [nil, 18, %{"version" => "18.13.0"}, ["omp/18.13.0"]] do
         assert Version.parse(input) == {:error, :unparseable_version}, inspect(input)
       end
     end

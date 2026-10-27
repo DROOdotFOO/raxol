@@ -11,7 +11,7 @@ defmodule Raxol.Agent.OMP.Version do
   binary and decides how to surface a warning.
   """
 
-  @tested "18.12.6"
+  @tested "18.13.0"
 
   @typedoc """
   A minor above the tested pin, `{:newer_minor, found, tested}`, or below it,
