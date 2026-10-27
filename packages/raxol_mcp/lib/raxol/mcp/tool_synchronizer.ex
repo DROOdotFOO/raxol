@@ -227,7 +227,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     # call timeout) stops this init, and an init that stops runs no
     # `terminate/2`: the telemetry handler would outlive this process, and
     # what the registry took before it stalled, or takes once it resumes,
-    # would stay registered.
+    # would go only once the registry handles this process's exit.
     try do
       {:ok, register_session(state)}
     catch
