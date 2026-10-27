@@ -485,7 +485,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
   # unregistered here because its widget left the view. Answers whether any
   # was registered, and the state, holding the tools refused.
   defp offer(state, offered) do
-    changed = Enum.reject(offered, &(Map.get(state.tools, &1.name) == tool_key(&1)))
+    changed = Enum.reject(offered, &(Map.get(state.tools, &1.name) == definition_key(&1)))
 
     refused =
       state.registry
@@ -493,14 +493,19 @@ defmodule Raxol.MCP.ToolSynchronizer do
       |> note_refused(state.session_id, state.name_collisions)
 
     registered = Enum.reject(changed, &Map.has_key?(refused, &1.name))
-    tools = Enum.reduce(registered, state.tools, &Map.put(&2, &1.name, tool_key(&1)))
+    tools = Enum.reduce(registered, state.tools, &Map.put(&2, &1.name, definition_key(&1)))
     {registered != [], %{state | tools: tools, name_collisions: refused}}
   end
 
-  # The meta-tool has no provider.
-  defp tool_key(tool) do
-    {Map.get(tool, :provider),
-     :erlang.phash2({tool.description, tool.inputSchema, Map.get(tool, :annotations)})}
+  # What the client lists for a tool, as a provider and a 32-bit hash of the
+  # listed definition (the meta-tool has no provider), so the set keeps no
+  # second copy of every schema. Two definitions of one name that hash alike
+  # (about 1 in 2^32 per change) leave the earlier one registered: its
+  # description, schema and annotations, `sensitive` included, stay as they
+  # were until another change, while calls still act on the live widget.
+  defp definition_key(tool) do
+    definition = {tool.description, tool.inputSchema, Map.get(tool, :annotations)}
+    {Map.get(tool, :provider), :erlang.phash2(definition, 4_294_967_296)}
   end
 
   # The session's `discover_tools` meta-tool, or none for a session whose id
