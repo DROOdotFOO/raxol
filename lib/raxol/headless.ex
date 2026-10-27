@@ -108,7 +108,15 @@ defmodule Raxol.Headless do
 
   defmodule Session do
     @moduledoc false
-    defstruct [:id, :module, :lifecycle_pid, :synchronizer_pid, :width, :height]
+    defstruct [
+      :id,
+      :module,
+      :lifecycle_pid,
+      :synchronizer_pid,
+      :registry_pid,
+      :width,
+      :height
+    ]
   end
 
   # --- Public API ---
@@ -159,6 +167,12 @@ defmodule Raxol.Headless do
   its own refused tools. A tool a later render derives into a held name is
   refused alone and answered by `name_collisions/1`.
 
+  A session whose tool synchronizer fails to start, for example because the
+  registry did not answer its first registration within the call timeout
+  (5 s), is stopped too and answers `{:error, {:tool_synchronizer_failed,
+  class}}`, `class` being the exit's class (`:timeout`). Other sessions and
+  the session manager carry on.
+
   ## Passing a path executes code
 
   Compiling a `defmodule` runs its body, so **whoever chooses the path string
@@ -203,8 +217,9 @@ defmodule Raxol.Headless do
       and the process is never messaged. The check is of identity, not
       responsiveness: it reads which module the process was started with,
       so a `Raxol.MCP.Registry` that is suspended or too busy to reply
-      passes it, and the first call that waits on the registry is the one
-      registering the session's tools. (default: `Raxol.MCP.Registry`,
+      passes it; the session's first registration then times out and the
+      start answers `{:error, {:tool_synchronizer_failed, :timeout}}`.
+      (default: `Raxol.MCP.Registry`,
       when it is running; without it the session has no tools)
     * `:server` - the `Raxol.MCP.Server` told when the session's tool set
       changes (`notifications/tools/list_changed`), in the same forms as
@@ -479,8 +494,8 @@ defmodule Raxol.Headless do
         pid in [session.lifecycle_pid, session.synchronizer_pid]
       end)
 
-    Enum.each(down, fn {id, session} ->
-      if pid == session.synchronizer_pid, do: release_synchronizer(id, pid)
+    Enum.each(down, fn {_id, session} ->
+      if pid == session.synchronizer_pid, do: release_synchronizer(session)
       stop_synchronizer(session.synchronizer_pid)
       stop_lifecycle(session.lifecycle_pid)
     end)
@@ -576,12 +591,10 @@ defmodule Raxol.Headless do
   # The implicit defaults may be absent: a node without the MCP stack runs
   # sessions with no tools. A registry or server the caller NAMED must be a
   # running `Raxol.MCP.Registry` or `Raxol.MCP.Server`. The session's
-  # synchronizer is linked to this process and calls the registry, so a
-  # registry of another kind crashes it and every session it holds; it casts
-  # to the server, which a process of another kind (this one, say) may crash
-  # on. A name that resolves to nothing would leave the session silently
-  # without tools, or its clients unnotified, while `settle/1` reports them in
-  # step.
+  # synchronizer calls the registry as one, and casts to the server, which a
+  # process of another kind (this one, say) may crash on. A name that resolves
+  # to nothing would leave the session silently without tools, or its clients
+  # unnotified, while `settle/1` reports them in step.
   defp named_mcp(opts, key, module, error) do
     case Keyword.fetch(opts, key) do
       {:ok, name} -> named_mcp_process(name, module, error)
@@ -671,19 +684,18 @@ defmodule Raxol.Headless do
        ) do
     case start_headless_app(module, width, height, subscriptions) do
       {:ok, lifecycle_pid} ->
-        synchronizer_pid =
-          start_tool_synchronizer(lifecycle_pid, id, module, registry, server)
 
         session = %Session{
           id: id,
           module: module,
           lifecycle_pid: lifecycle_pid,
-          synchronizer_pid: synchronizer_pid,
           width: width,
           height: height
         }
 
-        keep_if_whole(session, state)
+        with {:ok, session} <-
+               start_tool_synchronizer(session, registry, server),
+             do: keep_if_whole(session, state)
 
       {:error, reason} ->
         {:error, reason}
@@ -715,9 +727,14 @@ defmodule Raxol.Headless do
     end
   end
 
+  # A refused session leaves nothing running: a process its stop did not end
+  # within the stop timeout is killed, and a synchronizer that ended without
+  # its `terminate/2` (killed, before or here) is released, which its
+  # `:DOWN` would not do once the session is not stored.
   defp discard(session) do
     stop_synchronizer(session.synchronizer_pid)
     stop_lifecycle(session.lifecycle_pid)
+    kill_session(session)
   end
 
   # The gate lives HERE rather than in `Raxol.Headless.McpTools` because this is
@@ -1239,23 +1256,24 @@ defmodule Raxol.Headless do
       {:DOWN, ^ref, :process, ^sync_pid, _reason} -> :ok
     end
 
-    release_synchronizer(session.id, sync_pid)
+    release_synchronizer(session)
   end
 
   # A synchronizer killed untrappably never ran its `terminate/2`, so what it
   # holds under this session's name is released here: its telemetry handler and
-  # the `raxol://session/<id>/` resources. Its tools are not: tool names are
-  # global, and another session may have registered the same ones. A registry
-  # that is gone holds nothing left to release.
-  defp release_synchronizer(session_id, sync_pid) do
+  # the `raxol://session/<id>/` resources in the registry it registered them
+  # in. Its tools are not: tool names are global, and another session may have
+  # registered the same ones. A registry that is gone holds nothing left to
+  # release.
+  defp release_synchronizer(%Session{synchronizer_pid: sync_pid} = session) do
     [:raxol, :runtime, :view_tree_updated]
     |> :telemetry.list_handlers()
     |> Enum.filter(&match?(%{config: %{synchronizer: ^sync_pid}}, &1))
     |> Enum.each(&:telemetry.detach(&1.id))
 
     _ =
-      with registry when is_pid(registry) <- Process.whereis(Raxol.MCP.Registry) do
-        prefix = "raxol://session/#{session_id}/"
+      with registry when is_pid(registry) <- session.registry_pid do
+        prefix = "raxol://session/#{session.id}/"
 
         uris =
           for %{uri: uri} <- Raxol.MCP.Registry.list_resources(registry),
@@ -1298,30 +1316,36 @@ defmodule Raxol.Headless do
   defp synchronizer_collisions(session),
     do: session_call(session, session.synchronizer_pid, :name_collisions)
 
-  defp start_tool_synchronizer(
-         lifecycle_pid,
-         session_id,
-         app_module,
-         registry,
-         server
-       ) do
+  # With no registry running the session has no tools. With one, a
+  # synchronizer that fails to start (its first call to a registry too busy
+  # to answer timed out) would leave a session silently without tools: the
+  # start is refused and the session stopped, the answer carrying only the
+  # exit's class.
+  defp start_tool_synchronizer(session, registry, server) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
          pid when is_pid(pid) <- GenServer.whereis(registry),
          dispatcher_pid when is_pid(dispatcher_pid) <-
-           get_dispatcher_pid(lifecycle_pid),
-         {:ok, sync_pid} <-
-           GenServer.start(Raxol.MCP.ToolSynchronizer,
-             registry: pid,
-             server: server,
-             dispatcher_pid: dispatcher_pid,
-             session_id: session_id,
-             app_module: app_module,
-             owner: self()
-           ) do
-      Process.monitor(sync_pid)
-      sync_pid
+           get_dispatcher_pid(session.lifecycle_pid) do
+      opts = [
+        registry: pid,
+        server: server,
+        dispatcher_pid: dispatcher_pid,
+        session_id: session.id,
+        app_module: session.module,
+        owner: self()
+      ]
+
+      case GenServer.start(Raxol.MCP.ToolSynchronizer, opts) do
+        {:ok, sync_pid} ->
+          Process.monitor(sync_pid)
+          {:ok, %{session | synchronizer_pid: sync_pid, registry_pid: pid}}
+
+        {:error, reason} ->
+          discard(session)
+          {:error, {:tool_synchronizer_failed, exit_class(reason)}}
+      end
     else
-      _ -> nil
+      _ -> {:ok, session}
     end
   end
 

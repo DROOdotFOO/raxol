@@ -223,22 +223,16 @@ defmodule Raxol.MCP.ToolSynchronizer do
       owner_ref: owner_ref
     }
 
-    if not TreeWalker.id?(session_id), do: TreeWalker.warn_refused_session_id(session_id)
-
-    # Register the session's discover_tools meta-tool
-    {meta_registered?, state} = offer(state, discover_tool(state))
-
-    # Register session-level resources (context tree, widget tree)
-    resource_uris =
-      if TreeWalker.id?(session_id), do: register_session_resources(state), else: MapSet.new()
-
-    state = %{state | current_resource_uris: resource_uris}
-
-    # Seed tools synchronously so callers never observe a meta-tool-only
-    # session when the engine's first render preceded telemetry attachment.
-    {changed?, state} = sync_initial_view(state)
-    if changed? or meta_registered?, do: notify_tools_changed(state)
-    {:ok, state}
+    # A registry call that exits (a registry too busy to answer within the
+    # call timeout) stops this init, and an init that stops runs no
+    # `terminate/2`: the telemetry handler would outlive this process.
+    try do
+      {:ok, register_session(state)}
+    catch
+      kind, reason ->
+        :telemetry.detach(handler_id)
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    end
   end
 
   defp configured_debounce_ms do
@@ -431,6 +425,25 @@ defmodule Raxol.MCP.ToolSynchronizer do
   defp apply_sync(view_tree, model, state) do
     {changed?, state} = do_sync(view_tree, model, state)
     if changed?, do: notify_tools_changed(state)
+    state
+  end
+
+  defp register_session(%{session_id: session_id} = state) do
+    if not TreeWalker.id?(session_id), do: TreeWalker.warn_refused_session_id(session_id)
+
+    # Register the session's discover_tools meta-tool
+    {meta_registered?, state} = offer(state, discover_tool(state))
+
+    # Register session-level resources (context tree, widget tree)
+    resource_uris =
+      if TreeWalker.id?(session_id), do: register_session_resources(state), else: MapSet.new()
+
+    state = %{state | current_resource_uris: resource_uris}
+
+    # Seed tools synchronously so callers never observe a meta-tool-only
+    # session when the engine's first render preceded telemetry attachment.
+    {changed?, state} = sync_initial_view(state)
+    if changed? or meta_registered?, do: notify_tools_changed(state)
     state
   end
 
