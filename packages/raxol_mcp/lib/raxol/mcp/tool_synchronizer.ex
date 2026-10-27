@@ -340,6 +340,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   def handle_manager_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state),
     do: {:stop, :normal, state}
+
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer
