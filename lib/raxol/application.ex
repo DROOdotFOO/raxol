@@ -353,7 +353,17 @@ defmodule Raxol.Application do
       # Headless sessions name their tools; a call to one of a stopped
       # session says so instead of answering `-32601`.
       unknown_tool_reply: &Raxol.Headless.McpTools.unknown_tool_reply/1
-    ]
+    ] ++ mcp_server_version()
+  end
+
+  # `serverInfo.version` in the `initialize` reply. A packaged command that
+  # embeds this server (`raxol mcp`) reports its own version there, not
+  # raxol_mcp's; unset keeps the server's default.
+  defp mcp_server_version do
+    case Application.get_env(:raxol, :mcp_server_version) do
+      nil -> []
+      version -> [server_version: version]
+    end
   end
 
   # Whether the tool authorizer above is an operator's choice or our fallback.
@@ -1097,10 +1107,12 @@ defmodule Raxol.Application do
 
       # The coding-agent harness tools live in raxol_agent, which main raxol
       # does not depend on; they register only when that package is loaded
-      # in this VM (e.g. `mix mcp.server` run from packages/raxol_agent).
+      # in this VM (e.g. `mix mcp.server` run from packages/raxol_agent), and
+      # not where `config :raxol, :mcp_harness_tools, false` turns them off.
       harness = Raxol.Agent.Harness.McpTools
 
-      if Code.ensure_loaded?(harness) do
+      if Application.get_env(:raxol, :mcp_harness_tools, true) and
+           Code.ensure_loaded?(harness) do
         harness
         |> apply(:register, [Raxol.MCP.Registry])
         |> warn_on_refused_tools(harness)
