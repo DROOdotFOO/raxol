@@ -381,7 +381,8 @@ defmodule Raxol.Headless.McpTools do
   Register all headless tools with the given MCP Registry.
 
   Called from `Raxol.Application` after the MCP supervisor and Headless
-  are both running. Raises `ArgumentError` when
+  are both running. `opts` go to `Raxol.MCP.Registry.register_tools/3`
+  (`owner: pid`). Raises `ArgumentError` when
   `config :raxol, :headless_startable` is invalid (see `startable/0`), so a
   bad config stops the boot instead of surfacing at the first `raxol_start`.
 
@@ -390,16 +391,16 @@ defmodule Raxol.Headless.McpTools do
   has the same client-side name (`Raxol.MCP.Registry.register_tools/2`); the
   rest are registered.
   """
-  @spec register(GenServer.server()) ::
+  @spec register(GenServer.server(), keyword()) ::
           :ok | {:error, {:name_collision, [{String.t(), String.t()}]}}
-  def register(registry \\ Raxol.MCP.Registry) do
+  def register(registry \\ Raxol.MCP.Registry, opts \\ []) do
     case startable() do
       {:ok, _modules} -> :ok
       {:error, message} -> raise ArgumentError, message
     end
 
     if Code.ensure_loaded?(Raxol.MCP.Registry) do
-      Raxol.MCP.Registry.register_tools(registry, tools(registry))
+      Raxol.MCP.Registry.register_tools(registry, tools(registry), opts)
     else
       :ok
     end

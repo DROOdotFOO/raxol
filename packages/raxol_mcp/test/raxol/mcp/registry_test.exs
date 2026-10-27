@@ -445,4 +445,135 @@ defmodule Raxol.MCP.RegistryTest do
       end
     end
   end
+
+  describe "owners" do
+    setup do
+      unique = System.unique_integer([:positive])
+      server = :"owners_server_#{unique}"
+      {:ok, registry} = Registry.start_link(name: :"owners_registry_#{unique}", server: server)
+      {:ok, _} = Raxol.MCP.Server.start_link(name: server, registry: registry)
+      :ok = Raxol.MCP.Server.subscribe(server, self())
+      :sys.get_state(server)
+      %{owned: registry, server: server}
+    end
+
+    test "an owner's exit removes what it still holds and sends one list_changed", %{
+      owned: r,
+      server: server
+    } do
+      first = owner()
+      second = owner()
+
+      :ok = Registry.register_tools(r, [sample_tool("a"), sample_tool("moved")], owner: first)
+      :ok = Registry.register_resources(r, [sample_resource("raxol://a")], owner: first)
+      :ok = Registry.register_prompts(r, [prompt("p")], owner: first)
+      :ok = Registry.register_tools(r, [sample_tool("moved")], owner: second)
+      :ok = Registry.register_tools(r, [sample_tool("unowned")])
+
+      ref = Process.monitor(first)
+      Process.exit(first, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^first, :killed}
+      :sys.get_state(r)
+      :sys.get_state(server)
+
+      assert r |> Registry.list_tools() |> Enum.map(& &1.name) |> Enum.sort() ==
+               ["moved", "unowned"]
+
+      assert Registry.list_resources(r) == []
+      assert Registry.list_prompts(r) == []
+      assert_received {:mcp_notification, %{method: "notifications/tools/list_changed"}}
+      refute_received {:mcp_notification, _}
+    end
+
+    test "an unowned registration outlives the process that made it", %{owned: r} do
+      {caller, ref} =
+        spawn_monitor(fn -> :ok = Registry.register_tools(r, [sample_tool("kept")]) end)
+
+      assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
+      :sys.get_state(r)
+
+      assert [%{name: "kept"}] = Registry.list_tools(r)
+    end
+
+    test "unregistering with an owner takes only what that owner still holds", %{owned: r} do
+      first = owner()
+      second = owner()
+
+      :ok = Registry.register_tools(r, [sample_tool("a"), sample_tool("moved")], owner: first)
+      :ok = Registry.register_resources(r, [sample_resource("raxol://moved")], owner: first)
+      :ok = Registry.register_tools(r, [sample_tool("moved")], owner: second)
+      :ok = Registry.register_resources(r, [sample_resource("raxol://moved")], owner: second)
+
+      :ok = Registry.unregister_tools(r, ["a", "moved"], owner: first)
+      :ok = Registry.unregister_resources(r, ["raxol://moved"], owner: first)
+
+      assert [%{name: "moved"}] = Registry.list_tools(r)
+      assert [%{uri: "raxol://moved"}] = Registry.list_resources(r)
+    end
+  end
+
+  test "a :server that names no server refuses to start the registry" do
+    name = :"bad_server_registry_#{System.unique_integer([:positive])}"
+
+    for server <- ["Raxol.MCP.Server", {:local, :x}, 42] do
+      assert Registry.start_link(name: name, server: server) ==
+               {:error, {:invalid_server, server}}
+    end
+
+    assert Process.whereis(name) == nil
+  end
+
+  test "unregistering a tool forgets its circuit", %{registry: r} do
+    tool = %{sample_tool() | callback: fn _args -> {:error, :down} end}
+    :ok = Registry.register_tools(r, [tool])
+    for _ <- 1..5, do: Registry.call_tool(r, "test_tool", %{})
+    assert %{state: :open} = Registry.circuit_status(r, {:tool, "test_tool"})
+
+    :ok = Registry.unregister_tools(r, ["test_tool"])
+
+    assert %{state: :closed, failures: 0} = Registry.circuit_status(r, {:tool, "test_tool"})
+  end
+
+  test "a call that finishes after its tool was unregistered leaves no circuit to the next", %{
+    registry: r
+  } do
+    test_pid = self()
+
+    tool = %{
+      sample_tool()
+      | callback: fn _args ->
+          send(test_pid, {:in_call, self()})
+          receive do: (:finish -> {:error, :down})
+        end
+    }
+
+    :ok = Registry.register_tools(r, [tool])
+    calls = for _ <- 1..5, do: Task.async(fn -> Registry.call_tool(r, "test_tool", %{}) end)
+
+    callers =
+      for _ <- calls do
+        assert_receive {:in_call, pid}
+        pid
+      end
+
+    :ok = Registry.unregister_tools(r, ["test_tool"])
+    Enum.each(callers, &send(&1, :finish))
+    assert Enum.map(calls, &Task.await/1) == List.duplicate({:error, :down}, 5)
+    assert %{state: :open} = Registry.circuit_status(r, {:tool, "test_tool"})
+
+    :ok = Registry.register_tools(r, [sample_tool()])
+
+    assert %{state: :closed, failures: 0} = Registry.circuit_status(r, {:tool, "test_tool"})
+    assert {:ok, _} = Registry.call_tool(r, "test_tool", %{})
+  end
+
+  defp owner do
+    pid = spawn(fn -> receive do: (:never -> :ok) end)
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    pid
+  end
+
+  defp prompt(name) do
+    %{name: name, description: "A prompt", arguments: [], callback: fn _ -> {:ok, []} end}
+  end
 end

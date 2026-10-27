@@ -405,6 +405,26 @@ defmodule Raxol.HeadlessTest do
       refute "other_registry" in Headless.list()
     end
 
+    test "refuses a server that is no running MCP server, and keeps serving" do
+      headless = Process.whereis(Headless)
+      name = :"not_a_server_#{System.unique_integer([:positive])}"
+
+      agent =
+        start_supervised!(%{
+          id: name,
+          start: {Agent, :start_link, [fn -> %{} end, [name: name]]}
+        })
+
+      for server <- [Headless, name, agent, :"no_server_#{name}", "not a name"] do
+        assert {:error, {:invalid_server, ^server}} =
+                 Headless.start(TestApp, id: "bad_server", server: server)
+      end
+
+      assert Process.whereis(Headless) == headless
+      assert {:message_queue_len, 0} = Process.info(agent, :message_queue_len)
+      refute "bad_server" in Headless.list()
+    end
+
     test "accepts a running MCP registry by pid" do
       registry = start_supervised!({Raxol.MCP.Registry, name: nil})
 

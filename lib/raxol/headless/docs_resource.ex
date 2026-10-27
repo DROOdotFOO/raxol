@@ -21,13 +21,14 @@ defmodule Raxol.Headless.DocsResource do
   @doc """
   Register the docs resources with the MCP registry. Safe to call when
   `raxol_mcp` is unavailable or no `docs/` tree is found: returns `:ok`.
+  `opts` go to `Raxol.MCP.Registry.register_resources/3` (`owner: pid`).
   """
-  @spec register(GenServer.server()) :: :ok
-  def register(registry \\ Raxol.MCP.Registry) do
+  @spec register(GenServer.server(), keyword()) :: :ok
+  def register(registry \\ Raxol.MCP.Registry, opts \\ []) do
     with true <- Code.ensure_loaded?(Raxol.MCP.Registry),
          root when is_binary(root) <- docs_root(),
          [_ | _] = resources <- resources(root) do
-      Raxol.MCP.Registry.register_resources(registry, resources)
+      Raxol.MCP.Registry.register_resources(registry, resources, opts)
     else
       _ -> :ok
     end

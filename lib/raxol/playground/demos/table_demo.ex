@@ -262,9 +262,9 @@ defmodule Raxol.Playground.Demos.TableDemo do
 
   # `Table.render/2` returns an id-less box. `Raxol.MCP.TreeWalker` derives the
   # Table tools from this wrapper: its id, the provider marker, the columns
-  # (which `sort` checks its column against) and the rows (read by
-  # `get_rows`). A column, since the layout engine sizes a box that carries
-  # `:attrs` from those attrs alone.
+  # (which `sort` checks its column against), the rows and the sort state
+  # (`get_rows` answers the rows in the order shown). A column, since the
+  # layout engine sizes a box that carries `:attrs` from those attrs alone.
   defp table_node(table) do
     [children: [Table.render(table, %{})]]
     |> column()
@@ -272,6 +272,8 @@ defmodule Raxol.Playground.Demos.TableDemo do
       id: @tool_id,
       columns: table.columns,
       data: table.data,
+      sort_by: table.sort_by,
+      sort_direction: table.sort_direction,
       attrs: %{component_module: Table}
     })
   end

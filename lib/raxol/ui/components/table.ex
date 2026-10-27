@@ -915,9 +915,14 @@ defmodule Raxol.UI.Components.Table do
     {:ok, "Selected row #{index}", [{:select_row, context.widget_id, index}]}
   end
 
+  # In the order the table shows them: `render/2` sorts at draw time, so the
+  # node's `:data` stays in insertion order and its `:sort_by` /
+  # `:sort_direction` say how it is shown.
   def handle_tool_call("get_rows", _args, context) do
-    data = context.widget_state[:data] || []
-    {:ok, data}
+    node = context.widget_state
+
+    {:ok,
+     rows_as_shown(node[:data] || [], node[:sort_by], node[:sort_direction])}
   end
 
   def handle_tool_call("sort", args, context) do
@@ -939,6 +944,11 @@ defmodule Raxol.UI.Components.Table do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  defp rows_as_shown(data, column, direction) when direction in [:asc, :desc],
+    do: sort_data(data, column, direction)
+
+  defp rows_as_shown(data, _column, _direction), do: data
 
   # A column the node itself declares, ignoring case: a column's id or label
   # (`:columns`, as Table state carries them) or a DSL table's `:headers`.

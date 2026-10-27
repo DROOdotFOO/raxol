@@ -125,7 +125,9 @@ defmodule Raxol.MCP.TreeWalker do
   @type context :: %{
           required(:session_id) => String.t(),
           optional(:dispatcher_pid) => pid() | nil,
-          optional(:type_map) => %{atom() => module()}
+          optional(:type_map) => %{atom() => module()},
+          optional(:view) => (-> {:ok, map() | [map()]} | {:error, term()}),
+          optional(:synced) => (-> term())
         }
 
   @doc """
@@ -174,6 +176,30 @@ defmodule Raxol.MCP.TreeWalker do
       (required)
     * `:dispatcher_pid` - pid of the session's Dispatcher (for message dispatch)
     * `:type_map` - optional override for widget type -> module mapping
+    * `:view` - a function answering the session's current view tree,
+      `{:ok, tree}` or `{:error, reason}`. With it, every call resolves its
+      widget by id in that tree, so it acts on the widget as it is now, not
+      as it was when the tool was derived. Without it (a static tree), a call
+      acts on the node it was derived from.
+    * `:synced` - a function called after a call's messages have been
+      dispatched and before it answers, to bring the session's tool set up
+      to date with their effect
+
+  ## Live resolution
+
+  With `:view` in the context, a call whose widget is no longer in the view,
+  no longer offers the action (a disabled Button offers none) or is now
+  another kind of widget answers `{:error, {:widget_unavailable, widget_id,
+  :absent | :disabled | :type_changed}}` (`widget_unavailable?/1`). Those
+  answers are about the question, not the tool's health, so they never count
+  toward its circuit breaker (`:fault?`). When several widgets in the view
+  share the id, the call acts on the first, in view order, that is of the
+  tool's kind and offers the action. A call into a session whose dispatcher
+  has exited answers `{:error, {:session_not_running, session_id}}`.
+
+  Every tool also carries `:provider`, the widget's module: with its name and
+  listed definition it is what `Raxol.MCP.ToolSynchronizer` keys a session's
+  tool set on.
   """
   @spec derive_tools(map() | [map()], context()) :: [
           Raxol.MCP.Registry.tool_def()
@@ -221,6 +247,21 @@ defmodule Raxol.MCP.TreeWalker do
   @spec id?(term()) :: boolean()
   def id?(id) when is_binary(id), do: Regex.match?(@id, id)
   def id?(_id), do: false
+
+  @unavailable_reasons [:absent, :disabled, :type_changed]
+
+  @doc """
+  Whether `reason` is the `{:widget_unavailable, widget_id, why}` a derived
+  tool answers (see "Live resolution" in `derive_tools/2`): `widget_id`
+  passes `id?/1` and `why` is `:absent`, `:disabled` or `:type_changed`. Any
+  tool can return a term of that shape, so this is what makes it safe to name
+  the widget to a client.
+  """
+  @spec widget_unavailable?(term()) :: boolean()
+  def widget_unavailable?({:widget_unavailable, widget_id, why}),
+    do: why in @unavailable_reasons and id?(widget_id)
+
+  def widget_unavailable?(_reason), do: false
 
   # The last segment, the action name. Every built-in action (`click`,
   # `get_visible_range`, ...) is lowercase snake case; the same 32 bounds it.
@@ -438,37 +479,96 @@ defmodule Raxol.MCP.TreeWalker do
         name: "#{Map.fetch!(context, :session_id)}.#{widget_id}.#{spec.name}",
         description: description,
         inputSchema: schema,
-        callback: tool_callback(spec.name, widget_id, module, node, context)
+        provider: module,
+        fault?: &fault?/1,
+        callback: fn args -> call_action(spec.name, args, widget_id, module, node, context) end
       }
       |> put_annotations(Map.get(spec, :annotations))
       |> then(&{:ok, &1})
     end
   end
 
-  defp tool_callback(action_name, widget_id, module, node, context) do
-    fn args ->
+  defp call_action(action_name, args, widget_id, module, node, context) do
+    with :ok <- dispatcher_alive(context),
+         {:ok, live} <- live_node(widget_id, module, action_name, node, context) do
       tool_context = %{
         widget_id: widget_id,
-        widget_state: node,
+        widget_state: live,
         dispatcher_pid: context[:dispatcher_pid]
       }
 
-      case module.handle_tool_call(action_name, args, tool_context) do
-        {:ok, result, messages} ->
-          dispatch_and_format(messages, result, context[:dispatcher_pid])
-
-        {:ok, result} ->
-          {:ok, format_result(result)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      action_name
+      |> module.handle_tool_call(args, tool_context)
+      |> answer(context)
     end
   end
 
-  defp dispatch_and_format(messages, result, dispatcher_pid) do
-    with :ok <- dispatch_messages(messages, dispatcher_pid), do: {:ok, format_result(result)}
+  defp answer({:ok, result, messages}, context) do
+    with :ok <- dispatch_messages(messages, context[:dispatcher_pid]) do
+      synced(context)
+      {:ok, format_result(result)}
+    end
   end
+
+  defp answer({:ok, result}, _context), do: {:ok, format_result(result)}
+  defp answer({:error, reason}, _context), do: {:error, reason}
+
+  # Answers about the widget, not the tool's health: the breaker must not
+  # open on a dismissed modal's tool and stay open when it reopens.
+  defp fault?(reason), do: not widget_unavailable?(reason)
+
+  defp dispatcher_alive(%{dispatcher_pid: pid, session_id: session_id}) when is_pid(pid) do
+    if Process.alive?(pid), do: :ok, else: {:error, {:session_not_running, session_id}}
+  end
+
+  defp dispatcher_alive(_context), do: :ok
+
+  defp live_node(_widget_id, _module, _action, node, context)
+       when not is_map_key(context, :view),
+       do: {:ok, node}
+
+  defp live_node(widget_id, module, action, _node, context) do
+    with {:ok, tree} <- context.view.() do
+      type_map = Map.get(context, :type_map, @default_type_map)
+      tree |> find_nodes(widget_id) |> pick_live(widget_id, module, action, type_map)
+    end
+  end
+
+  # Ids are not unique in every view, and `do_walk/4` derives from every node
+  # with the id, so the call takes the first of the tool's kind that offers
+  # the action.
+  defp pick_live([], widget_id, _module, _action, _type_map),
+    do: {:error, {:widget_unavailable, widget_id, :absent}}
+
+  defp pick_live(nodes, widget_id, module, action, type_map) do
+    same_kind = Enum.filter(nodes, &(resolve_module(&1, &1.type, type_map) == module))
+
+    case Enum.find(same_kind, &offers?(&1, module, action)) do
+      nil when same_kind == [] -> {:error, {:widget_unavailable, widget_id, :type_changed}}
+      nil -> {:error, {:widget_unavailable, widget_id, :disabled}}
+      live -> {:ok, live}
+    end
+  end
+
+  defp offers?(node, module, action) do
+    not mcp_excluded?(node) and Enum.any?(module.mcp_tools(node), &(&1.name == action))
+  end
+
+  # Every node with `widget_id` that `do_walk/4` would derive tools from, in
+  # view order.
+  defp find_nodes(nodes, widget_id) when is_list(nodes),
+    do: Enum.flat_map(nodes, &find_nodes(&1, widget_id))
+
+  defp find_nodes(%{type: type, id: widget_id} = node, widget_id) when is_atom(type),
+    do: [node | find_nodes(child_nodes(node), widget_id)]
+
+  defp find_nodes(node, widget_id) when is_map(node),
+    do: node |> child_nodes() |> find_nodes(widget_id)
+
+  defp find_nodes(_node, _widget_id), do: []
+
+  defp synced(%{synced: synced}), do: synced.()
+  defp synced(_context), do: :ok
 
   # Only the two flags `Raxol.MCP.ToolDef.sensitive?/1` reads, and only when
   # `true`: a provider declaring its action dangerous is credible, one
