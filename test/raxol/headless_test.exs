@@ -207,6 +207,20 @@ defmodule Raxol.HeadlessTest do
     def view(_model), do: Raxol.Core.Renderer.View.text("never")
   end
 
+  # Refuses with a term of its own, which the caller is not shown.
+  defmodule DetailedRefusingApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: {:error, %{token: "app-private"}}
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("never")
+  end
+
   setup do
     # The app-level Headless may or may not be running depending on
     # test mode. Ensure one exists, clean slate for each test.
@@ -795,10 +809,12 @@ defmodule Raxol.HeadlessTest do
 
       # Headless stops the Lifecycle while handling the synchronizer's
       # `:DOWN`, so the Lifecycle's own `:DOWN` arriving means Headless is in
-      # or past that handler; the `:sys` call returns once it has finished.
+      # or past that handler; the `:sys` call returns once it has finished,
+      # and the release it started is awaited.
       lifecycle_ref = process_refs.lifecycle
       assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
       :sys.get_state(Headless)
+      await_releases(headless)
 
       for role <- [:dispatcher, :engine] do
         ref = Map.fetch!(process_refs, role)
@@ -923,6 +939,12 @@ defmodule Raxol.HeadlessTest do
                Headless.start(TestApp, id: "unanswered", registry: stalled)
 
       :ok = :sys.resume(stalled)
+      # The registration that timed out ran once the registry resumed, and
+      # the withdrawal the synchronizer queued behind it ran next; the `:sys`
+      # call is answered after both.
+      :sys.get_state(stalled)
+      assert tool_names(stalled) == []
+      assert session_uris(stalled, "unanswered") == []
 
       refute_received {:DOWN, ^headless_ref, :process, _, _}
       assert Process.whereis(Headless) == headless
@@ -961,12 +983,75 @@ defmodule Raxol.HeadlessTest do
       lifecycle_ref = Process.monitor(lifecycle)
       Process.exit(sync_pid, :kill)
       # Headless stops the Lifecycle while handling the synchronizer's
-      # `:DOWN`; the `:sys` call returns once that handler has finished.
+      # `:DOWN`; the `:sys` call returns once that handler has finished, and
+      # the release it started is awaited.
       assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
       :sys.get_state(Headless)
+      await_releases(Process.whereis(Headless))
 
       assert session_uris(own, id) == []
       assert sync_handler_ids(sync_pid) == []
+    end
+
+    # A registry that answers the synchronizer's first registration and then
+    # stalls: the start is refused at the next one, and what the registry
+    # took, or takes once it moves again, is withdrawn. The hook stops the
+    # registry right after its first reply, until the test lets it go.
+    test "a start refused mid-registration withdraws what the registry took" do
+      stalling =
+        start_supervised!({Raxol.MCP.Registry, name: nil},
+          id: :stalling_registry
+        )
+
+      :ok = :sys.install(stalling, {&stall_after_first_reply/3, :waiting})
+
+      assert {:error, {:tool_synchronizer_failed, :timeout}} =
+               Headless.start(TestApp, id: "half_registered", registry: stalling)
+
+      send(stalling, :go_on)
+      :sys.get_state(stalling)
+      assert tool_names(stalling) == []
+      assert session_uris(stalling, "half_registered") == []
+    end
+
+    # The release of a killed synchronizer calls its session's registry, so
+    # Headless runs it outside itself: a registry that does not answer holds
+    # up that release, not every other session's calls.
+    test "a killed synchronizer's release does not wait on its registry" do
+      Process.whereis(Raxol.MCP.Registry) ||
+        start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
+
+      own =
+        start_supervised!({Raxol.MCP.Registry, name: nil},
+          id: :suspended_release_registry
+        )
+
+      {:ok, other} = Headless.start(TestApp, id: "release_other")
+      {:ok, id} = Headless.start(TestApp, id: "release_held", registry: own)
+      %{synchronizer_pid: sync_pid} = :sys.get_state(Headless).sessions[id]
+      %{lifecycle: lifecycle} = session_pids(id)
+      lifecycle_ref = Process.monitor(lifecycle)
+
+      :ok = :sys.suspend(own)
+      Process.exit(sync_pid, :kill)
+      assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
+
+      # Answered while the registry is still suspended.
+      assert Headless.list() == [other]
+      assert {:ok, _} = Headless.screenshot(other)
+
+      :ok = :sys.resume(own)
+      await_releases(Process.whereis(Headless))
+      assert session_uris(own, id) == []
+    end
+
+    # An app's error term would reach `raxol_start`'s client verbatim; the
+    # answer carries its class.
+    test "an app's init error is answered by its class" do
+      assert {:error, {:app_init_failed, :unknown}} =
+               Headless.start(DetailedRefusingApp, id: "init_detailed")
+
+      refute "init_detailed" in Headless.list()
     end
 
     # Headless unlinks every Lifecycle it starts, so when it exited they all
@@ -1152,6 +1237,26 @@ defmodule Raxol.HeadlessTest do
     for %{id: handler_id, config: %{synchronizer: ^sync_pid}} <-
           :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
         do: handler_id
+  end
+
+  # A `:sys` debug function: once the registry has sent its first reply it
+  # stops, inside the registry process, until it receives `:go_on`.
+  defp stall_after_first_reply(:waiting, {:out, _reply, _to, _state}, _name) do
+    receive do: (:go_on -> :done)
+  end
+
+  defp stall_after_first_reply(:waiting, _event, _name), do: :waiting
+
+  # Headless releases a killed synchronizer from a `Task` it starts, which
+  # names Headless first in its `$callers`; each one running is awaited.
+  defp await_releases(headless) do
+    refs =
+      for pid <- Process.list(),
+          {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
+          match?([^headless | _], dictionary[:"$callers"]),
+          do: Process.monitor(pid)
+
+    for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
   end
 
   # Every live app runtime, by the module its process was started with.

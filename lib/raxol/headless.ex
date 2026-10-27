@@ -99,10 +99,15 @@ defmodule Raxol.Headless do
 
   # Trapping exits, Headless reaches `terminate/2` only once the callback in
   # hand returns, and its supervisor's shutdown clock runs from the exit
-  # signal. The longest bounded callbacks stop a synchronizer and then a
-  # Lifecycle (`stop/1`, a session's `:DOWN`), or compile and then ask the new
-  # Lifecycle for its dispatcher (`start/2`); `use GenServer`'s 5 s default
-  # left a teardown that followed one of them no time at all.
+  # signal; `use GenServer`'s 5 s default left a teardown that followed a
+  # callback no time at all. The figure covers the callbacks whose steps
+  # answer within their timeouts: stopping a synchronizer and then a
+  # Lifecycle (`stop/1`, a session's `:DOWN`, whose release runs outside
+  # Headless), or compiling and then asking the new Lifecycle for its
+  # dispatcher (`start/2`). A start whose synchronizer `init` also waits out
+  # a registry call (5 s each) and then stops the refused session takes
+  # longer, as does a queue of callbacks ahead of the exit signal: a
+  # shutdown that arrives behind one can kill Headless mid-teardown.
   @child_shutdown_ms max(2 * @stop_timeout_ms, @max_compile_timeout_ms + 5_000) +
                        @shutdown_budget_ms + @kill_budget_ms + 1_000
 
@@ -167,11 +172,14 @@ defmodule Raxol.Headless do
   its own refused tools. A tool a later render derives into a held name is
   refused alone and answered by `name_collisions/1`.
 
-  A session whose tool synchronizer fails to start, for example because the
-  registry did not answer its first registration within the call timeout
-  (5 s), is stopped too and answers `{:error, {:tool_synchronizer_failed,
-  class}}`, `class` being the exit's class (`:timeout`). Other sessions and
-  the session manager carry on.
+  With a registry to register in, a session whose tool synchronizer does not
+  start is stopped too and answers `{:error, {:tool_synchronizer_failed,
+  class}}`, `class` being the exit's class: `:timeout` when the registry did
+  not answer a registration, or the app's runtime its dispatcher lookup,
+  within the call timeout (5 s); `:noproc` when a named registry stopped
+  after its check. An app whose runtime fails to initialize answers
+  `{:error, {:app_init_failed, class}}` the same way, the full reason
+  logged. Other sessions and the session manager carry on.
 
   ## Passing a path executes code
 
@@ -495,7 +503,7 @@ defmodule Raxol.Headless do
       end)
 
     Enum.each(down, fn {_id, session} ->
-      if pid == session.synchronizer_pid, do: release_synchronizer(session)
+      if pid == session.synchronizer_pid, do: release_later(session)
       stop_synchronizer(session.synchronizer_pid)
       stop_lifecycle(session.lifecycle_pid)
     end)
@@ -506,8 +514,9 @@ defmodule Raxol.Headless do
   # Trapping, Headless still receives the `EXIT` of a Lifecycle that ends
   # between `start_link` and `Process.unlink/1`, of any other process linked
   # to it, and any exit signal another process sends it. A session's teardown
-  # belongs to its `:DOWN`, so this only logs. The parent's `EXIT` never
-  # arrives here: `GenServer` stops on it.
+  # belongs to its `:DOWN`, so this only logs, the reason truncated: any
+  # process can send one, of any size. The parent's `EXIT` never arrives
+  # here: `GenServer` stops on it.
   @impl true
   def handle_info({:EXIT, pid, reason}, state) do
     session =
@@ -519,7 +528,7 @@ defmodule Raxol.Headless do
     Logger.warning(
       "[#{inspect(__MODULE__)}] exit signal from #{inspect(pid)} " <>
         "(session: #{inspect(session)}) ignored: " <>
-        Exception.format_exit(reason)
+        inspect(reason, limit: 20, printable_limit: 200)
     )
 
     {:noreply, state}
@@ -563,8 +572,7 @@ defmodule Raxol.Headless do
   # --- Private Helpers ---
 
   defp do_start_session(module_or_path, opts, state) do
-    with {:ok, registry} <-
-           named_mcp(opts, :registry, Raxol.MCP.Registry, :invalid_registry),
+    with {:ok, registry} <- session_registry(opts),
          {:ok, server} <-
            named_mcp(opts, :server, Raxol.MCP.Server, :invalid_server),
          {:ok, module} <- resolve_module(module_or_path),
@@ -586,6 +594,14 @@ defmodule Raxol.Headless do
         )
       end
     end
+  end
+
+  # The implicit default registry may be absent (`{:optional, name}`): the
+  # session then has no tools. One the caller named must be there.
+  defp session_registry(opts) do
+    if Keyword.has_key?(opts, :registry),
+      do: named_mcp(opts, :registry, Raxol.MCP.Registry, :invalid_registry),
+      else: {:ok, {:optional, Raxol.MCP.Registry}}
   end
 
   # The implicit defaults may be absent: a node without the MCP stack runs
@@ -728,13 +744,20 @@ defmodule Raxol.Headless do
   end
 
   # A refused session leaves nothing running: a process its stop did not end
-  # within the stop timeout is killed, and a synchronizer that ended without
-  # its `terminate/2` (killed, before or here) is released, which its
-  # `:DOWN` would not do once the session is not stored.
+  # within the stop timeout is killed (a no-op on one already stopped), and
+  # the synchronizer is released once it is down, since a killed one ran no
+  # `terminate/2` and its `:DOWN` finds no stored session.
   defp discard(session) do
     stop_synchronizer(session.synchronizer_pid)
     stop_lifecycle(session.lifecycle_pid)
-    kill_session(session)
+    Process.exit(session.lifecycle_pid, :kill)
+
+    if session.synchronizer_pid do
+      Process.exit(session.synchronizer_pid, :kill)
+      release_later(session)
+    end
+
+    :ok
   end
 
   # The gate lives HERE rather than in `Raxol.Headless.McpTools` because this is
@@ -1005,6 +1028,16 @@ defmodule Raxol.Headless do
         Process.unlink(pid)
         {:ok, pid}
 
+      # The app's own error term would reach `raxol_start`'s client verbatim;
+      # the answer carries its class, the log the term.
+      {:error, {:app_init_failed, reason}} ->
+        Logger.warning(
+          "[#{inspect(__MODULE__)}] #{inspect(module)} failed to start: " <>
+            inspect(reason, limit: 20, printable_limit: 200)
+        )
+
+        {:error, {:app_init_failed, exit_class(reason)}}
+
       error ->
         error
     end
@@ -1259,6 +1292,24 @@ defmodule Raxol.Headless do
     release_synchronizer(session)
   end
 
+  # Runs outside Headless, which serves every other session meanwhile: the
+  # release calls the session's registry, and that registry may not answer.
+  # It waits for the synchronizer to be down, so nothing it releases is
+  # registered again behind it.
+  defp release_later(%Session{synchronizer_pid: sync_pid} = session) do
+    {:ok, _releaser} =
+      Task.start(fn ->
+        ref = Process.monitor(sync_pid)
+
+        receive do
+          {:DOWN, ^ref, :process, ^sync_pid, _reason} ->
+            release_synchronizer(session)
+        end
+      end)
+
+    :ok
+  end
+
   # A synchronizer killed untrappably never ran its `terminate/2`, so what it
   # holds under this session's name is released here: its telemetry handler and
   # the `raxol://session/<id>/` resources in the registry it registered them
@@ -1315,49 +1366,58 @@ defmodule Raxol.Headless do
   defp synchronizer_collisions(session),
     do: session_call(session, session.synchronizer_pid, :name_collisions)
 
-  # With no registry running the session has no tools. With one, a
-  # synchronizer that fails to start (its first call to a registry too busy
-  # to answer timed out) would leave a session silently without tools: the
-  # start is refused and the session stopped, the answer carrying only the
-  # exit's class.
-  defp start_tool_synchronizer(session, registry, server) do
-    with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
-         pid when is_pid(pid) <- GenServer.whereis(registry),
-         dispatcher_pid when is_pid(dispatcher_pid) <-
-           get_dispatcher_pid(session.lifecycle_pid) do
-      start_synchronizer(session, pid, dispatcher_pid, server)
-    else
-      _ -> {:ok, session}
-    end
+  # With no registry running (the default one absent) the session has no
+  # tools. With one, a session whose synchronizer does not start would run
+  # silently without them: a Lifecycle that does not name its dispatcher, a
+  # named registry gone since its check, or a synchronizer `init` that fails
+  # (its call to a registry too busy to answer timed out). Each refuses the
+  # start and stops the session, the answer carrying only the exit's class.
+  defp start_tool_synchronizer(session, {:optional, registry}, server) do
+    if Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer) and
+         is_pid(GenServer.whereis(registry)),
+       do: start_tool_synchronizer(session, registry, server),
+       else: {:ok, session}
   end
 
-  defp start_synchronizer(session, registry_pid, dispatcher_pid, server) do
-    opts = [
-      registry: registry_pid,
-      server: server,
-      dispatcher_pid: dispatcher_pid,
-      session_id: session.id,
-      app_module: session.module,
-      owner: self()
-    ]
+  defp start_tool_synchronizer(session, registry, server) do
+    with {:ok, registry_pid} <- registry_pid(registry),
+         {:ok, dispatcher_pid} <- get_dispatcher_pid(session.lifecycle_pid),
+         {:ok, sync_pid} <-
+           start_synchronizer(session, registry_pid, dispatcher_pid, server) do
+      Process.monitor(sync_pid)
 
-    case GenServer.start(Raxol.MCP.ToolSynchronizer, opts) do
-      {:ok, sync_pid} ->
-        Process.monitor(sync_pid)
-
-        {:ok,
-         %{session | synchronizer_pid: sync_pid, registry_pid: registry_pid}}
-
+      {:ok, %{session | synchronizer_pid: sync_pid, registry_pid: registry_pid}}
+    else
       {:error, reason} ->
         discard(session)
         {:error, {:tool_synchronizer_failed, exit_class(reason)}}
     end
   end
 
+  defp registry_pid(registry) do
+    case GenServer.whereis(registry) do
+      pid when is_pid(pid) -> {:ok, pid}
+      _ -> {:error, :noproc}
+    end
+  end
+
+  defp start_synchronizer(session, registry_pid, dispatcher_pid, server) do
+    GenServer.start(Raxol.MCP.ToolSynchronizer,
+      registry: registry_pid,
+      server: server,
+      dispatcher_pid: dispatcher_pid,
+      session_id: session.id,
+      app_module: session.module,
+      owner: self()
+    )
+  end
+
   defp get_dispatcher_pid(lifecycle_pid) do
-    lifecycle_state = GenServer.call(lifecycle_pid, :get_full_state)
-    lifecycle_state.dispatcher_pid
+    case GenServer.call(lifecycle_pid, :get_full_state) do
+      %{dispatcher_pid: pid} when is_pid(pid) -> {:ok, pid}
+      _no_dispatcher -> {:error, :noproc}
+    end
   catch
-    :exit, _ -> nil
+    :exit, reason -> {:error, reason}
   end
 end
