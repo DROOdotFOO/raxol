@@ -230,9 +230,10 @@ defmodule Raxol.Headless do
 
   The wait happens in the calling process, not in the `Raxol.Headless`
   server, so a slow `update/2` holds up only its own caller: other sessions
-  answer meanwhile. That isolation is per process. `Raxol.MCP.Server` runs
-  every tool call in its one process, so over MCP a slow session holds every
-  client's tool calls, not just the caller's.
+  answer meanwhile. Over MCP that caller is the tool call's own callback
+  worker (`Raxol.MCP.Server` runs each call in one), so a slow session holds
+  only the calls made to it, while it holds a slot of the server's
+  `:max_in_flight` and of the calling connection's share.
 
   From inside an app's `update/2`, `list/0`, `start/2` and calls on other
   sessions work. Calls on the app's own session answer

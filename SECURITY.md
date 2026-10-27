@@ -49,6 +49,16 @@ Pre-alpha packages (`raxol_earn`, `raxol_symphony`, `raxol_gateway`,
   sessions, or journal, or spends past that tenant's budget is in scope and
   high priority. Deployments handling mutually hostile tenants should add
   OS-level isolation on top.
+- `raxol mcp` serves Raxol apps as MCP tools over stdio to the client that
+  spawned it (OMP), so its boundary is that OS process: whoever can write
+  its stdin can call every tool it lists. It starts only modules on the
+  startable list (the playground demos unless configured), refuses
+  `raxol_start`'s `path` argument (starting from a path compiles the file),
+  leaves out the coding-agent harness tools, and serves `resources/read`
+  only for the sessions it runs; every other read is denied. stdout is the
+  JSON-RPC wire and carries nothing else. Anything that runs code a client
+  chose beyond those modules, reads outside those sessions, or puts a
+  non-JSON-RPC byte on stdout is in scope.
 
 ## Dependency scanning
 
