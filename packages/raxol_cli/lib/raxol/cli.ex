@@ -8,7 +8,7 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent code p acp login setup doctor update playground new help)
+  @commands ~w(agent code p acp mcp login setup doctor update playground new help)
 
   @doc "Dispatch `argv`, returning an exit code."
   @spec main([String.t()]) :: non_neg_integer()
@@ -23,6 +23,8 @@ defmodule Raxol.CLI do
   def main(["-p" | rest]), do: Raxol.Agent.P.run(rest)
   # Serve over ACP on stdio, for editors and agent harnesses that spawn us.
   def main(["acp" | rest]), do: Raxol.Agent.ClientProtocol.Serve.run(rest)
+  # Serve Raxol apps as MCP tools on stdio, for OMP and other MCP clients.
+  def main(["mcp" | rest]), do: Raxol.CLI.MCP.run(rest)
   # The interactive setup an ACP client relaunches us for (Terminal Auth): the
   # args here are the ones `initialize` advertises, so the two cannot drift.
   def main(["login" | rest]), do: Raxol.Agent.ClientProtocol.Login.run(rest)
@@ -352,6 +354,7 @@ defmodule Raxol.CLI do
       code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
       acp           Serve over the Agent Client Protocol on stdio
+      mcp           Serve Raxol apps as MCP tools on stdio (for OMP)
       login         Connect an LLM provider (browser sign-in, or a key)
       setup         Connect/inspect a provider headlessly (CI, remote boxes)
       doctor        Report this install: build, runtime, providers, config
