@@ -844,10 +844,10 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   # `UsageUpdate.cost` is documented as the CUMULATIVE SESSION cost, so
   # emitting it verbatim as this turn's cost would bill turn 1's dollars
   # again on turn 2, and again on turn 3 -- the same double-count ADR-0034
-  # records for Symphony's `merge_tokens/2`. `:cost` is therefore the delta
-  # against the cumulative anchored at this turn's start, and the
-  # cumulative itself rides as `:session_cost` for display only (pricing
-  # reads `:cost`, never `:session_cost`). This is the deliberate
+  # records for Symphony's `merge_tokens/2` (outside this repository). `:cost`
+  # is therefore the delta against the cumulative anchored at this turn's
+  # start, and the cumulative itself rides as `:session_cost` for display only
+  # (pricing reads `:cost`, never `:session_cost`). This is the deliberate
   # refinement of ADR-0035's "prefer a provider's own reported cost": the
   # preference is for the provider's figure, not for its accumulation.
   # A turn the peer sent no usage_update for reported NOTHING about its

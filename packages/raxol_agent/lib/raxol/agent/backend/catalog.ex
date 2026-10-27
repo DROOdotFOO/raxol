@@ -12,8 +12,9 @@ defmodule Raxol.Agent.Backend.Catalog do
 
   The policy is derive, not merge: this module is the declaration and the three
   consumers each project the slice they need out of it. Nothing here knows about
-  credential resolution, request building, or Symphony's runner registry, which
-  answer different questions and keep their own logic.
+  credential resolution, request building, or Symphony's runner registry
+  (outside this repository), which answer different questions and keep their
+  own logic.
 
   ## Entry shape
 

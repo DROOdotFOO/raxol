@@ -232,8 +232,8 @@ defmodule Raxol.Agent do
   the agent declares a non-empty `sandbox/0`.
 
   Consumers wiring an agent into a runtime (Symphony's
-  `Runners.RaxolAgent`, the Agent.Session helper, etc) should pass
-  the result here as the hook list rather than reading
+  `Runners.RaxolAgent`, outside this repository, the Agent.Session helper,
+  etc) should pass the result here as the hook list rather than reading
   `command_hooks/0` directly.
 
   Falls back to `[]` when `agent_module` doesn't export either

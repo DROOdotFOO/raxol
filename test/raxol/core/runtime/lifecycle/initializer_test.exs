@@ -124,12 +124,13 @@ defmodule Raxol.Core.Runtime.Lifecycle.InitializerTest do
       assert model(pid) == %{n: 7}
     end
 
-    # The exact path Symphony took: an `{:agent_message, from, payload}` cast
-    # goes straight to update/2, where `Map.put/3` on the command list raised
-    # %BadMapError{term: []} and the update was dropped.
+    # The exact path Symphony (now outside this repository) took: an
+    # `{:agent_message, from, payload}` cast goes straight to update/2, where
+    # `Map.put/3` on the command list raised %BadMapError{term: []} and the
+    # update was dropped.
     test "the model survives into update/2 as a map" do
       pid = start_app!(TupleInitApp)
-      send_agent_message(pid, {:symphony_start, %{}})
+      send_agent_message(pid, {:orchestrator_start, %{}})
 
       assert %{n: 7, touched: true} = model(pid)
     end
