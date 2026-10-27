@@ -40,6 +40,29 @@ defmodule Raxol.MCP.StickyToolSetsTest do
     end
   end
 
+  # A checkbox and a button that share the id `dup`, the checkbox first.
+  defmodule DuplicateIdApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{checked: false, clicks: 0}
+
+    @impl true
+    def update({:checkbox_toggle, "dup", checked}, model), do: {%{model | checked: checked}, []}
+    def update(:go, model), do: {%{model | clicks: model.clicks + 1}, []}
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(model) do
+      column(
+        children: [
+          Raxol.View.Components.checkbox(id: "dup", label: "Dup", checked: model.checked),
+          button("Go", id: "dup", on_click: :go)
+        ]
+      )
+    end
+  end
+
   setup do
     if is_nil(Process.whereis(Headless)),
       do: start_supervised!({Headless, [name: Headless]})
@@ -117,6 +140,15 @@ defmodule Raxol.MCP.StickyToolSetsTest do
 
     assert Regex.scan(~r/framework: "([^"]+)"/, rows, capture: :all_but_first) ==
              [["Bubble Tea"], ["Ink"], ["Textual"], ["Blessed"], ["Ratatui"], ["tview"], ["Raxol"]]
+  end
+
+  test "a call on a shared widget id acts on the widget of its own kind", %{server: server} = ctx do
+    id = start!(DuplicateIdApp, ctx)
+
+    assert ok_text(call(server, "#{id}.dup.click")) =~ "Clicked"
+    assert ok_text(call(server, "#{id}.dup.toggle")) == "Toggled to true"
+
+    assert {:ok, %{clicks: 1, checked: true}} = Headless.get_model(id)
   end
 
   # The registry's owner contract: a synchronizer that dies takes what it owns

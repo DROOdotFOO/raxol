@@ -190,10 +190,12 @@ defmodule Raxol.MCP.TreeWalker do
   With `:view` in the context, a call whose widget is no longer in the view,
   no longer offers the action (a disabled Button offers none) or is now
   another kind of widget answers `{:error, {:widget_unavailable, widget_id,
-  :absent | :disabled | :type_changed}}`. Those answers are about the
-  question, not the tool's health, so they never count toward its circuit
-  breaker (`:fault?`). A call into a session whose dispatcher has exited
-  answers `{:error, {:session_not_running, session_id}}`.
+  :absent | :disabled | :type_changed}}` (`widget_unavailable?/1`). Those
+  answers are about the question, not the tool's health, so they never count
+  toward its circuit breaker (`:fault?`). When several widgets in the view
+  share the id, the call acts on the first, in view order, that is of the
+  tool's kind and offers the action. A call into a session whose dispatcher
+  has exited answers `{:error, {:session_not_running, session_id}}`.
 
   Every tool also carries `:provider`, the widget's module: with its name and
   listed definition it is what `Raxol.MCP.ToolSynchronizer` keys a session's
@@ -245,6 +247,21 @@ defmodule Raxol.MCP.TreeWalker do
   @spec id?(term()) :: boolean()
   def id?(id) when is_binary(id), do: Regex.match?(@id, id)
   def id?(_id), do: false
+
+  @unavailable_reasons [:absent, :disabled, :type_changed]
+
+  @doc """
+  Whether `reason` is the `{:widget_unavailable, widget_id, why}` a derived
+  tool answers (see "Live resolution" in `derive_tools/2`): `widget_id`
+  passes `id?/1` and `why` is `:absent`, `:disabled` or `:type_changed`. Any
+  tool can return a term of that shape, so this is what makes it safe to name
+  the widget to a client.
+  """
+  @spec widget_unavailable?(term()) :: boolean()
+  def widget_unavailable?({:widget_unavailable, widget_id, why}),
+    do: why in @unavailable_reasons and id?(widget_id)
+
+  def widget_unavailable?(_reason), do: false
 
   # The last segment, the action name. Every built-in action (`click`,
   # `get_visible_range`, ...) is lowercase snake case; the same 32 bounds it.
@@ -498,8 +515,7 @@ defmodule Raxol.MCP.TreeWalker do
 
   # Answers about the widget, not the tool's health: the breaker must not
   # open on a dismissed modal's tool and stay open when it reopens.
-  defp fault?({:widget_unavailable, _widget_id, _why}), do: false
-  defp fault?(_reason), do: true
+  defp fault?(reason), do: not widget_unavailable?(reason)
 
   defp dispatcher_alive(%{dispatcher_pid: pid, session_id: session_id}) when is_pid(pid) do
     if Process.alive?(pid), do: :ok, else: {:error, {:session_not_running, session_id}}
@@ -514,23 +530,23 @@ defmodule Raxol.MCP.TreeWalker do
   defp live_node(widget_id, module, action, _node, context) do
     with {:ok, tree} <- context.view.() do
       type_map = Map.get(context, :type_map, @default_type_map)
-      tree |> find_node(widget_id) |> check_live(widget_id, module, action, type_map)
+      tree |> find_nodes(widget_id) |> pick_live(widget_id, module, action, type_map)
     end
   end
 
-  defp check_live(nil, widget_id, _module, _action, _type_map),
+  # Ids are not unique in every view, and `do_walk/4` derives from every node
+  # with the id, so the call takes the first of the tool's kind that offers
+  # the action.
+  defp pick_live([], widget_id, _module, _action, _type_map),
     do: {:error, {:widget_unavailable, widget_id, :absent}}
 
-  defp check_live(live, widget_id, module, action, type_map) do
-    cond do
-      resolve_module(live, live.type, type_map) != module ->
-        {:error, {:widget_unavailable, widget_id, :type_changed}}
+  defp pick_live(nodes, widget_id, module, action, type_map) do
+    same_kind = Enum.filter(nodes, &(resolve_module(&1, &1.type, type_map) == module))
 
-      offers?(live, module, action) ->
-        {:ok, live}
-
-      true ->
-        {:error, {:widget_unavailable, widget_id, :disabled}}
+    case Enum.find(same_kind, &offers?(&1, module, action)) do
+      nil when same_kind == [] -> {:error, {:widget_unavailable, widget_id, :type_changed}}
+      nil -> {:error, {:widget_unavailable, widget_id, :disabled}}
+      live -> {:ok, live}
     end
   end
 
@@ -538,16 +554,18 @@ defmodule Raxol.MCP.TreeWalker do
     not mcp_excluded?(node) and Enum.any?(module.mcp_tools(node), &(&1.name == action))
   end
 
-  # The node `do_walk/4` would derive `widget_id`'s tools from.
-  defp find_node(nodes, widget_id) when is_list(nodes),
-    do: Enum.find_value(nodes, &find_node(&1, widget_id))
+  # Every node with `widget_id` that `do_walk/4` would derive tools from, in
+  # view order.
+  defp find_nodes(nodes, widget_id) when is_list(nodes),
+    do: Enum.flat_map(nodes, &find_nodes(&1, widget_id))
 
-  defp find_node(%{type: type, id: widget_id} = node, widget_id) when is_atom(type), do: node
+  defp find_nodes(%{type: type, id: widget_id} = node, widget_id) when is_atom(type),
+    do: [node | find_nodes(child_nodes(node), widget_id)]
 
-  defp find_node(node, widget_id) when is_map(node),
-    do: node |> child_nodes() |> find_node(widget_id)
+  defp find_nodes(node, widget_id) when is_map(node),
+    do: node |> child_nodes() |> find_nodes(widget_id)
 
-  defp find_node(_node, _widget_id), do: nil
+  defp find_nodes(_node, _widget_id), do: []
 
   defp synced(%{synced: synced}), do: synced.()
   defp synced(_context), do: :ok

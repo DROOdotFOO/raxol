@@ -1614,11 +1614,16 @@ defmodule Raxol.MCP.Server do
         Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
 
       # A derived tool whose widget is not as it was (see
-      # `Raxol.MCP.TreeWalker`). The id is checked at derivation
-      # (`[A-Za-z0-9_-]{1,32}`), so it is safe to echo.
-      {:error, {:widget_unavailable, widget, why}} ->
-        content = [%{type: "text", text: "widget `#{widget}` #{widget_unavailable(why)}"}]
-        Protocol.response(id, %{content: content, isError: true})
+      # `Raxol.MCP.TreeWalker`). Any tool may answer this shape, so the widget
+      # is named only in the shape TreeWalker answers
+      # (`TreeWalker.widget_unavailable?/1`); any other is a fixed sentence.
+      {:error, {:widget_unavailable, widget, why} = reason} ->
+        text =
+          if Raxol.MCP.TreeWalker.widget_unavailable?(reason),
+            do: "widget `#{widget}` #{widget_unavailable(why)}",
+            else: "the widget is not available for this call"
+
+        Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
 
       {:error, :circuit_open} ->
         content = [
