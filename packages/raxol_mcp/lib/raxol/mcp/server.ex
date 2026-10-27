@@ -1606,23 +1606,15 @@ defmodule Raxol.MCP.Server do
       # `Raxol.MCP.TreeWalker`). Any tool may answer this shape, so the
       # session is named only when it is a session id (`TreeWalker.id?/1`).
       {:error, {:session_not_running, session}} ->
-        text =
-          if Raxol.MCP.TreeWalker.id?(session),
-            do: "session `#{session}` is not running in this server; call raxol_list",
-            else: "the session is not running in this server; call raxol_list"
-
+        text = session_not_running_text(session)
         Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
 
       # A derived tool whose widget is not as it was (see
       # `Raxol.MCP.TreeWalker`). Any tool may answer this shape, so the widget
       # is named only in the shape TreeWalker answers
       # (`TreeWalker.widget_unavailable?/1`); any other is a fixed sentence.
-      {:error, {:widget_unavailable, widget, why} = reason} ->
-        text =
-          if Raxol.MCP.TreeWalker.widget_unavailable?(reason),
-            do: "widget `#{widget}` #{widget_unavailable(why)}",
-            else: "the widget is not available for this call"
-
+      {:error, {:widget_unavailable, _widget, _why} = reason} ->
+        text = widget_unavailable_text(reason)
         Protocol.response(id, %{content: [%{type: "text", text: text}], isError: true})
 
       {:error, :circuit_open} ->
@@ -1639,6 +1631,18 @@ defmodule Raxol.MCP.Server do
         content = [%{type: "text", text: "Error: #{inspect(reason)}"}]
         Protocol.response(id, %{content: content, isError: true})
     end
+  end
+
+  defp session_not_running_text(session) do
+    if Raxol.MCP.TreeWalker.id?(session),
+      do: "session `#{session}` is not running in this server; call raxol_list",
+      else: "the session is not running in this server; call raxol_list"
+  end
+
+  defp widget_unavailable_text({:widget_unavailable, widget, why} = reason) do
+    if Raxol.MCP.TreeWalker.widget_unavailable?(reason),
+      do: "widget `#{widget}` #{widget_unavailable(why)}",
+      else: "the widget is not available for this call"
   end
 
   defp widget_unavailable(:absent), do: "is not in the session's current view"
