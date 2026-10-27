@@ -8,7 +8,9 @@ defmodule Raxol.MCP.Server do
 
   ## Supported Methods
 
-  - `initialize` -- MCP handshake, returns server capabilities
+  - `initialize` -- MCP handshake, returns server capabilities and
+    `serverInfo` (`name` "raxol"; `version` the `:server_version` option,
+    default this package's version)
   - `notifications/initialized` -- client acknowledgement (no reply)
   - `ping` -- health check
   - `tools/list` -- list the registered tools this caller may call
@@ -131,9 +133,15 @@ defmodule Raxol.MCP.Server do
   and elicitation timers while callback work is pending.
 
   `:max_in_flight` bounds concurrent callback workers across every connection
-  (default 32); it does not count parked calls, which hold no worker.
+  (default 32); it does not count parked calls, which hold no worker. One
+  connection may hold at most `:max_in_flight_per_connection` of them (default
+  half of `:max_in_flight`, at least 1), so a client running many slow calls
+  at once (a stdio peer included) leaves room for every other connection. The
+  share may not exceed `:max_in_flight`; the server refuses to start if it
+  does. Both counts are kept in this process and checked when a worker
+  starts, so concurrent requests cannot both pass a check meant for one.
   `:callback_timeout_ms` bounds each worker's lifetime (default 300,000 ms).
-  Work above the concurrency bound receives a structured busy error. A finite
+  Work above either concurrency bound receives a structured busy error. A finite
   timeout passed to `handle_message/4` also cancels that call's worker if the
   caller stops waiting. `request/3` callers cancel explicitly with `cancel/2`,
   and are monitored: when one exits, its outstanding requests are cancelled.
@@ -206,14 +214,17 @@ defmodule Raxol.MCP.Server do
     pending_elicitations: %{},
     parked_counts: %{},
     in_flight: %{},
+    in_flight_counts: %{},
     worker_refs: %{},
     caller_refs: %{},
     elicitation_timeout_ms: @default_elicitation_timeout_ms,
     max_client_capabilities: @default_max_client_capabilities,
     max_in_flight: @default_max_in_flight,
+    max_in_flight_per_connection: div(@default_max_in_flight, 2),
     max_parked_elicitations: @default_max_parked_elicitations,
     max_parked_elicitations_total: @default_max_parked_elicitations_total,
-    callback_timeout_ms: @default_callback_timeout_ms
+    callback_timeout_ms: @default_callback_timeout_ms,
+    server_version: nil
   ]
 
   @typedoc """
@@ -268,14 +279,17 @@ defmodule Raxol.MCP.Server do
           pending_elicitations: %{String.t() => pending_elicitation()},
           parked_counts: %{conn_id() => pos_integer()},
           in_flight: %{reference() => map()},
+          in_flight_counts: %{conn_id() => pos_integer()},
           worker_refs: %{reference() => reference()},
           caller_refs: %{reference() => reference()},
           elicitation_timeout_ms: pos_integer(),
           max_client_capabilities: pos_integer(),
           max_in_flight: pos_integer(),
+          max_in_flight_per_connection: pos_integer(),
           max_parked_elicitations: pos_integer(),
           max_parked_elicitations_total: pos_integer(),
-          callback_timeout_ms: pos_integer()
+          callback_timeout_ms: pos_integer(),
+          server_version: String.t()
         }
 
   @typedoc """
@@ -509,6 +523,7 @@ defmodule Raxol.MCP.Server do
     refuse_unguarded_reads!(transport, read_authorizer)
 
     {max_parked, max_parked_total} = parked_caps!(opts)
+    {max_in_flight, max_per_connection} = in_flight_caps!(opts)
 
     {:ok,
      %__MODULE__{
@@ -528,11 +543,13 @@ defmodule Raxol.MCP.Server do
          max_client_capabilities!(
            Keyword.get(opts, :max_client_capabilities, @default_max_client_capabilities)
          ),
-       max_in_flight: positive_option!(opts, :max_in_flight, @default_max_in_flight),
+       max_in_flight: max_in_flight,
+       max_in_flight_per_connection: max_per_connection,
        max_parked_elicitations: max_parked,
        max_parked_elicitations_total: max_parked_total,
        callback_timeout_ms:
-         positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms)
+         positive_option!(opts, :callback_timeout_ms, @default_callback_timeout_ms),
+       server_version: server_version!(Keyword.get(opts, :server_version, RaxolMcp.version()))
      }}
   end
 
@@ -703,7 +720,7 @@ defmodule Raxol.MCP.Server do
 
     case async_action(message, state, conn_id) do
       {:call, work} ->
-        start_async_call(work, request_ref, delivery, state)
+        start_async_call(work, request_ref, delivery, conn_id, state)
 
       {:push, pending, work} ->
         {_pending, state} = take_pending(state, message.id)
@@ -932,8 +949,8 @@ defmodule Raxol.MCP.Server do
     action == "accept" and fetch_field(content, "approve", false) == true
   end
 
-  defp start_async_call(work, request_ref, delivery, state) do
-    case start_worker(state, request_ref, work, delivery) do
+  defp start_async_call(work, request_ref, delivery, conn_id, state) do
+    case start_worker(state, request_ref, work, delivery, conn_id) do
       {:ok, state} ->
         {:noreply, state}
 
@@ -945,7 +962,7 @@ defmodule Raxol.MCP.Server do
   defp start_async_push(work, pending, state) do
     {request_ref, delivery} = push_delivery(pending)
 
-    case start_worker(state, request_ref, work, delivery) do
+    case start_worker(state, request_ref, work, delivery, pending.owner) do
       {:ok, state} ->
         {:reply, {:reply, nil}, state}
 
@@ -964,47 +981,61 @@ defmodule Raxol.MCP.Server do
 
   defp push_delivery(pending), do: {make_ref(), {:push, pending}}
 
-  defp start_worker(state, request_ref, work, delivery) do
-    if map_size(state.in_flight) >= state.max_in_flight do
-      :busy
-    else
-      server = self()
+  # Both bounds are checked here, in the one process that starts workers, so
+  # the counts and the start are one step: no concurrent request can pass a
+  # check meant for the last free slot.
+  defp start_worker(state, request_ref, work, delivery, conn_id) do
+    cond do
+      map_size(state.in_flight) >= state.max_in_flight ->
+        :busy
 
-      {pid, monitor_ref} =
-        :erlang.spawn_opt(
-          fn ->
-            result = execute_async(work)
-            send(server, {:mcp_request_result, request_ref, result})
-          end,
-          [:link, :monitor]
-        )
+      Map.get(state.in_flight_counts, conn_id, 0) >= state.max_in_flight_per_connection ->
+        :busy
 
-      timer =
-        Process.send_after(
-          self(),
-          {:mcp_request_timeout, request_ref},
-          state.callback_timeout_ms
-        )
-
-      caller_monitor = monitor_caller(delivery)
-
-      entry = %{
-        pid: pid,
-        monitor_ref: monitor_ref,
-        timer: timer,
-        delivery: delivery,
-        work: work,
-        caller_monitor: caller_monitor
-      }
-
-      {:ok,
-       %{
-         state
-         | in_flight: Map.put(state.in_flight, request_ref, entry),
-           worker_refs: Map.put(state.worker_refs, monitor_ref, request_ref),
-           caller_refs: track_caller(state.caller_refs, caller_monitor, request_ref)
-       }}
+      true ->
+        spawn_worker(state, request_ref, work, delivery, conn_id)
     end
+  end
+
+  defp spawn_worker(state, request_ref, work, delivery, conn_id) do
+    server = self()
+
+    {pid, monitor_ref} =
+      :erlang.spawn_opt(
+        fn ->
+          result = execute_async(work)
+          send(server, {:mcp_request_result, request_ref, result})
+        end,
+        [:link, :monitor]
+      )
+
+    timer =
+      Process.send_after(
+        self(),
+        {:mcp_request_timeout, request_ref},
+        state.callback_timeout_ms
+      )
+
+    caller_monitor = monitor_caller(delivery)
+
+    entry = %{
+      pid: pid,
+      monitor_ref: monitor_ref,
+      timer: timer,
+      delivery: delivery,
+      work: work,
+      caller_monitor: caller_monitor,
+      conn_id: conn_id
+    }
+
+    {:ok,
+     %{
+       state
+       | in_flight: Map.put(state.in_flight, request_ref, entry),
+         in_flight_counts: Map.update(state.in_flight_counts, conn_id, 1, &(&1 + 1)),
+         worker_refs: Map.put(state.worker_refs, monitor_ref, request_ref),
+         caller_refs: track_caller(state.caller_refs, caller_monitor, request_ref)
+     }}
   end
 
   defp execute_async({:authorize_tool, id, name, arguments, tools, authorizer, ctx, conn_id}) do
@@ -1229,9 +1260,17 @@ defmodule Raxol.MCP.Server do
          %{
            state
            | in_flight: in_flight,
+             in_flight_counts: release_slot(state.in_flight_counts, entry.conn_id),
              worker_refs: Map.delete(state.worker_refs, entry.monitor_ref),
              caller_refs: release_caller(state.caller_refs, entry.caller_monitor)
          }}
+    end
+  end
+
+  defp release_slot(counts, conn_id) do
+    case Map.fetch!(counts, conn_id) do
+      1 -> Map.delete(counts, conn_id)
+      count -> Map.put(counts, conn_id, count - 1)
     end
   end
 
@@ -1253,7 +1292,7 @@ defmodule Raxol.MCP.Server do
     result = %{
       protocolVersion: Protocol.mcp_protocol_version(),
       capabilities: capabilities(),
-      serverInfo: server_info()
+      serverInfo: %{name: "raxol", version: state.server_version}
     }
 
     # Remember what the CLIENT can do, PER CONNECTION. `elicitation` is the one
@@ -1571,10 +1610,6 @@ defmodule Raxol.MCP.Server do
       prompts: %{listChanged: false},
       logging: %{}
     }
-  end
-
-  defp server_info do
-    %{name: "raxol", version: RaxolMcp.version()}
   end
 
   defp format_resource_content(text) when is_binary(text),
@@ -1909,6 +1944,31 @@ defmodule Raxol.MCP.Server do
     end
 
     {max_parked, max_parked_total}
+  end
+
+  # Half by default: one connection that keeps its share busy still leaves the
+  # other half to everyone else. A server capped at one worker has no half to
+  # give, so its one connection may use it.
+  defp in_flight_caps!(opts) do
+    max_in_flight = positive_option!(opts, :max_in_flight, @default_max_in_flight)
+
+    per_connection =
+      positive_option!(opts, :max_in_flight_per_connection, max(div(max_in_flight, 2), 1))
+
+    if per_connection > max_in_flight do
+      raise ArgumentError,
+            "Raxol.MCP.Server :max_in_flight_per_connection (#{per_connection}) must not " <>
+              "exceed :max_in_flight (#{max_in_flight})"
+    end
+
+    {max_in_flight, per_connection}
+  end
+
+  defp server_version!(version) when is_binary(version) and version != "", do: version
+
+  defp server_version!(other) do
+    raise ArgumentError,
+          "Raxol.MCP.Server :server_version must be a non-empty string, got: #{inspect(other)}"
   end
 
   # Registering a tool that declares itself destructive/sensitive while no

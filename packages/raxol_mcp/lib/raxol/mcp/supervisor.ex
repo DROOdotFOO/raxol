@@ -38,8 +38,13 @@ defmodule Raxol.MCP.Supervisor do
     # `:default`, not `:configured`: an embedder who forgets this option must
     # leave the SSE boot gate shut rather than satisfy it by omission.
     authorizer_source = Keyword.get(opts, :authorizer_source, :default)
-    # Forwarded only when given, so an unset cap keeps the Server's default.
-    parked_caps = Keyword.take(opts, [:max_parked_elicitations, :max_parked_elicitations_total])
+    # Forwarded only when given, so an unset option keeps the Server's default.
+    forwarded =
+      Keyword.take(opts, [
+        :max_parked_elicitations,
+        :max_parked_elicitations_total,
+        :server_version
+      ])
 
     children = [
       Raxol.MCP.Client.Tables,
@@ -53,7 +58,7 @@ defmodule Raxol.MCP.Supervisor do
          transport: transport,
          authorizer_source: authorizer_source,
          unknown_tool_reply: Keyword.get(opts, :unknown_tool_reply)
-       ] ++ parked_caps}
+       ] ++ forwarded}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)
