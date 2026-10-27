@@ -196,7 +196,8 @@ defmodule Raxol.Headless do
       timer running, which tick a sampled frame shows is a property of
       scheduler timing rather than of the caller. (default: `true`)
     * `:debounce_ms` - the session's `Raxol.MCP.ToolSynchronizer`
-      `:debounce_ms`, a non-negative integer; anything else is
+      `:debounce_ms`, an integer from 0 to 4,294,967,295 (the longest
+      `Process.send_after/3` timer); anything else is
       `{:error, {:invalid_debounce_ms, value}}`. (default: the
       synchronizer's configured value)
   """
@@ -535,11 +536,20 @@ defmodule Raxol.Headless do
 
   defp validate_name(name, error), do: {:error, {error, name}}
 
+  # The synchronizer arms `Process.send_after/3` with it, which raises above
+  # this: the synchronizer crash would take `Raxol.Headless` down with it.
+  @max_debounce_ms 4_294_967_295
+
   defp synchronizer_opts(opts) do
     case Keyword.fetch(opts, :debounce_ms) do
-      :error -> {:ok, []}
-      {:ok, ms} when is_integer(ms) and ms >= 0 -> {:ok, [debounce_ms: ms]}
-      {:ok, other} -> {:error, {:invalid_debounce_ms, other}}
+      :error ->
+        {:ok, []}
+
+      {:ok, ms} when is_integer(ms) and ms >= 0 and ms <= @max_debounce_ms ->
+        {:ok, [debounce_ms: ms]}
+
+      {:ok, other} ->
+        {:error, {:invalid_debounce_ms, other}}
     end
   end
 

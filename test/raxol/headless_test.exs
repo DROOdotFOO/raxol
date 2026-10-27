@@ -438,8 +438,8 @@ defmodule Raxol.HeadlessTest do
       assert "pid_registry.cold_start_button.click" in tool_names(registry)
     end
 
-    test "refuses a debounce_ms that is not a non-negative integer" do
-      for debounce_ms <- [-1, 1.5, "50"] do
+    test "refuses a debounce_ms that is not an integer from 0 to the longest timer" do
+      for debounce_ms <- [-1, 1.5, "50", 4_294_967_296, 10 ** 30] do
         assert {:error, {:invalid_debounce_ms, ^debounce_ms}} =
                  Headless.start(TestApp, id: "bad_debounce", debounce_ms: debounce_ms)
       end
