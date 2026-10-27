@@ -14,7 +14,7 @@ defmodule Raxol.Release.PackageCheckTest do
       assert :raxol_core in apps
       assert :raxol_telegram in apps
       refute :raxol_cli in apps
-      refute :raxol_earn in apps
+      refute :raxol_gateway in apps
     end
 
     test "keeps --only in caller order" do
@@ -37,7 +37,7 @@ defmodule Raxol.Release.PackageCheckTest do
 
     test "points at --all when the name is a pre-alpha package" do
       assert {:error, errors} =
-               PackageCheck.select_packages(only: ["raxol_earn"])
+               PackageCheck.select_packages(only: ["raxol_gateway"])
 
       assert Enum.any?(errors, &String.contains?(&1, "pass --all"))
     end
@@ -46,10 +46,10 @@ defmodule Raxol.Release.PackageCheckTest do
       assert {:ok, packages} =
                PackageCheck.select_packages(
                  include_pre_alpha: true,
-                 only: ["raxol_earn"]
+                 only: ["raxol_gateway"]
                )
 
-      assert Enum.map(packages, & &1.app) == [:raxol_earn]
+      assert Enum.map(packages, & &1.app) == [:raxol_gateway]
     end
   end
 
