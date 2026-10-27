@@ -74,12 +74,21 @@ defmodule Raxol.Agent.Backend.OmpGatewayTest do
        %{tmp_dir: dir} do
     %{major: major, minor: minor} = Elixir.Version.parse!(Version.tested())
     older = "#{major}.#{minor - 1}.0"
-    pinned = ~s(\\"version\\":\\"#{Version.tested()}\\")
     recorded = File.read!(Path.join(@fixtures, "messages_text.jsonl"))
-    assert [_, _] = String.split(recorded, pinned)
+    # The model fixture keeps the version it was recorded with, which can predate the pin.
+    [_header, ready_event | _] = String.split(recorded, "\n", trim: true)
+    %{"out" => ready_line} = Jason.decode!(ready_event)
+    %{"version" => recorded_version} = Jason.decode!(ready_line)
+    ready_version = ~s(\\"version\\":\\"#{recorded_version}\\")
+    assert [_, _] = String.split(recorded, ready_version)
 
     fixture = Path.join(dir, "older_minor.jsonl")
-    File.write!(fixture, String.replace(recorded, pinned, ~s(\\"version\\":\\"#{older}\\")))
+
+    File.write!(
+      fixture,
+      String.replace(recorded, ready_version, ~s(\\"version\\":\\"#{older}\\"))
+    )
+
     server = start_supervised!({Server, name: nil, path: write_player(dir, fixture, "play")})
 
     log =

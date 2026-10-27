@@ -33,14 +33,14 @@ defmodule Raxol.Agent.Backend.OmpGateway.CodecTest do
       [ready | _] = outs("no_model")
 
       assert {:ok, version, []} = Codec.decode_ready(ready)
-      assert to_string(version) == "18.12.6"
+      assert to_string(version) == "18.13.0"
     end
 
     test "a different major is refused" do
       [ready | _] = outs("no_model")
-      wrong = String.replace(ready, "18.12.6", "19.0.0")
+      wrong = String.replace(ready, "18.13.0", "19.0.0")
 
-      assert {:error, {:unsupported_major, "19.0.0", "18.12.6"}} = Codec.decode_ready(wrong)
+      assert {:error, {:unsupported_major, "19.0.0", "18.13.0"}} = Codec.decode_ready(wrong)
     end
 
     test "a reply line is not a ready line" do
