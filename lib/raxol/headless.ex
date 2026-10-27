@@ -700,7 +700,6 @@ defmodule Raxol.Headless do
        ) do
     case start_headless_app(module, width, height, subscriptions) do
       {:ok, lifecycle_pid} ->
-
         session = %Session{
           id: id,
           module: module,
@@ -1311,10 +1310,11 @@ defmodule Raxol.Headless do
   end
 
   # A synchronizer killed untrappably never ran its `terminate/2`, so what it
-  # holds under this session's name is released here: its telemetry handler and
-  # the `raxol://session/<id>/` resources in the registry it registered them
-  # in. Its tools stay registered until the registry tracks which process
-  # registered them. A registry that is gone holds nothing left to release.
+  # holds under this session's name is released here: its telemetry handler,
+  # which only this side knows of, and the `raxol://session/<id>/` resources
+  # it still owns in the registry it registered them in. The registry drops
+  # the rest of what that owner held, its tools included, when it sees the
+  # exit. A registry that is gone holds nothing left to release.
   defp release_synchronizer(%Session{synchronizer_pid: sync_pid} = session) do
     [:raxol, :runtime, :view_tree_updated]
     |> :telemetry.list_handlers()
@@ -1331,7 +1331,10 @@ defmodule Raxol.Headless do
               do: uri
 
         if uris != [],
-          do: Raxol.MCP.Registry.unregister_resources(registry, uris)
+          do:
+            Raxol.MCP.Registry.unregister_resources(registry, uris,
+              owner: sync_pid
+            )
       end
 
     :ok
