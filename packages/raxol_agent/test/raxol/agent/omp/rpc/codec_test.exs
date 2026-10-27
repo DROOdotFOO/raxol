@@ -216,8 +216,8 @@ defmodule Raxol.Agent.OMP.RPC.CodecTest do
       end
     end
 
-    # Synthetic: the option list omp 18.12.6 builds when grants are offered
-    # (S:588021-588075; F3's approval offers none).
+    # Synthetic: the option list omp 18.13.0 builds when grants are offered
+    # (S:602530-602584; F3's approval offers none).
     test "a grant omp would persist is never offered to the principal" do
       options = [
         "Approve Directory: src",
