@@ -65,7 +65,7 @@ defmodule Raxol.CrossTerminal.HeadlessGoldenTest do
   end
 
   test "initial render matches golden" do
-    {:ok, id} = Headless.start(GoldenApp, id: :golden_initial)
+    {:ok, id} = Headless.start(GoldenApp, id: "golden_initial")
     {:ok, text} = Headless.screenshot(id)
 
     assert text =~ "Count: 0"
@@ -74,7 +74,7 @@ defmodule Raxol.CrossTerminal.HeadlessGoldenTest do
   end
 
   test "key event updates model and re-renders" do
-    {:ok, id} = Headless.start(GoldenApp, id: :golden_keys)
+    {:ok, id} = Headless.start(GoldenApp, id: "golden_keys")
 
     {:ok, text} = Headless.send_key_and_screenshot(id, :tab)
     assert text =~ "Panel: b"
@@ -86,7 +86,7 @@ defmodule Raxol.CrossTerminal.HeadlessGoldenTest do
   end
 
   test "model state matches what the screen shows" do
-    {:ok, id} = Headless.start(GoldenApp, id: :golden_model)
+    {:ok, id} = Headless.start(GoldenApp, id: "golden_model")
     {:ok, _} = Headless.send_key_and_screenshot(id, "+")
     {:ok, _} = Headless.send_key_and_screenshot(id, "+")
 

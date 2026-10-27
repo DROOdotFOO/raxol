@@ -32,7 +32,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_session
+          session_id: "test_session"
         )
 
       tools = Registry.list_tools(registry)
@@ -49,7 +49,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_sync
+          session_id: "test_sync"
         )
 
       view_tree = %{
@@ -61,8 +61,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       # Use sync_now to bypass debounce
       ToolSynchronizer.sync(pid, view_tree)
-      # Give the cast time to process
-      Process.sleep(20)
+      :ok = ToolSynchronizer.flush(pid)
 
       tools = Registry.list_tools(registry)
       names = Enum.map(tools, & &1[:name])
@@ -78,7 +77,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_telemetry
+          session_id: "test_telemetry"
         )
 
       # Simulate the telemetry event that the rendering engine emits
@@ -88,8 +87,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         %{view_tree: %{type: :column, children: []}, dispatcher_pid: self()}
       )
 
-      # Wait for debounce
-      Process.sleep(80)
+      :ok = ToolSynchronizer.flush(pid)
 
       # Should still have discover_tools
       tools = Registry.list_tools(registry)
@@ -106,7 +104,7 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_ignore
+          session_id: "test_ignore"
         )
 
       initial_tools = Registry.list_tools(registry)
@@ -118,12 +116,52 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         %{view_tree: %{type: :button, id: "x", attrs: %{}}, dispatcher_pid: other_pid}
       )
 
-      Process.sleep(80)
+      :ok = ToolSynchronizer.flush(pid)
 
       after_tools = Registry.list_tools(registry)
       assert length(initial_tools) == length(after_tools)
 
       Process.exit(other_pid, :kill)
+      GenServer.stop(pid)
+    end
+
+    # In a session the view tree comes from the rendering engine, another
+    # process than the one flushing, and nothing orders the two senders'
+    # messages. `flush/2` takes a reply from the sender first, which arrives
+    # after everything the sender cast before it. The flush request
+    # (`flush/2`'s `{:flush, sender}`) goes out before the sender is let go,
+    # so the view tree is cast after the request.
+    test "flush/2 applies a view tree its sender cast before answering", %{registry: registry} do
+      {:ok, sender} = Agent.start_link(fn -> nil end)
+
+      {:ok, pid} =
+        ToolSynchronizer.start_link(
+          registry: registry,
+          dispatcher_pid: sender,
+          session_id: "test_flush_sender"
+        )
+
+      view_tree = %{type: :column, id: "late", attrs: %{component_module: TestWidget}}
+
+      Agent.cast(sender, fn agent_state ->
+        receive do: (:go -> :ok)
+
+        :telemetry.execute(
+          [:raxol, :runtime, :view_tree_updated],
+          %{},
+          %{view_tree: view_tree, dispatcher_pid: self()}
+        )
+
+        agent_state
+      end)
+
+      flush = :gen_server.send_request(pid, {:flush, sender})
+      send(sender, :go)
+      assert :gen_server.receive_response(flush, 5_000) == {:reply, :ok}
+
+      names = registry |> Registry.list_tools() |> Enum.map(& &1[:name])
+      assert "late.click" in names
+
       GenServer.stop(pid)
     end
   end
@@ -134,13 +172,13 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_cleanup
+          session_id: "test_cleanup"
         )
 
       # Sync some tools
       view_tree = %{type: :column, children: []}
       ToolSynchronizer.sync(pid, view_tree)
-      Process.sleep(20)
+      :ok = ToolSynchronizer.flush(pid)
 
       # Stop -- should clean up
       GenServer.stop(pid)
@@ -153,25 +191,34 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
   end
 
   describe "debounce" do
-    test "debounces rapid view tree updates", %{registry: registry} do
+    # The debounce timer's message is what applies an update in production.
+    # It is sent here rather than waited for; if the real timer fires first,
+    # this one finds nothing pending. `:sys.get_state/1` is the barrier, not
+    # `flush/1`, which would apply the update itself.
+    test "the debounce timer applies the last of rapid updates", %{registry: registry} do
       {:ok, pid} =
         ToolSynchronizer.start_link(
           registry: registry,
           dispatcher_pid: self(),
-          session_id: :test_debounce
+          session_id: "test_debounce"
         )
 
-      # Send multiple rapid updates
-      for i <- 1..5 do
-        GenServer.cast(pid, {:view_tree_updated, %{type: :column, children: []}})
-        if i < 5, do: Process.sleep(5)
+      for n <- 1..5 do
+        view_tree = %{
+          type: :column,
+          children: [%{type: :column, id: "w#{n}", attrs: %{component_module: TestWidget}}]
+        }
+
+        GenServer.cast(pid, {:view_tree_updated, view_tree})
       end
 
-      # Wait for debounce to fire
-      Process.sleep(80)
+      send(pid, :debounce_fire)
+      state = :sys.get_state(pid)
 
-      # Should still be alive and functional
-      assert Process.alive?(pid)
+      names = registry |> Registry.list_tools() |> Enum.map(& &1[:name])
+      assert "w5.click" in names
+      refute "w1.click" in names
+      assert state.pending_view_tree == nil
 
       GenServer.stop(pid)
     end

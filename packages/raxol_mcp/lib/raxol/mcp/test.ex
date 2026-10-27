@@ -26,7 +26,10 @@ defmodule Raxol.MCP.Test do
   a per-session `Raxol.MCP.Registry`, and a `ToolSynchronizer` that
   auto-derives MCP tools from the view tree. Interaction helpers like
   `click/2` and `type_into/3` call tools through the registry, exercising
-  the full MCP pipeline.
+  the full MCP pipeline. Each helper returns once the app has handled the
+  action, rendered the result and brought its tool set (the tool names) up to
+  that frame (`Raxol.Headless.settle/1`), so the next step sees its effect. A
+  tool whose name survives the frame keeps the callback it was derived with.
 
   For unit tests that don't need a running app, use the lower-level
   modules directly: `TreeWalker.derive_tools/2`, `Registry.call_tool/3`.
@@ -42,8 +45,6 @@ defmodule Raxol.MCP.Test do
   alias Raxol.MCP.Registry
   alias Raxol.MCP.StructuredScreenshot
 
-  @default_settle_ms 100
-
   # -- Session Lifecycle -------------------------------------------------------
 
   @doc """
@@ -53,24 +54,23 @@ defmodule Raxol.MCP.Test do
 
   ## Options
 
-    * `:id` - session ID (default: auto-generated unique atom)
+    * `:id` - session ID, 1-32 characters of `[A-Za-z0-9_-]` as
+      `Raxol.Headless.start/2` requires (default: a unique `"t..."` id)
     * `:width` - terminal width (default: 120)
     * `:height` - terminal height (default: 40)
-    * `:settle_ms` - ms to wait after start for initial render (default: #{@default_settle_ms})
   """
   @spec start_session(module() | String.t(), keyword()) :: Session.t()
   def start_session(module_or_path, opts \\ []) do
     unique = System.unique_integer([:positive])
-    session_id = Keyword.get(opts, :id, :"test_#{unique}")
+
+    session_id =
+      Keyword.get(opts, :id, "t" <> String.downcase(Integer.to_string(unique, 36)))
+
     registry_name = :"test_registry_#{unique}"
-    settle_ms = Keyword.get(opts, :settle_ms, @default_settle_ms)
 
     {:ok, registry_pid} = Registry.start_link(name: registry_name)
 
-    headless_opts =
-      opts
-      |> Keyword.merge(id: session_id, registry: registry_name)
-      |> Keyword.drop([:settle_ms])
+    headless_opts = Keyword.merge(opts, id: session_id, registry: registry_name)
 
     if Code.ensure_loaded?(Raxol.Headless) do
       {:ok, ^session_id} = Raxol.Headless.start(module_or_path, headless_opts)
@@ -79,15 +79,12 @@ defmodule Raxol.MCP.Test do
               "Add {:raxol, path: \"..\"} as a test dependency."
     end
 
-    Process.sleep(settle_ms)
-
-    %Session{
+    settle!(%Session{
       id: session_id,
       registry: registry_name,
       registry_pid: registry_pid,
-      module: module_or_path,
-      settle_ms: settle_ms
-    }
+      module: module_or_path
+    })
   end
 
   @doc """
@@ -195,11 +192,10 @@ defmodule Raxol.MCP.Test do
   @spec send_key(Session.t(), atom() | String.t(), keyword()) :: Session.t()
   def send_key(%Session{} = session, key, opts \\ []) do
     if Code.ensure_loaded?(Raxol.Headless) do
-      Raxol.Headless.send_key(session.id, key, opts)
+      :ok = Raxol.Headless.send_key(session.id, key, opts)
     end
 
-    Process.sleep(session.settle_ms)
-    session
+    settle!(session)
   end
 
   @doc """
@@ -294,8 +290,7 @@ defmodule Raxol.MCP.Test do
   defp call_tool!(%Session{} = session, tool_name, args) do
     case Registry.call_tool(session.registry, tool_name, args) do
       {:ok, _result} ->
-        Process.sleep(session.settle_ms)
-        session
+        settle!(session)
 
       {:error, :tool_not_found} ->
         available = Registry.list_tools(session.registry) |> Enum.map(& &1[:name])
@@ -304,6 +299,17 @@ defmodule Raxol.MCP.Test do
 
       {:error, reason} ->
         raise "Tool '#{tool_name}' failed: #{inspect(reason)}"
+    end
+  end
+
+  defp settle!(%Session{} = session) do
+    if Code.ensure_loaded?(Raxol.Headless) do
+      case Raxol.Headless.settle(session.id) do
+        :ok -> session
+        {:error, reason} -> raise "session #{session.id} did not settle: #{inspect(reason)}"
+      end
+    else
+      session
     end
   end
 

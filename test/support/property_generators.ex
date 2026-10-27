@@ -133,10 +133,10 @@ defmodule Raxol.Test.PropertyGenerators do
     ])
   end
 
-  @session_atoms for i <- 0..99, do: :"test_session_#{i}"
+  @session_ids for i <- 0..99, do: "test_session_#{i}"
 
   def session_id_gen do
-    member_of(@session_atoms)
+    member_of(@session_ids)
   end
 
   def unique_session_ids_gen(min \\ 1, max \\ 5) do

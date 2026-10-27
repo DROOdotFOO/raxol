@@ -62,11 +62,26 @@ defmodule Raxol.Headless.McpTools do
     Raxol.Playground.Demos.BeamDashboardDemo
   ]
 
+  # One session-id rule, three renderings: the check, the JSON Schema
+  # `pattern` clients validate against, and the prose a refusal quotes.
+  # `\A`/`\z` in the check, because a regex `$` also matches before a final
+  # newline; a JSON Schema pattern is ECMA-262, where `$` does not.
+  @session_id_max 7
+  @session_id_body "[a-z][a-z0-9]{0,#{@session_id_max - 1}}"
+  @session_id_format Regex.compile!("\\A" <> @session_id_body <> "\\z")
+  @session_id_pattern "^" <> @session_id_body <> "$"
+  @session_id_rule "1 to #{@session_id_max} characters, a lowercase letter " <>
+                     "then lowercase letters or digits (no underscores or dots)"
+
   @doc """
   Returns the list of Raxol MCP tool definitions.
+
+  `raxol_start` starts sessions whose derived tools are registered in
+  `registry` (default `Raxol.MCP.Registry`), the registry `register/1`
+  puts these tools in.
   """
-  @spec tools() :: [Raxol.MCP.Registry.tool_def()]
-  def tools do
+  @spec tools(GenServer.server()) :: [Raxol.MCP.Registry.tool_def()]
+  def tools(registry \\ Raxol.MCP.Registry) do
     [
       %{
         name: "raxol_start",
@@ -74,19 +89,19 @@ defmodule Raxol.Headless.McpTools do
         Starts a headless Raxol session from a module name. The module must be
         on this server's startable list (the playground demos unless the
         deployment sets its own) and a Raxol application: it has to export init/1,
-        update/2 and view/1. Returns the session ID.
+        update/2 and view/1.
 
         A "path" argument also exists, but it is DISABLED unless the deployment
         sets RAXOL_HEADLESS_PATH_ROOT, because starting from a path compiles the
         file. Prefer "module"; the path property below has the details.
 
         Examples:
-          {"module": "Raxol.Playground.Demos.TableDemo"}
           {"module": "Raxol.Playground.Demos.TableDemo", "id": "demo"}
-          {"module": "Raxol.Playground.Demos.TableDemo", "width": 120, "height": 40}
+          {"module": "Raxol.Playground.Demos.TableDemo", "id": "t1", "width": 120, "height": 40}
         """,
         inputSchema: %{
           type: "object",
+          required: ["id"],
           properties: %{
             module: %{
               type: "string",
@@ -106,8 +121,8 @@ defmodule Raxol.Headless.McpTools do
             },
             id: %{
               type: "string",
-              description:
-                "Session identifier (default: derived from module name)"
+              pattern: @session_id_pattern,
+              description: "Session identifier: " <> @session_id_rule
             },
             width: %{
               type: "integer",
@@ -132,7 +147,7 @@ defmodule Raxol.Headless.McpTools do
         # `sensitive`, raxol_mcp's own flag for a tool that must not run
         # unattended. `Raxol.MCP.ToolDef.sensitive?/1` honours either.
         annotations: %{sensitive: true},
-        callback: &start_session/1,
+        callback: &start_session(&1, registry),
         fault?: &start_fault?/1
       },
       %{
@@ -312,14 +327,6 @@ defmodule Raxol.Headless.McpTools do
       ", got: " <> inspect(value, limit: 10, printable_limit: 200)
   end
 
-  # The config error is the deployment's, not the tool's: counted as a fault,
-  # five calls opened `raxol_start`'s circuit for every client, and it stayed
-  # open after the config was fixed. Every other error still counts.
-  defp start_fault?(reason),
-    do:
-      not (is_binary(reason) and
-             String.starts_with?(reason, @startable_config_error))
-
   @doc """
   Register all headless tools with the given MCP Registry.
 
@@ -336,7 +343,7 @@ defmodule Raxol.Headless.McpTools do
     end
 
     if Code.ensure_loaded?(Raxol.MCP.Registry) do
-      Raxol.MCP.Registry.register_tools(registry, tools())
+      Raxol.MCP.Registry.register_tools(registry, tools(registry))
     else
       :ok
     end
@@ -588,16 +595,41 @@ defmodule Raxol.Headless.McpTools do
 
   # --- Tool Callbacks ---
 
-  defp start_session(args) do
+  defp start_session(args, registry) do
     # Both refusals are already human-readable sentences, unlike the
     # `inspect`ed terms the other callbacks report.
-    with {:ok, module_or_path} <- resolve_module_or_path(args),
+    with {:ok, id} <- session_id(args),
+         {:ok, module_or_path} <- resolve_module_or_path(args),
          {:ok, {width, height}} <- start_size(args) do
-      id = parse_session_id(args["id"])
-      opts = build_start_opts(id, width, height)
-      do_start(module_or_path, opts)
+      do_start(module_or_path,
+        id: id,
+        width: width,
+        height: height,
+        registry: registry
+      )
     end
   end
+
+  # The id is to name every tool the session derives (`<id>.<widget>.<action>`,
+  # and a client renames those: OMP turns each `.` into `_` and prefixes the
+  # 17-character `mcp__raxol_raxol_`. No `_` or `.` in the id keeps the
+  # session boundary unambiguous after that rename (`a_b.c` and `a.b_c` would
+  # both become `a_b_c`), and 7 characters leave the longest demo widget and
+  # action within OMP's 64. Refused, never replaced: a caller that named a
+  # session must not find its tools under another name.
+  defp session_id(%{"id" => id}) when is_binary(id) do
+    if Regex.match?(@session_id_format, id),
+      do: {:ok, id},
+      else: {:error, id_refusal(id)}
+  end
+
+  defp session_id(%{"id" => id}), do: {:error, id_refusal(id)}
+
+  defp session_id(_args),
+    do: {:error, "'id' is required: " <> @session_id_rule}
+
+  defp id_refusal(id),
+    do: "session id #{inspect(id)} is refused: " <> @session_id_rule
 
   # Refused, not clamped: the caller named this size, so it is told the range
   # rather than handed a smaller screen than it asked for. The ceiling is the
@@ -645,15 +677,6 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
-  defp parse_session_id(nil), do: nil
-
-  defp parse_session_id(id_string) do
-    case safe_to_atom(id_string) do
-      {:error, _} -> nil
-      atom -> atom
-    end
-  end
-
   defp screenshot(args) do
     with_session(args, fn id ->
       case Raxol.Headless.screenshot(id) do
@@ -689,13 +712,30 @@ defmodule Raxol.Headless.McpTools do
     end)
   end
 
+  # Every answer `start_session` returns is a sentence about the call: a
+  # refused id, module or size, an invalid `:headless_startable` config, or
+  # the reason that module did not start. None says the tool is unavailable,
+  # so none may open its circuit for every client (a config error counted as
+  # a fault kept the circuit open after the config was fixed); a raise or an
+  # exit still does.
+  defp start_fault?(reason), do: not is_binary(reason)
+
+  # `Raxol.Headless.stop/1` answers `:ok` for an id it has no session for, so
+  # the id is checked first: a mistyped id must not report a running session
+  # as stopped.
   defp stop_session(args) do
     with_session(args, fn id ->
-      case Raxol.Headless.stop(id) do
-        :ok -> {:ok, "Session #{id} stopped."}
-        {:error, reason} -> {:error, inspect(reason)}
-      end
+      if id in Raxol.Headless.list(),
+        do: do_stop(id),
+        else: {:error, "session #{id} is not running; call raxol_list"}
     end)
+  end
+
+  defp do_stop(id) do
+    case Raxol.Headless.stop(id) do
+      :ok -> {:ok, "Session #{id} stopped."}
+      {:error, reason} -> {:error, inspect(reason)}
+    end
   end
 
   defp list_sessions(_args) do
@@ -710,12 +750,12 @@ defmodule Raxol.Headless.McpTools do
 
   # --- Helpers ---
 
-  defp with_session(args, fun) do
-    case safe_to_atom(args["id"]) do
-      {:error, _} = err -> {:error, inspect(err)}
-      id -> fun.(id)
-    end
-  end
+  # The id is passed through as the binary it arrived as; an unknown one is
+  # Headless's `:not_found`, and no atom is made from it.
+  defp with_session(%{"id" => id}, fun) when is_binary(id), do: fun.(id)
+
+  defp with_session(_args, _fun),
+    do: {:error, "'id' is required and must be a string"}
 
   # `"module"` arrives from an MCP client, which is choosing what this VM runs,
   # so it is matched by name against `startable/0` before anything resolves it.
@@ -863,18 +903,7 @@ defmodule Raxol.Headless.McpTools do
   defp parse_key(key) when key in @special_keys, do: String.to_atom(key)
   defp parse_key(key) when is_binary(key), do: key
 
-  defp build_start_opts(nil, width, height), do: [width: width, height: height]
-
-  defp build_start_opts(id, width, height),
-    do: [id: id, width: width, height: height]
-
   defp maybe_add(opts, args, json_key, opt_key) do
     if Map.get(args, json_key, false), do: [{opt_key, true} | opts], else: opts
-  end
-
-  defp safe_to_atom(str) when is_binary(str) do
-    String.to_existing_atom(str)
-  rescue
-    ArgumentError -> {:error, {:unknown_session, str}}
   end
 end

@@ -70,10 +70,10 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
 
   describe "tools/list" do
     for {demo, id, action} <- [
-          {Demos.TableDemo, :list_table, "playground_table.sort"},
-          {Demos.SelectListDemo, :list_select_list, "lang.select"},
-          {Demos.TextInputDemo, :list_text_input, "input.type_into"},
-          {Demos.TabsDemo, :list_tabs, "tabs.select_tab"}
+          {Demos.TableDemo, "list_table", "playground_table.sort"},
+          {Demos.SelectListDemo, "list_select_list", "lang.select"},
+          {Demos.TextInputDemo, "list_text_input", "input.type_into"},
+          {Demos.TabsDemo, "list_tabs", "tabs.select_tab"}
         ] do
       test "#{inspect(demo)} lists #{action}" do
         start_demo(unquote(demo), unquote(id))
@@ -82,7 +82,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
     end
 
     test "ModalDemo lists confirm.dismiss while the dialog is open" do
-      id = start_demo(Demos.ModalDemo, :list_modal)
+      id = start_demo(Demos.ModalDemo, "list_modal")
       refute "confirm.dismiss" in tool_names()
 
       open_modal(id)
@@ -91,7 +91,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "table_sort_stars_desc: sort sets the model and keeps the dispatcher" do
-    id = start_demo(Demos.TableDemo, :table_sort_stars_desc)
+    id = start_demo(Demos.TableDemo, "sortdesc")
     dispatcher = dispatcher_pid(id)
 
     assert %{content: [%{text: "Sorted by stars desc"}]} =
@@ -111,7 +111,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "table sort takes a column label in any case and refuses unknown input" do
-    id = start_demo(Demos.TableDemo, :table_sort_validation)
+    id = start_demo(Demos.TableDemo, "table_sort_validation")
 
     assert %{content: [%{text: text}]} =
              result =
@@ -134,7 +134,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "select_list_pick: select confirms the option" do
-    id = start_demo(Demos.SelectListDemo, :select_list_pick)
+    id = start_demo(Demos.SelectListDemo, "pick")
 
     refute error?(call_tool("lang.select", %{"index" => 2}))
 
@@ -142,7 +142,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "modal_dismiss: dismiss closes the dialog as cancelled" do
-    id = start_demo(Demos.ModalDemo, :modal_dismiss)
+    id = start_demo(Demos.ModalDemo, "dismiss")
     open_modal(id)
 
     refute error?(call_tool("confirm.dismiss", %{}))
@@ -151,7 +151,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "text_input_fill: type_into sets the value" do
-    id = start_demo(Demos.TextInputDemo, :text_input_fill)
+    id = start_demo(Demos.TextInputDemo, "fill")
 
     refute error?(call_tool("input.type_into", %{"text" => "hello"}))
 
@@ -159,7 +159,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "tabs_switch: select_tab activates the tab" do
-    id = start_demo(Demos.TabsDemo, :tabs_switch)
+    id = start_demo(Demos.TabsDemo, "switch")
 
     refute error?(call_tool("tabs.select_tab", %{"index" => 2}))
 
@@ -167,7 +167,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "click on a button without an on_click message is an error result" do
-    start_demo(ProbeApp, :probe_no_message)
+    start_demo(ProbeApp, "probe_no_message")
 
     for {name, label} <- [{"silent.click", "Silent"}, {"fn.click", "Fn"}] do
       assert %{content: [%{text: text}]} = result = call_tool(name, %{})
@@ -177,7 +177,7 @@ defmodule Raxol.MCP.DerivedToolMessagesTest do
   end
 
   test "a message whose update/2 raises is an error result; the dispatcher survives" do
-    id = start_demo(ProbeApp, :probe_update_failed)
+    id = start_demo(ProbeApp, "probe_update_failed")
     dispatcher = dispatcher_pid(id)
 
     assert %{content: [%{text: "Error: :update_failed"}]} = result = call_tool("boom.click", %{})

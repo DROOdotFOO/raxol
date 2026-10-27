@@ -30,7 +30,7 @@ defmodule Raxol.Playground.SidebarScrollTest do
   end
 
   setup do
-    id = :"sidebar_scroll_#{System.unique_integer([:positive])}"
+    id = "sidebar_scroll_#{System.unique_integer([:positive])}"
     on_exit(fn -> safe_stop(id) end)
     {:ok, id: id}
   end

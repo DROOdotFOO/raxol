@@ -177,11 +177,10 @@ defmodule Raxol.MCP.TestTest do
       ])
 
     session = %Session{
-      id: :test,
+      id: "test",
       registry: :"test_reg_#{unique}",
       registry_pid: registry,
-      module: __MODULE__,
-      settle_ms: 0
+      module: __MODULE__
     }
 
     on_exit(fn ->
@@ -199,9 +198,8 @@ defmodule Raxol.MCP.TestTest do
 
   describe "Session struct" do
     test "has required fields", %{session: session} do
-      assert session.id == :test
+      assert session.id == "test"
       assert session.registry != nil
-      assert session.settle_ms == 0
     end
   end
 

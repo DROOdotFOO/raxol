@@ -19,7 +19,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
       {:ok, pid} = ToolSynchronizer.start_link(
         registry: Raxol.MCP.Registry,
         dispatcher_pid: dispatcher_pid,
-        session_id: :my_session,
+        session_id: "demo",
         app_module: MyApp
       )
   """
@@ -33,6 +33,10 @@ defmodule Raxol.MCP.ToolSynchronizer do
   alias Raxol.MCP.{ContextTree, Diff, FocusLens, Registry, StructuredScreenshot, TreeWalker}
 
   @debounce_ms 50
+
+  # Below `GenServer.call/2`'s default 5 s, so a flush whose sender does not
+  # answer still answers its caller.
+  @flush_sender_timeout_ms 4_000
 
   defstruct [
     :registry,
@@ -66,6 +70,26 @@ defmodule Raxol.MCP.ToolSynchronizer do
   @spec sync(GenServer.server(), map()) :: :ok
   def sync(synchronizer, view_tree) do
     GenServer.cast(synchronizer, {:sync_now, view_tree})
+  end
+
+  @doc """
+  Applies a view-tree update still waiting out the debounce now, and returns
+  once the registry reflects it.
+
+  A barrier: once `flush/2` returns, the session's tool set (the tool names)
+  matches the last view tree that reached this process. Messages from one
+  process to another arrive in the order sent, but nothing orders the
+  caller's flush after a view tree another process sent. `sender` names that
+  process (the session's rendering engine, whose render casts the view tree):
+  the synchronizer takes a reply from `sender` first, which arrives after
+  every view tree `sender` sent before it, so a render that answered before
+  `flush/2` was called is always applied. `sender` must not be the caller,
+  which cannot answer while it waits. Without `sender` only view trees
+  already received are applied.
+  """
+  @spec flush(GenServer.server(), pid() | nil) :: :ok
+  def flush(synchronizer, sender \\ nil) do
+    GenServer.call(synchronizer, {:flush, sender})
   end
 
   @doc """
@@ -138,6 +162,20 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:flush, nil}, _from, state) do
+    {:reply, :ok, apply_pending(state)}
+  end
+
+  # Any reply `sender` sends comes after the view trees it cast before it, so
+  # once it is in, those casts are queued here; the self-sent message then
+  # lines up behind them and the reply goes out after they are applied.
+  def handle_manager_call({:flush, sender}, from, state) when is_pid(sender) do
+    await_reply_from(sender)
+    send(self(), {:flush_reply, from})
+    {:noreply, state}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:view_tree_updated, view_tree, model}, state) do
     # Debounce: cancel previous timer, start new one
     if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
@@ -199,6 +237,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
     {:noreply, %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}}
   end
 
+  def handle_manager_info({:flush_reply, from}, state) do
+    state = apply_pending(state)
+    GenServer.reply(from, :ok)
+    {:noreply, state}
+  end
+
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer
@@ -247,6 +291,27 @@ defmodule Raxol.MCP.ToolSynchronizer do
   end
 
   def handle_telemetry_event(_event_name, _measurements, _metadata, _config), do: :ok
+
+  # `:sys.statistics/3` is a request every OTP process answers, cheaply. A
+  # sender that is gone has nothing more to deliver; one that does not answer
+  # within the bound is not waited on further.
+  defp await_reply_from(sender) do
+    _ = :sys.statistics(sender, :get, @flush_sender_timeout_ms)
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp apply_pending(%{pending_view_tree: nil} = state), do: state
+
+  defp apply_pending(state) do
+    if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
+
+    new_state =
+      do_sync(state.pending_view_tree, state.pending_model || state.current_model, state)
+
+    %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}
+  end
 
   # -- Private: sync --
 

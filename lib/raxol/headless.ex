@@ -10,22 +10,27 @@ defmodule Raxol.Headless do
   ## Usage
 
       # Start a session from a module
-      {:ok, :demo} = Raxol.Headless.start(RaxolDemo, id: :demo)
+      {:ok, "demo"} = Raxol.Headless.start(RaxolDemo, id: "demo")
 
       # Start from an example script (compiles module, skips boot code)
-      {:ok, :demo} = Raxol.Headless.start("examples/demo.exs", id: :demo)
+      {:ok, "demo"} = Raxol.Headless.start("examples/demo.exs", id: "demo")
 
       # Take a text screenshot
-      {:ok, text} = Raxol.Headless.screenshot(:demo)
+      {:ok, text} = Raxol.Headless.screenshot("demo")
 
       # Send a key and see the result
-      {:ok, text} = Raxol.Headless.send_key_and_screenshot(:demo, :tab)
+      {:ok, text} = Raxol.Headless.send_key_and_screenshot("demo", :tab)
 
       # Inspect the model
-      {:ok, model} = Raxol.Headless.get_model(:demo)
+      {:ok, model} = Raxol.Headless.get_model("demo")
 
       # Stop
-      :ok = Raxol.Headless.stop(:demo)
+      :ok = Raxol.Headless.stop("demo")
+
+  Session ids are binaries of 1-32 characters of `[A-Za-z0-9_-]`, the rule
+  a widget id follows (`Raxol.MCP.TreeWalker`): an id reaches MCP clients
+  verbatim, in `raxol_list`, session-id completion, resource URIs and tool
+  names. The `raxol_start` MCP tool narrows it to `^[a-z][a-z0-9]{0,6}$`.
 
   ## Processes
 
@@ -151,9 +156,25 @@ defmodule Raxol.Headless do
 
   ## Options
 
-    * `:id` - Session identifier (default: module name as atom)
+    * `:id` - Session identifier, 1-32 characters of `[A-Za-z0-9_-]`
+      (default: the module's last segment, underscored: `"table_demo"` for
+      `TableDemo`; a character outside the rule becomes `_`, and a name over
+      32 characters becomes its first 23, `_` and 8 hex digits of the
+      module's hash). Any other value is
+      `{:error, {:invalid_session_id, id}}` and starts nothing.
     * `:width` - Screen width (default: 120)
     * `:height` - Screen height (default: 40)
+    * `:registry` - the `Raxol.MCP.Registry` the session's tools are
+      registered in, as a name or pid (an atom, a pid, `{:global, name}` or
+      `{:via, module, name}`). A registry given here must be a running
+      `Raxol.MCP.Registry`; any other value, a name no process has, or a
+      process of another kind is `{:error, {:invalid_registry, registry}}`,
+      and the process is never messaged. The check is of identity, not
+      responsiveness: it reads which module the process was started with,
+      so a `Raxol.MCP.Registry` that is suspended or too busy to reply
+      passes it, and the first call that waits on the registry is the one
+      registering the session's tools. (default: `Raxol.MCP.Registry`,
+      when it is running; without it the session has no tools)
     * `:subscriptions` - `false` boots the app with its declared
       subscriptions (timers, event sources) unarmed, so the model advances
       only on messages delivered explicitly via `send_message/2` or
@@ -162,14 +183,14 @@ defmodule Raxol.Headless do
       scheduler timing rather than of the caller. (default: `true`)
   """
   @spec start(module() | String.t(), keyword()) ::
-          {:ok, atom()} | {:error, term()}
+          {:ok, String.t()} | {:error, term()}
   def start(module_or_path, opts \\ []) do
     GenServer.call(__MODULE__, {:start_session, module_or_path, opts}, 10_000)
   end
 
   @doc "Takes a text screenshot of the session's current screen."
-  @spec screenshot(atom()) :: {:ok, String.t()} | {:error, term()}
-  def screenshot(id) do
+  @spec screenshot(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def screenshot(id) when is_binary(id) do
     with {:ok, session} <- lookup_session(id), do: take_screenshot(session)
   end
 
@@ -180,8 +201,8 @@ defmodule Raxol.Headless do
   `Raxol.Core.Buffer` itself, preserving per-cell style for downstream
   rendering targets such as the LiveView-to-video pipeline.
   """
-  @spec get_buffer(atom()) :: {:ok, map()} | {:error, term()}
-  def get_buffer(id) do
+  @spec get_buffer(String.t()) :: {:ok, map()} | {:error, term()}
+  def get_buffer(id) when is_binary(id) do
     with {:ok, session} <- lookup_session(id), do: take_buffer(session)
   end
 
@@ -230,9 +251,9 @@ defmodule Raxol.Headless do
       `:infinity` (default: #{@default_dispatch_timeout_ms})
     * `:wait` - `false` returns once the key is queued (default: `true`)
   """
-  @spec send_key(atom(), String.t() | atom(), keyword()) ::
+  @spec send_key(String.t(), String.t() | atom(), keyword()) ::
           :ok | {:error, term()}
-  def send_key(id, key, opts \\ []) do
+  def send_key(id, key, opts \\ []) when is_binary(id) do
     {wait, opts} = Keyword.pop(opts, :wait, true)
 
     {timeout, key_opts} =
@@ -257,8 +278,8 @@ defmodule Raxol.Headless do
   return means the model has folded the message, so a following
   `get_buffer/1` renders its effect.
   """
-  @spec send_message(atom(), term()) :: :ok | {:error, term()}
-  def send_message(id, msg) do
+  @spec send_message(String.t(), term()) :: :ok | {:error, term()}
+  def send_message(id, msg) when is_binary(id) do
     with {:ok, session} <- lookup_session(id),
          do: dispatch_message(session, msg)
   end
@@ -276,10 +297,11 @@ defmodule Raxol.Headless do
   #{@default_dispatch_timeout_ms} ms, and the resize may still be applied
   after that.
   """
-  @spec send_resize(atom(), pos_integer(), pos_integer()) ::
+  @spec send_resize(String.t(), pos_integer(), pos_integer()) ::
           :ok | {:error, term()}
   def send_resize(id, width, height)
-      when is_integer(width) and width > 0 and is_integer(height) and
+      when is_binary(id) and is_integer(width) and width > 0 and
+             is_integer(height) and
              height > 0 do
     with {:ok, session} <- lookup_session(id) do
       dispatch_resize(session, width, height)
@@ -293,27 +315,50 @@ defmodule Raxol.Headless do
   `update/2` has handled the key. Takes the same options as `send_key/3`,
   except `:wait`: the screenshot is of the handled key, so it always waits.
   """
-  @spec send_key_and_screenshot(atom(), String.t() | atom(), keyword()) ::
+  @spec send_key_and_screenshot(String.t(), String.t() | atom(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_key_and_screenshot(id, key, opts \\ []) do
+  def send_key_and_screenshot(id, key, opts \\ []) when is_binary(id) do
     with :ok <- send_key(id, key, Keyword.delete(opts, :wait)),
          do: screenshot(id)
   end
 
   @doc "Returns the application model from the session's dispatcher."
-  @spec get_model(atom()) :: {:ok, term()} | {:error, term()}
-  def get_model(id) do
+  @spec get_model(String.t()) :: {:ok, term()} | {:error, term()}
+  def get_model(id) when is_binary(id) do
     with {:ok, session} <- lookup_session(id), do: read_model(session)
   end
 
+  @doc """
+  Returns once the session has caught up with everything sent to it so far:
+  its dispatcher has taken every queued message through `update/2`, its
+  rendering engine has drawn the resulting model, and the session's MCP tool
+  set (the tool names) matches that frame. A tool whose name was already
+  registered keeps the callback it was derived with.
+
+  Three barriers in order: a model read at the dispatcher, a synchronous
+  render at the engine (which casts the frame's view tree to the session's
+  `Raxol.MCP.ToolSynchronizer` before the render answers), and a flush at the
+  synchronizer that first takes a reply from that engine, so the cast has
+  arrived before the flush applies it (`Raxol.MCP.ToolSynchronizer.flush/2`).
+  Commands `update/2` started are not awaited. Answers the same errors as
+  `get_model/1` and `screenshot/1`.
+  """
+  @spec settle(String.t()) :: :ok | {:error, term()}
+  def settle(id) when is_binary(id) do
+    with {:ok, session} <- lookup_session(id),
+         {:ok, _model} <- read_model(session) do
+      with_engine(session, &render_and_flush_tools(session, &1))
+    end
+  end
+
   @doc "Stops a headless session."
-  @spec stop(atom()) :: :ok | {:error, term()}
-  def stop(id) do
+  @spec stop(String.t()) :: :ok | {:error, term()}
+  def stop(id) when is_binary(id) do
     GenServer.call(__MODULE__, {:stop_session, id}, 5_000)
   end
 
   @doc "Lists all active sessions. Returns `[]` if the Headless server is not running."
-  @spec list() :: [atom()]
+  @spec list() :: [String.t()]
   def list do
     GenServer.call(__MODULE__, :list_sessions)
   catch
@@ -389,24 +434,129 @@ defmodule Raxol.Headless do
   # --- Private Helpers ---
 
   defp do_start_session(module_or_path, opts, state) do
-    with {:ok, module} <- resolve_module(module_or_path) do
-      id = Keyword.get(opts, :id, module_to_id(module))
-
+    with {:ok, registry} <- session_registry(opts),
+         {:ok, module} <- resolve_module(module_or_path),
+         {:ok, id} <- session_id(opts, module) do
       if Map.has_key?(state.sessions, id) do
         {:error, {:already_started, id}}
       else
         width = Keyword.get(opts, :width, @default_width)
         height = Keyword.get(opts, :height, @default_height)
         subscriptions = Keyword.get(opts, :subscriptions, true)
-        create_session(module, id, width, height, subscriptions, state)
+
+        create_session(
+          module,
+          id,
+          {width, height},
+          subscriptions,
+          registry,
+          state
+        )
       end
     end
   end
 
-  defp create_session(module, id, width, height, subscriptions, state) do
+  # The implicit default may be absent: a node without the MCP stack runs
+  # sessions with no tools. A registry the caller NAMED must be a running
+  # `Raxol.MCP.Registry`. The session's synchronizer is linked to this
+  # process, so a server of another kind crashes it and every session it
+  # holds, and a name that resolves to nothing would leave the session
+  # silently without tools while `settle/1` reports them in step.
+  defp session_registry(opts) do
+    case Keyword.fetch(opts, :registry) do
+      {:ok, registry} -> named_registry(registry)
+      :error -> {:ok, Raxol.MCP.Registry}
+    end
+  end
+
+  defp named_registry(registry) do
+    with :ok <- validate_registry(registry) do
+      if mcp_registry?(registry),
+        do: {:ok, registry},
+        else: {:error, {:invalid_registry, registry}}
+    end
+  end
+
+  # The registry is looked up with `GenServer.whereis/1` in this process,
+  # where a value that names no server would crash it and every session it
+  # holds.
+  defp validate_registry(registry) when is_atom(registry) or is_pid(registry),
+    do: :ok
+
+  defp validate_registry({:global, _name}), do: :ok
+
+  defp validate_registry({:via, module, _name} = registry)
+       when is_atom(module) do
+    if Code.ensure_loaded?(module) and
+         function_exported?(module, :whereis_name, 1),
+       do: :ok,
+       else: {:error, {:invalid_registry, registry}}
+  end
+
+  defp validate_registry(registry), do: {:error, {:invalid_registry, registry}}
+
+  # Asked about the process, never sent to it: a message a server of another
+  # kind does not expect can crash that server. `$initial_call` names the
+  # module a `GenServer` was started with, so `:proc_lib.initial_call/1`
+  # answers without touching the process's mailbox. `:erpc` bounds the read
+  # and reaches a `{:global, _}` registry on another node. A dead pid answers
+  # `false`.
+  @registry_check_timeout_ms 1_000
+
+  defp mcp_registry?(registry) do
+    case GenServer.whereis(registry) do
+      pid when is_pid(pid) ->
+        match?(
+          {Raxol.MCP.Registry, :init, _},
+          :erpc.call(
+            node(pid),
+            :proc_lib,
+            :initial_call,
+            [pid],
+            @registry_check_timeout_ms
+          )
+        )
+
+      _ ->
+        false
+    end
+  catch
+    _kind, _reason -> false
+  end
+
+  # One rule for every session id, the widget-id rule of
+  # `Raxol.MCP.TreeWalker` (its `@widget_id`): an id reaches every client
+  # verbatim, in `raxol_list`, session-id completion, resource URIs and tool
+  # names, so it holds only characters each of them can encode and show as
+  # they are. `raxol_start` narrows it further for ids a client picks.
+  @session_id ~r/\A[A-Za-z0-9_-]{1,32}\z/
+
+  defp session_id(opts, module) do
+    case Keyword.fetch(opts, :id) do
+      :error -> {:ok, module_to_id(module)}
+      {:ok, id} when is_binary(id) -> check_session_id(id)
+      {:ok, other} -> {:error, {:invalid_session_id, other}}
+    end
+  end
+
+  defp check_session_id(id) do
+    if Regex.match?(@session_id, id),
+      do: {:ok, id},
+      else: {:error, {:invalid_session_id, id}}
+  end
+
+  defp create_session(
+         module,
+         id,
+         {width, height},
+         subscriptions,
+         registry,
+         state
+       ) do
     case start_headless_app(module, width, height, subscriptions) do
       {:ok, lifecycle_pid} ->
-        synchronizer_pid = start_tool_synchronizer(lifecycle_pid, id, module)
+        synchronizer_pid =
+          start_tool_synchronizer(lifecycle_pid, id, module, registry)
 
         session = %Session{
           id: id,
@@ -651,12 +801,33 @@ defmodule Raxol.Headless do
   defp module_def?({:defmodule, _, _}), do: true
   defp module_def?(_), do: false
 
+  # The module's last segment, underscored, made to satisfy `@session_id`:
+  # each character outside `[A-Za-z0-9_-]` becomes `_`, and a result longer
+  # than 32 characters keeps its first 23 and appends `_` and 8 hex digits of
+  # the module's hash, so two long names sharing a prefix still differ.
+  @default_id_prefix 23
+
   defp module_to_id(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-    |> String.to_atom()
+    id =
+      module
+      |> Atom.to_string()
+      |> String.split(".")
+      |> List.last()
+      |> Macro.underscore()
+      |> String.replace(~r/[^A-Za-z0-9_-]/u, "_")
+
+    if byte_size(id) in 1..32, do: id, else: shortened_id(id, module)
+  end
+
+  defp shortened_id(id, module) do
+    hash =
+      module
+      |> :erlang.phash2(0x1_0000_0000)
+      |> Integer.to_string(16)
+      |> String.downcase()
+      |> String.pad_leading(8, "0")
+
+    binary_part(id, 0, min(byte_size(id), @default_id_prefix)) <> "_" <> hash
   end
 
   defp start_headless_app(module, width, height, subscriptions) do
@@ -896,9 +1067,25 @@ defmodule Raxol.Headless do
 
   @compile {:no_warn_undefined, Raxol.MCP.ToolSynchronizer}
 
-  defp start_tool_synchronizer(lifecycle_pid, session_id, app_module) do
+  defp render_and_flush_tools(session, engine_pid) do
+    with {:ok, _buffer} <- render_frame(session, engine_pid),
+         do: flush_tools(session, engine_pid)
+  end
+
+  # A session started with no MCP registry running has no synchronizer and
+  # so no tools to bring up to date. `{:flush, engine_pid}` is
+  # `Raxol.MCP.ToolSynchronizer.flush/2`'s request.
+  defp flush_tools(%{synchronizer_pid: nil}, _engine_pid), do: :ok
+
+  defp flush_tools(session, engine_pid) do
+    with {:ok, :ok} <-
+           session_call(session, session.synchronizer_pid, {:flush, engine_pid}),
+         do: :ok
+  end
+
+  defp start_tool_synchronizer(lifecycle_pid, session_id, app_module, registry) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
-         pid when is_pid(pid) <- Process.whereis(Raxol.MCP.Registry),
+         pid when is_pid(pid) <- GenServer.whereis(registry),
          dispatcher_pid when is_pid(dispatcher_pid) <-
            get_dispatcher_pid(lifecycle_pid),
          {:ok, sync_pid} <-

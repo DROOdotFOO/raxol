@@ -285,7 +285,7 @@ defmodule Raxol.MCP.FocusAndExclusionTest do
         ToolSynchronizer.start_link(
           registry: :"sync_reg_#{unique}",
           dispatcher_pid: self(),
-          session_id: :"sync_test_#{unique}"
+          session_id: "sync_test_#{unique}"
         )
 
       on_exit(fn ->

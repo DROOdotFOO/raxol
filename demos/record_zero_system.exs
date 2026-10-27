@@ -24,7 +24,7 @@ Process.sleep(200)
 width = 100
 height = 32
 out = "demos/zero_system.cast"
-session = :zero_rec
+session = "zero_rec"
 tick = 100
 
 {:ok, _rec} =

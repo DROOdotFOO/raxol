@@ -92,7 +92,7 @@ defmodule RaxolTest do
       on_exit(fn ->
         if Process.alive?(pid) do
           try do
-            GenServer.call(pid, {:stop_session, :raxol_test_themed_app}, 2_000)
+            GenServer.call(pid, {:stop_session, "raxol_test_themed_app"}, 2_000)
           catch
             :exit, _ -> :ok
           end
@@ -105,7 +105,7 @@ defmodule RaxolTest do
     test "the next frame renders with the new theme" do
       {:ok, id} =
         Headless.start(ThemedApp,
-          id: :raxol_test_themed_app,
+          id: "raxol_test_themed_app",
           width: 20,
           height: 3
         )
@@ -142,7 +142,7 @@ defmodule RaxolTest do
 
       {:ok, id} =
         Headless.start(ThemedApp,
-          id: :raxol_test_themed_app,
+          id: "raxol_test_themed_app",
           width: 20,
           height: 3
         )

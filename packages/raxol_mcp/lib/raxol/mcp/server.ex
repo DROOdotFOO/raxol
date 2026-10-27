@@ -687,7 +687,7 @@ defmodule Raxol.MCP.Server do
       id,
       "completion/complete",
       %{"ref" => ref},
-      {:completion, state.registry, ref, argument},
+      {:completion, state.registry, state.authorizer, ref, argument},
       state,
       conn_id
     )
@@ -846,8 +846,10 @@ defmodule Raxol.MCP.Server do
     {:response, do_get_prompt(id, name, arguments, %{registry: registry})}
   end
 
-  defp execute_read_operation(id, {:completion, registry, ref, argument}, _ctx) do
-    completions = compute_completions(ref, argument, %{registry: registry})
+  defp execute_read_operation(id, {:completion, registry, authorizer, ref, argument}, ctx) do
+    completions =
+      compute_completions(ref, argument, %{registry: registry, authorizer: authorizer}, ctx)
+
     {:response, Protocol.response(id, %{completion: %{values: completions}})}
   end
 
@@ -1240,7 +1242,7 @@ defmodule Raxol.MCP.Server do
 
     case authorize_read("completion/complete", %{"ref" => ref}, state, ctx) do
       :allow ->
-        completions = compute_completions(ref, argument, state)
+        completions = compute_completions(ref, argument, state, ctx)
         {Protocol.response(id, %{completion: %{values: completions}}), state}
 
       {:deny, detail} ->
@@ -1894,7 +1896,7 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  defp compute_completions(ref, argument, state) do
+  defp compute_completions(ref, argument, state, ctx) do
     ref_type = Map.get(ref, "type") || Map.get(ref, :type, "")
     arg_name = Map.get(argument, "name") || Map.get(argument, :name, "")
     arg_value = Map.get(argument, "value") || Map.get(argument, :value, "")
@@ -1902,7 +1904,7 @@ defmodule Raxol.MCP.Server do
     case {ref_type, arg_name} do
       {"ref/tool", "id"} ->
         # Complete session IDs from headless tools
-        complete_session_ids(arg_value)
+        complete_session_ids(arg_value, state, ctx)
 
       {"ref/tool", "name"} ->
         # Complete tool names
@@ -1934,21 +1936,27 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  defp complete_session_ids(prefix) do
-    if Code.ensure_loaded?(Raxol.Headless) and
-         function_exported?(Raxol.Headless, :list, 0) do
-      case Raxol.Headless.list() do
-        {:ok, sessions} ->
-          sessions
-          |> Enum.map(fn s -> Map.get(s, :id, "") |> to_string() end)
-          |> Enum.filter(&String.starts_with?(&1, prefix))
-          |> Enum.take(20)
+  # The live session ids are exactly what `raxol_list` answers, so they are
+  # completed only for a caller the tool authorizer would let call it: an
+  # operator who denies `raxol_list` to hide which sessions exist hides them
+  # here too. Decided as `tools/list` decides a listing, with no arguments,
+  # and ASK hides like DENY. A nil authorizer allows it, as it lists every
+  # tool.
+  defp session_ids_visible?(%{authorizer: nil}, _ctx), do: true
 
-        _ ->
-          []
-      end
+  defp session_ids_visible?(%{authorizer: authorizer}, ctx),
+    do: safe_decide(authorizer, "raxol_list", %{}, ctx) == :allow
+
+  defp complete_session_ids(prefix, state, ctx) when is_binary(prefix) do
+    if session_ids_visible?(state, ctx) and Code.ensure_loaded?(Raxol.Headless) and
+         function_exported?(Raxol.Headless, :list, 0) do
+      Raxol.Headless.list()
+      |> Enum.filter(&String.starts_with?(&1, prefix))
+      |> Enum.take(20)
     else
       []
     end
   end
+
+  defp complete_session_ids(_prefix, _state, _ctx), do: []
 end
