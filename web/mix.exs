@@ -51,7 +51,7 @@ defmodule RaxolPlayground.MixProject do
       {:phoenix, "~> 1.8.1"},
       {:phoenix_live_view, "~> 1.2.3"},
       {:phoenix_html, "~> 4.3"},
-      {:phoenix_live_reload, "~> 1.6.1", only: :dev},
+      {:phoenix_live_reload, "~> 1.7.0", only: :dev},
       {:phoenix_pubsub, "~> 2.1"},
       {:jason, "~> 1.4.4"},
       {:plug_cowboy, "~> 2.7"},
@@ -61,7 +61,7 @@ defmodule RaxolPlayground.MixProject do
       {:finch, "~> 0.13"},
       {:telemetry_metrics, "~> 1.1"},
       {:telemetry_poller, "~> 1.2"},
-      {:dns_cluster, "~> 0.1.1"},
+      {:dns_cluster, "~> 0.3.1"},
       {:heroicons, "~> 0.5"},
       {:gettext, "~> 1.0"}
     ]
