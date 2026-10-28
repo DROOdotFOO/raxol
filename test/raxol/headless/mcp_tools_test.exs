@@ -3,6 +3,8 @@ defmodule Raxol.Headless.McpToolsTest do
   @moduletag :capture_log
 
   alias Raxol.Headless.McpTools
+  import ExUnit.CaptureLog, only: [capture_log: 1]
+
 
   # The test apps `raxol_start` starts over MCP. A set `:headless_startable`
   # replaces the default demo list, so they are listed alongside the demos,
@@ -12,6 +14,7 @@ defmodule Raxol.Headless.McpToolsTest do
   @test_startable [
     Raxol.Headless.McpToolsTest.SizedApp,
     Raxol.Headless.McpToolsTest.InjectedTextApp,
+    Raxol.Headless.McpToolsTest.RaisingInitApp,
     Raxol.Terminal.Buffer.BufferServer
   ]
 
@@ -60,6 +63,19 @@ defmodule Raxol.Headless.McpToolsTest do
 
     @impl true
     def subscriptions(_model), do: []
+  end
+
+  defmodule RaisingInitApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: raise("init-secret-RAISE-91X")
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("never")
   end
 
   # Owns `:tidewave_tools` the way Tidewave does: a `:sys`-reachable process, so
@@ -333,6 +349,26 @@ defmodule Raxol.Headless.McpToolsTest do
 
       assert message =~ "is not a Raxol application"
       assert message =~ "init/1, update/2 and view/1"
+    end
+
+    test "a raised init failure exposes only its class" do
+      test = self()
+
+      log =
+        capture_log(fn ->
+          result =
+            start_tool_result(%{
+              "module" => inspect(RaisingInitApp),
+              "id" => "raise1"
+            })
+
+          send(test, {:raising_init_result, result})
+        end)
+
+      assert_receive {:raising_init_result, {:error, "{:app_init_failed, :unknown}"}}
+      refute log =~ "init-secret-RAISE-91X"
+      assert log =~ "failed to start (class: :unknown)"
+      refute "raise1" in Raxol.Headless.list()
     end
 
     # The two refusals send an operator in opposite directions -- go list it

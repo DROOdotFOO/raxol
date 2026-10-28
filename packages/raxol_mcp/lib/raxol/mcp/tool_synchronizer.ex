@@ -11,8 +11,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
   `Raxol.MCP.ResourceProvider`, and registers context tree + widget tree
   resources for the session.
 
-  Started by `Raxol.Headless` when creating a session. Linked to the
-  session lifecycle -- dies when the session dies, cleaning up its tools.
+  Started by `Raxol.Headless` when creating a session, which passes itself as
+  `:owner`: when the owner exits, the synchronizer stops and its `terminate/2`
+  unregisters the session's tools and resources.
 
   Every tool it registers is named under the session id: derived tools are
   `"session_id.widget_id.action"` and the meta-tool is
@@ -55,6 +56,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
     * `:registry`, `:dispatcher_pid`, `:session_id` - required
     * `:app_module` - the session's TEA module
+    * `:owner` - a pid to monitor independently of the starter; the
+      synchronizer stops and runs `terminate/2` when it exits
     * `:server` - the `Raxol.MCP.Server` that `list_changed` notifications go
       to (default `Raxol.MCP.Server`)
     * `:debounce_ms` - how long a render waits for the next before it is
@@ -91,6 +94,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     :session_id,
     :app_module,
     :telemetry_handler_id,
+    :owner_ref,
     :debounce_ref,
     server: Raxol.MCP.Server,
     debounce_ms: @default_debounce_ms,
@@ -114,7 +118,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
     renders: 0
   ]
 
-  @doc "Start a ToolSynchronizer linked to the calling process."
+  @doc """
+  Starts a ToolSynchronizer under the caller's lifecycle.
+
+  The optional `:owner` is monitored independently; its exit also stops the
+  synchronizer and runs `terminate/2`.
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -195,6 +204,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
     session_id = Keyword.fetch!(opts, :session_id)
     app_module = Keyword.get(opts, :app_module)
 
+    owner_ref =
+      case Keyword.get(opts, :owner) do
+        nil -> nil
+        owner -> Process.monitor(owner)
+      end
+
     handler_id = "tool_sync_#{session_id}_#{System.unique_integer([:positive])}"
 
     :telemetry.attach(
@@ -211,25 +226,22 @@ defmodule Raxol.MCP.ToolSynchronizer do
       app_module: app_module,
       server: Keyword.get(opts, :server, Raxol.MCP.Server),
       debounce_ms: Keyword.get_lazy(opts, :debounce_ms, &configured_debounce_ms/0),
-      telemetry_handler_id: handler_id
+      telemetry_handler_id: handler_id,
+      owner_ref: owner_ref
     }
 
-    if not TreeWalker.id?(session_id), do: TreeWalker.warn_refused_session_id(session_id)
-
-    # Register the session's discover_tools meta-tool
-    {meta_registered?, state} = offer(state, discover_tool(state))
-
-    # Register session-level resources (context tree, widget tree)
-    resource_uris =
-      if TreeWalker.id?(session_id), do: register_session_resources(state), else: MapSet.new()
-
-    state = %{state | current_resource_uris: resource_uris}
-
-    # Seed tools synchronously so callers never observe a meta-tool-only
-    # session when the engine's first render preceded telemetry attachment.
-    {changed?, state} = sync_initial_view(state)
-    if changed? or meta_registered?, do: notify_tools_changed(state)
-    {:ok, state}
+    # A registry call that exits (a registry too busy to answer within the
+    # call timeout) stops this init, and an init that stops runs no
+    # `terminate/2`: detach the telemetry handler here. Registrations already
+    # accepted are owner-scoped, so the registry removes them after this
+    # process is down.
+    try do
+      {:ok, register_session(state)}
+    catch
+      kind, reason ->
+        :telemetry.detach(handler_id)
+        {:stop, {:tool_synchronizer_init_failed, self(), kind, reason}}
+    end
   end
 
   defp configured_debounce_ms do
@@ -329,6 +341,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
     {:noreply, state}
   end
 
+  def handle_manager_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state),
+    do: {:stop, :normal, state}
+
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer
@@ -419,6 +434,25 @@ defmodule Raxol.MCP.ToolSynchronizer do
   defp apply_sync(view_tree, model, state) do
     {changed?, state} = do_sync(view_tree, model, state)
     if changed?, do: notify_tools_changed(state)
+    state
+  end
+
+  defp register_session(%{session_id: session_id} = state) do
+    if not TreeWalker.id?(session_id), do: TreeWalker.warn_refused_session_id(session_id)
+
+    # Register the session's discover_tools meta-tool
+    {meta_registered?, state} = offer(state, discover_tool(state))
+
+    # Register session-level resources (context tree, widget tree)
+    resource_uris =
+      if TreeWalker.id?(session_id), do: register_session_resources(state), else: MapSet.new()
+
+    state = %{state | current_resource_uris: resource_uris}
+
+    # Seed tools synchronously so callers never observe a meta-tool-only
+    # session when the engine's first render preceded telemetry attachment.
+    {changed?, state} = sync_initial_view(state)
+    if changed? or meta_registered?, do: notify_tools_changed(state)
     state
   end
 
@@ -762,8 +796,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     session_id = state.session_id
     registry = state.registry
 
-    context_uri = "raxol://session/#{session_id}/context"
-    widgets_uri = "raxol://session/#{session_id}/widgets"
+    [context_uri, widgets_uri] = session_resource_uris(session_id)
 
     self_pid = self()
 
@@ -801,6 +834,9 @@ defmodule Raxol.MCP.ToolSynchronizer do
     Registry.register_resources(registry, resources, owner: self())
     MapSet.new([context_uri, widgets_uri])
   end
+
+  defp session_resource_uris(session_id),
+    do: ["raxol://session/#{session_id}/context", "raxol://session/#{session_id}/widgets"]
 
   defp emit_behavior_event(event_type, data, telemetry_event) do
     if Code.ensure_loaded?(Raxol.Adaptive.BehaviorTracker) and

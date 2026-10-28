@@ -38,6 +38,15 @@ defmodule Raxol.Property.HeadlessMonitoringTest do
     end)
   end
 
+  # A `:DOWN` names a process that has exited, and Headless stops the
+  # session's Lifecycle on it, at once for one that is gone. A live stand-in
+  # ignores the stop until it times out, so it exits first, as the real one
+  # would have; the exit signal reaches it before the stop's monitor does.
+  defp down(pid) do
+    Process.exit(pid, :kill)
+    {:DOWN, make_ref(), :process, pid, :killed}
+  end
+
   # -- Property 10: :DOWN removes exactly the matching session --
 
   describe "handle_info :DOWN correctness (#223)" do
@@ -53,11 +62,7 @@ defmodule Raxol.Property.HeadlessMonitoringTest do
         {state, sessions} = build_state(session_ids)
         target_pid = sessions[target_id].lifecycle_pid
 
-        {:noreply, new_state} =
-          Headless.handle_info(
-            {:DOWN, make_ref(), :process, target_pid, :normal},
-            state
-          )
+        {:noreply, new_state} = Headless.handle_info(down(target_pid), state)
 
         refute Map.has_key?(new_state.sessions, target_id),
                "session #{inspect(target_id)} should be removed after :DOWN"
@@ -101,11 +106,7 @@ defmodule Raxol.Property.HeadlessMonitoringTest do
           Enum.reduce(session_ids, state, fn id, acc ->
             pid = sessions[id].lifecycle_pid
 
-            {:noreply, new_acc} =
-              Headless.handle_info(
-                {:DOWN, make_ref(), :process, pid, :normal},
-                acc
-              )
+            {:noreply, new_acc} = Headless.handle_info(down(pid), acc)
 
             new_acc
           end)
@@ -125,11 +126,7 @@ defmodule Raxol.Property.HeadlessMonitoringTest do
           before_count = map_size(acc.sessions)
           pid = sessions[id].lifecycle_pid
 
-          {:noreply, new_acc} =
-            Headless.handle_info(
-              {:DOWN, make_ref(), :process, pid, :normal},
-              acc
-            )
+          {:noreply, new_acc} = Headless.handle_info(down(pid), acc)
 
           after_count = map_size(new_acc.sessions)
 

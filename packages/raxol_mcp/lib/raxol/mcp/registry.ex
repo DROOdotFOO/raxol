@@ -78,7 +78,8 @@ defmodule Raxol.MCP.Registry do
   does not take its tools with it when it exits.
 
   Unregistering, by name or by an owner's exit, also forgets the entry's
-  circuit-breaker state.
+  circuit-breaker state. `await_owner_cleanup/2` is a barrier for callers
+  that must not answer until a dead owner's entries are gone.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -336,6 +337,12 @@ defmodule Raxol.MCP.Registry do
     GenServer.call(registry, {:unregister_resources, uris, owner(opts)})
   end
 
+  @doc "Wait until the registry holds no tools, resources or prompts for `owner`."
+  @spec await_owner_cleanup(GenServer.server(), pid()) :: :ok
+  def await_owner_cleanup(registry \\ __MODULE__, owner) when is_pid(owner) do
+    GenServer.call(registry, {:await_owner_cleanup, owner})
+  end
+
   @doc "List all registered resources (definitions without callbacks)."
   @spec list_resources(GenServer.server()) :: [map()]
   def list_resources(registry \\ __MODULE__) do
@@ -455,8 +462,9 @@ defmodule Raxol.MCP.Registry do
        table: table,
        breaker_table: breaker_table,
        server: Keyword.get(opts, :server, Raxol.MCP.Server),
-       # owner pid => %{ref: monitor, keys: entries it holds}; `held_by` is
-       # the reverse map. Entries are ETS keys: {:tool | :resource | :prompt, _}.
+       # owner pid => %{ref: monitor, keys: entries it holds, waiters: callers
+       # waiting for those entries to be removed}; `held_by` is the reverse
+       # map. Entries are ETS keys: {:tool | :resource | :prompt, _}.
        owners: %{},
        held_by: %{}
      }}
@@ -531,6 +539,17 @@ defmodule Raxol.MCP.Registry do
 
   def handle_manager_call({:unregister_prompts, names}, _from, state) do
     {:reply, :ok, Enum.reduce(names, state, &remove(&2, prompt_key(&1)))}
+  end
+
+  def handle_manager_call({:await_owner_cleanup, owner}, from, state) do
+    case Map.fetch(state.owners, owner) do
+      {:ok, entry} ->
+        owners = Map.put(state.owners, owner, %{entry | waiters: [from | entry.waiters]})
+        {:noreply, %{state | owners: owners}}
+
+      :error ->
+        {:reply, :ok, state}
+    end
   end
 
   # An owner exited: everything it still holds goes, and a client listing
@@ -657,7 +676,7 @@ defmodule Raxol.MCP.Registry do
   defp hold(state, key, owner) do
     entry =
       Map.get_lazy(state.owners, owner, fn ->
-        %{ref: Process.monitor(owner), keys: MapSet.new()}
+        %{ref: Process.monitor(owner), keys: MapSet.new(), waiters: []}
       end)
 
     %{
@@ -679,6 +698,7 @@ defmodule Raxol.MCP.Registry do
         owners =
           if MapSet.size(keys) == 0 do
             Process.demonitor(ref, [:flush])
+            Enum.each(entry.waiters, &GenServer.reply(&1, :ok))
             Map.delete(state.owners, owner)
           else
             Map.put(state.owners, owner, %{entry | keys: keys})
