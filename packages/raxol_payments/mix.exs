@@ -12,8 +12,8 @@ defmodule RaxolPayments.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      # cowlib 2.20.0 is the latest release and neither vulnerable function is called; see #921.
-      hex: [ignore_advisories: ["EEF-CVE-2026-43966", "EEF-CVE-2026-43969"]],
+      # cowlib 2.21.0 still has EEF-CVE-2026-43966 with no fixed release; see #921.
+      hex: [ignore_advisories: ["EEF-CVE-2026-43966"]],
       dialyzer: [
         # raxol_agent is a compile-time-only dep (runtime: false), so it is not in
         # the application tree dialyzer derives. Add it (with :mix, for the Mix.Task

@@ -38,14 +38,15 @@ updates:
       prefix: "chore"
       include: "scope"
 
-  # The 18 package lockfiles. `directory: "/"` alone scanned NONE of them, yet
-  # every package publishes to Hex -- so an advisory against a dependency only
-  # a package locks (ex_doc, mox, credo, dialyxir all differ from the root)
-  # produced no PR and no alert, indefinitely. `directories` takes a list, so
-  # one entry covers them all.
+  # The 18 package lockfiles and the deployed web application. `directory: "/"`
+  # alone scanned NONE of them, yet every package publishes to Hex and `web/`
+  # deploys independently. An advisory against a dependency only one project
+  # locks otherwise produces no PR and no alert indefinitely. `directories`
+  # takes a list, so one entry covers them all.
   - package-ecosystem: "mix"
     directories:
       - "/packages/*"
+      - "/web"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -54,9 +55,9 @@ updates:
     labels:
       - "dependencies"
     groups:
-      # One PR per package rather than one per dependency: these are the same
-      # dev/test toolchain repeated eighteen times, and eighteen separate
-      # ex_doc bumps a week is how a review channel gets muted.
+      # One PR per project rather than one per dependency: these projects
+      # repeat much of the same dev/test toolchain, and separate PRs for every
+      # ex_doc bump each week are how a review channel gets muted.
       package-toolchain:
         patterns:
           - "*"

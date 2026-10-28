@@ -110,7 +110,7 @@ jobs:
   # "Ignored advisories" and exits 0. Once the lock moves past it, hex.audit
   # says the entry "can be removed" but still exits 0, so this job fails on
   # that message: the entry (and its comment) goes in the PR that makes it
-  # stale. The cowlib 2.20.0 pair is handled that way; see #921.
+  # stale. Cowlib 2.21.0's remaining EEF-CVE-2026-43966 is handled that way; see #921.
   #
   # Every project is checked even after one fails, so a single run names all
   # of them. `mix hex.audit` refuses to run until the project's deps are
