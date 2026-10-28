@@ -457,7 +457,7 @@ defmodule Raxol.MCP.RegistryTest do
       %{owned: registry, server: server}
     end
 
-    test "an owner's exit removes what it still holds and sends one list_changed", %{
+    test "owner exit removes tools and resources without unregistering", %{
       owned: r,
       server: server
     } do
@@ -470,10 +470,15 @@ defmodule Raxol.MCP.RegistryTest do
       :ok = Registry.register_tools(r, [sample_tool("moved")], owner: second)
       :ok = Registry.register_tools(r, [sample_tool("unowned")])
 
+      assert r |> Registry.list_tools() |> Enum.map(& &1.name) |> Enum.sort() ==
+               ["a", "moved", "unowned"]
+
+      assert [%{uri: "raxol://a"}] = Registry.list_resources(r)
+
       ref = Process.monitor(first)
       Process.exit(first, :kill)
       assert_receive {:DOWN, ^ref, :process, ^first, :killed}
-      :sys.get_state(r)
+      :ok = Registry.await_owner_cleanup(r, first)
       :sys.get_state(server)
 
       assert r |> Registry.list_tools() |> Enum.map(& &1.name) |> Enum.sort() ==

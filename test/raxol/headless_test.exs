@@ -193,6 +193,22 @@ defmodule Raxol.HeadlessTest do
     def view(_model), do: Raxol.Core.Renderer.View.text("plus")
   end
 
+  defmodule ReportingApp do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context) do
+      send(Application.fetch_env!(:raxol, :headless_test_observer), {:lifecycle, self()})
+      %{}
+    end
+
+    @impl true
+    def update(_message, model), do: {model, []}
+
+    @impl true
+    def view(_model), do: Raxol.Core.Renderer.View.text("reporting")
+  end
+
   # Its `init/1` refuses, so the runtime's `Lifecycle.init/1` stops.
   defmodule RefusingApp do
     use Raxol.Core.Runtime.Application
@@ -808,13 +824,12 @@ defmodule Raxol.HeadlessTest do
       assert_receive {:DOWN, ^sync_ref, :process, _, :killed}
 
       # Headless stops the Lifecycle while handling the synchronizer's
-      # `:DOWN`, so the Lifecycle's own `:DOWN` arriving means Headless is in
-      # or past that handler; the `:sys` call returns once it has finished,
-      # and the release it started is awaited.
+      # `:DOWN`; the `:sys` call returns once that handler and its telemetry
+      # detach have finished.
       lifecycle_ref = process_refs.lifecycle
       assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
       :sys.get_state(Headless)
-      await_releases(headless)
+      :ok = Raxol.MCP.Registry.await_owner_cleanup(registry, sync_pid)
 
       for role <- [:dispatcher, :engine] do
         ref = Map.fetch!(process_refs, role)
@@ -887,6 +902,7 @@ defmodule Raxol.HeadlessTest do
       sync_ref = Process.monitor(sync_pid)
       Process.exit(headless, :kill)
       assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, :normal}, 5_000
+      :ok = Raxol.MCP.Registry.await_owner_cleanup(registry, sync_pid)
 
       assert sync_handler_ids(sync_pid) == []
       refute context_uri in resource_uris(registry)
@@ -913,10 +929,9 @@ defmodule Raxol.HeadlessTest do
 
     # The `:registry` check reads which module a process runs, not whether it
     # answers, so a suspended registry passes it and the synchronizer's first
-    # registration times out in its `init`. Linked, that exit killed Headless,
-    # and every other session's Lifecycle ran on, forgotten, its tools still
-    # callable. Now the start is refused: its Lifecycle stopped, its
-    # synchronizer's telemetry handler detached, every other session as it was.
+    # registration times out in its `init`. The refusal waits for that
+    # synchronizer to be DOWN and for owner cleanup before answering. A public
+    # monitor proves its Lifecycle is stopped too.
     test "a start against a registry that does not answer is refused, not fatal" do
       registry =
         Process.whereis(Raxol.MCP.Registry) ||
@@ -932,30 +947,38 @@ defmodule Raxol.HeadlessTest do
           id: :stalled_registry
         )
 
-      lifecycles_before = lifecycles()
+      Application.put_env(:raxol, :headless_test_observer, self())
+      on_exit(fn -> Application.delete_env(:raxol, :headless_test_observer) end)
       :ok = :sys.suspend(stalled)
 
-      assert {:error, {:tool_synchronizer_failed, :timeout}} =
-               Headless.start(TestApp, id: "unanswered", registry: stalled)
+      start =
+        Task.async(fn ->
+          Headless.start(ReportingApp, id: "unanswered", registry: stalled)
+        end)
+
+      assert_receive {:lifecycle, lifecycle}
+      lifecycle_ref = Process.monitor(lifecycle)
+      sync_pid = synchronizer_for("unanswered")
+      sync_ref = Process.monitor(sync_pid)
+      assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, _reason}, 6_000
+
+      # The synchronizer is down, but the suspended registry has not processed
+      # its owner cleanup. The refusal therefore has not been answered.
+      start_ref = start.ref
+      refute_received {^start_ref, _result}
 
       :ok = :sys.resume(stalled)
-      # The registration that timed out ran once the registry resumed, and
-      # the withdrawal the synchronizer queued behind it ran next; the `:sys`
-      # call is answered after both.
-      :sys.get_state(stalled)
+
+      assert Task.await(start) ==
+               {:error, {:tool_synchronizer_failed, :timeout}}
+
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, _reason}, 5_000
       assert tool_names(stalled) == []
       assert session_uris(stalled, "unanswered") == []
-
       refute_received {:DOWN, ^headless_ref, :process, _, _}
       assert Process.whereis(Headless) == headless
       assert Headless.list() == [keep]
-      assert lifecycles() -- lifecycles_before == []
-
-      refute Enum.any?(
-               :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
-               &String.starts_with?(&1.id, "tool_sync_unanswered_")
-             )
-
+      assert sync_handler_ids(sync_pid) == []
       assert Process.alive?(keep_sync)
 
       assert {:ok, _} =
@@ -966,9 +989,8 @@ defmodule Raxol.HeadlessTest do
                )
     end
 
-    # A killed synchronizer's resources are released from the registry it
-    # registered them in, which `:registry` may make another than the
-    # default one.
+    # Owner cleanup is the only registry cleanup a killed synchronizer needs:
+    # its tools and resources both disappear without an explicit unregister.
     test "a killed synchronizer is released from its own registry" do
       own =
         start_supervised!({Raxol.MCP.Registry, name: nil}, id: :own_registry)
@@ -978,26 +1000,24 @@ defmodule Raxol.HeadlessTest do
 
       %{synchronizer_pid: sync_pid} = :sys.get_state(Headless).sessions[id]
       %{lifecycle: lifecycle} = session_pids(id)
+      assert tool_names(own) != []
       assert "raxol://session/#{id}/context" in session_uris(own, id)
 
       lifecycle_ref = Process.monitor(lifecycle)
       Process.exit(sync_pid, :kill)
-      # Headless stops the Lifecycle while handling the synchronizer's
-      # `:DOWN`; the `:sys` call returns once that handler has finished, and
-      # the release it started is awaited.
       assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
       :sys.get_state(Headless)
-      await_releases(Process.whereis(Headless))
+      :ok = Raxol.MCP.Registry.await_owner_cleanup(own, sync_pid)
 
+      assert tool_names(own) == []
       assert session_uris(own, id) == []
       assert sync_handler_ids(sync_pid) == []
     end
 
     # A registry that answers the synchronizer's first registration and then
-    # stalls: the start is refused at the next one, and what the registry
-    # took, or takes once it moves again, is withdrawn. The hook stops the
-    # registry right after its first reply, until the test lets it go.
-    test "a start refused mid-registration withdraws what the registry took" do
+    # stalls: the next registration times out and the synchronizer exits. The
+    # start remains unanswered until the real registry processes owner cleanup.
+    test "a refused start waits for registry owner cleanup" do
       stalling =
         start_supervised!({Raxol.MCP.Registry, name: nil},
           id: :stalling_registry
@@ -1005,45 +1025,26 @@ defmodule Raxol.HeadlessTest do
 
       :ok = :sys.install(stalling, {&stall_after_first_reply/3, :waiting})
 
-      assert {:error, {:tool_synchronizer_failed, :timeout}} =
-               Headless.start(TestApp, id: "half_registered", registry: stalling)
+      start =
+        Task.async(fn ->
+          Headless.start(TestApp, id: "half_registered", registry: stalling)
+        end)
+
+      sync_pid = synchronizer_for("half_registered")
+      sync_ref = Process.monitor(sync_pid)
+      assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, _reason}, 6_000
+      start_ref = start.ref
+      refute_received {^start_ref, _result}
 
       send(stalling, :go_on)
-      :sys.get_state(stalling)
+
+      assert Task.await(start) ==
+               {:error, {:tool_synchronizer_failed, :timeout}}
+
       assert tool_names(stalling) == []
       assert session_uris(stalling, "half_registered") == []
     end
 
-    # The release of a killed synchronizer calls its session's registry, so
-    # Headless runs it outside itself: a registry that does not answer holds
-    # up that release, not every other session's calls.
-    test "a killed synchronizer's release does not wait on its registry" do
-      Process.whereis(Raxol.MCP.Registry) ||
-        start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
-
-      own =
-        start_supervised!({Raxol.MCP.Registry, name: nil},
-          id: :suspended_release_registry
-        )
-
-      {:ok, other} = Headless.start(TestApp, id: "release_other")
-      {:ok, id} = Headless.start(TestApp, id: "release_held", registry: own)
-      %{synchronizer_pid: sync_pid} = :sys.get_state(Headless).sessions[id]
-      %{lifecycle: lifecycle} = session_pids(id)
-      lifecycle_ref = Process.monitor(lifecycle)
-
-      :ok = :sys.suspend(own)
-      Process.exit(sync_pid, :kill)
-      assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
-
-      # Answered while the registry is still suspended.
-      assert Headless.list() == [other]
-      assert {:ok, _} = Headless.screenshot(other)
-
-      :ok = :sys.resume(own)
-      await_releases(Process.whereis(Headless))
-      assert session_uris(own, id) == []
-    end
 
     # An app's error term would reach `raxol_start`'s client verbatim; the
     # answer carries its class.
@@ -1082,10 +1083,10 @@ defmodule Raxol.HeadlessTest do
     end
 
     # A session still stopping when the shutdown budget runs out is killed,
-    # and a killed synchronizer runs no `terminate/2`. Its `:DOWN` reaches a
-    # Headless already inside its own `terminate/2`, which never handles it,
-    # so Headless releases the telemetry handler and the session's resources
-    # there. The synchronizer is held so its stop outlasts the real budget.
+    # and a killed synchronizer runs no `terminate/2`. Headless detaches its
+    # telemetry handler after `:DOWN`, while the registry removes every tool
+    # and resource that process owned. The synchronizer is held so its stop
+    # outlasts the real budget.
     test "a session stuck at shutdown is killed and its synchronizer released" do
       registry =
         Process.whereis(Raxol.MCP.Registry) ||
@@ -1119,6 +1120,7 @@ defmodule Raxol.HeadlessTest do
 
       assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, :killed}, 5_000
       assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed}, 5_000
+      :ok = Raxol.MCP.Registry.await_owner_cleanup(registry, sync_pid)
       assert sync_handler_ids(sync_pid) == []
       assert session_uris(registry, id) == []
     end
@@ -1179,6 +1181,11 @@ defmodule Raxol.HeadlessTest do
 
       assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed}, 5_000
       assert_receive {:stop_reply, :ok}
+      :ok =
+        Raxol.MCP.Registry.await_owner_cleanup(
+          registry,
+          left.synchronizer_pid
+        )
       assert sync_handler_ids(left.synchronizer_pid) == []
       assert session_uris(registry, left.id) == []
     end
@@ -1247,27 +1254,15 @@ defmodule Raxol.HeadlessTest do
 
   defp stall_after_first_reply(:waiting, _event, _name), do: :waiting
 
-  # Headless releases a killed synchronizer from a `Task` it starts, which
-  # names Headless first in its `$callers`; each one running is awaited.
-  defp await_releases(headless) do
-    refs =
-      for pid <- Process.list(),
-          {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
-          match?([^headless | _], dictionary[:"$callers"]),
-          do: Process.monitor(pid)
 
-    for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
-  end
-
-  # Every live app runtime, by the module its process was started with.
-  defp lifecycles do
-    Enum.filter(
-      Process.list(),
-      &match?(
-        {Raxol.Core.Runtime.Lifecycle, :init, _},
-        :proc_lib.initial_call(&1)
-      )
-    )
+  defp synchronizer_for(id) do
+    case Enum.find(
+           :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
+           &String.starts_with?(&1.id, "tool_sync_#{id}_")
+         ) do
+      %{config: %{synchronizer: pid}} -> pid
+      nil -> synchronizer_for(id)
+    end
   end
 
   defp session_uris(registry, id) do
