@@ -645,6 +645,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tmux
 
+      # raxol_payments' EIP-712 conformance vectors and vendored fee oracle
+      # come from one integrity-pinned @xochi/spec release. The cache key
+      # includes both committed pin files; the fetch script retries only a
+      # cache miss, verifies SHA-512 before extraction, then validates the
+      # package identity and publishes one verified package root.
+      - name: Set up Node (pinned @xochi/spec)
+        if: matrix.package == 'raxol_payments'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Cache pinned @xochi/spec
+        if: matrix.package == 'raxol_payments'
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/xochi-spec-cache
+          key: xochi-spec-${{ runner.os }}-${{ hashFiles('packages/raxol_payments/test/fixtures/XOCHI_SPEC_VERSION', 'packages/raxol_payments/test/fixtures/XOCHI_SPEC_INTEGRITY') }}
+
+      - name: Fetch and verify pinned @xochi/spec
+        if: matrix.package == 'raxol_payments'
+        run: |
+          package_root="$(
+            scripts/fetch_xochi_spec.sh \
+              "$RUNNER_TEMP/xochi-spec-cache" \
+              "$RUNNER_TEMP/xochi-spec/package"
+          )"
+          echo "XOCHI_SPEC_DIR=$package_root" >> "$GITHUB_ENV"
+
       # `--check-locked` rather than a bare `deps.get`: a plain fetch REWRITES
       # a stale mix.lock in place and carries on, so a package whose committed
       # lock does not match what resolution produces builds green in CI and

@@ -1,6 +1,6 @@
 defmodule Raxol.Payments.Test.CliSigner do
   @moduledoc """
-  Spawn the `riddler-client` CLI as a black-box signing oracle.
+  Spawn Riddler's `packages/e2e-signer` CLI as a black-box signing oracle.
 
   The CLI emits a single `RESULT_JSON: { ... }` line on stdout for the
   sign-only and ACP buyer-auth subcommands; this module spawns the CLI
@@ -11,17 +11,20 @@ defmodule Raxol.Payments.Test.CliSigner do
   raxol_earn end-to-end tests that exercise the buyer-side authorization
   path.
 
-  ## Resolving the CLI repo
+  ## Resolving the CLI
 
-  Lookup order:
+  The taker CLI (formerly axol-io/riddler-sdk `packages/sdk-taker`) now lives
+  in the private Riddler repo as `packages/e2e-signer`. It is run from its
+  built output, so build it first (`npm ci && npm run build` in
+  `packages/e2e-signer`). Riddler is private, so `:cli_signer` stays a
+  local-only tag.
 
-  1. `opts[:cwd]`
-  2. `System.get_env("RIDDLER_CLI_DIR")`
-  3. Sibling-directory fallback assuming `riddler-client` is
-     checked out beside this monorepo's parent.
+  `RIDDLER_CHECKOUT_DIR` must name the Riddler repository root, regardless of
+  where that checkout lives. An explicit `opts[:cwd]` overrides it. There is
+  no owner-specific sibling-directory fallback.
 
-  If neither `cwd` nor `RIDDLER_CLI_DIR` is set and the sibling fallback
-  doesn't exist, every call raises `Raxol.Payments.Test.CliSigner.CliNotFoundError`.
+  If the selected root does not hold `packages/e2e-signer/dist/cli.js`, every
+  call raises `Raxol.Payments.Test.CliSigner.CliNotFoundError`.
 
   ## Example
 
@@ -49,8 +52,8 @@ defmodule Raxol.Payments.Test.CliSigner do
 
   @result_json_regex ~r/^RESULT_JSON:\s*(\{.*\})\s*$/m
 
-  # Path (relative to the riddler-client repo root) of the CLI entry point.
-  @cli_entry "packages/sdk-taker/src/cli.ts"
+  # Path (relative to the Riddler repo root) of the built CLI entry point.
+  @cli_entry "packages/e2e-signer/dist/cli.js"
 
   @type flag :: {atom() | String.t(), String.t() | integer() | boolean()}
   @type opts :: [
@@ -79,12 +82,10 @@ defmodule Raxol.Payments.Test.CliSigner do
           {:ok, result()} | {:error, {:cli_failed, integer(), String.t()}}
   def run(subcommand, flags, opts \\ []) do
     cwd = resolve_cwd(opts)
-    # riddler-client is now a monorepo; the CLI lives in the riddler-sdk package
-    # and is TypeScript, so it is run from source via tsx (no build step needed).
-    args = ["tsx", @cli_entry, subcommand | encode_flags(flags)]
+    args = [@cli_entry, subcommand | encode_flags(flags)]
     env = build_env(opts)
 
-    {stdout, exit_code} = System.cmd("npx", args, cd: cwd, env: env, stderr_to_stdout: true)
+    {stdout, exit_code} = System.cmd("node", args, cd: cwd, env: env, stderr_to_stdout: true)
 
     case exit_code do
       0 ->
@@ -127,40 +128,36 @@ defmodule Raxol.Payments.Test.CliSigner do
     run("xochi-flow", flags, opts)
   end
 
+  @doc """
+  The Riddler repository root from `RIDDLER_CHECKOUT_DIR`, or nil when its
+  built e2e-signer CLI is absent.
+  """
+  @spec locate() :: Path.t() | nil
+  def locate do
+    case System.get_env("RIDDLER_CHECKOUT_DIR") do
+      blank when blank in [nil, ""] -> nil
+      checkout_dir -> if cli_present?(checkout_dir), do: checkout_dir
+    end
+  end
+
   # -- Internals --
 
   defp resolve_cwd(opts) do
-    cwd =
-      opts[:cwd] ||
-        System.get_env("RIDDLER_CLI_DIR") ||
-        sibling_default()
+    cwd = opts[:cwd] || System.get_env("RIDDLER_CHECKOUT_DIR")
 
-    if cwd && File.dir?(cwd) && File.exists?(Path.join([cwd | Path.split(@cli_entry)])) do
+    if cli_present?(cwd) do
       cwd
     else
       raise CliNotFoundError,
         message:
-          "Could not locate riddler-client CLI. Set RIDDLER_CLI_DIR or pass cwd: ... " <>
-            "(tried #{inspect(cwd)})"
+          "Could not locate the Riddler e2e-signer CLI (#{@cli_entry}). " <>
+            "Set RIDDLER_CHECKOUT_DIR to the Riddler repository root with " <>
+            "packages/e2e-signer built, or pass cwd: ... (tried #{inspect(cwd)})"
     end
   end
 
-  # Best-effort fallback: a sibling checkout of the CLI repo (axol-io/riddler-sdk,
-  # formerly riddler-client) beside the raxol monorepo, the common dev layout
-  # where both live under ~/CODE/.
-  #
-  # The previous expansion was one level short and landed on
-  # <raxol>/riddler-client, inside this repo, so the fallback never resolved
-  # under either repo name.
-  defp sibling_default do
-    Enum.find(
-      [
-        Path.expand("../../../../../riddler-sdk", __DIR__),
-        Path.expand("../../../../../riddler-client", __DIR__)
-      ],
-      &File.dir?/1
-    )
-  end
+  defp cli_present?(nil), do: false
+  defp cli_present?(dir), do: File.regular?(Path.join(dir, @cli_entry))
 
   defp encode_flags(flags) do
     Enum.flat_map(flags, fn

@@ -47,6 +47,19 @@ defmodule Raxol.Payments.Conformance.Permit2ConformanceTest do
     end
   end
 
+  # `by_protocol/1` answers [] both when the fixture is absent and when it loads
+  # but carries no permit2 vectors, and a `for` over [] generates no tests at
+  # all. The moduletag above covers the first case; this covers the second,
+  # where the suite would otherwise report a green run having asserted nothing
+  # about Permit2.
+  describe "fixture coverage" do
+    test "the loaded fixture yields at least one permit2 vector" do
+      assert ConformanceFixture.by_protocol("permit2") != [],
+             "fixture loaded but produced no permit2 vectors -- every generated " <>
+               "test below was silently skipped out of existence"
+    end
+  end
+
   describe "Permit2 EIP-712 conformance vs CLI" do
     for vec <- ConformanceFixture.by_protocol("permit2") do
       @vec vec
