@@ -10,7 +10,7 @@ import Config
 #
 # Every listener limit below is pinned at or below Cowboy's own default, so
 # an upstream default change cannot loosen this listener. Line numbers refer
-# to the locked cowboy 2.19.0 / cowlib 2.20.0.
+# to the locked cowboy 2.20.0 / cowlib 2.21.0.
 config :raxol_playground, RaxolPlaygroundWeb.Endpoint,
   adapter: Phoenix.Endpoint.Cowboy2Adapter,
   url: [host: "localhost"],

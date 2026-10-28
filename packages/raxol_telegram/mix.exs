@@ -15,8 +15,8 @@ defmodule RaxolTelegram.MixProject do
         ignore_warnings: ".dialyzer_ignore.exs"
       ],
       deps: deps(),
-      # cowlib 2.20.0 is the latest release and neither vulnerable function is called; see #921.
-      hex: [ignore_advisories: ["EEF-CVE-2026-43966", "EEF-CVE-2026-43969"]],
+      # cowlib 2.21.0 still has EEF-CVE-2026-43966 with no fixed release; see #921.
+      hex: [ignore_advisories: ["EEF-CVE-2026-43966"]],
       description: description(),
       package: package(),
       docs: docs(),
