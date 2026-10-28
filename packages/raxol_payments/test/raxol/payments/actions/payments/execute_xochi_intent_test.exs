@@ -1517,24 +1517,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               serve_quote(conn)
 
             "/api/intent/execute" ->
-              case outcome do
-                :timeout ->
-                  Req.Test.transport_error(conn, :timeout)
-
-                :closed ->
-                  Req.Test.transport_error(conn, :closed)
-
-                :invalid_json ->
-                  conn
-                  |> Plug.Conn.put_resp_content_type("application/json")
-                  |> Plug.Conn.send_resp(200, "{not-json")
-
-                :invalid_body ->
-                  Req.Test.json(conn, ["not", "an", "execute", "response"])
-
-                :server_500 ->
-                  conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "upstream"})
-              end
+              XochiIntentFixture.serve_ambiguous_execute(conn, outcome)
           end
         end)
 
