@@ -5,7 +5,6 @@ defmodule Raxol.Headless.McpToolsTest do
   alias Raxol.Headless.McpTools
   import ExUnit.CaptureLog, only: [capture_log: 1]
 
-
   # The test apps `raxol_start` starts over MCP. A set `:headless_startable`
   # replaces the default demo list, so they are listed alongside the demos,
   # for this module's tests only. BufferServer is not an app: it is listed so

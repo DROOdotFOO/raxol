@@ -1,7 +1,13 @@
+Code.require_file(
+  "../../../../../raxol_payments/test/support/xochi_intent_fixture.ex",
+  __DIR__
+)
+
 defmodule Raxol.Earn.Xochi.SettlerTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Earn.Xochi.Settler
+  alias Raxol.Payments.Test.XochiIntentFixture
   alias Raxol.Payments.Xochi.ReadTokenStore
 
   @src_token "0x" <> String.duplicate("11", 20)
@@ -296,43 +302,46 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
         body =
           case conn.request_path do
             "/api/intent/execute" ->
-              send(test_pid, :executed)
-
-              base =
-                %{"success" => exec_status == 200, "intent_id" => "i1", "status" => "executing"}
-
-              base
-              |> Map.merge(if(exec_token, do: %{"read_token" => exec_token}, else: %{}))
-              |> Map.merge(
-                if(exec_status in 400..499, do: %{"error" => "request_rejected"}, else: %{})
-              )
+              read_cap_execute(exec_token, exec_status, test_pid)
 
             "/api/intent/i1/status" ->
-              presented = Plug.Conn.get_req_header(conn, "x-xochi-read-token")
-              send(test_pid, {:presented, presented, conn.query_string})
-
-              legs =
-                if presented == [issued],
-                  do: %{
-                    "txHash" => "0x" <> String.duplicate("a", 64),
-                    "receivingTxHash" => "0x" <> String.duplicate("b", 64)
-                  },
-                  else: %{"settlement_confirmed" => true, "legs_withheld" => true}
-
-              Map.merge(
-                %{
-                  "intentId" => "i1",
-                  "status" => "completed",
-                  "terminal" => true,
-                  "settlementType" => "stealth"
-                },
-                legs
-              )
+              read_cap_status(conn, issued, test_pid)
           end
 
         status = if conn.request_path == "/api/intent/execute", do: exec_status, else: 200
         conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
       end
+    end
+
+    defp read_cap_execute(exec_token, exec_status, test_pid) do
+      send(test_pid, :executed)
+
+      %{"success" => exec_status == 200, "intent_id" => "i1", "status" => "executing"}
+      |> Map.merge(if(exec_token, do: %{"read_token" => exec_token}, else: %{}))
+      |> Map.merge(if(exec_status in 400..499, do: %{"error" => "request_rejected"}, else: %{}))
+    end
+
+    defp read_cap_status(conn, issued, test_pid) do
+      presented = Plug.Conn.get_req_header(conn, "x-xochi-read-token")
+      send(test_pid, {:presented, presented, conn.query_string})
+
+      legs =
+        if presented == [issued],
+          do: %{
+            "txHash" => "0x" <> String.duplicate("a", 64),
+            "receivingTxHash" => "0x" <> String.duplicate("b", 64)
+          },
+          else: %{"settlement_confirmed" => true, "legs_withheld" => true}
+
+      Map.merge(
+        %{
+          "intentId" => "i1",
+          "status" => "completed",
+          "terminal" => true,
+          "settlementType" => "stealth"
+        },
+        legs
+      )
     end
 
     defp read_cap_settler(exec_token, opts \\ []) do
@@ -390,24 +399,7 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
           "/api/intent/execute" ->
             send(test_pid, :executed)
 
-            case outcome do
-              :timeout ->
-                Req.Test.transport_error(conn, :timeout)
-
-              :closed ->
-                Req.Test.transport_error(conn, :closed)
-
-              :invalid_json ->
-                conn
-                |> Plug.Conn.put_resp_content_type("application/json")
-                |> Plug.Conn.send_resp(200, "{not-json")
-
-              :invalid_body ->
-                Req.Test.json(conn, ["not", "an", "execute", "response"])
-
-              :server_500 ->
-                conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "upstream"})
-            end
+            XochiIntentFixture.serve_ambiguous_execute(conn, outcome)
 
           "/api/intent/i1/status" ->
             Req.Test.json(conn, %{
@@ -421,7 +413,7 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
     end
 
     test "ambiguous decode, reset, and 5xx outcomes poll instead of re-relaying" do
-      for outcome <- [:closed, :invalid_json, :invalid_body, :server_500] do
+      for outcome <- [:timeout, :closed, :invalid_json, :invalid_body, :server_500] do
         store = Raxol.Payments.Checkpoint.ETS.new()
 
         settle =

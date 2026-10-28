@@ -1045,7 +1045,6 @@ defmodule Raxol.HeadlessTest do
       assert session_uris(stalling, "half_registered") == []
     end
 
-
     # An app's error term would reach `raxol_start`'s client verbatim; the
     # answer carries its class.
     test "an app's init error is answered by its class" do
@@ -1253,7 +1252,6 @@ defmodule Raxol.HeadlessTest do
   end
 
   defp stall_after_first_reply(:waiting, _event, _name), do: :waiting
-
 
   defp synchronizer_for(id) do
     case Enum.find(
