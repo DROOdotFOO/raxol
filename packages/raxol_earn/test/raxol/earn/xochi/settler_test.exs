@@ -318,9 +318,7 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
 
       %{"success" => exec_status == 200, "intent_id" => "i1", "status" => "executing"}
       |> Map.merge(if(exec_token, do: %{"read_token" => exec_token}, else: %{}))
-      |> Map.merge(
-        if(exec_status in 400..499, do: %{"error" => "request_rejected"}, else: %{})
-      )
+      |> Map.merge(if(exec_status in 400..499, do: %{"error" => "request_rejected"}, else: %{}))
     end
 
     defp read_cap_status(conn, issued, test_pid) do
