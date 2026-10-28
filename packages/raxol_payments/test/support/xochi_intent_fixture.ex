@@ -92,6 +92,8 @@ defmodule Raxol.Payments.Test.XochiIntentFixture do
 
   @doc "Serves a response whose outcome is unknown after dispatch."
   @spec serve_ambiguous_execute(Plug.Conn.t(), atom()) :: Plug.Conn.t()
+  def serve_ambiguous_execute(conn, :timeout), do: Req.Test.transport_error(conn, :timeout)
+
   def serve_ambiguous_execute(conn, :closed), do: Req.Test.transport_error(conn, :closed)
 
   def serve_ambiguous_execute(conn, :invalid_json) do

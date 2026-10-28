@@ -415,7 +415,7 @@ defmodule Raxol.Earn.Xochi.SettlerTest do
     end
 
     test "ambiguous decode, reset, and 5xx outcomes poll instead of re-relaying" do
-      for outcome <- [:closed, :invalid_json, :invalid_body, :server_500] do
+      for outcome <- [:timeout, :closed, :invalid_json, :invalid_body, :server_500] do
         store = Raxol.Payments.Checkpoint.ETS.new()
 
         settle =

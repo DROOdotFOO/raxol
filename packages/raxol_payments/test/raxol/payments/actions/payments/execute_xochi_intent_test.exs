@@ -1510,7 +1510,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     end
 
     test "ambiguous post-submit outcomes retain checkpoint and budget" do
-      for outcome <- [:closed, :invalid_json, :invalid_body, :server_500] do
+      for outcome <- [:timeout, :closed, :invalid_json, :invalid_body, :server_500] do
         Req.Test.stub(__MODULE__, fn conn ->
           case conn.request_path do
             "/api/intent/quote" ->
