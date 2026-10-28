@@ -10,9 +10,9 @@ defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   `ecrecover` (ERC-3009 origin pull / Permit2 / x402) rejects. Regression guard
   for the `v` normalization in `Raxol.Payments.EIP712.pack_signature/1`.
 
-  Tagged `:cli_signer` (excluded by default): needs node and a Riddler
-  checkout with `packages/e2e-signer` built. Set `RIDDLER_CLI_DIR` to it, or
-  check Riddler out beside the raxol repo.
+  Tagged `:cli_signer` (excluded by default): needs node and a Riddler checkout
+  with `packages/e2e-signer` built. Set `RIDDLER_CHECKOUT_DIR` to the repository
+  root.
   """
   use ExUnit.Case, async: true
 
@@ -35,7 +35,7 @@ defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   test "Env wallet signs an ERC-3009 digest identically to the reference CLI", %{cli_dir: cwd} do
     unless cwd do
       flunk(
-        "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+        "CLI not available; set RIDDLER_CHECKOUT_DIR to the built Riddler repository root or run with --exclude cli_signer"
       )
     end
 

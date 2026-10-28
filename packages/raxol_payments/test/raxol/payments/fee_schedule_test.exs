@@ -83,15 +83,9 @@ defmodule Raxol.Payments.FeeScheduleTest do
       dir =
         XochiSpec.dir() ||
           flunk(
-            "XOCHI_SPEC_DIR is unset under CI. Unpack npm pack " <>
-              "@xochi/spec@#{version} and set it to the tarball's package/ directory."
+            "XOCHI_SPEC_DIR is unset under CI. Run scripts/fetch_xochi_spec.sh " <>
+              "for @xochi/spec@#{version} and set it to the verified package root."
           )
-
-      manifest = dir |> Path.join("package.json") |> File.read!() |> Jason.decode!()
-
-      assert {manifest["name"], manifest["version"]} == {"@xochi/spec", version},
-             "XOCHI_SPEC_DIR=#{dir} is not @xochi/spec@#{version} " <>
-               "(test/fixtures/XOCHI_SPEC_VERSION)"
 
       assert File.read!(Path.join([dir, "fee", "schedule.json"])) == File.read!(@oracle_path),
              "priv/fee-oracle/schedule.json drifted from @xochi/spec@#{version} " <>

@@ -5,22 +5,21 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
   The fixture is `conformance/conformance.json` in the published
   `@xochi/spec` package (xochi-fi/xochi-sdk `packages/spec`), the
   byte-equality contract between the Node SDK and `raxol_payments`. It is read
-  from the release pinned in `test/fixtures/XOCHI_SPEC_VERSION` (see
-  `Raxol.Payments.Test.XochiSpec`), located by exactly one variable:
+  from the release pinned in `test/fixtures/XOCHI_SPEC_VERSION`. The single
+  `XOCHI_SPEC_DIR` variable names the verified package root; this loader
+  derives the fixture path from it through `Raxol.Payments.Test.XochiSpec`.
 
-      CONFORMANCE_FIXTURE_PATH=<unpacked tarball>/package/conformance/conformance.json
-
-  There is no sibling-checkout fallback: a checkout's working tree is whatever
-  branch it happens to be on, not a pinned release.
+  There is no sibling-checkout or separate fixture-path fallback: a checkout's
+  working tree is whatever branch it happens to be on, not a pinned release.
 
   Conformance tests are tagged `:conformance`. Locally they are excluded and
-  generate zero vectors when the variable is unset; under CI an unset variable
-  raises, because zero vectors there is a missing download, not coverage.
+  generate zero vectors when the root is unset; under CI an unset root raises,
+  because zero vectors there is a missing download, not coverage.
   """
 
   alias Raxol.Payments.Test.XochiSpec
 
-  @env "CONFORMANCE_FIXTURE_PATH"
+  @env "XOCHI_SPEC_DIR"
 
   @doc """
   Load the entire fixture as a list of vector maps. Raises if the
@@ -54,7 +53,7 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
         IO.puts(
           :stderr,
           "[conformance] fixture absent -- 0 #{protocol} vectors generated. " <>
-            "Set #{@env} to the pinned @xochi/spec conformance.json to run them."
+            "Set #{@env} to the verified @xochi/spec package root to run them."
         )
 
         []
@@ -92,29 +91,13 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
     end
   end
 
-  # An explicit path that does not exist is a misconfiguration in every
-  # environment, never a reason to fall back to "absent".
-  defp do_locate do
-    case System.get_env(@env) do
-      blank when blank in [nil, ""] ->
-        nil
-
-      path ->
-        if File.regular?(path) do
-          path
-        else
-          raise "#{@env}=#{inspect(path)} does not name a file. Point it at " <>
-                  "conformance/conformance.json in the unpacked " <>
-                  "@xochi/spec@#{XochiSpec.pinned_version()} tarball."
-        end
-    end
-  end
+  defp do_locate, do: XochiSpec.conformance_path()
 
   defp not_found_message do
     version = XochiSpec.pinned_version()
 
-    "Conformance fixture not found: #{@env} is unset. Fetch the pinned release " <>
-      "(npm pack @xochi/spec@#{version} && tar xzf xochi-spec-#{version}.tgz) " <>
-      "and set #{@env}=$PWD/package/conformance/conformance.json."
+    "Conformance fixture not found: #{@env} is unset. Run " <>
+      "scripts/fetch_xochi_spec.sh for @xochi/spec@#{version}, then set " <>
+      "#{@env} to the verified package root."
   end
 end

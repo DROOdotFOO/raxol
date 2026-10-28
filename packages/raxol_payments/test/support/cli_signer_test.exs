@@ -17,7 +17,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
     } do
       unless cli_available? do
         flunk(
-          "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+          "CLI not available; set RIDDLER_CHECKOUT_DIR to the built Riddler repository root or run with --exclude cli_signer"
         )
       end
 
@@ -39,7 +39,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
     } do
       unless cli_available? do
         flunk(
-          "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+          "CLI not available; set RIDDLER_CHECKOUT_DIR to the built Riddler repository root or run with --exclude cli_signer"
         )
       end
 
@@ -74,7 +74,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
     } do
       unless cli_available? do
         flunk(
-          "CLI not available; set RIDDLER_CLI_DIR to a built Riddler checkout or run with --exclude cli_signer"
+          "CLI not available; set RIDDLER_CHECKOUT_DIR to the built Riddler repository root or run with --exclude cli_signer"
         )
       end
 

@@ -19,14 +19,12 @@ defmodule Raxol.Payments.Test.CliSigner do
   `packages/e2e-signer`). Riddler is private, so `:cli_signer` stays a
   local-only tag.
 
-  Lookup order for the Riddler checkout root:
+  `RIDDLER_CHECKOUT_DIR` must name the Riddler repository root, regardless of
+  where that checkout lives. An explicit `opts[:cwd]` overrides it. There is
+  no owner-specific sibling-directory fallback.
 
-  1. `opts[:cwd]`
-  2. `System.get_env("RIDDLER_CLI_DIR")`
-  3. A sibling `Riddler` checkout beside this monorepo.
-
-  If none holds `packages/e2e-signer/dist/cli.js`, every call raises
-  `Raxol.Payments.Test.CliSigner.CliNotFoundError`.
+  If the selected root does not hold `packages/e2e-signer/dist/cli.js`, every
+  call raises `Raxol.Payments.Test.CliSigner.CliNotFoundError`.
 
   ## Example
 
@@ -131,18 +129,21 @@ defmodule Raxol.Payments.Test.CliSigner do
   end
 
   @doc """
-  The Riddler checkout holding the built CLI (`RIDDLER_CLI_DIR`, then a
-  sibling `Riddler` checkout), or nil when neither has it.
+  The Riddler repository root from `RIDDLER_CHECKOUT_DIR`, or nil when its
+  built e2e-signer CLI is absent.
   """
   @spec locate() :: Path.t() | nil
   def locate do
-    Enum.find([System.get_env("RIDDLER_CLI_DIR"), sibling_default()], &cli_present?/1)
+    case System.get_env("RIDDLER_CHECKOUT_DIR") do
+      blank when blank in [nil, ""] -> nil
+      checkout_dir -> if cli_present?(checkout_dir), do: checkout_dir
+    end
   end
 
   # -- Internals --
 
   defp resolve_cwd(opts) do
-    cwd = opts[:cwd] || System.get_env("RIDDLER_CLI_DIR") || sibling_default()
+    cwd = opts[:cwd] || System.get_env("RIDDLER_CHECKOUT_DIR")
 
     if cli_present?(cwd) do
       cwd
@@ -150,17 +151,13 @@ defmodule Raxol.Payments.Test.CliSigner do
       raise CliNotFoundError,
         message:
           "Could not locate the Riddler e2e-signer CLI (#{@cli_entry}). " <>
-            "Set RIDDLER_CLI_DIR to a Riddler checkout with packages/e2e-signer " <>
-            "built, or pass cwd: ... (tried #{inspect(cwd)})"
+            "Set RIDDLER_CHECKOUT_DIR to the Riddler repository root with " <>
+            "packages/e2e-signer built, or pass cwd: ... (tried #{inspect(cwd)})"
     end
   end
 
   defp cli_present?(nil), do: false
   defp cli_present?(dir), do: File.regular?(Path.join(dir, @cli_entry))
-
-  # Best-effort fallback: a Riddler checkout beside the raxol monorepo, the
-  # common dev layout where both live under ~/CODE/.
-  defp sibling_default, do: Path.expand("../../../../../Riddler", __DIR__)
 
   defp encode_flags(flags) do
     Enum.flat_map(flags, fn

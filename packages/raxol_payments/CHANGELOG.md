@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Cross-repository parity now uses the published `@xochi/spec@0.9.0`
+  tarball, pinned by committed SHA-512 integrity and fetched through a cached,
+  verified script. `XOCHI_SPEC_DIR` is the single package-root contract, and
+  `RIDDLER_CHECKOUT_DIR` explicitly names any built Riddler checkout.
 - `Raxol.Payments.PrivacyTier`: Sovereign's `data_retention` is `:wallet`, not
   `:nothing`; `:nothing` is removed from the `t()` typespec. No design promises
   zero retention and Sovereign is excluded (xochi
