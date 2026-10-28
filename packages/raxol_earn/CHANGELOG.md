@@ -94,6 +94,26 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
   matrix lists them (it lists EURe), including with the stablecoin corridor
   allowlist off. They reject as `{:unsupported_src_token, _, _}` /
   `{:unsupported_dst_token, _, _}`.
+- **The Xochi settler polls only an intent it owns.** The atomically acquired
+  dispatch checkpoint fingerprints the exact signed bundle and binds its intent
+  to the executing principal and API origin. A 409 or completed/claimed 400 is
+  a clean rejection for this writer: it never polls that intent or presents a
+  token left by another writer.
+- The owner read token (xochi#563) is sent only in the request header. It never
+  enters the deliverable, error, or replay checkpoint: a `Secret`-wrapped value
+  lives in a separate private record keyed by API origin, executing principal,
+  and intent id. Terminal results are committed before token deletion and remain
+  replayable for 24 hours; read tokens expire after one hour. Failed, expired,
+  and refunded results delete their token as well.
+- Once execute submission starts, reset, malformed response, and 5xx outcomes
+  remain in doubt and are polled under the owned signed intent id. A 404 at or
+  after the signed deadline resolves that ambiguity as never dispatched and
+  releases the state. Invalid configuration and transport setup failures proven
+  to happen before send delete the dispatch checkpoint immediately.
+- A completed anonymous view with no settlement transaction hash fails with
+  `{:error, {:settlement_tx_hash_unavailable, intent_id}}`. An anonymous
+  (`legs_withheld`) answer remains non-terminal and retains the token for a
+  later owner-view poll.
 
 ### Security
 

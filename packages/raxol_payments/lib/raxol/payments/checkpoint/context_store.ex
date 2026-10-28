@@ -69,10 +69,48 @@ defmodule Raxol.Payments.Checkpoint.ContextStore do
   end
 
   @impl true
+  def put_new(store_id, key, record) do
+    if available?(),
+      do: with_lock(store_id, fn -> put_unless_present(store_id, key, record) end),
+      else: :ok
+  end
+
+  @impl true
   def delete(store_id, key) do
     if available?(), do: @context_store.update(store_id, &Map.delete(&1, key))
     :ok
   end
+
+  @impl true
+  def sweep_expired(store_id, now) do
+    if available?(),
+      do: with_lock(store_id, fn -> sweep_records(store_id, now) end),
+      else: :ok
+  end
+
+  defp with_lock(store_id, fun),
+    do: :global.trans({{__MODULE__, store_id}, self()}, fun)
+
+  defp put_unless_present(store_id, key, record) do
+    case fetch(store_id, key) do
+      :error ->
+        put(store_id, key, record)
+        :ok
+
+      {:ok, _record} ->
+        {:error, :exists}
+    end
+  end
+
+  defp sweep_records(store_id, now) do
+    case @context_store.update(store_id, &Map.reject(&1, fn entry -> expired?(entry, now) end)) do
+      {:ok, _records} -> :ok
+      {:error, :not_found} -> :ok
+    end
+  end
+
+  defp expired?({_key, record}, now),
+    do: is_map(record) and is_integer(record[:expires_at]) and record.expires_at <= now
 
   defp available?, do: Code.ensure_loaded?(@context_store)
 end

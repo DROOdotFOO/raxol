@@ -57,8 +57,22 @@ defmodule Raxol.Payments.Checkpoint.ETS do
   end
 
   @impl true
+  def put_new(table, key, record) do
+    if :ets.insert_new(table, {key, record}), do: :ok, else: {:error, :exists}
+  end
+
+  @impl true
   def delete(table, key) do
     :ets.delete(table, key)
+    :ok
+  end
+
+  @impl true
+  def sweep_expired(table, now) do
+    :ets.select_delete(table, [
+      {{:_, %{expires_at: :"$1"}}, [{:"=<", :"$1", now}], [true]}
+    ])
+
     :ok
   end
 end

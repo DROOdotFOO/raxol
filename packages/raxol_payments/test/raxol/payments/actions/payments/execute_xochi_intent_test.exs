@@ -4,7 +4,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
   alias Raxol.Payments.{Checkpoint, Failure, Ledger, SpendingPolicy}
   alias Raxol.Payments.Test.XochiIntentFixture
-  alias Raxol.Payments.Xochi.Stealth
+  alias Raxol.Payments.Xochi.{ReadTokenStore, SettlementState, Stealth}
 
   # Wallet that signals when it signs, so tests can assert the gate runs first.
   defmodule SpyWallet do
@@ -132,6 +132,65 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     case Keyword.fetch(opts, :types) do
       {:ok, types} -> Map.put(eip712, "types", types)
       :error -> eip712
+    end
+  end
+
+  defp quote_then_refuse_connections do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [
+        :binary,
+        packet: :raw,
+        active: false,
+        reuseaddr: true,
+        ip: {127, 0, 0, 1}
+      ])
+
+    {:ok, port} = :inet.port(listener)
+
+    spawn_link(fn ->
+      {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+      :ok = :gen_tcp.close(listener)
+      body = socket |> read_http_request("") |> Jason.decode!()
+      to_amount = body["output_amount"] || "499000"
+
+      payload =
+        Jason.encode!(%{
+          "intentId" => "int_1",
+          "quoteId" => "q_1",
+          "canSolve" => true,
+          "toAmount" => to_amount,
+          "xochiFee" => "1000",
+          "eip712Data" => served_eip712(body, to_amount, "q_1", [])
+        })
+
+      :ok =
+        :gen_tcp.send(
+          socket,
+          "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: #{byte_size(payload)}\r\n\r\n#{payload}"
+        )
+
+      :ok = :gen_tcp.close(socket)
+    end)
+
+    "http://127.0.0.1:#{port}"
+  end
+
+  defp read_http_request(socket, acc) do
+    case String.split(acc, "\r\n\r\n", parts: 2) do
+      [head, body] ->
+        [_, length] = Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, "\r\n" <> head)
+        length = String.to_integer(length)
+
+        if byte_size(body) >= length do
+          binary_part(body, 0, length)
+        else
+          {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+          read_http_request(socket, acc <> data)
+        end
+
+      [_head] ->
+        {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+        read_http_request(socket, acc <> data)
     end
   end
 
@@ -1071,7 +1130,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
 
-    test "drops the checkpoint when execution fails so a retry starts clean" do
+    test "drops the checkpoint for a structurally valid clean rejection" do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
           "/api/intent/quote" ->
@@ -1081,8 +1140,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
             conn
             |> Plug.Conn.put_resp_content_type("application/json")
             |> Plug.Conn.send_resp(
-              500,
-              Jason.encode!(%{"error" => "server_error"})
+              422,
+              Jason.encode!(%{"error" => "request_rejected"})
             )
         end
       end)
@@ -1365,6 +1424,351 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), call_ctx())
       assert result.reconciling == false
+    end
+
+    test "the execute read token stays out of the Action result and replay summary" do
+      token = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+      store = Checkpoint.ETS.new()
+
+      stub_quote(%{
+        "success" => true,
+        "intentId" => "int_1",
+        "status" => "executing",
+        "stealthAddress" => "0xstealth",
+        "read_token" => token
+      })
+
+      ctx = Map.merge(call_ctx(), %{checkpoint: store, idempotency_key: "pay-token"})
+      assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), ctx)
+      refute Map.has_key?(result, :read_token)
+      refute inspect(result) =~ token
+
+      assert ReadTokenStore.fetch(
+               store,
+               config().base_url,
+               "agent:a1",
+               "int_1",
+               System.system_time(:second)
+             ) == token
+
+      assert {:ok, %{summary: summary}} = Checkpoint.fetch(store, "pay-token")
+
+      refute Map.has_key?(summary, :read_token)
+      refute inspect(summary) =~ token
+    end
+
+    test "a 502 carrying read_token is dispatched and in doubt, keeping its checkpoint and reservation" do
+      token = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            serve_quote(conn)
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_status(502)
+            |> Req.Test.json(%{
+              "success" => false,
+              "intent_id" => "int_1",
+              "status" => "completed",
+              "error" => "solver",
+              "read_token" => token
+            })
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-502"
+      }
+
+      assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert result.intent_id == "int_1"
+      assert result.reconciling == true
+      refute Map.has_key?(result, :read_token)
+      assert {:ok, %{summary: summary}} = Checkpoint.fetch(store, "pay-502")
+      refute Map.has_key?(summary, :read_token)
+
+      assert ReadTokenStore.fetch(
+               store,
+               config().base_url,
+               "agent:a1",
+               "int_1",
+               System.system_time(:second)
+             ) == token
+
+      assert [] = for(%{metadata: %{type: :release}} <- Ledger.get_history(ledger, "a1"), do: 1)
+    end
+
+    test "ambiguous post-submit outcomes retain checkpoint and budget" do
+      for outcome <- [:closed, :invalid_json, :invalid_body, :server_500] do
+        Req.Test.stub(__MODULE__, fn conn ->
+          case conn.request_path do
+            "/api/intent/quote" ->
+              serve_quote(conn)
+
+            "/api/intent/execute" ->
+              case outcome do
+                :timeout ->
+                  Req.Test.transport_error(conn, :timeout)
+
+                :closed ->
+                  Req.Test.transport_error(conn, :closed)
+
+                :invalid_json ->
+                  conn
+                  |> Plug.Conn.put_resp_content_type("application/json")
+                  |> Plug.Conn.send_resp(200, "{not-json")
+
+                :invalid_body ->
+                  Req.Test.json(conn, ["not", "an", "execute", "response"])
+
+                :server_500 ->
+                  conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "upstream"})
+              end
+          end
+        end)
+
+        {:ok, ledger} =
+          Ledger.start_link(table_name: :"xochi_unknown_#{System.unique_integer([:positive])}")
+
+        store = Checkpoint.ETS.new()
+        key = "pay-#{outcome}"
+
+        ctx = %{
+          wallet: SpyWallet,
+          xochi_config: Map.update!(config(), :req_options, &Keyword.put(&1, :retry, false)),
+          ledger: ledger,
+          policy: policy(),
+          agent_id: "a1",
+          checkpoint: store,
+          idempotency_key: key
+        }
+
+        assert {:ok, %{intent_id: "int_1", reconciling: true}} =
+                 ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+        assert {:ok, %{intent_id: "int_1", summary: %{reconciling: true}}} =
+                 Checkpoint.fetch(store, key)
+
+        assert [] =
+                 for(%{metadata: %{type: :release}} <- Ledger.get_history(ledger, "a1"), do: 1)
+
+        assert Decimal.equal?(Ledger.get_totals(ledger, "a1", policy()).lifetime, "0.50")
+      end
+    end
+
+    test "connect refusal releases the checkpoint and spend reservation" do
+      base_url = quote_then_refuse_connections()
+
+      {:ok, ledger} =
+        Ledger.start_link(table_name: :"xochi_refused_#{System.unique_integer([:positive])}")
+
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: %{base_url: base_url, auth: :none, req_options: [retry: false]},
+        ledger: ledger,
+        policy: %{policy() | approved_domains: ["127.0.0.1"]},
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-refused"
+      }
+
+      assert {:error, %Failure{reason: :network}} =
+               ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+      assert :error = Checkpoint.fetch(store, "pay-refused")
+      assert Decimal.equal?(Ledger.get_totals(ledger, "a1", policy()).lifetime, "0")
+    end
+
+    test "invalid base URL fails before checkpoint or spend reservation" do
+      {:ok, ledger} =
+        Ledger.start_link(table_name: :"xochi_invalid_url_#{System.unique_integer([:positive])}")
+
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: %{base_url: "ftp://xochi.invalid", auth: :none},
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-invalid-url"
+      }
+
+      assert {:error, %Failure{reason: :unknown}} =
+               ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+      assert :error = Checkpoint.fetch(store, "pay-invalid-url")
+      assert Decimal.equal?(Ledger.get_totals(ledger, "a1", policy()).lifetime, "0")
+      refute_received :wallet_signed
+    end
+
+    test "concurrent same-payment executes have one checkpoint owner and one POST" do
+      test_pid = self()
+
+      plug = fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            serve_quote(conn)
+
+          "/api/intent/execute" ->
+            send(test_pid, {:execute_started, self()})
+
+            receive do
+              :release_execute ->
+                Req.Test.json(conn, %{
+                  "success" => true,
+                  "intentId" => "int_1",
+                  "status" => "executing",
+                  "stealthAddress" => "0xstealth"
+                })
+            end
+        end
+      end
+
+      {:ok, ledger} =
+        Ledger.start_link(table_name: :"xochi_concurrent_#{System.unique_integer([:positive])}")
+
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: %{base_url: "https://xochi.test", req_options: [plug: plug]},
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-concurrent"
+      }
+
+      first = Task.async(fn -> ExecuteXochiIntent.run(base_params(%{}), ctx) end)
+      assert_receive {:execute_started, execute_pid}
+
+      assert {:ok, %{dispatch_key: "pay-concurrent"}} =
+               SettlementState.owner(
+                 store,
+                 ctx.xochi_config.base_url,
+                 "agent:a1",
+                 "int_1",
+                 System.system_time(:second)
+               )
+
+      second = Task.async(fn -> ExecuteXochiIntent.run(base_params(%{}), ctx) end)
+      assert {:ok, %{intent_id: "int_1", status: "dispatched"}} = Task.await(second)
+      refute_received {:execute_started, _other}
+
+      send(execute_pid, :release_execute)
+      assert {:ok, %{intent_id: "int_1"}} = Task.await(first)
+      refute_received {:execute_started, _other}
+
+      assert {:ok, %{intent_id: "int_1", summary: %{intent_id: "int_1"}}} =
+               Checkpoint.fetch(store, "pay-concurrent")
+    end
+
+    test "a refused execute releases this writer's checkpoint and budget" do
+      refusals = [
+        {409, %{"success" => false, "error" => "Intent already being executed"}},
+        {400, %{"success" => false, "error" => "Cannot execute intent in executing status"}},
+        {400, %{"success" => false, "error" => "Cannot execute intent in completed status"}}
+      ]
+
+      for {{status, body}, n} <- Enum.with_index(refusals) do
+        Req.Test.stub(__MODULE__, fn conn ->
+          case conn.request_path do
+            "/api/intent/quote" -> serve_quote(conn)
+            "/api/intent/execute" -> conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
+          end
+        end)
+
+        {:ok, ledger} =
+          Ledger.start_link(table_name: :"xochi_claimed_#{System.unique_integer([:positive])}")
+
+        store = Checkpoint.ETS.new()
+        key = "pay-claimed-#{n}"
+
+        ctx = %{
+          wallet: SpyWallet,
+          xochi_config: config(),
+          ledger: ledger,
+          policy: policy(),
+          agent_id: "a1",
+          checkpoint: store,
+          idempotency_key: key
+        }
+
+        assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+        assert :error = Checkpoint.fetch(store, key)
+
+        assert [_release] =
+                 for(
+                   %{metadata: %{type: :release}} = entry <-
+                     Ledger.get_history(ledger, "a1"),
+                   do: entry
+                 )
+
+        assert Decimal.equal?(Ledger.get_totals(ledger, "a1", policy()).lifetime, "0")
+      end
+    end
+
+    test "a refusal because the intent expired is clean: budget released, checkpoint dropped" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            serve_quote(conn)
+
+          "/api/intent/execute" ->
+            conn
+            |> Plug.Conn.put_status(400)
+            |> Req.Test.json(%{
+              "success" => false,
+              "error" => "Cannot execute intent in expired status"
+            })
+        end
+      end)
+
+      {:ok, ledger} =
+        Ledger.start_link(table_name: :"xochi_expired_#{System.unique_integer([:positive])}")
+
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-expired"
+      }
+
+      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert :error = Checkpoint.fetch(store, "pay-expired")
+      assert Decimal.equal?(Ledger.get_totals(ledger, "a1", policy()).lifetime, "0")
+    end
+
+    test "an older worker's execute returns no model-visible read token" do
+      stub_quote(%{
+        "success" => true,
+        "intentId" => "int_1",
+        "status" => "executing",
+        "stealthAddress" => "0xstealth"
+      })
+
+      assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), call_ctx())
+      refute Map.has_key?(result, :read_token)
     end
 
     test "an in-doubt (reconciling) execute surfaces reconciling, not a clean success" do

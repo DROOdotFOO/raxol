@@ -30,9 +30,10 @@ defmodule Raxol.Payments.Checkpoint do
 
   A record is a plain map whose shape the calling Action defines. The
   load-bearing field is the id a resume polls -- `:intent_id` for the Xochi
-  intent, `:transfer_id` for the Relay transfer. Implementations persist whatever
-  else the caller stores; both payment Actions store the full result summary so a
-  resume can return it without re-deriving anything.
+  intent, `:transfer_id` for the Relay transfer. Replayable result records must
+  contain no bearer secrets; Xochi read capabilities use a separate,
+  `Secret`-wrapped checkpoint entry keyed by the API origin, executing principal,
+  and non-secret intent id.
   """
 
   @type handle :: term()
@@ -49,8 +50,14 @@ defmodule Raxol.Payments.Checkpoint do
   @doc "Store `record` under `key`, overwriting any existing record."
   @callback put(handle(), key(), entry()) :: :ok
 
+  @doc "Store `record` only when `key` is absent."
+  @callback put_new(handle(), key(), entry()) :: :ok | {:error, :exists}
+
   @doc "Remove any record stored under `key`."
   @callback delete(handle(), key()) :: :ok
+
+  @doc "Delete records whose integer `:expires_at` is at or before `now`."
+  @callback sweep_expired(handle(), integer()) :: :ok
 
   @doc """
   Fetch the in-flight record for `key`.
@@ -67,10 +74,24 @@ defmodule Raxol.Payments.Checkpoint do
   def put(nil, _key, _record), do: :ok
   def put({module, handle}, key, record) when is_atom(module), do: module.put(handle, key, record)
 
+  @doc "Atomically store a record only when its key is absent."
+  @spec put_new(store() | nil, key(), entry()) :: :ok | {:error, :exists}
+  def put_new(nil, _key, _record), do: :ok
+
+  def put_new({module, handle}, key, record) when is_atom(module),
+    do: module.put_new(handle, key, record)
+
   @doc "Drop the record for `key`. No-op when no store is configured."
   @spec delete(store() | nil, key()) :: :ok
   def delete(nil, _key), do: :ok
   def delete({module, handle}, key) when is_atom(module), do: module.delete(handle, key)
+
+  @doc "Remove expired records. No-op when no store is configured."
+  @spec sweep_expired(store() | nil, integer()) :: :ok
+  def sweep_expired(nil, _now), do: :ok
+
+  def sweep_expired({module, handle}, now) when is_atom(module) and is_integer(now),
+    do: module.sweep_expired(handle, now)
 
   @doc """
   Derive a stable idempotency key from the canonical fields of a logical payment.
