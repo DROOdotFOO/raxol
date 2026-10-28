@@ -248,29 +248,30 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       assert exec.read_token == nil
     end
 
-    test "a malformed read_token on a 502 is dropped and never enters an error" do
+    test "a malformed read_token on a 502 is classified without exposing it" do
       assert {:ok, %ExecuteResponse{} = exec} =
-               exec_502(%{"error" => "x", "read_token" => "short"})
+               exec_502(%{"error" => "x", "readToken" => "short"})
 
       assert exec.reconciling
       assert exec.read_token == nil
+      assert exec.error == ":malformed_read_token"
       refute inspect(exec) =~ "short"
     end
 
-    test "a 4xx carrying a valid read token is not a clean rejection" do
-      body = %{"error" => "uncertain", "read_token" => @token}
+    test "a 4xx refusal carrying a valid token is still a clean rejection" do
+      body = %{
+        "error" => "Cannot execute intent in completed status",
+        "readToken" => @token
+      }
 
       config = %{
         base_url: "https://api.xochi.fi",
-        req_options: [plug: json_plug(body, 409), retry: false]
+        req_options: [plug: json_plug(body, 400), retry: false]
       }
 
-      assert {:ok,
-              %ExecuteResponse{
-                intent_id: "xi_1",
-                reconciling: true,
-                read_token: @token
-              }} = Client.execute(config, @exec_request)
+      assert {:error, {:http, 400, redacted}} = Client.execute(config, @exec_request)
+      assert redacted["readToken"] == "[redacted]"
+      refute inspect(redacted) =~ @token
     end
 
     test "a structurally valid 4xx is a clean rejection with nested tokens redacted" do
@@ -295,19 +296,15 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       Client.execute(config, @exec_request)
     end
 
-    test "an intent another writer is executing is in doubt, not a clean rejection" do
-      # The worker's lost-claim answer: this request did not execute the intent,
-      # but another one is, so its outcome is unknown.
-      assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true, status: :unknown}} =
+    test "an intent another writer claimed is a clean rejection for this writer" do
+      assert {:error, {:http, 409, _}} =
                exec_with(409, %{"success" => false, "error" => "Intent already being executed"})
     end
 
-    test "an intent already past quoted is in doubt for every status but expired" do
+    test "an intent already past quoted is a clean rejection for this writer" do
       for status <- ["executing", "settling", "completed", "failed", "refunded"] do
         body = %{"success" => false, "error" => "Cannot execute intent in #{status} status"}
-
-        assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true}} =
-                 exec_with(400, body)
+        assert {:error, {:http, 400, _}} = exec_with(400, body)
       end
     end
 
@@ -325,10 +322,14 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       assert {:error, {:http, 400, _}} = exec_with(400, %{"error" => "Nonce already used"})
     end
 
-    test "transport timeout and reset remain in doubt and are never retried" do
+    test "connect refusal is definite while a reset remains in doubt, with no retry" do
       test_pid = self()
 
-      for reason <- [:timeout, :closed] do
+      for {reason, expected} <- [
+            {:econnrefused, {:error, {:transport, :not_sent}}},
+            {:timeout, {:ok, :reconciling}},
+            {:closed, {:ok, :reconciling}}
+          ] do
         plug = fn conn ->
           send(test_pid, {:execute_attempt, reason})
           Req.Test.transport_error(conn, reason)
@@ -339,8 +340,15 @@ defmodule Raxol.Payments.Xochi.ClientTest do
           req_options: [plug: plug, retry: :transient]
         }
 
-        assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true, read_token: nil}} =
-                 Client.execute(config, @exec_request)
+        result = Client.execute(config, @exec_request)
+
+        case expected do
+          {:ok, :reconciling} ->
+            assert {:ok, %ExecuteResponse{intent_id: "xi_1", reconciling: true}} = result
+
+          error ->
+            assert ^error = result
+        end
 
         assert_received {:execute_attempt, ^reason}
         refute_received {:execute_attempt, ^reason}
@@ -414,9 +422,41 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       refute_received {:req, _, _, _, _}
     end
 
-    test "a served read_token of the wrong shape is dropped" do
-      exec = ExecuteResponse.from_json(%{"intent_id" => "xi_1", "read_token" => "short"})
-      assert exec.read_token == nil
+    test "a served malformed readToken becomes a contextual reconciling result" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [
+          plug:
+            json_plug(%{"intentId" => "xi_1", "status" => "executing", "readToken" => "short"})
+        ]
+      }
+
+      assert {:ok, %ExecuteResponse{reconciling: true, error: ":malformed_read_token"}} =
+               Client.execute(config, @exec_request)
+    end
+
+    test "token-bearing reads never follow a cross-host redirect" do
+      test_pid = self()
+
+      plug = fn conn ->
+        send(test_pid, {:request, conn.host, conn.request_path, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_header("location", "http://collector.example/steal")
+        |> Plug.Conn.send_resp(302, "")
+      end
+
+      config = %{base_url: "https://xochi.example", req_options: [plug: plug]}
+
+      for read <- [
+            fn -> Client.get_status(config, "xi_1", read_token: @token) end,
+            fn -> Client.get_intent(config, "xi_1", read_token: @token) end
+          ] do
+        assert {:error, {:http, 302, _}} = read.()
+        assert_received {:request, "xochi.example", _path, headers}
+        assert {"x-xochi-read-token", @token} in downcase(headers)
+        refute_received {:request, "collector.example", _, _}
+      end
     end
   end
 

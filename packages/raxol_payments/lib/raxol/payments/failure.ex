@@ -331,6 +331,24 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
+  def from({:intent_not_owned, intent_id} = detail),
+    do:
+      build(
+        :rejected,
+        "This principal did not dispatch intent #{intent_id}; polling it is refused.",
+        false,
+        detail
+      )
+
+  def from({:never_dispatched, intent_id} = detail),
+    do:
+      build(
+        :network,
+        "Intent #{intent_id} was not accepted before its signed deadline; the reservation was released.",
+        true,
+        detail
+      )
+
   # A poll gave up before the intent reached a terminal status. The origin funds
   # may already have moved, so this is a reconcile case, not a clean retry: the
   # intent id rides the error so an operator can resolve THAT intent.
@@ -548,6 +566,8 @@ defmodule Raxol.Payments.Failure do
   end
 
   defp mapped_code(_), do: nil
+
+  defp transport_error?({:transport, :not_sent}), do: true
 
   defp transport_error?(reason) when reason in @transport_atoms, do: true
 

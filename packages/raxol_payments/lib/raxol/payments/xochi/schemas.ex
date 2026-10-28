@@ -447,13 +447,22 @@ defmodule Raxol.Payments.Xochi.Schemas do
   defmodule ExecuteRequest do
     @moduledoc false
     @enforce_keys [:intent_id, :quote_id, :signature, :nonce]
-    defstruct [:intent_id, :quote_id, :signature, :nonce, :pull_signature, :aztec_proof]
+    defstruct [
+      :intent_id,
+      :quote_id,
+      :signature,
+      :nonce,
+      :deadline,
+      :pull_signature,
+      :aztec_proof
+    ]
 
     @type t :: %__MODULE__{
             intent_id: String.t(),
             quote_id: String.t(),
             signature: String.t(),
             nonce: non_neg_integer(),
+            deadline: integer() | nil,
             pull_signature: String.t() | nil,
             aztec_proof: String.t() | nil
           }
@@ -529,13 +538,10 @@ defmodule Raxol.Payments.Xochi.Schemas do
         # 5xx/timeout wrapped as a 200) and kept the intent non-terminal. Funds
         # may be in flight; the caller must poll to resolve, never re-execute.
         reconciling: pick(json, ["reconciling"]) || false,
-        # Read capability (xochi#563), returned once by execute. Present it on
-        # `Client.get_status/3` / `get_intent/3` to see a stealth/shielded
-        # intent's on-chain legs, which the worker otherwise withholds. Older
-        # workers omit it; nil then, and reads stay anonymous. A malformed one
-        # is dropped, never an error: the execute it rides on may have moved
-        # funds.
-        read_token: if(read_token?(json["read_token"]), do: json["read_token"])
+        # Read capability (xochi#563), returned once by execute. The client
+        # rejects a present malformed value with context; this parser accepts
+        # both worker naming conventions and never coerces it.
+        read_token: read_token(json)
       }
     end
 
@@ -550,6 +556,11 @@ defmodule Raxol.Payments.Xochi.Schemas do
       do: String.match?(token, ~r/\A[A-Za-z0-9_-]{43}\z/)
 
     def read_token?(_), do: false
+
+    defp read_token(json) do
+      token = pick(json, ["read_token", "readToken"])
+      if read_token?(token), do: token
+    end
 
     defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
 

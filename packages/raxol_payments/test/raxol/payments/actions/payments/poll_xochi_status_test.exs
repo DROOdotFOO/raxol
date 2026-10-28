@@ -3,7 +3,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
 
   alias Raxol.Payments.Actions.Payments.PollXochiStatus
   alias Raxol.Payments.{Checkpoint, Failure, Ledger, SpendingPolicy}
-  alias Raxol.Payments.Xochi.ReadTokenStore
+  alias Raxol.Payments.Xochi.{ReadTokenStore, SettlementState}
 
   # A checkpoint store that dies on delete, modelling a crash between the
   # recorded terminal summary and the token cleanup.
@@ -17,7 +17,13 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
     def put(table, key, record), do: Checkpoint.ETS.put(table, key, record)
 
     @impl true
+    def put_new(table, key, record), do: Checkpoint.ETS.put_new(table, key, record)
+
+    @impl true
     def delete(_table, _key), do: raise("crash before token cleanup")
+
+    @impl true
+    def sweep_expired(table, now), do: Checkpoint.ETS.sweep_expired(table, now)
   end
 
   defp config do
@@ -26,6 +32,26 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
       auth_token: "t",
       req_options: [plug: {Req.Test, __MODULE__}]
     }
+  end
+
+  @principal "agent:agent_1"
+  @now 1_900_000_000
+
+  defp owner_context(store, overrides \\ %{}) do
+    Map.merge(
+      %{
+        xochi_config: config(),
+        checkpoint: store,
+        agent_id: "agent_1",
+        clock: fn -> @now end
+      },
+      overrides
+    )
+  end
+
+  defp seed_token(store, origin, id, token) do
+    :ok = SettlementState.bind(store, origin, @principal, id, @now + 300, @now)
+    :ok = ReadTokenStore.put(store, origin, @principal, id, token, @now)
   end
 
   defp policy do
@@ -184,11 +210,11 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
 
     test "the token is loaded from private checkpoint state and reveals the settlement tx" do
       store = Checkpoint.ETS.new()
-      ReadTokenStore.put(store, config().base_url, "int_s", @token)
+      seed_token(store, config().base_url, "int_s", @token)
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
       assert {:ok, summary} =
-               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+               PollXochiStatus.run(params, owner_context(store))
 
       # Every owner-view leg is in the result before the token is dropped.
       assert %{
@@ -202,7 +228,40 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
              } = summary
 
       assert_received {:presented, [@token]}
-      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == nil
+      assert ReadTokenStore.fetch(store, config().base_url, @principal, "int_s", @now) == nil
+    end
+
+    test "an atom agent id resolves the same private owner principal" do
+      store = Checkpoint.ETS.new()
+      principal = SettlementState.principal(%{agent_id: :agent_1})
+
+      :ok =
+        SettlementState.bind(
+          store,
+          config().base_url,
+          principal,
+          "int_atom",
+          @now + 300,
+          @now
+        )
+
+      :ok =
+        ReadTokenStore.put(
+          store,
+          config().base_url,
+          principal,
+          "int_atom",
+          @token,
+          @now
+        )
+
+      assert {:ok, %{tx_hash: "0x" <> _}} =
+               PollXochiStatus.run(
+                 %{intent_id: "int_atom", timeout_ms: 40, interval_ms: 10},
+                 owner_context(store, %{agent_id: :agent_1})
+               )
+
+      assert_received {:presented, [@token]}
     end
 
     test "without a token no header is sent and the status still resolves" do
@@ -220,77 +279,171 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
       assert_received {:presented, []}
     end
 
-    test "an anonymous terminal answer keeps the token for a later owner-view poll" do
+    test "an anonymous terminal answer uses the shared terminal cleanup policy" do
       store = Checkpoint.ETS.new()
-      ReadTokenStore.put(store, config().base_url, "int_s", @other)
+      seed_token(store, config().base_url, "int_s", @other)
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
       assert {:ok, %{legs_withheld: true, tx_hash: nil}} =
-               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+               PollXochiStatus.run(params, owner_context(store))
 
-      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == @other
+      assert ReadTokenStore.fetch(store, config().base_url, @principal, "int_s", @now) == nil
     end
 
-    test "a failed status keeps the token, since the error carries none of its legs" do
+    test "a failed terminal status drops the token" do
       stub_private(self(), "failed")
       store = Checkpoint.ETS.new()
-      ReadTokenStore.put(store, config().base_url, "int_s", @token)
+      seed_token(store, config().base_url, "int_s", @token)
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
       assert {:error, %Failure{}} =
-               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+               PollXochiStatus.run(params, owner_context(store))
 
-      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == @token
+      assert ReadTokenStore.fetch(store, config().base_url, @principal, "int_s", @now) == nil
     end
 
     test "a token stored for another API origin is never presented" do
       store = Checkpoint.ETS.new()
-      ReadTokenStore.put(store, "https://other.test", "int_s", @token)
+      seed_token(store, "https://other.test", "int_s", @token)
+
+      :ok =
+        SettlementState.bind(
+          store,
+          config().base_url,
+          @principal,
+          "int_s",
+          @now + 300,
+          @now
+        )
+
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
       assert {:ok, %{tx_hash: nil}} =
-               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+               PollXochiStatus.run(params, owner_context(store))
 
       assert_received {:presented, []}
-      assert ReadTokenStore.fetch(store, "https://other.test", "int_s") == @token
+
+      assert ReadTokenStore.fetch(store, "https://other.test", @principal, "int_s", @now) ==
+               @token
     end
 
     test "a crash after the completed summary is recorded replays it without polling" do
       table = :ets.new(:poll_crash, [:set, :public])
       crashing = {CrashOnDelete, table}
       store = {Checkpoint.ETS, table}
-      ReadTokenStore.put(store, config().base_url, "int_s", @token)
+      seed_token(store, config().base_url, "int_s", @token)
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
       # The summary is recorded, then the process dies deleting the token.
       assert_raise RuntimeError, fn ->
-        PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: crashing})
+        PollXochiStatus.run(params, owner_context(crashing))
       end
 
       assert_received {:presented, [@token]}
-      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == @token
+      assert ReadTokenStore.fetch(store, config().base_url, @principal, "int_s", @now) == @token
 
       # The retry returns the owner-view evidence without an anonymous poll,
       # and finishes the token cleanup.
       assert {:ok, %{tx_hash: "0x" <> _, receiving_tx_hash: "0x" <> _, legs_withheld: false}} =
-               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+               PollXochiStatus.run(params, owner_context(store))
 
       refute_received {:presented, _}
-      assert ReadTokenStore.fetch(store, config().base_url, "int_s") == nil
+      assert ReadTokenStore.fetch(store, config().base_url, @principal, "int_s", @now) == nil
     end
 
-    test "a recorded summary is not replayed under another API origin" do
+    test "a terminal summary cannot be replayed under another API origin" do
       store = Checkpoint.ETS.new()
-      ReadTokenStore.put(store, config().base_url, "int_s", @token)
+      seed_token(store, config().base_url, "int_s", @token)
       params = %{intent_id: "int_s", timeout_ms: 40, interval_ms: 10}
 
       assert {:ok, %{tx_hash: "0x" <> _}} =
-               PollXochiStatus.run(params, %{xochi_config: config(), checkpoint: store})
+               PollXochiStatus.run(params, owner_context(store))
 
       other = %{config() | base_url: "https://other.test"}
 
-      assert {:ok, %{tx_hash: nil, legs_withheld: true}} =
-               PollXochiStatus.run(params, %{xochi_config: other, checkpoint: store})
+      assert {:error, %Failure{reason: :rejected}} =
+               PollXochiStatus.run(params, owner_context(store, %{xochi_config: other}))
+    end
+
+    test "model-triggered poll cannot use another principal's stored token" do
+      store = Checkpoint.ETS.new()
+      victim = "agent:victim"
+
+      :ok =
+        SettlementState.bind(
+          store,
+          config().base_url,
+          victim,
+          "victim1",
+          @now + 300,
+          @now
+        )
+
+      :ok =
+        ReadTokenStore.put(
+          store,
+          config().base_url,
+          victim,
+          "victim1",
+          @token,
+          @now
+        )
+
+      assert {:error, %Failure{reason: :rejected}} =
+               PollXochiStatus.run(%{intent_id: "victim1"}, owner_context(store))
+
+      refute_received {:presented, _}
+
+      assert ReadTokenStore.fetch(store, config().base_url, victim, "victim1", @now) ==
+               @token
+    end
+
+    test "404 after signed deadline releases ownership and reservation" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{"error" => "not_found"})
+      end)
+
+      store = Checkpoint.ETS.new()
+      dispatch_key = "payment-int-missing"
+      :ok = Checkpoint.put(store, dispatch_key, %{intent_id: "int_missing", status: :in_flight})
+
+      :ok =
+        SettlementState.bind(
+          store,
+          config().base_url,
+          @principal,
+          "int_missing",
+          @now - 1,
+          @now - 10,
+          dispatch_key: dispatch_key
+        )
+
+      {:ok, ledger} =
+        Ledger.start_link(table_name: :"poll_missing_#{System.unique_integer([:positive])}")
+
+      :ok = Ledger.try_spend(ledger, "agent_1", Decimal.new("1.00"), policy(), %{})
+      :ok = Ledger.tag_reservation(ledger, "agent_1", "int_missing", Decimal.new("1.00"))
+
+      ctx = owner_context(store, %{ledger: ledger})
+
+      assert {:error, %Failure{reason: :network, retryable?: true}} =
+               PollXochiStatus.run(
+                 %{intent_id: "int_missing", timeout_ms: 40, interval_ms: 10},
+                 ctx
+               )
+
+      assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy()).lifetime, "0")
+
+      assert :error =
+               SettlementState.owner(
+                 store,
+                 config().base_url,
+                 @principal,
+                 "int_missing",
+                 @now
+               )
+
+      assert :error = Checkpoint.fetch(store, dispatch_key)
     end
   end
 

@@ -32,6 +32,71 @@ defmodule Raxol.Payments.Checkpoint.ContextStoreTest do
     assert {:ok, %{status: :in_flight}} = Checkpoint.fetch(store, "k")
   end
 
+  test "put_new has one owner under concurrent acquisition" do
+    store = Bridge.new(:cp_bridge_a)
+    parent = self()
+
+    tasks =
+      for owner <- 1..16 do
+        Task.async(fn ->
+          send(parent, {:ready, self()})
+
+          receive do
+            :go -> Checkpoint.put_new(store, "shared", %{owner: owner})
+          end
+        end)
+      end
+
+    pids =
+      for _ <- tasks do
+        assert_receive {:ready, pid}
+        pid
+      end
+
+    Enum.each(pids, &send(&1, :go))
+    results = Task.await_many(tasks)
+
+    assert Enum.count(results, &(&1 == :ok)) == 1
+    assert Enum.count(results, &(&1 == {:error, :exists})) == 15
+    assert {:ok, %{owner: owner}} = Checkpoint.fetch(store, "shared")
+    assert owner in 1..16
+  end
+
+  test "a dead lock holder cannot leak the ContextStore acquisition lock" do
+    store = Bridge.new(:cp_bridge_a)
+    parent = self()
+    resource = {Bridge, :cp_bridge_a}
+
+    holder =
+      spawn(fn ->
+        :global.set_lock({resource, self()}, [node()])
+        send(parent, {:locked, self()})
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    assert_receive {:locked, ^holder}
+    ref = Process.monitor(holder)
+    task = Task.async(fn -> Checkpoint.put_new(store, "after_crash", %{owner: :survivor}) end)
+
+    Process.exit(holder, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}
+    assert :ok = Task.await(task)
+    assert {:ok, %{owner: :survivor}} = Checkpoint.fetch(store, "after_crash")
+  end
+
+  test "sweep removes only expired records" do
+    store = Bridge.new(:cp_bridge_a)
+    Checkpoint.put(store, "expired", %{expires_at: 10})
+    Checkpoint.put(store, "fresh", %{expires_at: 12})
+
+    assert :ok = Checkpoint.sweep_expired(store, 10)
+    assert :error = Checkpoint.fetch(store, "expired")
+    assert {:ok, %{expires_at: 12}} = Checkpoint.fetch(store, "fresh")
+  end
+
   test "two store ids are isolated" do
     a = Bridge.new(:cp_bridge_a)
     b = Bridge.new(:cp_bridge_b)

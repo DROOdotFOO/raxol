@@ -94,30 +94,26 @@ package formerly named `raxol_acp`; neither name has been on Hex before, so
   matrix lists them (it lists EURe), including with the stablecoin corridor
   allowlist off. They reject as `{:unsupported_src_token, _, _}` /
   `{:unsupported_dst_token, _, _}`.
-- **The Xochi settler polls with the intent's read token** (xochi#563), sent
-  only in the request header. The token never enters the deliverable, error, or
-  replay checkpoint: a `Secret`-wrapped value lives in a separate private
-  checkpoint record keyed by the API origin and the non-secret intent id, so a
-  checkpoint reused under another `base_url` never presents it. A completed
-  anonymous view with no settlement tx hash fails with
-  `{:error, {:settlement_tx_hash_unavailable, intent_id}}`.
-- At a terminal status the settler replaces the in-flight checkpoint with a
-  terminal record holding the settle result (public deliverable fields or the
-  error, never the token) and only then deletes the token. Every path that
-  returns a committed terminal record (a re-run, or a concurrent writer whose
-  execute returned after another writer's commit) deletes any token left for
-  that intent first and returns the stored result without polling. A crash
-  before that commit keeps the token for the re-run's owner-view poll, and an
-  anonymous (`legs_withheld`) terminal answer commits nothing and keeps the
-  token.
-- Once execute submission starts, timeout/reset, malformed response, and 5xx
-  outcomes remain in doubt and are polled under the signed intent id, even when
-  no token was returned. So does a refusal because another writer already
-  executed the intent (409, or 400 naming any status but `expired`): it polls
-  with the token already stored for that intent and never deletes the shared
-  checkpoint or token. Their dispatched checkpoint is retained so a restart
-  never re-relays an unknown outcome; only local validation failure or a
-  structurally valid clean 4xx rejection drops it.
+- **The Xochi settler polls only an intent it owns.** The atomically acquired
+  dispatch checkpoint fingerprints the exact signed bundle and binds its intent
+  to the executing principal and API origin. A 409 or completed/claimed 400 is
+  a clean rejection for this writer: it never polls that intent or presents a
+  token left by another writer.
+- The owner read token (xochi#563) is sent only in the request header. It never
+  enters the deliverable, error, or replay checkpoint: a `Secret`-wrapped value
+  lives in a separate private record keyed by API origin, executing principal,
+  and intent id. Terminal results are committed before token deletion and remain
+  replayable for 24 hours; read tokens expire after one hour. Failed, expired,
+  and refunded results delete their token as well.
+- Once execute submission starts, reset, malformed response, and 5xx outcomes
+  remain in doubt and are polled under the owned signed intent id. A 404 at or
+  after the signed deadline resolves that ambiguity as never dispatched and
+  releases the state. Invalid configuration and transport setup failures proven
+  to happen before send delete the dispatch checkpoint immediately.
+- A completed anonymous view with no settlement transaction hash fails with
+  `{:error, {:settlement_tx_hash_unavailable, intent_id}}`. An anonymous
+  (`legs_withheld`) answer remains non-terminal and retains the token for a
+  later owner-view poll.
 
 ### Security
 

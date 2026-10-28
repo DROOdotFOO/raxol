@@ -17,6 +17,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
   ## Context
 
     * `:xochi_config` -- `%{base_url:, auth}` for the quote endpoint.
+    * `:agent_id` -- optional atom or binary principal for private checkpoint
+      ownership. Pass the same value to `payment_poll_xochi_status`. Without one,
+      the route's `wallet` input is the principal and must be supplied as the
+      poll context's `:wallet`.
+    * `:checkpoint` -- optional private checkpoint store that records that
+      principal's ownership before returning the deposit instructions.
     * `:deposit_attestation_signer` -- optional operator pin for the expected
       signer; otherwise `config :raxol_payments, :xochi_deposit_attestation_signer`,
       otherwise the live capability matrix's `deposit_attestation_signer`.
@@ -113,18 +119,38 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRoute do
 
   alias Raxol.Payments.DeliveryFloor
   alias Raxol.Payments.Protocols.Xochi
+  alias Raxol.Payments.Xochi.{Client, SettlementState}
   alias Raxol.Payments.Xochi.Schemas.DepositRouteRequest
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, term()}
   @impl true
   def run(params, context) do
     with {:ok, config} <- fetch_config(context),
+         :ok <- Client.validate_config(config),
          request = build_request(params),
          {:ok, floor} <- delivery_floor(request, params),
          {:ok, instructions} <- Xochi.deposit_route_quote(config, request, signer_opts(context)),
-         :ok <- assert_delivery_floor(instructions, floor) do
+         :ok <- assert_delivery_floor(instructions, floor),
+         :ok <- bind_poll_owner(context, config, params.wallet, instructions) do
       summary(instructions)
     end
+  end
+
+  defp bind_poll_owner(context, config, wallet, instructions) do
+    SettlementState.bind(
+      Map.get(context, :checkpoint),
+      config.base_url,
+      SettlementState.principal(context, wallet),
+      instructions.intent_id,
+      instructions.deposit_deadline,
+      now(context)
+    )
+  end
+
+  defp now(context) do
+    context
+    |> Map.get(:clock, fn -> System.system_time(:second) end)
+    |> then(fn clock -> clock.() end)
   end
 
   defp delivery_floor(%DepositRouteRequest{} = request, params) do

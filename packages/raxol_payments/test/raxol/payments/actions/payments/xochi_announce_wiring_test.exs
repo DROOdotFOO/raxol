@@ -5,7 +5,7 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
   alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
   alias Raxol.Payments.{Checkpoint, Ledger, SpendingPolicy}
   alias Raxol.Payments.Test.XochiIntentFixture
-  alias Raxol.Payments.Xochi.AgentStream
+  alias Raxol.Payments.Xochi.{AgentStream, SettlementState}
 
   # Anvil/foundry default account #1 -- a well-known key, not a secret. A real
   # signing wallet (not a stub) so the announce signature actually verifies.
@@ -33,7 +33,15 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
     def put(table, key, record), do: Raxol.Payments.Checkpoint.ETS.put(table, key, record)
 
     @impl true
+    def put_new(table, key, record),
+      do: Raxol.Payments.Checkpoint.ETS.put_new(table, key, record)
+
+    @impl true
     def delete(_table, _key), do: raise("crash before token cleanup")
+
+    @impl true
+    def sweep_expired(table, now),
+      do: Raxol.Payments.Checkpoint.ETS.sweep_expired(table, now)
   end
 
   setup do
@@ -204,6 +212,18 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
       # The completed summary is recorded, then the process dies cleaning up
       # the token, before the terminal announce.
       table = :ets.new(:announce_crash, [:set, :public])
+      store = {Checkpoint.ETS, table}
+      principal = SettlementState.principal(ctx)
+
+      SettlementState.bind(
+        store,
+        ctx.xochi_config.base_url,
+        principal,
+        "int_1",
+        nil,
+        System.system_time(:second)
+      )
+
       poll = %{intent_id: "int_1", timeout_ms: 2000}
 
       assert_raise RuntimeError, fn ->

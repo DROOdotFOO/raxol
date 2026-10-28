@@ -7,18 +7,21 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   intent id and initial status. Poll for the terminal status with
   `Raxol.Payments.Actions.Payments.PollXochiStatus`. When a checkpoint store is
   configured, the execute-time read token is kept in a separate private record
-  keyed by the API origin and intent id; it never enters the Action result or
-  replay summary.
-  Polling reads that private record automatically and otherwise stays anonymous.
+  keyed by the API origin, executing principal, and intent id; it never enters
+  the Action result or replay summary. The principal is the `:agent_id` when
+  present, otherwise the signing wallet address. Polling with the same context
+  reads that private record automatically.
 
   The spend is gated on the human-decimal `amount`; the atomic `from_amount`
-  sent to Xochi is derived from the token's decimals. A proven local signing
-  failure or structurally valid clean server rejection releases the reservation
-  and deletes the checkpoint. Once submission starts, a transport failure,
-  malformed response, 5xx, or a refusal because the intent is already executing
-  or past `quoted` is in doubt: it is reported as dispatched with
-  `reconciling: true`, and the checkpoint and reservation remain for polling or
-  operator reconciliation even when no read token was received.
+  sent to Xochi is derived from the token's decimals. Invalid endpoint
+  configuration, a connection failure proven to happen before send, a local
+  signing failure, or a structurally valid clean server rejection releases the
+  reservation and deletes the checkpoint. Once submission may have started, a
+  reset, malformed response, or 5xx remains in doubt: it is reported as
+  dispatched with `reconciling: true`, and the checkpoint and reservation remain
+  for polling or operator reconciliation even when no read token was received.
+  A 409 or 400 saying another writer claimed or completed the intent is a clean
+  rejection for this writer and is never polled as this payment's result.
 
   With `swap_kind: "exact_output"` the caller fixes the delivered
   `output_amount` instead, the solver picks the origin amount, and `amount` is
@@ -54,6 +57,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   * `:xochi_config` -- `%{base_url:, auth:}` for `Xochi.Client` (e.g.
     `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
   * `:policy`, `:ledger`, `:agent_id`, `:on_confirm` -- see `SpendGate`.
+    `:agent_id` is also the read-token principal; atom and binary ids are
+    supported. Without one, the wallet address is the principal.
   * `:checkpoint` -- optional trusted `{module, handle}`
     `Raxol.Payments.Checkpoint` store for idempotent recovery and the separate
     `Secret`-wrapped read capability (nil disables both).
@@ -140,14 +145,15 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   alias Raxol.Payments.Actions.SpendGate
   alias Raxol.Payments.{Assets, Checkpoint, DeliveryFloor, Failure, Router}
   alias Raxol.Payments.Protocols.Xochi
+  alias Raxol.Payments.Xochi.{Client, ReadTokenStore, SettlementState, Stealth, SwapAnnouncer}
   alias Raxol.Payments.Xochi.Schemas.{ExecuteResponse, QuoteRequest, QuoteResponse}
-  alias Raxol.Payments.Xochi.{ReadTokenStore, Stealth, SwapAnnouncer}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
   def run(params, context) do
     with {:ok, wallet} <- fetch(context, :wallet),
          {:ok, config} <- fetch(context, :xochi_config),
+         :ok <- Client.validate_config(config),
          {:ok, request, amount} <- build_request(params, wallet),
          {:ok, store} <- resolve_checkpoint(context, request) do
       resume_or_settle(config, wallet, request, amount, params, context, store)
@@ -315,8 +321,15 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     %{intent_id: record.intent_id, status: to_string(Map.get(record, :status, :dispatched))}
   end
 
-  defp dispatched_record(%QuoteResponse{} = quote) do
-    %{intent_id: quote.intent_id, quote_id: quote.quote_id, status: :dispatched}
+  defp dispatched_record(%QuoteResponse{} = quote, principal, deadline, now) do
+    %{
+      intent_id: quote.intent_id,
+      quote_id: quote.quote_id,
+      status: :dispatched,
+      principal: principal,
+      deadline: deadline,
+      expires_at: max(deadline || now, now) + 86_400
+    }
   end
 
   defp settled_record(summary) do
@@ -632,15 +645,120 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   # budget.
   defp submit(config, quote, wallet, request, context, amount, store, key) do
     with {:ok, bundle} <- safe_sign(quote, wallet, request) do
-      Checkpoint.put(store, key, dispatched_record(quote))
+      now = now(context)
 
-      with {:ok, exec} <-
-             Xochi.as_dispatched(safe_dispatch(config, bundle, quote.intent_id), quote.intent_id) do
-        ReadTokenStore.put(store, config.base_url, exec.intent_id, exec.read_token)
-        tag_dispatch(context, exec, amount)
-        {:ok, exec, quote}
-      end
+      acquire_dispatch(%{
+        amount: amount,
+        bundle: bundle,
+        config: config,
+        context: context,
+        key: key,
+        now: now,
+        principal: SettlementState.principal(context, wallet),
+        quote: quote,
+        store: store
+      })
     end
+  end
+
+  defp acquire_dispatch(dispatch) do
+    record =
+      dispatched_record(
+        dispatch.quote,
+        dispatch.principal,
+        dispatch.bundle[:deadline],
+        dispatch.now
+      )
+
+    case Checkpoint.put_new(dispatch.store, dispatch.key, record) do
+      :ok ->
+        bind_dispatch_owner(dispatch)
+        dispatch_owned(dispatch)
+
+      {:error, :exists} ->
+        SpendGate.release(dispatch.context, dispatch.amount, %{
+          protocol: :xochi,
+          reason: :concurrent_dispatch
+        })
+
+        case Checkpoint.fetch(dispatch.store, dispatch.key) do
+          {:ok, existing} -> {:ok, resumed_execute(existing), dispatch.quote}
+          :error -> {:error, :checkpoint_race}
+        end
+    end
+  end
+
+  defp bind_dispatch_owner(dispatch) do
+    SettlementState.bind(
+      dispatch.store,
+      dispatch.config.base_url,
+      dispatch.principal,
+      dispatch.quote.intent_id,
+      dispatch.bundle[:deadline],
+      dispatch.now,
+      dispatch_key: dispatch.key
+    )
+  end
+
+  defp dispatch_owned(dispatch) do
+    result =
+      dispatch.config
+      |> safe_dispatch(dispatch.bundle, dispatch.quote.intent_id)
+      |> Xochi.as_dispatched(dispatch.quote.intent_id)
+
+    case result do
+      {:ok, exec} ->
+        bind_dispatch_owner(dispatch)
+
+        ReadTokenStore.put(
+          dispatch.store,
+          dispatch.config.base_url,
+          dispatch.principal,
+          exec.intent_id,
+          exec.read_token,
+          dispatch.now
+        )
+
+        tag_dispatch(dispatch.context, exec, dispatch.amount)
+        {:ok, exec, dispatch.quote}
+
+      {:error, _reason} = error ->
+        clear_owned_dispatch(
+          dispatch.store,
+          dispatch.key,
+          dispatch.config.base_url,
+          dispatch.principal,
+          dispatch.quote.intent_id
+        )
+
+        error
+    end
+  end
+
+  defp resumed_execute(record) do
+    %ExecuteResponse{
+      intent_id: record.intent_id,
+      status: Map.get(record, :status, :unknown),
+      reconciling: true
+    }
+  end
+
+  defp clear_owned_dispatch(store, key, base_url, principal, intent_id) do
+    case Checkpoint.fetch(store, key) do
+      {:ok, %{principal: ^principal}} ->
+        Checkpoint.delete(store, key)
+        SettlementState.forget(store, base_url, principal, intent_id)
+        ReadTokenStore.delete(store, base_url, principal, intent_id)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp now(context) do
+    context
+    |> Map.get(:clock, fn -> System.system_time(:second) end)
+    |> then(fn clock -> clock.() end)
   end
 
   defp safe_sign(quote, wallet, request) do

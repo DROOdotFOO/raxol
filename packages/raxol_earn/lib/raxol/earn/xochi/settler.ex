@@ -73,30 +73,33 @@ defmodule Raxol.Earn.Xochi.Settler do
   anonymous caller. The relay presents the execute-time read token while polling
   but never returns, logs, or stores it in a replayable settlement record. With
   a checkpoint store, the token is wrapped in a separate private record keyed by
-  the API origin and the non-secret intent id; without it the poll remains
-  anonymous. The token is deleted only after the terminal result is committed,
-  and kept when the worker answered with the anonymous view (`legs_withheld`).
+  API origin, exact signed-bundle fingerprint, and intent id. Failed, expired,
+  refunded, and completed terminal results are committed before token deletion.
+  Tokens expire after one hour and terminal summaries after 24 hours.
 
   ## Crash recovery
 
   With a `:checkpoint` store (a `Raxol.Payments.Checkpoint` `{module, handle}`)
-  the settler records the intent before relaying it and records only non-secret
-  execute metadata in the replay checkpoint. A settle re-run for the same intent
-  resumes polling instead of relaying the bundle again. Once submission starts,
-  transport failures, malformed responses, 5xx responses, and refusals because
-  the intent is already executing or past `quoted` remain in doubt and keep that
-  checkpoint even without a token. Only local validation failure or a
-  structurally valid clean rejection drops it.
+  the settler atomically records the exact signed bundle before relaying it. A
+  settle re-run for the same bundle resumes polling instead of relaying again;
+  another writer cannot adopt or delete that state. Once submission starts,
+  resets, malformed responses, and 5xx responses remain in doubt. A 404 at or
+  after the signed deadline resolves that state as never dispatched. Invalid
+  configuration and connection setup failures proven to happen before send
+  delete the dispatch state.
 
-  At a terminal status the in-flight record is replaced by a terminal record
-  holding the settle result (public deliverable fields or the error, never the
-  token), and only then is the token deleted. A re-run that finds the terminal
-  record returns that result without polling.
+  A relay refusal because another writer holds or completed the intent is a
+  definite failure for this writer. It is never converted to a deliverable by
+  polling the other writer's intent or presenting that writer's token.
+
+  At a terminal status the result (public deliverable fields or the error, never
+  the token) is committed before the token is deleted. A re-run within the
+  bounded retention window returns that result without polling.
   """
 
   alias Raxol.Payments.Checkpoint
   alias Raxol.Payments.Protocols.Xochi
-  alias Raxol.Payments.Xochi.ReadTokenStore
+  alias Raxol.Payments.Xochi.{Client, ReadTokenStore, SettlementState}
   alias Raxol.Payments.Xochi.Schemas.{ExecuteRequest, ExecuteResponse, IntentStatus}
 
   @doc """
@@ -121,9 +124,10 @@ defmodule Raxol.Earn.Xochi.Settler do
     poll_timeout = Keyword.get(opts, :poll_timeout_ms, 120_000)
     poll_interval = Keyword.get(opts, :poll_interval_ms, 2_000)
     store = Keyword.get(opts, :checkpoint)
+    clock = Keyword.get(opts, :clock, fn -> System.system_time(:second) end)
 
     fn settle_args ->
-      do_settle(settle_args, xochi_config, store,
+      do_settle(settle_args, xochi_config, store, clock,
         timeout_ms: poll_timeout,
         interval_ms: poll_interval
       )
@@ -132,131 +136,188 @@ defmodule Raxol.Earn.Xochi.Settler do
 
   # -- Internal --
 
-  defp do_settle(args, xochi_config, store, poll_opts) do
+  defp do_settle(args, xochi_config, store, clock, poll_opts) do
     with {:ok, bundle} <- extract_signed_intent(args),
          {:ok, intent_id} <- bundle_intent_id(bundle),
+         :ok <- Client.validate_config(xochi_config),
          {:ok, request} <- Xochi.prepare_signed_execute(bundle) do
-      key = Checkpoint.derive_key([:xochi_settler, intent_id])
+      settle_request(%{
+        args: args,
+        clock: clock,
+        config: xochi_config,
+        key: dispatch_key(xochi_config, intent_id),
+        poll_opts: poll_opts,
+        principal: SettlementState.fingerprint(request),
+        request: request,
+        store: store
+      })
+    end
+  end
 
-      case dispatch(xochi_config, request, intent_id, store, key) do
-        {:terminal, result} -> result
-        {:ok, %ExecuteResponse{} = exec} -> poll(xochi_config, exec, args, store, key, poll_opts)
-        {:error, _reason} = error -> error
+  defp settle_request(settlement) do
+    result =
+      dispatch(
+        settlement.config,
+        settlement.request,
+        settlement.principal,
+        settlement.store,
+        settlement.key,
+        settlement.clock.()
+      )
+
+    case result do
+      {:terminal, terminal} -> terminal
+      {:ok, %ExecuteResponse{} = exec} -> poll(settlement, exec)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp poll(settlement, exec) do
+    now = settlement.clock.()
+
+    token =
+      exec.read_token ||
+        ReadTokenStore.fetch(
+          settlement.store,
+          settlement.config.base_url,
+          settlement.principal,
+          exec.intent_id,
+          now
+        )
+
+    case Xochi.poll_status(
+           settlement.config,
+           exec.intent_id,
+           Keyword.put(settlement.poll_opts, :read_token, token)
+         ) do
+      {:ok, %IntentStatus{} = status} ->
+        result = settle_result(status, exec, settlement.args)
+
+        SettlementState.commit_terminal(
+          settlement.store,
+          settlement.config.base_url,
+          settlement.principal,
+          exec.intent_id,
+          result,
+          settlement.clock.()
+        )
+
+        Checkpoint.delete(settlement.store, settlement.key)
+        result
+
+      {:error, {:http, 404, _body}} = error ->
+        if expired?(settlement.request.deadline, settlement.clock.()) do
+          release_never_dispatched(
+            settlement.store,
+            settlement.config,
+            settlement.principal,
+            exec.intent_id,
+            settlement.key
+          )
+
+          {:error, {:never_dispatched, exec.intent_id}}
+        else
+          error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp dispatch(xochi_config, request, principal, store, key, now) do
+    terminal =
+      SettlementState.terminal(store, xochi_config.base_url, principal, request.intent_id, now)
+
+    case terminal do
+      {:ok, result} -> {:terminal, result}
+      :error -> acquire_dispatch(xochi_config, request, principal, store, key, now)
+    end
+  end
+
+  defp acquire_dispatch(xochi_config, request, _principal, nil, _key, _now) do
+    with :ok <- Client.validate_config(xochi_config) do
+      safe_dispatch(xochi_config, request, request.intent_id)
+    end
+  end
+
+  defp acquire_dispatch(xochi_config, request, principal, store, key, now) do
+    with :ok <- Client.validate_config(xochi_config) do
+      record = dispatched_record(request, principal, now)
+
+      case Checkpoint.put_new(store, key, record) do
+        :ok ->
+          dispatch_owned(xochi_config, request, principal, store, key, now)
+
+        {:error, :exists} ->
+          resume_owned(xochi_config, request, principal, store, key, now)
       end
     end
   end
 
-  defp poll(xochi_config, exec, args, store, key, poll_opts) do
-    # A writer that lost the execute race holds no token of its own; the
-    # winner's, if already stored for this origin, still opens the owner view.
-    token = exec.read_token || ReadTokenStore.fetch(store, xochi_config.base_url, exec.intent_id)
+  defp dispatch_owned(xochi_config, request, principal, store, key, now) do
+    case safe_dispatch(xochi_config, request, request.intent_id) do
+      {:ok, %ExecuteResponse{} = exec} ->
+        resolved_id = exec.intent_id || request.intent_id
 
-    with {:ok, %IntentStatus{} = status} <-
-           Xochi.poll_status(
-             xochi_config,
-             exec.intent_id,
-             Keyword.put(poll_opts, :read_token, token)
-           ) do
-      status
-      |> settle_result(exec, args)
-      |> commit_terminal(status, exec.intent_id, xochi_config, store, key)
-    end
-  end
-
-  # The terminal record replaces the in-flight one in a single put, and the
-  # token is dropped only after it lands: a crash before the put leaves the
-  # token for the re-run's owner-view poll, a crash after it leaves the stored
-  # result. An anonymous answer (`legs_withheld`) means the token was absent or
-  # refused, so neither is committed and a re-run polls again. A terminal
-  # record another writer already committed wins.
-  defp commit_terminal(result, %IntentStatus{legs_withheld: true}, _id, _config, _store, _key),
-    do: result
-
-  defp commit_terminal(result, %IntentStatus{}, intent_id, xochi_config, store, key) do
-    case Checkpoint.fetch(store, key) do
-      {:ok, %{status: :terminal} = record} ->
-        {:terminal, committed} = replay_terminal(record, intent_id, xochi_config, store)
-        committed
-
-      _ ->
-        Checkpoint.put(store, key, %{intent_id: intent_id, status: :terminal, result: result})
-        ReadTokenStore.delete(store, xochi_config.base_url, intent_id)
-        result
-    end
-  end
-
-  # Every path that returns a committed terminal record comes through here. A
-  # crash between the commit and the token delete, or a concurrent writer that
-  # stored its own token after the commit, leaves a token behind; delete it
-  # (idempotent) before replaying the stored result.
-  defp replay_terminal(%{result: result} = record, intent_id, xochi_config, store) do
-    ReadTokenStore.delete(store, xochi_config.base_url, Map.get(record, :intent_id, intent_id))
-    {:terminal, result}
-  end
-
-  # Resume from the checkpoint when this intent was already relayed; otherwise
-  # record it before the POST. A crash between the two records leaves only the
-  # dispatched marker: the outcome is unknown, so the intent is polled
-  # anonymously rather than relayed twice.
-  defp dispatch(xochi_config, request, intent_id, store, key) do
-    case Checkpoint.fetch(store, key) do
-      {:ok, %{status: :terminal} = record} ->
-        replay_terminal(record, intent_id, xochi_config, store)
-
-      {:ok, record} ->
-        {:ok, resumed_exec(record, intent_id, xochi_config, store)}
-
-      :error ->
-        Checkpoint.put(store, key, %{intent_id: intent_id, status: :dispatched})
-
-        case safe_dispatch(xochi_config, request, intent_id) do
-          {:ok, %ExecuteResponse{} = exec} ->
-            ReadTokenStore.put(
-              store,
-              xochi_config.base_url,
-              exec.intent_id || intent_id,
-              exec.read_token
-            )
-
-            record_executed(store, key, exec, intent_id, xochi_config)
-
-          # A clean rejection carries no token, so any stored for this intent
-          # was issued to another writer and is left alone.
-          {:error, _reason} = error ->
-            Checkpoint.delete(store, key)
-            error
-        end
-    end
-  end
-
-  # A concurrent writer for the same intent shares this key. Never overwrite a
-  # terminal record it committed, and keep the announcement fields it recorded
-  # when this (in-doubt) response carries none.
-  defp record_executed(store, key, exec, intent_id, xochi_config) do
-    case Checkpoint.fetch(store, key) do
-      {:ok, %{status: :terminal} = record} ->
-        replay_terminal(record, intent_id, xochi_config, store)
-
-      {:ok, existing} ->
-        put_executed(
+        SettlementState.bind(
           store,
-          key,
-          exec,
-          Map.merge(existing, executed_record(exec, intent_id), &keep_known/3)
+          xochi_config.base_url,
+          principal,
+          resolved_id,
+          request.deadline,
+          now,
+          dispatch_key: key
         )
 
+        ReadTokenStore.put(
+          store,
+          xochi_config.base_url,
+          principal,
+          resolved_id,
+          exec.read_token,
+          now
+        )
+
+        record_executed(store, key, exec, request, principal)
+
+      {:error, _reason} = error ->
+        delete_owned(store, key, principal)
+        error
+    end
+  end
+
+  defp resume_owned(xochi_config, request, principal, store, key, now) do
+    case Checkpoint.fetch(store, key) do
+      {:ok, %{principal: ^principal, status: :dispatching, deadline: deadline}}
+      when not is_integer(deadline) or now < deadline ->
+        {:error, {:intent_dispatch_in_progress, request.intent_id}}
+
+      {:ok, %{principal: ^principal} = record} ->
+        {:ok, resumed_exec(record, request.intent_id, xochi_config, principal, store, now)}
+
+      {:ok, _other_writer} ->
+        {:error, {:intent_owned_by_another_writer, request.intent_id}}
+
       :error ->
-        put_executed(store, key, exec, executed_record(exec, intent_id))
+        acquire_dispatch(xochi_config, request, principal, store, key, now)
+    end
+  end
+
+  defp record_executed(store, key, exec, request, principal) do
+    case Checkpoint.fetch(store, key) do
+      {:ok, %{principal: ^principal} = existing} ->
+        record = Map.merge(existing, executed_record(exec, request, principal), &keep_known/3)
+        Checkpoint.put(store, key, record)
+        {:ok, announced_exec(exec, record)}
+
+      _ ->
+        {:error, {:checkpoint_ownership_lost, request.intent_id}}
     end
   end
 
   defp keep_known(_field, old, nil), do: old
   defp keep_known(_field, _old, new), do: new
-
-  defp put_executed(store, key, exec, record) do
-    Checkpoint.put(store, key, record)
-    {:ok, announced_exec(exec, record)}
-  end
 
   defp announced_exec(%ExecuteResponse{} = exec, record) do
     %{
@@ -284,28 +345,60 @@ defmodule Raxol.Earn.Xochi.Settler do
     }
   end
 
-  defp executed_record(%ExecuteResponse{} = exec, intent_id) do
+  defp dispatched_record(request, principal, now) do
     %{
-      intent_id: exec.intent_id || intent_id,
+      intent_id: request.intent_id,
+      status: :dispatching,
+      principal: principal,
+      deadline: request.deadline,
+      expires_at: max(request.deadline || now, now) + 86_400
+    }
+  end
+
+  defp executed_record(%ExecuteResponse{} = exec, request, principal) do
+    %{
+      intent_id: exec.intent_id || request.intent_id,
       status: :in_flight,
+      principal: principal,
+      deadline: request.deadline,
       stealth_address: exec.stealth_address,
       ephemeral_pub_key: exec.ephemeral_pub_key,
       view_tag: exec.view_tag
     }
   end
 
-  defp resumed_exec(record, intent_id, xochi_config, store) do
+  defp resumed_exec(record, intent_id, xochi_config, principal, store, now) do
     resolved_id = Map.get(record, :intent_id, intent_id)
 
     %ExecuteResponse{
       intent_id: resolved_id,
       status: :unknown,
       reconciling: true,
-      read_token: ReadTokenStore.fetch(store, xochi_config.base_url, resolved_id),
+      read_token: ReadTokenStore.fetch(store, xochi_config.base_url, principal, resolved_id, now),
       stealth_address: Map.get(record, :stealth_address),
       ephemeral_pub_key: Map.get(record, :ephemeral_pub_key),
       view_tag: Map.get(record, :view_tag)
     }
+  end
+
+  defp delete_owned(store, key, principal) do
+    case Checkpoint.fetch(store, key) do
+      {:ok, %{principal: ^principal}} -> Checkpoint.delete(store, key)
+      _ -> :ok
+    end
+  end
+
+  defp release_never_dispatched(store, config, principal, intent_id, key) do
+    delete_owned(store, key, principal)
+    SettlementState.forget(store, config.base_url, principal, intent_id)
+    ReadTokenStore.delete(store, config.base_url, principal, intent_id)
+  end
+
+  defp expired?(deadline, now) when is_integer(deadline), do: now >= deadline
+  defp expired?(_deadline, _now), do: false
+
+  defp dispatch_key(config, intent_id) do
+    Checkpoint.derive_key([:xochi_settler, ReadTokenStore.origin(config.base_url), intent_id])
   end
 
   # The buyer's pre-signed intent bundle, threaded directly (`:signed_intent`) or

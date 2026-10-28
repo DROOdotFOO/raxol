@@ -6,9 +6,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
 
   alias Raxol.Payments.Actions.Payments
   alias Raxol.Payments.Actions.Payments.ExecuteDepositRoute
-  alias Raxol.Payments.EIP712
-  alias Raxol.Payments.Xochi.Capabilities
-  alias Raxol.Payments.Xochi.DepositAttestation
+  alias Raxol.Payments.{Checkpoint, EIP712}
+  alias Raxol.Payments.Xochi.{Capabilities, DepositAttestation, SettlementState}
 
   @tron_usdt "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
   @tron_wallet "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
@@ -99,6 +98,29 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteDepositRouteTest do
       assert result.deposit_deadline == 1_900_000_000
       assert result.from_amount == @amount
       assert result.recipient_address == @evm_recipient
+    end
+
+    test "binds an atom agent principal for the later poll action" do
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        xochi_config: config(),
+        deposit_attestation_signer: signer_address(),
+        checkpoint: store,
+        agent_id: :route_agent,
+        clock: fn -> 1_800_000_000 end
+      }
+
+      assert {:ok, %{intent_id: @intent_id}} = ExecuteDepositRoute.run(params(), ctx)
+
+      assert {:ok, %{principal: "agent:route_agent"}} =
+               SettlementState.owner(
+                 store,
+                 config().base_url,
+                 "agent:route_agent",
+                 @intent_id,
+                 1_800_000_000
+               )
     end
 
     test "fails closed when the attestation does not recover to the pinned signer" do

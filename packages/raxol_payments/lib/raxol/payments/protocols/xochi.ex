@@ -314,8 +314,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   Keys may be atoms (internal callers) or strings (decoded from an ACP
   requirement). Required: `intent_id`, `quote_id`, `signature`, `nonce`.
-  Optional: `pull_signature` (nil for non-pulling methods), `aztec_proof`
-  (shielded claims).
+  Generated bundles also carry the EIP-712 intent's signed `deadline`; older
+  bundles may omit it. Optional: `pull_signature` (nil for non-pulling methods)
+  and `aztec_proof` (shielded claims).
   """
   @type signed_intent :: %{optional(atom() | String.t()) => term()}
 
@@ -668,7 +669,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
       intent_id: quote_resp.intent_id,
       quote_id: quote_resp.quote_id,
       signature: signature,
-      nonce: signed_nonce(quote_resp)
+      nonce: signed_nonce(quote_resp),
+      deadline: signed_deadline(quote_resp)
     }
     |> put_pull_signature(pull_signature)
   end
@@ -688,6 +690,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
          {:ok, quote_id} <- require_binary(signed, :quote_id),
          {:ok, signature} <- require_binary(signed, :signature),
          {:ok, nonce} <- require_nonce(signed),
+         {:ok, deadline} <- optional_integer(signed, :deadline),
          {:ok, pull_signature} <- optional_binary(signed, :pull_signature),
          {:ok, aztec_proof} <- optional_binary(signed, :aztec_proof) do
       {:ok,
@@ -696,6 +699,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
          quote_id: quote_id,
          signature: signature,
          nonce: nonce,
+         deadline: deadline,
          pull_signature: pull_signature,
          aztec_proof: aztec_proof
        }}
@@ -723,6 +727,41 @@ defmodule Raxol.Payments.Protocols.Xochi do
       _ -> {:error, {:invalid_signed_intent, :nonce}}
     end
   end
+
+  defp optional_integer(map, field) do
+    case fetch_field(map, field) do
+      :error -> {:ok, nil}
+      {:ok, nil} -> {:ok, nil}
+      {:ok, value} when is_integer(value) and value >= 0 -> {:ok, value}
+      {:ok, value} when is_binary(value) -> parse_optional_integer(value, field)
+      _ -> {:error, {:invalid_signed_intent, field}}
+    end
+  end
+
+  defp parse_optional_integer(value, field) do
+    case Integer.parse(value) do
+      {integer, ""} when integer >= 0 -> {:ok, integer}
+      _ -> {:error, {:invalid_signed_intent, field}}
+    end
+  end
+
+  defp signed_deadline(%QuoteResponse{eip712_data: eip712}) do
+    eip712
+    |> eip712_message()
+    |> Map.get("deadline")
+    |> normalize_signed_deadline()
+  end
+
+  defp normalize_signed_deadline(value) when is_integer(value), do: value
+
+  defp normalize_signed_deadline(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> integer
+      _ -> nil
+    end
+  end
+
+  defp normalize_signed_deadline(_value), do: nil
 
   defp optional_binary(map, field) do
     case fetch_field(map, field) do

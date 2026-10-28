@@ -74,12 +74,12 @@ defmodule Raxol.Payments.Xochi.Client do
 
   alias Raxol.Payments.Xochi.Schemas.{
     DepositRouteRequest,
-    QuoteRequest,
-    QuoteResponse,
     ExecuteRequest,
     ExecuteResponse,
     Intent,
-    IntentStatus
+    IntentStatus,
+    QuoteRequest,
+    QuoteResponse
   }
 
   @type auth ::
@@ -136,13 +136,12 @@ defmodule Raxol.Payments.Xochi.Client do
   @doc """
   Execute a quoted intent with a signed payload.
 
-  Once the POST starts it is never retried by the transport. A timeout, reset,
-  5xx, or malformed response has an unknown outcome: the worker may have
-  accepted the intent. Those cases, and a refusal because the intent is already
-  executing or past `quoted` (except `expired`), return
-  `{:ok, %ExecuteResponse{reconciling: true}}`, retaining the request's known
-  intent id and any valid read token the worker supplied. Any other structurally
-  valid 4xx is returned as a clean rejection.
+  Once the POST starts it is never retried by the transport. A reset, 5xx, or
+  malformed response has an unknown outcome: the worker may have accepted the
+  intent. Failures proven to occur before a connection was established are
+  returned as definite errors. A refusal because another writer claimed the
+  intent is also definite for this request. Error bodies always redact read
+  tokens.
   """
   @spec execute(config(), ExecuteRequest.t()) :: {:ok, ExecuteResponse.t()} | error()
   def execute(config, %ExecuteRequest{} = request) do
@@ -152,9 +151,13 @@ defmodule Raxol.Payments.Xochi.Client do
         |> Req.post(url: "/api/intent/execute", json: json, retry: false)
         |> handle_execute_response(request.intent_id)
       rescue
-        _exception -> {:ok, in_doubt(request.intent_id, :response_exception)}
+        exception in Req.TransportError ->
+          classify_execute_exception(exception.reason, request.intent_id)
+
+        _exception ->
+          {:ok, in_doubt(request.intent_id, :response_exception)}
       catch
-        _kind, _reason -> {:ok, in_doubt(request.intent_id, :response_exception)}
+        _kind, reason -> classify_execute_exception(reason, request.intent_id)
       end
     end
   end
@@ -170,7 +173,7 @@ defmodule Raxol.Payments.Xochi.Client do
   def get_status(config, intent_id, opts \\ []) do
     with {:ok, req} <- put_read_token(build_req(config), Keyword.get(opts, :read_token)) do
       req
-      |> Req.get(url: "/api/intent/#{intent_id}/status")
+      |> Req.get(url: "/api/intent/#{intent_id}/status", redirect: false)
       |> handle_response(&IntentStatus.from_json/1)
     end
   end
@@ -188,7 +191,7 @@ defmodule Raxol.Payments.Xochi.Client do
   def get_intent(config, intent_id, opts \\ []) do
     with {:ok, req} <- put_read_token(build_req(config), Keyword.get(opts, :read_token)) do
       req
-      |> Req.get(url: "/api/intent/#{intent_id}")
+      |> Req.get(url: "/api/intent/#{intent_id}", redirect: false)
       |> handle_response(&Intent.from_json/1)
     end
   end
@@ -243,10 +246,24 @@ defmodule Raxol.Payments.Xochi.Client do
     |> handle_response(& &1)
   end
 
+  @doc "Validate the endpoint before callers persist a dispatched checkpoint."
+  @spec validate_config(config()) :: :ok | {:error, :invalid_base_url}
+  def validate_config(%{base_url: base_url}) when is_binary(base_url) do
+    case URI.parse(base_url) do
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" -> :ok
+      %URI{scheme: "http", host: host} when host in ["localhost", "127.0.0.1"] -> :ok
+      _ -> {:error, :invalid_base_url}
+    end
+  end
+
+  def validate_config(_config), do: {:error, :invalid_base_url}
+
   # -- Private --
 
   defp prepare_execute(config, request) do
-    {:ok, build_req(config), ExecuteRequest.to_json(request)}
+    with :ok <- validate_config(config) do
+      {:ok, build_req(config), ExecuteRequest.to_json(request)}
+    end
   rescue
     _exception -> {:error, :execute_preparation_failed}
   catch
@@ -306,12 +323,11 @@ defmodule Raxol.Payments.Xochi.Client do
       else: {:error, :invalid_read_token}
   end
 
-  defp validate_base_url!("https://" <> _), do: :ok
-  defp validate_base_url!("http://localhost" <> _), do: :ok
-  defp validate_base_url!("http://127.0.0.1" <> _), do: :ok
-
-  defp validate_base_url!(url) do
-    raise ArgumentError, "Xochi client requires HTTPS base_url, got: #{inspect(url)}"
+  defp validate_base_url!(base_url) do
+    case validate_config(%{base_url: base_url}) do
+      :ok -> :ok
+      {:error, :invalid_base_url} -> raise ArgumentError, "Xochi client requires HTTPS base_url"
+    end
   end
 
   defp handle_response({:ok, %Req.Response{status: status, body: body}}, transform)
@@ -349,11 +365,11 @@ defmodule Raxol.Payments.Xochi.Client do
        )
        when status in 400..499 and is_map(body) do
     cond do
-      ExecuteResponse.read_token?(body["read_token"]) ->
-        {:ok, parse_in_doubt(body, intent_id, {:http, status})}
-
       past_quoted?(status, body) ->
-        {:ok, in_doubt(intent_id, {:intent_past_quoted, status})}
+        {:error, {:http, status, redact_read_token(body)}}
+
+      valid_read_token?(body) ->
+        {:ok, parse_in_doubt(body, intent_id, {:http, status})}
 
       clean_rejection?(body) ->
         {:error, {:http, status, redact_read_token(body)}}
@@ -366,21 +382,36 @@ defmodule Raxol.Payments.Xochi.Client do
   defp handle_execute_response({:ok, %Req.Response{status: status}}, intent_id),
     do: {:ok, in_doubt(intent_id, {:invalid_response, status})}
 
-  defp handle_execute_response({:error, _reason}, intent_id),
-    do: {:ok, in_doubt(intent_id, :transport_error)}
+  defp handle_execute_response({:error, reason}, intent_id) do
+    if definite_connect_failure?(reason),
+      do: {:error, {:transport, :not_sent}},
+      else: {:ok, in_doubt(intent_id, :transport_error)}
+  end
 
   defp parse_execute(body, intent_id) do
-    exec = ExecuteResponse.from_json(body)
+    case read_token_value(body) do
+      {:error, :malformed_read_token} ->
+        in_doubt(intent_id, :malformed_read_token)
 
-    if valid_execute_response?(exec, intent_id),
-      do: sanitize_execute(exec, intent_id),
-      else: sanitize_in_doubt(exec, intent_id, :invalid_response)
+      _ ->
+        exec = ExecuteResponse.from_json(body)
+
+        if valid_execute_response?(exec, intent_id),
+          do: sanitize_execute(exec, intent_id),
+          else: sanitize_in_doubt(exec, intent_id, :invalid_response)
+    end
   end
 
   defp parse_in_doubt(body, intent_id, reason) when is_map(body) do
-    body
-    |> ExecuteResponse.from_json()
-    |> sanitize_in_doubt(intent_id, reason)
+    case read_token_value(body) do
+      {:error, :malformed_read_token} ->
+        in_doubt(intent_id, :malformed_read_token)
+
+      _ ->
+        body
+        |> ExecuteResponse.from_json()
+        |> sanitize_in_doubt(intent_id, reason)
+    end
   rescue
     _exception -> in_doubt(intent_id, reason)
   end
@@ -453,23 +484,14 @@ defmodule Raxol.Payments.Xochi.Client do
     end)
   end
 
-  # The worker refuses an execute for an intent that has already left `quoted`:
-  # a 409 when another writer holds the execution claim, a 400 naming the
-  # intent's current status otherwise. Either way this request did not start the
-  # execution, but one may be running or may have moved funds, so it is not a
-  # clean rejection: releasing the reservation or the checkpoint here would free
-  # budget for a payment still in flight. A 409 is in doubt unless it names a
-  # refusal made before any claim: a pre-claim `error_category`
-  # (`promo_unavailable`) or an expired/unknown quote, which the caller
-  # re-quotes. An `expired` intent's 400 likewise stays clean: it never executed.
+  # A refusal means this request did not dispatch. The caller may retain state
+  # owned by the writer that won, but must never poll or reuse that writer's
+  # capability as evidence for this request.
   defp past_quoted?(409, body),
     do: body["error_category"] not in @clean_conflict_categories and not quote_gone?(body)
 
   defp past_quoted?(400, %{"error" => error}) when is_binary(error) do
-    case Regex.run(~r/\ACannot execute intent in (\S+) status\z/, error) do
-      [_, status] -> status != "expired"
-      nil -> false
-    end
+    match?([_, _status], Regex.run(~r/\ACannot execute intent in (\S+) status\z/, error))
   end
 
   defp past_quoted?(_status, _body), do: false
@@ -488,15 +510,61 @@ defmodule Raxol.Payments.Xochi.Client do
   # capability rather than assuming it appears only at the response root.
   defp redact_read_token(body) when is_map(body) do
     Map.new(body, fn
-      {"read_token", _value} -> {"read_token", "[redacted]"}
+      {key, _value} when key in ["read_token", "readToken"] -> {key, "[redacted]"}
       {key, value} -> {key, redact_read_token(value)}
     end)
   end
 
   defp redact_read_token(body) when is_list(body), do: Enum.map(body, &redact_read_token/1)
 
-  defp redact_read_token(body) when is_binary(body),
-    do: Regex.replace(~r/("read_token"\s*:\s*")[^"]*"/, body, ~S(\1[redacted]"))
+  defp redact_read_token(body) when is_binary(body) do
+    Regex.replace(~r/("(?:read_token|readToken)"\s*:\s*")[^"]*"/, body, ~S(\1[redacted]"))
+  end
 
   defp redact_read_token(body), do: body
+
+  defp valid_read_token?(body), do: match?({:ok, _token}, read_token_value(body))
+
+  defp read_token_value(body) when is_map(body) do
+    case Map.fetch(body, "read_token") do
+      {:ok, value} -> validate_read_token_value(value)
+      :error -> body |> Map.fetch("readToken") |> read_token_from_fetch()
+    end
+  end
+
+  defp read_token_value(_body), do: :missing
+  defp read_token_from_fetch(:error), do: :missing
+  defp read_token_from_fetch({:ok, value}), do: validate_read_token_value(value)
+  defp validate_read_token_value(nil), do: :missing
+
+  defp validate_read_token_value(value) do
+    if ExecuteResponse.read_token?(value),
+      do: {:ok, value},
+      else: {:error, :malformed_read_token}
+  end
+
+  @definite_connect_reasons [
+    :econnrefused,
+    :nxdomain,
+    :ehostunreach,
+    :enetunreach,
+    :connect_timeout
+  ]
+
+  defp classify_execute_exception(reason, intent_id) do
+    if definite_connect_failure?(reason),
+      do: {:error, {:transport, :not_sent}},
+      else: {:ok, in_doubt(intent_id, :response_exception)}
+  end
+
+  defp definite_connect_failure?(reason) when reason in @definite_connect_reasons, do: true
+  defp definite_connect_failure?({:tls_alert, _detail}), do: true
+
+  defp definite_connect_failure?(reason) when is_tuple(reason),
+    do: reason |> Tuple.to_list() |> Enum.any?(&definite_connect_failure?/1)
+
+  defp definite_connect_failure?(reason) when is_map(reason),
+    do: reason |> Map.values() |> Enum.any?(&definite_connect_failure?/1)
+
+  defp definite_connect_failure?(_reason), do: false
 end
