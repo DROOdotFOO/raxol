@@ -492,31 +492,8 @@ defmodule Raxol.Headless do
   end
 
   @impl true
-  def handle_call({:stop_session, id}, from, state) do
-    case state.teardowns do
-      %{^id => teardown} ->
-        updated = %{teardown | replies: teardown.replies ++ [{from, :ok}]}
-        {:noreply, put_in(state, [:teardowns, id], updated)}
-
-      _ ->
-        case state.starts do
-          %{^id => start} ->
-            updated = %{
-              start
-              | cancelled: true,
-                stop_replies: start.stop_replies ++ [{from, :ok}]
-            }
-
-            {:noreply, put_in(state, [:starts, id], updated)}
-
-          _ ->
-            case Map.get(state.sessions, id) do
-              nil -> {:reply, :ok, state}
-              session -> {:noreply, begin_teardown(session, {from, :ok}, state)}
-            end
-        end
-    end
-  end
+  def handle_call({:stop_session, id}, from, state),
+    do: handle_stop_call(id, from, state)
 
   @impl true
   def handle_call(:list_sessions, _from, state) do
@@ -644,40 +621,90 @@ defmodule Raxol.Headless do
   # tools and resources it owned.
   @impl true
   def terminate(_reason, state) do
+    stop_session_workers(state)
+
+    state
+    |> shutdown_sessions()
+    |> stop_shutdown_sessions()
+
+    reply_shutdown_callers(state)
+  end
+
+  # --- Private Helpers ---
+  defp handle_stop_call(id, from, state) do
+    case state.teardowns do
+      %{^id => teardown} ->
+        updated = %{teardown | replies: [{from, :ok} | teardown.replies]}
+        {:noreply, put_in(state, [:teardowns, id], updated)}
+
+      _ ->
+        handle_stop_before_teardown(id, from, state)
+    end
+  end
+
+  defp handle_stop_before_teardown(id, from, state) do
+    case state.starts do
+      %{^id => start} ->
+        updated = %{
+          start
+          | cancelled: true,
+            stop_replies: [{from, :ok} | start.stop_replies]
+        }
+
+        {:noreply, put_in(state, [:starts, id], updated)}
+
+      _ ->
+        start_session_teardown(id, from, state)
+    end
+  end
+
+  defp start_session_teardown(id, from, state) do
+    case Map.get(state.sessions, id) do
+      nil -> {:reply, :ok, state}
+      session -> {:noreply, begin_teardown(session, {from, :ok}, state)}
+    end
+  end
+
+  defp stop_session_workers(state) do
     state.starts
     |> Map.values()
     |> Enum.concat(Map.values(state.teardowns))
     |> Enum.each(fn worker ->
       if is_pid(worker.pid), do: Process.exit(worker.pid, :kill)
     end)
+  end
 
-    state
-    |> shutdown_sessions()
+  defp stop_shutdown_sessions(sessions) do
+    sessions
     |> each_session_within(@shutdown_budget_ms, fn session ->
       stop_synchronizer(session.synchronizer_pid)
       stop_lifecycle(session.lifecycle_pid)
     end)
-    |> Enum.map(fn {session, reason} ->
-      Logger.warning(
-        "[#{inspect(__MODULE__)}] session #{inspect(session.id)} did not " <>
-          "stop within #{@shutdown_budget_ms} ms of shutdown (" <>
-          Exception.format_exit(reason) <> "); killing it"
-      )
-
-      session
-    end)
+    |> Enum.map(&kill_shutdown_session/1)
     |> each_session_within(@kill_budget_ms, &kill_session/1)
-    |> Enum.each(fn {session, reason} ->
-      Logger.error(
-        "[#{inspect(__MODULE__)}] session #{inspect(session.id)} was not " <>
-          "killed within #{@kill_budget_ms} ms (" <>
-          Exception.format_exit(reason) <> ")"
-      )
-    end)
+    |> Enum.each(&log_shutdown_kill_failure/1)
+  end
 
-    state.starts
-    |> Map.values()
-    |> Enum.each(fn start ->
+  defp kill_shutdown_session({session, reason}) do
+    Logger.warning(
+      "[#{inspect(__MODULE__)}] session #{inspect(session.id)} did not " <>
+        "stop within #{@shutdown_budget_ms} ms of shutdown (" <>
+        Exception.format_exit(reason) <> "); killing it"
+    )
+
+    session
+  end
+
+  defp log_shutdown_kill_failure({session, reason}) do
+    Logger.error(
+      "[#{inspect(__MODULE__)}] session #{inspect(session.id)} was not " <>
+        "killed within #{@kill_budget_ms} ms (" <>
+        Exception.format_exit(reason) <> ")"
+    )
+  end
+
+  defp reply_shutdown_callers(state) do
+    Enum.each(state.starts, fn {_id, start} ->
       GenServer.reply(start.from, {:error, :shutdown})
 
       Enum.each(start.stop_replies, fn {from, reply} ->
@@ -685,14 +712,11 @@ defmodule Raxol.Headless do
       end)
     end)
 
-    state.teardowns
-    |> Map.values()
-    |> Enum.each(fn teardown ->
+    Enum.each(state.teardowns, fn {_id, teardown} ->
       Enum.each(teardown.replies, &reply_after_teardown(&1, teardown.failure))
     end)
   end
 
-  # --- Private Helpers ---
   defp begin_start(session, registry, server, from, state) do
     parent = self()
     Process.monitor(session.lifecycle_pid)
@@ -795,54 +819,67 @@ defmodule Raxol.Headless do
   defp handle_non_start_down(ref, worker, reason, state) do
     case teardown_for_ref(state.teardowns, ref) do
       {id, %{pid: ^worker, failure: nil} = teardown} ->
-        log_worker_exit(:teardown, id, reason)
-
-        if teardown.attempt < @max_teardown_attempts do
-          state = %{state | teardowns: Map.delete(state.teardowns, id)}
-
-          {:noreply,
-           begin_teardown(
-             teardown.session,
-             teardown.replies,
-             state,
-             teardown.attempt + 1
-           )}
-        else
-          failure = exit_class(reason)
-
-          terminal =
-            spawn_teardown(
-              teardown.session,
-              teardown.replies,
-              teardown.attempt,
-              failure
-            )
-
-          {:noreply, put_in(state, [:teardowns, id], terminal)}
-        end
+        handle_teardown_worker_exit(id, reason, teardown, state)
 
       {id, %{pid: ^worker} = teardown} ->
-        log_worker_exit(:terminal_teardown, id, reason)
-        signal_kill_session(teardown.session)
-        waiting = %{teardown | pid: nil, ref: nil}
-        state = put_in(state, [:teardowns, id], waiting)
-        send(self(), {:finish_forced_teardown, id})
-        {:noreply, state}
+        handle_terminal_teardown_exit(id, reason, teardown, state)
 
       nil ->
-        starts = mark_cancelled_starts(state.starts, worker)
-
-        state =
-          Enum.reduce(state.sessions, %{state | starts: starts}, fn {_id,
-                                                                     session},
-                                                                    acc ->
-            if worker in [session.lifecycle_pid, session.synchronizer_pid],
-              do: begin_teardown(session, nil, acc),
-              else: acc
-          end)
-
-        {:noreply, state}
+        handle_session_process_exit(worker, state)
     end
+  end
+
+  defp handle_teardown_worker_exit(id, reason, teardown, state) do
+    log_worker_exit(:teardown, id, reason)
+
+    if teardown.attempt < @max_teardown_attempts do
+      state = %{state | teardowns: Map.delete(state.teardowns, id)}
+
+      {:noreply,
+       begin_teardown(
+         teardown.session,
+         teardown.replies,
+         state,
+         teardown.attempt + 1
+       )}
+    else
+      {:noreply, begin_forced_teardown(id, reason, teardown, state)}
+    end
+  end
+
+  defp begin_forced_teardown(id, reason, teardown, state) do
+    terminal =
+      spawn_teardown(
+        teardown.session,
+        teardown.replies,
+        teardown.attempt,
+        exit_class(reason)
+      )
+
+    put_in(state, [:teardowns, id], terminal)
+  end
+
+  defp handle_terminal_teardown_exit(id, reason, teardown, state) do
+    log_worker_exit(:terminal_teardown, id, reason)
+    signal_kill_session(teardown.session)
+    waiting = %{teardown | pid: nil, ref: nil}
+    state = put_in(state, [:teardowns, id], waiting)
+    send(self(), {:finish_forced_teardown, id})
+    {:noreply, state}
+  end
+
+  defp handle_session_process_exit(worker, state) do
+    starts = mark_cancelled_starts(state.starts, worker)
+
+    state =
+      Enum.reduce(state.sessions, %{state | starts: starts}, fn {_id, session},
+                                                                acc ->
+        if worker in [session.lifecycle_pid, session.synchronizer_pid],
+          do: begin_teardown(session, nil, acc),
+          else: acc
+      end)
+
+    {:noreply, state}
   end
 
   defp log_worker_exit(kind, id, reason) do
@@ -914,32 +951,36 @@ defmodule Raxol.Headless do
          {:ok, server} <-
            named_mcp(opts, :server, Raxol.MCP.Server, :invalid_server),
          {:ok, module} <- resolve_module(module_or_path),
-         {:ok, id} <- session_id(opts, module) do
-      if Map.has_key?(state.sessions, id) or
-           Map.has_key?(state.starts, id) or
-           Map.has_key?(state.teardowns, id) do
-        {:error, {:already_started, id}}
-      else
-        width = Keyword.get(opts, :width, @default_width)
-        height = Keyword.get(opts, :height, @default_height)
-        subscriptions = Keyword.get(opts, :subscriptions, true)
+         {:ok, id} <- session_id(opts, module),
+         :ok <- ensure_session_available(state, id),
+         {:ok, session} <- start_prepared_session(module, id, opts) do
+      {:ok, session, registry, server}
+    end
+  end
 
-        case start_headless_app(module, width, height, subscriptions) do
-          {:ok, lifecycle_pid} ->
-            session = %Session{
-              id: id,
-              module: module,
-              lifecycle_pid: lifecycle_pid,
-              width: width,
-              height: height
-            }
+  defp ensure_session_available(state, id) do
+    if Map.has_key?(state.sessions, id) or
+         Map.has_key?(state.starts, id) or
+         Map.has_key?(state.teardowns, id),
+       do: {:error, {:already_started, id}},
+       else: :ok
+  end
 
-            {:ok, session, registry, server}
+  defp start_prepared_session(module, id, opts) do
+    width = Keyword.get(opts, :width, @default_width)
+    height = Keyword.get(opts, :height, @default_height)
+    subscriptions = Keyword.get(opts, :subscriptions, true)
 
-          {:error, reason} ->
-            {:error, reason}
-        end
-      end
+    with {:ok, lifecycle_pid} <-
+           start_headless_app(module, width, height, subscriptions) do
+      {:ok,
+       %Session{
+         id: id,
+         module: module,
+         lifecycle_pid: lifecycle_pid,
+         width: width,
+         height: height
+       }}
     end
   end
 

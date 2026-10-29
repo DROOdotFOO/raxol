@@ -203,53 +203,77 @@ defmodule Raxol.MCP.ToolSynchronizer do
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
     registry_name = Keyword.fetch!(opts, :registry)
-    registry_pid = GenServer.whereis(registry_name)
-    registry = registry_pid || registry_name
-    registry_ref = if is_pid(registry_pid), do: Process.monitor(registry_pid)
+    {registry, registry_ref} = registry_target(registry_name)
     dispatcher_pid = Keyword.fetch!(opts, :dispatcher_pid)
     session_id = Keyword.fetch!(opts, :session_id)
-    app_module = Keyword.get(opts, :app_module)
-
-    owner_ref =
-      case Keyword.get(opts, :owner) do
-        nil -> nil
-        owner -> Process.monitor(owner)
-      end
-
     handler_id = "tool_sync_#{session_id}_#{System.unique_integer([:positive])}"
 
+    attach_telemetry(handler_id, dispatcher_pid)
+
+    state =
+      initial_state(
+        opts,
+        registry,
+        registry_ref,
+        dispatcher_pid,
+        session_id,
+        handler_id
+      )
+
+    register_initial_session(state)
+  end
+
+  defp registry_target(registry_name) do
+    case GenServer.whereis(registry_name) do
+      pid when is_pid(pid) -> {pid, Process.monitor(pid)}
+      nil -> {registry_name, nil}
+    end
+  end
+
+  defp attach_telemetry(handler_id, dispatcher_pid) do
     :telemetry.attach(
       handler_id,
       [:raxol, :runtime, :view_tree_updated],
       &__MODULE__.handle_telemetry_event/4,
       %{synchronizer: self(), dispatcher_pid: dispatcher_pid}
     )
+  end
 
-    state = %__MODULE__{
+  defp initial_state(
+         opts,
+         registry,
+         registry_ref,
+         dispatcher_pid,
+         session_id,
+         handler_id
+       ) do
+    %__MODULE__{
       registry: registry,
       dispatcher_pid: dispatcher_pid,
       session_id: session_id,
-      app_module: app_module,
+      app_module: Keyword.get(opts, :app_module),
       server: Keyword.get(opts, :server, Raxol.MCP.Server),
       debounce_ms: Keyword.get_lazy(opts, :debounce_ms, &configured_debounce_ms/0),
       telemetry_handler_id: handler_id,
-      owner_ref: owner_ref,
+      owner_ref: monitor_owner(Keyword.get(opts, :owner)),
       registry_ref: registry_ref
     }
+  end
 
-    # A registry call that exits (a registry too busy to answer within the
-    # call timeout) stops this init, and an init that stops runs no
-    # `terminate/2`: detach the telemetry handler here. Registrations already
-    # accepted are owner-scoped, so the registry removes them after this
-    # process is down.
-    try do
-      if not is_pid(registry_pid), do: exit(:noproc)
-      {:ok, register_session(state)}
-    catch
-      kind, reason ->
-        :telemetry.detach(handler_id)
-        {:stop, {:tool_synchronizer_init_failed, self(), kind, reason}}
-    end
+  defp monitor_owner(nil), do: nil
+  defp monitor_owner(owner), do: Process.monitor(owner)
+
+  # A registry call that exits (a registry too busy to answer within the call
+  # timeout) stops this init, and an init that stops runs no `terminate/2`:
+  # detach the telemetry handler here. Registrations already accepted are
+  # owner-scoped, so the registry removes them after this process is down.
+  defp register_initial_session(state) do
+    if is_nil(state.registry_ref), do: exit(:noproc)
+    {:ok, register_session(state)}
+  catch
+    kind, reason ->
+      :telemetry.detach(state.telemetry_handler_id)
+      {:stop, {:tool_synchronizer_init_failed, self(), kind, reason}}
   end
 
   defp configured_debounce_ms do
