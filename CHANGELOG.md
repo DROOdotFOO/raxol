@@ -55,10 +55,13 @@
 - **Derived MCP write tools reach the app's `update/2` instead of crashing the Dispatcher.** A derived tool's message (`{:sort, id, column, direction}` from a Table's `sort`, and the rest) was cast as `{:dispatch, msg}` into the full event path, which folds it through `update/2` and then reads `event.type`, so the first write call killed the session's Dispatcher. `Raxol.MCP.TreeWalker` now calls the Dispatcher's new `{:dispatch_tool_message, msg}` clause, which takes the raw path to `update/2` (still emitting the durable `:app_update` event), and the tool answers once `update/2` has folded the message; a dead or unresponsive Dispatcher is an error result, and so is an `update/2` that raises or returns an invalid result (`:update_failed`). A timed-out call (5 s) may still be applied afterwards; `Raxol.MCP.ToolProvider` and `docs/features/MCP.md` say so. `Raxol.MCP.ToolProvider` documents each provider's message. A Button's `click` tool sends the node's `on_click` message as captured when the tool was derived (it sent a click `%Event{}` the Bubbler routed from the focused element, not the button), and is an error result when `on_click` is missing or a function. A Table's `sort` is an error result for a direction other than `"asc"`/`"desc"` or a column the node does not declare (key or label, ignoring case). `Tabs.mcp_tools/1` no longer raises on string tabs, and `get_tabs` reads the DSL's `:active` (or the component's `:active_index`). `Components.text_input/1` keeps `:id`. The Table, SelectList, Modal, TextInput and Tabs playground demos now derive their tools (`playground_table.sort`, `lang.select`, `confirm.dismiss`, `input.type_into`, `tabs.select_tab`, ...) and handle the messages; TableDemo's stars are numbers (still shown as `39k`), its `sort` takes a column key or label in any case, and TabsDemo draws the DSL `tabs` bar.
 - **`Raxol.Headless` isolates each session's `ToolSynchronizer` and teardown.**
   Synchronizers are unlinked and monitored, so one synchronizer exit ends only
-  its session; Headless and every other session continue. Session teardown now
-  runs in a monitored worker rather than the Headless GenServer: a
-  synchronizer blocked unregistering from an unresponsive Registry cannot
-  block `list/0`, screenshots, or other session calls. The session remains
+  its session; Headless and every other session continue. Registry
+  synchronization during startup and all session teardown now run in monitored
+  workers rather than the Headless GenServer: a synchronizer blocked registering
+  with or unregistering from an unresponsive Registry cannot block `list/0`,
+  screenshots, or other sessions. Concurrent `stop/1` callers join the same
+  teardown and receive their replies only after it finishes; a stop racing
+  startup cancels that start and also waits for cleanup. The session remains
   listed until its synchronizer is down, and the Registry's owner monitor
   remains the authority that removes tools and resources after a kill.
   `ToolSynchronizer` now also monitors the concrete Registry process it
@@ -68,9 +71,11 @@
   Synchronizers still monitor their optional `:owner`, which Headless sets to
   itself. A failed synchronizer start answers
   `{:error, {:tool_synchronizer_failed, class}}` only after owner cleanup and
-  stops the Lifecycle. Headless traps app-init failures and bounds whole-manager
-  shutdown, killing sessions that exceed the shutdown budget rather than
-  leaving their Lifecycles running.
+  stops the Lifecycle. Abnormal teardown workers have a bounded retry and a
+  terminal forced-cleanup error instead of retrying forever. Headless traps
+  app-init failures and bounds whole-manager shutdown, including sessions in
+  startup or teardown, killing sessions that exceed the shutdown budget rather
+  than leaving their Lifecycles running.
 - **Tests: an approved stdio elicitation worker now reports why it died early
   (#1318).** The cancellation regression monitors the worker and immediately
   asserts it is alive before sending `notifications/cancelled`. The blocking

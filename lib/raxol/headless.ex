@@ -37,13 +37,13 @@ defmodule Raxol.Headless do
   ## Processes
 
   The `Raxol.Headless` server holds the session registry and serializes
-  `start/2` (compiling a script path included, bounded by the compile budget),
-  `list/0`, and resolving an id to its session. `stop/1` starts a monitored
-  teardown worker; the session stays listed until its synchronizer is down,
-  but a synchronizer waiting on an unresponsive MCP Registry cannot block
-  calls for another session. A synchronizer also monitors the concrete
-  Registry process it registered with, so replacing that process ends the
-  affected session instead of leaving it listed without tools.
+  session-id reservation, `list/0`, and resolving an id to its session.
+  Registry synchronization during `start/2` and all session teardown run in
+  monitored workers, so an unresponsive MCP Registry cannot block calls for
+  another session. A session stays reserved while either worker is active.
+  A synchronizer also monitors the concrete Registry process it registered
+  with, so replacing that process ends the affected session instead of
+  leaving it listed without tools.
 
   Every other function makes one lookup (5 s) and then runs in the caller: it
   asks the session's Lifecycle for its processes and calls its dispatcher (the
@@ -96,7 +96,9 @@ defmodule Raxol.Headless do
 
   # Each `GenServer.stop/3` of a session's synchronizer or Lifecycle.
   @stop_timeout_ms 5_000
-  @stop_call_timeout_ms 2 * @stop_timeout_ms + 1_000
+  @max_teardown_attempts 2
+  @stop_call_timeout_ms @max_teardown_attempts * 2 * @stop_timeout_ms + 1_000
+  @start_call_timeout_ms @stop_call_timeout_ms + @stop_timeout_ms
   @dispatcher_lookup_timeout_ms 5_000
 
   # `terminate/2` gives the sessions this long to stop the way `stop/1` stops
@@ -108,8 +110,8 @@ defmodule Raxol.Headless do
 
   # Trapping exits, Headless reaches `terminate/2` only once the callback in
   # hand returns, and its supervisor's shutdown clock runs from the exit
-  # signal. Session teardown normally runs outside this server now; this
-  # budget still covers compilation, dispatcher lookup and the bounded
+  # signal. Registry synchronization and teardown run outside this server;
+  # this budget covers compilation, dispatcher lookup and the bounded
   # shutdown work in `terminate/2`.
   @child_shutdown_ms max(
                        @stop_call_timeout_ms,
@@ -256,7 +258,11 @@ defmodule Raxol.Headless do
   @spec start(module() | String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def start(module_or_path, opts \\ []) do
-    GenServer.call(__MODULE__, {:start_session, module_or_path, opts}, 10_000)
+    GenServer.call(
+      __MODULE__,
+      {:start_session, module_or_path, opts},
+      @start_call_timeout_ms
+    )
   end
 
   @doc "Takes a text screenshot of the session's current screen."
@@ -461,17 +467,14 @@ defmodule Raxol.Headless do
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
-    {:ok, %{sessions: %{}, teardowns: %{}}}
+    {:ok, %{sessions: %{}, starts: %{}, teardowns: %{}}}
   end
 
   @impl true
   def handle_call({:start_session, module_or_path, opts}, from, state) do
-    case do_start_session(module_or_path, opts, state) do
-      {:ok, id, new_state} ->
-        {:reply, {:ok, id}, new_state}
-
-      {:discard, session, reason} ->
-        {:noreply, begin_teardown(session, {from, {:error, reason}}, state)}
+    case prepare_start_session(module_or_path, opts, state) do
+      {:ok, session, registry, server} ->
+        {:noreply, begin_start(session, registry, server, from, state)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -490,12 +493,28 @@ defmodule Raxol.Headless do
 
   @impl true
   def handle_call({:stop_session, id}, from, state) do
-    case get_session(state, id) do
-      {:ok, session} ->
-        {:noreply, begin_teardown(session, {from, :ok}, state)}
+    case state.teardowns do
+      %{^id => teardown} ->
+        updated = %{teardown | replies: teardown.replies ++ [{from, :ok}]}
+        {:noreply, put_in(state, [:teardowns, id], updated)}
 
-      {:error, :not_found} ->
-        {:reply, :ok, state}
+      _ ->
+        case state.starts do
+          %{^id => start} ->
+            updated = %{
+              start
+              | cancelled: true,
+                stop_replies: start.stop_replies ++ [{from, :ok}]
+            }
+
+            {:noreply, put_in(state, [:starts, id], updated)}
+
+          _ ->
+            case Map.get(state.sessions, id) do
+              nil -> {:reply, :ok, state}
+              session -> {:noreply, begin_teardown(session, {from, :ok}, state)}
+            end
+        end
     end
   end
 
@@ -517,18 +536,38 @@ defmodule Raxol.Headless do
   # manager or another session. The registry removes every tool and resource
   # owned by a synchronizer that must be killed.
   @impl true
+  def handle_info({:session_start_progress, id, worker, session}, state) do
+    case state.starts do
+      %{^id => %{pid: ^worker} = start} ->
+        if is_pid(session.synchronizer_pid) and
+             session.synchronizer_pid != start.session.synchronizer_pid do
+          Process.monitor(session.synchronizer_pid)
+        end
+
+        {:noreply, put_in(state, [:starts, id], %{start | session: session})}
+
+      _stale ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:session_start_complete, id, worker, result}, state) do
+    case state.starts do
+      %{^id => %{pid: ^worker, ref: ref} = start} ->
+        Process.demonitor(ref, [:flush])
+        state = %{state | starts: Map.delete(state.starts, id)}
+        {:noreply, complete_start(result, start, state)}
+
+      _stale ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:session_teardown_complete, id, worker}, state) do
     case state.teardowns do
-      %{^id => %{pid: ^worker, ref: ref, replies: replies}} ->
+      %{^id => %{pid: ^worker, ref: ref} = teardown} ->
         Process.demonitor(ref, [:flush])
-        Enum.each(replies, fn {from, reply} -> GenServer.reply(from, reply) end)
-
-        {:noreply,
-         %{
-           state
-           | sessions: Map.delete(state.sessions, id),
-             teardowns: Map.delete(state.teardowns, id)
-         }}
+        {:noreply, finish_teardown(id, teardown, state)}
 
       _stale ->
         {:noreply, state}
@@ -536,24 +575,37 @@ defmodule Raxol.Headless do
   end
 
   def handle_info({:DOWN, ref, :process, worker, reason}, state) do
-    case teardown_for_ref(state.teardowns, ref) do
-      {id, %{pid: ^worker} = teardown} ->
+    case start_for_ref(state.starts, ref) do
+      {id, %{pid: ^worker} = start} ->
         Logger.error(
-          "[#{inspect(__MODULE__)}] teardown worker for #{inspect(id)} exited: " <>
+          "[#{inspect(__MODULE__)}] start worker for #{inspect(id)} exited: " <>
             inspect(reason, limit: 20, printable_limit: 200)
         )
 
-        state = %{state | teardowns: Map.delete(state.teardowns, id)}
-        {:noreply, begin_teardown(teardown.session, teardown.replies, state)}
+        state = %{state | starts: Map.delete(state.starts, id)}
+        start_reply = {:error, {:session_start_failed, exit_class(reason)}}
+
+        {:noreply,
+         begin_teardown(start.session, start_replies(start, start_reply), state)}
 
       nil ->
-        state =
-          Enum.reduce(state.sessions, state, fn {_id, session}, acc ->
-            if worker in [session.lifecycle_pid, session.synchronizer_pid],
-              do: begin_teardown(session, nil, acc),
-              else: acc
-          end)
+        handle_non_start_down(ref, worker, reason, state)
+    end
+  end
 
+  def handle_info({:finish_forced_teardown, id}, state) do
+    case state.teardowns do
+      %{^id => %{pid: nil, failure: failure} = teardown}
+      when not is_nil(failure) ->
+        if teardown_processes_down?(teardown.session) do
+          safe_release_synchronizer(teardown.session)
+          {:noreply, finish_teardown(id, teardown, state)}
+        else
+          Process.send_after(self(), {:finish_forced_teardown, id}, 10)
+          {:noreply, state}
+        end
+
+      _stale ->
         {:noreply, state}
     end
   end
@@ -592,8 +644,15 @@ defmodule Raxol.Headless do
   # tools and resources it owned.
   @impl true
   def terminate(_reason, state) do
-    state.sessions
+    state.starts
     |> Map.values()
+    |> Enum.concat(Map.values(state.teardowns))
+    |> Enum.each(fn worker ->
+      if is_pid(worker.pid), do: Process.exit(worker.pid, :kill)
+    end)
+
+    state
+    |> shutdown_sessions()
     |> each_session_within(@shutdown_budget_ms, fn session ->
       stop_synchronizer(session.synchronizer_pid)
       stop_lifecycle(session.lifecycle_pid)
@@ -616,14 +675,87 @@ defmodule Raxol.Headless do
       )
     end)
 
+    state.starts
+    |> Map.values()
+    |> Enum.each(fn start ->
+      GenServer.reply(start.from, {:error, :shutdown})
+
+      Enum.each(start.stop_replies, fn {from, reply} ->
+        GenServer.reply(from, reply)
+      end)
+    end)
+
     state.teardowns
     |> Map.values()
-    |> Enum.flat_map(& &1.replies)
-    |> Enum.each(fn {from, reply} -> GenServer.reply(from, reply) end)
+    |> Enum.each(fn teardown ->
+      Enum.each(teardown.replies, &reply_after_teardown(&1, teardown.failure))
+    end)
   end
 
   # --- Private Helpers ---
-  defp begin_teardown(session, reply_or_replies, state) do
+  defp begin_start(session, registry, server, from, state) do
+    parent = self()
+    Process.monitor(session.lifecycle_pid)
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        result = finish_start(parent, session, registry, server)
+        send(parent, {:session_start_complete, session.id, self(), result})
+      end)
+
+    start = %{
+      pid: pid,
+      ref: ref,
+      session: session,
+      from: from,
+      cancelled: false,
+      stop_replies: []
+    }
+
+    put_in(state, [:starts, session.id], start)
+  end
+
+  defp finish_start(parent, session, registry, server) do
+    case start_tool_synchronizer(session, registry, server, parent) do
+      {:ok, session} ->
+        send(parent, {:session_start_progress, session.id, self(), session})
+        keep_if_whole(session)
+
+      error ->
+        error
+    end
+  end
+
+  defp complete_start({:ok, session}, %{cancelled: false, from: from}, state) do
+    if session_alive?(session) do
+      GenServer.reply(from, {:ok, session.id})
+      put_in(state, [:sessions, session.id], session)
+    else
+      reply = {from, {:error, {:session_unavailable, :noproc}}}
+      begin_teardown(session, reply, state)
+    end
+  end
+
+  defp complete_start({:ok, session}, start, state) do
+    begin_teardown(session, start_replies(start, {:error, :stopped}), state)
+  end
+
+  defp complete_start({:discard, session, reason}, start, state),
+    do: begin_teardown(session, start_replies(start, {:error, reason}), state)
+
+  defp complete_start({:error, reason}, %{session: session} = start, state),
+    do: begin_teardown(session, start_replies(start, {:error, reason}), state)
+
+  defp start_replies(start, start_reply),
+    do: [{start.from, start_reply} | start.stop_replies]
+
+  defp session_alive?(session) do
+    Process.alive?(session.lifecycle_pid) and
+      (is_nil(session.synchronizer_pid) or
+         Process.alive?(session.synchronizer_pid))
+  end
+
+  defp begin_teardown(session, reply_or_replies, state, attempt \\ 1) do
     id = session.id
     replies = teardown_replies(reply_or_replies)
 
@@ -633,40 +765,158 @@ defmodule Raxol.Headless do
         put_in(state, [:teardowns, id], updated)
 
       _ ->
-        parent = self()
-
-        {pid, ref} =
-          spawn_monitor(fn ->
-            discard(session)
-            send(parent, {:session_teardown_complete, id, self()})
-          end)
-
-        teardown = %{
-          pid: pid,
-          ref: ref,
-          session: session,
-          replies: replies
-        }
-
-        put_in(state, [:teardowns, id], teardown)
+        put_in(
+          state,
+          [:teardowns, id],
+          spawn_teardown(session, replies, attempt, nil)
+        )
     end
   end
+
+  defp spawn_teardown(session, replies, attempt, failure) do
+    parent = self()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        if failure, do: force_discard(session), else: discard(session)
+        send(parent, {:session_teardown_complete, session.id, self()})
+      end)
+
+    %{
+      pid: pid,
+      ref: ref,
+      session: session,
+      replies: replies,
+      attempt: attempt,
+      failure: failure
+    }
+  end
+
+  defp handle_non_start_down(ref, worker, reason, state) do
+    case teardown_for_ref(state.teardowns, ref) do
+      {id, %{pid: ^worker, failure: nil} = teardown} ->
+        log_worker_exit(:teardown, id, reason)
+
+        if teardown.attempt < @max_teardown_attempts do
+          state = %{state | teardowns: Map.delete(state.teardowns, id)}
+
+          {:noreply,
+           begin_teardown(
+             teardown.session,
+             teardown.replies,
+             state,
+             teardown.attempt + 1
+           )}
+        else
+          failure = exit_class(reason)
+
+          terminal =
+            spawn_teardown(
+              teardown.session,
+              teardown.replies,
+              teardown.attempt,
+              failure
+            )
+
+          {:noreply, put_in(state, [:teardowns, id], terminal)}
+        end
+
+      {id, %{pid: ^worker} = teardown} ->
+        log_worker_exit(:terminal_teardown, id, reason)
+        signal_kill_session(teardown.session)
+        waiting = %{teardown | pid: nil, ref: nil}
+        state = put_in(state, [:teardowns, id], waiting)
+        send(self(), {:finish_forced_teardown, id})
+        {:noreply, state}
+
+      nil ->
+        starts = mark_cancelled_starts(state.starts, worker)
+
+        state =
+          Enum.reduce(state.sessions, %{state | starts: starts}, fn {_id,
+                                                                     session},
+                                                                    acc ->
+            if worker in [session.lifecycle_pid, session.synchronizer_pid],
+              do: begin_teardown(session, nil, acc),
+              else: acc
+          end)
+
+        {:noreply, state}
+    end
+  end
+
+  defp log_worker_exit(kind, id, reason) do
+    Logger.error(
+      "[#{inspect(__MODULE__)}] #{kind} worker for #{inspect(id)} exited: " <>
+        inspect(reason, limit: 20, printable_limit: 200)
+    )
+  end
+
+  defp mark_cancelled_starts(starts, pid) do
+    Map.new(starts, fn {id, start} ->
+      if pid in [start.session.lifecycle_pid, start.session.synchronizer_pid],
+        do: {id, %{start | cancelled: true}},
+        else: {id, start}
+    end)
+  end
+
+  defp teardown_processes_down?(session) do
+    not Process.alive?(session.lifecycle_pid) and
+      (is_nil(session.synchronizer_pid) or
+         not Process.alive?(session.synchronizer_pid))
+  end
+
+  defp finish_teardown(id, teardown, state) do
+    Enum.each(teardown.replies, &reply_after_teardown(&1, teardown.failure))
+
+    %{
+      state
+      | sessions: Map.delete(state.sessions, id),
+        teardowns: Map.delete(state.teardowns, id)
+    }
+  end
+
+  defp reply_after_teardown({from, :ok}, failure) when not is_nil(failure),
+    do: GenServer.reply(from, {:error, {:teardown_failed, failure}})
+
+  defp reply_after_teardown({from, reply}, _failure),
+    do: GenServer.reply(from, reply)
 
   defp teardown_replies(nil), do: []
   defp teardown_replies(replies) when is_list(replies), do: replies
   defp teardown_replies(reply), do: [reply]
 
+  defp start_for_ref(starts, ref) do
+    Enum.find(starts, fn {_id, start} -> start.ref == ref end)
+  end
+
   defp teardown_for_ref(teardowns, ref) do
     Enum.find(teardowns, fn {_id, teardown} -> teardown.ref == ref end)
   end
 
-  defp do_start_session(module_or_path, opts, state) do
+  defp shutdown_sessions(state) do
+    start_sessions =
+      Enum.map(state.starts, fn {_id, start} -> start.session end)
+
+    teardown_sessions =
+      Enum.map(state.teardowns, fn {_id, teardown} -> teardown.session end)
+
+    state.sessions
+    |> Map.values()
+    |> Enum.concat(start_sessions)
+    |> Enum.concat(teardown_sessions)
+    |> Map.new(&{&1.id, &1})
+    |> Map.values()
+  end
+
+  defp prepare_start_session(module_or_path, opts, state) do
     with {:ok, registry} <- session_registry(opts),
          {:ok, server} <-
            named_mcp(opts, :server, Raxol.MCP.Server, :invalid_server),
          {:ok, module} <- resolve_module(module_or_path),
          {:ok, id} <- session_id(opts, module) do
       if Map.has_key?(state.sessions, id) or
+           Map.has_key?(state.starts, id) or
            Map.has_key?(state.teardowns, id) do
         {:error, {:already_started, id}}
       else
@@ -674,14 +924,21 @@ defmodule Raxol.Headless do
         height = Keyword.get(opts, :height, @default_height)
         subscriptions = Keyword.get(opts, :subscriptions, true)
 
-        create_session(
-          module,
-          id,
-          {width, height},
-          subscriptions,
-          {registry, server},
-          state
-        )
+        case start_headless_app(module, width, height, subscriptions) do
+          {:ok, lifecycle_pid} ->
+            session = %Session{
+              id: id,
+              module: module,
+              lifecycle_pid: lifecycle_pid,
+              width: width,
+              height: height
+            }
+
+            {:ok, session, registry, server}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
       end
     end
   end
@@ -780,33 +1037,6 @@ defmodule Raxol.Headless do
       else: {:error, {:invalid_session_id, id}}
   end
 
-  defp create_session(
-         module,
-         id,
-         {width, height},
-         subscriptions,
-         {registry, server},
-         state
-       ) do
-    case start_headless_app(module, width, height, subscriptions) do
-      {:ok, lifecycle_pid} ->
-        session = %Session{
-          id: id,
-          module: module,
-          lifecycle_pid: lifecycle_pid,
-          width: width,
-          height: height
-        }
-
-        with {:ok, session} <-
-               start_tool_synchronizer(session, registry, server),
-             do: keep_if_whole(session, state)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   # A session the registry refused tools of (their client-side names are held
   # by another session's or a static tool) would run without them, its
   # `discover_tools` included, while its caller read `{:ok, id}`: the start is
@@ -814,11 +1044,10 @@ defmodule Raxol.Headless do
   # alike. Asked before the session is stored, so no caller reaches it. The
   # refusal names only the refused tools: a holder can be another session's
   # tool, with its exact id and widgets.
-  defp keep_if_whole(session, state) do
+  defp keep_if_whole(session) do
     case synchronizer_collisions(session) do
       {:ok, []} ->
-        Process.monitor(session.lifecycle_pid)
-        {:ok, session.id, put_in(state, [:sessions, session.id], session)}
+        {:ok, session}
 
       {:ok, refused} ->
         {:discard, session,
@@ -853,6 +1082,45 @@ defmodule Raxol.Headless do
     end
 
     :ok
+  end
+
+  defp force_discard(session) do
+    refs =
+      [session.lifecycle_pid, session.synchronizer_pid]
+      |> Enum.filter(&is_pid/1)
+      |> Enum.uniq()
+      |> Enum.map(&Process.monitor/1)
+
+    signal_kill_session(session)
+    await_down(refs)
+    safe_release_synchronizer(session)
+  end
+
+  defp signal_kill_session(session) do
+    if is_pid(session.synchronizer_pid),
+      do: Process.exit(session.synchronizer_pid, :kill)
+
+    if is_pid(session.lifecycle_pid),
+      do: Process.exit(session.lifecycle_pid, :kill)
+
+    :ok
+  end
+
+  defp await_down([]), do: :ok
+
+  defp await_down(refs) do
+    receive do
+      {:DOWN, ref, :process, _pid, _reason} ->
+        await_down(List.delete(refs, ref))
+    end
+  end
+
+  defp safe_release_synchronizer(%Session{synchronizer_pid: nil}), do: :ok
+
+  defp safe_release_synchronizer(session) do
+    release_synchronizer(session)
+  catch
+    _kind, _reason -> :ok
   end
 
   # The gate lives HERE rather than in `Raxol.Headless.McpTools` because this is
@@ -1449,20 +1717,24 @@ defmodule Raxol.Headless do
   # named registry gone since its check, or a synchronizer `init` that fails
   # (its call to a registry too busy to answer timed out). Each refuses the
   # start and stops the session, the answer carrying only the exit's class.
-  defp start_tool_synchronizer(session, {:optional, registry}, server) do
+  defp start_tool_synchronizer(session, {:optional, registry}, server, owner) do
     if Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer) and
          is_pid(GenServer.whereis(registry)),
-       do: start_tool_synchronizer(session, registry, server),
+       do: start_tool_synchronizer(session, registry, server, owner),
        else: {:ok, session}
   end
 
-  defp start_tool_synchronizer(session, registry, server) do
+  defp start_tool_synchronizer(session, registry, server, owner) do
     with registry_pid when is_pid(registry_pid) <- GenServer.whereis(registry),
          {:ok, dispatcher_pid} <- get_dispatcher_pid(session.lifecycle_pid),
          {:ok, sync_pid} <-
-           start_synchronizer(session, registry_pid, dispatcher_pid, server) do
-      Process.monitor(sync_pid)
-
+           start_synchronizer(
+             session,
+             registry_pid,
+             dispatcher_pid,
+             server,
+             owner
+           ) do
       {:ok, %{session | synchronizer_pid: sync_pid}}
     else
       nil ->
@@ -1473,14 +1745,14 @@ defmodule Raxol.Headless do
     end
   end
 
-  defp start_synchronizer(session, registry_pid, dispatcher_pid, server) do
+  defp start_synchronizer(session, registry_pid, dispatcher_pid, server, owner) do
     case GenServer.start(Raxol.MCP.ToolSynchronizer,
            registry: registry_pid,
            server: server,
            dispatcher_pid: dispatcher_pid,
            session_id: session.id,
            app_module: session.module,
-           owner: self()
+           owner: owner
          ) do
       {:error, {:tool_synchronizer_init_failed, sync_pid, _kind, reason}} ->
         await_owner_cleanup(registry_pid, sync_pid)
