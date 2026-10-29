@@ -198,7 +198,11 @@ defmodule Raxol.HeadlessTest do
 
     @impl true
     def init(_context) do
-      send(Application.fetch_env!(:raxol, :headless_test_observer), {:lifecycle, self()})
+      send(
+        Application.fetch_env!(:raxol, :headless_test_observer),
+        {:lifecycle, self()}
+      )
+
       %{}
     end
 
@@ -322,7 +326,8 @@ defmodule Raxol.HeadlessTest do
             :atom_id,
             nil
           ] do
-        assert Headless.start(TestApp, id: id) == {:error, {:invalid_session_id, id}}
+        assert Headless.start(TestApp, id: id) ==
+                 {:error, {:invalid_session_id, id}}
       end
 
       assert Process.whereis(Headless) == server
@@ -338,7 +343,8 @@ defmodule Raxol.HeadlessTest do
       assert long_id =~ ~r/\Athis_headless_app_modul_[0-9a-f]{8}\z/
       assert {:error, {:already_started, ^long_id}} = Headless.start(long, [])
 
-      assert {:ok, "app__plus"} = Headless.start(:"Elixir.Raxol.HeadlessTest.App+Plus", [])
+      assert {:ok, "app__plus"} =
+               Headless.start(:"Elixir.Raxol.HeadlessTest.App+Plus", [])
     end
 
     test "rejects duplicate session ids" do
@@ -397,6 +403,57 @@ defmodule Raxol.HeadlessTest do
       assert {:error, :not_found} = Headless.screenshot("stop_test")
     end
 
+    test "stop joins an in-progress start and prevents the session from appearing" do
+      registry =
+        start_supervised!({Raxol.MCP.Registry, name: nil},
+          id: :stopped_start_registry
+        )
+
+      :ok = :sys.suspend(registry)
+
+      on_exit(fn ->
+        if Process.alive?(registry), do: :sys.resume(registry)
+      end)
+
+      id = "stopped_while_starting"
+
+      start =
+        Task.async(fn ->
+          Headless.start(StaticToolApp, id: id, registry: registry)
+        end)
+
+      sync_pid = synchronizer_for(id)
+      sync_ref = Process.monitor(sync_pid)
+      lifecycle = :sys.get_state(Headless).starts[id].session.lifecycle_pid
+      lifecycle_ref = Process.monitor(lifecycle)
+      headless = Process.whereis(Headless)
+      :erlang.trace(headless, true, [:receive])
+      stop = Task.async(fn -> Headless.stop(id) end)
+
+      assert_receive {:trace, ^headless, :receive,
+                      {:"$gen_call", _, {:stop_session, ^id}}}
+
+      :erlang.trace(headless, false, [:receive])
+
+      assert %{cancelled: true, stop_replies: [_]} =
+               :sys.get_state(Headless).starts[id]
+
+      refute id in Headless.list()
+
+      start_ref = start.ref
+      stop_ref = stop.ref
+      refute_received {^start_ref, _result}
+      refute_received {^stop_ref, _result}
+
+      :ok = :sys.resume(registry)
+
+      assert Task.await(start, 10_000) == {:error, :stopped}
+      assert Task.await(stop, 10_000) == :ok
+      assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, _reason}
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, _reason}
+      refute id in Headless.list()
+    end
+
     test "stop is idempotent for missing sessions" do
       assert :ok = Headless.stop("never_existed")
     end
@@ -411,7 +468,9 @@ defmodule Raxol.HeadlessTest do
 
       assert Process.whereis(Headless) == headless
       refute "bad_registry" in Headless.list()
-      assert {:ok, "good_registry"} = Headless.start(TestApp, id: "good_registry")
+
+      assert {:ok, "good_registry"} =
+               Headless.start(TestApp, id: "good_registry")
     end
 
     test "refuses a registry name no process has, and keeps serving" do
@@ -780,6 +839,178 @@ defmodule Raxol.HeadlessTest do
              )
     end
 
+    test "a stalled registry cannot block other sessions while a lifecycle ends" do
+      stalled =
+        start_supervised!({Raxol.MCP.Registry, name: nil},
+          id: :stalled_teardown_registry
+        )
+
+      healthy =
+        start_supervised!({Raxol.MCP.Registry, name: nil},
+          id: :healthy_teardown_registry
+        )
+
+      {:ok, ending} =
+        Headless.start(TestApp, id: "stalled_teardown", registry: stalled)
+
+      {:ok, survivor} =
+        Headless.start(StaticToolApp,
+          id: "healthy_during_teardown",
+          registry: healthy
+        )
+
+      sessions = :sys.get_state(Headless).sessions
+      ending_session = sessions[ending]
+      sync_pid = ending_session.synchronizer_pid
+      sync_ref = Process.monitor(sync_pid)
+      lifecycle_ref = Process.monitor(ending_session.lifecycle_pid)
+      :erlang.trace(sync_pid, true, [:send])
+
+      :ok = :sys.suspend(stalled)
+
+      on_exit(fn ->
+        if Process.alive?(stalled), do: :sys.resume(stalled)
+      end)
+
+      Process.exit(ending_session.lifecycle_pid, :kill)
+      assert_receive {:DOWN, ^lifecycle_ref, :process, _, :killed}
+
+      assert_receive {:trace, ^sync_pid, :send, {:"$gen_call", _, _}, ^stalled},
+                     6_000
+
+      assert Process.alive?(sync_pid)
+      assert ending in Headless.list()
+      assert survivor in Headless.list()
+      assert {:ok, screen} = Headless.screenshot(survivor)
+      assert screen =~ "Ready"
+
+      :ok = :sys.resume(stalled)
+      assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, _reason}, 6_000
+      :sys.get_state(Headless)
+
+      refute ending in Headless.list()
+      assert survivor in Headless.list()
+    end
+
+    test "a session without an MCP registry disappears safely while stopping" do
+      registry = Process.whereis(Raxol.MCP.Registry)
+
+      if is_pid(registry), do: Process.unregister(Raxol.MCP.Registry)
+
+      on_exit(fn ->
+        if is_pid(registry) and Process.alive?(registry) and
+             is_nil(Process.whereis(Raxol.MCP.Registry)) do
+          Process.register(registry, Raxol.MCP.Registry)
+        end
+      end)
+
+      {:ok, id} = Headless.start(TestApp, id: "no_registry_teardown")
+      session = :sys.get_state(Headless).sessions[id]
+      assert session.synchronizer_pid == nil
+
+      if is_pid(registry), do: Process.register(registry, Raxol.MCP.Registry)
+
+      lifecycle = session.lifecycle_pid
+      hold(lifecycle)
+      stop = Task.async(fn -> Headless.stop(id) end)
+      assert_receive {:stop_reached, ^lifecycle}
+      headless = Process.whereis(Headless)
+      :erlang.trace(headless, true, [:receive])
+      second_stop = Task.async(fn -> Headless.stop(id) end)
+
+      assert_receive {:trace, ^headless, :receive,
+                      {:"$gen_call", _, {:stop_session, ^id}}}
+
+      :erlang.trace(headless, false, [:receive])
+      assert length(:sys.get_state(Headless).teardowns[id].replies) == 2
+
+      refute id in Headless.list()
+      assert {:error, :not_found} = Headless.screenshot(id)
+      assert Process.alive?(Process.whereis(Headless))
+
+      Process.exit(lifecycle, :kill)
+      assert Task.await(stop) == :ok
+      assert Task.await(second_stop) == :ok
+    end
+
+    test "repeated abnormal teardown exits terminate with an error" do
+      registry =
+        start_supervised!({Raxol.MCP.Registry, name: nil},
+          id: :retry_teardown_registry
+        )
+
+      {:ok, id} =
+        Headless.start(TestApp, id: "teardown_retry_limit", registry: registry)
+
+      session = :sys.get_state(Headless).sessions[id]
+      lifecycle = session.lifecycle_pid
+      lifecycle_ref = Process.monitor(lifecycle)
+      hold(lifecycle)
+
+      stop = Task.async(fn -> Headless.stop(id) end)
+      assert_receive {:stop_reached, ^lifecycle}
+
+      first_worker = :sys.get_state(Headless).teardowns[id].pid
+      Process.exit(first_worker, :kill)
+      assert_receive {:stop_reached, ^lifecycle}
+
+      second_worker = :sys.get_state(Headless).teardowns[id].pid
+      refute second_worker == first_worker
+      Process.exit(second_worker, :kill)
+
+      assert Task.await(stop, 5_000) == {:error, {:teardown_failed, :killed}}
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed}
+      refute id in Headless.list()
+    end
+
+    test "a restarted registry ends only sessions registered with its old process" do
+      registry_name = Module.concat(__MODULE__, RestartedRegistry)
+
+      registry =
+        start_supervised!({Raxol.MCP.Registry, name: registry_name},
+          id: :restarted_session_registry
+        )
+
+      healthy_registry =
+        start_supervised!({Raxol.MCP.Registry, name: nil},
+          id: :restart_survivor_registry
+        )
+
+      {:ok, affected} =
+        Headless.start(StaticToolApp,
+          id: "registry_restarted",
+          registry: registry_name
+        )
+
+      {:ok, survivor} =
+        Headless.start(StaticToolApp,
+          id: "registry_restart_survivor",
+          registry: healthy_registry
+        )
+
+      affected_session = :sys.get_state(Headless).sessions[affected]
+      sync_ref = Process.monitor(affected_session.synchronizer_pid)
+      lifecycle_ref = Process.monitor(affected_session.lifecycle_pid)
+      registry_ref = Process.monitor(registry)
+
+      :ok = stop_supervised(:restarted_session_registry)
+      assert_receive {:DOWN, ^registry_ref, :process, ^registry, _reason}
+
+      replacement =
+        start_supervised!({Raxol.MCP.Registry, name: registry_name},
+          id: :restarted_session_registry
+        )
+
+      refute replacement == registry
+      assert_receive {:DOWN, ^sync_ref, :process, _, :normal}, 2_000
+      assert_receive {:DOWN, ^lifecycle_ref, :process, _, _reason}, 2_000
+
+      refute affected in Headless.list()
+      assert survivor in Headless.list()
+      assert {:ok, screen} = Headless.screenshot(survivor)
+      assert screen =~ "Ready"
+    end
+
     # The synchronizer was linked to Headless, which does not trap exits: one
     # synchronizer dying took the manager down, every session's tools with it,
     # and left every Lifecycle running, unlisted and unstoppable. Now it ends
@@ -960,6 +1191,10 @@ defmodule Raxol.HeadlessTest do
       lifecycle_ref = Process.monitor(lifecycle)
       sync_pid = synchronizer_for("unanswered")
       sync_ref = Process.monitor(sync_pid)
+      assert keep in Headless.list()
+      assert {:ok, screen} = Headless.screenshot(keep)
+      assert screen =~ "Ready"
+
       assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, _reason}, 6_000
 
       # The synchronizer is down, but the suspended registry has not processed
@@ -972,7 +1207,9 @@ defmodule Raxol.HeadlessTest do
       assert Task.await(start) ==
                {:error, {:tool_synchronizer_failed, :timeout}}
 
-      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, _reason}, 5_000
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, _reason},
+                     5_000
+
       assert tool_names(stalled) == []
       assert session_uris(stalled, "unanswered") == []
       refute_received {:DOWN, ^headless_ref, :process, _, _}
@@ -1008,6 +1245,7 @@ defmodule Raxol.HeadlessTest do
       assert_receive {:DOWN, ^lifecycle_ref, :process, _, _}, 5_000
       :sys.get_state(Headless)
       :ok = Raxol.MCP.Registry.await_owner_cleanup(own, sync_pid)
+      assert :ok = Headless.stop(id)
 
       assert tool_names(own) == []
       assert session_uris(own, id) == []
@@ -1118,19 +1356,65 @@ defmodule Raxol.HeadlessTest do
       :ok = stop_supervised(name)
 
       assert_receive {:DOWN, ^sync_ref, :process, ^sync_pid, :killed}, 5_000
-      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed}, 5_000
+
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed},
+                     5_000
+
       :ok = Raxol.MCP.Registry.await_owner_cleanup(registry, sync_pid)
       assert sync_handler_ids(sync_pid) == []
       assert session_uris(registry, id) == []
     end
 
-    # The supervisor's shutdown clock runs from its exit signal, but a
-    # trapping Headless reaches `terminate/2` only once the callback in hand
-    # returns. Here that callback is `stop/1` of a session whose synchronizer
-    # does not stop, so it takes the full stop timeout, and the session left
-    # is stuck too, so the teardown after it takes its whole budget. The 5 s
-    # default killed Headless mid-teardown and orphaned that Lifecycle.
-    test "a shutdown that arrives mid-callback still stops every session" do
+    test "shutdown cleans a session held only by teardown state" do
+      name = Module.concat(__MODULE__, TeardownOnlyHeadless)
+
+      headless =
+        start_supervised!(
+          Supervisor.child_spec({Headless, [name: name]}, id: name)
+        )
+
+      {:ok, id} =
+        GenServer.call(
+          headless,
+          {:start_session, TestApp, [id: "teardown_only"]}
+        )
+
+      session = :sys.get_state(headless).sessions[id]
+      lifecycle_ref = Process.monitor(session.lifecycle_pid)
+      worker = spawn(fn -> Process.sleep(:infinity) end)
+
+      :sys.replace_state(headless, fn state ->
+        teardown = %{
+          pid: worker,
+          ref: Process.monitor(worker),
+          session: session,
+          replies: [],
+          attempt: 1,
+          failure: nil
+        }
+
+        %{
+          state
+          | sessions: Map.delete(state.sessions, id),
+            teardowns: Map.put(state.teardowns, id, teardown)
+        }
+      end)
+
+      on_exit(fn ->
+        kill_all([worker, session.synchronizer_pid, session.lifecycle_pid])
+      end)
+
+      :ok = stop_supervised(name)
+
+      assert_receive {:DOWN, ^lifecycle_ref, :process, _, _reason}, 5_000
+      refute Process.alive?(worker)
+    end
+
+    # A stop request returns control to Headless while its teardown worker
+    # waits on the synchronizer. If supervised shutdown arrives then,
+    # `terminate/2` must still kill every session and answer the queued stop
+    # caller before Headless exits.
+    test "a shutdown while teardown is in flight still stops every session" do
       registry =
         Process.whereis(Raxol.MCP.Registry) ||
           start_supervised!({Raxol.MCP.Registry, name: Raxol.MCP.Registry})
@@ -1152,7 +1436,9 @@ defmodule Raxol.HeadlessTest do
         end
 
       on_exit(fn ->
-        kill_all(Enum.flat_map(sessions, &[&1.synchronizer_pid, &1.lifecycle_pid]))
+        kill_all(
+          Enum.flat_map(sessions, &[&1.synchronizer_pid, &1.lifecycle_pid])
+        )
       end)
 
       Enum.each(sessions, &hold(&1.synchronizer_pid))
@@ -1171,20 +1457,24 @@ defmodule Raxol.HeadlessTest do
         send(test, {:stop_reply, reply})
       end)
 
-      # Headless is inside that call once its stop reaches the synchronizer.
+      # The teardown worker has reached the synchronizer and is blocked there.
       assert_receive {:stop_reached, ^held}, 5_000
 
       lifecycle = left.lifecycle_pid
       lifecycle_ref = Process.monitor(lifecycle)
       :ok = stop_supervised(name)
 
-      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed}, 5_000
+      assert_receive {:DOWN, ^lifecycle_ref, :process, ^lifecycle, :killed},
+                     5_000
+
       assert_receive {:stop_reply, :ok}
+
       :ok =
         Raxol.MCP.Registry.await_owner_cleanup(
           registry,
           left.synchronizer_pid
         )
+
       assert sync_handler_ids(left.synchronizer_pid) == []
       assert session_uris(registry, left.id) == []
     end
