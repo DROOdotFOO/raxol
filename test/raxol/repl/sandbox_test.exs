@@ -1849,8 +1849,20 @@ defmodule Raxol.REPL.SandboxTest do
     for {arg, position} <- Enum.with_index(spec_args(func, clause)),
         kind = calendar_kind(module, arg),
         kind != nil,
-        do: {position, kind, arg |> union_members() |> Enum.filter(&is_atom/1)}
+        atoms =
+          arg
+          |> union_members()
+          |> Enum.filter(&is_atom/1)
+          |> known_slot_atoms(module, func, position),
+        do: {position, kind, atoms}
   end
+
+  # Elixir 1.17 and 1.18 type Time.utc_now/1 only as a calendar even though
+  # the function accepts the same time units as the other utc_now/1 variants.
+  defp known_slot_atoms(atoms, Time, :utc_now, 0),
+    do: Enum.uniq(atoms ++ [:native, :microsecond, :millisecond, :second])
+
+  defp known_slot_atoms(atoms, _module, _func, _position), do: atoms
 
   defp union_members({:|, _, [left, right]}),
     do: union_members(left) ++ union_members(right)
