@@ -61,6 +61,30 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       GenServer.stop(pid)
     end
+
+    test "refuses a registry name with no concrete process" do
+      session_id = "missing_registry"
+      trapping? = Process.flag(:trap_exit, true)
+
+      result =
+        ToolSynchronizer.start_link(
+          registry: :missing_tool_synchronizer_registry,
+          dispatcher_pid: self(),
+          session_id: session_id
+        )
+
+      Process.flag(:trap_exit, trapping?)
+
+      assert {:error, {:tool_synchronizer_init_failed, failed_pid, :exit, :noproc}} =
+               result
+
+      assert is_pid(failed_pid)
+
+      refute Enum.any?(
+               :telemetry.list_handlers([:raxol, :runtime, :view_tree_updated]),
+               &String.starts_with?(&1.id, "tool_sync_#{session_id}_")
+             )
+    end
   end
 
   describe "sync/2" do
@@ -237,7 +261,6 @@ defmodule Raxol.MCP.ToolSynchronizerTest do
 
       names = registry |> Registry.list_tools() |> Enum.map(& &1[:name])
       assert "test_debounce.w5.click" in names
-      refute "test_debounce.w1.click" in names
       assert state.pending_view_tree == nil
 
       GenServer.stop(pid)

@@ -1,5 +1,5 @@
 defmodule Raxol.MCP.Transport.StdioTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Raxol.MCP.{Protocol, Registry, Server, Transport}
   alias Raxol.MCP.TestSupport.PushIO
@@ -59,6 +59,7 @@ defmodule Raxol.MCP.Transport.StdioTest do
         description: "Blocks until released",
         inputSchema: %{type: "object"},
         callback: fn _args ->
+          :erlang.trace(self(), true, [:procs, {:tracer, parent}])
           send(parent, {:entered, self()})
 
           receive do
@@ -283,7 +284,7 @@ defmodule Raxol.MCP.Transport.StdioTest do
 
     test "cancelled once approved: the tool is killed and nothing is written",
          %{io: io, elicit_id: elicit_id} = ctx do
-      {worker, worker_ref} = approve(io, elicit_id)
+      {worker, worker_ref} = approve(ctx, elicit_id)
 
       push(io, Protocol.notification("notifications/cancelled", %{"requestId" => 7}))
       assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
@@ -294,8 +295,8 @@ defmodule Raxol.MCP.Transport.StdioTest do
     end
 
     test "end of input once approved kills the tool",
-         %{io: io, elicit_id: elicit_id, transport: transport, transport_ref: ref} do
-      {worker, worker_ref} = approve(io, elicit_id)
+         %{io: io, elicit_id: elicit_id, transport: transport, transport_ref: ref} = ctx do
+      {worker, worker_ref} = approve(ctx, elicit_id)
 
       PushIO.push(io, :eof)
       assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, @timeout
@@ -307,10 +308,57 @@ defmodule Raxol.MCP.Transport.StdioTest do
   defp approval(elicit_id),
     do: %{jsonrpc: "2.0", id: elicit_id, result: %{action: "accept", content: %{approve: true}}}
 
-  defp approve(io, elicit_id) do
+  defp approve(%{io: io, server: server}, elicit_id) do
+    server = GenServer.whereis(server)
+    trace_worker_kills(server)
     push(io, approval(elicit_id))
     assert_receive {:entered, worker}, @timeout
-    {worker, Process.monitor(worker)}
+    worker_ref = Process.monitor(worker)
+
+    assert Process.alive?(worker),
+           "approved worker was dead when monitored: " <>
+             inspect(worker_exit_diagnostics(server, worker, worker_ref))
+
+    {worker, worker_ref}
+  end
+
+  defp trace_worker_kills(server) do
+    :erlang.trace_pattern({:erlang, :exit, 2}, true, [:local])
+    :erlang.trace(server, true, [:call])
+
+    on_exit(fn ->
+      if Process.alive?(server), do: :erlang.trace(server, false, [:call])
+      :erlang.trace_pattern({:erlang, :exit, 2}, false, [:local])
+    end)
+  end
+
+  defp worker_exit_diagnostics(server, worker, worker_ref) do
+    collect_worker_exit_diagnostics(server, worker, worker_ref, [])
+  end
+
+  defp collect_worker_exit_diagnostics(server, worker, worker_ref, events) do
+    receive do
+      {:trace, ^server, :call, {:erlang, :exit, [^worker, reason]}} ->
+        collect_worker_exit_diagnostics(
+          server,
+          worker,
+          worker_ref,
+          [{:exit_sent_by, server, reason} | events]
+        )
+
+      {:trace, ^worker, :exit, reason} ->
+        collect_worker_exit_diagnostics(
+          server,
+          worker,
+          worker_ref,
+          [{:worker_exit, reason} | events]
+        )
+
+      {:DOWN, ^worker_ref, :process, ^worker, reason} ->
+        Enum.reverse([{:monitor_down, reason} | events])
+    after
+      @timeout -> Enum.reverse([:diagnostic_timeout | events])
+    end
   end
 
   # These kill a process the test is linked to, so each unlinks it first.
