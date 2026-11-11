@@ -377,6 +377,7 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
   # numbers of the frames that started the component. Each start is seen to
   # its end before the next frame, so each frame's count is settled.
   defp start_frames(id, view, label, frames) do
+    report_exits(id)
     show(id, view)
     failed_start(label)
 
@@ -396,11 +397,31 @@ defmodule Raxol.Core.Runtime.Rendering.EngineProcessComponentsTest do
     [1 | rest]
   end
 
+  # A start seen to its end: the engine taking up the DOWN that puts the
+  # component into backoff. A monitor of the test's own does not show that.
+  # The two DOWNs are separate signals, and a process already off the process
+  # table answers a new monitor `:noproc` at once, while its exit has yet to
+  # reach the monitors it had. A frame asked for then still had the component
+  # as starting, and started nothing (nightly of 2026-11-11, macOS).
   defp failed_start(label) do
     assert_receive {:started, ^label, pid}
-    ref = Process.monitor(pid)
-    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+    assert_receive {:engine_took_exit, ^pid}
   end
+
+  # Has the session's engine tell the test of each component exit as it takes
+  # the DOWN from its mailbox, so ahead of any frame asked for after that.
+  # Installing it a second time under the same id changes nothing.
+  defp report_exits(id) do
+    %{engine: engine} = session_pids(id)
+    :ok = :sys.install(engine, {__MODULE__, &report_exit/3, self()})
+  end
+
+  defp report_exit(test, {:in, {:DOWN, _ref, :process, pid, _reason}}, _name) do
+    send(test, {:engine_took_exit, pid})
+    test
+  end
+
+  defp report_exit(test, _event, _name), do: test
 
   # Shows `view` and sees the frame that follows drawn. The dispatcher sends
   # the Lifecycle `:render_needed` before it answers `send_message/2`, and

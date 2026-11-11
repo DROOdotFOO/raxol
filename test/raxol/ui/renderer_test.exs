@@ -13,16 +13,15 @@ defmodule Raxol.UI.RendererTest do
 
   # Add setup block
   setup do
-    # Initialize the theme system
-    Theme.init()
-
     # Initialize UserPreferences in test mode
     case UserPreferences.start_link(test_mode?: true) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
     end
 
-    # Create a test theme with the required structure
+    # A theme with the required structure, handed to the tests through the
+    # context and never registered: the theme registry is Application env,
+    # which every test running alongside this async module renders from.
     test_theme = %Theme{
       id: :test_theme,
       name: "Test Theme",
@@ -51,14 +50,11 @@ defmodule Raxol.UI.RendererTest do
       }
     }
 
-    # Register the test theme
-    Theme.register(test_theme)
-
     {:ok, %{theme: test_theme}}
   end
 
   describe "Table Rendering" do
-    test "renders basic table structure" do
+    test "renders basic table structure", %{theme: theme} do
       # Setup: Create a sample positioned table element (from Layout)
       positioned_table = %{
         type: :table,
@@ -76,8 +72,7 @@ defmodule Raxol.UI.RendererTest do
       }
 
       # Execute: Call Renderer.render_to_cells with the element and theme
-      rendered_cells =
-        Renderer.render_to_cells([positioned_table], Theme.get(:test_theme))
+      rendered_cells = Renderer.render_to_cells([positioned_table], theme)
 
       # Assert: Check the final character grid/cell list for correct padding/positioning
       assert [_ | _] = rendered_cells
@@ -103,10 +98,10 @@ defmodule Raxol.UI.RendererTest do
                {7, 3, "2", :default, :default, []}
     end
 
-    test "applies theme styles to table header and data rows" do
-      # Setup theme and element
-      test_theme = Theme.get(:test_theme)
-
+    test "applies theme styles to table header and data rows", %{
+      theme: test_theme
+    } do
+      # Setup element
       positioned_table = %{
         type: :table,
         x: 1,

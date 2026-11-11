@@ -845,8 +845,15 @@ defmodule Raxol.Harness.T13aSurfaceTest do
       assert_memory_residency_budget(final_model, 500)
     end
 
+    # `Surface.advance/1` re-projects every revealed event on each reveal, so
+    # this drive is quadratic in the event count: 10_002 advances over up to
+    # 10_002 events, about 25 million block builds. The nightly's integration
+    # lane finished in 131 to 184 s on the nights this passed, and the test
+    # ran past a 180 s limit on the nights it did not (2026-11-08, 11-11).
+    # 300 s is the ceiling the nightly gives the other CPU-bound harness
+    # suites; the assertion here is the memory ratio, not the time.
     @tag :slow
-    @tag timeout: 180_000
+    @tag timeout: 300_000
     test "5000-block: the same ratio budget holds at 10x scale -- the budget ScrollWindow virtualization must meet" do
       events = bulk_events(5000)
       {model, _device} = new_model(events, [])
