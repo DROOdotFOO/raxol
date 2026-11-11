@@ -147,6 +147,13 @@ defmodule Raxol.Core.Runtime.LifecycleTest do
       {:ok, pid} = Lifecycle.start_application(TestApp, [])
       assert is_pid(pid)
       assert Process.alive?(pid)
+
+      # Stopped here, and waited for. Left to the test process's exit, the
+      # Lifecycle tears down on its own time and its plugin manager, which
+      # holds the PluginLifecycle name until the end of that, was still up
+      # for the next module's setup (nightly of 2026-11-08,
+      # PluginSystemTest: `:already_started`).
+      :ok = GenServer.stop(pid)
     end
 
     test "get_app_name returns module's app_name if available" do

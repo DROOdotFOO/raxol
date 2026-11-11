@@ -52,6 +52,27 @@
   `Time.utc_now/1`'s typespec. The spec-derived guard test now supplies those
   four known literals instead of misclassifying safe calls as unguarded.
 
+- **Nightly: four tests no longer fail on timing or on what another test left
+  behind.**
+  - `Raxol.UI.RendererTest` (async) registered a theme and called
+    `Theme.init/0`, which changes the default theme every other test renders
+    with. A test that renders twice and compares saw the two halves under
+    different themes: `Raxol.ScoreboardTest` (2026-11-10, 11-11) and
+    `Raxol.CrossTerminal.ModalOverlayTest` (2026-11-08, Windows). It now
+    passes its theme to the renderer without registering it.
+  - `EngineProcessComponentsTest` waited on its own monitor of a failing
+    component, which can report the exit before the engine has handled its
+    own. It now waits on the engine taking that exit.
+  - `Raxol.Core.Runtime.LifecycleTest` left a running Lifecycle to shut down
+    after the test, and its plugin manager still held the `PluginLifecycle`
+    name when `PluginSystemTest` started (2026-11-08). The test stops it and
+    waits.
+  - The 5000-block memory test in `t13a_surface_test.exs` has 300 s rather
+    than 180 s. Its drive is quadratic in the event count: the integration
+    lane finished in 131 to 184 s on nights it passed, and the test ran past
+    180 s on the others (2026-11-08, 11-11). 300 s is what nightly gives the
+    other CPU-bound harness suites.
+
 - **Derived MCP write tools reach the app's `update/2` instead of crashing the Dispatcher.** A derived tool's message (`{:sort, id, column, direction}` from a Table's `sort`, and the rest) was cast as `{:dispatch, msg}` into the full event path, which folds it through `update/2` and then reads `event.type`, so the first write call killed the session's Dispatcher. `Raxol.MCP.TreeWalker` now calls the Dispatcher's new `{:dispatch_tool_message, msg}` clause, which takes the raw path to `update/2` (still emitting the durable `:app_update` event), and the tool answers once `update/2` has folded the message; a dead or unresponsive Dispatcher is an error result, and so is an `update/2` that raises or returns an invalid result (`:update_failed`). A timed-out call (5 s) may still be applied afterwards; `Raxol.MCP.ToolProvider` and `docs/features/MCP.md` say so. `Raxol.MCP.ToolProvider` documents each provider's message. A Button's `click` tool sends the node's `on_click` message as captured when the tool was derived (it sent a click `%Event{}` the Bubbler routed from the focused element, not the button), and is an error result when `on_click` is missing or a function. A Table's `sort` is an error result for a direction other than `"asc"`/`"desc"` or a column the node does not declare (key or label, ignoring case). `Tabs.mcp_tools/1` no longer raises on string tabs, and `get_tabs` reads the DSL's `:active` (or the component's `:active_index`). `Components.text_input/1` keeps `:id`. The Table, SelectList, Modal, TextInput and Tabs playground demos now derive their tools (`playground_table.sort`, `lang.select`, `confirm.dismiss`, `input.type_into`, `tabs.select_tab`, ...) and handle the messages; TableDemo's stars are numbers (still shown as `39k`), its `sort` takes a column key or label in any case, and TabsDemo draws the DSL `tabs` bar.
 - **`Raxol.Headless` isolates each session's `ToolSynchronizer` and teardown.**
   Synchronizers are unlinked and monitored, so one synchronizer exit ends only
