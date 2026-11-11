@@ -327,9 +327,17 @@ defmodule Raxol.MCP.Transport.StdioTest do
     :erlang.trace(server, true, [:call])
 
     on_exit(fn ->
-      if Process.alive?(server), do: :erlang.trace(server, false, [:call])
+      untrace(server)
       :erlang.trace_pattern({:erlang, :exit, 2}, false, [:local])
     end)
+  end
+
+  # The server can exit between any liveness check and the call, and
+  # `:erlang.trace/3` raises on a dead pid. Its trace flags die with it.
+  defp untrace(pid) do
+    :erlang.trace(pid, false, [:call])
+  rescue
+    ArgumentError -> :ok
   end
 
   defp worker_exit_diagnostics(server, worker, worker_ref) do
