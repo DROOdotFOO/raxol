@@ -21,7 +21,8 @@ defmodule Raxol.Broker.Tools.Generator do
     {"Watchlists", ~r/watchlist/},
     {"Legend", ~r/legend/},
     {"Equities", ~r/equity_(?:orders|positions|tax_lots)/},
-    {"Account", ~r/account|portfolio|pnl|margin/},
+    {"Account",
+     ~r/account|portfolio|pnl|margin|trade_approval|banking|credit_(?:card|transactions)/},
     {"MarketData", ~r//}
   ]
 

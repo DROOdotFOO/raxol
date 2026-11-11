@@ -12,6 +12,57 @@ defmodule Raxol.Broker.Tools.Account do
   def get_accounts(client, args \\ %{}), do: Raxol.Broker.Tools.call(client, "get_accounts", args)
 
   @doc ~S"""
+  List the user's Robinhood bank account including individual and joint checking and saving accounts if they have any and their account balances. The tool output includes the account type and the other account holder, if applicable. Each account has an id; pass it as account_id to get_banking_transactions to see only that account's activity.
+
+  Takes no arguments.
+  """
+  @spec get_bank_accounts(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_bank_accounts(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_bank_accounts", args)
+
+  @doc ~S"""
+  Returns transactions on the user's bank account (checking/savings): debit card purchases, ACH transfers, direct deposits, P2P transfers, ATM withdrawals, check deposits, fees, and interest. Covers all open bank accounts, or one account when account_id is set. If the user asks about a specific account (e.g. 'my joint checking', 'savings ending 1234'), call get_bank_accounts to get the account id and use said account id when calling this tool.
+
+  Arguments (string keys):
+    * `account_id` (optional, string)
+    * `cursor` (optional, string)
+    * `description` (optional, string)
+    * `end_date` (optional, string)
+    * `limit` (optional, integer)
+    * `max_amount` (optional, null | number)
+    * `min_amount` (optional, null | number)
+    * `start_date` (optional, string)
+  """
+  @spec get_banking_transactions(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_banking_transactions(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_banking_transactions", args)
+
+  @doc ~S"""
+  List the user's Robinhood credit card account if they have one with their current account balance. Use get_credit_transactions for its activity.
+
+  Takes no arguments.
+  """
+  @spec get_credit_card_account(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_credit_card_account(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_credit_card_account", args)
+
+  @doc ~S"""
+  Returns transactions on the user's credit card: purchases, refunds, payments toward the balance, interest, fees, cash advances, and statement credits/rewards. Includes activity on authorized-user cards.
+
+  Arguments (string keys):
+    * `cursor` (optional, string)
+    * `description` (optional, string)
+    * `end_date` (optional, string)
+    * `limit` (optional, integer)
+    * `max_amount` (optional, null | number)
+    * `min_amount` (optional, null | number)
+    * `start_date` (optional, string)
+  """
+  @spec get_credit_transactions(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_credit_transactions(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_credit_transactions", args)
+
+  @doc ~S"""
   Check whether a cash account is eligible to upgrade to limited margin and return the links (web and mobile) that start the upgrade flow. Limited margin lets the account trade with unsettled funds — proceeds from a sale can go into a new order before that sale settles — while adding no borrowing or leverage. Call when the user asks about that capability, about trading with unsettled funds, or about enabling limited margin.
 
   Arguments (string keys):
@@ -60,4 +111,27 @@ defmodule Raxol.Broker.Tools.Account do
   @spec get_realized_pnl(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
   def get_realized_pnl(client, args \\ %{}),
     do: Raxol.Broker.Tools.call(client, "get_realized_pnl", args)
+
+  @doc ~S"""
+  Read whether trades on an account currently require the customer's manual approval before they execute. Call this before telling the customer whether approvals are on or off, and before any step whose workflow depends on the answer. Takes account_number (from get_accounts). Only the customer can change this setting, in the Robinhood app; no tool here turns it on or off. To instead list the approvals waiting on the customer, use get_trade_approvals.
+
+  Arguments (string keys):
+    * `account_number` (required, string)
+  """
+  @spec get_trade_approval_setting(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_trade_approval_setting(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_trade_approval_setting", args)
+
+  @doc ~S"""
+  List the pending trade approvals waiting on the customer for an account — orders the agent placed that require the customer's manual approval before they execute. Call this every time before stating what is or is not pending: the customer approves and declines in the Robinhood app and pending approvals expire on their own, so an earlier result — or anything said earlier in the conversation — may already be wrong. Takes account_number (from get_accounts); optionally filter by asset class. To instead check the current state of specific approvals (in any state), pass their ids in approval_ids.
+
+  Arguments (string keys):
+    * `account_number` (required, string)
+    * `approval_ids` (optional, null | array)
+    * `asset_class` (optional, string)
+    * `cursor` (optional, string)
+  """
+  @spec get_trade_approvals(GenServer.server(), map()) :: {:ok, map()} | {:error, term()}
+  def get_trade_approvals(client, args \\ %{}),
+    do: Raxol.Broker.Tools.call(client, "get_trade_approvals", args)
 end

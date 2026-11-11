@@ -13,16 +13,19 @@ defmodule Raxol.Broker.Tools.CatalogTest do
 
     test "only the allowlisted order and alert tools are :write" do
       assert named(:write) ==
-               ~w(cancel_crypto_order cancel_equity_order cancel_option_order create_alert
-                  place_crypto_order place_equity_order place_option_order update_alert)
+               ~w(cancel_advanced_order cancel_crypto_order cancel_equity_order cancel_option_order
+                  create_alert place_advanced_order place_crypto_order place_equity_order
+                  place_option_order update_alert)
     end
 
     test "the review tools are :review, and every place tool resolves to one" do
-      assert named(:review) == ~w(preview_crypto_order review_equity_order review_option_order)
+      assert named(:review) ==
+               ~w(preview_crypto_order review_advanced_order review_equity_order review_option_order)
 
       assert Catalog.review_for("place_equity_order") == {:ok, "review_equity_order"}
       assert Catalog.review_for("place_option_order") == {:ok, "review_option_order"}
       assert Catalog.review_for("place_crypto_order") == {:ok, "preview_crypto_order"}
+      assert Catalog.review_for("place_advanced_order") == {:ok, "review_advanced_order"}
     end
 
     test "no :read tool is write-shaped, and the other mutators are :unknown" do
