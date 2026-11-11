@@ -11,7 +11,11 @@ defmodule Raxol.Broker.Tools.Generator do
 
   @dir "lib/raxol/broker/tools/generated"
 
-  # First match wins, so the narrower families come first.
+  # Matched against the tool name in this order; the first match wins, so the
+  # narrower families come first. `MarketData` matches everything and takes
+  # whatever no family above it claims, so a new read that is not market data
+  # needs a term here. `Account` also holds Robinhood's banking and card
+  # reads; `credit` is spelled out so an unrelated `credit` tool is not one.
   @families [
     {"Crypto", ~r/crypto|currency_pair/},
     {"Options", ~r/option/},

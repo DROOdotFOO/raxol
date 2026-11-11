@@ -210,6 +210,32 @@ defmodule Raxol.Broker.ExecutorTest do
     end
   end
 
+  describe "an intent with no order adapter" do
+    # The catalog classes the option and advanced order tools `:write`, so
+    # this refusal is all that stands between such an intent and a call.
+    test "is refused with nothing journaled or sent, even when the policy allows it", ctx do
+      allowing = Keyword.merge(policy(), options: true, advanced_orders: true)
+      executor = start_executor!(ctx, policy: allowing)
+
+      {:ok, option} =
+        Intent.option(:buy, "AAPL", d("100"), provenance: :strategy, id: "no-adapter-option")
+
+      {:ok, advanced} =
+        Intent.advanced(:buy, "AAPL", d("100"), provenance: :strategy, id: "no-adapter-advanced")
+
+      for tool <- ~w(place_option_order place_advanced_order),
+          do: assert(Catalog.permit(Catalog.static(), tool, :write) == :ok, tool)
+
+      assert Executor.run(executor, option, context()) == {:error, {:no_adapter, :option}}
+      assert Executor.run(executor, advanced, context()) == {:error, {:no_adapter, :advanced}}
+
+      assert Fake.calls(ctx.server) == []
+      assert Journal.open_groups(ctx.journal) == {:ok, []}
+      assert groups_for(ctx.path, "no-adapter-option") == []
+      assert groups_for(ctx.path, "no-adapter-advanced") == []
+    end
+  end
+
   describe "day window" do
     test "is a rolling 24 hours from the executor's clock, with no caller input", ctx do
       refute function_exported?(Executor, :run, 4)

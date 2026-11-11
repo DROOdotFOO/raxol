@@ -26,6 +26,22 @@ defmodule Raxol.Broker.ToolsTest do
     assert on_disk == files, "run `mix raxol.broker.gen.tools` in packages/raxol_broker"
   end
 
+  test "bank, card and approval reads are Account's, and a name two families match takes the first" do
+    for {name, family} <- [
+          {"get_bank_accounts", "Account"},
+          {"get_banking_transactions", "Account"},
+          {"get_credit_card_account", "Account"},
+          {"get_credit_transactions", "Account"},
+          {"get_trade_approval_setting", "Account"},
+          {"get_trade_approvals", "Account"},
+          {"get_crypto_account_onboarding_info", "Crypto"},
+          {"get_option_watchlist", "Options"},
+          # `credit` alone is not an Account term.
+          {"get_credit_ratings", "MarketData"}
+        ],
+        do: assert(Generator.family(name) == family, name)
+  end
+
   test "a generated function validates its arguments before anything is sent" do
     fake = Fake.start(quotes: %{"AAPL" => "125"})
     client = start_supervised!({Client, Fake.client_opts(fake)})

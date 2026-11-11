@@ -449,12 +449,40 @@ against the captured schema before sending:
 {:ok, result} = Raxol.Broker.Tools.MarketData.get_equity_quotes(session, %{"symbols" => ["AAPL"]})
 ```
 
-To refresh the capture from a signed-in account, then regenerate:
+To refresh the capture from a signed-in account:
 
-```sh
-mix raxol.broker.capture_tools
-mix raxol.broker.gen.tools          # --check fails if the checked-in modules are stale
-```
+1. Capture, then list what the new capture changes for the order tools:
+
+   ```sh
+   mix raxol.broker.capture_tools
+   git show HEAD:packages/raxol_broker/priv/robinhood/tools_list.json > /tmp/previous_tools_list.json
+   mix run --no-start -e '
+     alias Raxol.Broker.Tools.Catalog
+     previous = "/tmp/previous_tools_list.json" |> File.read!() |> Jason.decode!() |> Map.fetch!("tools")
+     session = Catalog.reconcile(previous)
+     IO.inspect(Enum.frequencies(Map.values(Catalog.static())), label: "classes")
+     changed = for {name, class} <- Catalog.static(), class in [:review, :write], session[name] != class, do: name
+     IO.inspect(Enum.sort(changed), label: "new or changed order tools")
+   '
+   ```
+
+   A tool on the second line is new, or its `inputSchema` or `annotations`
+   changed. Live sessions were refusing a changed one as drifted, and
+   committing the capture is what accepts it again. Read its new text against
+   `Raxol.Broker.Executor.Review` and `Raxol.Broker.Executor.Place` first, and
+   name it in the CHANGELOG.
+2. Regenerate the read modules, and check which module each new function
+   landed in. One in `MarketData` that is not market data needs a term in the
+   families of `Raxol.Broker.Tools.Generator`.
+
+   ```sh
+   mix raxol.broker.gen.tools          # --check fails if the checked-in modules are stale
+   ```
+
+3. Update the pinned `:write` and `:review` lists in
+   `test/raxol/broker/tools/catalog_test.exs`. Editing them is the sign-off
+   that a new order tool is meant to be one.
+4. Update the counts below from the `classes` line, and the CHANGELOG.
 
 The checked-in capture is Robinhood's live list of 2026-11-11 (87 tools):
 57 are readable, `review_equity_order`, `review_option_order`,

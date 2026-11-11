@@ -28,7 +28,9 @@ defmodule Raxol.Broker.Executor.Place do
        journal takes (`:infinity`): a caller-side timeout would leave a
        queued `placing` landing after the executor gave up on it;
     4. the tool is called once, with `ref_id` (a UUID derived from the intent
-       id) on a place, which Robinhood deduplicates on;
+       id) on a place. Robinhood deduplicates retries on it. On an account
+       with trade approvals on, the order placed after the owner approves
+       carries its approval id instead, so `ref_id` does not find it;
     5. the response is journaled as `{:order, status, response}`, also with
        no caller-side timeout.
 
@@ -45,7 +47,11 @@ defmodule Raxol.Broker.Executor.Place do
 
   ## Status
 
-    * `:placed`: a result without `isError`;
+    * `:placed`: a result without `isError`. On an account with trade
+      approvals on, Robinhood's tool text says such a result is a proposal
+      the owner still has to approve in the app, not an order. This module
+      does not tell the two apart yet: both are `:placed` and count toward
+      the caps. It must before `mode: :armed` exists (#1179);
     * `:failed`: a result with `isError`, a JSON-RPC error that says the
       request was never acted on (parse error, invalid request, unknown
       method, invalid params), or a client refusal made before anything was
