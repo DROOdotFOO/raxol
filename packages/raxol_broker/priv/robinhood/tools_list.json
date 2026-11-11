@@ -1,6 +1,6 @@
 {
   "provenance": {
-    "captured": "2026-10-06T19:07:28Z",
+    "captured": "2026-11-11T19:09:46Z",
     "note": "Captured by mix raxol.broker.capture_tools; unsanitized tool metadata.",
     "source": "https://agent.robinhood.com/mcp/trading tools/list"
   },
@@ -80,7 +80,29 @@
       "name": "add_to_watchlist"
     },
     {
-      "description": "Cancel an open crypto order by order_id. Always confirm with the user before calling. Resolve order_id via get_crypto_orders if the user refers to it by description; pass the same rhs_account_number that owns the order. Cancellation may be rejected if the order has already filled, was already canceled, or is otherwise ineligible.",
+      "description": "Cancel an advanced order (e.g. an OCO) by order_id, cancelling all of its legs. Resolve order_id via get_advanced_orders; pass the same account_number. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "description": "Brokerage account that owns the advanced order. Must come from the user or be clearly implied — never default from get_accounts. Must be agentic_allowed=true. The upstream rejects mismatches against the order's owning account.",
+            "type": "string"
+          },
+          "order_id": {
+            "description": "Advanced-order UUID from get_advanced_orders. Must live in account_number.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_number",
+          "order_id"
+        ],
+        "type": "object"
+      },
+      "name": "cancel_advanced_order"
+    },
+    {
+      "description": "Cancel an open crypto order by order_id. Always confirm with the user before calling. Resolve order_id via get_crypto_orders if the user refers to it by description; pass the same rhs_account_number that owns the order. Cancellation may be rejected if the order has already filled, was already canceled, or is otherwise ineligible. Cancels placed orders only — to withdraw a pending trade approval, use decline_trade_approval instead.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -393,6 +415,28 @@
       "name": "create_watchlist"
     },
     {
+      "description": "Decline a single pending trade approval by its id, so it will not execute — useful for clearing a stale approval before proposing a replacement. Takes account_number and approval_id (from get_trade_approvals). Confirm with the user before calling. The agent can only decline; approving a trade is done by the customer in the Robinhood app.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "description": "Alphanumeric brokerage account number the approval belongs to — the account_number field from get_accounts, NOT the numeric rhs_account_number. Must be an account accessible to this agent. Required.",
+            "type": "string"
+          },
+          "approval_id": {
+            "description": "The id of the pending approval to decline, as returned in the approval_id field of get_trade_approvals. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_number",
+          "approval_id"
+        ],
+        "type": "object"
+      },
+      "name": "decline_trade_approval"
+    },
+    {
       "description": "Permanently delete a price or indicator alert, with a server-enforced confirmation step: a call without confirm deletes nothing and returns a preview of exactly what would be deleted; show that preview to the user, and only after they approve call again with confirm=true. There is no undo. If the user only wants to stop notifications for a while, disable the alert with update_alert (enabled=false) instead of deleting it.",
       "inputSchema": {
         "additionalProperties": false,
@@ -484,6 +528,42 @@
       "annotations": {
         "readOnlyHint": true
       },
+      "description": "Fetch advanced orders (OCO — one-cancels-the-other — and other multi-leg contingency orders) for an account, each with its legs' underlying equity orders hydrated. Call this alongside get_equity_orders when you want to get a full picture of the user’s orders.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "description": "Brokerage account number. Must come from the user or be clearly implied — never default from get_accounts.",
+            "type": "string"
+          },
+          "contingency_type": {
+            "description": "Filter by kind: 'oco', 'oto', or 'fx_at_trade'.",
+            "type": "string"
+          },
+          "created_at_gte": {
+            "description": "Lower bound (inclusive). An RFC 3339 timestamp with a time and an offset, e.g. 2026-10-01T00:00:00Z. A date alone (2026-10-01) or a time without an offset is rejected.",
+            "type": "string"
+          },
+          "cursor": {
+            "description": "Pagination cursor. Omit for the first page; for the next page, pass the prior response's next value back verbatim.",
+            "type": "string"
+          },
+          "order_id": {
+            "description": "Filter to a single advanced order by its UUID (the id from a prior result).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_number"
+        ],
+        "type": "object"
+      },
+      "name": "get_advanced_orders"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true
+      },
       "description": "Read the log of fired alerts — what fired, when, and at what price or indicator value — with read/unread state. Poll this to learn whether any alert has fired; alert events are not pushed to the agent.",
       "inputSchema": {
         "additionalProperties": false,
@@ -540,6 +620,126 @@
       "annotations": {
         "readOnlyHint": true
       },
+      "description": "List the user's Robinhood bank account including individual and joint checking and saving accounts if they have any and their account balances. The tool output includes the account type and the other account holder, if applicable. Each account has an id; pass it as account_id to get_banking_transactions to see only that account's activity.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "get_bank_accounts"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "description": "Returns transactions on the user's bank account (checking/savings): debit card purchases, ACH transfers, direct deposits, P2P transfers, ATM withdrawals, check deposits, fees, and interest. Covers all open bank accounts, or one account when account_id is set. If the user asks about a specific account (e.g. 'my joint checking', 'savings ending 1234'), call get_bank_accounts to get the account id and use said account id when calling this tool.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Id of one of the user's open bank accounts, to return only that account's transactions. Omit for all open bank accounts.",
+            "type": "string"
+          },
+          "cursor": {
+            "description": "Pagination cursor. Omit for the first page; for the next page, pass the prior response's next value back verbatim and keep the other arguments unchanged.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Text to match against the transaction description or merchant name, e.g. Payroll or Starbucks. Fuzzy match.",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "Last day to include (inclusive), YYYY-MM-DD in US Pacific time. Defaults to today.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Transactions per page, 1-250. Defaults to 100.",
+            "type": "integer"
+          },
+          "max_amount": {
+            "description": "Only include transactions whose signed amount in US dollars is at most this. max_amount=-100 returns money out of $100 or more.",
+            "type": [
+              "null",
+              "number"
+            ]
+          },
+          "min_amount": {
+            "description": "Only include transactions whose signed amount in US dollars is at least this. Money in is positive and money out negative, so min_amount=0 returns only money in.",
+            "type": [
+              "null",
+              "number"
+            ]
+          },
+          "start_date": {
+            "description": "First day to include, YYYY-MM-DD in US Pacific time. Defaults to January 1 of the current year.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_banking_transactions"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "description": "List the user's Robinhood credit card account if they have one with their current account balance. Use get_credit_transactions for its activity.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "get_credit_card_account"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "description": "Returns transactions on the user's credit card: purchases, refunds, payments toward the balance, interest, fees, cash advances, and statement credits/rewards. Includes activity on authorized-user cards.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Pagination cursor. Omit for the first page; for the next page, pass the prior response's next value back verbatim and keep the other arguments unchanged.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Text to match against the merchant name or transaction description, e.g. Trader Joe's. Fuzzy match.",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "Last day to include (inclusive), YYYY-MM-DD in US Pacific time. Defaults to today.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Transactions per page, 1-250. Defaults to 100.",
+            "type": "integer"
+          },
+          "max_amount": {
+            "description": "Only include transactions whose signed amount in US dollars is at most this. max_amount=0 returns only credits such as payments and refunds.",
+            "type": [
+              "null",
+              "number"
+            ]
+          },
+          "min_amount": {
+            "description": "Only include transactions whose signed amount in US dollars is at least this. Charges are positive, credits negative, so min_amount=100 means charges of $100 or more.",
+            "type": [
+              "null",
+              "number"
+            ]
+          },
+          "start_date": {
+            "description": "First day to include, YYYY-MM-DD in US Pacific time. Defaults to January 1 of the current year.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_credit_transactions"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true
+      },
       "description": "Get the link a user opens to sign the crypto agreement and open a crypto account. Call when the user wants to trade crypto but has no crypto account.",
       "inputSchema": {
         "additionalProperties": false,
@@ -556,7 +756,7 @@
         "additionalProperties": false,
         "properties": {
           "created_at_gte": {
-            "description": "Lower bound (inclusive) on created_at. ISO 8601 UTC; naive values are interpreted as UTC.",
+            "description": "Lower bound (inclusive) on created_at. ISO 8601 with an explicit offset — a UTC time ending in 'Z', or a created_at value from an earlier response as returned.",
             "type": "string"
           },
           "cursor": {
@@ -588,7 +788,7 @@
             "type": "string"
           },
           "updated_at_gte": {
-            "description": "Lower bound (inclusive) on updated_at. ISO 8601 UTC. Useful for polling for fills — each state transition bumps updated_at.",
+            "description": "Lower bound (inclusive) on updated_at. ISO 8601 with an explicit offset — a UTC time ending in 'Z', or an updated_at value from an earlier response as returned. Useful for polling for fills — each state transition bumps updated_at.",
             "type": "string"
           }
         },
@@ -753,7 +953,7 @@
       "annotations": {
         "readOnlyHint": true
       },
-      "description": "Get today's fundamentals for one or more stock symbols — valuation ratios (PE, P/B), capitalization (market cap, shares outstanding, float), today's session OHLCV, trailing volume averages, 52-week range, dividend schedule, and company profile. For real-time quotes use get_equity_quotes; for time-series price history use get_equity_historicals.",
+      "description": "Get today's fundamentals for up to 20 stock symbols — valuation ratios (PE, P/B), capitalization (market cap, shares outstanding, float), today's session OHLCV, trailing volume averages, 52-week range, dividend schedule, and company profile. For real-time quotes use get_equity_quotes; for time-series price history use get_equity_historicals.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -762,7 +962,7 @@
             "type": "string"
           },
           "symbols": {
-            "description": "One or more stock symbols (max 10 per call). Exact-ticker match — no name or partial-ticker resolution. Lowercase and whitespace-padded input is normalized to uppercase-trimmed before forwarding.",
+            "description": "One or more stock symbols (max 20 per call). Exact-ticker match — no name or partial-ticker resolution. Lowercase and whitespace-padded input is normalized to uppercase-trimmed before forwarding.",
             "items": {
               "type": "string"
             },
@@ -783,7 +983,7 @@
       "annotations": {
         "readOnlyHint": true
       },
-      "description": "Get OHLCV bars for one or more equity symbols across an explicit time range. Use this for charting, \"recent activity\" questions, and backtesting. The server auto-selects an interval when one is not provided. If the bar's interpolated field is true, bar was synthesized to fill a gap and carry no new information.\n\nParameter rules:\n- interval is optional; when omitted, the server auto-selects an interval that targets ~2,500 bars across the requested range. Provide an explicit interval only when you need a specific granularity.\n- interval values are fixed; the server does NOT aggregate intermediate bars. For a custom interval (e.g. 3-minute), request the next-finer fixed interval and aggregate client-side.\n- bounds defaults to 'regular' (RTH only). Use 'extended' or '24_5' only when the user explicitly asks about extended-hours activity.\n- adjustment_type defaults to 'split' (split-adjusted, the right default for backtesting). Use 'none' for raw prices, 'all' for split + dividend adjustment.\n- If the range would produce more bars than the upstream allows at the explicitly requested interval, narrow the range or coarsen the interval — the call is rejected before reaching upstream. The cap does not apply when interval is auto-selected.",
+      "description": "Get OHLCV bars for one or more equity symbols across an explicit time range. Use this for charting, \"recent activity\" questions, and backtesting. The server auto-selects an interval when one is not provided. If the bar's interpolated field is true, bar was synthesized to fill a gap and carry no new information.\n\nParameter rules:\n- interval is optional; when omitted, the server auto-selects an interval that targets ~2,500 bars across the requested range. Provide an explicit interval only when you need a specific granularity.\n- interval values are fixed; the server does NOT aggregate intermediate bars. For a custom interval (e.g. 3-minute), request the next-finer fixed interval and aggregate client-side.\n- bounds defaults to 'regular' (RTH only). Use 'extended' or '24_5' only when the user explicitly asks about extended-hours activity.\n- adjustment_type defaults to 'split' (split-adjusted, the right default for backtesting). Use 'none' for raw prices, 'all' for split + dividend adjustment.\n- If the range would produce more bars than the upstream allows at the explicitly requested interval, narrow the range or coarsen the interval — the call is rejected before reaching upstream. The cap does not apply when interval is auto-selected.\n- Only completed bars are returned. end_time (default now) is rounded down to the start of its interval in UTC (day: 00:00Z, week: Monday 00:00Z, month: the 1st, year: Jan 1), and start_time must be before the rounded end_time. To include a bar, end at the next bar's start. For example, one day's bar is <date>T00:00:00Z to <next date>T00:00:00Z.\n- The current day, week, month or year bar is not returned until it closes. For the period so far, use an intraday interval or omit interval.\n- start_time must not be in the future.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -800,7 +1000,7 @@
             "type": "string"
           },
           "interval": {
-            "description": "Bar interval. Optional — when omitted, the server picks an interval that targets ~2,500 bars across the requested range. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute').",
+            "description": "Bar interval. Optional — when omitted, the server picks an interval that targets ~2,500 bars across the requested range. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute'). There is no '15minute' bar. For 15-minute bars, request '5minute' and combine every three bars.",
             "type": "string"
           },
           "start_time": {
@@ -830,13 +1030,20 @@
       "annotations": {
         "readOnlyHint": true
       },
-      "description": "Fetch equity orders for an account — list mode (newest first; open and closed, including fills, cancellations, rejections) or single-order mode by passing order_id. When the user asks broadly for \"orders\" or \"my orders\" without naming an asset class or order type, call get_equity_orders, get_option_orders, get_crypto_orders, and get_advanced_orders in parallel so OCO groups are not omitted.\n\nFiltering tips:\n- Prefer narrow queries: combine state, symbol, and/or created_at_gte for specific questions (e.g. \"my filled AAPL orders this week\") — the per-page cap is fixed.\n- created_at_gte: interpret relative times in the user's timezone, convert to UTC before sending.\n- symbol forces a symbol→instrument lookup; omit it if you don't need it.",
+      "description": "Fetch equity orders for an account — list mode (newest first; open and closed, including fills, cancellations, rejections) or single-order mode by passing order_id. When the user asks broadly for \"orders\" or \"my orders\" without naming an asset class or order type, call get_equity_orders, get_option_orders, get_crypto_orders, and get_advanced_orders in parallel so OCO groups are not omitted.\n\nFiltering tips:\n- Prefer narrow queries: combine state, symbol, and/or created_at_gte for specific questions (e.g. \"my filled AAPL orders this week\") — the per-page cap is fixed.\n- created_at_gte: interpret relative times in the user's timezone, convert to UTC before sending.\n- symbol forces a symbol→instrument lookup; omit it if you don't need it.\n- To find agent-initiated orders, use agent_initiated=true: it returns every order an agent initiated, including ones the customer approved in the app, which placed_agent='agentic' alone would miss. It does not identify which agent, so describe results as agent-initiated orders rather than as this agent's own trades.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "account_number": {
             "description": "Brokerage account number. Must come from the user or be clearly implied — never default from get_accounts.",
             "type": "string"
+          },
+          "agent_initiated": {
+            "description": "true returns only agent-initiated orders (any agent, not just this one), whether an agent submitted them directly or the customer approved them in the Robinhood app; false returns only orders the customer created with no agent involved. Omit for all orders.",
+            "type": [
+              "null",
+              "boolean"
+            ]
           },
           "created_at_gte": {
             "description": "Lower bound (inclusive). ISO 8601 UTC or YYYY-MM-DD; naive values are interpreted as UTC.",
@@ -851,7 +1058,7 @@
             "type": "string"
           },
           "placed_agent": {
-            "description": "Filter to one source: 'user', 'agentic' (MCP), 'recurring', 'drip', etc.",
+            "description": "Filter by the source that finally submitted or approved the order: 'user', 'agentic' (MCP), 'recurring', 'drip', etc. To find agent-initiated orders, use agent_initiated instead: an approved order is submitted by the customer and reads 'user' here.",
             "type": "string"
           },
           "state": {
@@ -979,7 +1186,7 @@
       "annotations": {
         "readOnlyHint": true
       },
-      "description": "Compute a technical indicator (RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, and more) over one equity symbol's OHLCV bars across a time range. For the raw OHLCV bars themselves, use get_equity_historicals.\n\nParameter rules:\n- The parameters an indicator accepts depend on type:\n  - period only: ema/sma (default 9); rsi/cci/atr/mfi (default 14); williams_r/adx (default 10); momentum (default 12); roc (default 14); donchian_channels (default 20).\n  - bollinger_bands: period (default 20) + num_std (default 2).\n  - macd: fast_period (12), slow_period (26), signal_period (9).\n  - keltner_channels: period (default 20) + multiplier (default 2).\n  - supertrend: period (default 10) + multiplier (default 3).\n  - pivot_points: method (only 'classic').\n  - vwap, obv: no parameters.\n  Omit a parameter to use its default. Passing a parameter the chosen type does not accept is rejected.\n- interval is REQUIRED — indicator periods are counted in bars, so there is no auto-selection.\n- adjustment_type defaults to 'split'; 'all' (split + dividend) requires a day-or-coarser interval.\n- If the requested range plus the indicator's warm-up exceeds the per-request bar cap, narrow the range or coarsen the interval.",
+      "description": "Compute a technical indicator (RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, and more) over the OHLCV bars of up to 10 equity symbols across a time range. For the raw OHLCV bars themselves, use get_equity_historicals.\n\nParameter rules:\n- The parameters an indicator accepts depend on type:\n  - period only: ema/sma (default 9); rsi/cci/atr/mfi (default 14); williams_r/adx (default 10); momentum (default 12); roc (default 14); donchian_channels (default 20).\n  - bollinger_bands: period (default 20) + num_std (default 2).\n  - macd: fast_period (12), slow_period (26), signal_period (9).\n  - keltner_channels: period (default 20) + multiplier (default 2).\n  - supertrend: period (default 10) + multiplier (default 3).\n  - pivot_points: method (only 'classic').\n  - vwap, obv: no parameters.\n  Omit a parameter to use its default. Passing a parameter the chosen type does not accept is rejected.\n- interval is REQUIRED — indicator periods are counted in bars, so there is no auto-selection.\n- adjustment_type defaults to 'split'; 'all' (split + dividend) requires a day-or-coarser interval.\n- If the requested range plus the indicator's warm-up exceeds the per-symbol bar cap, narrow the range or coarsen the interval.\n- When screening several symbols, prefer output 'latest' or 'last:N' over the full series.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1003,7 +1210,7 @@
             ]
           },
           "interval": {
-            "description": "Required bar interval the indicator is computed on. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. The 1-minute bar is named 'minute' (not '1minute').",
+            "description": "Required bar interval the indicator is computed on. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. The 1-minute bar is named 'minute' (not '1minute'). There is no '15minute' bar. For a 15-minute reading, use '10minute' or '30minute' instead.",
             "type": "string"
           },
           "method": {
@@ -1054,8 +1261,18 @@
             "type": "string"
           },
           "symbol": {
-            "description": "Stock symbol (uppercase). Exactly one symbol per call.",
+            "description": "Deprecated: use symbols. A single stock symbol; pass either symbols or symbol, not both.",
             "type": "string"
+          },
+          "symbols": {
+            "description": "Stock symbols (uppercase), max 10 per call. Pass every symbol you need in one call rather than one call per symbol; with more than 10, split across calls of 10 or fewer.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
           },
           "type": {
             "description": "Indicator to compute. One of: ema, sma, rsi, momentum, roc, cci, williams_r, atr, mfi, adx, donchian_channels, bollinger_bands, macd, keltner_channels, supertrend, vwap, obv, pivot_points.",
@@ -1063,7 +1280,6 @@
           }
         },
         "required": [
-          "symbol",
           "type",
           "interval",
           "start_time"
@@ -1076,7 +1292,7 @@
       "annotations": {
         "readOnlyHint": true
       },
-      "description": "Check tradability for up to 10 equity symbols on a given account: per-session eligibility and fractional. Call before placing an order to surface restrictions. Exact-ticker match — no name or partial-ticker resolution.",
+      "description": "Check tradability for up to 20 equity symbols on a given account: per-session eligibility and fractional. Call before placing an order to surface restrictions. Exact-ticker match — no name or partial-ticker resolution.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1085,7 +1301,7 @@
             "type": "string"
           },
           "symbols": {
-            "description": "Stock symbols, max 10 per call. With more than 10, split across multiple calls of 10 or fewer. Exact-ticker match only.",
+            "description": "Stock symbols, max 20 per call. With more than 20, split across multiple calls of 20 or fewer. Exact-ticker match only.",
             "items": {
               "type": "string"
             },
@@ -1160,7 +1376,7 @@
             ]
           },
           "interval": {
-            "description": "Bar interval. Required — there is no server auto-select for indexes. Intraday: 5second, 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute').",
+            "description": "Bar interval. Required — there is no server auto-select for indexes. Intraday: 5second, 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute'). There is no '15minute' bar. For 15-minute bars, request '5minute' and combine every three bars.",
             "type": "string"
           },
           "start_time": {
@@ -1288,7 +1504,7 @@
             ]
           },
           "interval": {
-            "description": "Bar interval. Optional — when omitted, the server auto-selects an interval that targets a bounded bar count across the range. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute').",
+            "description": "Bar interval. Optional — when omitted, the server auto-selects an interval that targets a bounded bar count across the range. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute'). There is no '15minute' bar. For 15-minute bars, request '5minute' and combine every three bars.",
             "type": "string"
           },
           "start_time": {
@@ -1377,13 +1593,20 @@
       "annotations": {
         "readOnlyHint": true
       },
-      "description": "Fetch options orders for an account — list mode (newest first; open and closed, including fills, cancellations, and rejections) or single-order mode by passing order_id. When the user asks broadly for \"orders\" or \"my orders\" without naming an asset class or order type, call get_equity_orders, get_option_orders, get_crypto_orders, and get_advanced_orders in parallel so OCO groups are not omitted.\n\nFiltering tips:\n- Prefer narrow queries: combine state and/or created_at_gte for specific questions — the per-page cap is fixed.\n- chain_ids filters by underlying chain UUID (from get_option_chains).\n- created_at_gte: interpret relative times in the user's timezone, convert to UTC before sending.",
+      "description": "Fetch options orders for an account — list mode (newest first; open and closed, including fills, cancellations, and rejections) or single-order mode by passing order_id. When the user asks broadly for \"orders\" or \"my orders\" without naming an asset class or order type, call get_equity_orders, get_option_orders, get_crypto_orders, and get_advanced_orders in parallel so OCO groups are not omitted.\n\nFiltering tips:\n- Prefer narrow queries: combine state and/or created_at_gte for specific questions — the per-page cap is fixed.\n- chain_ids filters by underlying chain UUID (from get_option_chains).\n- created_at_gte: interpret relative times in the user's timezone, convert to UTC before sending.\n- To find agent-initiated orders, use agent_initiated=true: it returns every order an agent initiated, including ones the customer approved in the app, which placed_agent='agentic' alone would miss. It does not identify which agent, so describe results as agent-initiated orders rather than as this agent's own trades.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "account_number": {
             "description": "Brokerage account number. Must come from the user or be clearly implied — never default from get_accounts.",
             "type": "string"
+          },
+          "agent_initiated": {
+            "description": "true returns only agent-initiated orders (any agent, not just this one), whether an agent submitted them directly or the customer approved them in the Robinhood app; false returns only orders the customer created with no agent involved. Omit for all orders.",
+            "type": [
+              "null",
+              "boolean"
+            ]
           },
           "chain_ids": {
             "description": "Comma-separated chain UUIDs (from get_option_chains) to filter by underlying.",
@@ -1402,7 +1625,7 @@
             "type": "string"
           },
           "placed_agent": {
-            "description": "Filter to one source: 'user', 'agentic' (MCP), 'recurring', 'drip', etc.",
+            "description": "Filter by the source that finally submitted or approved the order: 'user', 'agentic' (MCP), 'recurring', 'drip', etc. To find agent-initiated orders, use agent_initiated instead: an approved order is submitted by the customer and reads 'user' here.",
             "type": "string"
           },
           "state": {
@@ -1507,7 +1730,7 @@
       "annotations": {
         "readOnlyHint": true
       },
-      "description": "List the single-leg option contracts on the user's options watchlist. Use this instead of get_watchlist_items for the options watchlist — get_watchlist_items returns a generic shape that drops the option-specific title and the upstream rejects it with 400 anyway. Works for both equity options (AAPL, NVDA) and index options (SPX, NDX, RUT). Multi-leg strategies (verticals, condors, etc.) that may exist in the user's watchlist from app-side order placement are not shown — direct the user to the Robinhood app to view those.",
+      "description": "List the single-leg option contracts, long and short, on the user's options watchlist. Use this instead of get_watchlist_items for the options watchlist — get_watchlist_items returns a generic shape that drops the option-specific title and the upstream rejects it with 400 anyway. Works for both equity options (AAPL, NVDA) and index options (SPX, NDX, RUT). Multi-leg strategies (verticals, condors, etc.) that may exist in the user's watchlist from app-side order placement are not shown — direct the user to the Robinhood app to view those.",
       "inputSchema": {
         "additionalProperties": false,
         "type": "object"
@@ -1629,7 +1852,7 @@
             "type": "string"
           },
           "span": {
-            "description": "Preset window: day, week, month, 3month, year, or all. Defaults to 3month ('last 90 days'). Mutually exclusive with start_date/end_date.",
+            "description": "Preset window: day, week, month, 3month, ytd, year, or all. ytd is year to date — Jan 1 of the current year in timezone through now. Defaults to 3month ('last 90 days'). Mutually exclusive with start_date/end_date.",
             "type": "string"
           },
           "start_date": {
@@ -1835,6 +2058,64 @@
       "annotations": {
         "readOnlyHint": true
       },
+      "description": "Read whether trades on an account currently require the customer's manual approval before they execute. Call this before telling the customer whether approvals are on or off, and before any step whose workflow depends on the answer. Takes account_number (from get_accounts). Only the customer can change this setting, in the Robinhood app; no tool here turns it on or off. To instead list the approvals waiting on the customer, use get_trade_approvals.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "description": "Alphanumeric brokerage account number to read the trade-approval setting for — the account_number field from get_accounts, NOT the numeric rhs_account_number. Must be an account accessible to this agent. Only agentic accounts have this setting; non-agentic accounts are rejected. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_number"
+        ],
+        "type": "object"
+      },
+      "name": "get_trade_approval_setting"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "description": "List the pending trade approvals waiting on the customer for an account — orders the agent placed that require the customer's manual approval before they execute. Call this every time before stating what is or is not pending: the customer approves and declines in the Robinhood app and pending approvals expire on their own, so an earlier result — or anything said earlier in the conversation — may already be wrong. Takes account_number (from get_accounts); optionally filter by asset class. To instead check the current state of specific approvals (in any state), pass their ids in approval_ids.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "description": "Alphanumeric brokerage account number to list pending trade approvals for — the account_number field from get_accounts, NOT the numeric rhs_account_number. Must be an account accessible to this agent. Required.",
+            "type": "string"
+          },
+          "approval_ids": {
+            "description": "Optional list of specific approval ids to fetch, all in this account, at most 100 per call. When set, the tool returns exactly these approvals in any state (pending, approved, declined, expired, or auto-approved) instead of listing pending ones, and asset_class/cursor are ignored. Ids not in this account are omitted from the result.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "asset_class": {
+            "description": "Optional filter to one asset class. One of ASSET_CLASS_EQUITY, ASSET_CLASS_OPTION, ASSET_CLASS_CRYPTO. Omit for all classes. Ignored when approval_ids is set.",
+            "type": "string"
+          },
+          "cursor": {
+            "description": "Pagination cursor. Omit for the first page; to fetch the next page, pass the value from the prior response's next field. Ignored when approval_ids is set.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_number"
+        ],
+        "type": "object"
+      },
+      "name": "get_trade_approvals"
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true
+      },
       "description": "List the items in a watchlist. Items may be stocks/ETFs, crypto pairs, futures, indexes — distinguished by object_type. For the options watchlist, use get_option_watchlist instead — this tool returns a generic shape that drops the strategy-specific fields and the upstream rejects it with 400 anyway. Does not return live prices; call get_quotes with the symbol(s) for that.",
       "inputSchema": {
         "additionalProperties": false,
@@ -1887,12 +2168,66 @@
       "name": "mark_alerts_read"
     },
     {
-      "description": "Place a real crypto order with real money. Parameters mirror preview_crypto_order plus the optional ref_id. Requires an agentic-enabled crypto account.\n\nIdempotency: pass a fresh UUID as ref_id on the first call for each logical order, and re-send the SAME ref_id on retries of transient failures. Use a new ref_id only when the user wants a new order.\n\nParameter rules:\n- Provide exactly one of quantity or dollar_amount; dollar_amount works with every type.\n- limit_price is required for limit and stop_limit; stop_price is required for stop_loss and stop_limit.\n- symbol is resolved to a currency pair before placement; pass a bare asset symbol (e.g. 'BTC') or a pair ('BTC-USD').",
+      "description": "Place an OCO (one-cancels-the-other) equity order with real money: a take-profit limit leg and a stop-loss leg on the same symbol, side, and quantity, where filling one cancels the other. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.\n\nWhen review_advanced_order came back with customer_approval_required true and no alert, call this tool straight away with no confirmation step in the conversation, because this call does not place the order: it goes to the customer to approve or decline in the Robinhood app. Otherwise, including whenever an alert is present, follow review_advanced_order's own guide.\n\nIdempotency: pass a fresh UUID as ref_id on the first call and re-send the same ref_id on transient retries.\n\nOCO rules:\n- Both legs use the same symbol, side, and quantity.\n- take_profit_limit_price and stop_loss_stop_price are required and must differ.\n- For a sell OCO (protecting a long): take_profit_limit_price must be ABOVE stop_loss_stop_price. For a buy OCO (covering a short): stop_loss_stop_price must be ABOVE take_profit_limit_price.\n- time_in_force can be GFD or GTC. market_hours must be regular_hours (the only session OCO supports) — omit it or pass regular_hours explicitly.\n- take_profit_limit_price and stop_loss_stop_price must each be at least 0.25% away from the current market price, and at least $0.10 apart from each other, or the order will be rejected — don't propose prices tighter than that.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "description": "Brokerage account number. Must come from the user or be clearly implied — never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected.",
+            "type": "string"
+          },
+          "market_hours": {
+            "description": "'regular_hours' — the only session OCO supports; extended_hours and all_day_hours are rejected. Both legs share it.",
+            "type": "string"
+          },
+          "quantity": {
+            "description": "Whole-share quantity. Both legs use the same quantity.",
+            "type": "string"
+          },
+          "ref_id": {
+            "description": "Idempotency key (UUID) for the advanced order. Generate once per logical order and re-send on transient retries; a fresh key is generated when omitted.",
+            "type": "string"
+          },
+          "side": {
+            "description": "'buy' or 'sell'. Both legs use this side (an exit for an existing position: 'sell' to protect a long, 'buy' to cover a short).",
+            "type": "string"
+          },
+          "stop_loss_stop_price": {
+            "description": "Stop trigger price of the stop-loss leg. The stop-loss leg is always a stop-market order — there is no stop-limit option for it.",
+            "type": "string"
+          },
+          "symbol": {
+            "description": "Stock symbol. Both OCO legs are on this symbol.",
+            "type": "string"
+          },
+          "take_profit_limit_price": {
+            "description": "Limit price of the take-profit leg.",
+            "type": "string"
+          },
+          "time_in_force": {
+            "description": "Can be 'gfd' or 'gtc'. Both legs share it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_number",
+          "symbol",
+          "side",
+          "quantity",
+          "take_profit_limit_price",
+          "stop_loss_stop_price"
+        ],
+        "type": "object"
+      },
+      "name": "place_advanced_order"
+    },
+    {
+      "description": "Place a real crypto order with real money. Parameters mirror preview_crypto_order plus the optional ref_id. Requires an agentic-enabled crypto account.\n\nWorkflow: by default call preview_crypto_order first. When it comes back with customer_approval_required true, call this tool straight away with no confirmation step in the conversation, because this call does not place the order: it goes to the customer to approve or decline in the Robinhood app. Otherwise follow preview_crypto_order's own guide.\n\nIdempotency: pass a fresh UUID as ref_id on the first call for each logical order, and re-send the SAME ref_id on retries of transient failures. Use a new ref_id only when the user wants a new order.\n\nParameter rules:\n- Provide exactly one of quantity or dollar_amount; dollar_amount works with every type the pair accepts.\n- limit_price is required for limit and stop_limit; stop_price is required for stop_loss and stop_limit.\n- symbol is resolved to a currency pair before placement; pass a bare asset symbol (e.g. 'BTC') or a pair ('BTC-USD').\n- quantity must be a multiple of the pair's min_order_quantity_increment (see get_currency_pairs). An off-increment quantity is rejected, never resized, and the error names the nearest valid quantity; after a preview that carried requested_quantity, place the previewed order's quantity.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "dollar_amount": {
-            "description": "USD notional (e.g. '100.00'). Valid with every order type. Provide exactly one of quantity or dollar_amount. For market, quantity is derived server-side: a buy is sized at the current market price — the same sizing as the app — so the typical debit is ~dollar_amount, with a worst case up to ~1% more if the price moves before execution (the buy collar); a sell is likewise sized at the current market price, so the typical credit is ~dollar_amount, with a worst case up to ~5% less if the price moves before execution (the sell collar). For stop_loss, quantity is derived from dollar_amount at stop_price (the trigger price) when the order is placed, not the live quote — the triggered market order executes near the trigger, so the typical fill notional is ~dollar_amount, with a worst case up to the collar worse (a higher debit for buy stops, a lower credit for sell stops). For limit and stop_limit, quantity is derived from dollar_amount at limit_price when the order is placed — fills execute at the limit price or better, so a buy's debit is capped at dollar_amount (no collar buffer; on fee-priced accounts fee rounding can add at most one cent) and a sell's credit is at least the derived quantity's worth at the limit, minus any fee. On fee-priced accounts a buy's quantity is sized from the fee-netted amount so the total debit targets dollar_amount, and a sell's fee is deducted from the credit.",
+            "description": "USD notional (e.g. '100.00'). Valid with every order type the pair accepts. Provide exactly one of quantity or dollar_amount. For market, quantity is derived server-side: a buy is sized at the current market price — the same sizing as the app — so the typical debit is ~dollar_amount, with a worst case up to ~1% more if the price moves before execution (the buy collar); a sell is likewise sized at the current market price, so the typical credit is ~dollar_amount, with a worst case up to ~5% less if the price moves before execution (the sell collar). For stop_loss, quantity is derived from dollar_amount at stop_price (the trigger price) when the order is placed, not the live quote — the triggered market order executes near the trigger, so the typical fill notional is ~dollar_amount, with a worst case up to the collar worse (a higher debit for buy stops, a lower credit for sell stops). For limit and stop_limit, quantity is derived from dollar_amount at limit_price when the order is placed — fills execute at the limit price or better, so a buy's debit is capped at dollar_amount (no collar buffer; on fee-priced accounts fee rounding can add at most one cent) and a sell's credit is at least the derived quantity's worth at the limit, minus any fee. On fee-priced accounts a buy's quantity is sized from the fee-netted amount so the total debit targets dollar_amount, and a sell's fee is deducted from the credit.",
             "type": "string"
           },
           "limit_price": {
@@ -1904,7 +2239,7 @@
             "type": "string"
           },
           "ref_id": {
-            "description": "Idempotency key (UUID). Generate once per logical order and re-send the SAME value on retries of transient failures — the upstream deduplicates by ref_id. Omitting falls back to a server-generated key (loses client↔gateway idempotency). Use a new value only when the user wants a new order.",
+            "description": "Idempotency key (UUID). Generate once per logical order and re-send the SAME value on retries of transient failures, so a retry cannot place the order twice. The order is placed under its approval id, so the ref_id on the placed order differs from this value; that is expected, and retries still re-send this one. Omitting falls back to a server-generated key, which a retry cannot reuse. Use a new value only when the user wants a new order.",
             "type": "string"
           },
           "rhs_account_number": {
@@ -1924,7 +2259,7 @@
             "type": "string"
           },
           "tax_lots": {
-            "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default disposal, pass {open_lot_id, quantity} objects whose quantities sum to the order quantity, with open_lot_id taken from the account's crypto tax lots (see the request guide). Omit for the default. Sell only; quantity-based orders only (not dollar_amount); at most 50 lots; only when the lot listing reports selection_state 'enabled'. Not every account can select lots: if the tool rejects tax_lots as not available, tell the user and offer the default disposal instead.",
+            "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default disposal, pass {open_lot_id, quantity} objects whose quantities sum to the order quantity, with open_lot_id taken from the account's crypto tax lots (see the request guide). Omit for the default. Sell only; market and limit orders only (not stop_loss or stop_limit); quantity-based orders only (not dollar_amount); at most 50 lots; only when the lot listing reports selection_state 'enabled'. Not every account can select lots: if the tool rejects tax_lots as not available, tell the user and offer the default disposal instead.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -1933,7 +2268,7 @@
                   "type": "string"
                 },
                 "quantity": {
-                  "description": "Units to sell from this lot as a decimal string; at most the lot's quantity_available (or exactly quantity_to_sell from a strategy result).",
+                  "description": "Units to sell from this lot as a decimal string; at most the lot's quantity_available, and a multiple of the pair's min_order_quantity_increment.",
                   "type": "string"
                 }
               },
@@ -1953,7 +2288,7 @@
             "type": "string"
           },
           "type": {
-            "description": "'market', 'limit', 'stop_loss', or 'stop_limit'. Required. 'stop_loss' is a stop-triggered market order — despite the name it applies to buy stops too; the equity/option tools call the same concept 'stop_market'. ALWAYS call these by their app names when speaking to the user, including when listing what types are supported: 'stop_loss' is a 'stop order' and 'stop_limit' a 'stop limit order'; the raw values are tool inputs only. A user asking for a 'stop loss', 'stop order', or 'stop market' order means this stop_loss type — do not ask which stop type (but a limit price given alongside the trigger makes it stop_limit); ask only when the phrasing names no type, e.g. a bare 'stop' or 'protect my position'.",
+            "description": "'market', 'limit', 'stop_loss', or 'stop_limit'. Required. 'stop_loss' is a stop-triggered market order — despite the name it applies to buy stops too; the equity/option tools call the same concept 'stop_market'. ALWAYS call these by their app names when speaking to the user, including when listing what types are supported: 'stop_loss' is a 'stop order' and 'stop_limit' a 'stop limit order'; the raw values are tool inputs only. A user asking for a 'stop loss', 'stop order', or 'stop market' order means this stop_loss type — do not ask which stop type (but a limit price given alongside the trigger makes it stop_limit); ask only when the phrasing names no type, e.g. a bare 'stop' or 'protect my position'. A pair whose market_orders_only is true on get_currency_pairs (such as the stablecoins USDC and USDG) accepts only 'market': use it for those without asking the user to choose a type.",
             "type": "string"
           }
         },
@@ -1968,7 +2303,7 @@
       "name": "place_crypto_order"
     },
     {
-      "description": "Place a real equity order with real money. Parameters mirror review_equity_order plus the optional ref_id. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.\n\nIdempotency: pass a fresh UUID as ref_id on the first call for each logical order, and re-send the SAME ref_id on retries of transient transport failures. Use a new ref_id only when the user wants a new order.\n\nParameter rules:\n- If the user has not specified type, ask. For immediate fills with price protection, prefer a marketable limit at the current ask over a plain market.\n- Outside regular hours, only limit orders execute. For an immediate fill during extended or overnight/24-hour sessions, place a limit order (a marketable limit at the current ask) with market_hours set to that session — not a market order. Market and stop orders are regular_hours-only; placed after hours as regular_hours they queue for the next regular open.\n- Provide exactly one of quantity or dollar_amount, and take the value from the user — if they did not say how much, ask. Never substitute a default such as 1 share or $100. dollar_amount requires type=market (server computes shares from last_trade_price).\n- Fractional shares: only on type=market with market_hours=regular_hours, eligible accounts, up to 6 decimal places, no short sells.\n- limit_price required for limit/stop_limit; stop_price required for stop_market/stop_limit.\n- Fractional and dollar-based orders only place in regular_hours; the tool rejects them in other sessions.\n- tax_lots (specified-lot selling, sell only): to sell specific lots, first call get_equity_tax_lots for the symbol, then pass tax_lots as {open_lot_id, quantity} pairs whose quantities sum to the order quantity. Omit for default (FIFO) cost basis. US accounts only; not allowed with dollar_amount, stop orders, all_day_hours, or fractional limit orders.",
+      "description": "Place a real equity order with real money. Parameters mirror review_equity_order plus the optional ref_id. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.\n\nWorkflow: by default call review_equity_order first. When it comes back with customer_approval_required true and no order_checks alert, call this tool straight away with no confirmation step in the conversation, because this call does not place the order: it goes to the customer to approve or decline in the Robinhood app. Otherwise, including whenever order_checks is non-empty, follow review_equity_order's own guide.\n\nIdempotency: pass a fresh UUID as ref_id on the first call for each logical order, and re-send the SAME ref_id on retries of transient transport failures. Use a new ref_id only when the user wants a new order.\n\nParameter rules:\n- If the user has not specified type, ask. For immediate fills with price protection, prefer a marketable limit at the current ask over a plain market.\n- Outside regular hours, only limit orders execute. For an immediate fill during extended or overnight/24-hour sessions, place a limit order (a marketable limit at the current ask) with market_hours set to that session — not a market order. Market and stop orders are regular_hours-only; placed after hours as regular_hours they queue for the next regular open.\n- Provide exactly one of quantity or dollar_amount, and take the value from the user — if they did not say how much, ask. Never substitute a default such as 1 share or $100. dollar_amount requires type=market (server computes shares from last_trade_price).\n- Fractional shares: only on type=market with market_hours=regular_hours, eligible accounts, up to 6 decimal places, no short sells.\n- limit_price required for limit/stop_limit; stop_price required for stop_market/stop_limit.\n- Fractional and dollar-based orders only place in regular_hours; the tool rejects them in other sessions.\n- tax_lots (specified-lot selling, sell only): to sell specific lots, first call get_equity_tax_lots for the symbol, then pass tax_lots as {open_lot_id, quantity} pairs whose quantities sum to the order quantity. Omit for default (FIFO) cost basis. US accounts only; not allowed with dollar_amount, stop orders, all_day_hours, or fractional limit orders.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1993,7 +2328,7 @@
             "type": "string"
           },
           "ref_id": {
-            "description": "Idempotency key (UUID). Generate once per logical order and re-send on retry — the upstream deduplicates by ref_id. Omitting falls back to a server-generated key (loses client↔gateway idempotency).",
+            "description": "Idempotency key (UUID). Generate once per logical order and re-send the SAME value on retries of transient failures, so a retry cannot place the order twice. The order is placed under its approval id, so the ref_id on the placed order differs from this value; that is expected, and retries still re-send this one. Omitting falls back to a server-generated key, which a retry cannot reuse. Use a new value only when the user wants a new order.",
             "type": "string"
           },
           "side": {
@@ -2053,7 +2388,7 @@
       "name": "place_equity_order"
     },
     {
-      "description": "Place a real options order with real money.\n\nCapability: single-leg options orders — Level 2 strategies (covered calls, cash-secured puts, long calls and puts). Multi-leg spreads (Level 3 strategies) are supported on option_level_3 accounts.\n\nAccount requirements: confirm via get_accounts that the chosen account is agentic_allowed=true AND has option_level_2 or option_level_3. If agentic_allowed=false do NOT call. If option_level is empty or option_level_0, do NOT call; follow the get_accounts guide for how to direct the user to enroll.\n\nAlert handling: pre-trade alerts surface only in review_option_order. After the user has acknowledged the reviewed alert, call this tool with the same parameters.\n\nIdempotency: pass a fresh UUID as ref_id on the first call for each logical order, and re-send the SAME ref_id on retries of transient transport failures. Use a new ref_id only when the user wants a new order.\n\nTo find option_id: get_option_chains → get_option_instruments filtered by expiration_date/strike_price/type.\n\nParameter rules:\n- Multi-leg leg layouts — vertical spread: two legs, same expiration, different strikes, opposite sides. Calendar: two legs, same strike, different expirations. Iron condor: four legs, a put spread plus a call spread. Roll: close the leg you hold (position_effect 'close', side opposite the position) plus open the replacement ('open').\n- Get the net price from the user rather than inferring it from individual leg quotes.\n- Multi-leg is not available on cash or retirement accounts through this tool.\n- type: 'limit' (default), 'market', 'stop_limit', 'stop_market'. price for limit/stop_limit; stop_price for stop_market/stop_limit.\n- market, stop_market, and stop_limit are single-leg only. market and stop_market are also regular_hours, GFD only. stop_market is sell-to-close only with stop_price below the current ask.\n\nNot currently supported anywhere (including the Robinhood apps):\n- combo orders. At Robinhood, \"combo\" specifically means a stock-option combo: one option leg paired with 100 shares of the underlying equity. In broader industry use, \"combo\" without qualifier sometimes refers to multi-leg option structures.",
+      "description": "Place a real options order with real money.\n\nWorkflow: by default call review_option_order first. When it comes back with customer_approval_required true on a single-leg order with no order_checks alert, call this tool straight away with no confirmation step in the conversation, because this call does not place the order: it goes to the customer to approve or decline in the Robinhood app. Otherwise, for every multi-leg strategy, and whenever order_checks is non-empty, follow review_option_order's own guide.\n\nCapability: single-leg options orders — Level 2 strategies (covered calls, cash-secured puts, long calls and puts). Multi-leg spreads (Level 3 strategies) are supported on option_level_3 accounts.\n\nAccount requirements: confirm via get_accounts that the chosen account is agentic_allowed=true AND has option_level_2 or option_level_3. If agentic_allowed=false do NOT call. If option_level is empty or option_level_0, do NOT call; follow the get_accounts guide for how to direct the user to enroll.\n\nAlert handling: pre-trade alerts surface only in review_option_order. After the user has acknowledged the reviewed alert, call this tool with the same parameters.\n\nIdempotency: pass a fresh UUID as ref_id on the first call for each logical order, and re-send the SAME ref_id on retries of transient transport failures. Use a new ref_id only when the user wants a new order.\n\nTo find option_id: get_option_chains → get_option_instruments filtered by expiration_date/strike_price/type.\n\nParameter rules:\n- Multi-leg leg layouts — vertical spread: two legs, same expiration, different strikes, opposite sides. Calendar: two legs, same strike, different expirations. Iron condor: four legs, a put spread plus a call spread. Roll: close the leg you hold (position_effect 'close', side opposite the position) plus open the replacement ('open').\n- Get the net price from the user rather than inferring it from individual leg quotes.\n- Multi-leg is not available on cash or retirement accounts through this tool.\n- type: 'limit' (default), 'market', 'stop_limit', 'stop_market'. price for limit/stop_limit; stop_price for stop_market/stop_limit.\n- market, stop_market, and stop_limit are single-leg only. market and stop_market are also regular_hours, GFD only. stop_market is sell-to-close only with stop_price below the current ask.\n\nNot currently supported anywhere (including the Robinhood apps):\n- combo orders. At Robinhood, \"combo\" specifically means a stock-option combo: one option leg paired with 100 shares of the underlying equity. In broader industry use, \"combo\" without qualifier sometimes refers to multi-leg option structures.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -2112,7 +2447,7 @@
             "type": "string"
           },
           "ref_id": {
-            "description": "Idempotency key (UUID). Generate once per logical order and re-send on retry. Omitting falls back to a server-generated key.",
+            "description": "Idempotency key (UUID). Generate once per logical order and re-send the SAME value on retries of transient failures, so a retry cannot place the order twice. The order is placed under its approval id, so the ref_id on the placed order differs from this value; that is expected, and retries still re-send this one. Omitting falls back to a server-generated key, which a retry cannot reuse. Use a new value only when the user wants a new order.",
             "type": "string"
           },
           "stop_price": {
@@ -2138,12 +2473,12 @@
       "name": "place_option_order"
     },
     {
-      "description": "Simulate a crypto order without placing it — returns the transient order shape with the estimated cost/credit and fees resolved, plus any pre-trade validation errors. Call this by default before place_crypto_order unless the user has very explicitly asked to skip the preview. Requires an agentic-enabled crypto account.\n\nParameter rules:\n- Provide exactly one of quantity or dollar_amount; dollar_amount works with every type.\n- limit_price is required for limit and stop_limit; stop_price is required for stop_loss and stop_limit.\n- symbol is resolved to a currency pair before the preview; pass a bare asset symbol (e.g. 'BTC') or a pair ('BTC-USD').",
+      "description": "Simulate a crypto order without placing it — returns the transient order shape with the estimated cost/credit and fees resolved, plus any pre-trade validation errors. Call this by default before place_crypto_order unless the user has very explicitly asked to skip the preview. Requires an agentic-enabled crypto account.\n\nParameter rules:\n- Provide exactly one of quantity or dollar_amount; dollar_amount works with every type the pair accepts.\n- limit_price is required for limit and stop_limit; stop_price is required for stop_loss and stop_limit.\n- symbol is resolved to a currency pair before the preview; pass a bare asset symbol (e.g. 'BTC') or a pair ('BTC-USD').\n- A quantity that is not a multiple of the pair's min_order_quantity_increment (see get_currency_pairs) is rounded down to it for the preview, and the response then carries requested_quantity; place_crypto_order rejects an off-increment quantity rather than rounding it.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "dollar_amount": {
-            "description": "USD notional (e.g. '100.00'). Valid with every order type. Provide exactly one of quantity or dollar_amount. For market, quantity is derived server-side: a buy is sized at the current market price — the same sizing as the app — so the typical debit is ~dollar_amount, with a worst case up to ~1% more if the price moves before execution (the buy collar); a sell is likewise sized at the current market price, so the typical credit is ~dollar_amount, with a worst case up to ~5% less if the price moves before execution (the sell collar). For stop_loss, quantity is derived from dollar_amount at stop_price (the trigger price) when the order is placed, not the live quote — the triggered market order executes near the trigger, so the typical fill notional is ~dollar_amount, with a worst case up to the collar worse (a higher debit for buy stops, a lower credit for sell stops). For limit and stop_limit, quantity is derived from dollar_amount at limit_price when the order is placed — fills execute at the limit price or better, so a buy's debit is capped at dollar_amount (no collar buffer; on fee-priced accounts fee rounding can add at most one cent) and a sell's credit is at least the derived quantity's worth at the limit, minus any fee. On fee-priced accounts a buy's quantity is sized from the fee-netted amount so the total debit targets dollar_amount, and a sell's fee is deducted from the credit.",
+            "description": "USD notional (e.g. '100.00'). Valid with every order type the pair accepts. Provide exactly one of quantity or dollar_amount. For market, quantity is derived server-side: a buy is sized at the current market price — the same sizing as the app — so the typical debit is ~dollar_amount, with a worst case up to ~1% more if the price moves before execution (the buy collar); a sell is likewise sized at the current market price, so the typical credit is ~dollar_amount, with a worst case up to ~5% less if the price moves before execution (the sell collar). For stop_loss, quantity is derived from dollar_amount at stop_price (the trigger price) when the order is placed, not the live quote — the triggered market order executes near the trigger, so the typical fill notional is ~dollar_amount, with a worst case up to the collar worse (a higher debit for buy stops, a lower credit for sell stops). For limit and stop_limit, quantity is derived from dollar_amount at limit_price when the order is placed — fills execute at the limit price or better, so a buy's debit is capped at dollar_amount (no collar buffer; on fee-priced accounts fee rounding can add at most one cent) and a sell's credit is at least the derived quantity's worth at the limit, minus any fee. On fee-priced accounts a buy's quantity is sized from the fee-netted amount so the total debit targets dollar_amount, and a sell's fee is deducted from the credit.",
             "type": "string"
           },
           "limit_price": {
@@ -2171,7 +2506,7 @@
             "type": "string"
           },
           "tax_lots": {
-            "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default disposal, pass {open_lot_id, quantity} objects whose quantities sum to the order quantity, with open_lot_id taken from the account's crypto tax lots (see the request guide). Omit for the default. Sell only; quantity-based orders only (not dollar_amount); at most 50 lots; only when the lot listing reports selection_state 'enabled'. Not every account can select lots: if the tool rejects tax_lots as not available, tell the user and offer the default disposal instead.",
+            "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default disposal, pass {open_lot_id, quantity} objects whose quantities sum to the order quantity, with open_lot_id taken from the account's crypto tax lots (see the request guide). Omit for the default. Sell only; market and limit orders only (not stop_loss or stop_limit); quantity-based orders only (not dollar_amount); at most 50 lots; only when the lot listing reports selection_state 'enabled'. Not every account can select lots: if the tool rejects tax_lots as not available, tell the user and offer the default disposal instead.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -2180,7 +2515,7 @@
                   "type": "string"
                 },
                 "quantity": {
-                  "description": "Units to sell from this lot as a decimal string; at most the lot's quantity_available (or exactly quantity_to_sell from a strategy result).",
+                  "description": "Units to sell from this lot as a decimal string; at most the lot's quantity_available, and a multiple of the pair's min_order_quantity_increment.",
                   "type": "string"
                 }
               },
@@ -2200,7 +2535,7 @@
             "type": "string"
           },
           "type": {
-            "description": "'market', 'limit', 'stop_loss', or 'stop_limit'. Required. 'stop_loss' is a stop-triggered market order — despite the name it applies to buy stops too; the equity/option tools call the same concept 'stop_market'. ALWAYS call these by their app names when speaking to the user, including when listing what types are supported: 'stop_loss' is a 'stop order' and 'stop_limit' a 'stop limit order'; the raw values are tool inputs only. A user asking for a 'stop loss', 'stop order', or 'stop market' order means this stop_loss type — do not ask which stop type (but a limit price given alongside the trigger makes it stop_limit); ask only when the phrasing names no type, e.g. a bare 'stop' or 'protect my position'.",
+            "description": "'market', 'limit', 'stop_loss', or 'stop_limit'. Required. 'stop_loss' is a stop-triggered market order — despite the name it applies to buy stops too; the equity/option tools call the same concept 'stop_market'. ALWAYS call these by their app names when speaking to the user, including when listing what types are supported: 'stop_loss' is a 'stop order' and 'stop_limit' a 'stop limit order'; the raw values are tool inputs only. A user asking for a 'stop loss', 'stop order', or 'stop market' order means this stop_loss type — do not ask which stop type (but a limit price given alongside the trigger makes it stop_limit); ask only when the phrasing names no type, e.g. a bare 'stop' or 'protect my position'. A pair whose market_orders_only is true on get_currency_pairs (such as the stablecoins USDC and USDG) accepts only 'market': use it for those without asking the user to choose a type.",
             "type": "string"
           }
         },
@@ -2375,12 +2710,12 @@
       "name": "remove_from_watchlist"
     },
     {
-      "description": "Remove option contracts from the user's options watchlist. Specify the same position_type used when the contract was added (defaults to \"long\"). Contracts not on the list are no-ops. Confirm with the user before calling.",
+      "description": "Remove option contracts from the user's options watchlist. Specify the item's position_type as reported by get_option_watchlist (defaults to \"long\"). Contracts not on the list are no-ops. Confirm with the user before calling.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "option_ids": {
-            "description": "Option contract UUIDs to remove. The position_type must match how each contract was added (most likely \"long\").",
+            "description": "Option contract UUIDs to remove: each item's option_ids[0] from get_option_watchlist.",
             "items": {
               "type": "string"
             },
@@ -2390,7 +2725,7 @@
             ]
           },
           "position_type": {
-            "description": "\"long\" (default) or \"short\". Must match how the contract was originally added.",
+            "description": "\"long\" (default) or \"short\". Use the item's position_type from get_option_watchlist.",
             "type": "string"
           }
         },
@@ -2400,6 +2735,56 @@
         "type": "object"
       },
       "name": "remove_option_from_watchlist"
+    },
+    {
+      "description": "Simulate an OCO equity order without placing it; returns any pre-trade alert (buying power, instrument halt, etc.). Parameters mirror place_advanced_order. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.\n\nOCO rules:\n- Both legs use the same symbol, side, and quantity.\n- take_profit_limit_price and stop_loss_stop_price are required and must differ.\n- For a sell OCO (protecting a long): take_profit_limit_price must be ABOVE stop_loss_stop_price. For a buy OCO (covering a short): stop_loss_stop_price must be ABOVE take_profit_limit_price.\n- time_in_force can be GFD or GTC. market_hours must be regular_hours (the only session OCO supports) — omit it or pass regular_hours explicitly.\n- take_profit_limit_price and stop_loss_stop_price must each be at least 0.25% away from the current market price, and at least $0.10 apart from each other, or the order will be rejected — don't propose prices tighter than that.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_number": {
+            "description": "Brokerage account number. Must come from the user or be clearly implied — never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected.",
+            "type": "string"
+          },
+          "market_hours": {
+            "description": "'regular_hours' — the only session OCO supports; extended_hours and all_day_hours are rejected.",
+            "type": "string"
+          },
+          "quantity": {
+            "description": "Whole-share quantity. Both legs use the same quantity.",
+            "type": "string"
+          },
+          "side": {
+            "description": "'buy' or 'sell'. Both legs use this side.",
+            "type": "string"
+          },
+          "stop_loss_stop_price": {
+            "description": "Stop trigger price of the stop-loss leg. The stop-loss leg is always a stop-market order — there is no stop-limit option for it.",
+            "type": "string"
+          },
+          "symbol": {
+            "description": "Stock symbol. Both OCO legs are on this symbol.",
+            "type": "string"
+          },
+          "take_profit_limit_price": {
+            "description": "Limit price of the take-profit leg.",
+            "type": "string"
+          },
+          "time_in_force": {
+            "description": "Can be 'gfd' or 'gtc'.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_number",
+          "symbol",
+          "side",
+          "quantity",
+          "take_profit_limit_price",
+          "stop_loss_stop_price"
+        ],
+        "type": "object"
+      },
+      "name": "review_advanced_order"
     },
     {
       "description": "Simulate a stock order without placing it. Returns the current quote plus pre-trade alerts (buying power, PDT, instrument halt, etc.). Call this by default before place_equity_order unless the user has very explicitly asked to skip review. Requires an agentic_allowed=true account; non-agentic accounts are rejected — do not call.\n\nParameter rules:\n- If the user has not specified type, ask. For immediate fills with price protection, prefer a marketable limit at the current ask over a plain market.\n- Outside regular hours, only limit orders execute. For an immediate fill during extended or overnight/24-hour sessions, place a limit order (a marketable limit at the current ask) with market_hours set to that session — not a market order. Market and stop orders are regular_hours-only; placed after hours as regular_hours they queue for the next regular open.\n- Provide exactly one of quantity or dollar_amount, and take the value from the user — if they did not say how much, ask. Never substitute a default such as 1 share or $100. dollar_amount requires type=market (server computes shares from last_trade_price).\n- Fractional shares: only on type=market with market_hours=regular_hours, eligible accounts, up to 6 decimal places, no short sells.\n- limit_price required for limit/stop_limit; stop_price required for stop_market/stop_limit.\n- Fractional and dollar-based orders only place in regular_hours; the tool rejects them in other sessions.\n- tax_lots (specified-lot selling, sell only): to sell specific lots, first call get_equity_tax_lots for the symbol, then pass tax_lots as {open_lot_id, quantity} pairs whose quantities sum to the order quantity. Omit for default (FIFO) cost basis. US accounts only; not allowed with dollar_amount, stop orders, all_day_hours, or fractional limit orders.",
@@ -2492,7 +2877,7 @@
             "type": "string"
           },
           "chain_symbol": {
-            "description": "Underlying ticker (e.g. 'AAPL', 'SPXW'). Supply alongside underlying_type to include fees and collateral in the response — always do so when known.",
+            "description": "Do not send. Ignored: review reads the chain symbol from the legs' option contracts.",
             "type": "string"
           },
           "direction": {
@@ -2558,7 +2943,7 @@
             "type": "string"
           },
           "underlying_type": {
-            "description": "'equity' or 'index'. Required alongside chain_symbol to enable the fee + collateral fetch.",
+            "description": "Do not send. Ignored: review reads the underlying type from the legs' option contracts.",
             "type": "string"
           }
         },

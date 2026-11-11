@@ -36,7 +36,7 @@ defmodule Raxol.Broker.Tools.MarketData do
     do: Raxol.Broker.Tools.call(client, "get_equity_analyst_ratings", args)
 
   @doc ~S"""
-  Get today's fundamentals for one or more stock symbols — valuation ratios (PE, P/B), capitalization (market cap, shares outstanding, float), today's session OHLCV, trailing volume averages, 52-week range, dividend schedule, and company profile. For real-time quotes use get_equity_quotes; for time-series price history use get_equity_historicals.
+  Get today's fundamentals for up to 20 stock symbols — valuation ratios (PE, P/B), capitalization (market cap, shares outstanding, float), today's session OHLCV, trailing volume averages, 52-week range, dividend schedule, and company profile. For real-time quotes use get_equity_quotes; for time-series price history use get_equity_historicals.
 
   Arguments (string keys):
     * `bounds` (optional, string)
@@ -82,7 +82,7 @@ defmodule Raxol.Broker.Tools.MarketData do
     do: Raxol.Broker.Tools.call(client, "get_equity_quotes", args)
 
   @doc ~S"""
-  Compute a technical indicator (RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, and more) over one equity symbol's OHLCV bars across a time range. For the raw OHLCV bars themselves, use get_equity_historicals.
+  Compute a technical indicator (RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, and more) over the OHLCV bars of up to 10 equity symbols across a time range. For the raw OHLCV bars themselves, use get_equity_historicals.
 
   Arguments (string keys):
     * `adjustment_type` (optional, string)
@@ -98,7 +98,8 @@ defmodule Raxol.Broker.Tools.MarketData do
     * `signal_period` (optional, null | integer)
     * `slow_period` (optional, null | integer)
     * `start_time` (required, string)
-    * `symbol` (required, string)
+    * `symbol` (optional, string)
+    * `symbols` (optional, null | array)
     * `type` (required, string)
   """
   @spec get_equity_technical_indicators(GenServer.server(), map()) ::
@@ -107,7 +108,7 @@ defmodule Raxol.Broker.Tools.MarketData do
     do: Raxol.Broker.Tools.call(client, "get_equity_technical_indicators", args)
 
   @doc ~S"""
-  Check tradability for up to 10 equity symbols on a given account: per-session eligibility and fractional. Call before placing an order to surface restrictions. Exact-ticker match — no name or partial-ticker resolution.
+  Check tradability for up to 20 equity symbols on a given account: per-session eligibility and fractional. Call before placing an order to surface restrictions. Exact-ticker match — no name or partial-ticker resolution.
 
   Arguments (string keys):
     * `account_number` (required, string)

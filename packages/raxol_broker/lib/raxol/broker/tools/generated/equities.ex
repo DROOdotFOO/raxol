@@ -8,6 +8,7 @@ defmodule Raxol.Broker.Tools.Equities do
 
   Arguments (string keys):
     * `account_number` (required, string)
+    * `agent_initiated` (optional, null | boolean)
     * `created_at_gte` (optional, string)
     * `cursor` (optional, string)
     * `order_id` (optional, string)

@@ -62,6 +62,7 @@ defmodule Raxol.Broker.Tools.Options do
 
   Arguments (string keys):
     * `account_number` (required, string)
+    * `agent_initiated` (optional, null | boolean)
     * `chain_ids` (optional, string)
     * `created_at_gte` (optional, string)
     * `cursor` (optional, string)
@@ -104,7 +105,7 @@ defmodule Raxol.Broker.Tools.Options do
     do: Raxol.Broker.Tools.call(client, "get_option_quotes", args)
 
   @doc ~S"""
-  List the single-leg option contracts on the user's options watchlist. Use this instead of get_watchlist_items for the options watchlist — get_watchlist_items returns a generic shape that drops the option-specific title and the upstream rejects it with 400 anyway. Works for both equity options (AAPL, NVDA) and index options (SPX, NDX, RUT). Multi-leg strategies (verticals, condors, etc.) that may exist in the user's watchlist from app-side order placement are not shown — direct the user to the Robinhood app to view those.
+  List the single-leg option contracts, long and short, on the user's options watchlist. Use this instead of get_watchlist_items for the options watchlist — get_watchlist_items returns a generic shape that drops the option-specific title and the upstream rejects it with 400 anyway. Works for both equity options (AAPL, NVDA) and index options (SPX, NDX, RUT). Multi-leg strategies (verticals, condors, etc.) that may exist in the user's watchlist from app-side order placement are not shown — direct the user to the Robinhood app to view those.
 
   Takes no arguments.
   """
