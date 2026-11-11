@@ -27,8 +27,6 @@ defmodule Raxol.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      # cowlib 2.21.0 still has EEF-CVE-2026-43966 with no fixed release; see #921.
-      hex: [ignore_advisories: ["EEF-CVE-2026-43966"]],
       releases: releases(),
       description: description(),
       package: package(),
