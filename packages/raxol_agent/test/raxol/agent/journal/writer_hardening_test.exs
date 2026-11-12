@@ -9,7 +9,19 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.FileStore.Writer
 
+  import Bitwise
+
   @moduletag :unix_only
+
+  @init_signalable match?({_, 0}, System.cmd("kill", ["-0", "1"], stderr_to_stdout: true))
+
+  @case_insensitive (
+                      probe = Path.join(System.tmp_dir!(), "raxol-case-probe-#{System.pid()}")
+                      File.write!(probe, "")
+                      insensitive = File.exists?(String.upcase(probe))
+                      File.rm(probe)
+                      insensitive
+                    )
 
   setup do
     base =
@@ -64,7 +76,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       # A real, live BEAM we own — its pid in the lock file must block a
       # second Writer (the two-OS-processes-on-one-journal corruption case).
       # The lock holds the pid alone, as one written before the start token.
-      holder = foreign_beam()
+      holder = ForeignBeam.start_supervised()
       File.write!(Path.join(dir, "writer.lock"), holder.pid)
 
       # `:ignore`, not `{:stop, _}`: an abnormal init exit reaches the linked
@@ -84,7 +96,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       dir = Path.join(base, s)
       File.mkdir_p!(dir)
 
-      holder = foreign_beam()
+      holder = ForeignBeam.start_supervised()
       File.write!(Path.join(dir, "writer.lock"), holder.pid)
 
       # The opener is a plain NON-trapping process, like the TUI dispatcher
@@ -121,8 +133,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
     test "reclaims a stale lock left by a dead process", %{base: base, session: s} do
       dir = Path.join(base, s)
       File.mkdir_p!(dir)
-      # A pid that cannot exist on this host -> stale -> reclaimed.
-      File.write!(Path.join(dir, "writer.lock"), "999999")
+      File.write!(Path.join(dir, "writer.lock"), ForeignBeam.dead_pid())
 
       assert {:ok, pid} = Writer.start_link(dir: dir, session_id: s)
       assert Process.alive?(pid)
@@ -139,7 +150,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       # The other BEAM opens the journal itself, so the lock is the one a
       # real second writer leaves: its pid and its start token.
       holder =
-        foreign_beam("""
+        ForeignBeam.start_supervised("""
         {:ok, _} = Application.ensure_all_started(:jason)
         {:ok, _} = Raxol.Agent.Journal.FileStore.open(#{inspect(s)}, base_dir: #{inspect(base)})
         """)
@@ -172,7 +183,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
 
       # The pid was reused: a BEAM runs under it, but not the one that wrote
       # the lock.
-      holder = foreign_beam()
+      holder = ForeignBeam.start_supervised()
       File.write!(Path.join(dir, "writer.lock"), holder.pid <> " " <> another_start())
 
       assert Writer.lock_holder(dir) == nil
@@ -188,7 +199,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       dir = Path.join(base, s)
       File.mkdir_p!(dir)
 
-      holder = foreign_beam()
+      holder = ForeignBeam.start_supervised()
       File.write!(Path.join(dir, "writer.lock"), holder.pid <> " epoch:12345")
 
       assert Writer.lock_holder(dir) == holder.pid
@@ -215,11 +226,12 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       GenServer.stop(pid)
     end
 
+    # Where this account may signal pid 1 (root, or a container whose pid 1
+    # is ours), there is no such pid to name.
+    @tag skip: @init_signalable && "pid 1 can be signalled by this account"
     test "a pid this account may not signal is stale", %{base: base, session: s} do
       dir = Path.join(base, s)
       File.mkdir_p!(dir)
-      # pid 1 is alive and belongs to root: `kill -0` is refused, and as root
-      # it is still not a BEAM.
       File.write!(Path.join(dir, "writer.lock"), "1")
 
       assert Writer.lock_holder(dir) == nil
@@ -244,21 +256,110 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
     end
 
     test "require_lock refuses a journal that cannot be locked", %{base: base, session: s} do
-      # No `kill`, no way to prove a holder dead, so no lock is taken.
-      path = System.get_env("PATH")
-      System.put_env("PATH", "")
-      on_exit(fn -> System.put_env("PATH", path) end)
+      # The lock is linked from a temp file; with a directory in that file's
+      # place it cannot be written, so no lock is taken.
+      for session <- [s, s <> "-lockless"] do
+        File.mkdir_p!(Path.join([base, session, "writer.lock.tmp.#{System.pid()}"]))
+      end
 
-      required = FileStore.open(s, base_dir: base, require_lock: true)
-      lockless = FileStore.open(s <> "-lockless", base_dir: base)
-      System.put_env("PATH", path)
-
-      assert required == {:error, {:journal_locked, :lock_unavailable}}
+      assert FileStore.open(s, base_dir: base, require_lock: true) ==
+               {:error, {:journal_locked, :lock_unavailable}}
 
       # Without the option the Writer still journals, unlocked.
-      assert {:ok, journal} = lockless
+      assert {:ok, journal} = FileStore.open(s <> "-lockless", base_dir: base)
       refute File.exists?(lock_path(base, s <> "-lockless"))
       :ok = FileStore.close(journal)
+    end
+
+    test "the lock appears filled and leaves no temp file", %{base: base, session: s} do
+      {:ok, journal} = FileStore.open(s, base_dir: base, private: true)
+
+      assert [pid, _token] = lock_path(base, s) |> File.read!() |> String.split(" ", parts: 2)
+      assert pid == System.pid()
+      assert (File.stat!(lock_path(base, s)).mode &&& 0o777) == 0o600
+      assert Enum.filter(File.ls!(Path.join(base, s)), &(&1 =~ "writer.lock.")) == []
+
+      :ok = FileStore.close(journal)
+    end
+
+    test "three BEAMs opening the same fresh journals at once get one writer each", %{base: base} do
+      ids = for n <- 1..25, do: "race-#{n}"
+
+      open_all = """
+      for id <- #{inspect(ids)} do
+        result =
+          case Raxol.Agent.Journal.FileStore.open(id,
+                 base_dir: #{inspect(base)},
+                 private: true,
+                 require_lock: true
+               ) do
+            {:ok, _journal} -> "ok"
+            {:error, _reason} -> "refused"
+          end
+
+        IO.puts("result " <> id <> " " <> result)
+      end
+
+      IO.puts("done")
+      """
+
+      beams =
+        for _ <- 1..3 do
+          ForeignBeam.start_supervised(
+            "{:ok, _} = Application.ensure_all_started(:jason)",
+            open_all
+          )
+        end
+
+      Enum.each(beams, &ForeignBeam.go/1)
+
+      results =
+        for beam <- beams,
+            "result " <> result <- ForeignBeam.lines_until(beam, "done"),
+            do: List.to_tuple(String.split(result))
+
+      for id <- ids do
+        assert Enum.count(results, &(&1 == {id, "ok"})) == 1, "#{id}: #{inspect(results)}"
+        assert Enum.count(results, &(elem(&1, 0) == id)) == 3
+      end
+    end
+
+    test "a Writer leaves a lock that is no longer its own", %{base: base, session: s} do
+      {:ok, journal} = FileStore.open(s, base_dir: base)
+      other = ForeignBeam.start_supervised()
+      File.write!(lock_path(base, s), other.pid)
+
+      :ok = FileStore.close(journal)
+
+      assert File.read!(lock_path(base, s)) == other.pid
+    end
+
+    test "a dead claimer's leftovers are swept, a live one's stay", %{base: base, session: s} do
+      dir = Path.join(base, s)
+      File.mkdir_p!(dir)
+      dead = ForeignBeam.dead_pid()
+      live = ForeignBeam.start_supervised().pid
+
+      for kind <- ~w(tmp stale),
+          pid <- [dead, live],
+          do: File.write!(Path.join(dir, "writer.lock.#{kind}.#{pid}"), "x")
+
+      assert {:ok, pid} = Writer.start_link(dir: dir, session_id: s)
+
+      assert dir |> File.ls!() |> Enum.filter(&(&1 =~ "writer.lock.")) |> Enum.sort() ==
+               ["writer.lock.stale.#{live}", "writer.lock.tmp.#{live}"]
+
+      GenServer.stop(pid)
+    end
+
+    @tag skip: !@case_insensitive && "this volume is case-sensitive"
+    test "another case of one directory names the same Writer", %{base: base, session: s} do
+      assert {:ok, pid} = Writer.start_link(dir: Path.join(base, s), session_id: s)
+
+      assert {:error, {:already_started, ^pid}} =
+               Writer.start_link(dir: Path.join(base, String.upcase(s)), session_id: s)
+
+      GenServer.stop(pid)
     end
 
     test "two spellings of one directory name one Writer", %{base: base, session: s} do
@@ -278,6 +379,34 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
                )
 
       GenServer.stop(pid)
+    end
+  end
+
+  describe "classify_ps/1" do
+    test "a row is a running process" do
+      assert Writer.classify_ps({"Thu Nov 12 09:15:02 2026 /opt/erts/bin/beam.smp\n", 0}) ==
+               {:ok, {:lstart, "Thu Nov 12 09:15:02 2026"}, "/opt/erts/bin/beam.smp"}
+
+      assert Writer.classify_ps({"Thu Nov  5 09:15:02 2026 my prog\n", 0}) ==
+               {:ok, {:lstart, "Thu Nov 5 09:15:02 2026"}, "my prog"}
+    end
+
+    test "exit 1 with nothing printed is no such process" do
+      assert Writer.classify_ps({"", 1}) == :gone
+      assert Writer.classify_ps({"\n", 1}) == :gone
+    end
+
+    test "a ps that did not answer says nothing about the process" do
+      for answer <- [
+            {"ps: illegal option -- o\n", 1},
+            {"", 0},
+            {"", 127},
+            {"sh: ps: command not found\n", 127},
+            {"Thu Nov 12\n", 0},
+            {"Thu Nov 12 09:15:02 2026 beam.smp\n", 2}
+          ] do
+        assert Writer.classify_ps(answer) == :unknown, inspect(answer)
+      end
     end
   end
 
@@ -368,12 +497,6 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
         FileStore.close(journal)
       end
     end
-  end
-
-  defp foreign_beam(setup \\ ":ok") do
-    beam = ForeignBeam.start(setup)
-    on_exit(fn -> ForeignBeam.signal(beam) end)
-    beam
   end
 
   defp lock_pid(dir) do

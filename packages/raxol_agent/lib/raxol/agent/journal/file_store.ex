@@ -84,32 +84,39 @@ defmodule Raxol.Agent.Journal.FileStore do
 
   @doc """
   The current durable high-watermark (highest offset) for `session_id`, read
-  read-side via the tolerant Reader — `0` for an empty/absent/damaged journal.
+  read-side via the tolerant Reader — `0` for an empty/absent/damaged journal,
+  `{:error, :invalid_session_id}` for an id that names no session directory.
 
   Used by the `attach` command's `:live` history policy to stream only records
   above the decision-time watermark (`from_offset = high_watermark + 1`).
   """
-  @spec high_watermark(String.t(), keyword()) :: non_neg_integer()
-  def high_watermark(session_id, opts \\ []) when is_binary(session_id) do
-    Reader.last_offset(session_dir(session_id, opts))
+  @spec high_watermark(term(), keyword()) ::
+          non_neg_integer() | {:error, :invalid_session_id}
+  def high_watermark(session_id, opts \\ []) do
+    with :ok <- validate_session_id(session_id) do
+      Reader.last_offset(session_dir(session_id, opts))
+    end
   end
 
   @doc """
   Read `session_id`'s durable records read-side via the tolerant Reader
   (writerless-safe — no Writer needed). `{:error, :damaged}` on interior
-  corruption (the damaged content is never surfaced). Used by the read-side
-  reattach and seek paths.
+  corruption (the damaged content is never surfaced),
+  `{:error, :invalid_session_id}` for an id that names no session directory.
+  Used by the read-side reattach and seek paths.
   """
-  @spec read_records(String.t(), keyword()) ::
-          {:ok, [map()]} | {:error, :damaged}
-  def read_records(session_id, opts \\ []) when is_binary(session_id) do
+  @spec read_records(term(), keyword()) ::
+          {:ok, [map()]} | {:error, :damaged | :invalid_session_id}
+  def read_records(session_id, opts \\ []) do
     # Read-side only: never self-heal (physically truncate) a torn tail
     # here — the dir may belong to a live Writer in another OS process
     # (a concurrent `--replay`), or sit on read-only media. The partial
     # line is tolerated in-memory; the Writer heals it at its own boot.
-    case Reader.scan(session_dir(session_id, opts)) do
-      {:ok, records} -> {:ok, records}
-      {:damaged, _partial} -> {:error, :damaged}
+    with :ok <- validate_session_id(session_id) do
+      case Reader.scan(session_dir(session_id, opts)) do
+        {:ok, records} -> {:ok, records}
+        {:damaged, _partial} -> {:error, :damaged}
+      end
     end
   end
 
@@ -441,6 +448,9 @@ defmodule Raxol.Agent.Journal.FileStore do
   end
 
   defp validate_session_id(id) when id in [".", ".."],
+    do: {:error, :invalid_session_id}
+
+  defp validate_session_id(id) when not is_binary(id),
     do: {:error, :invalid_session_id}
 
   defp validate_session_id(id) do
