@@ -1,4 +1,4 @@
-defmodule Raxol.System.UpdaterTest do
+defmodule Raxol.CLI.UpdaterTest do
   @moduledoc """
   The self-updater against a real HTTP release channel on loopback: real
   downloads, real SHA256SUMS, real files standing in for the running
@@ -12,8 +12,8 @@ defmodule Raxol.System.UpdaterTest do
 
   import Bitwise
 
-  alias Raxol.System.Updater
-  alias Raxol.System.Updater.{Archive, Manifest}
+  alias Raxol.CLI.Updater
+  alias Raxol.CLI.Updater.{Archive, Manifest}
   alias Raxol.Test.UpdaterReleaseServer, as: Server
 
   @repo "DROOdotFOO/raxol"

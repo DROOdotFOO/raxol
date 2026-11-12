@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Sct do
+defmodule Raxol.CLI.Updater.Provenance.Sct do
   @moduledoc """
   Certificate transparency for a Fulcio leaf: the signed certificate
   timestamps (SCTs, RFC 6962) Fulcio embeds in every leaf it issues.
@@ -11,7 +11,7 @@ defmodule Raxol.System.Updater.Provenance.Sct do
 
   require Record
 
-  alias Raxol.System.Updater.Provenance.{Certificate, Crypto, TrustedRoot}
+  alias Raxol.CLI.Updater.Provenance.{Certificate, Crypto, TrustedRoot}
 
   @hrl "public_key/include/public_key.hrl"
   Record.defrecordp(

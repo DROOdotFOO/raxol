@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Crypto do
+defmodule Raxol.CLI.Updater.Provenance.Crypto do
   @moduledoc """
   Non-raising primitives the Sigstore verifier is built from: signature
   checks, public-key and DER decoding, base64, and the integers that

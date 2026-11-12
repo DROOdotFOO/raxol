@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.ProvenanceTest do
+defmodule Raxol.CLI.Updater.ProvenanceTest do
   @moduledoc """
   The Sigstore verifier against real, published bundles
   (`test/fixtures/sigstore/`):
@@ -20,9 +20,9 @@ defmodule Raxol.System.Updater.ProvenanceTest do
 
   import Bitwise
 
-  alias Raxol.System.Updater.Network
-  alias Raxol.System.Updater.Provenance
-  alias Raxol.System.Updater.Provenance.{Certificate, Policy, TrustedRoot}
+  alias Raxol.CLI.Updater.Network
+  alias Raxol.CLI.Updater.Provenance
+  alias Raxol.CLI.Updater.Provenance.{Certificate, Policy, TrustedRoot}
 
   @fixtures Path.expand("../../../fixtures/sigstore", __DIR__)
   @repo "DROOdotFOO/raxol"

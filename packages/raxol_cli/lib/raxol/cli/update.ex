@@ -1,20 +1,20 @@
 defmodule Raxol.CLI.Update do
   @moduledoc """
-  `raxol update`: the command-line face of `Raxol.System.Updater`.
+  `raxol update`: the command-line face of `Raxol.CLI.Updater`.
 
   This module owns the CLI experience (flags, messages, exit codes, the
   once-a-day interactive prompt). Finding the release, checking it against
   `SHA256SUMS` and its Sigstore provenance, and replacing the binary are
-  `Raxol.System.Updater`'s, on its default channel: the `raxol-cli-v*`
+  `Raxol.CLI.Updater`'s, on its default channel: the `raxol-cli-v*`
   releases this binary is built from.
   """
 
-  alias Raxol.System.Updater
-  alias Raxol.System.Updater.Manifest
+  alias Raxol.CLI.Updater
+  alias Raxol.CLI.Updater.Manifest
 
   @auto_check_interval_s 24 * 60 * 60
 
-  # Options passed through to `Raxol.System.Updater` (tests point them at a
+  # Options passed through to `Raxol.CLI.Updater` (tests point them at a
   # loopback release channel and scratch files).
   @updater_keys [:manifest, :platform, :current_executable, :backup_dir, :work_dir]
 

@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Archive do
+defmodule Raxol.CLI.Updater.Archive do
   @moduledoc """
   Extracts a checksum-verified update archive without letting any entry land
   outside the destination directory.

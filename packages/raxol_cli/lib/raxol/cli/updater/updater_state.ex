@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.State do
+defmodule Raxol.CLI.Updater.State do
   @moduledoc """
   Refactored System Updater State module with GenServer-based state management.
 
@@ -14,7 +14,7 @@ defmodule Raxol.System.Updater.State do
   * Auto-update configuration
   """
 
-  alias Raxol.System.Updater.State.UpdaterServer, as: Server
+  alias Raxol.CLI.Updater.State.UpdaterServer, as: Server
 
   # @update_settings_file "~/.raxol/update_settings.json"
 

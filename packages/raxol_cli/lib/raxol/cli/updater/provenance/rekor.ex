@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Rekor do
+defmodule Raxol.CLI.Updater.Provenance.Rekor do
   @moduledoc """
   The Rekor (v1) transparency-log entry of a Sigstore bundle, and what
   proves it:
@@ -17,7 +17,7 @@ defmodule Raxol.System.Updater.Provenance.Rekor do
   import Bitwise
 
   alias Jason.OrderedObject
-  alias Raxol.System.Updater.Provenance.{Crypto, Dsse, TrustedRoot}
+  alias Raxol.CLI.Updater.Provenance.{Crypto, Dsse, TrustedRoot}
 
   @checkpoint_signature_prefix "\u2014 "
 

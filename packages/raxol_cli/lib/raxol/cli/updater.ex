@@ -1,15 +1,15 @@
-defmodule Raxol.System.Updater do
+defmodule Raxol.CLI.Updater do
   use Raxol.Core.Behaviours.BaseManager
 
   @moduledoc """
   Version checks and verified self-update for a Burrito-packaged binary.
 
-  Where updates come from is a `Raxol.System.Updater.Manifest`: by default the
+  Where updates come from is a `Raxol.CLI.Updater.Manifest`: by default the
   `raxol` CLI release channel (`raxol-cli-v*` releases on `DROOdotFOO/raxol`),
   or whatever an application sets in `config :raxol, :updater_manifest`.
   Every download is checked against the release's `SHA256SUMS` and, unless
   the manifest sets `provenance: :off`, against the release's Sigstore
-  attestation (`Raxol.System.Updater.Provenance`: signed by the manifest's
+  attestation (`Raxol.CLI.Updater.Provenance`: signed by the manifest's
   workflow for that tag) before it is extracted or installed. The replaced
   executable is kept so `rollback_update/1` can restore it.
 
@@ -28,7 +28,7 @@ defmodule Raxol.System.Updater do
     * `:work_dir` - scratch directory (default: a fresh temp dir, removed after)
   """
 
-  alias Raxol.System.Updater.{Core, State}
+  alias Raxol.CLI.Updater.{Core, State}
 
   # --- Client API ---
 

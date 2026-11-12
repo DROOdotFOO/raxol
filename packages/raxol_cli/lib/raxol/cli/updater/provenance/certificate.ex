@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Certificate do
+defmodule Raxol.CLI.Updater.Provenance.Certificate do
   @moduledoc """
   The Fulcio leaf certificate of a Sigstore bundle: its key, validity,
   signer identity, and chain to a pinned Fulcio root.
@@ -14,7 +14,7 @@ defmodule Raxol.System.Updater.Provenance.Certificate do
 
   require Record
 
-  alias Raxol.System.Updater.Provenance.{Crypto, TrustedRoot}
+  alias Raxol.CLI.Updater.Provenance.{Crypto, TrustedRoot}
 
   @hrl "public_key/include/public_key.hrl"
   Record.defrecordp(

@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Validation do
+defmodule Raxol.CLI.Updater.Validation do
   @moduledoc """
   Update-check scheduling and version comparison for the Raxol System Updater.
   """

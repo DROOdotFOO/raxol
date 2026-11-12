@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Manifest do
+defmodule Raxol.CLI.Updater.Manifest do
   @moduledoc """
   Where a self-update comes from and what a release has to contain.
 
@@ -17,7 +17,7 @@ defmodule Raxol.System.Updater.Manifest do
   The manifest also says who must have built a release. With
   `provenance: :required` (the default) an asset is installed only when
   the release's `attestation_asset` proves, via
-  `Raxol.System.Updater.Provenance`, that `signer_workflow` in `repo` built
+  `Raxol.CLI.Updater.Provenance`, that `signer_workflow` in `repo` built
   it for the release's tag. `provenance: :off` turns that off, for a
   channel that publishes no attestation.
 

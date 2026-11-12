@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Policy do
+defmodule Raxol.CLI.Updater.Provenance.Policy do
   @moduledoc """
   Who must have signed a release: the GitHub Actions workflow of a
   repository, run for the release's tag on a GitHub-hosted runner.
@@ -7,10 +7,10 @@ defmodule Raxol.System.Updater.Provenance.Policy do
   --signer-workflow <repo>/<workflow> --source-ref refs/tags/<tag>
   --cert-oidc-issuer https://token.actions.githubusercontent.com
   --deny-self-hosted-runners` makes, applied to the Fulcio certificate's
-  identity (`Raxol.System.Updater.Provenance.Certificate.identity/1`).
+  identity (`Raxol.CLI.Updater.Provenance.Certificate.identity/1`).
   """
 
-  alias Raxol.System.Updater.Provenance.Certificate
+  alias Raxol.CLI.Updater.Provenance.Certificate
 
   @github "https://github.com"
   @actions_issuer "https://token.actions.githubusercontent.com"
