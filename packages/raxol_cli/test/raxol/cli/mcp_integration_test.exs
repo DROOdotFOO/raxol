@@ -28,7 +28,12 @@ defmodule Raxol.CLI.MCPIntegrationTest do
   # `@tag mcp_args: [...]` adds flags after `mcp`; `:dump` stands for a
   # `--bench-dump` path in this test's directory.
   setup ctx do
-    dir = Path.join(System.tmp_dir!(), "raxol_mcp_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol_mcp_#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
 
@@ -37,7 +42,13 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     dump = Path.join(dir, "models.bin")
     for fifo <- [input, errors], do: {_, 0} = System.cmd("mkfifo", [fifo])
 
-    argv = ["mcp" | Enum.map(Map.get(ctx, :mcp_args, []), &if(&1 == :dump, do: dump, else: &1))]
+    argv = [
+      "mcp"
+      | Enum.map(
+          Map.get(ctx, :mcp_args, []),
+          &if(&1 == :dump, do: dump, else: &1)
+        )
+    ]
 
     sh = System.find_executable("sh")
 
@@ -55,30 +66,54 @@ defmodule Raxol.CLI.MCPIntegrationTest do
           input,
           errors
         ],
-        env: [
-          {~c"MIX_ENV", ~c"test"},
-          {~c"RAXOL_MODE", ~c"mcp"},
-          {~c"RAXOL_CLI_INSTALL_DIR", false},
-          {~c"__BURRITO", false}
-        ]
+        env:
+          [
+            {~c"MIX_ENV", ~c"test"},
+            {~c"RAXOL_MODE", ~c"mcp"},
+            {~c"RAXOL_CLI_INSTALL_DIR", false},
+            {~c"__BURRITO", false}
+          ] ++ Map.get(ctx, :mcp_env, [])
       ])
 
     # Not `exec`: the shell keeps the port's stdout open while `cat` writes the
     # FIFO, or the port would close at once on that pipe's end of file.
-    writer = Port.open({:spawn_executable, sh}, [:binary, args: ["-c", ~s(cat > "$0"), input]])
+    writer =
+      Port.open({:spawn_executable, sh}, [
+        :binary,
+        args: ["-c", ~s(cat > "$0"), input]
+      ])
 
     stderr =
-      Port.open({:spawn_executable, System.find_executable("cat")}, [:binary, args: [errors]])
+      Port.open({:spawn_executable, System.find_executable("cat")}, [
+        :binary,
+        args: [errors]
+      ])
 
     %{server: server, writer: writer, stderr: stderr, dir: dir, dump: dump}
   end
 
   test "end of input exits 0, and stdout carries only JSON-RPC", ctx do
-    send_line(ctx.writer, %{jsonrpc: "2.0", id: 1, method: "initialize", params: %{}})
-    {init, seen} = read_reply(ctx.server, 1)
-    assert init["result"]["serverInfo"] == %{"name" => "raxol", "version" => Raxol.CLI.version()}
+    send_line(ctx.writer, %{
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: %{}
+    })
 
-    send_line(ctx.writer, %{jsonrpc: "2.0", id: 2, method: "tools/list", params: %{}})
+    {init, seen} = read_reply(ctx.server, 1)
+
+    assert init["result"]["serverInfo"] == %{
+             "name" => "raxol",
+             "version" => Raxol.CLI.version()
+           }
+
+    send_line(ctx.writer, %{
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: %{}
+    })
+
     {list, listed} = read_reply(ctx.server, 2)
     names = Enum.map(list["result"]["tools"], & &1["name"])
     assert "raxol_start" in names
@@ -87,8 +122,13 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     path_start = %{"path" => "examples/demo.exs", "id" => "p"}
     send_line(ctx.writer, tool_call(3, "raxol_start", path_start))
     {refused, refusals} = read_reply(ctx.server, 3)
-    assert %{"isError" => true, "content" => [%{"text" => text}]} = refused["result"]
-    assert %{"error" => "authorization_required", "detail" => detail} = Jason.decode!(text)
+
+    assert %{"isError" => true, "content" => [%{"text" => text}]} =
+             refused["result"]
+
+    assert %{"error" => "authorization_required", "detail" => detail} =
+             Jason.decode!(text)
+
     assert detail =~ ~s("path" is refused)
 
     {status, rest} = end_input(ctx)
@@ -96,8 +136,29 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     assert_json_rpc(seen ++ listed ++ refusals ++ rest)
   end
 
+  # Without a UTF-8 locale the standard devices are latin1, and a character
+  # outside latin1 written through one is not JSON.
+  @tag mcp_env: [{~c"LC_ALL", ~c"C"}, {~c"LANG", false}, {~c"LC_CTYPE", false}]
+  test "a screen's box-drawing characters cross the wire without a UTF-8 locale",
+       ctx do
+    assert_screen_crosses(ctx, [])
+  end
+
+  # One byte that is not UTF-8 switches a UTF-8 device to latin1.
+  @tag mcp_env: [{~c"LC_ALL", ~c"C.UTF-8"}]
+  test "a byte that is not UTF-8 does not change how later frames are written",
+       ctx do
+    assert_screen_crosses(ctx, [<<0xFF>>, "{}\n"])
+  end
+
   test "an app's OSC output reaches stderr, never the wire", ctx do
-    send_line(ctx.writer, %{jsonrpc: "2.0", id: 1, method: "initialize", params: %{}})
+    send_line(ctx.writer, %{
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: %{}
+    })
+
     {_init, seen} = read_reply(ctx.server, 1)
 
     demo = %{"module" => "Raxol.Playground.Demos.OscAmbientDemo", "id" => "o"}
@@ -106,7 +167,11 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     refute started["result"]["isError"], inspect(started)
 
     # Space starts the demo's task, which writes OSC 9;4 progress with IO.write.
-    send_line(ctx.writer, tool_call(3, "raxol_send_key", %{"id" => "o", "key" => " "}))
+    send_line(
+      ctx.writer,
+      tool_call(3, "raxol_send_key", %{"id" => "o", "key" => " "})
+    )
+
     {keyed, keying} = read_reply(ctx.server, 3)
     refute keyed["result"]["isError"], inspect(keyed)
 
@@ -119,22 +184,30 @@ defmodule Raxol.CLI.MCPIntegrationTest do
   end
 
   @tag mcp_args: ["--no-derived"]
-  test "--no-derived lists derived tools nowhere; own sessions can be subscribed", ctx do
+  test "--no-derived lists derived tools nowhere; own sessions can be subscribed",
+       ctx do
     {_init, seen} = call(ctx, 1, "initialize", %{})
     table = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "t"}
-    {started, starting} = call(ctx, 2, "tools/call", %{name: "raxol_start", arguments: table})
+
+    {started, starting} =
+      call(ctx, 2, "tools/call", %{name: "raxol_start", arguments: table})
+
     refute started["result"]["isError"], inspect(started)
 
     # The session resources that list the registry's tools would name the
     # derived ones `tools/list` hides.
     replies =
-      for {path, id} <- Enum.zip(~w(context tools resources prompts widgets), 3..7) do
-        {reply, lines} = call(ctx, id, "resources/read", %{uri: "raxol://session/t/#{path}"})
+      for {path, id} <-
+            Enum.zip(~w(context tools resources prompts widgets), 3..7) do
+        {reply, lines} =
+          call(ctx, id, "resources/read", %{uri: "raxol://session/t/#{path}"})
+
         {path, reply, lines}
       end
 
     for {path, reply, _} <- replies, path != "widgets" do
-      assert reply["error"]["data"]["detail"] =~ "static tools only", "#{path}: #{inspect(reply)}"
+      assert reply["error"]["data"]["detail"] =~ "static tools only",
+             "#{path}: #{inspect(reply)}"
     end
 
     assert [{"widgets", %{"result" => %{"contents" => [_ | _]}}, _}] =
@@ -145,28 +218,42 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     assert sub["result"] == %{}, inspect(sub)
     {unsub, unsubbing} = call(ctx, 9, "resources/unsubscribe", widgets)
     assert unsub["result"] == %{}, inspect(unsub)
-    {other, othering} = call(ctx, 10, "resources/subscribe", %{uri: "raxol://session/zz/widgets"})
+
+    {other, othering} =
+      call(ctx, 10, "resources/subscribe", %{uri: "raxol://session/zz/widgets"})
+
     assert other["error"]["data"]["detail"] =~ ~s(no session "zz")
 
     {status, rest} = end_input(ctx)
     assert status == 0
     read_lines = Enum.flat_map(replies, &elem(&1, 2))
-    assert_json_rpc(seen ++ starting ++ read_lines ++ subbing ++ unsubbing ++ othering ++ rest)
+
+    assert_json_rpc(
+      seen ++ starting ++ read_lines ++ subbing ++ unsubbing ++ othering ++ rest
+    )
   end
 
   @tag mcp_args: ["--bench-dump", :dump]
-  test "--bench-dump writes every session's final model, whole, at end of input", ctx do
+  test "--bench-dump writes every session's final model, whole, at end of input",
+       ctx do
     call(ctx, 1, "initialize", %{})
     table = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "t"}
-    {started, _} = call(ctx, 2, "tools/call", %{name: "raxol_start", arguments: table})
+
+    {started, _} =
+      call(ctx, 2, "tools/call", %{name: "raxol_start", arguments: table})
+
     refute started["result"]["isError"], inspect(started)
     refute File.exists?(ctx.dump)
 
     assert {0, _rest} = end_input(ctx)
 
     # Renamed into place: the dump and nothing beside it (no temporary file).
-    assert ctx.dir |> File.ls!() |> Enum.sort() == ~w(models.bin stderr.fifo stdin.fifo)
-    assert %{"t" => model} = ctx.dump |> File.read!() |> :erlang.binary_to_term()
+    assert ctx.dir |> File.ls!() |> Enum.sort() ==
+             ~w(models.bin stderr.fifo stdin.fifo)
+
+    assert %{"t" => model} =
+             ctx.dump |> File.read!() |> :erlang.binary_to_term()
+
     assert is_map(model)
   end
 
@@ -180,12 +267,40 @@ defmodule Raxol.CLI.MCPIntegrationTest do
       params: %{name: name, arguments: arguments}
     }
 
+  # Start a demo, send `noise` as it is, and read the demo's screen back.
+  defp assert_screen_crosses(ctx, noise) do
+    {_init, seen} = call(ctx, 1, "initialize", %{})
+
+    demo = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "t"}
+    send_line(ctx.writer, tool_call(2, "raxol_start", demo))
+    {started, starting} = read_reply(ctx.server, 2)
+    refute started["result"]["isError"], inspect(started)
+
+    if noise != [], do: Port.command(ctx.writer, noise)
+
+    send_line(ctx.writer, tool_call(3, "raxol_screenshot", %{"id" => "t"}))
+    {shot, shooting} = read_reply(ctx.server, 3)
+    assert %{"content" => [%{"text" => screen} | _]} = shot["result"]
+    assert Enum.any?(String.to_charlist(screen), &(&1 > 255)), screen
+
+    {status, rest} = end_input(ctx)
+    assert status == 0
+    assert_json_rpc(seen ++ starting ++ shooting ++ rest)
+  end
+
   defp call(ctx, id, method, params) do
-    send_line(ctx.writer, %{jsonrpc: "2.0", id: id, method: method, params: params})
+    send_line(ctx.writer, %{
+      jsonrpc: "2.0",
+      id: id,
+      method: method,
+      params: params
+    })
+
     read_reply(ctx.server, id)
   end
 
-  defp send_line(writer, message), do: Port.command(writer, [Jason.encode!(message), "\n"])
+  defp send_line(writer, message),
+    do: Port.command(writer, [Jason.encode!(message), "\n"])
 
   # Every stdout line read up to and including the reply to `id`.
   defp read_reply(server, id, seen \\ []) do
@@ -199,14 +314,19 @@ defmodule Raxol.CLI.MCPIntegrationTest do
         end
 
       {^server, {:data, {:noeol, chunk}}} ->
-        flunk("stdout line longer than the port's line buffer: #{String.slice(chunk, 0, 200)}")
+        flunk(
+          "stdout line longer than the port's line buffer: #{String.slice(chunk, 0, 200)}"
+        )
 
       {^server, {:exit_status, status}} ->
         flunk(
           "raxol mcp exited #{status} before replying to #{id}: #{inspect(Enum.reverse(seen))}"
         )
     after
-      @reply_ms -> flunk("no reply to #{id}; stdout so far: #{inspect(Enum.reverse(seen))}")
+      @reply_ms ->
+        flunk(
+          "no reply to #{id}; stdout so far: #{inspect(Enum.reverse(seen))}"
+        )
     end
   end
 
@@ -218,9 +338,14 @@ defmodule Raxol.CLI.MCPIntegrationTest do
 
   defp drain(server, seen) do
     receive do
-      {^server, {:data, {:eol, line}}} -> drain(server, [line | seen])
-      {^server, {:data, {:noeol, chunk}}} -> flunk("unterminated stdout: #{chunk}")
-      {^server, {:exit_status, status}} -> {status, Enum.reverse(seen)}
+      {^server, {:data, {:eol, line}}} ->
+        drain(server, [line | seen])
+
+      {^server, {:data, {:noeol, chunk}}} ->
+        flunk("unterminated stdout: #{chunk}")
+
+      {^server, {:exit_status, status}} ->
+        {status, Enum.reverse(seen)}
     after
       @reply_ms -> flunk("raxol mcp did not exit at end of input")
     end
@@ -233,7 +358,8 @@ defmodule Raxol.CLI.MCPIntegrationTest do
       receive do
         {^stderr, {:data, chunk}} -> assert_stderr(stderr, needle, acc <> chunk)
       after
-        @reply_ms -> flunk("#{inspect(needle)} never reached stderr; got: #{inspect(acc)}")
+        @reply_ms ->
+          flunk("#{inspect(needle)} never reached stderr; got: #{inspect(acc)}")
       end
     end
   end
@@ -242,7 +368,8 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     assert lines != []
 
     for line <- lines do
-      assert {:ok, %{"jsonrpc" => "2.0"}} = Jason.decode(line), "not JSON-RPC: #{inspect(line)}"
+      assert {:ok, %{"jsonrpc" => "2.0"}} = Jason.decode(line),
+             "not JSON-RPC: #{inspect(line)}"
     end
   end
 end
