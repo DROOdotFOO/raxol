@@ -1,6 +1,6 @@
-defmodule Raxol.System.Updater.State.UpdaterServer do
+defmodule Raxol.CLI.Updater.State.UpdaterServer do
   @moduledoc """
-  GenServer implementation for the System Updater state management.
+  GenServer implementation for the updater's state management.
 
   This server manages update settings, progress tracking, statistics,
   and logging while eliminating Process dictionary usage.

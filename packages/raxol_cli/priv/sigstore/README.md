@@ -2,8 +2,8 @@
 
 `trusted_root.json` is the Sigstore public-good instance's trusted root: the
 Fulcio certificate chains, Rekor log keys and CT log keys that
-`Raxol.System.Updater.Provenance` checks release attestations against. It is
-compiled into `Raxol.System.Updater.Provenance.TrustedRoot`, so a refreshed
+`Raxol.CLI.Updater.Provenance` checks release attestations against. It is
+compiled into `Raxol.CLI.Updater.Provenance.TrustedRoot`, so a refreshed
 root reaches users only through a (verified) release.
 
 - Source: `gh attestation trusted-root` (gh 2.97.0), which fetches it over
@@ -18,11 +18,12 @@ root reaches users only through a (verified) release.
 
 Sigstore rotates these keys with overlapping `validFor` windows, so refresh
 before a window the releases depend on closes, and whenever a release is
-signed by a key this file does not list yet:
+signed by a key this file does not list yet. From the `raxol_cli` package
+directory:
 
 ```sh
 gh attestation trusted-root | head -n 1 | jq . > priv/sigstore/trusted_root.json
-mix test test/raxol/system/updater/provenance_test.exs
+mix test test/raxol/cli/updater/provenance_test.exs
 ```
 
 Then update the snapshot date above.

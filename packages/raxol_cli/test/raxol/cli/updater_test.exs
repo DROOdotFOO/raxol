@@ -1,4 +1,4 @@
-defmodule Raxol.System.UpdaterTest do
+defmodule Raxol.CLI.UpdaterTest do
   @moduledoc """
   The self-updater against a real HTTP release channel on loopback: real
   downloads, real SHA256SUMS, real files standing in for the running
@@ -12,8 +12,8 @@ defmodule Raxol.System.UpdaterTest do
 
   import Bitwise
 
-  alias Raxol.System.Updater
-  alias Raxol.System.Updater.{Archive, Manifest}
+  alias Raxol.CLI.Updater
+  alias Raxol.CLI.Updater.{Archive, Manifest}
   alias Raxol.Test.UpdaterReleaseServer, as: Server
 
   @repo "DROOdotFOO/raxol"
@@ -122,9 +122,7 @@ defmodule Raxol.System.UpdaterTest do
                Manifest.new(provenance: :optional)
 
       assert {:error, {:invalid_manifest, :signer_workflow, _}} =
-               Manifest.new(
-                 signer_workflow: "someone/else/.github/workflows/x.yml"
-               )
+               Manifest.new(signer_workflow: "someone/else/.github/workflows/x.yml")
 
       assert {:error, {:invalid_manifest, :attestation_asset, _}} =
                Manifest.new(attestation_asset: "../bundle.json")
@@ -137,9 +135,7 @@ defmodule Raxol.System.UpdaterTest do
       tag = "raxol-cli-v1.1.0"
 
       base =
-        Server.start(
-          Server.release_routes(@repo, tag, %{@asset => "new binary"})
-        )
+        Server.start(Server.release_routes(@repo, tag, %{@asset => "new binary"}))
 
       assert :ok = Updater.self_update("1.1.0", opts(base, ctx))
 
@@ -164,9 +160,7 @@ defmodule Raxol.System.UpdaterTest do
 
       base =
         Server.start(
-          Server.release_routes(@repo, tag, %{@asset => "a tampered binary"},
-            checksums: sums
-          )
+          Server.release_routes(@repo, tag, %{@asset => "a tampered binary"}, checksums: sums)
         )
 
       assert {:error, {:checksum_mismatch, @asset}} =
@@ -184,16 +178,12 @@ defmodule Raxol.System.UpdaterTest do
 
       for {sums, expected} <- [
             {other, {:missing_checksum, @asset}},
-            {"#{sha}  #{@asset}\n#{sha}  #{@asset}\n",
-             {:duplicate_checksum, @asset}},
-            {"not a checksum line\n",
-             {:invalid_checksum_line, "not a checksum line"}}
+            {"#{sha}  #{@asset}\n#{sha}  #{@asset}\n", {:duplicate_checksum, @asset}},
+            {"not a checksum line\n", {:invalid_checksum_line, "not a checksum line"}}
           ] do
         base =
           Server.start(
-            Server.release_routes(@repo, tag, %{@asset => "new binary"},
-              checksums: sums
-            )
+            Server.release_routes(@repo, tag, %{@asset => "new binary"}, checksums: sums)
           )
 
         assert {:error, ^expected} =
@@ -208,9 +198,7 @@ defmodule Raxol.System.UpdaterTest do
 
     test "an equal or older release is not installed", ctx do
       base =
-        Server.start(
-          Server.release_routes(@repo, "raxol-cli-v1.0.0", %{@asset => "same"})
-        )
+        Server.start(Server.release_routes(@repo, "raxol-cli-v1.0.0", %{@asset => "same"}))
 
       assert {:no_update, "1.0.0"} =
                Updater.self_update("1.0.0", opts(base, ctx))
@@ -231,18 +219,14 @@ defmodule Raxol.System.UpdaterTest do
 
       base =
         Server.start(
-          Server.release_routes(@repo, "raxol-cli-v1.1.0", %{@asset => "x"},
-            listing: listing
-          )
+          Server.release_routes(@repo, "raxol-cli-v1.1.0", %{@asset => "x"}, listing: listing)
         )
 
       assert {:update_available, "1.1.0"} =
                Updater.check_for_updates(opts(base, ctx, force: true))
 
       assert {:no_update, "1.1.0"} =
-               Updater.check_for_updates(
-                 opts(base, ctx, force: true, current_version: "1.1.0")
-               )
+               Updater.check_for_updates(opts(base, ctx, force: true, current_version: "1.1.0"))
     end
   end
 
@@ -402,9 +386,7 @@ defmodule Raxol.System.UpdaterTest do
          ctx do
       base = serve_attested(%{@asset => "new binary"})
 
-      assert {:error,
-              {:provenance_failed,
-               {:attestation_unavailable, {:http_status, 404, _url}}}} =
+      assert {:error, {:provenance_failed, {:attestation_unavailable, {:http_status, 404, _url}}}} =
                Updater.self_update(
                  "0.2.10",
                  attested_opts(base, ctx, current_version: "0.2.8")

@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance do
+defmodule Raxol.CLI.Updater.Provenance do
   @moduledoc """
   Verifies a release asset against its Sigstore provenance bundle, natively
   (`:public_key`, `:crypto`, Jason), with no `gh` or `cosign` involved.
@@ -37,7 +37,7 @@ defmodule Raxol.System.Updater.Provenance do
   (`Provenance.TrustedRoot`), not refreshed over TUF.
   """
 
-  alias Raxol.System.Updater.Provenance.{
+  alias Raxol.CLI.Updater.Provenance.{
     Certificate,
     Crypto,
     Dsse,

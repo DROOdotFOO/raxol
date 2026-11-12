@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Rekor do
+defmodule Raxol.CLI.Updater.Provenance.Rekor do
   @moduledoc """
   The Rekor (v1) transparency-log entry of a Sigstore bundle, and what
   proves it:
@@ -17,7 +17,7 @@ defmodule Raxol.System.Updater.Provenance.Rekor do
   import Bitwise
 
   alias Jason.OrderedObject
-  alias Raxol.System.Updater.Provenance.{Crypto, Dsse, TrustedRoot}
+  alias Raxol.CLI.Updater.Provenance.{Crypto, Dsse, TrustedRoot}
 
   @checkpoint_signature_prefix "\u2014 "
 
@@ -27,8 +27,7 @@ defmodule Raxol.System.Updater.Provenance.Rekor do
     log_index: {["logIndex"], :uint},
     integrated_time: {["integratedTime"], :uint},
     body: {["canonicalizedBody"], :base64},
-    signed_entry_timestamp:
-      {["inclusionPromise", "signedEntryTimestamp"], :base64}
+    signed_entry_timestamp: {["inclusionPromise", "signedEntryTimestamp"], :base64}
   ]
 
   @proof_fields [
@@ -76,9 +75,7 @@ defmodule Raxol.System.Updater.Provenance.Rekor do
 
   def entry(_entries), do: {:error, {:malformed_tlog_entry, "tlogEntries"}}
 
-  defp parse(
-         %{"kindVersion" => %{"kind" => "dsse", "version" => "0.0.1"}} = entry
-       ) do
+  defp parse(%{"kindVersion" => %{"kind" => "dsse", "version" => "0.0.1"}} = entry) do
     with {:ok, fields} <- fields(entry, @entry_fields),
          {:ok, proof} <- fields(entry, @proof_fields) do
       {:ok, struct!(__MODULE__, Map.put(fields, :proof, proof))}

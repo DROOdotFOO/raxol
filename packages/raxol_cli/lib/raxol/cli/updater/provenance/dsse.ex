@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Dsse do
+defmodule Raxol.CLI.Updater.Provenance.Dsse do
   @moduledoc """
   A DSSE envelope (<https://github.com/secure-systems-lab/dsse>) as a
   Sigstore bundle carries it: one signature over the pre-authentication
@@ -6,7 +6,7 @@ defmodule Raxol.System.Updater.Provenance.Dsse do
   """
 
   alias Jason.OrderedObject
-  alias Raxol.System.Updater.Provenance.Crypto
+  alias Raxol.CLI.Updater.Provenance.Crypto
 
   @type signature :: %{keyid: String.t(), sig: binary()}
   @type t :: %__MODULE__{

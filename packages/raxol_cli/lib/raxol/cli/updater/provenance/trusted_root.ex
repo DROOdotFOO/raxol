@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.TrustedRoot do
+defmodule Raxol.CLI.Updater.Provenance.TrustedRoot do
   @moduledoc """
   The pinned Sigstore trust material: Fulcio certificate chains, Rekor
   transparency-log keys and certificate-transparency log keys, each with
@@ -11,7 +11,7 @@ defmodule Raxol.System.Updater.Provenance.TrustedRoot do
   and how to refresh it.
   """
 
-  alias Raxol.System.Updater.Provenance.Crypto
+  alias Raxol.CLI.Updater.Provenance.Crypto
 
   @path Path.expand("../../../../../priv/sigstore/trusted_root.json", __DIR__)
   @external_resource @path
@@ -66,8 +66,7 @@ defmodule Raxol.System.Updater.Provenance.TrustedRoot do
            map_all(Map.get(root, "certificateAuthorities", []), &ca/1),
          {:ok, tlogs} <- logs(root, "tlogs"),
          {:ok, ctlogs} <- logs(root, "ctlogs") do
-      {:ok,
-       %__MODULE__{certificate_authorities: cas, tlogs: tlogs, ctlogs: ctlogs}}
+      {:ok, %__MODULE__{certificate_authorities: cas, tlogs: tlogs, ctlogs: ctlogs}}
     end
   end
 

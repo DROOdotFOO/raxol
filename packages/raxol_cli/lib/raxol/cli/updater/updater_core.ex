@@ -1,22 +1,22 @@
-defmodule Raxol.System.Updater.Core do
+defmodule Raxol.CLI.Updater.Core do
   @moduledoc """
-  Update flow and GenServer callbacks for `Raxol.System.Updater`.
+  Update flow and GenServer callbacks for `Raxol.CLI.Updater`.
 
   Every install follows one order: resolve the release from the manifest,
   fetch its `SHA256SUMS` and (unless the manifest turns provenance off) its
   Sigstore attestation, download, verify the download's checksum, verify
-  the attestation covers the download (`Raxol.System.Updater.Provenance`),
+  the attestation covers the download (`Raxol.CLI.Updater.Provenance`),
   and only then extract (archive channels) and install. Nothing downloaded
   is extracted, executed, or copied over the running binary before it
   verifies, and a release whose attestation is missing or does not verify
   is never installed.
 
-  Functions take the options documented on `Raxol.System.Updater`; each
+  Functions take the options documented on `Raxol.CLI.Updater`; each
   defaults to the running installation.
   """
   use Raxol.Core.Behaviours.BaseManager
 
-  alias Raxol.System.Updater.{
+  alias Raxol.CLI.Updater.{
     Archive,
     Manifest,
     Network,
@@ -25,7 +25,7 @@ defmodule Raxol.System.Updater.Core do
     Validation
   }
 
-  alias Raxol.System.Updater.Provenance.Policy
+  alias Raxol.CLI.Updater.Provenance.Policy
 
   # --- Client API ---
 
@@ -234,8 +234,7 @@ defmodule Raxol.System.Updater.Core do
   def handle_manager_call({:install_update, version}, _from, state) do
     case self_update(version) do
       :ok ->
-        {:reply, :ok,
-         %{state | status: :installed, current_version: version, error: nil}}
+        {:reply, :ok, %{state | status: :installed, current_version: version, error: nil}}
 
       {:no_update, _current} ->
         {:reply, :ok, state}
@@ -294,8 +293,7 @@ defmodule Raxol.System.Updater.Core do
         {:update_available, version} ->
           {:ok, tag} = Manifest.tag(manifest, version)
 
-          {:ok,
-           [%{version: version, url: Manifest.release_page_url(manifest, tag)}]}
+          {:ok, [%{version: version, url: Manifest.release_page_url(manifest, tag)}]}
 
         {:no_update, _current} ->
           {:ok, []}

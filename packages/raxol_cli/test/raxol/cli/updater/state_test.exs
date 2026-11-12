@@ -1,9 +1,9 @@
-defmodule Raxol.System.Updater.StateTest do
+defmodule Raxol.CLI.Updater.StateTest do
   # The updater state server is a singleton registered under a global name.
   use ExUnit.Case, async: false
 
-  alias Raxol.System.Updater.State
-  alias Raxol.System.Updater.State.UpdaterServer
+  alias Raxol.CLI.Updater.State
+  alias Raxol.CLI.Updater.State.UpdaterServer
 
   # A server left running by an earlier test would hide an unnamed start.
   setup do

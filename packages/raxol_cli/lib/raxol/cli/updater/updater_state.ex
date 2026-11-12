@@ -1,6 +1,6 @@
-defmodule Raxol.System.Updater.State do
+defmodule Raxol.CLI.Updater.State do
   @moduledoc """
-  Refactored System Updater State module with GenServer-based state management.
+  Updater state module with GenServer-based state management.
 
   This module provides backward compatibility while eliminating Process dictionary usage.
   All state is now managed through the Updater.State.Server GenServer.
@@ -14,7 +14,7 @@ defmodule Raxol.System.Updater.State do
   * Auto-update configuration
   """
 
-  alias Raxol.System.Updater.State.UpdaterServer, as: Server
+  alias Raxol.CLI.Updater.State.UpdaterServer, as: Server
 
   # @update_settings_file "~/.raxol/update_settings.json"
 

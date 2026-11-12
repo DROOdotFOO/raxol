@@ -1,4 +1,4 @@
-defmodule Raxol.System.Updater.Provenance.Sct do
+defmodule Raxol.CLI.Updater.Provenance.Sct do
   @moduledoc """
   Certificate transparency for a Fulcio leaf: the signed certificate
   timestamps (SCTs, RFC 6962) Fulcio embeds in every leaf it issues.
@@ -11,7 +11,7 @@ defmodule Raxol.System.Updater.Provenance.Sct do
 
   require Record
 
-  alias Raxol.System.Updater.Provenance.{Certificate, Crypto, TrustedRoot}
+  alias Raxol.CLI.Updater.Provenance.{Certificate, Crypto, TrustedRoot}
 
   @hrl "public_key/include/public_key.hrl"
   Record.defrecordp(
@@ -58,9 +58,7 @@ defmodule Raxol.System.Updater.Provenance.Sct do
     with [extension(extnValue: value)] <- sct_extensions,
          {:ok, list} <- Crypto.der_content(0x04, value),
          {:ok, scts} <- parse_list(list) do
-      {:ok,
-       :public_key.der_encode(:TBSCertificate, tbs(tbs, extensions: others)),
-       scts}
+      {:ok, :public_key.der_encode(:TBSCertificate, tbs(tbs, extensions: others)), scts}
     else
       _missing_or_malformed -> {:error, :sct_missing}
     end
@@ -111,8 +109,8 @@ defmodule Raxol.System.Updater.Provenance.Sct do
   # SignedCertificateTimestamp v1 (RFC 6962 section 3.2).
   defp parse_sct(
          <<0, log_id::binary-32, timestamp::64, ext_length::16,
-           extensions::binary-size(ext_length), hash, _signature_algorithm,
-           sig_length::16, signature::binary-size(sig_length)>>
+           extensions::binary-size(ext_length), hash, _signature_algorithm, sig_length::16,
+           signature::binary-size(sig_length)>>
        ),
        do:
          {:ok,
@@ -132,9 +130,8 @@ defmodule Raxol.System.Updater.Provenance.Sct do
     case TrustedRoot.find_log(ctlogs, sct.log_id, div(sct.timestamp, 1000)) do
       {:ok, log} ->
         signed =
-          <<0, 0, sct.timestamp::64, 1::16, issuer_key_hash::binary,
-            byte_size(tbs)::24, tbs::binary, byte_size(sct.extensions)::16,
-            sct.extensions::binary>>
+          <<0, 0, sct.timestamp::64, 1::16, issuer_key_hash::binary, byte_size(tbs)::24,
+            tbs::binary, byte_size(sct.extensions)::16, sct.extensions::binary>>
 
         Crypto.verify(signed, sct.digest, sct.signature, log.key)
 
