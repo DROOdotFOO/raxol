@@ -17,7 +17,8 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
         :mcp_spawnable_apps` and started by
         `Raxol.Agent.McpTools.start_owned/4`, under the rules `agent_spawn`
         applies: a required, locked journal bound to the project root and
-        the app. The root is the request's `cwd`, which must be absolute.
+        the app. The root is the real path of the directory the request's
+        `cwd` names (`Raxol.Agent.ClientProtocol.ProjectRoot`).
       * with an id, a journal an earlier run left under it for the same root
         and app is continued; the agent's state starts fresh. One agent runs
         under the id, so a second `session/new` is refused while it does, or
@@ -51,6 +52,7 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     use Raxol.AgentClientProtocol.Agent
 
     alias Raxol.Agent.Auth.Flow
+    alias Raxol.Agent.ClientProtocol.ProjectRoot
     alias Raxol.Agent.ClientProtocol.Turn
     alias Raxol.Agent.McpTools
     alias Raxol.AgentClientProtocol.Error
@@ -231,14 +233,12 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
       end
     end
 
-    defp project_root(%{cwd: cwd}) when is_binary(cwd) do
-      if Path.type(cwd) == :absolute,
-        do: {:ok, cwd},
-        else: refuse("cwd must be an absolute path: the agent's journal is bound to it")
+    defp project_root(req) do
+      case ProjectRoot.resolve(Map.get(req, :cwd)) do
+        {:ok, root} -> {:ok, root}
+        {:error, message} -> refuse(message)
+      end
     end
-
-    defp project_root(_req),
-      do: refuse("cwd must be an absolute path: the agent's journal is bound to it")
 
     defp start_agent(app, id, root, conn) do
       start = fn -> McpTools.start_owned(owner(conn), app, id, root) end

@@ -104,9 +104,11 @@ What a host should know:
   `loadSession` is false, and `authMethods` offers a browser sign-in for each
   provider that has one. Without `--agent`, or with an app that is not listed,
   `session/new` is refused and the error lists the apps that are.
-- **`session/new` starts the agent.** Its `cwd` must be absolute: it is the
-  project root the agent's journal is bound to
-  (`<sessions dir>/<first 8 hex of sha256(cwd)>/<id>`). The session id is the
+- **`session/new` starts the agent.** Its `cwd` must name an existing directory
+  by an absolute path of at most 4,096 bytes. The directory's real path, with
+  symlinks followed, is the project root the agent's journal is bound to
+  (`<sessions dir>/<first 8 hex of sha256(root)>/<id>`), so two spellings of
+  one directory continue one journal. The session id is the
   agent's id. With `:<id>`, a later run continues that journal while the
   agent's state starts fresh, and a second `session/new` is refused while the
   agent runs. Without it, every session starts a new agent under a random id.

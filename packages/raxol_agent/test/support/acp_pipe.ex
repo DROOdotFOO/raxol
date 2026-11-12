@@ -68,13 +68,18 @@ defmodule Raxol.Agent.Test.AcpPipe do
     use Raxol.AgentClientProtocol.Client
   end
 
-  @doc "A project root of the test's own, removed when it ends."
+  @doc """
+  A project root of the test's own, removed when it ends. The path is the
+  directory's real one (the system's temporary directory may be reached
+  through a symlink), which is what a session records as its root.
+  """
   @spec tmp_root(String.t()) :: Path.t()
   def tmp_root(prefix) do
     root = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf(root) end)
-    root
+    {physical, 0} = System.cmd("pwd", ["-P"], cd: root)
+    String.trim_trailing(physical, "\n")
   end
 
   @doc "The directory running agent `id`'s journal is kept under, as its session tree records it."

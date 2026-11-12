@@ -171,7 +171,14 @@ defmodule Raxol.Agent.AcpLoopbackTest do
     File.mkdir_p!(Path.join(tmp, "sessions"))
     on_exit(fn -> File.rm_rf(tmp) end)
 
-    %{tmp: tmp, id: "loop#{System.unique_integer([:positive])}"}
+    # The real path: it is what a session records as its root, and the
+    # system's temporary directory may be reached through a symlink.
+    {physical, 0} = System.cmd("pwd", ["-P"], cd: tmp)
+
+    %{
+      tmp: String.trim_trailing(physical, "\n"),
+      id: "loop#{System.unique_integer([:positive])}"
+    }
   end
 
   describe "bin/raxol-acp over Transport.Stdio" do

@@ -161,6 +161,46 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
       assert Session.Supervisor.whereis(id) == nil
     end
 
+    test "refuses a cwd that does not name an existing directory", %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      file = Path.join(root, "file")
+      File.write!(file, "")
+      loop = Path.join(root, "loop")
+      File.ln_s!("loop", loop)
+
+      for cwd <- [Path.join(root, "missing"), file, loop] do
+        assert {:error, error} = AcpPipe.new_session(pipe, cwd)
+        assert error.message =~ "cwd must name an existing directory"
+      end
+
+      assert {:error, error} = AcpPipe.new_session(pipe, "/" <> String.duplicate("a", 4_096))
+      assert error.message =~ "cwd is longer than 4096 bytes"
+      assert Session.Supervisor.whereis(id) == nil
+    end
+
+    test "a symlinked spelling of the directory continues the same journal",
+         %{root: root, id: id} do
+      link = Path.join(AcpPipe.tmp_root("acp_links"), "to_root")
+      File.ln_s!(root, link)
+
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      assert {:ok, ^id} = AcpPipe.new_session(pipe, link)
+      assert {:ok, {_owner, %{root: ^root}}} = Session.Supervisor.owner(id)
+      base = AcpPipe.journal_base(id)
+      assert AcpPipe.disconnect(pipe) == 0
+      {:ok, before} = FileStore.read_records(id, base_dir: base)
+
+      again = AcpPipe.connect(%{app: @counter, id: id})
+      assert {:ok, ^id} = AcpPipe.new_session(again, root)
+      assert AcpPipe.journal_base(id) == base
+
+      {:ok, records} = FileStore.read_records(id, base_dir: base)
+      marker = Enum.at(records, length(before))
+      assert %{"type" => "agent_started", "payload" => %{"prior_offset" => prior}} = marker
+      assert prior == length(before)
+      assert prior > 0
+    end
+
     test "records the branch a regular .git/HEAD names", %{root: root} do
       File.mkdir_p!(Path.join(root, ".git"))
       File.write!(Path.join(root, ".git/HEAD"), "ref: refs/heads/topic\n")
