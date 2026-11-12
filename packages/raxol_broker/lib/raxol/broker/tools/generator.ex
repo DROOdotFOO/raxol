@@ -14,8 +14,9 @@ defmodule Raxol.Broker.Tools.Generator do
   # Matched against the tool name in this order; the first match wins, so the
   # narrower families come first. `MarketData` matches everything and takes
   # whatever no family above it claims, so a new read that is not market data
-  # needs a term here. `Account` also holds Robinhood's banking and card
-  # reads; `credit` is spelled out so an unrelated `credit` tool is not one.
+  # needs a term here. `Banking` precedes `Account` because
+  # `get_bank_accounts` and `get_credit_card_account` match both; `credit` is
+  # spelled out so an unrelated `credit` tool is not a card tool.
   @families [
     {"Crypto", ~r/crypto|currency_pair/},
     {"Options", ~r/option/},
@@ -25,8 +26,8 @@ defmodule Raxol.Broker.Tools.Generator do
     {"Watchlists", ~r/watchlist/},
     {"Legend", ~r/legend/},
     {"Equities", ~r/equity_(?:orders|positions|tax_lots)/},
-    {"Account",
-     ~r/account|portfolio|pnl|margin|trade_approval|banking|credit_(?:card|transactions)/},
+    {"Banking", ~r/bank|credit_(?:card|transactions)/},
+    {"Account", ~r/account|portfolio|pnl|margin|trade_approval/},
     {"MarketData", ~r//}
   ]
 
