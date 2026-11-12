@@ -270,12 +270,7 @@ defmodule Raxol.CLI.MCPIntegrationTest do
   # Start a demo, send `noise` as it is, and read the demo's screen back.
   defp assert_screen_crosses(ctx, noise) do
     {_init, seen} = call(ctx, 1, "initialize", %{})
-
-    demo = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "t"}
-    send_line(ctx.writer, tool_call(2, "raxol_start", demo))
-    {started, starting} = read_reply(ctx.server, 2)
-    refute started["result"]["isError"], inspect(started)
-
+    starting = start_table_demo(ctx)
     if noise != [], do: Port.command(ctx.writer, noise)
 
     send_line(ctx.writer, tool_call(3, "raxol_screenshot", %{"id" => "t"}))
@@ -286,6 +281,14 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     {status, rest} = end_input(ctx)
     assert status == 0
     assert_json_rpc(seen ++ starting ++ shooting ++ rest)
+  end
+
+  defp start_table_demo(ctx) do
+    demo = %{"module" => "Raxol.Playground.Demos.TableDemo", "id" => "t"}
+    send_line(ctx.writer, tool_call(2, "raxol_start", demo))
+    {started, starting} = read_reply(ctx.server, 2)
+    refute started["result"]["isError"], inspect(started)
+    starting
   end
 
   defp call(ctx, id, method, params) do
