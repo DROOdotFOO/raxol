@@ -37,10 +37,15 @@ defmodule Raxol.Broker.Executor.Review do
   order: it goes to the customer to approve or decline in the Robinhood app".
   The review record carries that flag as `"customer_approval_required"`: true
   only when a text block decodes to a JSON object holding
-  `"customer_approval_required": true`, at its top level or under `"data"`
-  (the envelope seen on live reads; a real review response has not been
-  recorded yet). Anything else, an absent key included, is false, and
+  `"customer_approval_required": true`, at its top level or under `"data"`.
+  Robinhood answers `{"data": {...}, "guide": "..."}` with the flag in
+  `data` (recorded in `test/fixtures/robinhood/review_equity_order.json`).
+  Anything else, an absent key included, is false, and
   `Raxol.Broker.Executor.Place` then reads a successful place as an order.
+
+  That recording also shows Robinhood's alerts are `data.order_checks`, an
+  object that is `{}` when there are none. This module does not read that
+  shape, so a real review is `"unreadable review response"` and asks.
   """
 
   alias Raxol.Broker.Executor.Port
