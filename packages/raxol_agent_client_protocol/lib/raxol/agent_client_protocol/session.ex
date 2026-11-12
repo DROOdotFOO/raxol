@@ -720,11 +720,8 @@ defmodule Raxol.AgentClientProtocol.Session do
   # Runs the drain check in case the group is already empty.
   @spec begin_cancel(t(), Turn.t(), boolean()) :: t()
   defp begin_cancel(state, t, respond?) do
-    # Abort every parked permission ask (fail-closed, I9), before the backstop.
-    Enum.each(t.pending_perms, fn {tag, %{from: from}} ->
-      GenServer.reply(from, {:ok, :cancelled})
-      _ = state.conn_mod.cancel_request(state.conn, tag)
-    end)
+    # Before the backstop.
+    abort_pending_perms(state, t)
 
     # Graceful interrupt: the runner may peek :acp_cancel and wind down.
     if t.root_pid, do: send(t.root_pid, :acp_cancel)
@@ -789,10 +786,23 @@ defmodule Raxol.AgentClientProtocol.Session do
 
   defp drain_check(state), do: state
 
+  # Abort every parked permission ask (fail-closed, I9): the asker is denied
+  # and the client's request is withdrawn with `$/cancel_request`.
+  @spec abort_pending_perms(t(), Turn.t()) :: :ok
+  defp abort_pending_perms(state, t) do
+    Enum.each(t.pending_perms, fn {tag, %{from: from}} ->
+      GenServer.reply(from, {:ok, :cancelled})
+      _ = state.conn_mod.cancel_request(state.conn, tag)
+    end)
+  end
+
   # Single render + reply site (§3.2, I5): the wire stopReason equals turn.outcome.
   @spec finish(t(), Turn.t()) :: t()
   defp finish(state, t) do
     if t.backstop_timer, do: Process.cancel_timer(t.backstop_timer)
+    # An ask made from a process outside the turn's task group can still be
+    # parked when the root returns: the turn it asked for is over.
+    abort_pending_perms(state, t)
     warn_if_zero_updates(state, t)
     # SINGLE render site (§3.2, I5): the one `render(outcome)` value feeds BOTH
     # the durable `turn_completed` record AND the prompt response — they cannot
