@@ -138,7 +138,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       assert {:ok, pid} = Writer.start_link(dir: dir, session_id: s)
       assert Process.alive?(pid)
       assert lock_pid(dir) == System.pid()
-      assert File.ls!(dir) |> Enum.filter(&(&1 =~ "stale")) == []
+      assert File.ls!(dir) |> Enum.filter(&(&1 =~ "writer.lock.")) == []
 
       GenServer.stop(pid)
     end
@@ -284,44 +284,53 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
 
     test "three BEAMs opening the same fresh journals at once get one writer each", %{base: base} do
       ids = for n <- 1..25, do: "race-#{n}"
+      assert_one_writer_each(base, ids)
+    end
 
-      open_all = """
-      for id <- #{inspect(ids)} do
-        result =
-          case Raxol.Agent.Journal.FileStore.open(id,
-                 base_dir: #{inspect(base)},
-                 private: true,
-                 require_lock: true
-               ) do
-            {:ok, _journal} -> "ok"
-            {:error, _reason} -> "refused"
-          end
+    test "three BEAMs reclaiming the same stale locks at once get one writer each", %{base: base} do
+      ids = for n <- 1..25, do: "stale-race-#{n}"
 
-        IO.puts("result " <> id <> " " <> result)
+      # Made the way a private journal makes them, with a dead writer's lock.
+      for id <- ids do
+        {:ok, journal} = FileStore.open(id, base_dir: base, private: true)
+        :ok = FileStore.close(journal)
+        File.write!(lock_path(base, id), ForeignBeam.dead_pid())
       end
 
-      IO.puts("done")
-      """
-
-      beams =
-        for _ <- 1..3 do
-          ForeignBeam.start_supervised(
-            "{:ok, _} = Application.ensure_all_started(:jason)",
-            open_all
-          )
-        end
-
-      Enum.each(beams, &ForeignBeam.go/1)
-
-      results =
-        for beam <- beams,
-            "result " <> result <- ForeignBeam.lines_until(beam, "done"),
-            do: List.to_tuple(String.split(result))
+      assert_one_writer_each(base, ids)
 
       for id <- ids do
-        assert Enum.count(results, &(&1 == {id, "ok"})) == 1, "#{id}: #{inspect(results)}"
-        assert Enum.count(results, &(elem(&1, 0) == id)) == 3
+        assert [_pid, _token] = lock_path(base, id) |> File.read!() |> String.split(" ", parts: 2)
+        refute File.exists?(lock_path(base, id) <> ".reclaim")
       end
+    end
+
+    test "a claimer behind a live reclaimer is refused, naming it", %{base: base, session: s} do
+      dir = Path.join(base, s)
+      File.mkdir_p!(dir)
+      reclaimer = ForeignBeam.start_supervised()
+      File.write!(Path.join(dir, "writer.lock"), ForeignBeam.dead_pid())
+      File.write!(Path.join(dir, "writer.lock.reclaim"), reclaimer.pid)
+
+      assert {:error, {:journal_locked, holder}} = FileStore.open(s, base_dir: base)
+      assert holder == reclaimer.pid
+      assert File.read!(Path.join(dir, "writer.lock.reclaim")) == reclaimer.pid
+    end
+
+    test "a gate left by a dead reclaimer is removed and the lock reclaimed", %{
+      base: base,
+      session: s
+    } do
+      dir = Path.join(base, s)
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "writer.lock"), ForeignBeam.dead_pid())
+      File.write!(Path.join(dir, "writer.lock.reclaim"), ForeignBeam.dead_pid())
+
+      assert {:ok, pid} = Writer.start_link(dir: dir, session_id: s)
+      assert lock_pid(dir) == System.pid()
+      assert File.ls!(dir) |> Enum.filter(&(&1 =~ "writer.lock.")) == []
+
+      GenServer.stop(pid)
     end
 
     test "a Writer leaves a lock that is no longer its own", %{base: base, session: s} do
@@ -340,14 +349,14 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       dead = ForeignBeam.dead_pid()
       live = ForeignBeam.start_supervised().pid
 
-      for kind <- ~w(tmp stale),
+      for kind <- ["tmp", "reclaim.tmp"],
           pid <- [dead, live],
           do: File.write!(Path.join(dir, "writer.lock.#{kind}.#{pid}"), "x")
 
       assert {:ok, pid} = Writer.start_link(dir: dir, session_id: s)
 
       assert dir |> File.ls!() |> Enum.filter(&(&1 =~ "writer.lock.")) |> Enum.sort() ==
-               ["writer.lock.stale.#{live}", "writer.lock.tmp.#{live}"]
+               ["writer.lock.reclaim.tmp.#{live}", "writer.lock.tmp.#{live}"]
 
       GenServer.stop(pid)
     end
@@ -379,6 +388,15 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
                )
 
       GenServer.stop(pid)
+    end
+  end
+
+  describe "read-side session ids" do
+    test "an id that names no session directory is refused before any read", %{base: base} do
+      for id <- ["../x", "a/b", "..", "", 7] do
+        assert FileStore.read_records(id, base_dir: base) == {:error, :invalid_session_id}
+        assert FileStore.high_watermark(id, base_dir: base) == {:error, :invalid_session_id}
+      end
     end
   end
 
@@ -501,6 +519,53 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
 
   defp lock_pid(dir) do
     dir |> Path.join("writer.lock") |> File.read!() |> String.split() |> hd()
+  end
+
+  # Three BEAMs open every id at once, each requiring the lock: exactly one of
+  # them gets each journal.
+  defp assert_one_writer_each(base, ids) do
+    results = race(base, ids)
+
+    for id <- ids do
+      assert Enum.count(results, &(&1 == {id, "ok"})) == 1, "#{id}: #{inspect(results)}"
+      assert Enum.count(results, &(elem(&1, 0) == id)) == 3
+    end
+  end
+
+  defp race(base, ids) do
+    beams =
+      for _ <- 1..3 do
+        ForeignBeam.start_supervised(
+          "{:ok, _} = Application.ensure_all_started(:jason)",
+          open_all(base, ids)
+        )
+      end
+
+    Enum.each(beams, &ForeignBeam.go/1)
+
+    for beam <- beams,
+        "result " <> result <- ForeignBeam.lines_until(beam, "done"),
+        do: List.to_tuple(String.split(result))
+  end
+
+  defp open_all(base, ids) do
+    """
+    for id <- #{inspect(ids)} do
+      result =
+        case Raxol.Agent.Journal.FileStore.open(id,
+               base_dir: #{inspect(base)},
+               private: true,
+               require_lock: true
+             ) do
+          {:ok, _journal} -> "ok"
+          {:error, _reason} -> "refused"
+        end
+
+      IO.puts("result " <> id <> " " <> result)
+    end
+
+    IO.puts("done")
+    """
   end
 
   # A start token of the kind this host reads, for no process running on it.

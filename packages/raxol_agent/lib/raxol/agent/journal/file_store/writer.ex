@@ -51,13 +51,15 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   A lock naming this BEAM's own pid is stale: a second Writer for the same
   directory cannot be running here.
 
-  A stale lock is reclaimed by renaming it to `writer.lock.stale.<our pid>`
-  (of several reclaimers exactly one rename succeeds) and then creating
-  `writer.lock` as above. A reclaimer whose rename took a lock that is not
-  the stale one it judged (another reclaimer finished in between) links it
-  back and starts over. Residual: `writer.lock` does not exist between that
-  rename and the link, and a third process creating it in that instant would
-  leave two writers.
+  A stale lock is removed inside a gate, `writer.lock.reclaim`, which is
+  created the same way as the lock, and only if it still reads as it did when
+  it was judged; the reclaimer then creates `writer.lock` as above. So one
+  reclaimer acts at a time and none removes a lock created after it looked. A
+  claimer that finds a live BEAM in the gate is refused: that BEAM, or a
+  claimer that beats it to the lock, is taking the journal. A gate whose
+  holder is gone was left by a reclaimer that died inside it, and the next one
+  removes it. Residual: two claimers that judge such a leftover gate at once
+  can both enter.
 
   Init refuses when a confirmed-live foreign BEAM holds the lock. Where no
   lock can be taken (non-Unix, no `kill`, the lock file cannot be created)
@@ -799,8 +801,9 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   def lock_path(dir), do: Path.join(dir, @lock_file)
 
   @doc """
-  The OS pid holding `dir`'s writer lock when it is a CONFIRMED-LIVE foreign
-  BEAM, else `nil` (no lock, a stale one, our own, or liveness unprovable).
+  The OS pid holding `dir`'s writer lock, or reclaiming a stale one, when it
+  is a CONFIRMED-LIVE foreign BEAM, else `nil` (no lock, a stale one, our own,
+  or liveness unprovable).
 
   A read-only pre-flight for `FileStore.open/2`, so a refusal is reported as
   a plain `{:error, {:journal_locked, holder}}` naming the holder. It does not
@@ -808,8 +811,13 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   """
   @spec lock_holder(Path.t()) :: String.t() | nil
   def lock_holder(dir) do
-    with true <- lockable?(),
-         {:ok, contents} <- File.read(lock_path(dir)),
+    if lockable?() do
+      live_holder(lock_path(dir)) || live_holder(lock_path(dir) <> ".reclaim")
+    end
+  end
+
+  defp live_holder(path) do
+    with {:ok, contents} <- File.read(path),
          {:live, holder} <- holder_state(contents) do
       holder
     else
@@ -837,9 +845,9 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
-  # Two processes that both lose a round (a rename or a create) start over; a
-  # claimer still losing after `@claim_attempts` rounds goes without a lock
-  # rather than spin.
+  # A claimer that loses a round (the lock was released or reclaimed under it)
+  # starts over; one still losing after `@claim_attempts` rounds goes without a
+  # lock rather than spin.
   defp claim_lock(path, _identity, _private?, 0) do
     Logger.warning(
       "journal writer lock not acquired on #{inspect(Path.dirname(path))}: " <>
@@ -867,19 +875,19 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   defp resolve_existing_lock(path, identity, private?, attempts) do
     case File.read(path) do
-      {:ok, contents} ->
+      {:ok, contents} = judged ->
         case holder_state(contents) do
           {:live, holder} -> {:refused, holder}
-          :stale -> reclaim_lock(path, contents, identity, private?, attempts)
+          :stale -> reclaim_lock(path, judged, identity, private?, attempts)
         end
 
       {:error, :enoent} ->
         # Released between the create and the read.
         claim_lock(path, identity, private?, attempts - 1)
 
-      {:error, _reason} ->
+      {:error, _reason} = judged ->
         # Unreadable lock: treat as stale and reclaim (fail open).
-        reclaim_lock(path, :unreadable, identity, private?, attempts)
+        reclaim_lock(path, judged, identity, private?, attempts)
     end
   end
 
@@ -898,35 +906,48 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
-  defp reclaim_lock(path, stale_contents, identity, private?, attempts) do
-    aside = path <> ".stale." <> System.pid()
+  # `judged` is what reading the lock returned when it was found stale. The
+  # lock is removed only inside the gate and only if it still reads that way,
+  # so a lock another reclaimer created in the meantime is left alone.
+  defp reclaim_lock(path, judged, identity, private?, attempts) do
+    gate = path <> ".reclaim"
 
-    case :file.rename(path, aside) do
+    case create_lock(gate, identity, private?) do
       :ok ->
-        discard_or_restore(aside, path, stale_contents)
+        if File.read(path) == judged, do: File.rm(path)
+        File.rm(gate)
         claim_lock(path, identity, private?, attempts - 1)
 
-      {:error, _reason} ->
-        # Another reclaimer's rename won; it creates the lock next.
+      {:error, :eexist} ->
+        behind_reclaimer(gate, path, identity, private?, attempts)
+
+      {:error, reason} ->
+        Logger.warning("journal writer lock reclaim failed: #{inspect(reason)}")
+        {:ok, nil}
+    end
+  end
+
+  # Another reclaimer has the gate. A live one is about to hold the lock, or
+  # to lose it to a claimer that does. A gate whose holder is gone is removed,
+  # if it is still that gate; one that vanished means its reclaimer is done.
+  defp behind_reclaimer(gate, path, identity, private?, attempts) do
+    read = File.read(gate)
+
+    case gate_holder(read) do
+      {:live, holder} ->
+        {:refused, holder}
+
+      :stale ->
+        if File.read(gate) == read, do: File.rm(gate)
+        claim_lock(path, identity, private?, attempts - 1)
+
+      :gone ->
         claim_lock(path, identity, private?, attempts - 1)
     end
   end
 
-  # The rename is by name, so it may have taken a lock created after the stale
-  # one was judged. Only the stale one is discarded; any other goes back, by a
-  # link, which never replaces a lock created since.
-  defp discard_or_restore(aside, _path, :unreadable), do: File.rm_rf(aside)
-
-  defp discard_or_restore(aside, path, stale_contents) do
-    case File.read(aside) do
-      {:ok, ^stale_contents} ->
-        File.rm(aside)
-
-      _taken_from_a_new_holder ->
-        _ = File.ln(aside, path)
-        File.rm(aside)
-    end
-  end
+  defp gate_holder({:ok, contents}), do: holder_state(contents)
+  defp gate_holder({:error, _gone_or_unreadable}), do: :gone
 
   # The lock is linked into place from a file that already holds the identity
   # (0600 first, for a private journal), so it never exists empty or half
@@ -942,12 +963,12 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     result
   end
 
-  # What a claimer killed mid-claim left behind: its temp file, or a lock it
-  # had renamed aside. One of a live process is in use and stays.
+  # What a claimer killed mid-claim left behind: the temp file of a lock or of
+  # a gate. One of a live process is in use and stays.
   defp sweep_lock_leftovers(dir) do
     with {:ok, names} <- File.ls(dir) do
       for name <- names,
-          [_name, pid] <- [Regex.run(~r/\Awriter\.lock\.(?:tmp|stale)\.(\d+)\z/, name)],
+          [_name, pid] <- [Regex.run(~r/\Awriter\.lock(?:\.reclaim)?\.tmp\.(\d+)\z/, name)],
           pid == System.pid() or not signalable?(pid),
           do: File.rm(Path.join(dir, name))
     end
