@@ -14,11 +14,15 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
 
   On `session/cancel` the runner sends the turn's `{:acp_cancel, ref}` and
   waits for the agent session's answer, which comes once the turn's process
-  is down. The prompt is answered `cancelled` only then, so the agent is
-  idle when the client hears of it. The agent session gives a turn process
-  that traps exits `config :raxol_agent, :turn_cancel_grace_ms` to stop, and
-  journals the turn's brackets (`turn_started`, then `turn_completed`,
-  `turn_canceled` or `error`).
+  is down. The prompt is answered `cancelled` only then, so the turn's
+  process is gone when the client hears of it (work an agent runs inline in
+  `update/2` is not stopped; see `Raxol.Agent.Comm`). The agent session
+  gives a turn process that traps exits
+  `config :raxol_agent, :turn_cancel_grace_ms` to stop, and journals the
+  turn's brackets (`turn_started`, then `turn_completed`, `turn_canceled` or
+  `error`). A runner still waiting when the ACP session's cancel backstop
+  fires is killed, and the agent session then cancels the turn because its
+  caller is down.
 
   ## Budget
 
