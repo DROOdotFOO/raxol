@@ -55,10 +55,14 @@ carry no support commitment yet.
   startable list (the playground demos unless configured), refuses
   `raxol_start`'s `path` argument (starting from a path compiles the file),
   leaves out the coding-agent harness tools, and serves `resources/read`
-  only for the sessions it runs; every other read is denied. stdout is the
+  only for the sessions it runs and the journals of agents it started; every
+  other read is denied. Its `agent_*` tools start only the modules on
+  `config :raxol_agent, :mcp_spawnable_apps` (a reference counter unless
+  configured) and act only on agents this process started. stdout is the
   JSON-RPC wire and carries nothing else. Anything that runs code a client
-  chose beyond those modules, reads outside those sessions, or puts a
-  non-JSON-RPC byte on stdout is in scope.
+  chose beyond those modules, reads outside those sessions and journals,
+  reaches an agent this process did not start, or puts a non-JSON-RPC byte
+  on stdout is in scope.
 
 ## Dependency scanning
 

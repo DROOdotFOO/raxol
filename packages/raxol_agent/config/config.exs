@@ -32,3 +32,10 @@ end
 if config_env() == :test do
   config :raxol_agent, native_probe: false
 end
+
+# The apps `agent_spawn` (Raxol.Agent.McpTools) may start. Unset, it is the
+# reference counter alone; the suite adds an agent that never replies.
+if config_env() == :test do
+  config :raxol_agent,
+    mcp_spawnable_apps: [Raxol.Agent.Reference.Counter, Raxol.Agent.SilentAgent]
+end

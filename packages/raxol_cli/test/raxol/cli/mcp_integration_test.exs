@@ -37,6 +37,10 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
 
+    # Agent journals, beside the test's directory rather than in the home one.
+    sessions = dir <> "_sessions"
+    on_exit(fn -> File.rm_rf(sessions) end)
+
     input = Path.join(dir, "stdin.fifo")
     errors = Path.join(dir, "stderr.fifo")
     dump = Path.join(dir, "models.bin")
@@ -70,6 +74,7 @@ defmodule Raxol.CLI.MCPIntegrationTest do
           [
             {~c"MIX_ENV", ~c"test"},
             {~c"RAXOL_MODE", ~c"mcp"},
+            {~c"RAXOL_SESSIONS_DIR", String.to_charlist(sessions)},
             {~c"RAXOL_CLI_INSTALL_DIR", false},
             {~c"__BURRITO", false}
           ] ++ Map.get(ctx, :mcp_env, [])
@@ -229,6 +234,46 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     read_lines = Enum.flat_map(replies, &elem(&1, 2))
 
     assert_json_rpc(seen ++ starting ++ read_lines ++ subbing ++ unsubbing ++ othering ++ rest)
+  end
+
+  test "an agent is spawned, asked, read and stopped over the wire", ctx do
+    {_init, seen} = call(ctx, 1, "initialize", %{})
+
+    {list, listed} = call(ctx, 2, "tools/list", %{})
+    names = Enum.map(list["result"]["tools"], & &1["name"])
+
+    for tool <- ~w(agent_spawn agent_list agent_ask agent_status agent_stop),
+        do: assert(tool in names)
+
+    counter = %{"app" => "Raxol.Agent.Reference.Counter", "id" => "c1"}
+    {spawned, spawning} = call(ctx, 3, "tools/call", %{name: "agent_spawn", arguments: counter})
+    refute spawned["result"]["isError"], inspect(spawned)
+    assert [%{"text" => text}] = spawned["result"]["content"]
+    assert text =~ "started c1"
+    assert text =~ "journal root #{@cli_dir}"
+
+    ask = %{"id" => "c1", "message" => "increment"}
+    {asked, asking} = call(ctx, 4, "tools/call", %{name: "agent_ask", arguments: ask})
+    assert [%{"text" => "count: 1"}] = asked["result"]["content"]
+
+    {journal, reading} = call(ctx, 5, "resources/read", %{uri: "raxol://agent/c1/journal"})
+    assert %{"result" => %{"contents" => [%{"text" => json}]}} = journal
+    assert %{"id" => "c1", "records" => [%{"type" => "agent_started"} | _]} = Jason.decode!(json)
+
+    {other, othering} = call(ctx, 6, "resources/read", %{uri: "raxol://agent/zz/journal"})
+    assert other["error"], inspect(other)
+
+    {stopped, stopping} =
+      call(ctx, 7, "tools/call", %{name: "agent_stop", arguments: %{id: "c1"}})
+
+    refute stopped["result"]["isError"], inspect(stopped)
+
+    {status, rest} = end_input(ctx)
+    assert status == 0
+
+    assert_json_rpc(
+      seen ++ listed ++ spawning ++ asking ++ reading ++ othering ++ stopping ++ rest
+    )
   end
 
   @tag mcp_args: ["--bench-dump", :dump]

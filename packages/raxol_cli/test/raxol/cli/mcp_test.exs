@@ -58,6 +58,20 @@ defmodule Raxol.CLI.MCPTest do
         assert reason =~ ~s(no session "nope")
       end
     end
+
+    test "leaves an agent journal read to the resource, and nothing else of an agent" do
+      journal = %{"uri" => "raxol://agent/c1/journal"}
+      assert MCP.authorize_read("resources/read", journal, @ctx) == :allow
+
+      for method <- ~w(resources/subscribe resources/unsubscribe) do
+        assert {:deny, _} = MCP.authorize_read(method, journal, @ctx)
+      end
+
+      for uri <- ~w(raxol://agent/c1 raxol://agent/c1/model raxol://agent/../journal
+                    raxol://agent/a/b/journal raxol://agent//journal) do
+        assert {:deny, _} = MCP.authorize_read("resources/read", %{"uri" => uri}, @ctx)
+      end
+    end
   end
 
   describe "run/1 refusals" do

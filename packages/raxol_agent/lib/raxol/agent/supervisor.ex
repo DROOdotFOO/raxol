@@ -14,10 +14,13 @@ defmodule Raxol.Agent.Supervisor do
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
   - `Raxol.Agent.Curator` -- when a `:curator` config is set
   - `Raxol.Agent.Scheduler` -- when a `:scheduler` config is set
+  - `Raxol.Agent.McpTools` -- the `agent_*` MCP tools and the table of agents
+    they started
 
   Strategy is `:rest_for_one`: if the DynSup crashes, the Orchestrator
   restarts and rebuilds from ContextStore. If the Registry crashes,
-  everything restarts.
+  everything restarts. `McpTools` is last: a DynSup restart, which ends every
+  agent, also clears its table of them, and its own restart restarts nothing.
   """
 
   use Supervisor
@@ -48,7 +51,8 @@ defmodule Raxol.Agent.Supervisor do
         memory_children() ++
         skills_children() ++
         curator_children() ++
-        scheduler_children()
+        scheduler_children() ++
+        [Raxol.Agent.McpTools]
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
