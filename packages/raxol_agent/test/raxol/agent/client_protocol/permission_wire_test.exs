@@ -17,12 +17,7 @@ defmodule Raxol.Agent.ClientProtocol.PermissionWireTest do
 
   setup do
     AcpPipe.start_trees()
-
-    root = Path.join(System.tmp_dir!(), "acp_perm_#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf(root) end)
-
-    %{root: root, id: "p#{System.unique_integer([:positive])}"}
+    %{root: AcpPipe.tmp_root("acp_perm"), id: "p#{System.unique_integer([:positive])}"}
   end
 
   defp counting(root, id, opts) do

@@ -21,12 +21,7 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
 
   setup do
     AcpPipe.start_trees()
-
-    root = Path.join(System.tmp_dir!(), "acp_root_#{uniq()}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf(root) end)
-
-    %{root: root, id: "a#{uniq()}"}
+    %{root: AcpPipe.tmp_root("acp_root"), id: "a#{uniq()}"}
   end
 
   describe "without --agent" do
@@ -74,6 +69,10 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
 
       assert is_pid(conn)
       assert %{app: Counter, root: ^root} = owned
+
+      # The documented layout: `<sessions dir>/<first 8 hex of sha256(root)>/<id>`.
+      hash = :sha256 |> :crypto.hash(root) |> Base.encode16(case: :lower) |> binary_part(0, 8)
+      assert owned.base_dir == FileStore.session_dir(hash)
 
       assert {:ok, [%{"type" => "agent_started", "payload" => %{"prior_offset" => 0}}]} =
                FileStore.read_records(id, base_dir: owned.base_dir)
@@ -124,11 +123,11 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
     test "refuses an id whose journal belongs to another root", %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      base = AcpPipe.journal_base(id)
       assert AcpPipe.disconnect(pipe) == 0
 
       # A journal moved in from another project: same directory, another
       # root recorded in it.
-      {:ok, base} = journal_base(root)
       other = Path.join(System.tmp_dir!(), "acp_other_#{uniq()}")
       meta = Path.join([base, id, "meta.json"])
       File.write!(meta, meta |> File.read!() |> String.replace(root, other))
@@ -162,16 +161,18 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
     test "journals the turn's brackets", %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      base = AcpPipe.journal_base(id)
       {_updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "get")
       assert AcpPipe.disconnect(pipe) == 0
 
-      assert turn_brackets(root, id) == ["turn_started", "turn_completed"]
+      assert turn_brackets(base, id) == ["turn_started", "turn_completed"]
     end
 
     test "cancel after the hold action's update answers cancelled and leaves the agent idle",
          %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      base = AcpPipe.journal_base(id)
 
       tag = AcpPipe.prompt(pipe, id, "hold")
 
@@ -195,7 +196,7 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
 
       assert AcpPipe.disconnect(pipe) == 0
 
-      assert turn_brackets(root, id) ==
+      assert turn_brackets(base, id) ==
                ["turn_started", "turn_canceled", "turn_started", "turn_completed"]
     end
 
@@ -260,16 +261,9 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
 
   # The records the agent session writes around a whole prompt: their turn
   # ids start `acp-`, unlike those of the folds inside the turn.
-  defp turn_brackets(root, id) do
-    {:ok, base} = journal_base(root)
+  defp turn_brackets(base, id) do
     {:ok, records} = FileStore.read_records(id, base_dir: base)
     for %{"turn_id" => "acp-" <> _, "type" => type} <- records, do: type
-  end
-
-  # The documented layout: `<sessions dir>/<first 8 hex of sha256(root)>/<id>`.
-  defp journal_base(root) do
-    hash = :sha256 |> :crypto.hash(root) |> Base.encode16(case: :lower) |> binary_part(0, 8)
-    {:ok, FileStore.session_dir(hash)}
   end
 
   defp uniq, do: System.unique_integer([:positive])

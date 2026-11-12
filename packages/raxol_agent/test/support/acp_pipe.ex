@@ -55,6 +55,22 @@ defmodule Raxol.Agent.Test.AcpPipe do
     use Raxol.AgentClientProtocol.Client
   end
 
+  @doc "A project root of the test's own, removed when it ends."
+  @spec tmp_root(String.t()) :: Path.t()
+  def tmp_root(prefix) do
+    root = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf(root) end)
+    root
+  end
+
+  @doc "The directory running agent `id`'s journal is kept under, as its session tree records it."
+  @spec journal_base(String.t()) :: Path.t()
+  def journal_base(id) do
+    {:ok, {_owner, %{base_dir: base}}} = Raxol.Agent.Session.Supervisor.owner(id)
+    base
+  end
+
   @doc "Start what an agent session tree and an ACP connection need, if absent."
   @spec start_trees() :: :ok
   def start_trees do

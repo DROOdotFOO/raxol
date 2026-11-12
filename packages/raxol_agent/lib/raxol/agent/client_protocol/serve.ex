@@ -32,6 +32,7 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
               Raxol.Agent.ClientProtocol.StdioAgent
             ]}
 
+  alias Raxol.Agent.BenchmarkProfile
   alias Raxol.Agent.ClientProtocol.Budget
   alias Raxol.Agent.ClientProtocol.ParentWatch
 
@@ -143,7 +144,7 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   # A cap that cannot be read refuses to serve: it was set so that nobody
   # has to watch.
   defp start_budget do
-    with {:ok, profile} <- Raxol.Agent.BenchmarkProfile.from_env() do
+    with {:ok, profile} <- BenchmarkProfile.from_env() do
       _ = Budget.start_link(profile)
       :ok
     end

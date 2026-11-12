@@ -54,12 +54,7 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
   describe "serve_connection/2" do
     setup do
       AcpPipe.start_trees()
-
-      root = Path.join(System.tmp_dir!(), "acp_serve_#{uniq()}")
-      File.mkdir_p!(root)
-      on_exit(fn -> File.rm_rf(root) end)
-
-      %{root: root, id: "s#{uniq()}"}
+      %{root: AcpPipe.tmp_root("acp_serve"), id: "s#{uniq()}"}
     end
 
     test "a peer disconnect ends serving with exit code 0" do
@@ -77,7 +72,7 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
     test "the connection's end stops its agents and frees their ids", %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       {:ok, ^id} = AcpPipe.new_session(pipe, root)
-      {:ok, {_owner, %{base_dir: base}}} = Session.Supervisor.owner(id)
+      base = AcpPipe.journal_base(id)
       {_updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "increment")
 
       assert AcpPipe.disconnect(pipe) == 0
@@ -92,7 +87,7 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
     test "serving the id again continues its journal with fresh state", %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       {:ok, ^id} = AcpPipe.new_session(pipe, root)
-      {:ok, {_owner, %{base_dir: base}}} = Session.Supervisor.owner(id)
+      base = AcpPipe.journal_base(id)
       {_updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "increment")
       {updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "increment")
       assert AcpPipe.reply_text(updates) == "count: 2"
@@ -117,7 +112,7 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
          %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       {:ok, ^id} = AcpPipe.new_session(pipe, root)
-      {:ok, {_owner, %{base_dir: base}}} = Session.Supervisor.owner(id)
+      base = AcpPipe.journal_base(id)
 
       tag = AcpPipe.prompt(pipe, id, "hold")
       assert_receive {:acp_turn_update, ^tag, 0, %{update: {:tool_call, _call}}}, 5_000
