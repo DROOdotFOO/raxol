@@ -3,6 +3,9 @@ defmodule Raxol.Agent.McpToolsTest do
   `Raxol.Agent.McpTools` through a real `Raxol.MCP.Server`: every call is a
   `tools/call` or `resources/read`, so the authorizer seam, the registry and
   the callback workers are the ones a client reaches.
+
+  A test tagged `supervisor: true` runs under `Raxol.Agent.Supervisor`, where
+  a crash of one child restarts the ones after it.
   """
   use ExUnit.Case, async: false
 
@@ -13,6 +16,7 @@ defmodule Raxol.Agent.McpToolsTest do
 
   alias Raxol.Agent.ForeignBeam
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.McpTools
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
@@ -21,37 +25,31 @@ defmodule Raxol.Agent.McpToolsTest do
 
   @counter "Raxol.Agent.Reference.Counter"
   @silent "Raxol.Agent.SilentAgent"
+  @with_silent [mcp_spawnable_apps: [Raxol.Agent.Reference.Counter, Raxol.Agent.SilentAgent]]
 
   setup context do
     ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
     ensure_running({DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one})
 
-    start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
-    start_supervised!({DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one})
-    start_supervised!(Raxol.Agent.SessionStreamer)
-
     # Names of this test's own: the registry caches its table by name.
     registry = :"mcp_tools_registry_#{uniq()}"
     server = :"mcp_tools_server_#{uniq()}"
+    Process.put(:mcp, {registry, server})
 
-    if Map.get(context, :mcp, true) do
-      start_supervised!({Raxol.MCP.Registry, name: registry, server: server})
-
-      start_supervised!(
-        {Server,
-         name: server,
-         registry: registry,
-         authorizer: Authorizer.allow_all(),
-         read_authorizer: Authorizer.allow_all()}
-      )
-    end
+    if Map.get(context, :mcp, true), do: start_mcp()
 
     root = tmp_dir("mcp_tools_root")
     put_env(:mcp_project_root, root)
     for {key, value} <- Map.get(context, :env, []), do: put_env(key, value)
 
-    start_supervised!({McpTools, registry: registry, server: server})
-    Process.put(:mcp, {registry, server})
+    if Map.get(context, :supervisor, false) do
+      start_supervised!({Raxol.Agent.Supervisor, mcp_tools: [registry: registry, server: server]})
+    else
+      start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
+      start_supervised!({DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one})
+      start_supervised!(Raxol.Agent.SessionStreamer)
+      start_supervised!({McpTools, registry: registry, server: server})
+    end
 
     %{root: root, id: "a#{uniq()}", registry: registry, server: server}
   end
@@ -72,7 +70,7 @@ defmodule Raxol.Agent.McpToolsTest do
     end
 
     test "refuses an app that is not listed and starts nothing", %{id: id} do
-      for app <- ["Raxol.Agent.Session", "Elixir.System", "counter", "No.Such.#{uniq()}"] do
+      for app <- ["Raxol.Agent.Session", "Elixir.System", "counter", @silent] do
         assert {:error, text} = call("agent_spawn", %{"app" => app, "id" => id})
         assert text =~ "is not spawnable"
         assert text =~ @counter
@@ -89,10 +87,11 @@ defmodule Raxol.Agent.McpToolsTest do
       assert_raise ArgumentError, fn -> String.to_existing_atom("Elixir." <> name) end
     end
 
-    test "refuses an id that is not a session id" do
-      for id <- ["", "..", "a/b", "../x", ".hidden", "a b", String.duplicate("a", 65)] do
+    test "refuses an id that is not a lowercase session id" do
+      for id <- ["", "..", "a/b", "../x", ".hidden", "a b", "A1", "aB", String.duplicate("a", 65)] do
         assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
-        assert text =~ "an id is 1-64 characters"
+        assert text =~ "an id is 1-64 characters of a-z 0-9"
+        assert Registry.lookup(Raxol.Agent.Registry, id) == []
       end
 
       assert {:error, _} = call("agent_spawn", %{"app" => @counter, "id" => 7})
@@ -102,19 +101,31 @@ defmodule Raxol.Agent.McpToolsTest do
       {:ok, _} = start_directly(id, team_id: "t1")
 
       assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
-      assert text =~ "id #{id} in use (team t1)"
+      assert text =~ "id #{id} is in use (team t1); pick another id"
 
       other = "b#{uniq()}"
       {:ok, _} = start_directly(other)
       assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => other})
-      assert text =~ "id #{other} in use"
-      refute text =~ "team"
+      assert text =~ "id #{other} is in use; pick another id"
+    end
+
+    @tag env: [mcp_exposed_agents: ["ops"]]
+    test "refuses the id of an exposed agent, running or stopped" do
+      assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => "ops"})
+      assert text =~ "id ops is reserved"
+
+      {:ok, _} = start_directly("ops")
+      assert {:ok, _} = call("agent_stop", %{"id" => "ops"})
+
+      assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => "ops"})
+      assert text =~ "id ops is reserved"
+      assert Registry.lookup(Raxol.Agent.Registry, "ops") == []
     end
 
     test "is refused on Windows, with the reason" do
       assert {:error, text} = McpTools.platform_refusal({:win32, :nt})
       assert text =~ "not available on Windows"
-      assert text =~ "#1299"
+      refute text =~ "#"
       assert McpTools.platform_refusal({:unix, :darwin}) == :ok
       assert McpTools.platform_refusal({:unix, :linux}) == :ok
     end
@@ -162,6 +173,26 @@ defmodule Raxol.Agent.McpToolsTest do
       assert "turn_started" in types
       assert "turn_completed" in types
     end
+
+    test "a journal directory that cannot be read refuses the spawn and nothing else", %{
+      id: id,
+      root: root
+    } do
+      other = "b#{uniq()}"
+      assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => other})
+      tools = Process.whereis(McpTools)
+
+      # A directory where the first segment file belongs.
+      File.mkdir_p!(Path.join(journal_dir(root, id), "journal/000001.jsonl"))
+
+      assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert text =~ "agent #{id} did not start; the server log has the reason"
+      refute text =~ "journal_open_failed"
+
+      assert Process.whereis(McpTools) == tools
+      assert Session.Supervisor.whereis(id) == nil
+      assert {:ok, "count: 1"} = call("agent_ask", %{"id" => other, "message" => "increment"})
+    end
   end
 
   describe "agent_ask" do
@@ -175,6 +206,7 @@ defmodule Raxol.Agent.McpToolsTest do
       assert help =~ "commands: increment, get"
     end
 
+    @tag env: @with_silent
     test "names the timeout when the agent does not reply", %{id: id} do
       assert {:ok, _} = call("agent_spawn", %{"app" => @silent, "id" => id})
 
@@ -236,8 +268,19 @@ defmodule Raxol.Agent.McpToolsTest do
       assert {:error, _} = call("agent_stop", %{"id" => "shown"})
 
       put_env(:mcp_exposed_agents, ["shown"])
-      assert {:ok, _} = call("agent_stop", %{"id" => "shown"})
+      assert {:ok, text} = call("agent_stop", %{"id" => "shown"})
+      assert text =~ "its journal stays readable"
       assert Session.Supervisor.whereis("shown") == nil
+
+      # Stopped, and what the stop said holds: the ask is in the journal.
+      assert %{"id" => "shown", "records" => records} = read_journal!("shown")
+      assert Enum.any?(records, &(&1["type"] == "turn_completed"))
+      assert {:ok, status} = call("agent_status", %{"id" => "shown"})
+      assert %{"state" => "stopped"} = Jason.decode!(status)
+
+      put_env(:mcp_exposed_agents, [])
+      assert %{error: %{message: message}} = read(McpTools.journal_uri("shown"))
+      assert message =~ "no agent shown was started by this server"
     end
 
     @tag env: [mcp_exposed_agents: ["member"]]
@@ -245,13 +288,49 @@ defmodule Raxol.Agent.McpToolsTest do
       {:ok, _} = start_directly("member", team_id: "t1")
 
       assert {:error, text} = call("agent_stop", %{"id" => "member"})
-      assert text =~ "member is a member of team t1; use team_stop"
+      assert text =~ "member belongs to team t1 and is not stopped from here"
       assert {:error, text} = call("agent_status", %{"id" => "member"})
-      assert text =~ "member is a member of team t1"
+      assert text =~ "member belongs to team t1 and is not reported from here"
 
       assert is_pid(Session.Supervisor.whereis("member"))
       assert {:ok, listed} = call("agent_list", %{})
       assert %{"agents" => [%{"id" => "member", "team" => "t1"}]} = Jason.decode!(listed)
+    end
+
+    @tag env: [mcp_exposed_agents: ["member"]]
+    test "a refusal names no tool that is not registered", %{id: id} do
+      {:ok, _} = start_directly("member", team_id: "t1")
+      {:ok, _} = start_directly("taken")
+      assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert {:ok, _} = call("agent_stop", %{"id" => id})
+
+      refusals =
+        for {tool, arguments} <- [
+              {"agent_stop", %{"id" => "member"}},
+              {"agent_status", %{"id" => "member"}},
+              {"agent_spawn", %{"app" => @counter, "id" => "member"}},
+              {"agent_spawn", %{"app" => @counter, "id" => "taken"}},
+              {"agent_spawn", %{"app" => "nope", "id" => "x"}},
+              {"agent_spawn", %{"app" => @silent, "id" => id}},
+              {"agent_spawn", %{"app" => @counter, "id" => "Bad"}},
+              {"agent_ask", %{"id" => id, "message" => "get"}},
+              {"agent_ask", %{"id" => "nobody", "message" => "get"}},
+              {"agent_stop", %{"id" => id}},
+              {"agent_stop", %{}},
+              {"agent_status", %{"id" => "nobody"}}
+            ] do
+          assert {:error, text} = call(tool, arguments)
+          text
+        end
+
+      mentioned =
+        refusals
+        |> Enum.flat_map(&Regex.scan(~r/\b(?:agent|team)_[a-z_]+\b/, &1))
+        |> List.flatten()
+        |> Enum.uniq()
+
+      assert "agent_spawn" in mentioned
+      assert mentioned -- agent_tools() == []
     end
   end
 
@@ -271,9 +350,13 @@ defmodule Raxol.Agent.McpToolsTest do
       assert events > 1
 
       assert {:ok, status} = call("agent_status", %{"id" => id})
+      dir = journal_dir(root, id)
 
-      assert %{"state" => "stopped", "root" => ^root, "journal" => %{"events" => ^events}} =
-               Jason.decode!(status)
+      assert %{
+               "state" => "stopped",
+               "root" => ^root,
+               "journal" => %{"events" => ^events, "dir" => ^dir}
+             } = Jason.decode!(status)
 
       # Stopped: off the list, not askable, not stoppable twice.
       assert {:ok, listed} = call("agent_list", %{})
@@ -291,9 +374,10 @@ defmodule Raxol.Agent.McpToolsTest do
       before = id |> read_journal!() |> Map.fetch!("records")
       last = List.last(before)["id"]
 
-      # A turn the first run never closed.
+      # A turn the first run never closed: no checkpoint can be written.
       {:ok, journal} = FileStore.open(id, base_dir: Path.dirname(journal_dir(root, id)))
       {:ok, dangling} = FileStore.append(journal, turn_started("turn-left-open"))
+      assert Checkpoint.write(journal, nil) == {:error, :mid_turn}
       :ok = FileStore.close(journal)
       assert dangling == last + 1
 
@@ -320,7 +404,27 @@ defmodule Raxol.Agent.McpToolsTest do
                "payload" => %{"reason" => "agent_restarted"}
              } = seal
 
-      assert open_turns(records) == 0
+      # No turn is open any more: the checkpoint rule itself says so.
+      {:ok, journal} = FileStore.open(id, base_dir: Path.dirname(journal_dir(root, id)))
+      assert {:ok, _offset} = Checkpoint.write(journal, nil)
+      :ok = FileStore.close(journal)
+    end
+
+    test "an agent whose tree was ended elsewhere can be spawned again", %{id: id} do
+      assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      [{old_tree, _}] = Registry.lookup(Raxol.Agent.Registry, {:session_supervisor, id})
+      :ok = Session.Supervisor.stop_session(id)
+
+      assert {:ok, status} = call("agent_status", %{"id" => id})
+      assert %{"state" => "stopped"} = Jason.decode!(status)
+
+      assert {:ok, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert text =~ "continued"
+
+      # Word of the old tree's end arriving late changes nothing.
+      send(McpTools, {:DOWN, make_ref(), :process, old_tree, :shutdown})
+      assert {:ok, "count: 1"} = call("agent_ask", %{"id" => id, "message" => "increment"})
+      assert {:ok, _} = call("agent_stop", %{"id" => id})
     end
   end
 
@@ -351,17 +455,18 @@ defmodule Raxol.Agent.McpToolsTest do
       rewrite_meta(root, id, &Map.put(&1, "cwd", "/another/project"))
 
       assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
-      assert text =~ "journal #{id} belongs to project root /another/project"
+      assert text =~ "journal #{id} belongs to project root /another/project; pick another id"
       assert Session.Supervisor.whereis(id) == nil
       refute File.exists?(Path.join(journal_dir(root, id), "writer.lock"))
     end
 
+    @tag env: @with_silent
     test "a journal recorded for another app is refused", %{id: id} do
       assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
       assert {:ok, _} = call("agent_stop", %{"id" => id})
 
       assert {:error, text} = call("agent_spawn", %{"app" => @silent, "id" => id})
-      assert text =~ "journal #{id} belongs to app #{@counter}"
+      assert text =~ "journal #{id} belongs to app #{@counter}; pick another id"
       assert Session.Supervisor.whereis(id) == nil
 
       assert {:ok, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
@@ -369,10 +474,19 @@ defmodule Raxol.Agent.McpToolsTest do
     end
 
     @tag env: [mcp_project_root: {__MODULE__, :no_root, []}]
-    test "no root, no agent", %{id: id} do
+    test "a project root that cannot be resolved refuses the spawn", %{id: id} do
       assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
       assert text =~ "the project root is not known"
       assert Session.Supervisor.whereis(id) == nil
+    end
+
+    @tag env: [mcp_project_root: {__MODULE__, :raising_root, []}]
+    test "a project root function that raises refuses the spawn", %{id: id} do
+      tools = Process.whereis(McpTools)
+
+      assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert text =~ "the project root is not known"
+      assert Process.whereis(McpTools) == tools
     end
   end
 
@@ -381,7 +495,7 @@ defmodule Raxol.Agent.McpToolsTest do
       base = Path.dirname(journal_dir(root, id))
 
       holder =
-        ForeignBeam.start("""
+        ForeignBeam.start_supervised("""
         {:ok, _} = Application.ensure_all_started(:jason)
         {:ok, _} =
           Raxol.Agent.Journal.FileStore.open(#{inspect(id)},
@@ -392,11 +506,13 @@ defmodule Raxol.Agent.McpToolsTest do
           )
         """)
 
-      on_exit(fn -> ForeignBeam.signal(holder) end)
-
       assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
-      assert text =~ "journal #{id} is locked by pid #{holder.pid}"
-      assert text =~ Path.join(journal_dir(root, id), "writer.lock")
+
+      assert text =~
+               "another running server (pid #{holder.pid}) holds journal #{id}; " <>
+                 "stop it or spawn under another id"
+
+      refute text =~ "retry"
       assert Session.Supervisor.whereis(id) == nil
       assert Registry.lookup(Raxol.Agent.Registry, id) == []
 
@@ -411,7 +527,7 @@ defmodule Raxol.Agent.McpToolsTest do
     test "a lock naming a dead pid is reclaimed", %{id: id, root: root} do
       dir = journal_dir(root, id)
       File.mkdir_p!(dir)
-      File.write!(Path.join(dir, "writer.lock"), "999999")
+      File.write!(Path.join(dir, "writer.lock"), ForeignBeam.dead_pid())
 
       assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
 
@@ -420,20 +536,84 @@ defmodule Raxol.Agent.McpToolsTest do
     end
 
     test "a journal that cannot be locked refuses the spawn", %{id: id, root: root} do
-      # Without `kill` a holder's liveness cannot be proven, so no lock is taken.
-      path = System.get_env("PATH")
-      System.put_env("PATH", "")
-      on_exit(fn -> System.put_env("PATH", path) end)
+      # A directory where the lock's temp file belongs: no lock can be written.
+      blocker = Path.join(journal_dir(root, id), "writer.lock.tmp.#{System.pid()}")
+      File.mkdir_p!(blocker)
 
-      result = call("agent_spawn", %{"app" => @counter, "id" => id})
-      System.put_env("PATH", path)
-
-      assert {:error, text} = result
-      assert text =~ "no journal lock could be taken"
-      assert text =~ Path.join(journal_dir(root, id), "writer.lock")
+      assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert text =~ "no journal lock could be taken for #{id}"
+      assert text =~ journal_dir(root, id)
       assert Session.Supervisor.whereis(id) == nil
 
+      File.rmdir!(blocker)
       assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
+    end
+  end
+
+  describe "under Raxol.Agent.Supervisor" do
+    @describetag supervisor: true
+
+    test "a restart of an earlier child keeps the agents", %{id: id} do
+      assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert {:ok, "count: 1"} = call("agent_ask", %{"id" => id, "message" => "increment"})
+      tools = Process.whereis(McpTools)
+      session = Session.Supervisor.whereis(id)
+
+      crash(Raxol.Agent.SessionStreamer)
+      await(fn -> Process.whereis(McpTools) not in [nil, tools] end, Raxol.Agent.Supervisor)
+      # Past its `init`: it answers.
+      _ = :sys.get_state(McpTools)
+
+      # The agent never stopped, and the restarted tools still answer for it.
+      assert Session.Supervisor.whereis(id) == session
+      assert {:ok, listed} = call("agent_list", %{})
+      assert %{"agents" => [%{"id" => ^id, "app" => @counter}]} = Jason.decode!(listed)
+
+      assert Enum.sort(agent_tools()) ==
+               ~w(agent_ask agent_list agent_spawn agent_status agent_stop)
+
+      assert {:ok, "count: 2"} = call("agent_ask", %{"id" => id, "message" => "increment"})
+      assert %{"id" => ^id, "records" => [%{"type" => "agent_started"} | _]} = read_journal!(id)
+      assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert text =~ "is in use"
+
+      assert {:ok, _} = call("agent_stop", %{"id" => id})
+      assert Session.Supervisor.whereis(id) == nil
+    end
+
+    test "an agent whose session tree is killed comes back as this server's", %{id: id} do
+      assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert {:ok, "count: 1"} = call("agent_ask", %{"id" => id, "message" => "increment"})
+      [{tree, _}] = Registry.lookup(Raxol.Agent.Registry, {:session_supervisor, id})
+
+      crash(tree)
+
+      await(
+        fn ->
+          Session.Supervisor.whereis(id) != nil and
+            Registry.lookup(Raxol.Agent.Registry, id) != []
+        end,
+        Raxol.Agent.DynSup
+      )
+
+      # Restarted from `init/1`, on the same journal, and still owned.
+      assert {:ok, "count: 1"} = call("agent_ask", %{"id" => id, "message" => "increment"})
+      assert {:ok, status} = call("agent_status", %{"id" => id})
+      assert %{"state" => "running"} = Jason.decode!(status)
+
+      assert {:ok, _} = call("agent_stop", %{"id" => id})
+      assert Session.Supervisor.whereis(id) == nil
+
+      started =
+        id
+        |> read_journal!()
+        |> Map.fetch!("records")
+        |> Enum.filter(&(&1["type"] == "agent_started"))
+
+      assert [%{"payload" => %{"prior_offset" => 0}}, %{"payload" => %{"prior_offset" => prior}}] =
+               started
+
+      assert prior > 0
     end
   end
 
@@ -458,6 +638,15 @@ defmodule Raxol.Agent.McpToolsTest do
       assert :ok = McpTools.stop_agent(id)
     end
 
+    @tag mcp: false
+    test "a registry that appears later changes nothing: the first start decided", context do
+      start_mcp()
+      stop_supervised!(McpTools)
+      start_supervised!({McpTools, registry: context.registry, server: context.server})
+
+      assert agent_tools() == []
+    end
+
     @tag env: [mcp_tools: false]
     test "registers nothing when switched off" do
       assert agent_tools() == []
@@ -467,7 +656,44 @@ defmodule Raxol.Agent.McpToolsTest do
   @doc false
   def no_root, do: {:error, :unknown}
 
+  @doc false
+  def raising_root, do: raise("no root today")
+
   # -- helpers ------------------------------------------------------------------
+
+  defp start_mcp do
+    {registry, server} = Process.get(:mcp)
+    start_supervised!({Raxol.MCP.Registry, name: registry, server: server})
+
+    start_supervised!(
+      {Server,
+       name: server,
+       registry: registry,
+       authorizer: Authorizer.allow_all(),
+       read_authorizer: Authorizer.allow_all()}
+    )
+  end
+
+  # Kill a process and return once it is down.
+  defp crash(process) do
+    pid = GenServer.whereis(process)
+    mref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^mref, :process, ^pid, :killed}, 5_000
+  end
+
+  # Wait for what `supervisor` does about a dead child: each round is one call
+  # the supervisor answers only after the messages before it, its child's exit
+  # and its own restart attempts among them.
+  defp await(done?, supervisor, rounds \\ 2_000) do
+    _ = :sys.get_state(supervisor)
+
+    cond do
+      done?.() -> :ok
+      rounds == 0 -> flunk("#{inspect(supervisor)} did not restart its child")
+      true -> await(done?, supervisor, rounds - 1)
+    end
+  end
 
   defp agent_tools do
     {registry, _server} = Process.get(:mcp)
@@ -544,17 +770,6 @@ defmodule Raxol.Agent.McpToolsTest do
       tier: :durable,
       payload: %{}
     }
-  end
-
-  # The checkpoint turn-boundary count: zero means no turn is open.
-  defp open_turns(records) do
-    Enum.reduce(records, 0, fn record, open ->
-      case record["type"] do
-        "turn_started" -> open + 1
-        type when type in ["turn_completed", "turn_canceled", "error"] -> max(open - 1, 0)
-        _other -> open
-      end
-    end)
   end
 
   defp put_env(key, value) do

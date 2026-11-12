@@ -45,9 +45,11 @@ launcher then prints to stdout. One connection may run up to half the server's
 
 It also serves `agent_spawn`, `agent_list`, `agent_ask`, `agent_status` and
 `agent_stop`, and `resources/read` of `raxol://agent/<id>/journal`, for agents
-it started (`Raxol.Agent.McpTools`). Agents end with the process; their
-journals stay under `RAXOL_SESSIONS_DIR`, one directory per project root, and
-spawning an id again continues its journal. The root is the working directory
+it started (`Raxol.Agent.McpTools`). Agents end with the process. Their
+journals stay under `$RAXOL_SESSIONS_DIR` (default `~/.raxol/sessions`), in
+`<first 8 hex of sha256(root)>/<id>`, and spawning a stopped id continues its
+journal. Two servers on one root cannot run the same id: the second is
+refused while the first holds the journal. The root is the working directory
 `raxol mcp` was started in unless `config :raxol_agent, :mcp_project_root`
 names another, so projects served from one working directory share journals.
 

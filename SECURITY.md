@@ -58,11 +58,12 @@ carry no support commitment yet.
   only for the sessions it runs and the journals of agents it started; every
   other read is denied. Its `agent_*` tools start only the modules on
   `config :raxol_agent, :mcp_spawnable_apps` (a reference counter unless
-  configured) and act only on agents this process started. stdout is the
-  JSON-RPC wire and carries nothing else. Anything that runs code a client
-  chose beyond those modules, reads outside those sessions and journals,
-  reaches an agent this process did not start, or puts a non-JSON-RPC byte
-  on stdout is in scope.
+  configured) and act only on agents this process started, or those listed
+  in `:mcp_exposed_agents` (none unless configured). stdout is the JSON-RPC
+  wire and carries nothing else. Anything that runs code a client chose
+  beyond those modules, reads outside those sessions and journals, reaches
+  an agent that is neither started by this process nor exposed, or puts a
+  non-JSON-RPC byte on stdout is in scope.
 
 ## Dependency scanning
 

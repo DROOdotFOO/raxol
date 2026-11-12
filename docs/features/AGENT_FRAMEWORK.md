@@ -113,13 +113,16 @@ A prompt is one turn: `Comm.call(agent, {:acp_prompt, text, approver}, timeout)`
 `update/2` sees the prompt with the session's pid and the session's own ref for the turn (never
 the caller's ref, which can cancel the turn but not answer it, run its work or message its
 process), and answers inline with `Comm.reply/3`, or with `Comm.run_turn/3` for work that blocks.
-`{:acp_cancel, ref}` kills the turn's process and answers the prompt `{:error, :cancelled}`;
-sent with `Comm.call/3`, its `:ok` arrives only after that process is dead. Pass `ref: ref` to
+`{:acp_cancel, ref}` stops the turn's process and answers the prompt `{:error, :cancelled}`: the
+process gets an exit signal with reason `:shutdown`, which a turn that traps exits can use to
+release what it started, and is killed if it is still alive after
+`config :raxol_agent, :turn_cancel_grace_ms` (default 500). Sent with `Comm.call/3`, the
+cancel's `:ok` arrives only after that process is dead. Pass `ref: ref` to
 `Comm.call/4` to know the ref; it must be a fresh `make_ref/0`, used for one call only. A
 prompt is also cancelled when its caller goes down or its `Comm.call/4` times out. Whenever a
 turn ends without its reply (cancelled, or its process crashed or was killed), `update/2`
 receives `{:acp_cancel, ref}` with its own ref for the turn, so the agent drops what it tracks
-for the turn in one place. An inline reply while the turn's process runs kills that process
+for the turn in one place. An inline reply while the turn's process runs stops that process
 first, and `update/2` receives the cancel too. The session does not check a reply's shape: what
 the agent replies reaches the caller as is. The session intercepts the prompt and both cancel
 forms, with or without `:from`; an `{:acp_cancel, x}` naming no in-flight turn is swallowed.
@@ -130,6 +133,9 @@ a cancel stops only the turn's process, so inline work is neither stopped nor un
 process that changes agent state sends the change to the agent process (`self()` in
 `update/2`) as `{:command_result, msg}`, which `update/2` receives. `{:error, :cancelled}` does
 not roll back such a change: one already sent when the cancel arrives is still applied.
+
+The session journals each prompt turn under a turn id of its own: `turn_started`, then one of
+`turn_completed`, `turn_canceled` or `error`.
 
 Other answers to a prompt: `{:error, :invalid_prompt}` (`text` not a binary or `approver` not
 arity 3), `{:error, :duplicate_ref}` (the ref already names an in-flight turn),
