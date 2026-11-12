@@ -63,7 +63,7 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   def run(argv) do
     case OptionParser.parse(argv, strict: @switches, aliases: @aliases) do
       {opts, [], []} -> run_parsed(opts)
-      {_opts, rest, invalid} -> usage_error("unknown arguments #{unknown(rest, invalid)}")
+      {_opts, rest, invalid} -> usage_error(not_understood(rest, invalid))
     end
   end
 
@@ -92,6 +92,14 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
       {:ok, agent} -> serve(agent)
       {:error, message} -> usage_error(message)
     end
+  end
+
+  # `--agent` as the last argument has no value: OptionParser reports the
+  # switch itself as invalid.
+  defp not_understood(rest, invalid) do
+    if List.keymember?(invalid, "--agent", 0),
+      do: "--agent takes <app> or <app>:<id>",
+      else: "unknown arguments #{unknown(rest, invalid)}"
   end
 
   defp unknown(rest, invalid),

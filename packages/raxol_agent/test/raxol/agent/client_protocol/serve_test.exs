@@ -40,6 +40,14 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
         assert stderr =~ "--agent takes <app> or <app>:<id>"
       end
     end
+
+    test "--agent without a value exits 64 and says what it takes" do
+      for argv <- [["--agent"], ["--help", "--agent"]] do
+        stderr = capture_io(:stderr, fn -> assert Serve.run(argv) == 64 end)
+        assert stderr =~ "raxol acp: --agent takes <app> or <app>:<id>"
+        refute stderr =~ "unknown arguments"
+      end
+    end
   end
 
   describe "parse_agent/1" do
