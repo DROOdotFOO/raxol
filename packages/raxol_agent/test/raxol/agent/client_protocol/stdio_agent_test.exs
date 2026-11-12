@@ -120,6 +120,46 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
       assert Session.Supervisor.whereis(id) == nil
     end
 
+    test "records the branch a regular .git/HEAD names", %{root: root} do
+      File.mkdir_p!(Path.join(root, ".git"))
+      File.write!(Path.join(root, ".git/HEAD"), "ref: refs/heads/topic\n")
+      pipe = AcpPipe.connect(%{app: @counter, id: nil})
+
+      assert {:ok, id} = AcpPipe.new_session(pipe, root)
+      assert %{"git_branch" => "topic"} = journal_meta(id)
+    end
+
+    test "a .git/HEAD that is a FIFO is not opened", %{root: root} do
+      File.mkdir_p!(Path.join(root, ".git"))
+      {_output, 0} = System.cmd("mkfifo", [Path.join(root, ".git/HEAD")])
+      pipe = AcpPipe.connect(%{app: @counter, id: nil})
+
+      assert {:ok, first} = AcpPipe.new_session(pipe, root)
+      assert %{"git_branch" => nil} = journal_meta(first)
+      assert {:ok, _second} = AcpPipe.new_session(pipe, root)
+    end
+
+    test "a .git/HEAD that is a symlink is not followed", %{root: root} do
+      elsewhere = Path.join(AcpPipe.tmp_root("acp_elsewhere"), "HEAD")
+      File.write!(elsewhere, "ref: refs/heads/elsewhere\n")
+      File.mkdir_p!(Path.join(root, ".git"))
+      File.ln_s!(elsewhere, Path.join(root, ".git/HEAD"))
+      pipe = AcpPipe.connect(%{app: @counter, id: nil})
+
+      assert {:ok, first} = AcpPipe.new_session(pipe, root)
+      assert %{"git_branch" => nil} = journal_meta(first)
+      assert {:ok, _second} = AcpPipe.new_session(pipe, root)
+    end
+
+    test "a .git/HEAD past the size bound is not read", %{root: root} do
+      File.mkdir_p!(Path.join(root, ".git"))
+      File.write!(Path.join(root, ".git/HEAD"), "ref: refs/heads/" <> String.duplicate("b", 600))
+      pipe = AcpPipe.connect(%{app: @counter, id: nil})
+
+      assert {:ok, id} = AcpPipe.new_session(pipe, root)
+      assert %{"git_branch" => nil} = journal_meta(id)
+    end
+
     test "refuses an id whose journal belongs to another root", %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
@@ -264,6 +304,10 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
   defp turn_brackets(base, id) do
     {:ok, records} = FileStore.read_records(id, base_dir: base)
     for %{"turn_id" => "acp-" <> _, "type" => type} <- records, do: type
+  end
+
+  defp journal_meta(id) do
+    [AcpPipe.journal_base(id), id, "meta.json"] |> Path.join() |> File.read!() |> Jason.decode!()
   end
 
   defp uniq, do: System.unique_integer([:positive])

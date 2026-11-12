@@ -734,13 +734,30 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   defp put_tip(head, {:ok, tip}), do: Map.put(head, "tip_hash", tip)
   defp put_tip(head, nil), do: head
 
+  @git_head_max_bytes 512
+
   # Best-effort current branch from <cwd>/.git/HEAD; nil if not a git repo.
   defp git_branch(cwd) do
-    with {:ok, body} <- File.read(Path.join([cwd, ".git", "HEAD"])),
+    with {:ok, body} <- read_git_head(Path.join([cwd, ".git", "HEAD"])),
          "ref: refs/heads/" <> branch <- String.trim(body) do
       branch
     else
       _ -> nil
+    end
+  end
+
+  # `cwd` may be a directory someone else laid out, and this runs while the
+  # journal is opened: only a small regular file is read. Opening a FIFO
+  # would block, a device may never end, and a symlink may name either.
+  defp read_git_head(path) do
+    with {:ok, %File.Stat{type: :regular, size: size}} when size <= @git_head_max_bytes <-
+           File.lstat(path),
+         {:ok, file} <- :file.open(path, [:read, :raw, :binary]) do
+      read = :file.read(file, @git_head_max_bytes)
+      _ = :file.close(file)
+      read
+    else
+      _not_a_small_regular_file -> :error
     end
   end
 
