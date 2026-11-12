@@ -1,17 +1,17 @@
 defmodule Raxol.Agent.ClientProtocol.ParentWatchTest do
   @moduledoc """
   Burrito's launcher forks the BEAM and does not forward signals. Kill the
-  launcher pid alone and the BEAM keeps running with the provider credential:
-  no signal reaches it, and stdin stays open because the client's end of the
-  pipe is untouched. Reproduced against the released binary before this
-  existed.
+  launcher pid alone and the BEAM keeps running with its agents and their
+  journal locks: no signal reaches it, and stdin stays open because the
+  client's end of the pipe is untouched.
 
   The two shutdowns that already worked stay covered by their own paths -- a
   group signal reaches the BEAM directly, EOF on stdin ends the turn loop --
   so what is tested here is only the third case: the parent changed.
 
   The ppid reader is injected, so none of this depends on actually orphaning a
-  process.
+  process, and so is `:stop`, which stands in for `System.stop/1`: the watch
+  calls either the same way.
   """
   use ExUnit.Case, async: true
 
@@ -25,7 +25,7 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatchTest do
         name: :"parent_watch_#{System.unique_integer([:positive])}",
         ppid_fun: ppid_fun,
         interval_ms: 5,
-        on_orphan: fn -> send(test, :orphaned) end
+        stop: fn status -> send(test, {:stopped, status}) end
       ] ++ opts
     )
   end
@@ -33,7 +33,7 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatchTest do
   test "a stable parent keeps the watcher running and quiet" do
     {:ok, pid} = start(fn -> {:ok, 42} end)
 
-    refute_receive :orphaned, 60
+    refute_receive {:stopped, _status}, 60
     assert Process.alive?(pid)
   end
 
@@ -50,7 +50,7 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatchTest do
     # so monitoring afterwards races and reports :noproc.
     ref = Process.monitor(pid)
 
-    assert_receive :orphaned, 500
+    assert_receive {:stopped, 0}, 500
     assert_receive {:DOWN, ^ref, :process, _, :normal}, 500
   end
 
@@ -65,7 +65,7 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatchTest do
         if :counters.get(counter, 1) == 1, do: {:ok, 42}, else: :error
       end)
 
-    refute_receive :orphaned, 80
+    refute_receive {:stopped, _status}, 80
     assert Process.alive?(pid)
   end
 
