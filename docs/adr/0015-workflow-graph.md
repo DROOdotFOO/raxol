@@ -4,6 +4,8 @@
 
 Accepted, 2026-06-15. Part of the jido + beam_weaver extraction plan. ADRs 0005 (plugin system), 0012 (MCP as rendering target), 0013 (event dispatch backpressure), and 0014 (Telegram Guardian behaviour) are the closest priors. The effect-system landing (PRs #276, #277, #280, #281) is the direct dependency: the CloudEvents envelope, `causation_id`, and `with_dispatch_span` machinery are all load-bearing for what this ADR proposes.
 
+**Symphony frozen out, 2026-10-27** ([ADR-0043](0043-two-repositories-runtime-and-agent.md) Decision 6, #1320). The Symphony sections below, with `GraphAdapter` and `workflow_mode: :graph`, describe the frozen repository; `Raxol.Workflow.*` is unchanged.
+
 ## Context
 
 raxol has two consumers today that need a multi-step, observably-orchestrated, optionally-resumable execution primitive, and neither has one.

@@ -149,6 +149,11 @@ The first build exposes each headless session's derived tools to OMP.
   agent and records completion, tool calls and tokens, including cache reads
   and writes.
 
+**Amended by [ADR-0043](0043-two-repositories-runtime-and-agent.md),
+2026-10-26: plugin home.** The plugin and its marketplace catalog move with
+`raxol_cli` to the agent repository at the split; until then the plugin is
+built in this tree at `integrations/omp/raxol/`.
+
 ### 3. Delete the coding harness, after a dependency check
 
 The dependency check found that kept code still leans on the harness in
@@ -165,6 +170,11 @@ PRs go first:
 2. Replace Symphony's coding runner with an `omp` runner (`omp -p --mode
    json`) beside the existing Codex runner.
 3. Rebuild `raxol acp` on Raxol agents (Decision 5).
+
+**Symphony frozen out, 2026-10-27**
+([ADR-0043](0043-two-repositories-runtime-and-agent.md) Decision 6, #1320).
+The second PR above is dropped, so two go first, and the Symphony `omp`
+runner named under Consequences is not built.
 
 The cutover PR deletes coding-only code:
 
@@ -240,6 +250,11 @@ Ollama backends. The HTTP backend is split rather than deleted: its
 Anthropic and Ollama clauses stay, and an unknown provider becomes an error
 instead of falling through to OpenAI. Lumo, the OpenAI-compatible family and
 Kimi are deleted; the native CLI drivers go with the harness.
+
+**Amended by [ADR-0043](0043-two-repositories-runtime-and-agent.md),
+2026-10-26: `zkapi`.** The catalog gains a fourth model kind, `zkapi`,
+through the Ollama codec this decision keeps; it lands in the agent
+repository after the split.
 
 ### 5. ACP stays, aimed at Raxol agents
 

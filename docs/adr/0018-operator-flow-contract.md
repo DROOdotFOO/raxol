@@ -4,6 +4,8 @@
 
 Proposed, 2026-06-16. Direct follow-up to ADR-0017 (paused-run query and pause-checkpoint contract). Codifies the cross-layer pattern that emerged when ADR-0017's runtime primitive was surfaced through six channels (Terminal, LiveView, MCP, Telegram, Watch, Orchestrator subscribers).
 
+**Symphony frozen out, 2026-10-27** ([ADR-0043](0043-two-repositories-runtime-and-agent.md) Decision 6, #1320). The `Raxol.Symphony.*` rows, the channel table and the `packages/raxol_symphony/` paths describe the frozen repository, and the pause-reason table gains no row for an `omp` runner because that runner is dropped.
+
 ## Context
 
 ADR-0017 made paused runs first-class in the Workflow runtime: pause checkpoints with `interrupt_reason` metadata, the `c:list_paused/2` Saver callback, and `[:raxol, :workflow, :run, :paused | :resumed]` lifecycle telemetry. ADR-0016 added a `Job.Server.list_paused/0,1` facade on raxol_earn. The Symphony orchestrator's pause/resume machinery (`park_paused/4`, `dispatch_resumption/3`, `resume_run/3`) is covered by lifecycle tests. The Codex runner converts `:approval_required` errors into `{:pause, :awaiting_approval, token}`. The Symphony MCP surface gained `symphony_list_paused` and `symphony_resume_run`. The Terminal, LiveView, Telegram, and Watch surfaces all render the paused set with the same `interrupt_reason` vocabulary and the same `sym:resume:<issue_id>:<decision>` callback shape.

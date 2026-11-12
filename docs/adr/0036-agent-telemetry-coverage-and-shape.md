@@ -18,6 +18,11 @@ Depends on ADR-0035 for the metering semantics the tier-1 events observe, and on
 telemetry-invariant mechanism (`Raxol.Core.Telemetry.Invariants`,
 `Raxol.Core.Telemetry.InvariantSentinel`) for the classification every event must carry.
 
+**Symphony frozen out, 2026-10-27** ([ADR-0043](0043-two-repositories-runtime-and-agent.md)
+Decision 6, #1320). Symphony's runner, its turn count and `Sandboxes.BudgetCap` (open
+question 5) are in the frozen repository, so the `packages/raxol_symphony` test run under
+Validation cannot be repeated from this tree.
+
 ## Context
 
 ### What exists

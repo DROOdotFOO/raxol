@@ -4,6 +4,8 @@
 
 Accepted, 2026-07-22 (implemented in `Raxol.Workflow.Graph` via `add_channel/3` + `add_join/4`). Originally proposed 2026-06-16. Direct follow-up to ADR-0015 (Workflow Graph), which shipped the sequential single-branch runtime and explicitly deferred joins and channels. ADR-0017 (pause checkpoints) and ADR-0018 (operator-flow contract) layered on top of the sequential runtime; this ADR adds the parallel branches without invalidating either. Pre-requisite for any future work (sandboxed agents, distributed Symphony, cross-chain settlement) that wants fan-out + reduce inside a single workflow graph.
 
+**Symphony frozen out, 2026-10-27** ([ADR-0043](0043-two-repositories-runtime-and-agent.md) Decision 6, #1320). The Symphony `GraphAdapter` cited below is in the frozen repository, so its adoption of joins has no home in this tree.
+
 ## Context
 
 `Raxol.Workflow` is single-branch sequential today. From `lib/raxol/workflow/runtime.ex:29-30`, verbatim:

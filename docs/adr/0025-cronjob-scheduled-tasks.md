@@ -10,6 +10,10 @@ not on the path. Originally proposed
 tasks). Builds on the agent skill runtime (ADR-0021), the unified messaging gateway (ADR-0023, for
 delivery), and `Raxol.Core.Stores.Dets` (the shared ETS+DETS store).
 
+**Symphony frozen out, 2026-10-27** ([ADR-0043](0043-two-repositories-runtime-and-agent.md)
+Decision 6, #1320). The `Raxol.Symphony.Orchestrator` poll named in Context and References is
+in the frozen repository; the scheduler decided here does not use it.
+
 ## Context
 
 Raxol can schedule one thing: `Raxol.Symphony.Orchestrator` polls a tracker on a fixed cadence to
