@@ -304,6 +304,12 @@ defmodule Raxol.Agent.TurnContractTest do
     worker_mon = Process.monitor(worker)
     [{lifecycle, _}] = Registry.lookup(Raxol.Agent.Registry, {:lifecycle, id})
 
+    # The fold that started the turn has ended once the Dispatcher answers. A
+    # Dispatcher killed inside it leaves its own bracket open, which is not
+    # the bracket this test is about.
+    %{dispatcher_pid: dispatcher} = GenServer.call(lifecycle, :get_full_state)
+    _ = :sys.get_state(dispatcher)
+
     Process.exit(lifecycle, :kill)
     assert {:ok, {:error, :agent_down}} = Task.await(held)
     assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
