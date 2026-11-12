@@ -28,7 +28,7 @@ defmodule Raxol.Agent.Reference.Counter do
   Actions run through `Raxol.Agent.Action.ToolConverter` with `approver` as
   the turn's `:tool_authorizer`, in the turn process
   `Raxol.Agent.Comm.run_turn/3` starts, never in the agent process: a
-  blocked approver holds up only its turn, and a cancel kills it. `increment`
+  blocked approver holds up only its turn, and a cancel stops it. `increment`
   and `reset` return a change that the turn process sends back to `update/2`,
   which applies it and hands the new count to the turn for its reply, so a
   turn cancelled before its change is sent changes nothing; a change already

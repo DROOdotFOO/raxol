@@ -52,7 +52,7 @@ defmodule Raxol.Agent.Comm do
   process crashed or was killed), `update/2` then receives
   `{:acp_cancel, turn_ref}`, so an agent drops what it tracks for the turn
   in one place. An inline `reply/3` ends the turn even while its
-  `run_turn/3` process runs: that process is killed first, and `update/2`
+  `run_turn/3` process runs: that process is stopped first, and `update/2`
   receives `{:acp_cancel, turn_ref}` too. The session does not check a
   reply's shape: whatever the agent passes to `reply/3`, or `run_turn/3`'s
   function returns, reaches the caller as is.

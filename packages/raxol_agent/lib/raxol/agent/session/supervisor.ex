@@ -38,16 +38,18 @@ defmodule Raxol.Agent.Session.Supervisor do
       session — the whole tree recovers in dependency order (a FRESH lifecycle,
       so no durable event is ever emitted into a dead-sink gap), and the
       restarted bridge re-registers under `{:emit_bridge, session_id}` (exactly
-      one bridge; the journal Writer survives via its own `:global`
-      single-writer discipline and is re-joined on the next durable append, so
-      offsets stay monotonic);
+      one bridge; the journal Writer is linked to the bridge that opened it
+      and exits with it, and the restarted bridge opens the journal again, in
+      its `init` when the journal is required and on the next durable append
+      otherwise, resuming from the on-disk offset);
     * a **session crash** restarts *only* the session — the sink and the
       lifecycle are never orphaned or duplicated, and the restarted session
       re-resolves the SAME running lifecycle (model preserved) via the registry.
 
   ## Registry keys (all in `Raxol.Agent.Registry`)
 
-    * `{:session_supervisor, session_id}` → this subtree supervisor
+    * `{:session_supervisor, session_id}` → this subtree supervisor; its value
+      is the `:owner` the session was started with (`nil` without one)
     * `{:session, session_id}` → the live `Raxol.Agent.Session` process
       (registered by the session itself, in both supervised and standalone
       modes, so `whereis/1` resolves either)
@@ -104,6 +106,9 @@ defmodule Raxol.Agent.Session.Supervisor do
       journal bound to another `:cwd` or `:title` in `:journal_opts`) nothing
       is started and this returns `{:error, reason}` with the bridge's stop
       reason (see "A required journal" in `Raxol.Agent.EmitBridge`)
+    * `:owner` — any term, kept as the value of the tree's registry entry
+      (`{:session_supervisor, session_id}`) for as long as the tree runs, so
+      whoever started the session can recognise it later (see `owner/1`)
   """
   @spec start_session(module(), keyword()) ::
           {:ok, pid()} | {:error, {:already_started, pid()} | term()}
@@ -228,6 +233,31 @@ defmodule Raxol.Agent.Session.Supervisor do
   def whereis(session_id), do: lookup({:session, session_id})
 
   @doc """
+  The `:owner` the tree running under `session_id` was started with:
+  `{:ok, owner}` (`nil` when it was given none), or `:error` when no tree
+  runs under that id.
+  """
+  @spec owner(term()) :: {:ok, term()} | :error
+  def owner(session_id) do
+    case Registry.lookup(@registry, {:session_supervisor, session_id}) do
+      [{_pid, owner}] -> {:ok, owner}
+      [] -> :error
+    end
+  rescue
+    ArgumentError -> :error
+  end
+
+  @doc "Every running session tree, as `{session_id, owner}`."
+  @spec owners() :: [{term(), term()}]
+  def owners do
+    Registry.select(@registry, [
+      {{{:session_supervisor, :"$1"}, :_, :"$2"}, [], [{{:"$1", :"$2"}}]}
+    ])
+  rescue
+    ArgumentError -> []
+  end
+
+  @doc """
   All live sessions as `{session_id, session_pid}` — supervised subtrees and
   standalone `Session.start_link` sessions alike.
   """
@@ -249,7 +279,9 @@ defmodule Raxol.Agent.Session.Supervisor do
     session_id = Keyword.fetch!(opts, :session_id)
 
     Supervisor.start_link(__MODULE__, opts,
-      name: {:via, Registry, {@registry, {:session_supervisor, session_id}}}
+      name:
+        {:via, Registry,
+         {@registry, {:session_supervisor, session_id}, Keyword.get(opts, :owner)}}
     )
   end
 

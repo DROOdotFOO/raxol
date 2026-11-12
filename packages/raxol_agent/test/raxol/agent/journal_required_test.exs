@@ -13,11 +13,14 @@ defmodule Raxol.Agent.JournalRequiredTest do
   @moduletag :unix_only
 
   alias Raxol.Agent.Comm
+  alias Raxol.Agent.EmitBridge
   alias Raxol.Agent.ForeignBeam
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
   alias Raxol.Agent.ToolPolicy
+  alias Raxol.Core.Runtime.EmitBus
 
   @listener :journal_required_test_listener
 
@@ -101,6 +104,7 @@ defmodule Raxol.Agent.JournalRequiredTest do
     {:ok, before} = FileStore.read_records(id, base_dir: base)
     assert [%{"turn_id" => turn_id}] = open_turn_starts(before)
     assert "acp-" <> _ = turn_id
+    assert checkpoint(id, base) == {:error, :mid_turn}
 
     assert {:ok, _sup} = start(id, base)
     :ok = Session.Supervisor.stop_session(id)
@@ -116,6 +120,78 @@ defmodule Raxol.Agent.JournalRequiredTest do
            } = seal
 
     assert open_turn_starts(records) == []
+    assert {:ok, _offset} = checkpoint(id, base)
+  end
+
+  test "the marker is stamped like the bridge's other durable records", %{base: base, id: id} do
+    {:ok, bridge} =
+      EmitBridge.start_link(
+        session_id: id,
+        journal_required: true,
+        journal_opts: [base_dir: base],
+        branch_id: "side",
+        actor: %{kind: :agent, id: "a1"}
+      )
+
+    assert EmitBridge.prior_offset(bridge) == 0
+    :ok = GenServer.stop(bridge)
+
+    assert {:ok, [marker]} = FileStore.read_records(id, base_dir: base)
+
+    assert %{
+             "type" => "agent_started",
+             "tier" => "durable",
+             "branch_id" => "side",
+             "actor" => %{"kind" => "agent", "id" => "a1"},
+             "payload" => %{"prior_offset" => 0}
+           } = marker
+
+    # Stopping it closed the journal: the lock is gone.
+    refute File.exists?(Path.join([base, id, "writer.lock"]))
+  end
+
+  test "a Writer that dies under a queued event stops the bridge, which reopens", %{
+    base: base,
+    id: id
+  } do
+    assert {:ok, _sup} = start(id, base)
+    assert_receive {:register, Raxol.Agent.Registry, {:emit_bridge, ^id}, bridge, _}, 5_000
+    assert_receive {:register, Raxol.Agent.Registry, ^id, _session, _}, 5_000
+    %{journal: %{writer: writer}} = :sys.get_state(bridge)
+
+    # The durable event is ahead of the Writer's exit in the bridge's mailbox,
+    # so the bridge learns of the death from the append, not from the exit.
+    :ok = :sys.suspend(bridge)
+    EmitBus.publish(EmitBus.build(id, :app_update, :durable, %{}, turn_id: "t1"))
+    writer_down = Process.monitor(writer)
+    Process.exit(writer, :kill)
+    assert_receive {:DOWN, ^writer_down, :process, ^writer, :killed}, 5_000
+    :ok = :sys.resume(bridge)
+
+    assert_receive {:register, Raxol.Agent.Registry, {:emit_bridge, ^id}, reopened, _}, 5_000
+    assert reopened != bridge
+    assert_receive {:register, Raxol.Agent.Registry, ^id, _session, _}, 5_000
+
+    assert {:ok, "count: 1"} = Comm.call(id, "increment")
+    :ok = Session.Supervisor.stop_session(id)
+
+    {:ok, records} = FileStore.read_records(id, base_dir: base)
+    assert Enum.map(records, & &1["id"]) == Enum.to_list(1..length(records))
+    assert [_first, _second] = Enum.filter(records, &(&1["type"] == "agent_started"))
+  end
+
+  test "a standalone session cannot require a journal", %{base: base, id: id} do
+    assert_raise ArgumentError, ~r/journal_required needs/, fn ->
+      Session.start_link(
+        app_module: Counter,
+        id: id,
+        session_id: id,
+        journal_required: true,
+        journal_opts: [base_dir: base]
+      )
+    end
+
+    refute File.exists?(Path.join(base, id))
   end
 
   test "a journal bound to another root or app is refused, and nothing starts", %{
@@ -141,8 +217,7 @@ defmodule Raxol.Agent.JournalRequiredTest do
   end
 
   test "a journal a live BEAM holds is refused, naming the holder", %{base: base, id: id} do
-    holder = ForeignBeam.start()
-    on_exit(fn -> ForeignBeam.signal(holder) end)
+    holder = ForeignBeam.start_supervised()
 
     File.mkdir_p!(Path.join(base, id))
     File.write!(Path.join([base, id, "writer.lock"]), holder.pid)
@@ -214,6 +289,14 @@ defmodule Raxol.Agent.JournalRequiredTest do
       journal_required: true,
       journal_opts: journal_opts
     )
+  end
+
+  # Whether a checkpoint can be written: the rule that refuses one mid-turn.
+  defp checkpoint(id, base) do
+    {:ok, journal} = FileStore.open(id, base_dir: base)
+    result = Checkpoint.write(journal, nil)
+    :ok = FileStore.close(journal)
+    result
   end
 
   # The `turn_started` records with no closing bracket of the same turn after them.

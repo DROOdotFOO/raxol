@@ -91,6 +91,13 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   @spec record_keys() :: [String.t()]
   def record_keys, do: @record_keys
 
+  @doc """
+  The record types that close a `turn_started`. A checkpoint is refused as
+  `:mid_turn` while more turns were started than closed.
+  """
+  @spec turn_closers() :: [String.t()]
+  def turn_closers, do: ~w(turn_completed turn_canceled error)
+
   # --- behaviour (alternate backends may implement the same seam) -------------
 
   @doc """

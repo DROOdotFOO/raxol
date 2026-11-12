@@ -14,6 +14,7 @@ defmodule Raxol.Agent.TurnContractTest do
 
   alias Raxol.Agent.Comm
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
   alias Raxol.Agent.ToolPolicy
@@ -307,6 +308,17 @@ defmodule Raxol.Agent.TurnContractTest do
     assert {:ok, {:error, :agent_down}} = Task.await(held)
     assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
+
+    # The turn was closed in the journal too: nothing is left mid-turn.
+    :ok = stop_supervised!({Session, id})
+    {:ok, records} = FileStore.read_records(id, base_dir: base)
+
+    assert [%{"payload" => %{"reason" => reason}}] =
+             Enum.filter(records, &match?(%{"type" => "error", "turn_id" => "acp-" <> _}, &1))
+
+    assert reason =~ "agent_down"
+
+    assert {:ok, _offset} = checkpoint(id, base)
   end
 
   test "a forged agent-down with another ref changes nothing", %{id: id, base: base} do
@@ -578,7 +590,7 @@ defmodule Raxol.Agent.TurnContractTest do
 
       records = stopped_journal(context)
       assert Enum.filter(records, &match?(%{"turn_id" => "acp-" <> _}, &1)) == []
-      assert open_turns(records) == 0
+      assert {:ok, _offset} = checkpoint(context.id, context.base)
     end
   end
 
@@ -626,19 +638,16 @@ defmodule Raxol.Agent.TurnContractTest do
     assert started["type"] == "turn_started"
     assert closing["turn_id"] == turn_id
     assert closing["id"] > started["id"]
-    assert open_turns(records) == 0
+    assert {:ok, _offset} = checkpoint(context.id, context.base)
     {started, closing}
   end
 
-  # The checkpoint turn-boundary count: zero means no turn is open.
-  defp open_turns(records) do
-    Enum.reduce(records, 0, fn record, open ->
-      case record["type"] do
-        "turn_started" -> open + 1
-        type when type in ["turn_completed", "turn_canceled", "error"] -> max(open - 1, 0)
-        _other -> open
-      end
-    end)
+  # Whether a checkpoint can be written: the rule that refuses one mid-turn.
+  defp checkpoint(id, base) do
+    {:ok, journal} = FileStore.open(id, base_dir: base)
+    result = Checkpoint.write(journal, nil)
+    :ok = FileStore.close(journal)
+    result
   end
 
   # Start a `mode` prompt on a `TrappingTurn` agent; return once its turn runs.

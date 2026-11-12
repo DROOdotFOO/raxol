@@ -115,6 +115,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   @kind Raxol.Agent.Journal.Records.Checkpoint.kind()
   @reasons Raxol.Agent.Journal.Records.Checkpoint.reasons()
+  @turn_closers Raxol.Agent.Journal.Records.Checkpoint.turn_closers()
 
   # The frozen CONVERSATIONAL whitelist (JS-FREEZE §1.1 — the closure rule).
   @conversational MapSet.new(~w(
@@ -366,7 +367,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
           "turn_started" ->
             {turns + 1, reserves}
 
-          t when t in ["turn_completed", "turn_canceled", "error"] ->
+          t when t in @turn_closers ->
             {max(turns - 1, 0), reserves}
 
           "reserve" ->

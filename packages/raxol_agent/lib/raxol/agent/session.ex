@@ -40,7 +40,8 @@ defmodule Raxol.Agent.Session do
   `turn_started` (payload `prompt`) when the prompt is accepted, then exactly
   one of `turn_completed` (the turn was answered), `turn_canceled` (payload
   `reason`: `cancelled`, or `caller_down` when the prompt's caller exited) or
-  `error` (payload `reason: turn_failed`). A session that dies mid-turn
+  `error` (payload `reason`: `turn_failed`, or `agent_down` when a standalone
+  session's agent went down). A session that dies mid-turn
   leaves the `turn_started` open; a journal reopened with
   `journal_required: true` closes it (see `Raxol.Agent.EmitBridge`).
 
@@ -120,9 +121,21 @@ defmodule Raxol.Agent.Session do
     }
   end
 
+  @doc """
+  Start a standalone session. `journal_required: true` raises `ArgumentError`
+  here: a standalone session carries on without its bridge, so only
+  `Raxol.Agent.Session.Supervisor.start_session/2` can require a journal.
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
+
+    if Keyword.get(opts, :journal_required, false) == true and
+         Keyword.get(opts, :start_emit_bridge, true) do
+      raise ArgumentError,
+            ":journal_required needs Raxol.Agent.Session.Supervisor.start_session/2; " <>
+              "a standalone session cannot refuse to run unjournaled"
+    end
 
     # Deterministic (re)start: a `:rest_for_one` restart can race Registry's
     # async cleanup of the dead predecessor's `{:via, ...}` name. Wait for the
@@ -611,7 +624,7 @@ defmodule Raxol.Agent.Session do
   # catch-all and is dropped.
   #
   # The agent answered its prompt inline (`Comm.reply/3` to this session).
-  # A `run_turn/3` process still running for the turn is killed first, and
+  # A `run_turn/3` process still running for the turn is stopped first, and
   # the agent sees `{:acp_cancel, agent_ref}`, as for a cancel.
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:agent_reply, agent_ref, reply}, %__MODULE__{agent_refs: refs} = state)
@@ -760,6 +773,7 @@ defmodule Raxol.Agent.Session do
     Enum.each(state.turns, fn {ref, turn} ->
       Process.demonitor(turn.caller_mref)
       if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
+      bracket(state, turn, :error, %{reason: :agent_down})
       Comm.reply(turn.caller, ref, {:error, :agent_down})
     end)
 
