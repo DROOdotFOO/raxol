@@ -1,87 +1,93 @@
 defmodule Raxol.Agent.ClientProtocol.BudgetTest do
   @moduledoc """
-  The ACP surface had no spend cap at all, so an editor or a harness could
-  drive it until the provider account ran dry -- which is exactly how the first
-  T-Bench smoke ended, with a 402 from a drained key.
-
-  The cap reuses `BenchmarkProfile`, so what is worth testing here is the
-  wiring: that it is off unless asked for, that `check/0` still answers when it
-  is off, and that turns are refused once the money or the turn count is gone.
+  The cap alone: which variables start it, that a turn is counted when it is
+  taken, that spend is what replies reported, and that a cap whose process
+  is gone refuses.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Raxol.Agent.BenchmarkProfile
   alias Raxol.Agent.ClientProtocol.Budget
 
-  defp profile(env), do: BenchmarkProfile.from_env(env) |> elem(1)
+  @cost_cap %{
+    "RAXOL_MAX_COST_USD" => "0.01",
+    "RAXOL_COST_PER_MTOK_IN" => "1000",
+    "RAXOL_COST_PER_MTOK_OUT" => "1000"
+  }
 
-  # Under the test supervisor rather than linked to the test process, so
-  # ExUnit stops the named Agent, and waits for it, before on_exit and the
-  # next test. A child whose start_link returns :ignore comes back as
-  # {:ok, :undefined}.
-  defp start(env) do
-    case start_supervised({Budget, profile(env)}) do
-      {:ok, pid} when is_pid(pid) -> pid
-      {:ok, :undefined} -> :ignore
-    end
-  end
+  defp start(env), do: start_supervised!({Budget, env})
 
-  describe "when no cap is configured" do
-    test "it does not start, and check/0 still answers" do
-      assert :ignore = Budget.start_link(profile(%{}))
-      assert Budget.check() == :ok
-      assert Budget.record(%{"input_tokens" => 10_000}) == :ok
-      assert Budget.spent() == %{cost_usd: 0.0, turns: 0}
-    end
-  end
-
-  describe "spend cap" do
-    setup do
-      start(%{
-        "RAXOL_MAX_COST_USD" => "0.01",
-        "RAXOL_COST_PER_MTOK_IN" => "1000",
-        "RAXOL_COST_PER_MTOK_OUT" => "1000"
-      })
-
-      :ok
+  describe "start_link/1" do
+    test "does not start without a cap, and no cap allows every turn" do
+      assert Budget.start_link(%{}) == :ignore
+      assert Budget.begin_turn(nil) == :ok
+      assert Budget.record_usage(nil, %{"input_tokens" => 10_000}) == :ok
     end
 
-    test "allows turns until the money runs out" do
-      assert Budget.check() == :ok
-
-      # 1M tokens at $1000/Mtok = $1000, well past a 1 cent cap.
-      Budget.record(%{"input_tokens" => 1_000_000, "output_tokens" => 0})
-
-      assert {:exceeded, :max_cost_usd} = Budget.check()
+    test "reads the cap variables and no other" do
+      assert Budget.start_link(%{"RAXOL_MODEL" => "not a model"}) == :ignore
     end
 
-    test "accumulates across turns rather than judging each alone" do
-      for _ <- 1..3, do: Budget.record(%{"input_tokens" => 4_000, "output_tokens" => 0})
+    test "refuses a cap it cannot read or enforce" do
+      assert {:error, message} = Budget.start_link(%{"RAXOL_MAX_TURNS" => "many"})
+      assert message =~ "RAXOL_MAX_TURNS"
 
-      assert %{turns: 3, cost_usd: cost} = Budget.spent()
-      assert cost > 0.01
-      assert {:exceeded, :max_cost_usd} = Budget.check()
-    end
-
-    # Provider usage maps arrive in both naming families; the fold is
-    # BenchmarkProfile's, but a wiring slip would silently count nothing.
-    test "reads OpenAI-style keys too" do
-      Budget.record(%{"prompt_tokens" => 1_000_000, "completion_tokens" => 0})
-
-      assert {:exceeded, :max_cost_usd} = Budget.check()
+      assert {:error, message} = Budget.start_link(%{"RAXOL_MAX_COST_USD" => "1"})
+      assert message =~ "RAXOL_COST_PER_MTOK_IN"
     end
   end
 
   describe "turn cap" do
-    test "refuses once the turn count is spent" do
-      start(%{"RAXOL_MAX_TURNS" => "2"})
+    test "a turn counts when it is taken, and the cap refuses the next" do
+      budget = start(%{"RAXOL_MAX_TURNS" => "2"})
 
-      assert Budget.check() == :ok
-      Budget.record(%{})
-      assert Budget.check() == :ok
-      Budget.record(%{})
+      assert Budget.begin_turn(budget) == :ok
+      assert Budget.begin_turn(budget) == :ok
+      assert Budget.begin_turn(budget) == {:exceeded, :max_turns}
+      assert Budget.spent(budget).turns == 2
+    end
 
-      assert {:exceeded, :max_turns} = Budget.check()
+    test "turns taken at once never pass the cap" do
+      budget = start(%{"RAXOL_MAX_TURNS" => "3"})
+
+      taken =
+        1..20
+        |> Task.async_stream(fn _n -> Budget.begin_turn(budget) end, max_concurrency: 20)
+        |> Enum.count(&(&1 == {:ok, :ok}))
+
+      assert taken == 3
+    end
+  end
+
+  describe "spend cap" do
+    test "allows turns until the reported spend passes it" do
+      budget = start(@cost_cap)
+      assert Budget.begin_turn(budget) == :ok
+
+      # 1M tokens at $1000/Mtok = $1000, well past a 1 cent cap.
+      Budget.record_usage(budget, %{"input_tokens" => 1_000_000, "output_tokens" => 0})
+
+      assert Budget.begin_turn(budget) == {:exceeded, :max_cost_usd}
+    end
+
+    test "adds up what replies reported, in either naming family" do
+      budget = start(@cost_cap)
+
+      Budget.record_usage(budget, %{"input_tokens" => 4_000, "output_tokens" => 0})
+      Budget.record_usage(budget, %{"prompt_tokens" => 4_000, "completion_tokens" => 4_000})
+
+      assert %{turns: 0, cost_usd: cost} = Budget.spent(budget)
+      assert_in_delta cost, 12.0, 0.001
+      assert Budget.begin_turn(budget) == {:exceeded, :max_cost_usd}
+    end
+  end
+
+  describe "a cap whose process is gone" do
+    test "refuses the turn" do
+      budget = start(%{"RAXOL_MAX_TURNS" => "5"})
+      :ok = stop_supervised(Budget)
+
+      assert Budget.begin_turn(budget) == {:exceeded, :cap_unavailable}
+      assert Budget.record_usage(budget, %{}) == :ok
     end
   end
 end

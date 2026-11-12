@@ -11,12 +11,12 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
   @moduletag :capture_log
   @moduletag :unix_only
 
-  alias Raxol.Agent.BenchmarkProfile
   alias Raxol.Agent.ClientProtocol.Budget
   alias Raxol.Agent.ClientProtocol.Serve
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Session
   alias Raxol.Agent.Test.AcpPipe
+  alias Raxol.Agent.Test.TurnProbe
 
   @counter "Raxol.Agent.Reference.Counter"
 
@@ -124,12 +124,17 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
       closing = Enum.find(records, &match?(%{"type" => "turn_canceled"}, &1))
       assert %{"turn_id" => "acp-" <> _, "payload" => %{"reason" => "caller_down"}} = closing
     end
+  end
 
-    test "a turn cap refuses the prompt after the one that reached it", %{root: root, id: id} do
-      {:ok, profile} = BenchmarkProfile.from_env(%{"RAXOL_MAX_TURNS" => "1"})
-      start_supervised!({Budget, profile})
+  describe "a connection with RAXOL_MAX_TURNS=1" do
+    setup do
+      AcpPipe.start_trees()
+      budget = start_supervised!({Budget, %{"RAXOL_MAX_TURNS" => "1"}})
+      %{root: AcpPipe.tmp_root("acp_cap"), id: "s#{uniq()}", budget: budget}
+    end
 
-      pipe = AcpPipe.connect(%{app: @counter, id: id})
+    test "refuses the prompt after an answered one", %{root: root, id: id, budget: budget} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id}, budget: budget)
       {:ok, ^id} = AcpPipe.new_session(pipe, root)
 
       assert {_updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "increment")
@@ -137,8 +142,55 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
       assert {[], {:error, error}} = AcpPipe.turn(pipe, id, "increment")
       assert error.code == -32_603
       assert %{"tag" => "budget_exhausted", "reason" => ":max_turns"} = error.data
+      assert Budget.spent(budget).turns == 1
+    end
 
-      assert Budget.spent().turns == 1
+    test "refuses the prompt after a cancelled one", %{root: root, id: id, budget: budget} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id}, budget: budget)
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+      tag = AcpPipe.prompt(pipe, id, "hold")
+      assert_receive {:acp_turn_update, ^tag, 0, %{update: {:tool_call, _call}}}, 5_000
+      :ok = AcpPipe.cancel(pipe, id)
+      assert {_updates, {:ok, %{stop_reason: :cancelled}}} = AcpPipe.collect(tag)
+
+      assert {[], {:error, error}} = AcpPipe.turn(pipe, id, "get")
+      assert %{"tag" => "budget_exhausted", "reason" => ":max_turns"} = error.data
+    end
+
+    test "refuses the prompt after a failed one", %{root: root, id: id, budget: budget} do
+      AcpPipe.spawnable([TurnProbe])
+      pipe = AcpPipe.connect(%{app: inspect(TurnProbe), id: id}, budget: budget)
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+      assert {[], {:error, %{data: %{"tag" => "turn_failed"}}}} =
+               AcpPipe.turn(pipe, id, "error-atom")
+
+      assert {[], {:error, error}} = AcpPipe.turn(pipe, id, "anything")
+      assert %{"tag" => "budget_exhausted", "reason" => ":max_turns"} = error.data
+    end
+
+    test "takes one of two prompts sent at once on two sessions", %{root: root, budget: budget} do
+      pipe = AcpPipe.connect(%{app: @counter, id: nil}, budget: budget)
+      {:ok, first} = AcpPipe.new_session(pipe, root)
+      {:ok, second} = AcpPipe.new_session(pipe, root)
+
+      tags = [AcpPipe.prompt(pipe, first, "get"), AcpPipe.prompt(pipe, second, "get")]
+      results = for tag <- tags, do: tag |> AcpPipe.collect() |> elem(1)
+
+      assert [{:error, refused}, {:ok, %{stop_reason: :end_turn}}] = Enum.sort(results)
+      assert %{"tag" => "budget_exhausted", "reason" => ":max_turns"} = refused.data
+      assert Budget.spent(budget).turns == 1
+    end
+
+    test "refuses every prompt once the cap's process is gone",
+         %{root: root, id: id, budget: budget} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id}, budget: budget)
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      :ok = stop_supervised(Budget)
+
+      assert {[], {:error, error}} = AcpPipe.turn(pipe, id, "get")
+      assert %{"tag" => "budget_exhausted", "reason" => ":cap_unavailable"} = error.data
     end
   end
 

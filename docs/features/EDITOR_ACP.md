@@ -123,8 +123,13 @@ What a host should know:
 - **`session/load` is not offered.** A restarted agent has its journal and none
   of its state, so there is no transcript to replay into it.
 - **The agent lives as long as the connection.** It is stopped, and its journal
-  flushed, when the connection ends. `RAXOL_MAX_TURNS` and `RAXOL_MAX_COST_USD`
-  cap the turns and spend of one connection.
+  flushed, when the connection ends.
+- **`RAXOL_MAX_TURNS` and `RAXOL_MAX_COST_USD` cap one connection**, across all
+  its sessions. A turn counts when its prompt is taken, whether it is then
+  answered, cancelled or fails. Spend is the usage of the replies that reported
+  one, so the tokens of a cancelled or failed turn are not in it. Past a cap a
+  prompt is answered with a `budget_exhausted` error, and so is every prompt
+  if the cap can no longer be checked.
 
 Where the same BEAM also serves the `agent_*` MCP tools, they do not list, ask
 or stop an agent an ACP session started; the two share only the id namespace.

@@ -119,13 +119,19 @@ defmodule Raxol.Agent.Test.AcpPipe do
 
   Options: `:permission` (the option id the client selects, or `:hold` for
   a client that never answers; without it the client does not implement the
-  method) and `:auth_opts`.
+  method), `:budget` (the connection's
+  `Raxol.Agent.ClientProtocol.Budget`) and `:auth_opts`.
   """
   @spec connect(Serve.agent() | nil, keyword()) :: map()
   def connect(agent, opts \\ []) do
     {left, right} = Paired.create_pair()
     test = self()
-    handler_arg = %{agent: agent, auth_opts: Keyword.get(opts, :auth_opts, [])}
+
+    handler_arg = %{
+      agent: agent,
+      budget: Keyword.get(opts, :budget),
+      auth_opts: Keyword.get(opts, :auth_opts, [])
+    }
 
     {serving, _ref} =
       spawn_monitor(fn ->

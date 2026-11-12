@@ -5,11 +5,13 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     @moduledoc """
     A Raxol agent as an ACP agent: the handler `raxol acp --agent` serves.
 
-    `handler_arg` is `%{agent: %{app: name, id: id | nil} | nil}` (plus
-    `:auth_opts` for `Raxol.Agent.Auth.Flow`). `initialize` always answers,
-    so a client can connect before an agent is named. `session/new` then
-    starts the named app in this BEAM and answers with the agent's id as
-    the session id:
+    `handler_arg` is `%{agent: %{app: name, id: id | nil} | nil}`, plus
+    `:budget` (the connection's `Raxol.Agent.ClientProtocol.Budget`, absent
+    or `nil` for no cap) and `:auth_opts` for `Raxol.Agent.Auth.Flow`.
+
+    `initialize` always answers, so a client can connect before an agent is
+    named. `session/new` then starts the named app in this BEAM and answers
+    with the agent's id as the session id:
 
       * the app is matched against `config :raxol_agent,
         :mcp_spawnable_apps` and started by
@@ -278,7 +280,7 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
           session_id: id,
           conn: ctx.conn,
           task_sup: ctx.task_sup,
-          turn_runner: Turn.runner(id)
+          turn_runner: Turn.runner(id, Map.get(ctx.handler_state, :budget))
         )
 
       case started do

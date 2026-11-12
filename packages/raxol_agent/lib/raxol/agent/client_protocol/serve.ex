@@ -17,7 +17,8 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   are stopped when it ends, so their journals are flushed before the caller
   halts the VM.
 
-  `RAXOL_MAX_TURNS` and `RAXOL_MAX_COST_USD` cap the connection (see
+  `RAXOL_MAX_TURNS` and `RAXOL_MAX_COST_USD` cap the turns started and the
+  spend reported on the connection (see
   `Raxol.Agent.ClientProtocol.Budget`).
 
   Exit codes: 0 when the peer disconnects, 64 for a usage error or a
@@ -32,7 +33,6 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
               Raxol.Agent.ClientProtocol.StdioAgent
             ]}
 
-  alias Raxol.Agent.BenchmarkProfile
   alias Raxol.Agent.ClientProtocol.Budget
   alias Raxol.Agent.ClientProtocol.ParentWatch
 
@@ -128,26 +128,21 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
     reroute_logs_to_stderr()
     {:ok, _apps} = Application.ensure_all_started(:raxol_agent)
 
-    case start_budget() do
-      :ok ->
-        # Burrito's launcher forwards no signal: a client that kills only the
-        # launcher would leave this BEAM running with stdin open.
-        ParentWatch.start_link([])
-        {:ok, handle} = @stdio.start_self()
-        serve_connection({@stdio, handle}, %{agent: agent})
-
-      {:error, message} ->
-        usage_error(message)
+    # A cap that cannot be read refuses to serve: it was set so that nobody
+    # has to watch.
+    case Budget.start_link() do
+      {:error, message} -> usage_error(message)
+      {:ok, budget} -> serve_stdio(agent, budget)
+      :ignore -> serve_stdio(agent, nil)
     end
   end
 
-  # A cap that cannot be read refuses to serve: it was set so that nobody
-  # has to watch.
-  defp start_budget do
-    with {:ok, profile} <- BenchmarkProfile.from_env() do
-      _ = Budget.start_link(profile)
-      :ok
-    end
+  defp serve_stdio(agent, budget) do
+    # Burrito's launcher forwards no signal: a client that kills only the
+    # launcher would leave this BEAM running with stdin open.
+    ParentWatch.start_link([])
+    {:ok, handle} = @stdio.start_self()
+    serve_connection({@stdio, handle}, %{agent: agent, budget: budget})
   end
 
   @doc """

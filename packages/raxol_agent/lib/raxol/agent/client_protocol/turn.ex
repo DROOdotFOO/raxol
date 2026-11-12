@@ -26,8 +26,10 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
 
   ## Budget
 
-  A prompt is refused while `Raxol.Agent.ClientProtocol.Budget` reports a
-  cap exceeded, and each answered turn's `usage` is recorded there.
+  `runner/2` takes the connection's `Raxol.Agent.ClientProtocol.Budget`. A
+  prompt first takes a turn from it, which counts whatever becomes of the
+  turn, and is refused when a cap is spent or cannot be checked. The
+  `usage` of a reply that carries one is recorded there.
 
   ## Errors
 
@@ -71,32 +73,37 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
            session: pid(),
            session_id: String.t(),
            agent_id: String.t(),
+           budget: Budget.t(),
            ref: reference(),
            agent_mref: reference()
          }
 
-  @doc "The turn runner that prompts agent `agent_id`."
-  @spec runner(String.t()) :: runner()
-  def runner(agent_id) when is_binary(agent_id) do
-    fn session, request -> run(session, request, agent_id) end
+  @doc """
+  The turn runner that prompts agent `agent_id`, under `budget` (`nil` for
+  no cap).
+  """
+  @spec runner(String.t(), Budget.t()) :: runner()
+  def runner(agent_id, budget \\ nil) when is_binary(agent_id) do
+    fn session, request -> run(session, request, agent_id, budget) end
   end
 
-  defp run(session, request, agent_id) do
-    case Budget.check() do
-      :ok -> prompt(session, request, agent_id)
+  defp run(session, request, agent_id, budget) do
+    case Budget.begin_turn(budget) do
+      :ok -> prompt(session, request, agent_id, budget)
       {:exceeded, cap} -> {:error, error(:budget_exhausted, cap)}
     end
   end
 
   # The prompt goes out in the envelope `Raxol.Agent.Comm.call/4` sends, so
   # this process can also take the session's `:acp_cancel` while it waits.
-  defp prompt(session, request, agent_id) do
+  defp prompt(session, request, agent_id, budget) do
     case Registry.lookup(@registry, agent_id) do
       [{agent, _value}] ->
         turn = %{
           session: session,
           session_id: request.session_id,
           agent_id: agent_id,
+          budget: budget,
           ref: make_ref(),
           agent_mref: Process.monitor(agent)
         }
@@ -121,7 +128,7 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
   end
 
   defp answer(turn, {:ok, text, usage}) when is_binary(text) and is_map(usage) do
-    Budget.record(usage)
+    Budget.record_usage(turn.budget, usage)
     Permission.settle(turn.session, turn.session_id, :answered)
     post_reply(turn, text)
     {:stop, :end_turn}
