@@ -146,9 +146,7 @@ defmodule Raxol.MCP.Transport.Stdio do
   def handle_continue(:start_reader, state) do
     case GenServer.whereis(state.server) do
       nil ->
-        Logger.error(
-          "[MCP.Stdio] MCP server not running: #{inspect(state.server)}"
-        )
+        Logger.error("[MCP.Stdio] MCP server not running: #{inspect(state.server)}")
 
         {:stop, {:server_down, :noproc}, state}
 
@@ -189,9 +187,7 @@ defmodule Raxol.MCP.Transport.Stdio do
         {:noreply, send_request(state, message)}
 
       {:error, _reason} ->
-        Logger.debug(
-          "[MCP.Stdio] Ignoring non-JSON line: #{String.slice(line, 0, 100)}"
-        )
+        Logger.debug("[MCP.Stdio] Ignoring non-JSON line: #{String.slice(line, 0, 100)}")
 
         {:noreply, state}
     end
@@ -339,9 +335,7 @@ defmodule Raxol.MCP.Transport.Stdio do
     write_response(device, response)
   rescue
     e ->
-      Logger.error(
-        "[MCP.Stdio] Error writing response: #{Exception.message(e)}"
-      )
+      Logger.error("[MCP.Stdio] Error writing response: #{Exception.message(e)}")
 
       if id do
         error =

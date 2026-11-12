@@ -228,9 +228,7 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     assert status == 0
     read_lines = Enum.flat_map(replies, &elem(&1, 2))
 
-    assert_json_rpc(
-      seen ++ starting ++ read_lines ++ subbing ++ unsubbing ++ othering ++ rest
-    )
+    assert_json_rpc(seen ++ starting ++ read_lines ++ subbing ++ unsubbing ++ othering ++ rest)
   end
 
   @tag mcp_args: ["--bench-dump", :dump]
@@ -317,9 +315,7 @@ defmodule Raxol.CLI.MCPIntegrationTest do
         end
 
       {^server, {:data, {:noeol, chunk}}} ->
-        flunk(
-          "stdout line longer than the port's line buffer: #{String.slice(chunk, 0, 200)}"
-        )
+        flunk("stdout line longer than the port's line buffer: #{String.slice(chunk, 0, 200)}")
 
       {^server, {:exit_status, status}} ->
         flunk(
@@ -327,9 +323,7 @@ defmodule Raxol.CLI.MCPIntegrationTest do
         )
     after
       @reply_ms ->
-        flunk(
-          "no reply to #{id}; stdout so far: #{inspect(Enum.reverse(seen))}"
-        )
+        flunk("no reply to #{id}; stdout so far: #{inspect(Enum.reverse(seen))}")
     end
   end
 
