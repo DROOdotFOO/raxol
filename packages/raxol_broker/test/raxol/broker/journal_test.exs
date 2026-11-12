@@ -1035,6 +1035,25 @@ defmodule Raxol.Broker.JournalTest do
       assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
     end
 
+    test "a pending approval keeps counting and keeps its intent, live and after a restart",
+         %{opts: opts} do
+      name = opts[:name]
+      start!(opts)
+      intent = limit("4")
+      id = in_flight!(name, intent, context())
+      response = %{"approval_id" => "apr-1"}
+      :ok = Journal.append_to_group(id, {:order, :pending_approval, response}, name)
+
+      assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
+      assert Journal.placing_for_intent(intent.id, name) == {:ok, id}
+
+      stop_supervised!(name)
+      start!(opts)
+
+      assert counters(name, @t0) == {{:ok, d("500")}, {:ok, 1}}
+      assert Journal.placing_for_intent(intent.id, name) == {:ok, id}
+    end
+
     test "a close after placing is an unknown outcome and keeps counting",
          %{opts: opts, path: path} do
       name = opts[:name]

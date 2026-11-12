@@ -7,11 +7,17 @@ defmodule Raxol.Broker.Tools.Generator do
   test failure.
   """
 
+  alias Raxol.Broker.Tools
   alias Raxol.Broker.Tools.Catalog
 
   @dir "lib/raxol/broker/tools/generated"
 
-  # First match wins, so the narrower families come first.
+  # Matched against the tool name in this order; the first match wins, so the
+  # narrower families come first. `MarketData` matches everything and takes
+  # whatever no family above it claims, so a new read that is not market data
+  # needs a term here. `Banking` precedes `Account` because
+  # `get_bank_accounts` and `get_credit_card_account` match both; `credit` is
+  # spelled out so an unrelated `credit` tool is not a card tool.
   @families [
     {"Crypto", ~r/crypto|currency_pair/},
     {"Options", ~r/option/},
@@ -21,8 +27,8 @@ defmodule Raxol.Broker.Tools.Generator do
     {"Watchlists", ~r/watchlist/},
     {"Legend", ~r/legend/},
     {"Equities", ~r/equity_(?:orders|positions|tax_lots)/},
-    {"Account",
-     ~r/account|portfolio|pnl|margin|trade_approval|banking|credit_(?:card|transactions)/},
+    {"Banking", ~r/bank|credit_(?:card|transactions)/},
+    {"Account", ~r/account|portfolio|pnl|margin|trade_approval/},
     {"MarketData", ~r//}
   ]
 
@@ -85,7 +91,7 @@ defmodule Raxol.Broker.Tools.Generator do
   # inert. Text containing `"""` would end it early and is quoted instead.
   defp doc(tool) do
     text =
-      [description(tool), arguments(tool["inputSchema"] || %{})]
+      [description(tool), arguments(tool["inputSchema"] || %{}), rule(tool["name"])]
       |> Enum.reject(&(&1 == ""))
       |> Enum.join("\n\n")
 
@@ -112,6 +118,13 @@ defmodule Raxol.Broker.Tools.Generator do
       properties ->
         lines = Enum.map(properties, &argument_line(&1, required))
         Enum.join(["Arguments (string keys):" | lines], "\n")
+    end
+  end
+
+  defp rule(name) do
+    case Tools.exactly_one(name) do
+      [] -> ""
+      keys -> "Pass exactly one of " <> Enum.map_join(keys, ", ", &"`#{&1}`") <> "."
     end
   end
 

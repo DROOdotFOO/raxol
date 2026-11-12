@@ -270,6 +270,17 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   restarts. Each place carries a `ref_id` derived from the intent id,
   which Robinhood deduplicates on. Give intents a stable `:id` for this to
   work.
+* **Trade approvals.** When the review response says
+  `customer_approval_required`, a successful place is
+  `status: :pending_approval`, not `:placed`: Robinhood holds a proposal the
+  account owner approves or declines in its app, and no order exists yet.
+  The group keeps counting toward the caps and its intent is a duplicate,
+  because the proposal can still become an order. Nothing resolves a
+  pending approval yet (`get_trade_approvals` is a read tool), and the order
+  placed after an approval carries the approval id, not the `ref_id` sent.
+  The flag is read as Robinhood's tool text names it; a real review response
+  has not been recorded, so check this against one before `mode: :armed`
+  exists. `Raxol.Broker.MCP.Fake` models it with `trade_approvals: true`.
 * **Fail closed.** Any journal error before `placing`, review error or
   unsupported order kind means no order. Once the order call is made the
   result is `{:ok, _}`: a place call that times out is journaled
@@ -321,8 +332,9 @@ children = [{Raxol.Broker.Supervisor, journal: []}]
 
 A group is the intent, a snapshot of the policy context, each verdict, any
 human approval of an ASK, the review response, a `placing` record, and one
-terminal record: the order response (`:placed`, `:failed` or `:unknown`), a
-DENY verdict, a declined approval, or `{:close, reason}`. `open_group/2` makes
+terminal record: the order response (`:placed`, `:pending_approval`, `:failed`
+or `:unknown`), a DENY verdict, a declined approval, or `{:close, reason}`.
+`open_group/2` makes
 the intent durable before any review or order call; `append_group/1` writes a
 whole group as one contiguous run. Every record is synced before the call
 returns.
@@ -449,12 +461,40 @@ against the captured schema before sending:
 {:ok, result} = Raxol.Broker.Tools.MarketData.get_equity_quotes(session, %{"symbols" => ["AAPL"]})
 ```
 
-To refresh the capture from a signed-in account, then regenerate:
+To refresh the capture from a signed-in account:
 
-```sh
-mix raxol.broker.capture_tools
-mix raxol.broker.gen.tools          # --check fails if the checked-in modules are stale
-```
+1. Capture, then list what the new capture changes for the order tools:
+
+   ```sh
+   mix raxol.broker.capture_tools
+   git show HEAD:packages/raxol_broker/priv/robinhood/tools_list.json > /tmp/previous_tools_list.json
+   mix run --no-start -e '
+     alias Raxol.Broker.Tools.Catalog
+     previous = "/tmp/previous_tools_list.json" |> File.read!() |> Jason.decode!() |> Map.fetch!("tools")
+     session = Catalog.reconcile(previous)
+     IO.inspect(Enum.frequencies(Map.values(Catalog.static())), label: "classes")
+     changed = for {name, class} <- Catalog.static(), class in [:review, :write], session[name] != class, do: name
+     IO.inspect(Enum.sort(changed), label: "new or changed order tools")
+   '
+   ```
+
+   A tool on the second line is new, or its `inputSchema` or `annotations`
+   changed. Live sessions were refusing a changed one as drifted, and
+   committing the capture is what accepts it again. Read its new text against
+   `Raxol.Broker.Executor.Review` and `Raxol.Broker.Executor.Place` first, and
+   name it in the CHANGELOG.
+2. Regenerate the read modules, and check which module each new function
+   landed in. One in `MarketData` that is not market data needs a term in the
+   families of `Raxol.Broker.Tools.Generator`.
+
+   ```sh
+   mix raxol.broker.gen.tools          # --check fails if the checked-in modules are stale
+   ```
+
+3. Update the pinned `:write` and `:review` lists in
+   `test/raxol/broker/tools/catalog_test.exs`. Editing them is the sign-off
+   that a new order tool is meant to be one.
+4. Update the counts below from the `classes` line, and the CHANGELOG.
 
 The checked-in capture is Robinhood's live list of 2026-11-11 (87 tools):
 57 are readable, `review_equity_order`, `review_option_order`,

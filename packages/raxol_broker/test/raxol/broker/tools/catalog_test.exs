@@ -35,7 +35,8 @@ defmodule Raxol.Broker.Tools.CatalogTest do
              )
 
       for name <-
-            ~w(exercise_option cancel_option_exercise delete_alert create_watchlist add_to_watchlist),
+            ~w(exercise_option cancel_option_exercise delete_alert create_watchlist add_to_watchlist
+               decline_trade_approval),
           do: assert(Catalog.classify(name) == :unknown, name)
     end
 
@@ -62,7 +63,9 @@ defmodule Raxol.Broker.Tools.CatalogTest do
                      create_price_alert update_alert),
           do: assert(Catalog.classify(name, %{}) == :write, name)
 
-      for name <- ~w(exercise_option create_watchlist add_to_watchlist delete_alert set_margin),
+      for name <-
+            ~w(exercise_option create_watchlist add_to_watchlist delete_alert set_margin
+               decline_trade_approval approve_trade_approval),
           do: assert(Catalog.classify(name, @read) == :unknown, name)
     end
 

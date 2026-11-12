@@ -12,6 +12,7 @@ defmodule Raxol.Broker.Journal.Groups do
   | Outcome | When |
   | --- | --- |
   | `:placed` | an `order` record with status `placed` |
+  | `:pending_approval` | an `order` record with status `pending_approval`: the broker holds a proposal the owner has yet to approve, and no order exists yet |
   | `:failed` | an `order` record with status `failed` |
   | `:unknown` | an `order` record with status `unknown`, or a `close` record with outcome `unknown`: the order call may have gone out and its result is not known |
   | `:denied` | a DENY verdict, a declined approval, or a `close` record with outcome `deny` |
@@ -20,8 +21,8 @@ defmodule Raxol.Broker.Journal.Groups do
 
   An order counts toward notional and order rate from its `placing` record,
   at the notional recorded there, until an order response says it failed:
-  `:placed`, `:unknown` and `:in_flight` groups count unless their recorded
-  notional is `nil` (cancels).
+  `:placed`, `:pending_approval`, `:unknown` and `:in_flight` groups count
+  unless their recorded notional is `nil` (cancels).
   """
 
   defstruct [
@@ -48,7 +49,8 @@ defmodule Raxol.Broker.Journal.Groups do
           verdicts: [map()]
         }
 
-  @type outcome :: :open | :in_flight | :denied | :placed | :failed | :unknown
+  @type outcome ::
+          :open | :in_flight | :denied | :placed | :pending_approval | :failed | :unknown
 
   @doc """
   Fold journal records, in offset order, into `{groups, fills}`. Groups are in
@@ -95,6 +97,7 @@ defmodule Raxol.Broker.Journal.Groups do
   @doc "The group's outcome (see the moduledoc)."
   @spec outcome(t()) :: outcome()
   def outcome(%__MODULE__{order: %{"status" => "placed"}}), do: :placed
+  def outcome(%__MODULE__{order: %{"status" => "pending_approval"}}), do: :pending_approval
   def outcome(%__MODULE__{order: %{"status" => "unknown"}}), do: :unknown
   def outcome(%__MODULE__{order: %{}}), do: :failed
   def outcome(%__MODULE__{close: %{"outcome" => "unknown"}}), do: :unknown
@@ -133,7 +136,7 @@ defmodule Raxol.Broker.Journal.Groups do
   """
   @spec counts?(t()) :: boolean()
   def counts?(%__MODULE__{placing: %{"notional" => notional}} = group) when notional != nil,
-    do: outcome(group) in [:placed, :unknown, :in_flight]
+    do: outcome(group) in [:placed, :pending_approval, :unknown, :in_flight]
 
   def counts?(%__MODULE__{}), do: false
 

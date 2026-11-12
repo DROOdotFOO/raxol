@@ -125,6 +125,33 @@ defmodule Raxol.Broker.Executor.ReviewTest do
              {:error, {:review_failed, "review_equity_order", :is_error}}
   end
 
+  test "the review record says customer_approval_required only on a literal true", ctx do
+    run = fn -> Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000) end
+
+    assert {:ok, %{"customer_approval_required" => false} = response, []} = run.()
+    refute Review.customer_approval_required?(response)
+
+    for {body, expected} <- [
+          {%{"alerts" => [], "customer_approval_required" => true}, true},
+          {%{"alerts" => [], "customer_approval_required" => false}, false},
+          {%{"alerts" => [], "customer_approval_required" => "true"}, false},
+          {%{"alerts" => [], "order" => %{"customer_approval_required" => true}}, false}
+        ] do
+      answer(ctx.server, %{"content" => [text(body)], "isError" => false})
+      assert {:ok, response, []} = run.()
+      assert Review.customer_approval_required?(response) == expected, inspect(body)
+    end
+
+    # Robinhood's envelope: unreadable for warnings, so it asks a person, and
+    # the flag is still read for the place that follows an approval.
+    enveloped = %{"data" => %{"customer_approval_required" => true}, "guide" => "..."}
+    answer(ctx.server, %{"content" => [text(enveloped)], "isError" => false})
+    assert {:ok, response, [@unreadable]} = run.()
+    assert Review.customer_approval_required?(response)
+
+    refute Review.customer_approval_required?(%{"tool" => nil, "note" => "cancel"})
+  end
+
   test "equity?/1 covers the equity kinds and nothing else", ctx do
     assert Review.equity?(ctx.intent)
     refute Review.equity?(%{ctx.intent | kind: :cancel})

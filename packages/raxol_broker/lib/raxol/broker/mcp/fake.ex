@@ -34,6 +34,10 @@ defmodule Raxol.Broker.MCP.Fake do
     * `:alerts` - fired alerts, answered by `get_alert_log`.
     * `:warnings` - the `"alerts"` every `review_*` returns (default `[]`).
     * `:reject` - symbols whose `place_*` answers `isError: true`.
+    * `:trade_approvals` - `true` models an account with trade approvals on:
+      every `review_*` carries `"customer_approval_required": true`, and a
+      `place_*` answers a pending approval (`"approval_id"`, in the Fake's
+      own shape) and creates no order (default `false`).
     * `:order_states` - the states a placed order moves through, one step per
       `get_equity_orders` call (default `["queued"]`). `cancel_*` moves an
       order to `"cancelled"`.
@@ -117,6 +121,7 @@ defmodule Raxol.Broker.MCP.Fake do
     :alerts,
     :warnings,
     :reject,
+    :trade_approvals,
     :order_states,
     :accept,
     :tools,
@@ -149,6 +154,7 @@ defmodule Raxol.Broker.MCP.Fake do
       account: string!(Keyword.get(opts, :account, "FAKE-0001"), :account),
       quotes: quotes!(Keyword.get(opts, :quotes, %{})),
       order_states: states!(Keyword.get(opts, :order_states, ["queued"])),
+      trade_approvals: boolean!(Keyword.get(opts, :trade_approvals, false), :trade_approvals),
       accept: accept!(Keyword.get(opts, :accept))
     }
     |> Map.merge(lists!(opts))
@@ -534,8 +540,13 @@ defmodule Raxol.Broker.MCP.Fake do
     )
   end
 
-  defp tool("review_" <> _, args, state),
-    do: ok(%{"quote" => price_quote(state, args["symbol"]), "alerts" => state.warnings}, state)
+  defp tool("review_" <> _, args, state) do
+    body = %{"quote" => price_quote(state, args["symbol"]), "alerts" => state.warnings}
+
+    if state.trade_approvals,
+      do: ok(Map.put(body, "customer_approval_required", true), state),
+      else: ok(body, state)
+  end
 
   # Crypto's review tool is named `preview_*_order`; `preview_scan` is a read.
   defp tool("preview_crypto_order", args, state), do: tool("review_crypto_order", args, state)
@@ -546,6 +557,9 @@ defmodule Raxol.Broker.MCP.Fake do
     cond do
       MapSet.member?(state.reject, args["symbol"]) ->
         error(%{"error" => "order rejected", "symbol" => args["symbol"]}, state)
+
+      state.trade_approvals ->
+        ok(%{"approval_id" => "apr-" <> ref, "state" => "pending"}, state)
 
       order = state.orders[ref] ->
         ok(order_view(order), state)
@@ -649,6 +663,11 @@ defmodule Raxol.Broker.MCP.Fake do
         ArgumentError,
         "a quote price must be a string, integer or Decimal, got #{inspect(price)}"
       )
+
+  defp boolean!(value, _key) when is_boolean(value), do: value
+
+  defp boolean!(value, key),
+    do: raise(ArgumentError, "#{key} must be a boolean, got #{inspect(value)}")
 
   defp states!([_ | _] = states) do
     Enum.each(states, &string!(&1, :order_states))

@@ -96,8 +96,9 @@ defmodule Raxol.Broker.Journal do
   (`Raxol.Broker.Policy.notional/2`) and records that notional; it refuses an
   order it cannot price (`{:error, {:unpriced_order, reason}}`), so nothing
   unpriced is ever sent. Cancels record a `nil` notional. After `placing` the
-  only records a group takes are its order response (`:placed`, `:failed` or
-  `:unknown`) or a close, and an order response is refused for a group with no
+  only records a group takes are its order response (`:placed`,
+  `:pending_approval`, `:failed` or `:unknown`) or a close, and an order
+  response is refused for a group with no
   `placing` record (`{:error, {:not_placing, id}}`). A close after `placing`
   records an `unknown` outcome: the order may exist.
 
@@ -154,7 +155,7 @@ defmodule Raxol.Broker.Journal do
 
   @types ~w(intent context verdict review approval placing order close fill)
   @phases [:pre_review, :post_review]
-  @order_statuses [:placed, :failed, :unknown]
+  @order_statuses [:placed, :pending_approval, :failed, :unknown]
   @decisions [:approved, :declined]
   @before_placing [:verdict, :review, :approval, :placing]
   @minute_us 60_000_000
@@ -167,7 +168,7 @@ defmodule Raxol.Broker.Journal do
           | {:review, map()}
           | {:approval, :approved | :declined, String.t()}
           | {:placing}
-          | {:order, :placed | :failed | :unknown, map()}
+          | {:order, :placed | :pending_approval | :failed | :unknown, map()}
           | {:close, atom()}
   @type group :: %{intent: Intent.t(), context: Context.t(), entries: [entry()]}
   @type fill :: %{
@@ -314,9 +315,11 @@ defmodule Raxol.Broker.Journal do
       The journal records the order's notional and counts it from here, and
       refuses with `{:unpriced_order, reason}` when a non-cancel intent cannot
       be priced;
-    * `{:order, :placed | :failed | :unknown, response}`: finishes the group;
-      refused with `{:not_placing, id}` before `{:placing}`. `:failed` stops
-      the order counting and frees the intent for a retry;
+    * `{:order, :placed | :pending_approval | :failed | :unknown, response}`:
+      finishes the group; refused with `{:not_placing, id}` before
+      `{:placing}`. `:failed` stops the order counting and frees the intent
+      for a retry; `:pending_approval` (a proposal the owner has yet to
+      approve at the broker) keeps both, like `:placed`;
     * `{:close, reason}`: finishes the group, as DENY before `{:placing}` and
       as an unknown outcome (still counted) after it.
 

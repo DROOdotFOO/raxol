@@ -43,7 +43,7 @@ defmodule Raxol.Broker.Tools.Catalog do
   ]
   # Verbs that change state. A tool of this shape the allowlist does not name
   # is never `:read`, whatever its annotations say.
-  @mutating ~r/\A(?:place|cancel|replace|create|update|delete|add|remove|exercise|set|edit|submit|transfer|close|enable|disable)_/
+  @mutating ~r/\A(?:place|cancel|replace|create|update|delete|add|remove|exercise|set|edit|submit|transfer|close|enable|disable|decline|approve|reject|follow|unfollow|mark)_/
 
   @type class :: :read | :review | :write | :unknown
   @type session :: %{String.t() => class()}

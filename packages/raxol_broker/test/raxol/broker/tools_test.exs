@@ -7,6 +7,7 @@ defmodule Raxol.Broker.ToolsTest do
 
   alias Mix.Tasks.Raxol.Broker.CaptureTools
   alias Raxol.Broker.MCP.{Client, Fake}
+  alias Raxol.Broker.Tools
   alias Raxol.Broker.Tools.{Catalog, Generator}
   alias Raxol.Broker.Tools.MarketData
 
@@ -26,6 +27,23 @@ defmodule Raxol.Broker.ToolsTest do
     assert on_disk == files, "run `mix raxol.broker.gen.tools` in packages/raxol_broker"
   end
 
+  test "bank and card reads are Banking's, approvals Account's, and a name two families match takes the first" do
+    for {name, family} <- [
+          {"get_bank_accounts", "Banking"},
+          {"get_banking_transactions", "Banking"},
+          {"get_credit_card_account", "Banking"},
+          {"get_credit_transactions", "Banking"},
+          {"get_trade_approval_setting", "Account"},
+          {"get_trade_approvals", "Account"},
+          {"get_accounts", "Account"},
+          {"get_crypto_account_onboarding_info", "Crypto"},
+          {"get_option_watchlist", "Options"},
+          # `credit` alone is not a Banking term.
+          {"get_credit_ratings", "MarketData"}
+        ],
+        do: assert(Generator.family(name) == family, name)
+  end
+
   test "a generated function validates its arguments before anything is sent" do
     fake = Fake.start(quotes: %{"AAPL" => "125"})
     client = start_supervised!({Client, Fake.client_opts(fake)})
@@ -39,6 +57,42 @@ defmodule Raxol.Broker.ToolsTest do
              MarketData.get_equity_quotes(client, %{"symbols" => ["AAPL"]})
 
     assert %{"quotes" => [%{"symbol" => "AAPL"}]} = Jason.decode!(text)
+  end
+
+  test "technical indicators take exactly one of symbol and symbols, checked before sending" do
+    tool = "get_equity_technical_indicators"
+    keys = ["symbol", "symbols"]
+    assert Tools.exactly_one(tool) == keys
+
+    # The rule stands in for a schema that marks both optional. A capture
+    # that drops one of them, or requires one, makes it wrong.
+    schema = Catalog.schema(tool)
+    assert Enum.all?(keys, &is_map_key(schema["properties"], &1))
+    assert Enum.all?(keys, &(&1 not in schema["required"]))
+
+    fake = Fake.start()
+    empty = %{"content" => [%{"type" => "text", "text" => "{}"}], "isError" => false}
+    Fake.on_call(fake, tool, fn _args -> {:result, empty} end)
+    client = start_supervised!({Client, Fake.client_opts(fake)})
+
+    base = %{"type" => "rsi", "interval" => "day", "start_time" => "2026-11-01T00:00:00Z"}
+    refused = {:error, {:invalid_args, tool, [{[], {:exactly_one_of, keys}}]}}
+    both = Map.merge(base, %{"symbol" => "AAPL", "symbols" => ["AAPL"]})
+
+    assert MarketData.get_equity_technical_indicators(client, base) == refused
+    assert MarketData.get_equity_technical_indicators(client, both) == refused
+
+    assert MarketData.get_equity_technical_indicators(client, Map.put(base, "symbols", nil)) ==
+             refused
+
+    assert Fake.calls(fake) == []
+
+    for one <- [%{"symbols" => ["AAPL"]}, %{"symbol" => "AAPL"}] do
+      assert {:ok, %{is_error: false}} =
+               MarketData.get_equity_technical_indicators(client, Map.merge(base, one))
+    end
+
+    assert Fake.calls(fake, "get_") == [tool, tool]
   end
 
   test "capture_tools writes the live list the catalog and generator read", %{tmp_dir: dir} do
