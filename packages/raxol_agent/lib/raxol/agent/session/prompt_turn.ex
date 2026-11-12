@@ -7,8 +7,16 @@ defmodule Raxol.Agent.Session.PromptTurn do
   # owner, not the worker, is what the session monitors, so `abort/2` can
   # return only after the worker is dead, and the work also dies with the
   # session or the owner.
+  #
+  # Stopping a worker is two steps: an exit signal with reason `:shutdown`,
+  # which ends a worker that does not trap exits at once and gives one that
+  # does the chance to release what it started (a Port's OS process is not
+  # killed by its owner dying), then `:kill` after
+  # `config :raxol_agent, :turn_cancel_grace_ms` (default 500).
 
   require Logger
+
+  @default_grace_ms 500
 
   @doc "Start the turn for `session`. Returns `{owner_pid, monitor_ref}`."
   @spec start(pid(), reference(), (-> term())) :: {pid(), reference()}
@@ -17,8 +25,9 @@ defmodule Raxol.Agent.Session.PromptTurn do
   end
 
   @doc """
-  Kill the turn's worker and wait until the owner is down. `mref` is
-  removed without `:flush`; the caller drops its DOWN if one was queued.
+  Stop the turn's worker and wait until the owner is down, which takes up to
+  the cancel grace for a worker that traps exits. `mref` is removed without
+  `:flush`; the caller drops its DOWN if one was queued.
   """
   @spec abort(pid(), reference()) :: :ok
   def abort(owner, mref) do
@@ -86,10 +95,10 @@ defmodule Raxol.Agent.Session.PromptTurn do
         loop(session, session_mref, ref, worker)
 
       :abort ->
-        kill(worker)
+        stop(worker)
 
       {:DOWN, ^session_mref, :process, ^session, _reason} ->
-        kill(worker)
+        stop(worker)
     end
   end
 
@@ -98,11 +107,28 @@ defmodule Raxol.Agent.Session.PromptTurn do
     send(session, {:acp_turn_failed, ref, self()})
   end
 
+  defp stop(worker) do
+    Process.exit(worker, :shutdown)
+
+    receive do
+      {:EXIT, ^worker, _reason} -> :ok
+    after
+      grace_ms() -> kill(worker)
+    end
+  end
+
   defp kill(worker) do
     Process.exit(worker, :kill)
 
     receive do
       {:EXIT, ^worker, _reason} -> :ok
+    end
+  end
+
+  defp grace_ms do
+    case Application.get_env(:raxol_agent, :turn_cancel_grace_ms, @default_grace_ms) do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _invalid -> @default_grace_ms
     end
   end
 end

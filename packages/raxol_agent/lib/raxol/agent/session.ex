@@ -28,7 +28,21 @@ defmodule Raxol.Agent.Session do
   neither sends nor intercepts that atom.
 
   A cancelled turn is answered `{:error, :cancelled}`, but a change its
-  process already sent to the agent is not rolled back.
+  process already sent to the agent is not rolled back. The turn's process
+  first gets an exit signal it can trap, then is killed (see
+  `Raxol.Agent.Comm.run_turn/3`).
+
+  ## The turn in the journal
+
+  The Dispatcher brackets each fold of `update/2`, which for a turn that runs
+  in its own process ends long before the turn does. So the session brackets
+  the whole turn under a turn id of its own (`acp-...`): a durable
+  `turn_started` (payload `prompt`) when the prompt is accepted, then exactly
+  one of `turn_completed` (the turn was answered), `turn_canceled` (payload
+  `reason`: `cancelled`, or `caller_down` when the prompt's caller exited) or
+  `error` (payload `reason: turn_failed`). A session that dies mid-turn
+  leaves the `turn_started` open; a journal reopened with
+  `journal_required: true` closes it (see `Raxol.Agent.EmitBridge`).
 
   The turn's agent ref is not a secret inside the node: it travels in the
   Dispatcher's durable `:turn_started` event (with the prompt) and in the
@@ -42,6 +56,7 @@ defmodule Raxol.Agent.Session do
 
   alias Raxol.Agent.Comm
   alias Raxol.Agent.Session.PromptTurn
+  alias Raxol.Core.Runtime.EmitBus
 
   defstruct [
     :id,
@@ -75,6 +90,7 @@ defmodule Raxol.Agent.Session do
               caller: pid(),
               caller_mref: reference(),
               agent_ref: reference(),
+              turn_id: String.t(),
               pid: pid() | nil,
               mref: reference() | nil
             }
@@ -226,7 +242,7 @@ defmodule Raxol.Agent.Session do
     # session_id → pid resolution seam (SS): registered in both ownership
     # modes so `Raxol.Agent.Session.Supervisor.whereis/1` resolves supervised
     # and standalone sessions alike. Registry cleans the key up on death.
-    register_session(session_id, id, app_module)
+    register_session(session_id, id, app_module, team_id)
 
     {lifecycle_pid, lifecycle_mref} =
       if owns_lifecycle? do
@@ -443,17 +459,21 @@ defmodule Raxol.Agent.Session do
         # the prompt) can answer it, run its work or message its process.
         agent_ref = make_ref()
         prompt = {:call, self(), agent_ref, {:acp_prompt, text, approver}}
-        GenServer.cast(dispatcher_pid, dispatch_cast(prompt, metadata))
-
         caller_mref = Process.monitor(caller)
 
         turn = %{
           caller: caller,
           caller_mref: caller_mref,
           agent_ref: agent_ref,
+          turn_id: mint_turn_id(),
           pid: nil,
           mref: nil
         }
+
+        # Before the prompt reaches the agent, so the bracket opens ahead of
+        # every event the turn's folds emit.
+        bracket(state, turn, :turn_started, %{prompt: text})
+        GenServer.cast(dispatcher_pid, dispatch_cast(prompt, metadata))
 
         %{
           state
@@ -464,23 +484,38 @@ defmodule Raxol.Agent.Session do
     end
   end
 
-  defp cancel_turn(state, ref, metadata) do
+  # Random, not `System.unique_integer/1`: a journal outlives the BEAM, and a
+  # counter would mint a later run's turn ids over an earlier run's.
+  defp mint_turn_id,
+    do: "acp-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+
+  # The journal's bracket around the whole turn (see "The turn in the
+  # journal" in the moduledoc).
+  defp bracket(state, turn, type, payload) do
+    state.session_id
+    |> EmitBus.build(type, :durable, payload, turn_id: turn.turn_id)
+    |> EmitBus.publish()
+  end
+
+  defp cancel_turn(state, ref, metadata, reason \\ :cancelled) do
     if Map.has_key?(state.turns, ref) do
-      {:ok, end_turn(state, ref, {:error, :cancelled}, metadata)}
+      closing = {:turn_canceled, %{reason: reason}}
+      {:ok, end_turn(state, ref, {:error, :cancelled}, metadata, closing)}
     else
       {{:error, :not_found}, state}
     end
   end
 
-  # Kill the turn's process (if `run_turn/3` started one) before answering,
+  # Stop the turn's process (if `run_turn/3` started one) before answering,
   # so a cancel's `:ok` means that process is dead. Work the agent does
   # inline in `update/2` is not stopped and may still finish after this. The
   # agent then sees `{:acp_cancel, agent_ref}`, to drop whatever it tracks
   # for the turn.
-  defp end_turn(state, ref, answer, metadata) do
+  defp end_turn(state, ref, answer, metadata, {closing_type, closing_payload}) do
     {turn, state} = forget_turn(state, ref)
     Process.demonitor(turn.caller_mref)
     if turn.pid, do: PromptTurn.abort(turn.pid, turn.mref)
+    bracket(state, turn, closing_type, closing_payload)
     Comm.reply(turn.caller, ref, answer)
 
     {:noreply, state} =
@@ -498,6 +533,7 @@ defmodule Raxol.Agent.Session do
     {turn, state} = forget_turn(state, ref)
     Process.demonitor(turn.caller_mref)
     if turn.mref, do: Process.demonitor(turn.mref)
+    bracket(state, turn, :error, %{reason: :turn_failed})
     Comm.reply(turn.caller, ref, {:error, :turn_failed})
 
     {:noreply, state} =
@@ -586,11 +622,12 @@ defmodule Raxol.Agent.Session do
       %{pid: nil} ->
         {turn, state} = forget_turn(state, ref)
         Process.demonitor(turn.caller_mref)
+        bracket(state, turn, :turn_completed, %{})
         Comm.reply(turn.caller, ref, reply)
         {:noreply, state}
 
       %{pid: pid} when is_pid(pid) ->
-        {:noreply, end_turn(state, ref, reply, %{})}
+        {:noreply, end_turn(state, ref, reply, %{}, {:turn_completed, %{}})}
     end
   end
 
@@ -609,6 +646,7 @@ defmodule Raxol.Agent.Session do
         {turn, state} = forget_turn(state, ref)
         Process.demonitor(turn.caller_mref)
         Process.demonitor(turn.mref)
+        bracket(state, turn, :turn_completed, %{})
         Comm.reply(turn.caller, ref, reply)
         {:noreply, state}
 
@@ -759,7 +797,7 @@ defmodule Raxol.Agent.Session do
         {:noreply, fail_turn(state, ref)}
 
       _caller_down ->
-        {_result, state} = cancel_turn(state, ref, %{})
+        {_result, state} = cancel_turn(state, ref, %{}, :caller_down)
         {:noreply, state}
     end
   end
@@ -953,7 +991,9 @@ defmodule Raxol.Agent.Session do
 
   # A session_id is also the durable journal's on-disk directory name, so it
   # must be a safe filename. Coerce the (arbitrary term) agent id into the
-  # journal's charset and suffix a unique token so restarts never collide.
+  # journal's charset and suffix a random token so two sessions never collide,
+  # in this BEAM or with a journal an earlier one left behind
+  # (`System.unique_integer/1` starts over with every BEAM).
   #
   # Public (not `defp`) so `Raxol.Agent.Session.Supervisor.start_session/2` can
   # mint the same shape of id up-front when the caller omits `:session_id`.
@@ -967,7 +1007,7 @@ defmodule Raxol.Agent.Session do
       |> String.trim("-")
 
     base = if base == "", do: "agent", else: base
-    "#{base}-#{System.unique_integer([:positive])}"
+    "#{base}-#{Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)}"
   end
 
   defp to_id_string(id) when is_binary(id), do: id
@@ -986,11 +1026,11 @@ defmodule Raxol.Agent.Session do
   # registration rather than crashing the session — the primary `id` identity
   # is untouched. Registry is always up here (the `{:via, ...}` name requires
   # it), but guard defensively.
-  defp register_session(session_id, id, app_module) do
+  defp register_session(session_id, id, app_module, team_id) do
     if Process.whereis(Raxol.Agent.Registry) do
       do_register_session(
         {:session, session_id},
-        %{id: id, app_module: app_module}
+        %{id: id, app_module: app_module, team_id: team_id}
       )
     end
 

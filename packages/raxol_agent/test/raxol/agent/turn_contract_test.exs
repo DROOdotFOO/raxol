@@ -13,6 +13,7 @@ defmodule Raxol.Agent.TurnContractTest do
   import ExUnit.CaptureLog
 
   alias Raxol.Agent.Comm
+  alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
   alias Raxol.Agent.ToolPolicy
@@ -55,6 +56,46 @@ defmodule Raxol.Agent.TurnContractTest do
       do: {%{model | cancelled: [ref | model.cancelled]}, []}
 
     def update(_msg, model), do: {model, []}
+  end
+
+  # An agent whose turns trap exits, so they hear a cancel before they are
+  # killed. A "cleanup" turn then stops itself; a "stubborn" one carries on.
+  # Each step is reported through the turn's approver.
+  defmodule TrappingTurn do
+    @moduledoc false
+    use Raxol.Agent
+
+    alias Raxol.Agent.Comm
+
+    def init(_context), do: %{}
+
+    def update(
+          {:agent_message, _from, {:call, session, ref, {:acp_prompt, mode, approver}}},
+          model
+        ) do
+      Comm.run_turn(session, ref, fn ->
+        Process.flag(:trap_exit, true)
+        approver.("started", %{}, %{})
+
+        receive do
+          {:EXIT, _from, :shutdown} -> stopping(mode, approver)
+        end
+      end)
+
+      {model, []}
+    end
+
+    def update(_msg, model), do: {model, []}
+
+    defp stopping("cleanup", approver), do: approver.("cleaned_up", %{}, %{})
+
+    defp stopping("stubborn", approver) do
+      approver.("ignored", %{}, %{})
+
+      receive do
+        :never -> :ok
+      end
+    end
   end
 
   setup do
@@ -106,14 +147,14 @@ defmodule Raxol.Agent.TurnContractTest do
     assert {:ok, {:ok, "count: 0", _}} = prompt(id, "reset", ToolPolicy.allow_all())
   end
 
-  test "cancel kills a held turn and the agent answers the next prompt", %{id: id} do
+  test "cancel stops a held turn and the agent answers the next prompt", %{id: id} do
     ref = make_ref()
     {held, worker} = hold(id, ref)
     worker_mon = Process.monitor(worker)
 
     # The call-form cancel answers :ok only once the turn's process is dead.
     assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, {:error, :cancelled}} = Task.await(held)
 
     # Idle: the turn is gone and the agent answers again.
@@ -130,13 +171,13 @@ defmodule Raxol.Agent.TurnContractTest do
     assert_receive {:DOWN, ^worker_mon, :process, ^worker, :normal}, 5_000
   end
 
-  test "a cancel sent with from: kills the held turn", %{id: id} do
+  test "a cancel sent with from: stops the held turn", %{id: id} do
     ref = make_ref()
     {held, worker} = hold(id, ref)
     worker_mon = Process.monitor(worker)
 
     assert :ok = Comm.send(id, {:acp_cancel, ref}, from: "editor")
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, {:error, :cancelled}} = Task.await(held)
   end
 
@@ -181,7 +222,7 @@ defmodule Raxol.Agent.TurnContractTest do
     worker_mon = Process.monitor(worker)
 
     Process.exit(caller, :kill)
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
     assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", ToolPolicy.allow_all())
   end
@@ -192,14 +233,14 @@ defmodule Raxol.Agent.TurnContractTest do
     end
   end
 
-  test "cancel during a blocked approver kills the ask and changes nothing", %{id: id} do
+  test "cancel during a blocked approver stops the ask and changes nothing", %{id: id} do
     assert {:ok, {:ok, "count: 1", _}} = prompt(id, "increment", ToolPolicy.allow_all())
     ref = make_ref()
     {held, asker} = asking(id, "reset", ref)
     asker_mon = Process.monitor(asker)
 
     assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
-    assert_receive {:DOWN, ^asker_mon, :process, ^asker, :killed}, 5_000
+    assert_receive {:DOWN, ^asker_mon, :process, ^asker, :shutdown}, 5_000
     assert {:ok, {:error, :cancelled}} = Task.await(held)
 
     # The ask died with its turn, so the reset never reached the count.
@@ -264,7 +305,7 @@ defmodule Raxol.Agent.TurnContractTest do
 
     Process.exit(lifecycle, :kill)
     assert {:ok, {:error, :agent_down}} = Task.await(held)
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, {:error, :not_found}} = Comm.call(id, {:acp_cancel, ref})
   end
 
@@ -317,7 +358,7 @@ defmodule Raxol.Agent.TurnContractTest do
     worker_mon = Process.monitor(worker)
 
     assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert_receive {:agent_reply, ^ref, {:error, :cancelled}}, 5_000
     refute_received {:acp_run, ^ref, _fun}
   end
@@ -374,7 +415,7 @@ defmodule Raxol.Agent.TurnContractTest do
     assert Process.alive?(worker)
 
     assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, {:error, :cancelled}} = Task.await(held)
   end
 
@@ -423,11 +464,11 @@ defmodule Raxol.Agent.TurnContractTest do
     # process is dead and its cancel sent to the agent once this returns.
     assert {:ok, {:ok, "done", _}} = Comm.call(id, {:acp_prompt, "answer", approver}, 5_000)
     assert {:ok, {:ok, "answered inline", _}} = Task.await(running)
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, %{running: turn_ref, cancelled: [turn_ref]}} = Session.get_model(id)
   end
 
-  test "a cancel call sent with from: kills the held turn and answers", %{id: id} do
+  test "a cancel call sent with from: stops the held turn and answers", %{id: id} do
     ref = make_ref()
     {held, worker} = hold(id, ref)
     worker_mon = Process.monitor(worker)
@@ -435,8 +476,110 @@ defmodule Raxol.Agent.TurnContractTest do
 
     :ok = Comm.send(id, {:call, self(), call_ref, {:acp_cancel, ref}}, from: "editor")
     assert_receive {:agent_reply, ^call_ref, :ok}, 5_000
-    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
     assert {:ok, {:error, :cancelled}} = Task.await(held)
+  end
+
+  describe "cancel grace" do
+    setup do
+      id = "trapping-#{uniq()}"
+      {:ok, _sup} = Session.Supervisor.start_session(TrappingTurn, id: id, session_id: id)
+      on_exit(fn -> Application.delete_env(:raxol_agent, :turn_cancel_grace_ms) end)
+      %{trapping: id}
+    end
+
+    test "a turn that traps exits is told to stop, and stops itself", %{trapping: id} do
+      ref = make_ref()
+      {held, worker} = trapping(id, "cleanup", ref)
+      worker_mon = Process.monitor(worker)
+
+      assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
+
+      # It heard the stop, released what it held and returned: never killed.
+      assert_receive {:turn, "cleaned_up", ^worker}, 5_000
+      assert_receive {:DOWN, ^worker_mon, :process, ^worker, :normal}, 5_000
+      assert {:ok, {:error, :cancelled}} = Task.await(held)
+    end
+
+    test "a turn that ignores the stop is killed after the grace", %{trapping: id} do
+      Application.put_env(:raxol_agent, :turn_cancel_grace_ms, 50)
+      ref = make_ref()
+      {held, worker} = trapping(id, "stubborn", ref)
+      worker_mon = Process.monitor(worker)
+
+      # The cancel answers only once the turn's process is dead.
+      assert {:ok, :ok} = Comm.call(id, {:acp_cancel, ref})
+      refute Process.alive?(worker)
+
+      assert_receive {:turn, "ignored", ^worker}, 5_000
+      assert_receive {:DOWN, ^worker_mon, :process, ^worker, :killed}, 5_000
+      assert {:ok, {:error, :cancelled}} = Task.await(held)
+    end
+  end
+
+  describe "the turn in the journal" do
+    test "an answered turn is bracketed by turn_started and turn_completed", context do
+      assert {:ok, {:ok, "count: 1", _}} = prompt(context.id, "increment", ToolPolicy.allow_all())
+
+      assert {started, closing} = turn_bracket(context)
+      assert started["payload"]["prompt"] =~ "increment"
+      assert closing["type"] == "turn_completed"
+    end
+
+    test "an inline answer is bracketed too", context do
+      assert {:ok, {:ok, "count: 0", _}} = prompt(context.id, "get", ToolPolicy.allow_all())
+
+      assert {_started, %{"type" => "turn_completed"}} = turn_bracket(context)
+    end
+
+    test "a cancelled turn closes with turn_canceled", context do
+      ref = make_ref()
+      {held, _worker} = hold(context.id, ref)
+      assert {:ok, :ok} = Comm.call(context.id, {:acp_cancel, ref})
+      assert {:ok, {:error, :cancelled}} = Task.await(held)
+
+      assert {_started, closing} = turn_bracket(context)
+      assert closing["type"] == "turn_canceled"
+      assert closing["payload"]["reason"] =~ "cancelled"
+    end
+
+    test "a turn whose caller went down closes with turn_canceled", context do
+      ref = make_ref()
+      approver = authorizing(self())
+
+      caller =
+        spawn(fn -> Comm.call(context.id, {:acp_prompt, "hold", approver}, 30_000, ref: ref) end)
+
+      assert_receive {:authorizing, Counter.Hold, worker}, 5_000
+      worker_mon = Process.monitor(worker)
+      Process.exit(caller, :kill)
+      assert_receive {:DOWN, ^worker_mon, :process, ^worker, :shutdown}, 5_000
+
+      assert {_started, closing} = turn_bracket(context)
+      assert closing["type"] == "turn_canceled"
+      assert closing["payload"]["reason"] =~ "caller_down"
+    end
+
+    test "a failed turn closes with an error", context do
+      raising = fn _tool, _params, _context -> raise "approver failed" end
+
+      assert {:ok, {:error, :turn_failed}} =
+               Comm.call(context.id, {:acp_prompt, "reset", raising}, 5_000)
+
+      assert {_started, closing} = turn_bracket(context)
+      assert closing["type"] == "error"
+      assert closing["payload"]["reason"] =~ "turn_failed"
+    end
+
+    test "a plain call is answered and is not a turn of the session's", context do
+      assert {:ok, "count: 1"} = Comm.call(context.id, "increment")
+      assert {:ok, "count: 1"} = Comm.call(context.id, "get")
+      assert {:ok, "commands: increment, get"} = Comm.call(context.id, "reset")
+
+      records = stopped_journal(context)
+      assert Enum.filter(records, &match?(%{"turn_id" => "acp-" <> _}, &1)) == []
+      assert open_turns(records) == 0
+    end
   end
 
   test "a malformed prompt envelope is dropped without logging its text", %{id: id} do
@@ -464,6 +607,52 @@ defmodule Raxol.Agent.TurnContractTest do
     end
 
     assert {:ok, {:ok, "released 0", _}} = prompt(id, "release", ToolPolicy.allow_all())
+  end
+
+  # The journal once the session has stopped, which drains what it emitted.
+  defp stopped_journal(%{id: id, base: base}) do
+    :ok = Session.Supervisor.stop_session(id)
+    {:ok, records} = FileStore.read_records(id, base_dir: base)
+    records
+  end
+
+  # The one turn the session bracketed: its `turn_started` and what closed it.
+  defp turn_bracket(context) do
+    records = stopped_journal(context)
+
+    assert [%{"turn_id" => turn_id} = started, closing] =
+             Enum.filter(records, &match?(%{"turn_id" => "acp-" <> _}, &1))
+
+    assert started["type"] == "turn_started"
+    assert closing["turn_id"] == turn_id
+    assert closing["id"] > started["id"]
+    assert open_turns(records) == 0
+    {started, closing}
+  end
+
+  # The checkpoint turn-boundary count: zero means no turn is open.
+  defp open_turns(records) do
+    Enum.reduce(records, 0, fn record, open ->
+      case record["type"] do
+        "turn_started" -> open + 1
+        type when type in ["turn_completed", "turn_canceled", "error"] -> max(open - 1, 0)
+        _other -> open
+      end
+    end)
+  end
+
+  # Start a `mode` prompt on a `TrappingTurn` agent; return once its turn runs.
+  defp trapping(id, mode, ref) do
+    test = self()
+
+    approver = fn name, _params, _context ->
+      send(test, {:turn, name, self()})
+      :ok
+    end
+
+    held = Task.async(fn -> Comm.call(id, {:acp_prompt, mode, approver}, 30_000, ref: ref) end)
+    assert_receive {:turn, "started", worker}, 5_000
+    {held, worker}
   end
 
   # Start a `hold` prompt and return once its action is being authorized,

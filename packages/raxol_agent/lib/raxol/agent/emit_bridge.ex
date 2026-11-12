@@ -61,6 +61,35 @@ defmodule Raxol.Agent.EmitBridge do
   stale handle is dropped so the next durable event lazily reopens the journal
   and resumes from the on-disk offset — ids stay collision-free.
 
+  ## A required journal
+
+  With `journal_required: true` the journal is not optional and not lazy: the
+  bridge opens it in `init`, private and with `require_lock: true` (see
+  `Raxol.Agent.Journal.FileStore`), and stops instead of starting when it
+  cannot, so a session tree whose bridge is its first child does not start
+  unjournaled. The stop reasons:
+
+    * `{:journal_locked, os_pid}` - a live BEAM holds the writer lock
+      (`{:journal_locked, :lock_unavailable}` when no lock could be taken)
+    * `{:journal_bound, %{field: :cwd | :title, journal: recorded, requested:
+      asked}}` - `meta.json` records another `:cwd` or `:title` than the one in
+      `:journal_opts`: the journal belongs to another project root or
+      application and is not continued
+    * `{:journal_damaged, session_id}` - its records do not replay
+    * `{:journal_open_failed, reason}` - anything else `FileStore.open/2` refused
+
+  The journal continues and the model does not: every start appends
+  `agent_started` (payload `prior_offset`, the offset the journal had reached;
+  `0` for a new one) as its first record, then one `turn_canceled` (payload
+  `reason: "agent_restarted"`) per `turn_started` an earlier run left without
+  its closing bracket, so a checkpoint is never refused as mid-turn because of
+  a turn nothing is running any more. `agent_started` is a `family: :loop`
+  record outside the conversational set, so it is never a journal tip.
+
+  Such a bridge traps exits, so a supervised stop runs `terminate/2`: the
+  journal is flushed and its lock released before the stop returns. If its
+  Writer exits the bridge stops too, and its supervisor reopens the journal.
+
   ## Neutral -> contract mapping
 
   | neutral `type`     | tier         | contract `type`   |
@@ -70,6 +99,7 @@ defmodule Raxol.Agent.EmitBridge do
   | `:turn_started`     | `:durable`   | `:turn_started`      |
   | `:turn_completed`   | `:durable`   | `:turn_completed`    |
   | `:error`            | `:durable`   | `:error`             |
+  | `:turn_canceled`    | `:durable`   | `:turn_canceled`     |
   | `:approval_requested` | (tier as sent) | `:approval_requested` |
   | `:item_started`     | (tier as sent) | `:item_started`    |
   | `:woken`            | (tier as sent) | `:woken`           |
@@ -140,6 +170,15 @@ defmodule Raxol.Agent.EmitBridge do
   # must survive replay. Their tier is forced to `:durable` at the emit seam.
   @durable_required_types [:approval_requested, :woken]
 
+  # The brackets that close a `turn_started` (the checkpoint turn-boundary
+  # rule counts the same three).
+  @turn_closers ~w(turn_completed turn_canceled error)
+
+  # A bridge restarted under its supervisor can find its predecessor's Writer
+  # still flushing. It is given this long to exit before the journal counts as
+  # held by another process of this BEAM.
+  @writer_exit_ms 1_000
+
   @doc """
   Start a bridge for `session_id`.
 
@@ -148,9 +187,12 @@ defmodule Raxol.Agent.EmitBridge do
     * `:session_id` (required) — the EmitBus/SessionStreamer/Journal session key
     * `:streamer` — SessionStreamer server (default `Raxol.Agent.SessionStreamer`)
     * `:journal` — a pre-opened `Raxol.Agent.Journal.FileStore` handle (default:
-      opened lazily on the first durable event)
-    * `:journal_opts` — options forwarded to `FileStore.open/2` on lazy open
-      (e.g. `:base_dir`); default `[]`
+      opened lazily on the first durable event); ignored with `:journal_required`
+    * `:journal_required` — `true` to open the journal in `init` and stop when
+      it cannot be opened, locked and bound (see "A required journal")
+    * `:journal_opts` — options forwarded to `FileStore.open/2` (e.g.
+      `:base_dir`, and the `:cwd` and `:title` a required journal is bound
+      to); default `[]`
     * `:actor` — the write-generation actor (`%{kind, id}`) stamped onto every
       event this bridge emits when the neutral map does not already carry one
       (freeze §2.1: actor is producer-seam stamped, modules never invent it);
@@ -180,22 +222,168 @@ defmodule Raxol.Agent.EmitBridge do
   def init_manager(opts) do
     session_id = Keyword.fetch!(opts, :session_id)
     streamer = Keyword.get(opts, :streamer, SessionStreamer)
-    journal = Keyword.get(opts, :journal)
+
+    case initial_journal(session_id, opts) do
+      {:ok, journal, journal_opts, last_offset} ->
+        EmitBus.subscribe(session_id)
+
+        {:ok,
+         %__MODULE__{
+           session_id: session_id,
+           streamer: streamer,
+           journal: journal,
+           actor: Keyword.get(opts, :actor),
+           provenance: Keyword.get(opts, :provenance),
+           journal_opts: journal_opts,
+           last_offset: last_offset,
+           branch_id: Keyword.get(opts, :branch_id, @default_branch_id)
+         }}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
+  end
+
+  defp initial_journal(session_id, opts) do
     journal_opts = Keyword.get(opts, :journal_opts, [])
 
-    EmitBus.subscribe(session_id)
+    if Keyword.get(opts, :journal_required, false) == true do
+      # So that a stop from the supervisor closes the journal (see the moduledoc).
+      Process.flag(:trap_exit, true)
+      journal_opts = Keyword.merge(journal_opts, private: true, require_lock: true)
 
-    {:ok,
-     %__MODULE__{
-       session_id: session_id,
-       streamer: streamer,
-       journal: journal,
-       actor: Keyword.get(opts, :actor),
-       provenance: Keyword.get(opts, :provenance),
-       journal_opts: journal_opts,
-       last_offset: last_offset(journal),
-       branch_id: Keyword.get(opts, :branch_id, @default_branch_id)
-     }}
+      with {:ok, journal} <- open_owned(session_id, journal_opts, 2),
+           {:ok, last_offset} <- continue_journal(journal, session_id, journal_opts) do
+        {:ok, journal, journal_opts, last_offset}
+      end
+    else
+      journal = Keyword.get(opts, :journal)
+      {:ok, journal, journal_opts, last_offset(journal)}
+    end
+  end
+
+  # The bridge must own its Writer: a handle that joined another process's
+  # Writer would lose the journal when that process closed it.
+  defp open_owned(session_id, journal_opts, attempts) do
+    case FileStore.open(to_string(session_id), journal_opts) do
+      {:ok, %FileStore{owner?: true} = journal} ->
+        {:ok, journal}
+
+      {:ok, %FileStore{writer: writer}} when attempts > 1 ->
+        await_exit(writer)
+        open_owned(session_id, journal_opts, attempts - 1)
+
+      {:ok, %FileStore{}} ->
+        {:error, {:journal_locked, System.pid()}}
+
+      {:error, {:journal_locked, _holder}} = locked ->
+        locked
+
+      {:error, reason} ->
+        {:error, {:journal_open_failed, reason}}
+    end
+  end
+
+  defp await_exit(writer) do
+    ref = Process.monitor(writer)
+
+    receive do
+      {:DOWN, ^ref, :process, ^writer, _reason} -> :ok
+    after
+      @writer_exit_ms -> Process.demonitor(ref, [:flush])
+    end
+  end
+
+  # Runs under the Writer's lock. A refusal closes the journal again, which
+  # releases the lock.
+  defp continue_journal(journal, session_id, journal_opts) do
+    with :ok <- check_binding(journal, journal_opts),
+         {:ok, records} <- read_all(journal, session_id),
+         {:ok, offsets} <- append_reopening(journal, session_id, records) do
+      {:ok, List.last(offsets)}
+    else
+      {:error, _reason} = refusal ->
+        FileStore.close(journal)
+        refusal
+    end
+  end
+
+  defp check_binding(journal, journal_opts) do
+    case FileStore.read_meta(journal) do
+      {:ok, meta} ->
+        Enum.find_value([cwd: "cwd", title: "title"], :ok, &unbound(&1, meta, journal_opts))
+
+      {:error, reason} ->
+        {:error, {:journal_open_failed, {:meta, reason}}}
+    end
+  end
+
+  defp unbound({opt, key}, meta, journal_opts) do
+    case {Keyword.get(journal_opts, opt), Map.get(meta, key)} do
+      {nil, _recorded} -> nil
+      {requested, requested} -> nil
+      {requested, recorded} -> {:error, {:journal_bound, bound(opt, recorded, requested)}}
+    end
+  end
+
+  defp bound(field, recorded, requested),
+    do: %{field: field, journal: recorded, requested: requested}
+
+  defp read_all(journal, session_id) do
+    case FileStore.read(journal) do
+      {:ok, records} -> {:ok, records}
+      {:error, :damaged} -> {:error, {:journal_damaged, session_id}}
+    end
+  end
+
+  defp append_reopening(journal, session_id, records) do
+    started =
+      lifecycle_record(session_id, :agent_started, nil, %{
+        prior_offset: records |> List.last() |> record_id()
+      })
+
+    sealed =
+      for turn_id <- dangling_turns(records),
+          do: lifecycle_record(session_id, :turn_canceled, turn_id, %{reason: :agent_restarted})
+
+    case FileStore.append_many(journal, [started | sealed], :infinity) do
+      {:ok, offsets} -> {:ok, offsets}
+      {:error, reason} -> {:error, {:journal_open_failed, {:append, reason}}}
+    end
+  end
+
+  # One entry per `turn_started` whose turn id has no closing bracket after
+  # it, counted per turn id: a later BEAM mints the same turn ids again.
+  defp dangling_turns(records) do
+    records
+    |> Enum.reduce(%{}, fn record, open ->
+      case {Map.get(record, "type"), Map.get(record, "turn_id")} do
+        {"turn_started", turn_id} -> Map.update(open, turn_id, 1, &(&1 + 1))
+        {type, turn_id} when type in @turn_closers -> close_turn(open, turn_id)
+        _other -> open
+      end
+    end)
+    |> Enum.flat_map(fn {turn_id, count} -> List.duplicate(turn_id, count) end)
+  end
+
+  defp close_turn(open, turn_id) do
+    case open do
+      %{^turn_id => count} when count > 0 -> Map.put(open, turn_id, count - 1)
+      _not_open -> open
+    end
+  end
+
+  defp lifecycle_record(session_id, type, turn_id, payload) do
+    %{
+      v: 0,
+      session_id: session_id,
+      turn_id: turn_id,
+      ts: System.system_time(:microsecond),
+      family: :loop,
+      type: type,
+      tier: :durable,
+      payload: payload
+    }
   end
 
   # Durable-required resume-brackets: force `:durable` no matter the tier as
@@ -234,6 +422,14 @@ defmodule Raxol.Agent.EmitBridge do
 
     SessionStreamer.emit(session_id, event, state.streamer)
     {:noreply, state}
+  end
+
+  # Reaches a bridge that traps exits, i.e. one with a required journal.
+  def handle_manager_info(
+        {:EXIT, writer, reason},
+        %__MODULE__{journal: %FileStore{writer: writer}} = state
+      ) do
+    {:stop, {:journal_writer_down, reason}, %{state | journal: nil}}
   end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
@@ -497,6 +693,7 @@ defmodule Raxol.Agent.EmitBridge do
   defp contract_type(:turn_started, _tier), do: :turn_started
   defp contract_type(:turn_completed, _tier), do: :turn_completed
   defp contract_type(:error, _tier), do: :error
+  defp contract_type(:turn_canceled, _tier), do: :turn_canceled
   # Frozen-but-not-landed loop vocabulary (freeze §1.1 / storage-foundations):
   # these bracket events pass through with their own type instead of collapsing
   # to :item_completed. `approval_requested` is a durable bracket (a resume-point

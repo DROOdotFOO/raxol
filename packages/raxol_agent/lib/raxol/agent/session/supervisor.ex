@@ -9,8 +9,8 @@ defmodule Raxol.Agent.Session.Supervisor do
   `:rest_for_one`, children in dependency order:
 
     1. `Raxol.Agent.EmitBridge` — the per-session sink. Owns the durable
-       journal handle (opened lazily on the first durable event) and the
-       EmitBus subscription.
+       journal handle (opened lazily on the first durable event, or in its
+       `init` with `journal_required: true`) and the EmitBus subscription.
     2. `Raxol.Core.Runtime.Lifecycle` — the per-session TEA runtime (dispatcher
        + model). A **supervised sibling**, not something the session spawns and
        orphans. It emits durable events onto EmitBus, so it must start AFTER the
@@ -97,6 +97,13 @@ defmodule Raxol.Agent.Session.Supervisor do
       `{:harness_session, session_id}`)
     * `:journal` / `:journal_opts` — forwarded to the tree-owned
       `Raxol.Agent.EmitBridge`
+    * `:journal_required` — `true` for a session that must not run
+      unjournaled: the bridge opens the journal in its `init` (in the session
+      tree, so the Writer is linked to the bridge and not to the caller),
+      private and locked, and when it cannot (a live lock holder, no lock, a
+      journal bound to another `:cwd` or `:title` in `:journal_opts`) nothing
+      is started and this returns `{:error, reason}` with the bridge's stop
+      reason (see "A required journal" in `Raxol.Agent.EmitBridge`)
   """
   @spec start_session(module(), keyword()) ::
           {:ok, pid()} | {:error, {:already_started, pid()} | term()}
@@ -104,9 +111,21 @@ defmodule Raxol.Agent.Session.Supervisor do
     with :ok <- ensure_infrastructure() do
       opts = normalize_opts(app_module, opts)
 
-      DynamicSupervisor.start_child(@dynsup, tree_spec(opts))
+      @dynsup
+      |> DynamicSupervisor.start_child(tree_spec(opts))
+      |> journal_refusal(Keyword.get(opts, :journal_required, false))
     end
   end
+
+  # A required journal's refusal is the reason the caller asked for, not the
+  # supervisor's wrapping of a child that did not start.
+  defp journal_refusal(
+         {:error, {:shutdown, {:failed_to_start_child, :emit_bridge, reason}}},
+         true
+       ),
+       do: {:error, reason}
+
+  defp journal_refusal(result, _required?), do: result
 
   @doc """
   Stop a session's whole subtree (session first, then the sink — the reverse
@@ -245,6 +264,7 @@ defmodule Raxol.Agent.Session.Supervisor do
       ]
       |> copy_opt(:journal, opts)
       |> copy_opt(:journal_opts, opts)
+      |> copy_opt(:journal_required, opts)
 
     # The tree owns the sink AND the lifecycle; the session starts (and stops)
     # neither — it only looks them up and forwards to the runtime's dispatcher.
