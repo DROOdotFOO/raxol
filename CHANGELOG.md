@@ -367,7 +367,7 @@
 
 ### Removed
 
-- **`Raxol.System.Updater` and every `Raxol.System.Updater.*` module move from `raxol` to `raxol_cli` (ADR-0043).** **Breaking** for `raxol` users: the modules and `priv/sigstore/trusted_root.json` no longer ship in the `raxol` package, and `raxol` no longer lists `:inets` and `:ssl` in `extra_applications` (the updater was their only user). Module names, options and `config :raxol, :updater_manifest` are unchanged in `raxol_cli`, the updater's only caller.
+- **`Raxol.System.Updater` and every `Raxol.System.Updater.*` module leave `raxol` (ADR-0043).** `raxol_cli`, their only caller, now has them as `Raxol.CLI.Updater` and `Raxol.CLI.Updater.*` and reads the channel override from `config :raxol_cli, :updater_manifest`. **Breaking** for `raxol` users: the modules and `priv/sigstore/trusted_root.json` no longer ship in the `raxol` package, and `raxol` no longer lists `:inets` and `:ssl` in `extra_applications` (the updater was their only user).
 
 - **`raxol_symphony` leaves this repository (ADR-0043).** The tracker-driven coding-agent orchestrator, never published to Hex, is frozen with its history at [DROOdotFOO/raxol-symphony](https://github.com/DROOdotFOO/raxol-symphony) (archived, CI off), its raxol dependencies git-pinned to `ce40937c4`; it returns only as a Hex consumer of the runtime and agent repositories. Removed here with it: `packages/raxol_symphony/`, `docs/features/SYMPHONY.md` and its ExDoc extra, the package-test matrix cell and its `inotify-tools` step, its release-check catalog entry, singleton-guard roots and allowlist rows, and its `.gitignore` line.
 

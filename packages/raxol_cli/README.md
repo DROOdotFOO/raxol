@@ -48,9 +48,9 @@ launcher then prints to stdout. One connection may run up to half the server's
     raxol update [--check] [--version VERSION]
 
 Replaces the running binary with a newer `raxol-cli-v*` release; `--check`
-only reports one. The updater ships in this package as `Raxol.System.Updater`.
-`Raxol.System.Updater.Manifest` names the release channel and builds every
+only reports one. The updater ships in this package as `Raxol.CLI.Updater`.
+`Raxol.CLI.Updater.Manifest` names the release channel and builds every
 URL, and a download is installed only when it matches the release's
-`SHA256SUMS` and its Sigstore attestation (`Raxol.System.Updater.Provenance`).
+`SHA256SUMS` and its Sigstore attestation (`Raxol.CLI.Updater.Provenance`).
 The Sigstore trusted root is compiled in from `priv/sigstore/trusted_root.json`;
 `priv/sigstore/README.md` records its source and how to refresh it.

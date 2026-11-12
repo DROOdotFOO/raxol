@@ -1,6 +1,6 @@
 defmodule Raxol.CLI.Updater.State do
   @moduledoc """
-  Refactored System Updater State module with GenServer-based state management.
+  Updater state module with GenServer-based state management.
 
   This module provides backward compatibility while eliminating Process dictionary usage.
   All state is now managed through the Updater.State.Server GenServer.

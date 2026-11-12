@@ -1,6 +1,6 @@
 defmodule Raxol.CLI.Updater.Validation do
   @moduledoc """
-  Update-check scheduling and version comparison for the Raxol System Updater.
+  Update-check scheduling and version comparison for `Raxol.CLI.Updater`.
   """
 
   @default_check_interval 86_400
