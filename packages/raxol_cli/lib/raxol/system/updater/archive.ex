@@ -37,8 +37,7 @@ defmodule Raxol.System.Updater.Archive do
   defp entries(archive, :tar_gz) do
     case :erl_tar.table(to_charlist(archive), [:compressed, :verbose]) do
       {:ok, rows} ->
-        {:ok,
-         Enum.map(rows, fn row -> {to_string(elem(row, 0)), elem(row, 1)} end)}
+        {:ok, Enum.map(rows, fn row -> {to_string(elem(row, 0)), elem(row, 1)} end)}
 
       {:error, reason} ->
         {:error, {:unreadable_archive, reason}}

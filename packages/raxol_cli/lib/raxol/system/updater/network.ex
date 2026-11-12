@@ -62,9 +62,7 @@ defmodule Raxol.System.Updater.Network do
   @spec fetch_attestation(Manifest.t(), release()) ::
           {:ok, binary()} | {:error, term()}
   def fetch_attestation(manifest, release) do
-    get_text(
-      Manifest.asset_url(manifest, release.tag, manifest.attestation_asset)
-    )
+    get_text(Manifest.asset_url(manifest, release.tag, manifest.attestation_asset))
   end
 
   @doc """

@@ -170,9 +170,7 @@ defmodule Raxol.System.Updater.ProvenanceTest do
     end
 
     test "another tag is refused" do
-      assert {:error,
-              {:identity_mismatch, :source_repository_ref,
-               "refs/tags/raxol-cli-v0.2.10"}} =
+      assert {:error, {:identity_mismatch, :source_repository_ref, "refs/tags/raxol-cli-v0.2.10"}} =
                Provenance.verify(
                  bundle(),
                  subject(),
@@ -184,8 +182,7 @@ defmodule Raxol.System.Updater.ProvenanceTest do
       policy = Policy.for_release("someone/raxol", @workflow, @release_tag)
 
       assert {:error,
-              {:identity_mismatch, :source_repository_uri,
-               "https://github.com/DROOdotFOO/raxol"}} =
+              {:identity_mismatch, :source_repository_uri, "https://github.com/DROOdotFOO/raxol"}} =
                Provenance.verify(bundle(), subject(), policy)
     end
 
@@ -195,8 +192,7 @@ defmodule Raxol.System.Updater.ProvenanceTest do
         | issuer: "https://accounts.google.com"
       }
 
-      assert {:error,
-              {:identity_mismatch, :issuer, "https://accounts.google.com"}} =
+      assert {:error, {:identity_mismatch, :issuer, "https://accounts.google.com"}} =
                Policy.check(identity, policy())
     end
 
@@ -256,9 +252,7 @@ defmodule Raxol.System.Updater.ProvenanceTest do
 
     test "an integrated time the log did not sign is refused, even inside the certificate's validity" do
       moved =
-        mutate_tlog_entry(
-          &Map.put(&1, "integratedTime", to_string(leaf().not_before + 60))
-        )
+        mutate_tlog_entry(&Map.put(&1, "integratedTime", to_string(leaf().not_before + 60)))
 
       assert {:error, :signed_entry_timestamp_invalid} = verify(moved)
     end
@@ -333,8 +327,7 @@ defmodule Raxol.System.Updater.ProvenanceTest do
 
     test "an entry in a log the root does not trust is refused", %{root: root} do
       assert {:error,
-              {:untrusted_transparency_log,
-               "wNI9atQGlz+VWfO6LRygH4QUfY/8W4RFwiT5i5WRgB0="}} =
+              {:untrusted_transparency_log, "wNI9atQGlz+VWfO6LRygH4QUfY/8W4RFwiT5i5WRgB0="}} =
                verify(bundle(), trusted_root: %{root | tlogs: []})
     end
   end
@@ -370,11 +363,7 @@ defmodule Raxol.System.Updater.ProvenanceTest do
       assert {:error, {:malformed_bundle, :json}} = verify("not json")
 
       assert {:error, {:malformed_tlog_entry, "inclusionProof.hashes"}} =
-               verify(
-                 mutate_tlog_entry(
-                   &put_in(&1, ["inclusionProof", "hashes"], "nope")
-                 )
-               )
+               verify(mutate_tlog_entry(&put_in(&1, ["inclusionProof", "hashes"], "nope")))
     end
   end
 end

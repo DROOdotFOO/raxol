@@ -62,8 +62,7 @@ defmodule Raxol.Test.UpdaterReleaseServer do
 
     api = %{
       "/repos/#{repo}/releases/tags/#{tag}" => Jason.encode!(release),
-      "/repos/#{repo}/releases" =>
-        Jason.encode!([release | Keyword.get(opts, :listing, [])])
+      "/repos/#{repo}/releases" => Jason.encode!([release | Keyword.get(opts, :listing, [])])
     }
 
     downloads =

@@ -234,8 +234,7 @@ defmodule Raxol.System.Updater.Core do
   def handle_manager_call({:install_update, version}, _from, state) do
     case self_update(version) do
       :ok ->
-        {:reply, :ok,
-         %{state | status: :installed, current_version: version, error: nil}}
+        {:reply, :ok, %{state | status: :installed, current_version: version, error: nil}}
 
       {:no_update, _current} ->
         {:reply, :ok, state}
@@ -294,8 +293,7 @@ defmodule Raxol.System.Updater.Core do
         {:update_available, version} ->
           {:ok, tag} = Manifest.tag(manifest, version)
 
-          {:ok,
-           [%{version: version, url: Manifest.release_page_url(manifest, tag)}]}
+          {:ok, [%{version: version, url: Manifest.release_page_url(manifest, tag)}]}
 
         {:no_update, _current} ->
           {:ok, []}

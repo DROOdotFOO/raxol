@@ -25,8 +25,7 @@ defmodule Raxol.System.Updater.Provenance.Crypto do
   @doc "Decodes a DER `SubjectPublicKeyInfo` into a `:public_key` key."
   @spec decode_spki(binary()) :: {:ok, term()} | :error
   def decode_spki(der) when is_binary(der) do
-    {:ok,
-     :public_key.pem_entry_decode({:SubjectPublicKeyInfo, der, :not_encrypted})}
+    {:ok, :public_key.pem_entry_decode({:SubjectPublicKeyInfo, der, :not_encrypted})}
   rescue
     _malformed in [MatchError, ErlangError, ArgumentError, FunctionClauseError] ->
       :error
@@ -103,12 +102,10 @@ defmodule Raxol.System.Updater.Provenance.Crypto do
   def x509_time_to_unix(_time), do: :error
 
   defp general_time(
-         <<year::binary-4, month::binary-2, day::binary-2, hour::binary-2,
-           minute::binary-2, second::binary-2, "Z">>
+         <<year::binary-4, month::binary-2, day::binary-2, hour::binary-2, minute::binary-2,
+           second::binary-2, "Z">>
        ) do
-    case DateTime.from_iso8601(
-           "#{year}-#{month}-#{day}T#{hour}:#{minute}:#{second}Z"
-         ) do
+    case DateTime.from_iso8601("#{year}-#{month}-#{day}T#{hour}:#{minute}:#{second}Z") do
       {:ok, datetime, 0} -> {:ok, DateTime.to_unix(datetime)}
       _invalid -> :error
     end

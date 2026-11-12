@@ -66,8 +66,7 @@ defmodule Raxol.System.Updater.Provenance.TrustedRoot do
            map_all(Map.get(root, "certificateAuthorities", []), &ca/1),
          {:ok, tlogs} <- logs(root, "tlogs"),
          {:ok, ctlogs} <- logs(root, "ctlogs") do
-      {:ok,
-       %__MODULE__{certificate_authorities: cas, tlogs: tlogs, ctlogs: ctlogs}}
+      {:ok, %__MODULE__{certificate_authorities: cas, tlogs: tlogs, ctlogs: ctlogs}}
     end
   end
 
