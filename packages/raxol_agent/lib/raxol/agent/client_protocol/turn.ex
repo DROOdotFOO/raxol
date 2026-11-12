@@ -33,8 +33,11 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
 
   A turn that cannot be answered is a JSON-RPC internal error whose `data`
   carries a `tag` and a `reason`: `budget_exhausted`, `agent_not_running`,
-  `agent_down`, `turn_failed` (the agent answered `{:error, reason}`) or
-  `turn_reply_invalid` (the reply is not `{:ok, text, usage}`).
+  `agent_down`, `turn_failed` (the agent answered `{:error, reason}` with an
+  atom `reason`) or `turn_reply_invalid` (any other reply that is not
+  `{:ok, text, usage}`, such as `{:error, "text"}` or `{:ok, text}`; `reason`
+  is then the reply itself, inspected). `reason` is cut at 2,000 characters.
+  The same tag and reason are logged.
   """
 
   @compile {:no_warn_undefined,
@@ -131,7 +134,7 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
 
   defp refusal({:error, :cancelled}), do: {:stop, :cancelled}
   defp refusal({:error, reason}) when is_atom(reason), do: {:error, error(:turn_failed, reason)}
-  defp refusal(_reply), do: {:error, error(:turn_reply_invalid, :not_ok_text_usage)}
+  defp refusal(reply), do: {:error, error(:turn_reply_invalid, reply)}
 
   # The session answers the prompt once the turn's process is down. A reply
   # that was already on its way is still delivered: the agent did that work.
@@ -177,7 +180,9 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
 
   # Logged for the operator and carried to the client, which shows `data`.
   defp error(tag, reason) do
-    detail = reason |> inspect() |> String.slice(0, @reason_limit)
+    detail =
+      reason |> inspect(printable_limit: @reason_limit) |> String.slice(0, @reason_limit)
+
     Logger.error("[acp] #{tag}: #{detail}")
 
     @error.with_data(@error.internal_error(), %{
