@@ -35,6 +35,11 @@ Pairs with ADR-0035, which handles the cost-metering half of the same integratio
 Depends on ADR-0020 (`Raxol.Agent.Sandbox`) for what a governed tool call looks like, and on
 ADR-0030 for the `session/update` delivery contract the ACP seam rests on.
 
+**Symphony frozen out, 2026-10-27** ([ADR-0043](0043-two-repositories-runtime-and-agent.md)
+Decision 6, #1320). The Symphony runners and orchestrator cited below are in the frozen
+repository, and the Symphony-on-OMP notes are not carried forward because Symphony's `omp`
+runner is dropped.
+
 ## Context
 
 Raxol can host a foreign agent four ways. Three of them are in production and none of them was

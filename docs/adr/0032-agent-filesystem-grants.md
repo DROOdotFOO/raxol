@@ -25,6 +25,10 @@ Revised 2026-08-26 during review. The single-root diagnosis and the grant model 
 unchanged. The enforcement mechanism does not: the first draft proposed FUSE, and a FUSE
 mount does not confine a process. See "Alternatives considered".
 
+**Symphony frozen out, 2026-10-27** ([ADR-0043](0043-two-repositories-runtime-and-agent.md)
+Decision 6, #1320). `Raxol.Symphony.Config`, `Raxol.Symphony.PathSafety` and the #920 runner
+are in the frozen repository, so no Symphony path handling is left in this tree to converge.
+
 ## Context
 
 `Raxol.Agent.Actions.Fs.resolve/2` (`fs.ex:253`) is a single-root jail. It expands a request
