@@ -123,6 +123,19 @@ defmodule Raxol.Agent.JournalRequiredTest do
     assert {:ok, _offset} = checkpoint(id, base)
   end
 
+  test "a call the bridge does not know is answered and leaves it running", %{base: base, id: id} do
+    {:ok, bridge} =
+      EmitBridge.start_link(
+        session_id: id,
+        journal_required: true,
+        journal_opts: [base_dir: base]
+      )
+
+    assert GenServer.call(bridge, :not_a_bridge_call) == {:error, :not_implemented}
+    assert EmitBridge.prior_offset(bridge) == 0
+    :ok = GenServer.stop(bridge)
+  end
+
   test "the marker is stamped like the bridge's other durable records", %{base: base, id: id} do
     {:ok, bridge} =
       EmitBridge.start_link(

@@ -265,6 +265,9 @@ defmodule Raxol.Agent.EmitBridge do
   def handle_manager_call(:prior_offset, _from, state),
     do: {:reply, state.prior_offset, state}
 
+  def handle_manager_call(_request, _from, state),
+    do: {:reply, {:error, :not_implemented}, state}
+
   defp open_journal(%__MODULE__{journal_required: false} = state, journal),
     do: {:ok, %{state | journal: journal, last_offset: last_offset(journal)}}
 

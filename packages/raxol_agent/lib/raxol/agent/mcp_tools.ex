@@ -507,12 +507,16 @@ defmodule Raxol.Agent.McpTools do
   defp start_refusal(id, owned, {:journal_locked, :lock_unavailable}),
     do:
       "no journal lock could be taken for #{id}, so it was not started: no " <>
-        "`kill` binary was found, or #{Path.join(owned.base_dir, id)} is not writable"
+        "`kill` binary was found, or #{Path.join(owned.base_dir, id)} is not writable " <>
+        "or is on a volume without hard links"
 
-  defp start_refusal(id, _owned, {:journal_locked, holder}),
-    do:
-      "another running server (pid #{holder}) holds journal #{id}; " <>
-        "stop it or spawn under another id"
+  defp start_refusal(id, _owned, {:journal_locked, holder}) do
+    if holder == System.pid(),
+      do: "journal #{id} is still open in this server; ask again",
+      else:
+        "another running server (pid #{holder}) holds journal #{id}; " <>
+          "stop it or spawn under another id"
+  end
 
   defp start_refusal(id, _owned, {:journal_bound, %{field: :cwd, journal: root}}),
     do: "journal #{id} belongs to project root #{root || "(none recorded)"}; pick another id"

@@ -482,6 +482,20 @@ defmodule Raxol.Agent.CommandTest do
       FileStore.close(j)
     end
 
+    test "seek and a live attach of an id that names no session answer an error" do
+      {:ok, seek} = Command.decode(%{"type" => "seek", "payload" => %{"offset" => 1}})
+      assert Command.route(seek, %{session_id: "a/b"}) == {:error, :invalid_session_id}
+
+      {:ok, attach} =
+        Command.decode(%{
+          "type" => "attach",
+          "payload" => %{"from_offset" => 0, "history_policy" => "live"}
+        })
+
+      assert Command.route(attach, %{session_id: "a/b", pid: self()}) ==
+               {:error, :invalid_session_id}
+    end
+
     test "seek folds durable events up to the offset into a projection" do
       session_id = "cmd-seek-#{System.unique_integer([:positive])}"
       {:ok, j} = FileStore.open(session_id)

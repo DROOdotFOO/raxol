@@ -524,6 +524,23 @@ defmodule Raxol.Agent.McpToolsTest do
       assert text =~ "started #{id}"
     end
 
+    test "a journal this server still has open is not blamed on another server", %{
+      id: id,
+      root: root
+    } do
+      base = Path.dirname(journal_dir(root, id))
+
+      {:ok, journal} =
+        FileStore.open(id, base_dir: base, private: true, cwd: root, title: @counter)
+
+      assert {:error, text} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert text =~ "journal #{id} is still open in this server; ask again"
+      refute text =~ "another running server"
+
+      :ok = FileStore.close(journal)
+      assert {:ok, _text} = call("agent_spawn", %{"app" => @counter, "id" => id})
+    end
+
     test "a lock naming a dead pid is reclaimed", %{id: id, root: root} do
       dir = journal_dir(root, id)
       File.mkdir_p!(dir)

@@ -55,8 +55,8 @@ carry no support commitment yet.
   startable list (the playground demos unless configured), refuses
   `raxol_start`'s `path` argument (starting from a path compiles the file),
   leaves out the coding-agent harness tools, and serves `resources/read`
-  only for the sessions it runs and the journals of agents it started; every
-  other read is denied. Its `agent_*` tools start only the modules on
+  only for the sessions it runs and the journals of the agents its `agent_*`
+  tools act on; every other read is denied. Its `agent_*` tools start only the modules on
   `config :raxol_agent, :mcp_spawnable_apps` (a reference counter unless
   configured) and act only on agents this process started, or those listed
   in `:mcp_exposed_agents` (none unless configured). stdout is the JSON-RPC

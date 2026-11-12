@@ -217,7 +217,7 @@ defmodule Raxol.Agent.Command do
   # pure: reads via the tolerant Reader (writerless-safe), decodes with the
   # wire-safe `EventCodec` (unknown types stay strings, no atom minted from
   # disk), folds with `Raxol.Harness.Projection`. Returns `{:ok, projection}` or
-  # `{:error, :damaged}`.
+  # `{:error, :damaged | :invalid_session_id}`.
   defp seek(session, offset) do
     case FileStore.read_records(session_id(session)) do
       {:ok, records} ->
@@ -229,7 +229,7 @@ defmodule Raxol.Agent.Command do
 
         {:ok, projection}
 
-      {:error, :damaged} = err ->
+      {:error, reason} = err when reason in [:damaged, :invalid_session_id] ->
         err
     end
   end
@@ -246,7 +246,10 @@ defmodule Raxol.Agent.Command do
   end
 
   defp reattach(session, %{history_policy: :live}) do
-    attach_from(session, FileStore.high_watermark(session_id(session)) + 1)
+    case FileStore.high_watermark(session_id(session)) do
+      offset when is_integer(offset) -> attach_from(session, offset + 1)
+      {:error, :invalid_session_id} = err -> err
+    end
   end
 
   defp reattach(session, %{history_policy: :snapshot}) do
