@@ -119,13 +119,13 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
 
   defp answer(turn, {:ok, text, usage}) when is_binary(text) and is_map(usage) do
     Budget.record(usage)
-    Permission.settle(turn.session, turn.session_id, :completed)
+    Permission.settle(turn.session, turn.session_id, :answered)
     post_reply(turn, text)
     {:stop, :end_turn}
   end
 
   defp answer(turn, reply) do
-    Permission.settle(turn.session, turn.session_id, :failed)
+    Permission.settle(turn.session, turn.session_id, :unanswered)
     refusal(reply)
   end
 
@@ -150,7 +150,7 @@ defmodule Raxol.Agent.ClientProtocol.Turn do
   # one is cancelled there.
   defp agent_down(turn) do
     _ = Comm.send(turn.agent_id, {:acp_cancel, turn.ref})
-    Permission.settle(turn.session, turn.session_id, :failed)
+    Permission.settle(turn.session, turn.session_id, :unanswered)
     {:error, error(:agent_down, turn.agent_id)}
   end
 

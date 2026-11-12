@@ -1,11 +1,11 @@
 defmodule Raxol.Agent.ClientProtocol.PermissionTest do
   @moduledoc """
   The authorizer alone, against a process standing in for the ACP session:
-  it answers `request_permission` with a chosen outcome and reports every
-  call it receives. `Raxol.AgentClientProtocol.Ctx.request_permission/4`
-  folds a timeout, a client error, a disconnect and a cancel into
-  `{:ok, :cancelled}`, so the outcomes here are the ones it can produce,
-  and one it cannot.
+  it answers `request_permission` with a chosen outcome (`:hold` for never)
+  and reports every call it receives.
+  `Raxol.AgentClientProtocol.Ctx.request_permission/4` folds a timeout, a
+  client error, a disconnect and a cancel into `{:ok, :cancelled}`, so the
+  outcomes here are the ones it can produce, and one it cannot.
   """
   use ExUnit.Case, async: true
 
@@ -24,7 +24,7 @@ defmodule Raxol.Agent.ClientProtocol.PermissionTest do
     receive do
       {:"$gen_call", from, {:request_permission, request}} ->
         send(test, {:asked, request})
-        GenServer.reply(from, outcome)
+        if outcome != :hold, do: GenServer.reply(from, outcome)
 
       {:"$gen_call", from, {:post_update, notification}} ->
         send(test, {:posted, notification.update})
@@ -52,14 +52,14 @@ defmodule Raxol.Agent.ClientProtocol.PermissionTest do
   end
 
   describe "an action that is not sensitive" do
-    test "is allowed without asking, and announced in progress" do
+    test "is allowed without asking, and announced in progress with its params" do
       gate = Permission.authorizer(session(:never_asked), @session_id)
 
-      assert gate.(Increment, %{}, %{}) == :ok
+      assert gate.(Increment, %{by: 2}, %{}) == :ok
       refute_received {:asked, _request}
 
       assert [{:tool_call, call}] = posted()
-      assert %{title: "Run `increment`", status: :in_progress} = call
+      assert %{title: "Run `increment`", status: :in_progress, raw_input: %{"by" => 2}} = call
     end
   end
 
@@ -128,10 +128,10 @@ defmodule Raxol.Agent.ClientProtocol.PermissionTest do
       assert {:deny, _reason} = gate.(Reset, %{}, %{})
       [{:tool_call, allowed, :in_progress} | _denied] = statuses()
 
-      assert Permission.settle(stub, @session_id, :completed) == :ok
+      assert Permission.settle(stub, @session_id, :answered) == :ok
       assert statuses() == [{:update, allowed, :completed}]
 
-      assert Permission.settle(stub, @session_id, :failed) == :ok
+      assert Permission.settle(stub, @session_id, :unanswered) == :ok
       assert statuses() == []
     end
 
@@ -143,8 +143,28 @@ defmodule Raxol.Agent.ClientProtocol.PermissionTest do
       assert Task.await(worker) == :ok
       [{:tool_call, id, :in_progress}] = statuses()
 
-      assert Permission.settle(stub, @session_id, :failed) == :ok
-      assert statuses() == [{:update, id, :failed}]
+      assert Permission.settle(stub, @session_id, :unanswered) == :ok
+      assert [{:tool_call_update, %{tool_call_id: ^id, fields: fields}}] = posted()
+      assert fields.status == :failed
+      assert [{:content, %{content: {:text, %{text: note}}}}] = fields.content
+      assert note =~ "may have run"
+    end
+
+    test "closes a call still waiting for permission as failed, with no note" do
+      stub = session(:hold)
+      gate = Permission.authorizer(stub, @session_id)
+
+      spawn(fn -> gate.(Reset, %{to: 0}, %{}) end)
+      assert_receive {:asked, request}
+      assert %{title: "Run `reset`", raw_input: %{"to" => 0}} = request.tool_call.fields
+      id = request.tool_call.tool_call_id
+
+      assert Permission.settle(stub, @session_id, :answered) == :ok
+
+      assert [{:tool_call, %{tool_call_id: ^id, status: :pending}}, {:tool_call_update, closing}] =
+               posted()
+
+      assert %{tool_call_id: ^id, fields: %{status: :failed, content: nil}} = closing
     end
   end
 end

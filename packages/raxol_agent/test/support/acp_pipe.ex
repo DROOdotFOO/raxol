@@ -30,9 +30,13 @@ defmodule Raxol.Agent.Test.AcpPipe do
 
   defmodule Editor do
     @moduledoc """
-    The client side. `handler_arg` is `%{test: pid, permission: option_id}`:
-    every `session/request_permission` is reported to `test` and answered by
-    selecting `option_id`.
+    The client side. `handler_arg` is `%{test: pid, permission: answer}`:
+    every `session/request_permission` is reported to `test` as
+    `{:permission_asked, request}`. With an option id as `answer` it is
+    answered by selecting that option. With `:hold` it is never answered:
+    the process handling the request reports itself as
+    `{:permission_held, pid}` and waits, so a `$/cancel_request` for the
+    request shows as that process going down.
     """
     use Raxol.AgentClientProtocol.Client
 
@@ -44,8 +48,17 @@ defmodule Raxol.Agent.Test.AcpPipe do
 
     @impl true
     def request_permission(request, ctx) do
-      %{test: test, permission: option_id} = ctx.handler_state
+      %{test: test, permission: answer} = ctx.handler_state
       send(test, {:permission_asked, request})
+      answer(answer, test)
+    end
+
+    defp answer(:hold, test) do
+      send(test, {:permission_held, self()})
+      receive(do: (:never -> :ok))
+    end
+
+    defp answer(option_id, _test) do
       {:ok, RequestPermissionResponse.new({:selected, SelectedPermissionOutcome.new(option_id)})}
     end
   end
@@ -93,8 +106,9 @@ defmodule Raxol.Agent.Test.AcpPipe do
   Serve `agent` (what `--agent` parsed to, or `nil`) and connect a client
   past `initialize`.
 
-  Options: `:permission` (the option id the client selects; without it the
-  client does not implement the method) and `:auth_opts`.
+  Options: `:permission` (the option id the client selects, or `:hold` for
+  a client that never answers; without it the client does not implement the
+  method) and `:auth_opts`.
   """
   @spec connect(Serve.agent() | nil, keyword()) :: map()
   def connect(agent, opts \\ []) do
