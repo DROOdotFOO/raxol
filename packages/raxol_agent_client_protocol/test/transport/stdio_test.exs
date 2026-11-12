@@ -3,13 +3,9 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
 
   alias Raxol.AgentClientProtocol.Transport.Stdio
 
-  # These tests exercise :spawn mode against tiny, portable peer commands
-  # (`cat`, `printf`, `true`, `false`) that exist on any Unix CI runner.
-  # `:self` mode (owning the BEAM's own fd 0/1) is intentionally NOT
-  # exercised here: opening the real stdin/stdout during a test run would
-  # fight ExUnit's own IO capture over `:user` and is genuinely
-  # sandbox-unrunnable — it belongs in a release/escript entry point, not
-  # a unit test.
+  # `:spawn` mode runs against tiny, portable peer commands (`cat`, `printf`,
+  # `true`, `false`). `:self` mode runs against a `StringIO` device in place
+  # of `user`: the real stdin and stdout belong to the test runner.
 
   describe "round trip through cat (framer + decode)" do
     test "a sent message is echoed back and decodes to the same map" do
@@ -156,6 +152,51 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
       assert_receive {:acp_transport, _ref, {:message, ^msg}}, 2_000
 
       :ok = Stdio.close(transport)
+    end
+  end
+
+  describe "self mode over an IO device" do
+    test "delivers lines written before the owner is set, then end of input" do
+      {:ok, io} = StringIO.open(~s({"id":1}\n{"id":2}\r\n))
+      {:ok, transport} = Stdio.start_self(input: io, output: io)
+
+      :ok = Stdio.set_owner(transport, self())
+
+      assert_receive {:acp_transport, ref, {:message, %{"id" => 1}}}, 2_000
+      assert ref == transport.pid
+      assert_receive {:acp_transport, ^ref, {:message, %{"id" => 2}}}, 2_000
+      assert_receive {:acp_transport, ^ref, {:closed, :eof}}, 2_000
+    end
+
+    test "still writes after end of input, one line per message" do
+      {:ok, io} = StringIO.open("")
+      {:ok, transport} = Stdio.start_self(owner: self(), input: io, output: io)
+      assert_receive {:acp_transport, _ref, {:closed, :eof}}, 2_000
+
+      {:ok, transport} = Stdio.send_message(transport, %{"text" => "héllo\nworld"})
+      {:ok, _transport} = Stdio.send_message(transport, %{"seq" => 2})
+
+      assert {"", output} = StringIO.contents(io)
+      assert [first, second] = String.split(output, "\n", trim: true)
+      assert Jason.decode!(first) == %{"text" => "héllo\nworld"}
+      assert Jason.decode!(second) == %{"seq" => 2}
+    end
+
+    test "reports a line that is not a JSON object and keeps reading" do
+      {:ok, io} = StringIO.open(~s(not json\n{"ok":true}\n))
+      {:ok, _transport} = Stdio.start_self(owner: self(), input: io, output: io)
+
+      assert_receive {:acp_transport, _ref, {:decode_error, _reason, "not json"}}, 2_000
+      assert_receive {:acp_transport, _ref, {:message, %{"ok" => true}}}, 2_000
+    end
+
+    test "refuses a send after close" do
+      {:ok, io} = StringIO.open("")
+      {:ok, transport} = Stdio.start_self(owner: self(), input: io, output: io)
+
+      :ok = Stdio.close(transport)
+      assert {:error, :closed} = Stdio.send_message(transport, %{"late" => true})
+      assert :ok = Stdio.close(transport)
     end
   end
 end
