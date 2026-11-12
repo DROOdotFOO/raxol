@@ -174,6 +174,15 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   @doc false
   def global_name(dir), do: {:global, name_key(dir)}
 
+  @doc "The Writer that has the journal in `dir` open, or `nil`."
+  @spec whereis(Path.t()) :: pid() | nil
+  def whereis(dir) do
+    case :global.whereis_name(name_key(dir)) do
+      pid when is_pid(pid) -> pid
+      :undefined -> nil
+    end
+  end
+
   # The directory itself, however its path is spelled: another case on a
   # case-insensitive volume, a symlink, `..`. The path stands in only where
   # there is no inode to read.

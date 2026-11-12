@@ -97,7 +97,7 @@ defmodule Raxol.Broker.JournalTest do
 
   defp writer!(path) do
     {base, session} = Journal.location(path)
-    :global.whereis_name({Writer, Path.join(base, session)})
+    Writer.whereis(Path.join(base, session))
   end
 
   defp kill_writer!(path, journal) do
@@ -1089,7 +1089,7 @@ defmodule Raxol.Broker.JournalTest do
     test "a supervisor shutdown stops the Writer the journal started", %{opts: opts, path: path} do
       start!(opts)
       {base, session} = Journal.location(path)
-      writer = :global.whereis_name({Writer, Path.join(base, session)})
+      writer = Writer.whereis(Path.join(base, session))
       ref = Process.monitor(writer)
 
       stop_supervised!(opts[:name])
