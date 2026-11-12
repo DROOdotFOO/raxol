@@ -152,6 +152,16 @@ defmodule Raxol.Agent.Test.AcpPipe do
     %{conn: conn, init: init, serving: serving, server: left, peer: right}
   end
 
+  @doc """
+  The server's `Connection`: it owns the server's end of the pair once it
+  has answered `initialize`.
+  """
+  @spec server_connection(map()) :: pid()
+  def server_connection(%{server: server}) do
+    %{owner: connection} = :sys.get_state(server.pid)
+    connection
+  end
+
   defp client_spec(transport, permission) do
     {handler, handler_arg} =
       if permission,

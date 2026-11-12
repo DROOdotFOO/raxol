@@ -273,25 +273,34 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     # an earlier run's journal.
     defp random_id, do: "acp-" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
-    # The agent does not outlive a session that could not be opened for it.
+    # The agent is started first, so it does not outlive a session that
+    # could not be opened for it: the connection's session limit, an id the
+    # connection already has a session for, a session supervisor that is
+    # gone.
     defp open_session(id, ctx) do
-      started =
-        Session.Supervisor.start_session(ctx.session_sup,
-          session_id: id,
-          conn: ctx.conn,
-          task_sup: ctx.task_sup,
-          turn_runner: Turn.runner(id, Map.get(ctx.handler_state, :budget))
-        )
-
-      case started do
+      case start_acp_session(id, ctx) do
         {:ok, _session} ->
           {:ok, NewSessionResponse.new(id)}
 
         {:error, reason} ->
           _ = McpTools.stop_owned(owner(ctx.conn), id)
-          {:error, Error.new(-32_603, "the session did not start: #{inspect(reason)}")}
+          {:error, Error.new(-32_603, "the session did not start: #{why(reason)}")}
       end
     end
+
+    defp start_acp_session(id, ctx) do
+      Session.Supervisor.start_session(ctx.session_sup,
+        session_id: id,
+        conn: ctx.conn,
+        task_sup: ctx.task_sup,
+        turn_runner: Turn.runner(id, Map.get(ctx.handler_state, :budget))
+      )
+    catch
+      :exit, reason -> {:error, reason}
+    end
+
+    defp why(:max_children), do: "the connection is at its limit of sessions"
+    defp why(reason), do: inspect(reason)
 
     defp refuse(message), do: {:error, Error.new(-32_602, message)}
 

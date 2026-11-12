@@ -194,11 +194,10 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
     end
   end
 
-  # Kills the server's Connection, which owns its end of the pair once it
-  # has answered `initialize`. Returns what the loop wrote to stderr on its
-  # way to exit code 1.
-  defp kill_connection(%{serving: serving, server: server}) do
-    %{owner: connection} = :sys.get_state(server.pid)
+  # Kills the server's Connection. Returns what the loop wrote to stderr on
+  # its way to exit code 1.
+  defp kill_connection(%{serving: serving} = pipe) do
+    connection = AcpPipe.server_connection(pipe)
 
     capture_io(:stderr, fn ->
       Process.exit(connection, :kill)

@@ -201,6 +201,26 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
       assert prior > 0
     end
 
+    test "stops the agent it started when the session cannot be opened", %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+
+      # The name the session would register under is taken, so its start
+      # fails after the agent's has succeeded.
+      sessions = Raxol.AgentClientProtocol.Session.registry()
+      key = {AcpPipe.server_connection(pipe), id}
+      {:ok, _owner} = Registry.register(sessions, key, nil)
+
+      assert {:error, error} = AcpPipe.new_session(pipe, root)
+      assert error.code == -32_603
+      assert error.message =~ "the session did not start"
+      assert Session.Supervisor.owner(id) == :error
+      assert Registry.lookup(Raxol.Agent.Registry, id) == []
+
+      # Its journal is closed and unlocked: the id starts again.
+      :ok = Registry.unregister(sessions, key)
+      assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
+    end
+
     test "records the branch a regular .git/HEAD names", %{root: root} do
       File.mkdir_p!(Path.join(root, ".git"))
       File.write!(Path.join(root, ".git/HEAD"), "ref: refs/heads/topic\n")
