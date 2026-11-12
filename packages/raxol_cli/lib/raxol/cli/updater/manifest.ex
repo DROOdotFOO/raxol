@@ -23,7 +23,7 @@ defmodule Raxol.CLI.Updater.Manifest do
 
   An application that ships its own binary configures its own channel:
 
-      config :raxol, :updater_manifest,
+      config :raxol_cli, :updater_manifest,
         repo: "acme/widget",
         tag_prefix: "v",
         app: :widget,
@@ -79,13 +79,13 @@ defmodule Raxol.CLI.Updater.Manifest do
 
   @doc """
   The manifest for this call: `opts[:manifest]` (a struct or overrides),
-  else `config :raxol, :updater_manifest`, else the default channel.
+  else `config :raxol_cli, :updater_manifest`, else the default channel.
   """
   @spec load(keyword()) :: {:ok, t()} | {:error, term()}
   def load(opts \\ []) do
     case Keyword.get(opts, :manifest) do
       %__MODULE__{} = manifest -> validate(manifest)
-      nil -> :raxol |> Application.get_env(:updater_manifest, []) |> new()
+      nil -> :raxol_cli |> Application.get_env(:updater_manifest, []) |> new()
       overrides -> new(overrides)
     end
   end
