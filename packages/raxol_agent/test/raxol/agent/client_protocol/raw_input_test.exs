@@ -25,7 +25,16 @@ defmodule Raxol.Agent.ClientProtocol.RawInputTest do
     assert RawInput.render(%{"bytes" => <<0xFF, 0xFE>>}) == %{"bytes" => "<<255, 254>>"}
     assert RawInput.render(%{{:a, 1} => 1}) == %{"{:a, 1}" => 1}
     assert RawInput.render([1 | 2]) == "[1 | 2]"
+    assert RawInput.render(%{"xs" => [1, 2 | 3]}) == %{"xs" => "[1, 2 | 3]"}
     assert %{"pid" => "#PID<" <> _} = RawInput.render(%{"pid" => self()})
+  end
+
+  test "an integer too large for 64 bits is shown as its size" do
+    huge = Integer.pow(10, 5_000)
+
+    assert %{"n" => "integer of " <> _} = RawInput.render(%{"n" => huge})
+    assert RawInput.render(%{"n" => 0xFFFF_FFFF_FFFF_FFFF}) == %{"n" => 0xFFFF_FFFF_FFFF_FFFF}
+    assert encoded_size(%{"n" => List.duplicate(huge, 2_000)}) < @wire_bound
   end
 
   test "a map nested past the depth bound is shown by inspect" do

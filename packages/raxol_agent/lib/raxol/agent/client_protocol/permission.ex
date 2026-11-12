@@ -40,8 +40,10 @@ defmodule Raxol.Agent.ClientProtocol.Permission do
       it did not (a cancel, a failure, the agent going down) the call is
       `failed` with a note that its outcome is unknown: the action may have
       run.
-    * a call that was never allowed, such as one still waiting for
-      permission, is `failed`. It did not run.
+    * a call that was not allowed when the turn ended, such as one still
+      waiting for permission, is `failed`. Its ask is withdrawn as the
+      session finishes the turn; an allow that arrives between the two is
+      still honoured.
 
   A call whose process is killed between telling the turn and announcing is
   closed without having been announced.

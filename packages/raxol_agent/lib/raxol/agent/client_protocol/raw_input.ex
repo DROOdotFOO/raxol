@@ -2,6 +2,7 @@ defmodule Raxol.Agent.ClientProtocol.RawInput do
   @max_depth 4
   @max_bytes 4_096
   @max_opaque_bytes 200
+  @max_integer 0xFFFF_FFFF_FFFF_FFFF
   @cut "..."
 
   @moduledoc """
@@ -16,9 +17,11 @@ defmodule Raxol.Agent.ClientProtocol.RawInput do
     * the copy carries about #{@max_bytes} bytes of keys and values; once
       that is spent, what is left of a map or list is replaced by `"..."`
       and a string is cut short and ends in `...`
-    * atoms become strings; a struct, a tuple, a binary that is not UTF-8
-      and anything else JSON has no form for is shown by `inspect/2`, cut
-      to #{@max_opaque_bytes} bytes
+    * atoms become strings; a struct, a tuple, an improper list, a binary
+      that is not UTF-8 and anything else JSON has no form for is shown by
+      `inspect/2`, cut to #{@max_opaque_bytes} bytes
+    * an integer that does not fit in 64 bits is shown as its size, not its
+      digits
 
   Nothing is redacted: the client is shown what the action will be called
   with.
@@ -32,6 +35,10 @@ defmodule Raxol.Agent.ClientProtocol.RawInput do
   end
 
   # Every clause spends at least one byte of `left`, so a walk ends.
+  defp walk(value, _depth, left)
+       when is_integer(value) and (value > @max_integer or value < -@max_integer),
+       do: text("integer of #{:erlang.external_size(value)} bytes", left)
+
   defp walk(value, _depth, left) when is_number(value) or is_boolean(value) or is_nil(value),
     do: {value, left - 8}
 
@@ -41,8 +48,11 @@ defmodule Raxol.Agent.ClientProtocol.RawInput do
     if String.valid?(value), do: text(value, left), else: opaque(value, left)
   end
 
-  defp walk(value, depth, left) when is_list(value) and depth > 0,
-    do: items(value, depth - 1, left - 2)
+  defp walk(value, depth, left) when is_list(value) and depth > 0 do
+    if List.improper?(value),
+      do: opaque(value, left),
+      else: items(value, depth - 1, left - 2)
+  end
 
   defp walk(value, depth, left) when is_map(value) and not is_struct(value) and depth > 0,
     do: entries(:maps.next(:maps.iterator(value)), depth - 1, left - 2, %{})
@@ -52,13 +62,11 @@ defmodule Raxol.Agent.ClientProtocol.RawInput do
   defp items([], _depth, left), do: {[], left}
   defp items(_more, _depth, left) when left <= 0, do: {[@cut], left}
 
-  defp items([head | tail], depth, left) when is_list(tail) do
+  defp items([head | tail], depth, left) do
     {head, left} = walk(head, depth, left)
     {tail, left} = items(tail, depth, left)
     {[head | tail], left}
   end
-
-  defp items(improper, _depth, left), do: opaque(improper, left)
 
   defp entries(:none, _depth, left, acc), do: {acc, left}
   defp entries(_more, _depth, left, acc) when left <= 0, do: {Map.put(acc, @cut, @cut), left}
