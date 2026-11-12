@@ -156,7 +156,7 @@ The component gets its own GenServer under a DynamicSupervisor. If it crashes, i
 
 ### Hot code reload (dev only)
 
-`Raxol.Dev.CodeReloader` watches `.ex` files via FileSystem, debounces changes, recompiles, and sends `:render_needed` to the Lifecycle. Your app updates in-place without restart.
+`Raxol.Dev.CodeReloader` watches `.ex` files via FileSystem, debounces changes, recompiles, and sends `:render_needed` to the Lifecycle. Your app updates in-place without restart. `config :raxol, :code_reloader, false` turns it off, for a process whose stdout carries a protocol: a recompile prints there.
 
 ## Performance design
 

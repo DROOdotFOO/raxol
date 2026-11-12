@@ -48,6 +48,10 @@ MAKEFLAGS=-s mix compile >&2 </dev/null || {
 # the log handler to stderr.
 #
 # No -noinput: the wire is read from the `user` device, which needs stdin.
+#
+# :code_reloader is off because this runs in :dev: the reloader would
+# recompile inside the server when a source file changes and print
+# "Compiling N files" on stdout, between frames.
 exec env \
   MAKEFLAGS=-s \
   mix run \
@@ -57,6 +61,7 @@ exec env \
     --no-archives-check \
     --no-elixir-version-check \
     -e 'Application.put_env(:raxol, :skip_endpoint, true)
+        Application.put_env(:raxol, :code_reloader, false)
         Application.put_env(:raxol, :startup_mode, :mcp)
         System.halt(Raxol.Agent.ClientProtocol.Serve.run(System.argv()))' \
     -- "$@"

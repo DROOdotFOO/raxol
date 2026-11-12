@@ -55,9 +55,13 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
     end
   end
 
-  @doc "Starts the CodeReloader in dev mode; returns nil otherwise."
+  @doc """
+  Starts the CodeReloader in dev mode; returns nil otherwise, and when
+  `config :raxol, :code_reloader` is `false`. A recompile prints to stdout,
+  so a host whose stdout is a protocol stream turns the reloader off.
+  """
   def maybe_start_code_reloader(lifecycle_pid) do
-    if Code.ensure_loaded?(Mix) and Mix.env() == :dev do
+    if code_reloader?() do
       case Raxol.Dev.CodeReloader.start_link(lifecycle_pid) do
         {:ok, pid} -> pid
         _ -> nil
@@ -72,6 +76,11 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
       )
 
       nil
+  end
+
+  defp code_reloader? do
+    Application.get_env(:raxol, :code_reloader, true) != false and
+      Code.ensure_loaded?(Mix) and Mix.env() == :dev
   end
 
   @doc "Detects actual terminal size, falling back to options then 80x24."

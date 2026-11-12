@@ -2,9 +2,11 @@ defmodule Raxol.Dev.CodeReloader do
   @moduledoc """
   Watches `lib/` for file changes and triggers recompilation + re-render.
 
-  Only starts in `:dev` environment. Uses the `file_system` library to
-  watch for `*.ex` changes, debounces rapid edits, then calls
-  `IEx.Helpers.recompile/0` and sends `:render_needed` to the Lifecycle.
+  Only starts in `:dev` environment, and not when
+  `config :raxol, :code_reloader` is `false`. Uses the `file_system` library
+  to watch for `*.ex` changes, debounces rapid edits, then calls
+  `IEx.Helpers.recompile/0` and sends `:render_needed` to the Lifecycle. The
+  recompile prints Mix's output to stdout.
   """
 
   use GenServer
