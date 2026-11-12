@@ -38,7 +38,7 @@ defmodule Raxol.Agent.ClientProtocol.PermissionWireTest do
   end
 
   defp paying(root, id, opts) do
-    TurnProbe.spawnable()
+    AcpPipe.spawnable([TurnProbe])
     pipe = AcpPipe.connect(%{app: @probe, id: id}, opts)
     {:ok, ^id} = AcpPipe.new_session(pipe, root)
     pipe

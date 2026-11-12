@@ -84,6 +84,17 @@ defmodule Raxol.Agent.Test.AcpPipe do
     base
   end
 
+  @doc """
+  Put `apps` beside the reference counter on
+  `config :raxol_agent, :mcp_spawnable_apps` until the test ends.
+  """
+  @spec spawnable([module()]) :: :ok
+  def spawnable(apps) do
+    listed = [Raxol.Agent.Reference.Counter | apps]
+    Application.put_env(:raxol_agent, :mcp_spawnable_apps, listed)
+    on_exit(fn -> Application.delete_env(:raxol_agent, :mcp_spawnable_apps) end)
+  end
+
   @doc "Start what an agent session tree and an ACP connection need, if absent."
   @spec start_trees() :: :ok
   def start_trees do

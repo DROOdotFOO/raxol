@@ -14,8 +14,10 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
   alias Raxol.Agent.Test.AcpPipe
+  alias Raxol.Agent.Test.GatedStart
   alias Raxol.AgentClientProtocol.Connection
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.LoadSessionRequest
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionRequest
 
   @counter "Raxol.Agent.Reference.Counter"
 
@@ -85,6 +87,45 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
 
       assert {:error, error} = AcpPipe.new_session(pipe, root)
       assert error.message =~ "id #{id} is in use"
+    end
+
+    test "refuses a second session/new for an id while the first is still starting it",
+         %{root: root, id: id} do
+      pipe = gated(id)
+
+      first = request_session(pipe, root)
+      assert_receive {:starting, starter}, 5_000
+
+      assert {:error, error} = AcpPipe.new_session(pipe, root)
+      assert error.message =~ "id #{id} is in use: another session/new is starting it"
+
+      send(starter, :start)
+      assert_receive {:acp_result, ^first, {:ok, %{session_id: ^id}}}, 5_000
+      assert is_pid(Session.Supervisor.whereis(id))
+    end
+
+    test "a session/new cancelled while its agent starts does not hold the id",
+         %{root: root, id: id} do
+      pipe = gated(id)
+
+      cancelled = request_session(pipe, root)
+      assert_receive {:starting, starter}, 5_000
+      :ok = Connection.cancel_request(pipe.conn, cancelled)
+
+      # Frames are handled in order: once this is answered, the cancelled
+      # request's handler is gone.
+      load = %LoadSessionRequest{session_id: id, cwd: "/", mcp_servers: []}
+
+      assert {:error, _no_such_method} =
+               Connection.request(pipe.conn, "session/load", load, 5_000)
+
+      # The agent finishes starting with no session to prompt it.
+      send(starter, :start)
+      Process.unregister(GatedStart.gate())
+
+      assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      assert is_pid(Session.Supervisor.whereis(id))
+      refute_received {:acp_result, ^cancelled, _result}
     end
 
     test "starts a new agent under a random id per session when none is given", %{root: root} do
@@ -308,6 +349,22 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
 
   defp journal_meta(id) do
     [AcpPipe.journal_base(id), id, "meta.json"] |> Path.join() |> File.read!() |> Jason.decode!()
+  end
+
+  # Serves an agent whose start waits for this process (see `GatedStart`).
+  defp gated(id) do
+    AcpPipe.spawnable([GatedStart])
+    Process.register(self(), GatedStart.gate())
+    AcpPipe.connect(%{app: inspect(GatedStart), id: id})
+  end
+
+  # `session/new` without waiting: the answer arrives as
+  # `{:acp_result, tag, result}`.
+  defp request_session(pipe, root) do
+    tag = make_ref()
+    request = NewSessionRequest.new(root)
+    :ok = Connection.async_request(pipe.conn, "session/new", request, self(), tag, 30_000)
+    tag
   end
 
   defp uniq, do: System.unique_integer([:positive])

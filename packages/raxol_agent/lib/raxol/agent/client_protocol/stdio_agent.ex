@@ -18,7 +18,10 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
         the app. The root is the request's `cwd`, which must be absolute.
       * with an id, a journal an earlier run left under it for the same root
         and app is continued; the agent's state starts fresh. One agent runs
-        under the id, so a second `session/new` is refused while it does.
+        under the id, so a second `session/new` is refused while it does, or
+        while another `session/new` is still starting it. An agent of this
+        connection left without a session (its `session/new` was cancelled
+        while it started) is stopped and started again.
       * without an id, every session starts a new agent under a random one.
       * with no agent named, or an app that is not listed, the request is
         refused and the error lists the apps that are.
@@ -56,6 +59,8 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeResponse
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionResponse
     alias Raxol.AgentClientProtocol.Session
+
+    @agents Raxol.Agent.Registry
 
     @impl true
     def init(arg), do: {:ok, arg}
@@ -140,10 +145,58 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     @impl true
     def new_session(req, ctx) do
       with {:ok, agent} <- named_agent(ctx),
-           {:ok, root} <- project_root(req),
-           {:ok, id} <- start_agent(agent, root, ctx.conn) do
+           {:ok, root} <- project_root(req) do
+        id = Map.get(agent, :id) || random_id()
+        claimed(id, fn -> start_session(agent.app, id, root, ctx) end)
+      end
+    end
+
+    defp start_session(app, id, root, ctx) do
+      with :ok <- start_agent(app, id, root, ctx.conn) do
         open_session(id, ctx)
       end
+    end
+
+    # One `session/new` at a time starts an agent under an id, so a second
+    # one never takes the first's half-started agent for an abandoned one.
+    # The claim ends with this process: a request cancelled mid-start gives
+    # it up.
+    defp claimed(id, start) do
+      if claim(id) do
+        try do
+          start.()
+        after
+          release(id)
+        end
+      else
+        refuse("id #{id} is in use: another session/new is starting it")
+      end
+    end
+
+    defp claim(id, again? \\ true) do
+      case Registry.register(@agents, {:acp_starting, id}, nil) do
+        {:ok, _owner} -> true
+        {:error, {:already_registered, holder}} -> again? and claim_after(holder, id)
+      end
+    rescue
+      # No agent registry: the start itself reports that.
+      ArgumentError -> true
+    end
+
+    # The registry drops a dead holder's claim a moment after it died.
+    defp claim_after(holder, id) do
+      if Process.alive?(holder) do
+        false
+      else
+        Raxol.Agent.Session.await_free({:acp_starting, id})
+        claim(id, false)
+      end
+    end
+
+    defp release(id) do
+      Registry.unregister(@agents, {:acp_starting, id})
+    rescue
+      ArgumentError -> :ok
     end
 
     @doc "Stop every agent `conn`'s sessions started."
@@ -185,12 +238,32 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     defp project_root(_req),
       do: refuse("cwd must be an absolute path: the agent's journal is bound to it")
 
-    defp start_agent(agent, root, conn) do
-      id = Map.get(agent, :id) || random_id()
+    defp start_agent(app, id, root, conn) do
+      start = fn -> McpTools.start_owned(owner(conn), app, id, root) end
 
-      case McpTools.start_owned(owner(conn), agent.app, id, root) do
-        {:ok, _started} -> {:ok, id}
+      case past_orphan(start.(), start, id, conn) do
+        {:ok, _started} -> :ok
         {:error, message} -> refuse(message)
+      end
+    end
+
+    # A refused start is tried once more when an orphan stood in its way.
+    defp past_orphan({:ok, _started} = started, _start, _id, _conn), do: started
+
+    defp past_orphan(refusal, start, id, conn),
+      do: if(stop_orphan(id, conn), do: start.(), else: refusal)
+
+    # An agent of this connection with no ACP session: the `session/new` that
+    # started it was cancelled before it opened one. Nothing can prompt that
+    # agent, so it makes way.
+    defp stop_orphan(id, conn) do
+      owner = owner(conn)
+
+      with {:ok, {^owner, _owned}} <- Raxol.Agent.Session.Supervisor.owner(id),
+           [] <- Registry.lookup(Session.registry(), {conn, id}) do
+        McpTools.stop_owned(owner, id) == :ok
+      else
+        _other -> false
       end
     end
 

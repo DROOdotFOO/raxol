@@ -3,7 +3,7 @@ defmodule Raxol.Agent.Test.TurnProbe do
   An agent whose turns end the ways `Raxol.Agent.ClientProtocol.Turn` and
   `Raxol.Agent.ClientProtocol.Permission` have to report. A test puts it on
   `config :raxol_agent, :mcp_spawnable_apps` for its own duration
-  (`spawnable/0`). The prompt text picks the turn:
+  (`Raxol.Agent.Test.AcpPipe.spawnable/1`). The prompt text picks the turn:
 
     * `error-atom`, `error-text`, `no-usage`, `long-error` - answered inline
       with `{:error, :boom}`, `{:error, "x"}`, `{:ok, "x"}` and
@@ -37,14 +37,6 @@ defmodule Raxol.Agent.Test.TurnProbe do
     "no-usage" => {:ok, "x"},
     "long-error" => {:error, String.duplicate("x", 3_000)}
   }
-
-  @doc "Put this agent beside the reference counter on the spawnable list until the test ends."
-  @spec spawnable() :: :ok
-  def spawnable do
-    apps = [Raxol.Agent.Reference.Counter, __MODULE__]
-    Application.put_env(:raxol_agent, :mcp_spawnable_apps, apps)
-    ExUnit.Callbacks.on_exit(fn -> Application.delete_env(:raxol_agent, :mcp_spawnable_apps) end)
-  end
 
   def init(_context), do: %{paid: 0, waiting: []}
 
