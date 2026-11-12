@@ -156,16 +156,19 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
   end
 
   describe "self mode over an IO device" do
-    test "delivers lines written before the owner is set, then end of input" do
+    test "lines read before an owner is set are held, then delivered in order" do
       {:ok, io} = StringIO.open(~s({"id":1}\n{"id":2}\r\n))
       {:ok, transport} = Stdio.start_self(input: io, output: io)
+      await_reader(transport)
 
       :ok = Stdio.set_owner(transport, self())
 
-      assert_receive {:acp_transport, ref, {:message, %{"id" => 1}}}, 2_000
-      assert ref == transport.pid
-      assert_receive {:acp_transport, ^ref, {:message, %{"id" => 2}}}, 2_000
-      assert_receive {:acp_transport, ^ref, {:closed, :eof}}, 2_000
+      # Flushed inside `set_owner/2`, so all of it is here already.
+      assert delivered(transport) == [
+               {:message, %{"id" => 1}},
+               {:message, %{"id" => 2}},
+               {:closed, :eof}
+             ]
     end
 
     test "still writes after end of input, one line per message" do
@@ -209,6 +212,29 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
       :ok = Stdio.close(transport)
       assert {:error, :closed} = Stdio.send_message(transport, %{"late" => true})
       assert :ok = Stdio.close(transport)
+    end
+  end
+
+  # Returns once the transport has taken everything its reader read: the
+  # reader ends at end of input, and what it sent is ahead of the call
+  # below in the transport's mailbox.
+  defp await_reader(transport) do
+    {:links, links} = Process.info(transport.pid, :links)
+
+    for reader <- links -- [self()] do
+      ref = Process.monitor(reader)
+      assert_receive {:DOWN, ^ref, :process, ^reader, _reason}, 2_000
+    end
+
+    _state = :sys.get_state(transport.pid)
+    :ok
+  end
+
+  defp delivered(%{pid: pid} = transport) do
+    receive do
+      {:acp_transport, ^pid, event} -> [event | delivered(transport)]
+    after
+      0 -> []
     end
   end
 end
