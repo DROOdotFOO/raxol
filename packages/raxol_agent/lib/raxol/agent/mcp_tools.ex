@@ -46,7 +46,9 @@ defmodule Raxol.Agent.McpTools do
   An agent stopped through `agent_stop` leaves `agent_list` and, if this
   server started it, its id can be spawned again. Its journal stays readable
   until this process restarts: stopped agents are remembered in an ETS table
-  it owns.
+  it owns. While another owner runs an agent under a stopped id, that id is
+  refused like any agent this server did not start: the journal directory
+  then holds the other owner's records.
 
   Spawned ids share the node's agent registry with every other agent: a
   client can take any id nothing is registered under at that moment.
@@ -625,16 +627,21 @@ defmodule Raxol.Agent.McpTools do
     end
   end
 
-  # An exposed agent's row answers only while its id is still exposed.
   defp stopped(id) do
     case :ets.lookup(@table, id) do
-      [{^id, %{kind: :owned} = agent}] -> {:stopped, agent}
-      [{^id, %{kind: :exposed} = agent}] -> if id in exposed(), do: {:stopped, agent}, else: :none
+      [{^id, agent}] -> if answers?(id, agent), do: {:stopped, agent}, else: :none
       [] -> :none
     end
   rescue
     ArgumentError -> :none
   end
+
+  # A row is read only when nothing of this server's runs under the id. Any
+  # tree running under it now is another owner's, and the row would report
+  # that owner's agent and journal as this server's stopped one.
+  defp answers?(id, %{kind: :owned}), do: Session.Supervisor.owner(id) == :error
+  # An exposed agent's row answers only while its id is still exposed.
+  defp answers?(id, %{kind: :exposed}), do: id in exposed()
 
   defp agent(id, %{app: app, root: root, base_dir: base_dir}),
     do: %{kind: :owned, app: app, root: root, session_id: id, journal_opts: [base_dir: base_dir]}

@@ -308,8 +308,20 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
 
   describe "beside the agent MCP tools" do
     setup do
-      start_supervised!({McpTools, registry: :"no_mcp_registry_#{uniq()}"})
-      :ok
+      registry = :"acp_mcp_registry_#{uniq()}"
+      server = :"acp_mcp_server_#{uniq()}"
+      start_supervised!({Raxol.MCP.Registry, name: registry, server: server})
+
+      start_supervised!(
+        {Raxol.MCP.Server,
+         name: server,
+         registry: registry,
+         authorizer: Raxol.MCP.Authorizer.allow_all(),
+         read_authorizer: Raxol.MCP.Authorizer.allow_all()}
+      )
+
+      start_supervised!({McpTools, registry: registry, server: server})
+      %{mcp: server}
     end
 
     test "the tools do not answer for an agent a session started", %{root: root, id: id} do
@@ -338,6 +350,57 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
       assert is_pid(Session.Supervisor.whereis(id))
       assert :ok = McpTools.stop_agent(id)
     end
+
+    test "a stopped agent's id that a session now runs under is refused by the tools",
+         %{root: root, id: id, mcp: mcp} do
+      Application.put_env(:raxol_agent, :mcp_project_root, root)
+      on_exit(fn -> Application.delete_env(:raxol_agent, :mcp_project_root) end)
+      assert {:ok, %{id: ^id}} = McpTools.spawn_agent(@counter, id)
+      assert :ok = McpTools.stop_agent(id)
+      assert {:ok, status} = mcp_call(mcp, "agent_status", %{"id" => id})
+      assert %{"state" => "stopped"} = Jason.decode!(status)
+
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      {_updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "increment")
+
+      refusal = "no agent #{id} was started by this server"
+      assert {:error, text} = mcp_call(mcp, "agent_status", %{"id" => id})
+      assert text =~ refusal
+      assert {:error, text} = mcp_call(mcp, "agent_ask", %{"id" => id, "message" => "get"})
+      assert text =~ refusal
+      assert {:error, text} = mcp_call(mcp, "agent_stop", %{"id" => id})
+      assert text =~ refusal
+
+      assert %{error: %{message: message}} = mcp_read(mcp, McpTools.journal_uri(id))
+      assert message =~ refusal
+      assert is_pid(Session.Supervisor.whereis(id))
+    end
+  end
+
+  defp mcp_call(server, tool, arguments) do
+    {:reply, %{result: result}} =
+      Raxol.MCP.Server.handle_message(server, %{
+        jsonrpc: "2.0",
+        id: uniq(),
+        method: "tools/call",
+        params: %{"name" => tool, "arguments" => arguments}
+      })
+
+    [%{type: "text", text: text}] = result.content
+    if Map.get(result, :isError) == true, do: {:error, text}, else: {:ok, text}
+  end
+
+  defp mcp_read(server, uri) do
+    {:reply, reply} =
+      Raxol.MCP.Server.handle_message(server, %{
+        jsonrpc: "2.0",
+        id: uniq(),
+        method: "resources/read",
+        params: %{"uri" => uri}
+      })
+
+    reply
   end
 
   # The records the agent session writes around a whole prompt: their turn
