@@ -36,12 +36,11 @@ defmodule Raxol.CLI do
   # stderr. `-p` matches the historical `bin/raxol -p` wrapper spelling.
   defp dispatch(["p" | rest]), do: Raxol.Agent.P.run(rest)
   defp dispatch(["-p" | rest]), do: Raxol.Agent.P.run(rest)
-  # Serve over ACP on stdio, for editors and agent harnesses that spawn us.
+  # Serve a Raxol agent over ACP on stdio, for editors that spawn us.
   defp dispatch(["acp" | rest]), do: Raxol.Agent.ClientProtocol.Serve.run(rest)
   # Serve Raxol apps as MCP tools on stdio, for OMP and other MCP clients.
   defp dispatch(["mcp" | rest]), do: Raxol.CLI.MCP.run(rest)
-  # The interactive setup an ACP client relaunches us for (Terminal Auth): the
-  # args here are the ones `initialize` advertises, so the two cannot drift.
+  # Connect a provider interactively.
   defp dispatch(["login" | rest]), do: Raxol.Agent.ClientProtocol.Login.run(rest)
   # The headless twin of `login`, and the same code `mix raxol.setup` runs.
   # Reachable from the packaged binary because connecting a provider is the
@@ -368,7 +367,7 @@ defmodule Raxol.CLI do
       agent         Interactive AI agent session (default)
       code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
-      acp           Serve over the Agent Client Protocol on stdio
+      acp           Serve a Raxol agent over the Agent Client Protocol (--agent)
       mcp           Serve Raxol apps as MCP tools on stdio (for OMP)
       login         Connect an LLM provider (browser sign-in, or a key)
       setup         Connect/inspect a provider headlessly (CI, remote boxes)

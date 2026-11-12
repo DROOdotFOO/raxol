@@ -342,7 +342,7 @@ if Code.ensure_loaded?(Plug.Router) do
     ]
 
     # The contract-envelope producer path (`Raxol.Agent.Contract.pump/3`,
-    # `Raxol.Agent.EmitBridge`, `Raxol.Agent.AcpStreamAdapter`) emits
+    # `Raxol.Agent.EmitBridge`) emits
     # `%Event{}` structs through the SAME `SessionStreamer.emit/3` channel the
     # legacy tuple producers use — the SSE surface must speak both vocabularies
     # or a contract-backed session renders as a wall of `event: unknown`

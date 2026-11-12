@@ -1,30 +1,25 @@
 #!/bin/sh
-# raxol-acp -- serve the coding agent over the Agent Client Protocol on stdio,
-# for ACP-speaking editors (Zed and its ecosystem). Point the editor's
-# agent_servers command at this shim.
+# raxol-acp -- serve a Raxol agent over the Agent Client Protocol on stdio from
+# a source checkout, for editors that speak ACP (such as Zed). Point the
+# editor's agent_servers command at this shim.
 #
-#   raxol-acp
-#   raxol-acp --backend anthropic --model claude-sonnet-5
+#   raxol-acp --agent Raxol.Agent.Reference.Counter
+#   raxol-acp --agent Raxol.Agent.Reference.Counter:c1
 #   raxol-acp --help
 #
-# mix raxol.acp lives in the raxol_agent package. This shim runs it from the
-# package while passing the CALLER's cwd through as RAXOL_CLI_CWD. A session's
-# fs tools scope to the cwd the editor names in session/new; RAXOL_CLI_CWD is
-# what applies when that field is blank, so spawn this with the project
-# directory as cwd either way.
+# The agent's journal is bound to the cwd the editor names in session/new, not
+# to the directory this runs from.
 #
-# Why a shim: `mix raxol.acp` compiles the project on first run and Mix prints
-# "Compiling N files" to STDOUT, which would corrupt the NDJSON wire before
-# the task starts. This compiles quietly first, THEN execs the task, so stdout
-# carries only protocol frames.
-# Requires deps compiled once: (cd packages/raxol_agent && mix deps.get)
+# Why a shim: Mix prints "Compiling N files" to STDOUT, which would corrupt
+# the NDJSON wire. This compiles quietly first, THEN serves, so stdout carries
+# only protocol frames.
+# Requires deps fetched once: (cd packages/raxol_agent && mix deps.get)
 
 set -e
 
 # shellcheck disable=SC1007  # CDPATH= is an intentional env prefix for a safe cd
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(dirname -- "$SCRIPT_DIR")
-CALLER_CWD=$(pwd)
 
 cd "$REPO_ROOT/packages/raxol_agent"
 
@@ -44,30 +39,24 @@ MAKEFLAGS=-s mix compile >&2 </dev/null || {
   exit 70
 }
 
-# Precompiling is not sufficient on its own. `mix <task>` must load the project
-# to find the task module, and that loadpaths pass announces dep work on STDOUT
-# ("==> earmark_parser", "Compiling 47 files") BEFORE `raxol.acp` can install a
-# quiet shell -- elixir_make's NIF check re-announces on every invocation, so it
-# is not a first-run-only cost. That chatter lands ahead of the first frame and
-# an ACP client that does not tolerate a non-JSON preamble drops the session.
-# `mix run` is built into Mix, so it parses before any project loadpaths and
-# honours --no-deps-check; the task still runs `app.start` itself.
+# Precompiling is not sufficient on its own. A Mix task must load the project
+# to be found, and that loadpaths pass announces dep work on STDOUT
+# ("==> earmark_parser", "Compiling 47 files") -- elixir_make's NIF check
+# re-announces on every invocation, so it is not a first-run-only cost. `mix
+# run` is built into Mix, so it parses before any project loadpaths and
+# honours --no-deps-check. Nothing is started before `Serve.run/1` has moved
+# the log handler to stderr.
 #
-# -noinput: the VM otherwise boots with `prim_tty` owning fd 0, and the ACP
-# transport's own port on fd 0 then steals it
-# ("driver_select ... stealing control of fd=0 from resource prim_tty:tty").
-# The handshake hangs: the peer never answers `initialize`. Verified with
-# scripts/acp_probe.py, which hangs without this flag and completes a clean
-# turn with it.
+# No -noinput: the wire is read from the `user` device, which needs stdin.
 exec env \
   MAKEFLAGS=-s \
-  RAXOL_CLI_CWD="$CALLER_CWD" \
-  ELIXIR_ERL_OPTIONS="-noinput${ELIXIR_ERL_OPTIONS:+ $ELIXIR_ERL_OPTIONS}" \
   mix run \
     --no-start \
     --no-compile \
     --no-deps-check \
     --no-archives-check \
     --no-elixir-version-check \
-    -e 'Mix.Tasks.Raxol.Acp.run(System.argv())' \
+    -e 'Application.put_env(:raxol, :skip_endpoint, true)
+        Application.put_env(:raxol, :startup_mode, :mcp)
+        System.halt(Raxol.Agent.ClientProtocol.Serve.run(System.argv()))' \
     -- "$@"

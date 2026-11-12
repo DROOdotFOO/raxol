@@ -1,19 +1,28 @@
 defmodule Raxol.Agent.ClientProtocol.Serve do
   @moduledoc """
-  Serve the coding agent over [ACP](https://agentclientprotocol.com) on this
-  process's own stdio.
+  `raxol acp`: serve a Raxol agent over [ACP](https://agentclientprotocol.com)
+  on this process's own stdio, for an editor that spawns its agents.
 
-  The release-safe half of the ACP surface: this module makes no Mix calls, so
-  the Burrito-packaged `raxol acp` and the `mix raxol.acp` boot shim run the
-  same code — the same split as `Raxol.Agent.P` and `mix raxol.p`. Option
-  parsing, `--help`, provider resolution, and every exit code live here, so the
-  two entrypoints cannot disagree.
+      raxol acp --agent <app>[:<id>]
 
-  stdout carries newline-delimited JSON-RPC and nothing else. Logs are rerouted
-  to stderr before the transport binds, because on this surface a single stray
-  line is a protocol parse error at the client.
+  `<app>` is one of `config :raxol_agent, :mcp_spawnable_apps`; each
+  `session/new` starts it in this BEAM (see
+  `Raxol.Agent.ClientProtocol.StdioAgent`). With `<id>` the agent's journal
+  continues across runs; its state starts fresh every time. Without
+  `--agent` the wire still opens and `initialize` answers, and `session/new`
+  is refused with the list of apps.
 
-  Turns run the read-only toolset — see `Raxol.Agent.ClientProtocol.StdioAgent`.
+  stdout carries newline-delimited JSON-RPC and nothing else: logs are moved
+  to stderr before the transport starts. The agents this connection started
+  are stopped when it ends, so their journals are flushed before the caller
+  halts the VM.
+
+  `RAXOL_MAX_TURNS` and `RAXOL_MAX_COST_USD` cap the connection (see
+  `Raxol.Agent.ClientProtocol.Budget`).
+
+  Exit codes: 0 when the peer disconnects, 64 for a usage error or a
+  malformed cap, 1 for a build without ACP or a connection that ended
+  abnormally.
   """
 
   @compile {:no_warn_undefined,
@@ -23,282 +32,161 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
               Raxol.Agent.ClientProtocol.StdioAgent
             ]}
 
-  @switches [backend: :string, harness: :string, model: :string, help: :boolean]
+  alias Raxol.Agent.ClientProtocol.Budget
+  alias Raxol.Agent.ClientProtocol.ParentWatch
+
+  @acp_agent Raxol.AgentClientProtocol.Agent
+  @handler Raxol.Agent.ClientProtocol.StdioAgent
+  @stdio Raxol.AgentClientProtocol.Transport.Stdio
+
+  @switches [agent: :string, help: :boolean]
   @aliases [h: :help]
 
   @usage """
-  Usage: raxol acp [options]
+  Usage: raxol acp [--agent <app>[:<id>]]
 
-  Serve the coding agent over the Agent Client Protocol on stdio
-  (for ACP-speaking editors such as Zed).
+  Serve a Raxol agent over the Agent Client Protocol on stdio, for editors
+  that speak ACP (such as Zed).
 
   Options:
-    --backend NAME   LLM backend (auto-detected if omitted; --harness is a
-                     deprecated alias)
-    --model NAME     model override
-    -h, --help       print this help
+    --agent APP[:ID]  the app each session starts, and the id its journal
+                      continues under (a new id per session if omitted)
+    -h, --help        print this help
   """
 
-  @doc """
-  Parse `argv` and serve until the peer disconnects, returning an exit code.
+  @typedoc "The agent `--agent` names: an app name and, optionally, an id."
+  @type agent :: %{app: String.t(), id: String.t() | nil}
 
-  A clean disconnect is 0. The non-zero paths are a usage error (64), an
-  unavailable ACP build (1), an unresolved provider (1), and a connection that
-  ended abnormally (1).
-  """
+  @doc "Parse `argv` and serve until the peer disconnects. Returns the exit code."
   @spec run([String.t()]) :: non_neg_integer()
   def run(argv) do
-    {opts, _args, invalid} =
-      OptionParser.parse(argv, strict: @switches, aliases: @aliases)
+    case OptionParser.parse(argv, strict: @switches, aliases: @aliases) do
+      {opts, [], []} -> run_parsed(opts)
+      {_opts, rest, invalid} -> usage_error("unknown arguments #{unknown(rest, invalid)}")
+    end
+  end
 
+  defp run_parsed(opts) do
     cond do
       Keyword.get(opts, :help, false) ->
         IO.puts(@usage)
         0
 
-      invalid != [] ->
-        IO.puts(
-          :stderr,
-          "raxol acp: unknown options: #{inspect(invalid)}\n\n#{@usage}"
-        )
-
-        64
-
       not available?() ->
         IO.puts(
           :stderr,
-          "raxol acp: this build has no ACP support. The protocol package " <>
-            "(raxol_agent_client_protocol) is unpublished, so a Hex install of " <>
-            "raxol_agent is compiled without it; build from the raxol repo."
+          "raxol acp: this build has no ACP support: raxol_agent was compiled " <>
+            "without raxol_agent_client_protocol"
         )
 
         1
 
       true ->
-        serve(opts)
+        serve_named(Keyword.get(opts, :agent))
     end
   end
 
-  @doc "True when this build compiled the ACP agent surface."
-  @spec available?() :: boolean()
-  def available? do
-    Code.ensure_loaded?(Raxol.Agent.ClientProtocol.TurnRunner) and
-      Raxol.Agent.ClientProtocol.TurnRunner.available?() and
-      Code.ensure_loaded?(Raxol.Agent.ClientProtocol.StdioAgent)
-  end
-
-  # An unresolved provider no longer stops the wire from opening.
-  #
-  # It used to: resolution came first and a failure exited 1 before binding
-  # stdio, on the reasoning that a misconfigured agent should fail loudly
-  # rather than serve a wire it cannot answer on. That was the wrong shape for
-  # this protocol. A client connects and negotiates BEFORE any model is
-  # configured -- ACP has authentication methods precisely so it can -- and the
-  # registry's own verifier runs `raxol acp` with no credentials at all and
-  # expects a handshake. Refusing to boot made a perfectly serviceable
-  # `initialize` impossible.
-  #
-  # Loudness is preserved, and now arrives twice: a warning on stderr the
-  # moment we know, and a structured per-turn error carrying the same message
-  # to the peer. That second channel is new -- it did not exist when the
-  # fail-early call was made -- so the failure is no quieter for moving later,
-  # it is better addressed.
-  defp serve(opts) do
-    case apply_requested_model(opts) do
-      {:ok, opts} -> start_serving(resolve_provider(opts))
+  defp serve_named(spec) do
+    case parse_agent(spec) do
+      {:ok, agent} -> serve(agent)
       {:error, message} -> usage_error(message)
     end
   end
 
-  defp resolve_provider(opts) do
-    case Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
-      {:ok, executor, _source} ->
-        warn_if_tools_are_the_backend_s(executor)
-        {:ok, executor}
-
-      {:error, message} ->
-        IO.puts(:stderr, "raxol acp: #{message}")
-        {:error, message}
-    end
-  end
-
-  # A native-CLI backend (`:claude_native`, `:grok_native`, …) runs its OWN
-  # tool loop — `Raxol.Agent.Backend.Native` reports
-  # `handles_tools_internally? == true` — so on that path raxol's Actions never
-  # execute: no `session/request_permission`, no per-session `cwd` scoping, no
-  # `:tool_authorizer`. The surface still works, but it is the CLI's agent
-  # wearing our protocol, not ours.
-  #
-  # Said out loud here because the failure mode is silent and expensive: the
-  # turn looks normal, the tools have the OTHER agent's names, and a write
-  # refused by the CLI's own prompt is indistinguishable on the wire from our
-  # gate denying it. Anyone testing this surface against such a backend will
-  # draw conclusions about code that never ran.
-  defp warn_if_tools_are_the_backend_s(executor) do
-    with {:ok, module, _opts} <- Raxol.Agent.Backend.Selector.select(executor),
-         true <- Raxol.Agent.AIBackend.handles_tools_internally?(module) do
-      IO.puts(
-        :stderr,
-        "raxol acp: backend #{inspect(executor.backend)} runs its own tool " <>
-          "loop; raxol's Actions, cwd scoping and session/request_permission " <>
-          "are NOT in play on this session"
-      )
-    end
-
-    :ok
-  end
+  defp unknown(rest, invalid),
+    do: Enum.join(Enum.map(invalid, &elem(&1, 0)) ++ rest, " ")
 
   defp usage_error(message) do
-    IO.puts(:stderr, "raxol acp: #{message}")
-    1
+    IO.puts(:stderr, "raxol acp: #{message}\n\n#{@usage}")
+    64
   end
 
-  # Same env contract `raxol p` already honours (RAXOL_MAX_COST_USD,
-  # RAXOL_MAX_TURNS, RAXOL_COST_PER_MTOK_IN/_OUT). A malformed or
-  # unenforceable value refuses to serve rather than running uncapped: the
-  # whole reason to set one is that nobody is watching.
-  defp start_budget do
-    case Raxol.Agent.BenchmarkProfile.from_env() do
-      {:ok, profile} ->
-        Raxol.Agent.ClientProtocol.Budget.start_link(profile)
-        :ok
-
-      {:error, message} ->
-        IO.puts(:stderr, "raxol acp: #{message}")
-        System.halt(64)
-    end
-  end
-
-  @requested_model_env "HARBOR_ACP_REQUESTED_MODEL"
+  @doc "True when this build compiled the ACP agent surface."
+  @spec available?() :: boolean()
+  def available?, do: Code.ensure_loaded?(@acp_agent) and Code.ensure_loaded?(@handler)
 
   @doc """
-  Fold a harness-requested model into `opts`.
-
-  Harbor, the runner behind Terminal-Bench, tells an ACP agent which model to
-  use by setting `HARBOR_ACP_REQUESTED_MODEL` to a litellm-style
-  `provider/model` spec. Nothing on the ACP wire itself carries a model, so
-  without reading it a benchmark run served whatever provider auto-detection
-  happened to find and the recorded trajectory named a model the harness never
-  asked for — fabricated attribution in a published result.
-
-  `--backend`/`--model` win, because the human channel outranks the harness
-  channel. When either is given the env var is ignored WHOLE rather than
-  merged per key, so a flagged provider can never be paired with a model
-  belonging to a different one.
-
-  A value that is set but unparseable is REFUSED: a benchmark that cannot
-  honor the requested model must fail loudly rather than quietly serve a
-  different one. Blank is treated as unset. An unsupported provider is left to
-  `Raxol.Agent.Backend.Cli`, whose error already names the supported set. The
-  model half is split off only once, so a provider-qualified model name
-  (`openrouter/meta-llama/llama-3.1`) survives intact.
+  Parse the value of `--agent`: `<app>` or `<app>:<id>`. `nil` (no
+  `--agent`) is `{:ok, nil}`. Whether the app may start and the id is
+  well-formed is decided when a session starts it.
   """
-  @spec apply_requested_model(keyword(), %{optional(String.t()) => String.t()}) ::
-          {:ok, keyword()} | {:error, String.t()}
-  def apply_requested_model(opts, env \\ System.get_env()) do
-    if flagged?(opts) do
-      {:ok, opts}
-    else
-      merge_requested(opts, Map.get(env, @requested_model_env))
+  @spec parse_agent(String.t() | nil) :: {:ok, agent() | nil} | {:error, String.t()}
+  def parse_agent(nil), do: {:ok, nil}
+
+  def parse_agent(spec) when is_binary(spec) do
+    case String.split(spec, ":", parts: 2) do
+      [app] when app != "" -> {:ok, %{app: app, id: nil}}
+      [app, id] when app != "" and id != "" -> {:ok, %{app: app, id: id}}
+      _other -> {:error, "--agent takes <app> or <app>:<id>, got #{inspect(spec)}"}
     end
   end
 
-  defp flagged?(opts) do
-    Enum.any?([:model, :backend, :harness], &Keyword.has_key?(opts, &1))
-  end
-
-  defp merge_requested(opts, value) do
-    case parse_requested(value) do
-      :none ->
-        {:ok, opts}
-
-      {:ok, provider, model} ->
-        {:ok, Keyword.merge(opts, backend: provider, model: model)}
-
-      :error ->
-        {:error, "#{@requested_model_env} must be provider/model (got #{inspect(value)})"}
-    end
-  end
-
-  defp parse_requested(nil), do: :none
-
-  defp parse_requested(value) do
-    case String.split(String.trim(value), "/", parts: 2) do
-      [""] -> :none
-      [provider, model] when provider != "" and model != "" -> {:ok, provider, model}
-      _ -> :error
-    end
-  end
-
-  defp start_serving(provider) do
-    # No terminal driver: this process's stdio is the protocol wire, not a UI.
+  defp serve(agent) do
+    # This process's stdio is the wire, not a terminal.
     System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
     reroute_logs_to_stderr()
     {:ok, _apps} = Application.ensure_all_started(:raxol_agent)
-    start_budget()
-    # Burrito's launcher does not forward signals, so a client that kills the
-    # launcher pid alone would otherwise leave this BEAM running with the
-    # provider credential and an open stdin.
-    Raxol.Agent.ClientProtocol.ParentWatch.start_link([])
 
-    {:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
+    case start_budget() do
+      :ok ->
+        # Burrito's launcher forwards no signal: a client that kills only the
+        # launcher would leave this BEAM running with stdin open.
+        ParentWatch.start_link([])
+        {:ok, handle} = @stdio.start_self()
+        serve_connection({@stdio, handle}, %{agent: agent})
 
-    serve_connection(
-      {Raxol.AgentClientProtocol.Transport.Stdio, handle},
-      %{turn_opts: turn_opts(provider)}
-    )
+      {:error, message} ->
+        usage_error(message)
+    end
   end
 
-  @doc false
-  # Serve one connection and return its exit code.
-  #
-  # On peer disconnect the transport reports {:closed, _}, the Connection stops
-  # :normal, and the supervisor -- one_for_all with auto_shutdown:
-  # :any_significant over a significant Connection child -- exits :shutdown into
-  # the link `start_link` just made. Trapping turns that into a message we can
-  # answer with an exit code. Blocking instead got both callers wrong: the mix
-  # task died OF the linked exit (stderr "** (EXIT ...)", status 1 on a CLEAN
-  # disconnect), and the packaged binary, whose caller is OTP's
-  # application-master starter and therefore already trapping, ignored it and
-  # parked forever -- one resident BEAM per editor session holding the provider
-  # key, which Burrito's launcher cannot signal away.
+  # A cap that cannot be read refuses to serve: it was set so that nobody
+  # has to watch.
+  defp start_budget do
+    with {:ok, profile} <- Raxol.Agent.BenchmarkProfile.from_env() do
+      _ = Budget.start_link(profile)
+      :ok
+    end
+  end
+
+  @doc """
+  Serve one connection with `handler_arg` (see
+  `Raxol.Agent.ClientProtocol.StdioAgent`) and return its exit code, after
+  stopping the agents the connection started.
+
+  The connection's supervisor is linked and exits `:shutdown` when the
+  connection ends, whatever the reason; the connection's own exit reason
+  decides the code.
+  """
   @spec serve_connection(term(), map()) :: non_neg_integer()
   def serve_connection(transport, handler_arg) do
     Process.flag(:trap_exit, true)
 
-    {:ok, sup} =
-      Raxol.AgentClientProtocol.Agent.start_link(
-        Raxol.Agent.ClientProtocol.StdioAgent,
-        transport: transport,
-        handler_arg: handler_arg
-      )
+    {:ok, sup} = @acp_agent.start_link(@handler, transport: transport, handler_arg: handler_arg)
+    conn = connection(sup)
+    ref = if conn, do: Process.monitor(conn)
 
-    await_shutdown(sup, monitor_connection(sup))
+    reason = await_shutdown(sup, ref)
+    if conn, do: @handler.stop_agents(conn)
+    exit_code(reason)
   end
 
-  # OTP folds every significant-child exit into one :shutdown at the
-  # supervisor, so the supervisor's own reason cannot tell a clean disconnect
-  # from a crash. The Connection's DOWN carries the real one.
-  defp monitor_connection(sup) do
-    case Raxol.AgentClientProtocol.Agent.connection(sup) do
-      {:ok, pid} -> Process.monitor(pid)
-      _ -> nil
+  defp connection(sup) do
+    case @acp_agent.connection(sup) do
+      {:ok, pid} -> pid
+      _error -> nil
     end
   end
 
   defp await_shutdown(sup, ref, reason \\ :normal) do
     receive do
-      {:DOWN, ^ref, :process, _pid, down_reason} ->
-        await_shutdown(sup, ref, down_reason)
-
-      {:EXIT, ^sup, _sup_reason} ->
-        exit_code(collect_down(ref, reason))
+      {:DOWN, ^ref, :process, _pid, down_reason} -> await_shutdown(sup, ref, down_reason)
+      {:EXIT, ^sup, _sup_reason} -> collect_down(ref, reason)
     end
   end
 
-  # The Connection dies before the supervisor it brings down, but the two
-  # signals come from different processes, so take a DOWN that has already
-  # landed rather than assuming they arrive in that order.
+  # The connection goes down before its supervisor, but the two signals come
+  # from different processes: take a DOWN that has already landed.
   defp collect_down(nil, reason), do: reason
 
   defp collect_down(ref, reason) do
@@ -313,49 +201,15 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   defp exit_code({:shutdown, _}), do: 0
 
   defp exit_code(reason) do
-    IO.puts(
-      :stderr,
-      "raxol acp: connection ended abnormally: #{inspect(reason)}"
-    )
-
+    IO.puts(:stderr, "raxol acp: connection ended abnormally: #{inspect(reason)}")
     1
-  end
-
-  # The FULL toolset, mutating tools included. Safe because every sensitive
-  # call is gated on a `session/request_permission` round trip -- see
-  # `Raxol.Agent.ClientProtocol.Permission`, whose gate `TurnRunner` injects
-  # per turn. A client that refuses, times out, disconnects, or does not
-  # implement permissions at all denies the write, so the read-only narrowing
-  # this used to do is no longer what keeps the surface closed.
-  # `:executor` carries the resolution OUTCOME, not just the executor. A turn
-  # started without a provider fails with the same message the operator already
-  # saw on stderr, instead of a shrug.
-  defp turn_opts({:error, message}), do: [provider_error: message]
-
-  defp turn_opts({:ok, executor}) do
-    [
-      executor: executor,
-      actions:
-        Raxol.Agent.Actions.Fs.all() ++
-          Raxol.Agent.Actions.Code.all() ++ Raxol.Agent.Web3.enabled_actions(),
-      context: Raxol.Agent.Web3.put_context(%{}),
-      system_prompt:
-        "You are a coding assistant driven by an editor over ACP. Inspect " <>
-          "files with the read tools, and use write_file, edit_file and bash " <>
-          "to make changes. Editing tools ask the client for permission per " <>
-          "call, so a refusal is an answer, not an error. Be concise.\n\n" <>
-          Raxol.Agent.Code.App.edit_directive()
-    ]
   end
 
   @doc """
   Bind the default log handler to stderr, keeping stdout clear for the wire.
 
-  `update_handler_config(:config, ...)` is rejected by `logger_std_h` as an
-  illegal runtime type change, so the handler has to be removed and re-added.
-  The existing config is carried across so Elixir's formatter and level
-  survive: re-adding a bare `logger_std_h` would keep stdout clean but reduce
-  every stderr log line to Erlang's default format.
+  `logger_std_h` refuses a change of `:type` at runtime, so the handler is
+  removed and added again with the rest of its config.
   """
   @spec reroute_logs_to_stderr() :: :ok
   def reroute_logs_to_stderr do

@@ -24,7 +24,7 @@ defmodule Raxol.Agent.Session do
 
   This `{:acp_cancel, ref}` is not the bare `:acp_cancel` atom of the ACP
   stack, which `Raxol.AgentClientProtocol.Session` sends to the process
-  running a `Raxol.Agent.ClientProtocol.TurnRunner` turn. The session
+  running a `Raxol.Agent.ClientProtocol.Turn` turn. The session
   neither sends nor intercepts that atom.
 
   A cancelled turn is answered `{:error, :cancelled}`, but a change its

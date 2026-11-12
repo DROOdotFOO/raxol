@@ -1,312 +1,276 @@
 defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
-  # async: false — uses the ACP package's named shared tree (SessionRegistry,
-  # journal registries, AttachPolicy task supervisor).
+  @moduledoc """
+  `raxol acp --agent` as an editor sees it: every case is a request on a
+  connection to the real server loop (`Raxol.Agent.Test.AcpPipe`).
+  """
+  # async: false: the agent registry and the ACP package's shared tree are named.
   use ExUnit.Case, async: false
 
-  alias Raxol.Agent.SessionKey
-  alias Raxol.AgentClientProtocol.Agent, as: AcpAgent
-  alias Raxol.AgentClientProtocol.Client, as: AcpClient
+  @moduletag :capture_log
+  @moduletag :unix_only
+
+  alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.McpTools
+  alias Raxol.Agent.Reference.Counter
+  alias Raxol.Agent.Session
+  alias Raxol.Agent.Test.AcpPipe
   alias Raxol.AgentClientProtocol.Connection
-  alias Raxol.AgentClientProtocol.Session
-  alias Raxol.AgentClientProtocol.Transport.Paired
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.LoadSessionRequest
 
-  alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeRequest
-  alias Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionRequest
-  alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptRequest
-  alias Raxol.AgentClientProtocol.Schema.ContentBlock
-
-  defmodule MiniClient do
-    @moduledoc false
-    use Raxol.AgentClientProtocol.Client
-
-    @impl true
-    def init(arg), do: {:ok, arg}
-
-    @impl true
-    def session_update(_notification, _ctx), do: :ok
-  end
-
-  # Reports the working directory the fs tool context resolves to, and sends it
-  # to the test process threaded through the SAME tool context. Proves the
-  # session/new cwd reaches a real tool's context via Fs.working_dir/1.
-  defmodule ReportCwd do
-    @moduledoc false
-    use Raxol.Agent.Action,
-      name: "report_cwd",
-      description: "Report the fs working directory",
-      schema: [input: []]
-
-    @impl true
-    def run(_params, context) do
-      dir = Raxol.Agent.Actions.Fs.working_dir(context)
-
-      if pid = is_map(context) && Map.get(context, :test_pid) do
-        send(pid, {:probed_cwd, dir})
-      end
-
-      {:ok, %{cwd: dir}}
-    end
-  end
+  @counter "Raxol.Agent.Reference.Counter"
 
   setup do
-    # The package Application auto-starts its shared tree when the dep app
-    # boots; inject it only when absent so this test never double-starts
-    # named processes.
-    if Process.whereis(Session.registry()) == nil do
-      RaxolAgentClientProtocol.Application.children()
-      |> Enum.with_index()
-      |> Enum.each(fn {spec, i} ->
-        start_supervised!(Supervisor.child_spec(spec, id: {:acp_tree, i}))
-      end)
+    AcpPipe.start_trees()
+
+    root = Path.join(System.tmp_dir!(), "acp_root_#{uniq()}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf(root) end)
+
+    %{root: root, id: "a#{uniq()}"}
+  end
+
+  describe "without --agent" do
+    test "initialize answers and offers no session/load" do
+      %{init: init} = AcpPipe.connect(nil)
+
+      assert init.protocol_version == 1
+      assert %{name: "raxol", version: version} = init.agent_info
+      assert is_binary(version) and version != ""
+      assert init.agent_capabilities.load_session == false
     end
 
-    :ok
-  end
+    test "session/new is refused, naming the flag and the apps", %{root: root} do
+      pipe = AcpPipe.connect(nil)
 
-  test "an editor can initialize, open a session, and run a prompt turn" do
-    {left, right} = Paired.create_pair()
-
-    on_exit(fn ->
-      for %Paired{pid: p} <- [left, right],
-          is_pid(p) and Process.alive?(p) do
-        Process.exit(p, :kill)
-      end
-    end)
-
-    turn_opts = [
-      executor: Raxol.Agent.ExecutorConfig.new(backend: :mock),
-      actions: []
-    ]
-
-    agent_sup =
-      start_supervised!(
-        Map.put(
-          AcpAgent.child_spec(
-            id: {:stdio_agent, make_ref()},
-            handler: Raxol.Agent.ClientProtocol.StdioAgent,
-            handler_arg: %{turn_opts: turn_opts},
-            transport: {Paired, left}
-          ),
-          :restart,
-          :temporary
-        )
-      )
-
-    client_sup =
-      start_supervised!(
-        Map.put(
-          AcpClient.child_spec(
-            id: {:stdio_client, make_ref()},
-            handler: MiniClient,
-            handler_arg: %{},
-            transport: {Paired, right}
-          ),
-          :restart,
-          :temporary
-        )
-      )
-
-    agent_conn = connection_of(agent_sup)
-    client_conn = connection_of(client_sup)
-    assert_adopted(agent_conn)
-    assert_adopted(client_conn)
-
-    assert {:ok, init} =
-             Connection.request(
-               client_conn,
-               "initialize",
-               InitializeRequest.new(1),
-               2_000
-             )
-
-    # Clients and benchmark harnesses record `agentInfo` as the agent under
-    # test; without it the run is attributed to an unnamed agent.
-    assert %{agent_info: %{name: "raxol", version: version}} = init
-    assert is_binary(version) and version != ""
-
-    assert {:ok, %{session_id: sid}} =
-             Connection.request(
-               client_conn,
-               "session/new",
-               NewSessionRequest.new("/"),
-               2_000
-             )
-
-    # Not a prefix check: what a session id has to be is resolvable as a
-    # journal directory later, by a client that stored it and by a different
-    # VM than the one that minted it.
-    assert is_binary(sid)
-    assert SessionKey.valid?(sid)
-
-    prompt = PromptRequest.new(sid, [ContentBlock.from_string("hello")])
-
-    assert {:ok, response} =
-             Connection.request(client_conn, "session/prompt", prompt, 5_000)
-
-    assert %{stop_reason: _reason} = response
-  end
-
-  test "session/new cwd scopes the session's fs tool context" do
-    {left, right} = Paired.create_pair()
-
-    on_exit(fn ->
-      for %Paired{pid: p} <- [left, right],
-          is_pid(p) and Process.alive?(p) do
-        Process.exit(p, :kill)
-      end
-    end)
-
-    session_cwd =
-      Path.join(
-        System.tmp_dir!(),
-        "acp_cwd_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
-      )
-
-    File.mkdir_p!(session_cwd)
-    on_exit(fn -> File.rm_rf(session_cwd) end)
-
-    # One-shot: emit the tool call on the first turn, nothing after, so react
-    # executes the tool then completes on the plain second response.
-    fired = :counters.new(1, [])
-
-    tool_calls_fn = fn ->
-      if :counters.get(fired, 1) == 0 do
-        :counters.add(fired, 1, 1)
-        [%{"id" => "c1", "name" => "report_cwd", "arguments" => %{}}]
-      else
-        nil
-      end
-    end
-
-    turn_opts = [
-      executor: Raxol.Agent.ExecutorConfig.new(backend: :mock),
-      backend_opts: [tool_calls_fn: tool_calls_fn],
-      actions: [ReportCwd],
-      context: %{test_pid: self()}
-    ]
-
-    agent_sup =
-      start_supervised!(
-        Map.put(
-          AcpAgent.child_spec(
-            id: {:stdio_agent_cwd, make_ref()},
-            handler: Raxol.Agent.ClientProtocol.StdioAgent,
-            handler_arg: %{turn_opts: turn_opts},
-            transport: {Paired, left}
-          ),
-          :restart,
-          :temporary
-        )
-      )
-
-    client_sup =
-      start_supervised!(
-        Map.put(
-          AcpClient.child_spec(
-            id: {:stdio_client_cwd, make_ref()},
-            handler: MiniClient,
-            handler_arg: %{},
-            transport: {Paired, right}
-          ),
-          :restart,
-          :temporary
-        )
-      )
-
-    agent_conn = connection_of(agent_sup)
-    client_conn = connection_of(client_sup)
-    assert_adopted(agent_conn)
-    assert_adopted(client_conn)
-
-    {:ok, _} =
-      Connection.request(client_conn, "initialize", InitializeRequest.new(1), 2_000)
-
-    {:ok, %{session_id: sid}} =
-      Connection.request(
-        client_conn,
-        "session/new",
-        NewSessionRequest.new(session_cwd),
-        2_000
-      )
-
-    prompt = PromptRequest.new(sid, [ContentBlock.from_string("where are you")])
-    {:ok, _response} = Connection.request(client_conn, "session/prompt", prompt, 5_000)
-
-    assert_receive {:probed_cwd, probed}, 2_000
-    assert probed == Path.expand(session_cwd)
-  end
-
-  test "a prompt against an unknown session is a clean protocol error" do
-    {left, right} = Paired.create_pair()
-
-    on_exit(fn ->
-      for %Paired{pid: p} <- [left, right],
-          is_pid(p) and Process.alive?(p) do
-        Process.exit(p, :kill)
-      end
-    end)
-
-    agent_sup =
-      start_supervised!(
-        Map.put(
-          AcpAgent.child_spec(
-            id: {:stdio_agent2, make_ref()},
-            handler: Raxol.Agent.ClientProtocol.StdioAgent,
-            handler_arg: %{turn_opts: [executor: Raxol.Agent.ExecutorConfig.new(backend: :mock)]},
-            transport: {Paired, left}
-          ),
-          :restart,
-          :temporary
-        )
-      )
-
-    client_sup =
-      start_supervised!(
-        Map.put(
-          AcpClient.child_spec(
-            id: {:stdio_client2, make_ref()},
-            handler: MiniClient,
-            handler_arg: %{},
-            transport: {Paired, right}
-          ),
-          :restart,
-          :temporary
-        )
-      )
-
-    agent_conn = connection_of(agent_sup)
-    client_conn = connection_of(client_sup)
-    assert_adopted(agent_conn)
-    assert_adopted(client_conn)
-
-    {:ok, _} =
-      Connection.request(client_conn, "initialize", InitializeRequest.new(1), 2_000)
-
-    prompt = PromptRequest.new("no-such-session", [ContentBlock.from_string("hi")])
-
-    assert {:error, error} =
-             Connection.request(client_conn, "session/prompt", prompt, 2_000)
-
-    assert error.message =~ "unknown session"
-  end
-
-  defp connection_of(sup) do
-    sup
-    |> Supervisor.which_children()
-    |> Enum.find_value(fn {_id, pid, _type, mods} ->
-      if is_pid(pid) and Connection in mods, do: pid
-    end)
-  end
-
-  defp assert_adopted(conn) do
-    wait_until(fn -> :sys.get_state(conn).phase != :booting end)
-  end
-
-  defp wait_until(fun, tries \\ 200) do
-    cond do
-      fun.() -> :ok
-      tries <= 0 -> flunk("condition not met in time")
-      true -> Process.sleep(5) && wait_until(fun, tries - 1)
+      assert {:error, error} = AcpPipe.new_session(pipe, root)
+      assert error.code == -32_602
+      assert error.message =~ "--agent <app>[:<id>]"
+      assert error.message =~ "spawnable: #{@counter}"
+      assert Session.Supervisor.owners() == []
     end
   end
+
+  describe "session/new" do
+    test "refuses an app that is not listed, without making an atom of it", %{root: root} do
+      name = "No.Such.App#{uniq()}"
+      pipe = AcpPipe.connect(%{app: name, id: nil})
+
+      assert {:error, error} = AcpPipe.new_session(pipe, root)
+      assert error.message =~ "app #{name} is not spawnable"
+      assert error.message =~ @counter
+      assert Session.Supervisor.owners() == []
+      assert_raise ArgumentError, fn -> String.to_existing_atom("Elixir." <> name) end
+    end
+
+    test "starts the named app under the given id, journal bound to the cwd",
+         %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+
+      assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      assert is_pid(Session.Supervisor.whereis(id))
+
+      assert {:ok, {{Raxol.Agent.ClientProtocol.StdioAgent, conn}, owned}} =
+               Session.Supervisor.owner(id)
+
+      assert is_pid(conn)
+      assert %{app: Counter, root: ^root} = owned
+
+      assert {:ok, [%{"type" => "agent_started", "payload" => %{"prior_offset" => 0}}]} =
+               FileStore.read_records(id, base_dir: owned.base_dir)
+    end
+
+    test "refuses a second session under a given id while its agent runs",
+         %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+      assert {:error, error} = AcpPipe.new_session(pipe, root)
+      assert error.message =~ "id #{id} is in use"
+    end
+
+    test "starts a new agent under a random id per session when none is given", %{root: root} do
+      pipe = AcpPipe.connect(%{app: @counter, id: nil})
+
+      assert {:ok, first} = AcpPipe.new_session(pipe, root)
+      assert {:ok, second} = AcpPipe.new_session(pipe, root)
+
+      assert first != second
+      for id <- [first, second], do: assert(id =~ ~r/\Aacp-[0-9a-f]{12}\z/)
+      assert length(Session.Supervisor.owners()) == 2
+    end
+
+    test "refuses an id that is not a lowercase session id", %{root: root} do
+      for id <- ["A1", "a/b", "..", "a b"] do
+        pipe = AcpPipe.connect(%{app: @counter, id: id})
+
+        assert {:error, error} = AcpPipe.new_session(pipe, root)
+        assert error.message =~ "an id is 1-64 characters of a-z 0-9"
+      end
+
+      assert Session.Supervisor.owners() == []
+    end
+
+    test "refuses a cwd that is not absolute", %{id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+
+      for cwd <- ["", "relative/dir"] do
+        assert {:error, error} = AcpPipe.new_session(pipe, cwd)
+        assert error.message =~ "cwd must be an absolute path"
+      end
+
+      assert Session.Supervisor.whereis(id) == nil
+    end
+
+    test "refuses an id whose journal belongs to another root", %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      assert AcpPipe.disconnect(pipe) == 0
+
+      # A journal moved in from another project: same directory, another
+      # root recorded in it.
+      {:ok, base} = journal_base(root)
+      other = Path.join(System.tmp_dir!(), "acp_other_#{uniq()}")
+      meta = Path.join([base, id, "meta.json"])
+      File.write!(meta, meta |> File.read!() |> String.replace(root, other))
+
+      again = AcpPipe.connect(%{app: @counter, id: id})
+      assert {:error, error} = AcpPipe.new_session(again, root)
+      assert error.message =~ "journal #{id} belongs to project root #{other}"
+      assert Session.Supervisor.whereis(id) == nil
+    end
+  end
+
+  describe "session/prompt" do
+    test "answers with the agent's reply as one message chunk", %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+      assert {updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "increment")
+
+      assert [{:tool_call, _}, {:tool_call_update, _}, {:agent_message_chunk, _}] = updates
+      assert AcpPipe.reply_text(updates) == "count: 1"
+
+      assert AcpPipe.tool_statuses(updates) == [
+               {"Run `increment`", :in_progress},
+               {nil, :completed}
+             ]
+
+      assert {updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "get")
+      assert AcpPipe.reply_text(updates) == "count: 1"
+    end
+
+    test "journals the turn's brackets", %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+      {_updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "get")
+      assert AcpPipe.disconnect(pipe) == 0
+
+      assert turn_brackets(root, id) == ["turn_started", "turn_completed"]
+    end
+
+    test "cancel after the hold action's update answers cancelled and leaves the agent idle",
+         %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+      tag = AcpPipe.prompt(pipe, id, "hold")
+
+      assert_receive {:acp_turn_update, ^tag, 0,
+                      %{update: {:tool_call, %{title: "Run `hold`", status: :in_progress}}}},
+                     5_000
+
+      :ok = AcpPipe.cancel(pipe, id)
+
+      assert {updates, {:ok, %{stop_reason: :cancelled}}} = AcpPipe.collect(tag)
+      assert AcpPipe.tool_statuses(updates) == [{nil, :failed}]
+      assert AcpPipe.reply_text(updates) == ""
+
+      # Idle: no turn is held, and the next prompt is taken.
+      assert {:ok, %{holds: holds, changes: changes}} = Session.get_model(id)
+      assert MapSet.size(holds) == 0
+      assert changes == %{}
+
+      assert {updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "release")
+      assert AcpPipe.reply_text(updates) == "released 0"
+
+      assert AcpPipe.disconnect(pipe) == 0
+
+      assert turn_brackets(root, id) ==
+               ["turn_started", "turn_canceled", "turn_started", "turn_completed"]
+    end
+
+    test "a prompt for an unknown session is an error", %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+      assert {[], {:error, error}} = AcpPipe.turn(pipe, "no-such-session", "get")
+      assert error.message =~ "unknown session"
+    end
+  end
+
+  describe "session/load" do
+    test "is not a method this agent has", %{id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+
+      assert {:error, error} =
+               Connection.request(
+                 pipe.conn,
+                 "session/load",
+                 %LoadSessionRequest{session_id: id, cwd: "/", mcp_servers: []},
+                 5_000
+               )
+
+      assert error.code == -32_601
+    end
+  end
+
+  describe "beside the agent MCP tools" do
+    setup do
+      start_supervised!({McpTools, registry: :"no_mcp_registry_#{uniq()}"})
+      :ok
+    end
+
+    test "the tools do not answer for an agent a session started", %{root: root, id: id} do
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+      assert {:error, refusal} = McpTools.stop_agent(id)
+      assert refusal =~ "no agent #{id} was started by this server"
+      assert is_pid(Session.Supervisor.whereis(id))
+
+      assert {:error, refusal} = McpTools.spawn_agent(@counter, id)
+      assert refusal =~ "id #{id} is in use"
+    end
+
+    test "a session is refused an id an MCP-spawned agent runs under", %{root: root, id: id} do
+      Application.put_env(:raxol_agent, :mcp_project_root, root)
+      on_exit(fn -> Application.delete_env(:raxol_agent, :mcp_project_root) end)
+      assert {:ok, %{id: ^id}} = McpTools.spawn_agent(@counter, id)
+
+      pipe = AcpPipe.connect(%{app: @counter, id: id})
+      assert {:error, error} = AcpPipe.new_session(pipe, root)
+      assert error.message =~ "id #{id} is in use"
+
+      # The connection ending stops only what it started.
+      assert AcpPipe.disconnect(pipe) == 0
+      assert is_pid(Session.Supervisor.whereis(id))
+      assert :ok = McpTools.stop_agent(id)
+    end
+  end
+
+  # The records the agent session writes around a whole prompt: their turn
+  # ids start `acp-`, unlike those of the folds inside the turn.
+  defp turn_brackets(root, id) do
+    {:ok, base} = journal_base(root)
+    {:ok, records} = FileStore.read_records(id, base_dir: base)
+    for %{"turn_id" => "acp-" <> _, "type" => type} <- records, do: type
+  end
+
+  # The documented layout: `<sessions dir>/<first 8 hex of sha256(root)>/<id>`.
+  defp journal_base(root) do
+    hash = :sha256 |> :crypto.hash(root) |> Base.encode16(case: :lower) |> binary_part(0, 8)
+    {:ok, FileStore.session_dir(hash)}
+  end
+
+  defp uniq, do: System.unique_integer([:positive])
 end

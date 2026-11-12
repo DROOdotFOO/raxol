@@ -31,6 +31,8 @@ defmodule Raxol.Agent.Telemetry do
   filesystem talking, and this package has a deliberate chmod-0500 fault test
   that drives them on purpose.
 
+  No event here is `:invariant` at present, so the sentinel arms nothing.
+
   This package emits no `:peer` events: it is the agent-side library, and the
   peer-facing wire lives in `raxol_agent_client_protocol`, which carries its
   own registry. The vocabulary is shared but the registries are deliberately
@@ -52,23 +54,6 @@ defmodule Raxol.Agent.Telemetry do
   # Each entry carries WHY it lands where it does. The verdicts were read off
   # the emit sites, not guessed from the event names.
   @events %{
-    # INVARIANT. `run_interrupt/1` catches raise/throw/exit deliberately
-    # broadly, because the cancel path MUST reach the kill-complete fence no
-    # matter what the interrupt implementation does. The moduledoc there pays
-    # for that broad catch with a promise: "what review flagged as 'hides real
-    # defects' is answered by telemetry, not by narrowing the catch". This
-    # classification is what converts that promise into enforcement. The
-    # default implementation is our own `Raxol.Agent.Interrupt`, so a failure
-    # is our staged kill being broken; a test that injects a deliberately
-    # failing double declares it with `@tag expect_invariant:`, which pins the
-    # bad path instead of muting it.
-    [:raxol, :agent, :acp_turn_runner, :interrupt_failed] => :invariant,
-
-    # OPERATIONAL. `FileStore.append/2` refused the record. The cause is the
-    # filesystem (full disk, revoked permission, vanished directory), which
-    # the criterion puts outside our control.
-    [:raxol, :agent, :acp_turn_runner, :journal_failed] => :operational,
-
     # OPERATIONAL. `Code.App` stopped a running turn because the wired ledger
     # could not answer: the process is down or hung. A host dependency being
     # down, not a defect; split from `:over_limit` because the remedy is

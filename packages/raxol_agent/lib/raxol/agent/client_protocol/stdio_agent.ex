@@ -1,89 +1,75 @@
-# Compiled only when the ACP package is present (a dev/test path dep of
-# raxol_agent; production embedders add :raxol_agent_client_protocol
-# themselves). `use` injects the generated Agent behaviour, so a guard at
-# call sites cannot substitute for this compile-time gate.
+# Compiled only when the ACP package is present. `use` injects the generated
+# Agent behaviour, so a guard at call sites cannot replace this gate.
 if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
   defmodule Raxol.Agent.ClientProtocol.StdioAgent do
     @moduledoc """
-    The coding agent as an ACP agent: the handler `mix raxol.acp` serves
-    over stdio, so an ACP-speaking editor (Zed and its ecosystem) can spawn
-    and drive Raxol's agent loop.
+    A Raxol agent as an ACP agent: the handler `raxol acp --agent` serves.
 
-    Each `session/new` starts a `Raxol.AgentClientProtocol.Session` whose
-    `:turn_runner` is `Raxol.Agent.ClientProtocol.TurnRunner` over the
-    launcher-resolved executor; `session/prompt` defers to that session.
-    Turns run the FULL toolset, mutating tools included. Every sensitive call
-    is gated on a `session/request_permission` round trip via
-    `Raxol.Agent.ClientProtocol.Permission`, which `TurnRunner` injects as the
-    turn's `:tool_authorizer`. Reads are not gated, so a read-heavy turn costs
-    no extra protocol traffic. A client that refuses, times out, disconnects,
-    or does not implement permissions denies the write and keeps reading, so
-    the surface is fail-closed on the DECISION rather than on the toolset.
+    `handler_arg` is `%{agent: %{app: name, id: id | nil} | nil}` (plus
+    `:auth_opts` for `Raxol.Agent.Auth.Flow`). `initialize` always answers,
+    so a client can connect before an agent is named. `session/new` then
+    starts the named app in this BEAM and answers with the agent's id as
+    the session id:
 
-    Both of ACP's registry-accepted auth methods are advertised. `authenticate`
-    runs Agent Auth in-process via `Raxol.Agent.Auth.Flow` for the providers
-    that have a real browser flow; Terminal Auth (`raxol login`) covers every
-    other provider. See `auth_methods/0`.
+      * the app is matched against `config :raxol_agent,
+        :mcp_spawnable_apps` and started by
+        `Raxol.Agent.McpTools.start_owned/4`, under the rules `agent_spawn`
+        applies: a required, locked journal bound to the project root and
+        the app. The root is the request's `cwd`, which must be absolute.
+      * with an id, a journal an earlier run left under it for the same root
+        and app is continued; the agent's state starts fresh. One agent runs
+        under the id, so a second `session/new` is refused while it does.
+      * without an id, every session starts a new agent under a random one.
+      * with no agent named, or an app that is not listed, the request is
+        refused and the error lists the apps that are.
+
+    ## Ownership
+
+    The agent's session tree is owned by `{{StdioAgent, connection}, _}`, not
+    by `Raxol.Agent.McpTools`. Where one BEAM also serves the `agent_*` MCP
+    tools, they do not list, ask or stop this agent and do not serve its
+    journal; `agent_spawn` of its id is refused as in use, and this handler
+    refuses an id an MCP-spawned agent runs under. `stop_agents/1` stops the
+    agents a connection started; `Raxol.Agent.ClientProtocol.Serve` calls it
+    when the connection ends.
+
+    ## Turns
+
+    `session/prompt` is one turn of the agent
+    (`Raxol.Agent.ClientProtocol.Turn`): tool calls marked `sensitive` ask
+    the client through `session/request_permission`
+    (`Raxol.Agent.ClientProtocol.Permission`). `session/load` is not offered:
+    a restarted agent has its journal and none of its state, so a replayed
+    transcript would describe an agent that no longer exists.
     """
 
     use Raxol.AgentClientProtocol.Agent
 
-    require Logger
-
     alias Raxol.Agent.Auth.Flow
-    alias Raxol.Agent.ClientProtocol.TurnRunner
-    alias Raxol.Agent.Journal.FileStore
-    alias Raxol.Agent.SessionKey
-    alias Raxol.AgentClientProtocol.Connection
+    alias Raxol.Agent.ClientProtocol.Turn
+    alias Raxol.Agent.McpTools
     alias Raxol.AgentClientProtocol.Error
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.AuthenticateResponse
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.AuthMethod
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.Implementation
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeResponse
-    alias Raxol.AgentClientProtocol.Schema.AgentTypes.LoadSessionResponse
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionResponse
-    alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
     alias Raxol.AgentClientProtocol.Session
 
-    # handler_arg = %{turn_opts: keyword} — executor and toolset resolved by
-    # the launcher, once, before serving.
     @impl true
     def init(arg), do: {:ok, arg}
 
-    # Both of the registry's accepted methods, in the order a client should
-    # prefer them.
-    #
-    # Agent Auth first: `authenticate` runs the OAuth flow in-process -- bind a
-    # loopback port, open a browser, catch the redirect, store the credential --
-    # so the user never leaves the editor. It is offered only for the providers
-    # in `Flow.providers/0`, because a method advertised without a flow behind
-    # it is a sign-in that hangs.
-    #
-    # Terminal Auth second, and still the general answer: raxol takes its
-    # credential from a stored `op://` reference or a provider env var, never
-    # from the wire, so for every provider without a browser flow the client
-    # relaunches this same binary and the user connects one in a real terminal.
-    #
-    # Each entry carries its `_meta` type marker. The registry validator infers
-    # the method from that key and silently defaults an untyped method to
-    # `agent` -- so the markers are load-bearing, not decoration: an untyped
-    # entry would claim Agent Auth for a flow that does not exist.
-    @doc false
-    def auth_methods do
-      Enum.map(Flow.providers(), &agent_auth_method/1) ++
-        [
-          %{
-            AuthMethod.new("terminal", "Run in terminal")
-            | description: "Connect a provider interactively with `raxol login`",
-              _meta: %{"terminal-auth" => %{"args" => ["login"]}}
-          }
-        ]
-    end
+    @doc """
+    The auth methods `initialize` advertises: Agent Auth for each provider in
+    `Raxol.Agent.Auth.Flow.providers/0`.
 
-    # Total on purpose: a provider added to `Flow.providers/0` is advertised
-    # even before anyone writes copy for it here. A FunctionClauseError raised
-    # from this function would take out `initialize`, not just the new method.
+    Each carries its `_meta` type marker: the ACP registry infers the method
+    type from that key.
+    """
+    @spec auth_methods() :: [AuthMethod.t()]
+    def auth_methods, do: Enum.map(Flow.providers(), &agent_auth_method/1)
+
     defp agent_auth_method(provider) do
       %{
         AuthMethod.new(to_string(provider), "Sign in with #{label(provider)}")
@@ -95,30 +81,13 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     defp label(:openrouter), do: "OpenRouter"
     defp label(provider), do: provider |> to_string() |> String.capitalize()
 
-    # The Agent Auth flow itself. Each inbound request already runs in its own
-    # dispatch task (Connection §4.1), so waiting here for a browser blocks
-    # only this request -- the wire keeps moving, and a `$/cancel_request`
-    # kills the task, which closes the loopback port with it.
-    #
-    # Fail-closed on the whole flow: a refusal, a timeout, a disconnect, or a
-    # key the provider will not authorize is an error, never a partial success
-    # that leaves a client thinking it can open a session.
+    # Runs in the request's own task, so the wait for a browser holds up
+    # nothing else, and a `$/cancel_request` ends it and closes the port.
     @impl true
-    def authenticate(%{method_id: "terminal"}, _ctx) do
-      {:error,
-       Error.new(
-         -32_602,
-         "terminal auth does not run over the wire: relaunch this binary as `raxol login`"
-       )}
-    end
-
     def authenticate(%{method_id: method_id}, ctx) do
       case provider_for(method_id) do
-        {:ok, provider} ->
-          run_agent_auth(provider, ctx)
-
-        :error ->
-          {:error, Error.new(-32_602, "unknown auth method #{inspect(method_id)}")}
+        {:ok, provider} -> run_agent_auth(provider, ctx)
+        :error -> {:error, Error.new(-32_602, "unknown auth method #{inspect(method_id)}")}
       end
     end
 
@@ -128,16 +97,11 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
           {:ok, AuthenticateResponse.new()}
 
         {:error, reason} ->
-          {:error,
-           Error.new(
-             -32_603,
-             "#{provider} sign-in failed: #{Flow.describe(reason)}"
-           )}
+          {:error, Error.new(-32_603, "#{provider} sign-in failed: #{Flow.describe(reason)}")}
       end
     end
 
-    # Never `String.to_atom/1` on wire input: a method id is matched against
-    # the advertised list and anything else is an unknown method.
+    # A method id is matched against the advertised list, never made an atom.
     defp provider_for(method_id) when is_binary(method_id) do
       case Enum.find(Flow.providers(), &(to_string(&1) == method_id)) do
         nil -> :error
@@ -147,17 +111,11 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
 
     defp provider_for(_method_id), do: :error
 
-    # The flow's seams, injectable through `handler_arg` so a test drives the
-    # real loopback socket with no browser and no network.
-    defp auth_opts(%{handler_state: state}) when is_map(state) do
-      Map.get(state, :auth_opts, [])
-    end
+    defp auth_opts(%{handler_state: state}) when is_map(state),
+      do: Map.get(state, :auth_opts, [])
 
     defp auth_opts(_ctx), do: []
 
-    # Identify ourselves in the handshake: clients and benchmark harnesses
-    # record `agentInfo` as the agent under test, and a nil there is reported
-    # as an unnamed agent.
     @impl true
     def initialize(_req, _ctx) do
       {:ok,
@@ -165,21 +123,9 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
          InitializeResponse.new(1)
          | agent_info: implementation(),
            auth_methods: auth_methods(),
-           agent_capabilities: capabilities()
+           agent_capabilities: AgentCapabilities.new()
        }}
     end
-
-    # Advertised capabilities gate themselves: `Capabilities.negotiated?/2`
-    # resolves an inbound gated method against THIS struct, and the Connection
-    # answers a non-negotiated one with -32601 before it is even decoded. So
-    # the response was previously leaving `agent_capabilities` nil, which read
-    # as every optional capability being false -- `session/load` included, and
-    # it was refused on that basis.
-    #
-    # Only `load_session` is claimed. The prompt/mcp/session capability groups
-    # stay absent because nothing behind them is wired yet, and a capability is
-    # a promise the gate will hold us to.
-    defp capabilities, do: %{AgentCapabilities.new() | load_session: true}
 
     defp implementation do
       version =
@@ -191,188 +137,88 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
       Implementation.new("raxol", version)
     end
 
-    # The id is minted through `Raxol.Agent.SessionKey` rather than locally,
-    # for two reasons. It has to stay meaningful after this VM exits -- a
-    # client stores it and names it again to resume, and the previous
-    # `System.unique_integer/1` id restarted from a fresh sequence every run,
-    # so it named a different session on the far side of a restart. And it is
-    # the directory a session's journal lives in, which the coding TUI also
-    # writes, so the two surfaces cannot each own the format.
     @impl true
     def new_session(req, ctx) do
-      sid = SessionKey.mint()
-      {:ok, _session} = start_session(sid, req, ctx)
-      {:ok, NewSessionResponse.new(sid)}
-    end
-
-    @doc """
-    Replay a session recorded by an earlier run, then bind it so the next
-    `session/prompt` continues it.
-
-    The history is the notifications the original turns delivered, re-sent as
-    the same `session/update` frames rather than rebuilt from a second
-    vocabulary (see `Raxol.Agent.ClientProtocol.TurnRunner`'s "Durable
-    record"). `Connection.notify/3` is a call, so every frame is on the wire
-    ahead of this reply.
-    """
-    @impl true
-    def load_session(req, ctx) do
-      with {:ok, sid} <- loadable_id(req.session_id),
-           {:ok, records} <- load_records(sid, ctx),
-           :ok <- ensure_session(sid, req, ctx) do
-        replay(records, ctx)
-        {:ok, LoadSessionResponse.new()}
+      with {:ok, agent} <- named_agent(ctx),
+           {:ok, root} <- project_root(req),
+           {:ok, id} <- start_agent(agent, root, ctx.conn) do
+        open_session(id, ctx)
       end
     end
 
-    # The session id arrives from the wire and becomes a path:
-    # `FileStore.read_records/2` joins it onto the journal base WITHOUT
-    # sanitizing (unlike `open/2`, which validates). This is the guard for
-    # that, and it belongs here, in front of the read.
-    defp loadable_id(session_id) do
-      if SessionKey.valid?(session_id) do
-        {:ok, session_id}
-      else
-        {:error, Error.new(-32_602, "session id #{inspect(session_id)} is not loadable")}
-      end
-    end
+    @doc "Stop every agent `conn`'s sessions started."
+    @spec stop_agents(pid()) :: :ok
+    def stop_agents(conn) when is_pid(conn) do
+      owner = owner(conn)
 
-    # An id we have no journal for is reported as unknown rather than replayed
-    # as an empty history: a client that mistyped an id, or kept one past its
-    # deletion, must not be handed something that looks like a fresh session.
-    defp load_records(sid, ctx) do
-      case FileStore.read_records(sid, journal_opts(ctx)) do
-        {:ok, []} ->
-          {:error, Error.new(-32_602, "unknown session #{inspect(sid)}")}
-
-        {:ok, records} ->
-          {:ok, records}
-
-        {:error, :damaged} ->
-          {:error, Error.new(-32_603, "session #{inspect(sid)} has a damaged journal")}
-      end
-    end
-
-    # Loading the same session twice on one connection must not mint a second
-    # Session over the first.
-    defp ensure_session(sid, req, ctx) do
-      case Registry.lookup(Session.registry(), {ctx.conn, sid}) do
-        [{_pid, _value} | _rest] ->
-          :ok
-
-        [] ->
-          case start_session(sid, req, ctx) do
-            {:ok, _session} ->
-              :ok
-
-            {:error, reason} ->
-              {:error, Error.new(-32_603, "could not load session: #{inspect(reason)}")}
-          end
-      end
-    end
-
-    defp start_session(sid, req, ctx) do
-      turn_opts = session_turn_opts(ctx.handler_state.turn_opts, req)
-
-      Session.Supervisor.start_session(ctx.session_sup,
-        session_id: sid,
-        conn: ctx.conn,
-        task_sup: ctx.task_sup,
-        turn_runner: TurnRunner.new(turn_opts)
-      )
-    end
-
-    # Only the delivered notifications are history; the turn-boundary records
-    # are bookkeeping. A record that will not decode is skipped and counted
-    # rather than aborting the load -- a partial history is worth more than
-    # none, and the count says so out loud instead of leaving a silent gap.
-    defp replay(records, ctx) do
-      skipped =
-        records
-        |> Enum.filter(&(&1["type"] == "session_update"))
-        |> Enum.reduce(0, fn record, skipped ->
-          case decode_notification(record) do
-            {:ok, notif} ->
-              Connection.notify(ctx.conn, "session/update", notif)
-              skipped
-
-            :error ->
-              skipped + 1
-          end
-        end)
-
-      if skipped > 0 do
-        Logger.warning("acp session/load: skipped #{skipped} undecodable record(s)")
-      end
+      for {id, {^owner, _owned}} <- Raxol.Agent.Session.Supervisor.owners(),
+          do: McpTools.stop_owned(owner, id)
 
       :ok
     end
 
-    defp decode_notification(%{"payload" => %{"notification" => json}}) when is_map(json) do
-      case SessionNotification.from_json(json) do
-        {:ok, notif} -> {:ok, notif}
-        {:error, _reason} -> :error
+    defp owner(conn), do: {__MODULE__, conn}
+
+    defp named_agent(%{handler_state: %{agent: %{app: app} = agent}}) when is_binary(app),
+      do: {:ok, agent}
+
+    defp named_agent(_ctx) do
+      refuse(
+        "no agent is named: start raxol acp with --agent <app>[:<id>]; " <>
+          "spawnable: #{spawnable()}"
+      )
+    end
+
+    defp spawnable do
+      case McpTools.spawnable() do
+        [] -> "none"
+        names -> Enum.join(names, ", ")
       end
     end
 
-    defp decode_notification(_record), do: :error
-
-    defp journal_opts(%{handler_state: %{turn_opts: turn_opts}}) when is_list(turn_opts),
-      do: Keyword.get(turn_opts, :journal_opts, [])
-
-    defp journal_opts(_ctx), do: []
-
-    # `session/new` names the session's working directory; scope this session's
-    # fs/glob/grep tools to it through the tool-context `:cwd` seam
-    # (`Raxol.Agent.Actions.Fs.working_dir/1`), so two sessions on one server
-    # get independent roots and each tool call is contained under its own cwd.
-    # A blank cwd leaves the server-wide default in place. Map pattern, not a
-    # struct pattern, per the cross-package convention.
-    defp session_turn_opts(base_opts, req) do
-      cwd = session_cwd(req)
-
-      base_opts
-      |> put_session_cwd(cwd)
-      |> put_workspace_instructions(cwd)
+    defp project_root(%{cwd: cwd}) when is_binary(cwd) do
+      if Path.type(cwd) == :absolute,
+        do: {:ok, cwd},
+        else: refuse("cwd must be an absolute path: the agent's journal is bound to it")
     end
 
-    # A blank or absent cwd leaves the server-wide default in place.
-    defp session_cwd(%{cwd: cwd}) when is_binary(cwd) and cwd != "", do: cwd
-    defp session_cwd(_req), do: nil
+    defp project_root(_req),
+      do: refuse("cwd must be an absolute path: the agent's journal is bound to it")
 
-    defp put_session_cwd(base_opts, nil), do: base_opts
+    defp start_agent(agent, root, conn) do
+      id = Map.get(agent, :id) || random_id()
 
-    defp put_session_cwd(base_opts, cwd) do
-      context =
-        base_opts
-        |> Keyword.get(:context)
-        |> ensure_context_map()
-        |> Map.put(:cwd, cwd)
-
-      Keyword.put(base_opts, :context, context)
-    end
-
-    # The editor names the session root, so `AGENTS.md` resolves per session
-    # rather than once at boot. A `:system_prompt` source spec is left alone:
-    # `TurnRunner` resolves those itself, and there is no text to append to.
-    defp put_workspace_instructions(base_opts, cwd) do
-      root = cwd || Raxol.Agent.Actions.Fs.working_dir()
-
-      case Keyword.get(base_opts, :system_prompt) do
-        system when is_binary(system) ->
-          Keyword.put(
-            base_opts,
-            :system_prompt,
-            Raxol.Agent.Code.ProjectContext.augment(system, root)
-          )
-
-        _other ->
-          base_opts
+      case McpTools.start_owned(owner(conn), agent.app, id, root) do
+        {:ok, _started} -> {:ok, id}
+        {:error, message} -> refuse(message)
       end
     end
 
-    defp ensure_context_map(context) when is_map(context), do: context
-    defp ensure_context_map(_other), do: %{}
+    # Random, not counted: a counter starts over in every BEAM and would name
+    # an earlier run's journal.
+    defp random_id, do: "acp-" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+
+    # The agent does not outlive a session that could not be opened for it.
+    defp open_session(id, ctx) do
+      started =
+        Session.Supervisor.start_session(ctx.session_sup,
+          session_id: id,
+          conn: ctx.conn,
+          task_sup: ctx.task_sup,
+          turn_runner: Turn.runner(id)
+        )
+
+      case started do
+        {:ok, _session} ->
+          {:ok, NewSessionResponse.new(id)}
+
+        {:error, reason} ->
+          _ = McpTools.stop_owned(owner(ctx.conn), id)
+          {:error, Error.new(-32_603, "the session did not start: #{inspect(reason)}")}
+      end
+    end
+
+    defp refuse(message), do: {:error, Error.new(-32_602, message)}
 
     @impl true
     def prompt(req, ctx) do

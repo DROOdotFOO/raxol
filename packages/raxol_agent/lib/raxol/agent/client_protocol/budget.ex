@@ -1,21 +1,15 @@
 defmodule Raxol.Agent.ClientProtocol.Budget do
   @moduledoc """
-  Session-lifetime turn and spend cap for the ACP surface.
+  Turn and spend cap for one `raxol acp` connection.
 
-  `raxol p` has honoured `RAXOL_MAX_COST_USD` and `RAXOL_MAX_TURNS` since the
-  benchmark profile landed, but the ACP surface never did, so an editor or a
-  harness could drive it until the provider account ran dry. Same env contract,
-  same arithmetic, same fail-closed parsing: this is a place to keep the
-  running total, not a second budget system.
+  The caps come from `RAXOL_MAX_TURNS` and `RAXOL_MAX_COST_USD` (which needs
+  `RAXOL_COST_PER_MTOK_IN` and `RAXOL_COST_PER_MTOK_OUT`), read by
+  `Raxol.Agent.BenchmarkProfile.from_env/1`. Not started when neither is
+  set, and `check/0` answers `:ok` when it is not running.
 
-  Not started when neither cap is set, and `check/0` answers `:ok` when it is
-  not running, so callers never branch on whether budgeting is on.
-
-  The bound is the SESSION. Each provider completion increments `turns` and
-  folds its usage immediately, including a tool-loop completion whose action
-  is later cancelled or fails. `check/0` runs between ACP prompts, so crossing
-  a cap does not interrupt a prompt that is already applying edits; the next
-  prompt is refused.
+  `Raxol.Agent.ClientProtocol.Turn` checks before each prompt and records
+  the `usage` of each answered turn. The turn that crosses a cap runs to its
+  end; the next prompt is refused.
   """
 
   use Agent
@@ -41,7 +35,7 @@ defmodule Raxol.Agent.ClientProtocol.Budget do
     end
   end
 
-  @doc "Fold one billed provider completion's usage into the running total."
+  @doc "Count one answered turn and fold its usage into the running total."
   @spec record(map()) :: :ok
   def record(usage) do
     case Process.whereis(@name) do

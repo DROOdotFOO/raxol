@@ -728,19 +728,12 @@ jobs:
             --exclude cli_signer \
             --exclude skip_on_ci
 
-      # The loopback is excluded from the default run (`:integration`, see
-      # packages/raxol_agent/test/test_helper.exs) because it boots a real BEAM
-      # peer over stdio, so without this step the ONE test that drives
-      # `bin/raxol-acp` the way an editor does never ran in CI. It is included
-      # by file rather than by tag: the other `:integration` suites in this
-      # package need a live Postgres.
-      #
-      # Same reasoning as the input-protocol canary below. Everything this
-      # catches is invisible to unit tests, because a unit test supplies the
-      # frames instead of a process: non-JSON leaking onto the protocol pipe,
-      # the shim's compile step swallowing the client's first frame, and a turn
-      # that reports a stop reason while delivering no content. All three were
-      # real, all three shipped, and none of them failed a suite.
+      # `bin/raxol-acp --agent` as an OS process (`:integration`, excluded by
+      # packages/raxol_agent/test/test_helper.exs): the `initialize` written
+      # while the peer boots is answered, a prompt to the counter agent gets
+      # its reply, every stdout line is JSON-RPC, and end of input exits with
+      # the journal on disk. Only a process shows these. Included by file: the
+      # other `:integration` suites in this package need a live Postgres.
       - name: Run ACP stdio loopback (real peer)
         if: matrix.package == 'raxol_agent'
         working-directory: packages/raxol_agent

@@ -18,10 +18,10 @@ defmodule Raxol.Agent.Test.InvariantSentinel do
 
   A test that DELIBERATELY drives a bad path declares it:
 
-      @tag expect_invariant: [[:raxol, :agent, :acp_turn_runner, :interrupt_failed]]
+      @tag expect_invariant: [[:raxol, :agent, :some_unit, :impossible_state]]
 
   A single event may be given unwrapped (`expect_invariant: [:raxol, :agent,
-  :acp_turn_runner, :interrupt_failed]`). The declaration is an ASSERTION, not
+  :some_unit, :impossible_state]`). The declaration is an ASSERTION, not
   a mute button: such a test also fails when the event does NOT fire. That is
   the point -- it converts "this test happens to drive a bad path" into "this
   test pins the bad path". Declaring an event that `Raxol.Agent.Telemetry` does

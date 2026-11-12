@@ -197,7 +197,7 @@ defmodule RaxolCli.MixProject do
     ] ++ acp_dep()
   end
 
-  # `raxol acp` serves the agent over the Agent Client Protocol, and
+  # `raxol acp` serves a Raxol agent over the Agent Client Protocol, and
   # `Raxol.Agent.ClientProtocol.StdioAgent` is compile-gated on this package's
   # presence -- without it the packaged binary would ship the subcommand but not
   # the surface behind it. raxol_agent declares the same path dep; this one

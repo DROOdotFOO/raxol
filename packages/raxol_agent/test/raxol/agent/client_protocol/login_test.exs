@@ -1,15 +1,13 @@
 defmodule Raxol.Agent.ClientProtocol.LoginTest do
   @moduledoc """
-  `raxol login` is the command an ACP client relaunches us with for Terminal
-  Auth, so its contract is the exit code and what it does with a typed key --
-  a client reads the former and a user pays for the latter.
+  `raxol login` connects a provider from a terminal. Its contract is the exit
+  code and what it does with a typed key.
 
   Prompt and print are injected, so nothing here reads a terminal.
   """
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.ClientProtocol.Login
-  alias Raxol.Agent.ClientProtocol.StdioAgent
 
   defp io(lines, read \\ fn _ -> "sk-test" end) do
     [print_fn: fn msg -> send(self(), {:printed, msg}) end, read_fn: read] ++
@@ -147,31 +145,5 @@ defmodule Raxol.Agent.ClientProtocol.LoginTest do
     output = all_captured()
     assert output =~ "unknown provider: nope"
     assert output =~ "openrouter"
-  end
-
-  describe "the advertised Terminal Auth method" do
-    # The registry's validator infers `terminal` from this _meta key and
-    # defaults anything untyped to `agent`. The marker is what keeps the claim
-    # honest, so it is asserted rather than assumed.
-    test "carries the args a client relaunches us with" do
-      method = terminal_method()
-
-      assert method.id == "terminal"
-      assert %{"terminal-auth" => %{"args" => ["login"]}} = method._meta
-    end
-
-    # If these drift, a client runs a subcommand that does not exist.
-    test "names a subcommand the CLI actually dispatches" do
-      %{"terminal-auth" => %{"args" => [subcommand]}} = terminal_method()._meta
-
-      assert subcommand == "login"
-    end
-  end
-
-  defp terminal_method do
-    Enum.find(
-      StdioAgent.auth_methods(),
-      &match?(%{"terminal-auth" => _}, &1._meta)
-    )
   end
 end

@@ -126,7 +126,7 @@ defmodule Raxol.CLITest do
       out = capture_io(fn -> assert CLI.main(["acp", "--help"]) == 0 end)
 
       assert out =~ "Usage: raxol acp"
-      assert out =~ "--backend"
+      assert out =~ "--agent"
     end
 
     # The packaged binary must not merely accept `acp` -- the surface behind it
@@ -142,12 +142,11 @@ defmodule Raxol.CLITest do
     end
 
     test "an unknown acp option is a usage error, not a boot" do
-      stderr =
-        capture_io(:stderr, fn ->
-          assert CLI.main(["acp", "--nonsense"]) == 64
-        end)
+      for argv <- [["acp", "--nonsense"], ["acp", "--backend", "mock"]] do
+        stderr = capture_io(:stderr, fn -> assert CLI.main(argv) == 64 end)
 
-      assert stderr =~ "unknown options"
+        assert stderr =~ "unknown arguments"
+      end
     end
 
     test "an unknown command prints help and returns 1" do
