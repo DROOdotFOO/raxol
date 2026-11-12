@@ -12,6 +12,7 @@ packaging approach.
     raxol playground # interactive component catalog
     raxol new <name> # scaffold a new Raxol app
     raxol mcp        # serve Raxol apps as MCP tools on stdio (for OMP)
+    raxol update     # replace this binary with the latest verified release
     raxol help
 
 ## `raxol mcp`
@@ -41,3 +42,15 @@ refuses `raxol_start`'s `path`, and serves `resources/read`,
 started. It refuses to start while `RAXOL_CLI_INSTALL_DIR` is set, because the
 launcher then prints to stdout. One connection may run up to half the server's
 32 concurrent calls at once; the rest are answered `server_busy`.
+
+## `raxol update`
+
+    raxol update [--check] [--version VERSION]
+
+Replaces the running binary with a newer `raxol-cli-v*` release; `--check`
+only reports one. The updater ships in this package as `Raxol.System.Updater`.
+`Raxol.System.Updater.Manifest` names the release channel and builds every
+URL, and a download is installed only when it matches the release's
+`SHA256SUMS` and its Sigstore attestation (`Raxol.System.Updater.Provenance`).
+The Sigstore trusted root is compiled in from `priv/sigstore/trusted_root.json`;
+`priv/sigstore/README.md` records its source and how to refresh it.

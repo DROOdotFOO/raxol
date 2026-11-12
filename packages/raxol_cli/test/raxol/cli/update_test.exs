@@ -20,10 +20,7 @@ defmodule Raxol.CLI.UpdateTest do
   @old "old raxol binary\n"
   @binary "new raxol binary\n"
   @attestation "raxol-cli-attestation.sigstore.json"
-  @bundle Path.expand(
-            "../../../../../test/fixtures/sigstore/0.2.10/#{@attestation}",
-            __DIR__
-          )
+  @bundle Path.expand("../../fixtures/sigstore/0.2.10/#{@attestation}", __DIR__)
 
   setup do
     dir = Path.join(System.tmp_dir!(), "raxol-update-test-#{System.unique_integer([:positive])}")

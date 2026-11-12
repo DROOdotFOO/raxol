@@ -18,7 +18,8 @@ root reaches users only through a (verified) release.
 
 Sigstore rotates these keys with overlapping `validFor` windows, so refresh
 before a window the releases depend on closes, and whenever a release is
-signed by a key this file does not list yet:
+signed by a key this file does not list yet. From the `raxol_cli` package
+directory:
 
 ```sh
 gh attestation trusted-root | head -n 1 | jq . > priv/sigstore/trusted_root.json

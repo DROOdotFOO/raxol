@@ -21,7 +21,10 @@ defmodule RaxolCli.MixProject do
   end
 
   def application do
-    app = [extra_applications: [:logger]]
+    # `raxol update` fetches releases with :httpc over :ssl and verifies their
+    # Sigstore provenance with :public_key and :crypto. A release only bundles
+    # applications reachable from its own, and no dependency pulls :inets in.
+    app = [extra_applications: [:logger, :inets, :ssl, :public_key, :crypto]]
 
     # Self-run the CLI outside :test only; in :test the modules are a passive
     # dependency and the suite drives the dispatcher directly.
@@ -147,16 +150,13 @@ defmodule RaxolCli.MixProject do
     ]
   end
 
-  # The self-update tests serve releases from the same loopback channel the
-  # root updater's own tests use, and `raxol new`'s output is compiled and
-  # rendered by the same check root's `mix raxol.new` tests use, rather than
-  # second copies of either. Mix takes an external path only as an absolute
-  # directory.
+  # `raxol new`'s output is compiled and rendered by the same check root's
+  # `mix raxol.new` tests use, rather than a second copy. Mix takes an external
+  # path only as an absolute directory.
   defp elixirc_paths(:test),
     do: [
       "lib",
       "test/support",
-      Path.expand("../../test/support/updater", __DIR__),
       Path.expand("../../test/support/generated_app", __DIR__)
     ]
 
@@ -242,7 +242,9 @@ defmodule RaxolCli.MixProject do
   defp package do
     [
       name: "raxol_cli",
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md),
+      # The trusted root is read at compile time, so the package cannot
+      # compile without it.
+      files: ~w(lib priv/sigstore/trusted_root.json .formatter.exs mix.exs README.md LICENSE.md),
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       maintainers: ["Raxol Team"]

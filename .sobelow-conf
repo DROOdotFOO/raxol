@@ -13,10 +13,10 @@
 #
 # :medium rather than :low, deliberately. Confidence here is Sobelow's own
 # reading of how close a value is to attacker control. Sobelow 0.16 reports
-# 259 low findings and 0 medium or high findings after the 13 reviewed skips;
+# 230 low findings and 0 medium or high findings after the 13 reviewed skips;
 # the low set is almost entirely File operations on paths this terminal
-# framework builds itself (config dirs, snapshots, the updater's download
-# dir). Reaching :low means pinning 259 fingerprints. A Sobelow fingerprint
+# framework builds itself (config dirs, snapshots, recordings). Reaching :low
+# means pinning 230 fingerprints. A Sobelow fingerprint
 # includes the line number, so any edit above one resurrects it and turns the
 # gate red for an unrelated reason. A gate that cries wolf on every refactor is
 # the gate people switch off. High and medium are the levels where Sobelow

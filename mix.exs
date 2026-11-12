@@ -143,14 +143,7 @@ defmodule Raxol.MixProject do
           # also produces misleading process_memory_high_watermark log noise.
           :ssh,
           :public_key,
-          :crypto,
-          # Raxol.System.Updater fetches releases with :httpc over :ssl. A
-          # release only bundles applications reachable from its own, and
-          # nothing else in a prod tree pulls :inets in -- without these the
-          # packaged `raxol` binary could not start the HTTP client it updates
-          # itself with.
-          :inets,
-          :ssl
+          :crypto
         ] ++ phoenix_applications() ++ test_applications()
     ]
   end
@@ -454,7 +447,6 @@ defmodule Raxol.MixProject do
           lib
           priv/themes
           priv/scoreboard
-          priv/sigstore/trusted_root.json
           docs/getting-started
           docs/core
           docs/cookbook
