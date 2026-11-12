@@ -42,6 +42,13 @@
 
 ### Fixed
 
+- **`raxol mcp` and `mix mcp.server` corrupted non-ASCII text without a UTF-8
+  locale.** `Raxol.MCP.Transport.Stdio` read and wrote through the device's
+  encoding. With `LANG` unset or `LC_ALL=C`, `é` in a request arrived as `Ã©`
+  and a reply containing it was not valid JSON; under a UTF-8 locale one
+  invalid byte from the client switched the device to latin1 for the rest of
+  the session. The transport now reads and writes bytes.
+
 - **Security: current Hex advisories are fixed across every lockfile.** `jose`
   moves to 1.11.13 to pick up its October 2026 cryptographic hardening,
   `plug_crypto` is pinned at 2.2.1, and the root lock moves `hackney` to 4.9.1

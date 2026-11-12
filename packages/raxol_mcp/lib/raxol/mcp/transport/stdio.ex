@@ -6,6 +6,15 @@ defmodule Raxol.MCP.Transport.Stdio do
   MCP Server, and writes responses to stdout. This is the transport used
   by Claude Code and other CLI MCP clients.
 
+  ## Bytes
+
+  The wire is bytes, read and written unchanged. A device left in its own
+  encoding re-encodes them: under a non-UTF-8 locale standard input and
+  output are latin1, so non-ASCII text would arrive and leave corrupted, and
+  one invalid byte from the peer switches a UTF-8 device to latin1. The
+  transport therefore sets both devices to latin1, in which a byte is a
+  character, and reads and writes binaries.
+
   ## Ordering and cancellation
 
   The reader never waits for the server: each line goes out in read order
@@ -138,6 +147,7 @@ defmodule Raxol.MCP.Transport.Stdio do
     case GenServer.whereis(state.server) do
       nil ->
         Logger.error("[MCP.Stdio] MCP server not running: #{inspect(state.server)}")
+
         {:stop, {:server_down, :noproc}, state}
 
       server ->
@@ -148,6 +158,7 @@ defmodule Raxol.MCP.Transport.Stdio do
 
         parent = self()
         io_device = state.io_device
+        Enum.each([io_device, state.output_device], &byte_transparent/1)
         reader = spawn_link(fn -> read_loop(io_device, parent) end)
 
         {:noreply, %{state | reader: reader, server_monitor: server_monitor}}
@@ -155,7 +166,7 @@ defmodule Raxol.MCP.Transport.Stdio do
   end
 
   # A `:normal` stop does not take the linked reader down (it is not trapping,
-  # so it ignores a normal exit), and a reader left blocked in `IO.gets/2`
+  # so it ignores a normal exit), and a reader left blocked in `IO.binread/2`
   # would go on consuming input meant for whatever runs next.
   @impl GenServer
   def terminate(_reason, %{reader: reader}) when is_pid(reader) do
@@ -177,6 +188,7 @@ defmodule Raxol.MCP.Transport.Stdio do
 
       {:error, _reason} ->
         Logger.debug("[MCP.Stdio] Ignoring non-JSON line: #{String.slice(line, 0, 100)}")
+
         {:noreply, state}
     end
   end
@@ -192,15 +204,21 @@ defmodule Raxol.MCP.Transport.Stdio do
   end
 
   # The reader exits after reporting end of input; that exit is expected.
-  def handle_manager_info({:EXIT, pid, _reason}, %{reader: pid, closing: true} = state),
-    do: {:noreply, state}
+  def handle_manager_info(
+        {:EXIT, pid, _reason},
+        %{reader: pid, closing: true} = state
+      ),
+      do: {:noreply, state}
 
   def handle_manager_info({:EXIT, pid, reason}, %{reader: pid} = state) do
     Logger.info("[MCP.Stdio] Reader process exited: #{inspect(reason)}")
     close(state)
   end
 
-  def handle_manager_info({:DOWN, ref, :process, _server, reason}, %{server_monitor: ref} = state) do
+  def handle_manager_info(
+        {:DOWN, ref, :process, _server, reason},
+        %{server_monitor: ref} = state
+      ) do
     Logger.error("[MCP.Stdio] MCP server down: #{inspect(reason)}")
     {:stop, {:server_down, reason}, state}
   end
@@ -208,7 +226,9 @@ defmodule Raxol.MCP.Transport.Stdio do
   # Trapping exits must not swallow a linked process's crash. The parent's exit
   # never gets here: `gen_server` handles it before any callback.
   def handle_manager_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
-  def handle_manager_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
+
+  def handle_manager_info({:EXIT, _pid, reason}, state),
+    do: {:stop, reason, state}
 
   def handle_manager_info(msg, state) do
     case :gen_server.check_response(msg, state.requests, true) do
@@ -234,9 +254,14 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   # Ids are how a cancel and a reply find their request, so two in flight under
   # one id would leave the first unreachable. The second is refused, not run.
-  defp send_request(state, %{id: id, method: _method}) when is_map_key(state.in_flight, id) do
+  defp send_request(state, %{id: id, method: _method})
+       when is_map_key(state.in_flight, id) do
     error =
-      Protocol.error_response(id, Protocol.invalid_request(), "duplicate request id in flight")
+      Protocol.error_response(
+        id,
+        Protocol.invalid_request(),
+        "duplicate request id in flight"
+      )
 
     write_reply(state.output_device, id, error)
     state
@@ -289,7 +314,8 @@ defmodule Raxol.MCP.Transport.Stdio do
   defp maybe_stop(state), do: {:noreply, state}
 
   defp cancel_all(state) do
-    for {_req_id, {_id, request_ref}} <- :gen_server.reqids_to_list(state.requests) do
+    for {_req_id, {_id, request_ref}} <-
+          :gen_server.reqids_to_list(state.requests) do
       Server.cancel(state.server, request_ref)
     end
 
@@ -312,13 +338,29 @@ defmodule Raxol.MCP.Transport.Stdio do
       Logger.error("[MCP.Stdio] Error writing response: #{Exception.message(e)}")
 
       if id do
-        error = Protocol.error_response(id, Protocol.internal_error(), "Internal server error")
+        error =
+          Protocol.error_response(
+            id,
+            Protocol.internal_error(),
+            "Internal server error"
+          )
+
         write_response(device, error)
       end
   end
 
+  # See "Bytes" in the moduledoc. A device that takes no options is one a
+  # test supplied, which passes bytes through already.
+  defp byte_transparent(device) do
+    _ = :io.setopts(erlang_device(device), encoding: :latin1)
+    :ok
+  end
+
+  defp erlang_device(:stdio), do: :standard_io
+  defp erlang_device(device), do: device
+
   defp read_loop(io_device, parent) do
-    case IO.gets(io_device, "") do
+    case IO.binread(io_device, :line) do
       :eof ->
         send(parent, {:stdio_eof, :eof})
 
@@ -326,7 +368,8 @@ defmodule Raxol.MCP.Transport.Stdio do
         send(parent, {:stdio_eof, reason})
 
       line when is_binary(line) ->
-        trimmed = line |> String.trim_trailing("\n") |> String.trim_trailing("\r")
+        trimmed =
+          line |> String.trim_trailing("\n") |> String.trim_trailing("\r")
 
         if trimmed != "" do
           send(parent, {:stdio_line, trimmed})
@@ -338,6 +381,6 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   defp write_response(device, response) do
     data = Protocol.encode!(response)
-    IO.write(device, data)
+    IO.binwrite(device, data)
   end
 end
