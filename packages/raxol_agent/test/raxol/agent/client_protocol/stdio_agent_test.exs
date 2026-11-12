@@ -5,6 +5,7 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
   """
   # async: false: the agent registry and the ACP package's shared tree are named.
   use ExUnit.Case, async: false
+  use Raxol.Agent.Test.InvariantSentinel
 
   @moduletag :capture_log
   @moduletag :unix_only

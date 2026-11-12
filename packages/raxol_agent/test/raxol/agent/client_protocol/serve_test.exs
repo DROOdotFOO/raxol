@@ -5,6 +5,7 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
   connection's turn cap.
   """
   use ExUnit.Case, async: false
+  use Raxol.Agent.Test.InvariantSentinel
 
   import ExUnit.CaptureIO
 

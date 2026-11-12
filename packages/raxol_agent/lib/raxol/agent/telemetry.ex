@@ -11,9 +11,11 @@ defmodule Raxol.Agent.Telemetry do
   is only a guard if something fails when it fires. That is what the
   classification buys:
 
-    * `:invariant` -- can only fire if RAXOL ITSELF is wrong. Enforced:
-      `Raxol.Agent.Test.InvariantSentinel` fails any test in which one fires
-      unless the test declares it with `@tag expect_invariant:`.
+    * `:invariant` -- can only fire if RAXOL ITSELF is wrong. Enforced in the
+      test modules that `use Raxol.Agent.Test.InvariantSentinel` (the ACP
+      wire tests, `stdio_agent_test.exs` and `serve_test.exs`): a test in
+      which one fires fails unless it declares the event with
+      `@tag expect_invariant:`.
     * `:peer` -- caused by the remote agent/client misbehaving (malformed
       frame, unknown notification, duplicate id). Expected in negative tests,
       so not enforced.
@@ -31,7 +33,9 @@ defmodule Raxol.Agent.Telemetry do
   filesystem talking, and this package has a deliberate chmod-0500 fault test
   that drives them on purpose.
 
-  No event here is `:invariant` at present, so the sentinel arms nothing.
+  No event here is `:invariant` at present, so the sentinel arms nothing in
+  those modules. An event classified `:invariant` is enforced there as soon
+  as `invariant_events/0` lists it.
 
   This package emits no `:peer` events: it is the agent-side library, and the
   peer-facing wire lives in `raxol_agent_client_protocol`, which carries its
