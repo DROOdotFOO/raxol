@@ -101,6 +101,8 @@ defmodule Raxol.Broker.Tools.MarketData do
     * `symbol` (optional, string)
     * `symbols` (optional, null | array)
     * `type` (required, string)
+
+  Pass exactly one of `symbol`, `symbols`.
   """
   @spec get_equity_technical_indicators(GenServer.server(), map()) ::
           {:ok, map()} | {:error, term()}

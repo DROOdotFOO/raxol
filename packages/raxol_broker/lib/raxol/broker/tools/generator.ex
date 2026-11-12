@@ -7,6 +7,7 @@ defmodule Raxol.Broker.Tools.Generator do
   test failure.
   """
 
+  alias Raxol.Broker.Tools
   alias Raxol.Broker.Tools.Catalog
 
   @dir "lib/raxol/broker/tools/generated"
@@ -90,7 +91,7 @@ defmodule Raxol.Broker.Tools.Generator do
   # inert. Text containing `"""` would end it early and is quoted instead.
   defp doc(tool) do
     text =
-      [description(tool), arguments(tool["inputSchema"] || %{})]
+      [description(tool), arguments(tool["inputSchema"] || %{}), rule(tool["name"])]
       |> Enum.reject(&(&1 == ""))
       |> Enum.join("\n\n")
 
@@ -117,6 +118,13 @@ defmodule Raxol.Broker.Tools.Generator do
       properties ->
         lines = Enum.map(properties, &argument_line(&1, required))
         Enum.join(["Arguments (string keys):" | lines], "\n")
+    end
+  end
+
+  defp rule(name) do
+    case Tools.exactly_one(name) do
+      [] -> ""
+      keys -> "Pass exactly one of " <> Enum.map_join(keys, ", ", &"`#{&1}`") <> "."
     end
   end
 

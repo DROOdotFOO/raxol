@@ -12,6 +12,17 @@ defmodule Raxol.Broker.Tools do
   alias Raxol.Broker.MCP.Client
   alias Raxol.Broker.Tools.{Catalog, Schema}
 
+  # Rules Robinhood states only in a property's description, which the
+  # captured schema cannot carry: exactly one of these arguments per call.
+  @exactly_one %{"get_equity_technical_indicators" => ["symbol", "symbols"]}
+
+  @doc """
+  The arguments of which a call to `tool` must pass exactly one, or `[]`.
+  An argument that is absent or `nil` is not passed.
+  """
+  @spec exactly_one(String.t()) :: [String.t()]
+  def exactly_one(tool) when is_binary(tool), do: Map.get(@exactly_one, tool, [])
+
   @doc """
   Validate `args` against `tool`'s captured schema, then call it on the
   read-only session `client`.
@@ -28,9 +39,20 @@ defmodule Raxol.Broker.Tools do
   end
 
   defp validate(tool, args) do
-    case Schema.validate(Catalog.schema(tool), args) do
-      :ok -> :ok
+    with :ok <- Schema.validate(Catalog.schema(tool), args),
+         :ok <- one_of(exactly_one(tool), args) do
+      :ok
+    else
       {:error, errors} -> {:error, {:invalid_args, tool, errors}}
+    end
+  end
+
+  defp one_of([], _args), do: :ok
+
+  defp one_of(keys, args) do
+    case Enum.count(keys, &(Map.get(args, &1) != nil)) do
+      1 -> :ok
+      _none_or_several -> {:error, [{[], {:exactly_one_of, keys}}]}
     end
   end
 end
