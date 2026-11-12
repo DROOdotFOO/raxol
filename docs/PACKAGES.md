@@ -33,7 +33,7 @@ Raxol ships as a main package plus 18 focused subsystems. Use the main `raxol` p
 | `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
 | `raxol_broker` (pre-alpha)                                 | `path: "packages/raxol_broker"`   | Fail-closed brokerage policy parsing and initialization |
 
-The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (the event/command contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`) -> the product surfaces `mix raxol.code` (interactive TUI, also over SSH), `mix raxol.p` (headless one-shot), and `mix raxol.acp` (ACP on stdio, for editors), all three in `raxol_agent`. The Harness is the engine; the `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
+The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (the event/command contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`) -> the product surfaces `mix raxol.code` (interactive TUI, also over SSH) and `mix raxol.p` (headless one-shot), both in `raxol_agent`. The Harness is the engine; the `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
 `raxol_symphony`, the tracker-driven coding-agent orchestrator, left this repository on 2026-10-27 (ADR-0043). It is frozen at [DROOdotFOO/raxol-symphony](https://github.com/DROOdotFOO/raxol-symphony): archived, unpublished, its raxol dependencies pinned to `ce40937c4`.
 
@@ -60,7 +60,7 @@ raxol_agent    --> raxol + raxol_mcp (+ raxol_web3 optional, for the `web3` tool
 raxol_payments --> raxol_agent (compile-time only)
 raxol_earn      --> raxol_payments (runtime), raxol_mcp + raxol_agent (compile-time only)
 raxol_agent_client_protocol --> (none; jason only, zero raxol deps)
-raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp`)
+raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp --agent`)
 raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
 raxol_web3     --> raxol_core, raxol_mcp (+ mint, castore)
 raxol_broker   --> raxol_agent (+ decimal)

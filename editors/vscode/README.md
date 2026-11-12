@@ -56,19 +56,20 @@ Extension Development Host.
 
 ## Coding agent
 
-The Raxol coding agent reaches editors over the
-[Agent Client Protocol](https://agentclientprotocol.com), which Zed and its
-ecosystem speak. This extension wires up no ACP client. From a raxol checkout,
-run the agent TUI in the integrated terminal:
+From a raxol checkout, run the agent TUI in the integrated terminal:
 
 ```bash
 /path/to/raxol/bin/raxol-code
 ```
 
-Or serve it over ACP to a client that speaks it: `/path/to/raxol/bin/raxol-acp`
-(`mix help raxol.acp` has the Zed `agent_servers` snippet). Both need deps
-fetched once: `cd packages/raxol_agent && mix deps.get`. See
+It needs deps fetched once: `cd packages/raxol_agent && mix deps.get`. See
 [`docs/features/CODING_AGENT.md`](../../docs/features/CODING_AGENT.md).
+
+A Raxol agent, not the coding agent, is served over the
+[Agent Client Protocol](https://agentclientprotocol.com) to a client that
+speaks it: `/path/to/raxol/bin/raxol-acp --agent <app>` (see
+[`docs/features/EDITOR_ACP.md`](../../docs/features/EDITOR_ACP.md#serving-a-raxol-agent)).
+This extension wires up no ACP client.
 
 ## License
 

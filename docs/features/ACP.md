@@ -7,8 +7,8 @@ Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_earn/`.
 > **Two protocols share the letters "ACP".** This page is the **Agent Commerce Protocol**
 > (`Raxol.Earn`, on-chain payments for selling agent services). It is unrelated to the
 > [Editor Agent Client Protocol](EDITOR_ACP.md) (`Raxol.AgentClientProtocol`, the JSON-RPC
-> protocol between a code editor and an AI coding agent). Different acronym expansion,
-> different domain.
+> protocol between a code editor and an agent, which `raxol acp --agent` serves a Raxol
+> agent over). Different acronym expansion, different domain.
 
 ## Job lifecycle
 
