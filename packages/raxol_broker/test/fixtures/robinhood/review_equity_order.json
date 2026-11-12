@@ -1,0 +1,28 @@
+{
+  "provenance": {
+    "recorded_at": "2026-11-12T03:25:04Z",
+    "server": "https://agent.robinhood.com/mcp/trading",
+    "tool": "review_equity_order",
+    "via": "Raxol.MCP.Client.call_tool/4, which returns content and isError only",
+    "account": "trade approvals on (human_must_approve_trades: true); account number redacted",
+    "arguments": {
+      "account_number": "REDACTED-ACCOUNT",
+      "limit_price": "12.25",
+      "market_hours": "regular_hours",
+      "quantity": "1",
+      "side": "buy",
+      "symbol": "F",
+      "time_in_force": "gfd",
+      "type": "limit"
+    }
+  },
+  "result": {
+    "content": [
+      {
+        "text": "{\"data\":{\"symbol\":\"F\",\"side\":\"buy\",\"type\":\"limit\",\"quantity\":\"1\",\"limit_price\":\"12.25\",\"order_checks\":{},\"quote_data\":{\"symbol\":\"F\",\"last_trade_price\":\"12.255000\",\"venue_last_trade_time\":\"2026-11-11T20:59:59.673731521Z\",\"last_non_reg_trade_price\":\"12.239700\",\"venue_last_non_reg_trade_time\":\"2026-11-12T00:59:18.487839962Z\",\"adjusted_previous_close\":\"12.280000\",\"previous_close\":\"12.280000\",\"previous_close_date\":\"2026-11-10\",\"bid_price\":\"12.110000\",\"venue_bid_time\":\"2026-11-12T01:00:00.162088449Z\",\"ask_price\":\"12.350000\",\"venue_ask_time\":\"2026-11-12T01:00:00.162088449Z\",\"has_traded\":true,\"state\":\"active\"},\"market_data_disclosure\":\"Bid $12.22 × 1500 P · Ask $12.24 × 200 P · Last $12.2397 × 16000. Updated 7:59 PM ET.\",\"customer_approval_required\":true,\"customer_approval_required_reason\":\"account_setting\"},\"guide\":\"This tool does NOT place the order. When customer_approval_required is true and order_checks is empty ({}), call place_equity_order immediately with the same parameters, presenting nothing and asking for no confirmation: this call does not execute the order, the customer sees it in the Robinhood app and approves or declines it there, so confirming here asks for the same consent twice. Carry customer_approval_required_reason into what you tell the user once that call returns, so they hear why the order needs approving and not only that it does; give no cause when it is absent. A non-empty order_checks cancels that: present and confirm exactly as below whatever customer_approval_required says, so a flagged order is never sent for approval without the user seeing the alert. When customer_approval_required is false or absent, present the preview (symbol, side, type, quantity or dollar_amount, limit/stop prices, estimated execution) and get explicit confirmation before calling place_equity_order, surfacing any non-empty order_checks alert verbatim; an empty order_checks ({}) means no broker alerts, NOT that confirmation can be skipped. Whenever you show the user a price or quote from this response you MUST also display market_data_disclosure exactly as provided, verbatim and unmodified, as the required compliance quote disclosure. When you do present the order: estimate a market order's execution from quote_data.last_trade_price (ask for buys, bid for sells when spreads are wide), and compare a limit order's limit_price to quote_data bid/ask so the user knows the distance from market.\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false
+  }
+}

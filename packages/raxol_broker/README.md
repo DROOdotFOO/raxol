@@ -278,9 +278,11 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   because the proposal can still become an order. Nothing resolves a
   pending approval yet (`get_trade_approvals` is a read tool), and the order
   placed after an approval carries the approval id, not the `ref_id` sent.
-  The flag is read as Robinhood's tool text names it; a real review response
-  has not been recorded, so check this against one before `mode: :armed`
-  exists. `Raxol.Broker.MCP.Fake` models it with `trade_approvals: true`.
+  A recorded response (`test/fixtures/robinhood/review_equity_order.json`)
+  confirms the flag sits under `data`. The same recording shows Robinhood's
+  alerts are `data.order_checks`, which `Review` does not read yet, so a
+  real review is an "unreadable review response" and always asks a person.
+  `Raxol.Broker.MCP.Fake` models approvals with `trade_approvals: true`.
 * **Fail closed.** Any journal error before `placing`, review error or
   unsupported order kind means no order. Once the order call is made the
   result is `{:ok, _}`: a place call that times out is journaled

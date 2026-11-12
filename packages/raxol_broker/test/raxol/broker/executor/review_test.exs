@@ -29,6 +29,15 @@ defmodule Raxol.Broker.Executor.ReviewTest do
 
   defp text(body), do: %{"type" => "text", "text" => Jason.encode!(body)}
 
+  # What Robinhood answered a real `review_equity_order`, as the port returns it.
+  defp recorded_result do
+    "../../../fixtures/robinhood/review_equity_order.json"
+    |> Path.expand(__DIR__)
+    |> File.read!()
+    |> Jason.decode!()
+    |> Map.fetch!("result")
+  end
+
   test "a quote with no alerts has no warnings", ctx do
     assert {:ok, %{"tool" => "review_equity_order"}, []} =
              Review.run(ctx.port, Catalog.static(), ctx.intent, "ACC-1", 5_000)
@@ -142,10 +151,10 @@ defmodule Raxol.Broker.Executor.ReviewTest do
       assert Review.customer_approval_required?(response) == expected, inspect(body)
     end
 
-    # Robinhood's envelope: unreadable for warnings, so it asks a person, and
-    # the flag is still read for the place that follows an approval.
-    enveloped = %{"data" => %{"customer_approval_required" => true}, "guide" => "..."}
-    answer(ctx.server, %{"content" => [text(enveloped)], "isError" => false})
+    # Robinhood's own response, from an account with trade approvals on. The
+    # flag sits under "data". Its alerts are "order_checks", which this reader
+    # does not know, so the review asks a person.
+    answer(ctx.server, recorded_result())
     assert {:ok, response, [@unreadable]} = run.()
     assert Review.customer_approval_required?(response)
 
