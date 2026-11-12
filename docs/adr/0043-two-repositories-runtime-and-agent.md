@@ -158,9 +158,9 @@ deletion is breaking, and it pins the runtime as `~> 2.7`.
    deletion. Nothing below starts before the delete set is gone.
 2. In tree: extract `raxol_journal`, add the root boundary rule with every
    crossing listed, and shrink the list to zero (Decision 7).
-3. `git filter-repo` the agent packages, tests, docs and ADRs (0014, 0016 to
-   0028, 0030 to 0032, 0034 to 0042) into `raxol-agent`, with history. One PR
-   deletes them here; the index keeps a row per moved ADR.
+3. `git filter-repo` the agent packages, tests, docs and ADRs (0016 to 0018,
+   0020 to 0022, 0024 to 0028, 0030 to 0036, 0038 to 0042) into `raxol-agent`,
+   with history. One PR deletes them here; the index keeps a row per moved ADR.
 4. The agent repository takes the runtime from Hex. Its CI is the runtime's
    `ci-unified.yml` minus the terminal, Scoreboard and RATE jobs.
 5. `raxol_symphony` out (Decision 6). Done first, in #1320.
