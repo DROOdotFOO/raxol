@@ -13,11 +13,13 @@ defmodule Raxol.CLI.Doctor do
   `mix raxol.inspect` and the TUI's `/inspect` render — reused rather than
   reimplemented, so all three agree. What this adds is the install header:
   build provenance, packaging, runtime, and whether the ACP surface is
-  compiled into this build (a Hex install of `raxol_agent` has none).
+  compiled into this build (a Hex install of `raxol_agent` has none) and can
+  start an agent on this platform.
   """
 
   alias Raxol.Agent.ClientProtocol.Serve
   alias Raxol.Agent.Code.Inspection
+  alias Raxol.Agent.McpTools
 
   @doc "Print the install report for `cwd`, returning an exit code."
   @spec run([String.t()]) :: non_neg_integer()
@@ -58,12 +60,27 @@ defmodule Raxol.CLI.Doctor do
 
   defp otp_release, do: List.to_string(:erlang.system_info(:otp_release))
 
-  defp acp_surface do
-    if Serve.available?() do
-      "available (raxol acp --agent <app>)"
-    else
-      "NOT built in -- needs a source build of raxol_agent with " <>
-        ":raxol_agent_client_protocol"
+  @doc false
+  @spec acp_surface({atom(), atom()}) :: String.t()
+  def acp_surface(os_type \\ :os.type()) do
+    cond do
+      not Serve.available?() ->
+        "NOT built in -- needs a source build of raxol_agent with " <>
+          ":raxol_agent_client_protocol"
+
+      refusal = platform_refusal(os_type) ->
+        "NOT available -- #{refusal}"
+
+      true ->
+        "available (raxol acp --agent <app>)"
+    end
+  end
+
+  # Every `session/new` would be refused with the same words.
+  defp platform_refusal(os_type) do
+    case McpTools.platform_refusal(os_type) do
+      :ok -> nil
+      {:error, message} -> message
     end
   end
 

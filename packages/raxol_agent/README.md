@@ -70,4 +70,7 @@ message is a string. Its journal is kept per project root and continues when
 a stopped id is spawned again with the same app; its state starts from
 `init/1`.
 
+`mcp_spawnable_apps` is also the list `raxol acp --agent <app>` serves from
+(see [Editor ACP](../../docs/features/EDITOR_ACP.md#serving-your-own-agent)).
+
 See [main docs](../../README.md) for full examples and the agent framework guide.

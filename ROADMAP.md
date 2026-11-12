@@ -71,7 +71,7 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 - **FLAME** elastic exec on Fly Machines (BEAM-native idle hibernation, replaces Modal/Daytona).
 - More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
 - i18n: wire the present `gettext` through surface rendering, extract locale files.
-- Agent Client Protocol adapter: shipped. `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves a Raxol agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`: a prompt is one turn of the agent, and every sensitive Action is gated on a `session/request_permission` round trip) for editors that spawn an agent. Distinct from `raxol_earn`.
+- Agent Client Protocol adapter: shipped. `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves a Raxol agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`: a prompt is one turn of the agent, and a sensitive Action the agent passes to the turn's approver is gated on a `session/request_permission` round trip) for editors that spawn an agent. Distinct from `raxol_earn`.
 - Expose the AST-checked REPL as an agent action for scripted single-turn tool pipelines. The checker is a mitigation, not a boundary (see `Raxol.REPL.Sandbox`), so this needs a node that already opted into evaluation and holds no keys.
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.

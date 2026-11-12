@@ -11,6 +11,9 @@ mapping `usage_update` (Gap 3's hole); the `NativeHarness` usage contract; and t
 loopback test. Defect 1 was already fixed on master. Not implemented: the `ExternalAgent`
 driver, the `Stdio.*` extraction from `Runners.Codex`, and Gap 1 (still not decided).
 
+2026-11-12: `Raxol.Agent.AcpStreamAdapter` (`acp_stream_adapter.ex`) is removed (ADR-0042). The
+table row and the reference below that name it describe code that no longer exists.
+
 Revised the same day, after the forcing case turned out to be installed locally and every
 claim below could be measured instead of read. Four findings inverted, each corrected where it
 lands rather than quietly amended: the ACP seam is not prospective for this agent but shipped;

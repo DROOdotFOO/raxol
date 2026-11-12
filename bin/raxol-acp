@@ -49,6 +49,11 @@ MAKEFLAGS=-s mix compile >&2 </dev/null || {
 #
 # No -noinput: the wire is read from the `user` device, which needs stdin.
 #
+# :startup_mode :mcp boots :raxol's headless tree (no terminal driver, no web
+# endpoint), and :skip_endpoint keeps the :dev endpoint off in any other mode.
+# The packaged binary does not pass through here: its mode is decided in
+# packages/raxol_cli/config/runtime.exs.
+#
 # :code_reloader is off because this runs in :dev: the reloader would
 # recompile inside the server when a source file changes and print
 # "Compiling N files" on stdout, between frames.

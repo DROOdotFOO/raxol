@@ -1,13 +1,11 @@
 defmodule Raxol.Agent.ClientProtocol.Login do
   @moduledoc """
-  The interactive setup an ACP client launches for Terminal Auth.
+  `raxol login`: connect an LLM provider from a terminal.
 
-  ACP clients cannot hand raxol a credential over the wire: the surface reads
-  its provider from `Raxol.Agent.Backend.Resolver`, which wants a stored
-  `op://` reference or a provider env var. Terminal Auth is the protocol's
-  answer -- the client re-launches the SAME binary with the args the agent
-  advertised, the user completes an interactive flow in a real terminal, and
-  the client then starts a normal ACP session. That is what `raxol login` is.
+  A provider is resolved by `Raxol.Agent.Backend.Resolver`, which wants a
+  stored `op://` reference or a provider env var, and this is the interactive
+  way to store one. No ACP method advertises it: `raxol acp` serves a Raxol
+  agent, which may use no provider at all.
 
   The logic lives in `Raxol.Agent.Setup`, which `mix raxol.setup` also drives,
   so a provider connected here resolves identically on every surface. This
@@ -31,7 +29,7 @@ defmodule Raxol.Agent.ClientProtocol.Login do
   @usage """
   Usage: raxol login [provider] [options]
 
-  Connect an LLM provider for the coding agent and every ACP session.
+  Connect an LLM provider for the coding agent.
 
   With no provider, prints what is currently connected and concrete connection
   examples.

@@ -67,11 +67,13 @@ USAGE = """usage: acp_probe.py <agent command> [args...]
 
 Drives an ACP agent over stdio and records the wire transcript.
 
-  acp_probe.py bin/raxol-acp --backend mock
-  acp_probe.py packages/raxol_cli/burrito_out/raxol_cli_macos acp
+  PROBE_PROMPT=increment acp_probe.py \\
+      bin/raxol-acp --agent Raxol.Agent.Reference.Counter
+  acp_probe.py packages/raxol_cli/burrito_out/raxol_cli_macos acp \\
+      --agent Raxol.Agent.Reference.Counter
 
 Every argument is passed through to the agent verbatim, so the agent's own
-flags (--backend, --model, ...) are written after the command. This script
+flags (--agent <app>[:<id>]) are written after the command. This script
 takes no options of its own beyond -h/--help.
 
 Writes acp_transcript.json and acp_stderr.log to the current directory.

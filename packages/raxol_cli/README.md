@@ -12,8 +12,12 @@ packaging approach.
     raxol playground # interactive component catalog
     raxol new <name> # scaffold a new Raxol app
     raxol mcp        # serve Raxol apps as MCP tools on stdio (for OMP)
+    raxol acp        # serve a Raxol agent to ACP editors on stdio
     raxol update     # replace this binary with the latest verified release
     raxol help
+
+`raxol acp --agent <app>[:<id>]` is described in
+[Editor ACP](../../docs/features/EDITOR_ACP.md#serving-a-raxol-agent).
 
 ## `raxol mcp`
 

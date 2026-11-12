@@ -4,10 +4,11 @@ defmodule Raxol.Agent.SessionKey do
 
   One authority, because a session key is a filesystem path in two places at
   once: `Raxol.Agent.Journal.FileStore.session_dir/2` joins it onto the
-  journal base, and a surface's own session store uses it as a filename. Two
-  surfaces mint these -- the coding TUI and the ACP agent -- and a key minted
-  in one has to be resolvable by the other, so the format cannot live in each
-  of them separately.
+  journal base, and a surface's own session store uses it as a filename. The
+  coding TUI mints these, and the share token checks ids against the same
+  pattern, so the format cannot live in each of them separately. An agent
+  served over ACP is not named by one: its id is the `--agent` id or
+  `acp-<12 hex>`, checked by `Raxol.Agent.McpTools`.
 
   ## Why the format is what it is
 
@@ -28,9 +29,8 @@ defmodule Raxol.Agent.SessionKey do
 
   `valid?/1` is the one pattern that decides what may become a path; the
   share token's session-id check delegates here rather than restating it. Use
-  it on any key that arrived from outside this VM (a `session/load` request
-  names one) BEFORE it reaches `session_dir/2`, which joins without
-  sanitizing.
+  it on any key that arrived from outside this VM BEFORE it reaches
+  `session_dir/2`, which joins without sanitizing.
   """
 
   # Ids ride inside signed share tokens too, so they refuse anything that could

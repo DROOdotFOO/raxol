@@ -12,11 +12,9 @@ defmodule Raxol.Agent.TelemetryRegistryTest do
 
   The source is the registry, so it is read from source rather than restated
   here; restating it would reintroduce the second source of truth. Same
-  mechanic as `acp_stream_adapter_coverage_test.exs` (which parses the ACP
-  schema's `from_json/1` clauses) and the root suite's
-  `formatter_delegation_test.exs` (which parses the CI matrix out of
-  `.github/workflows/ci-unified.yml`), including the vacuity guard: a moved
-  `lib/` must fail loudly rather than pass empty.
+  mechanic as the root suite's `formatter_delegation_test.exs` (which parses
+  the CI matrix out of `.github/workflows/ci-unified.yml`), including the
+  vacuity guard: a moved `lib/` must fail loudly rather than pass empty.
 
   A doc or comment mention of an event counts as a hit. That is deliberate --
   it costs one registry line and it means a documented event can never be an

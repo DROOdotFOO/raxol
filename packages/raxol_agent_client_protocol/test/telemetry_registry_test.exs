@@ -10,10 +10,8 @@ defmodule Raxol.AgentClientProtocol.TelemetryRegistryTest do
   whether it means "we are wrong", "the peer is wrong", or "this is normal".
 
   Source-parsing a registry is an established pattern here:
-  `test/formatter_delegation_test.exs` (repo root) parses the CI matrix out of
-  `.github/workflows/ci-unified.yml`, and
-  `packages/raxol_agent/test/raxol/agent/acp_stream_adapter_coverage_test.exs`
-  parses the ACP schema's `from_json/1` clauses. Like those, this test carries a
+  `test/raxol/formatter_delegation_test.exs` (repo root) parses the CI matrix
+  out of `.github/workflows/ci-unified.yml`. Like it, this test carries a
   vacuity guard so a moved/renamed source tree fails loudly instead of passing
   on an empty scan.
   """

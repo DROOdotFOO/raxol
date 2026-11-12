@@ -151,12 +151,12 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
       with {:ok, agent} <- named_agent(ctx),
            {:ok, root} <- project_root(req) do
         id = Map.get(agent, :id) || random_id()
-        claimed(id, fn -> start_session(agent.app, id, root, ctx) end)
+        claimed(id, fn -> start_session(agent, id, root, ctx) end)
       end
     end
 
-    defp start_session(app, id, root, ctx) do
-      with :ok <- start_agent(app, id, root, ctx.conn) do
+    defp start_session(agent, id, root, ctx) do
+      with :ok <- start_agent(agent, id, root, ctx.conn) do
         open_session(id, ctx)
       end
     end
@@ -240,14 +240,30 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
       end
     end
 
-    defp start_agent(app, id, root, conn) do
-      start = fn -> McpTools.start_owned(owner(conn), app, id, root) end
+    defp start_agent(agent, id, root, conn) do
+      start = fn -> McpTools.start_owned(owner(conn), agent.app, id, root) end
 
       case past_orphan(start.(), start, id, conn) do
         {:ok, _started} -> :ok
-        {:error, message} -> refuse(message)
+        {:error, message} -> refuse(refusal(message, agent))
       end
     end
+
+    # An id in use that `--agent` fixed is not the client's to change: the
+    # refusal names the flag and what lifts the limit.
+    defp refusal(message, %{app: app, id: id}) when is_binary(id) do
+      case Raxol.Agent.Session.Supervisor.owner(id) do
+        {:ok, _running} ->
+          "id #{id} is in use: it is fixed by --agent #{app}:#{id}, which allows one " <>
+            "session per server process. Start raxol acp with --agent #{app} for a " <>
+            "new agent in every session"
+
+        :error ->
+          message
+      end
+    end
+
+    defp refusal(message, _unpinned), do: message
 
     # A refused start is tried once more when an orphan stood in its way.
     defp past_orphan({:ok, _started} = started, _start, _id, _conn), do: started

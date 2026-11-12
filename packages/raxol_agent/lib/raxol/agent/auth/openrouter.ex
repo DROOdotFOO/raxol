@@ -9,7 +9,8 @@ defmodule Raxol.Agent.Auth.OpenRouter do
   OpenAI have no public equivalent; their sign-in flows belong to their own
   first-party clients, and driving one with a borrowed client id would be
   impersonation that breaks the moment they rotate it. So this is the provider
-  Agent Auth advertises, and everything else stays on Terminal Auth.
+  Agent Auth advertises; every other provider is connected with `raxol login`
+  or `raxol setup`.
 
   What comes back is a user-controlled **API key**, not a bearer token with an
   expiry. That is why this needed no new secret storage: the key goes straight

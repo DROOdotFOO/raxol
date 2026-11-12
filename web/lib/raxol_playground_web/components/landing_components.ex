@@ -613,7 +613,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # browser pane's URL bar and page furniture are that chrome, and the frame
   # inside them is the recording.
   #
-  # No ACP tab. ACP is the coding agent's editor protocol, not a surface a
+  # No ACP tab. ACP is how an editor drives a Raxol agent, not a surface a
   # TEA module renders to, so a pane captioned "pulse, driven over ACP" would
   # describe a program that does not exist. It has its own page.
   #

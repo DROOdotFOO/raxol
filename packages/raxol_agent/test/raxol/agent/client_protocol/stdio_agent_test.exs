@@ -81,13 +81,16 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
                FileStore.read_records(id, base_dir: owned.base_dir)
     end
 
-    test "refuses a second session under a given id while its agent runs",
+    test "refuses a second session under a given id, naming the flag that fixed it",
          %{root: root, id: id} do
       pipe = AcpPipe.connect(%{app: @counter, id: id})
       assert {:ok, ^id} = AcpPipe.new_session(pipe, root)
 
       assert {:error, error} = AcpPipe.new_session(pipe, root)
       assert error.message =~ "id #{id} is in use"
+      assert error.message =~ "it is fixed by --agent #{@counter}:#{id}"
+      assert error.message =~ "Start raxol acp with --agent #{@counter} for"
+      refute error.message =~ "pick another id"
     end
 
     test "refuses a second session/new for an id while the first is still starting it",
