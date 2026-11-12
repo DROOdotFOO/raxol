@@ -236,6 +236,47 @@ defmodule Raxol.Broker.ExecutorTest do
     end
   end
 
+  describe "trade approvals on at the broker" do
+    setup ctx do
+      server = Fake.start(trade_approvals: true)
+      ctx = %{ctx | server: server}
+      {:ok, server: server, executor: start_executor!(ctx, policy: policy("1000", "400"))}
+    end
+
+    test "a successful place is pending approval: no order, still counted, a duplicate", ctx do
+      intent = limit("proposal-1")
+
+      assert {:ok, %{group_id: gid, status: :pending_approval, journaled: true}} =
+               Executor.run(ctx.executor, intent, context())
+
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
+      assert Fake.orders(ctx.server) == []
+
+      assert [%{"type" => "review", "response" => %{"customer_approval_required" => true}}] =
+               Enum.filter(group(ctx.path, gid), &(&1["type"] == "review"))
+
+      assert %{"type" => "order", "status" => "pending_approval"} =
+               List.last(group(ctx.path, gid))
+
+      assert Executor.run(ctx.executor, intent, context()) == {:ok, :duplicate}
+
+      assert {:deny, _gid, {:daily_notional_cap, _}} =
+               Executor.run(ctx.executor, limit("proposal-2"), context())
+
+      assert Fake.calls(ctx.server, "place_") == ["place_equity_order"]
+    end
+
+    test "an ASK approved later is still pending approval", ctx do
+      Fake.warnings(ctx.server, ["Pattern day trader check"])
+      assert {:ask, gid, _prompts} = Executor.run(ctx.executor, limit("proposal-3"), context())
+
+      assert {:ok, %{group_id: ^gid, status: :pending_approval}} =
+               Executor.approve(ctx.executor, gid, "droo@terminal")
+
+      assert Fake.orders(ctx.server) == []
+    end
+  end
+
   describe "day window" do
     test "is a rolling 24 hours from the executor's clock, with no caller input", ctx do
       refute function_exported?(Executor, :run, 4)

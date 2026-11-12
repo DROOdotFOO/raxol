@@ -270,6 +270,17 @@ A person answers an ASK later with `approve(executor, token, "name")`,
   restarts. Each place carries a `ref_id` derived from the intent id,
   which Robinhood deduplicates on. Give intents a stable `:id` for this to
   work.
+* **Trade approvals.** When the review response says
+  `customer_approval_required`, a successful place is
+  `status: :pending_approval`, not `:placed`: Robinhood holds a proposal the
+  account owner approves or declines in its app, and no order exists yet.
+  The group keeps counting toward the caps and its intent is a duplicate,
+  because the proposal can still become an order. Nothing resolves a
+  pending approval yet (`get_trade_approvals` is a read tool), and the order
+  placed after an approval carries the approval id, not the `ref_id` sent.
+  The flag is read as Robinhood's tool text names it; a real review response
+  has not been recorded, so check this against one before `mode: :armed`
+  exists. `Raxol.Broker.MCP.Fake` models it with `trade_approvals: true`.
 * **Fail closed.** Any journal error before `placing`, review error or
   unsupported order kind means no order. Once the order call is made the
   result is `{:ok, _}`: a place call that times out is journaled
@@ -321,8 +332,9 @@ children = [{Raxol.Broker.Supervisor, journal: []}]
 
 A group is the intent, a snapshot of the policy context, each verdict, any
 human approval of an ASK, the review response, a `placing` record, and one
-terminal record: the order response (`:placed`, `:failed` or `:unknown`), a
-DENY verdict, a declined approval, or `{:close, reason}`. `open_group/2` makes
+terminal record: the order response (`:placed`, `:pending_approval`, `:failed`
+or `:unknown`), a DENY verdict, a declined approval, or `{:close, reason}`.
+`open_group/2` makes
 the intent durable before any review or order call; `append_group/1` writes a
 whole group as one contiguous run. Every record is synced before the call
 returns.

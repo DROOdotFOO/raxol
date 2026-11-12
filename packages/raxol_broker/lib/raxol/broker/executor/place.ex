@@ -28,9 +28,9 @@ defmodule Raxol.Broker.Executor.Place do
        journal takes (`:infinity`): a caller-side timeout would leave a
        queued `placing` landing after the executor gave up on it;
     4. the tool is called once, with `ref_id` (a UUID derived from the intent
-       id) on a place. Robinhood deduplicates retries on it. On an account
-       with trade approvals on, the order placed after the owner approves
-       carries its approval id instead, so `ref_id` does not find it;
+       id) on a place. Robinhood deduplicates retries on it. An order placed
+       after the owner approved it carries its approval id instead, so
+       `ref_id` does not find that order;
     5. the response is journaled as `{:order, status, response}`, also with
        no caller-side timeout.
 
@@ -47,11 +47,14 @@ defmodule Raxol.Broker.Executor.Place do
 
   ## Status
 
-    * `:placed`: a result without `isError`. On an account with trade
-      approvals on, Robinhood's tool text says such a result is a proposal
-      the owner still has to approve in the app, not an order. This module
-      does not tell the two apart yet: both are `:placed` and count toward
-      the caps. It must before `mode: :armed` exists (#1179);
+    * `:placed`: a result without `isError`;
+    * `:pending_approval`: a place result without `isError` when the review
+      said `customer_approval_required` (`env.customer_approval_required`,
+      read by `Raxol.Broker.Executor.Review`). Robinhood then holds a
+      proposal the owner approves or declines in the app; no order exists
+      yet. It keeps counting toward the caps and its intent is not placed
+      again, because it can still become an order. A cancel is never
+      pending;
     * `:failed`: a result with `isError`, a JSON-RPC error that says the
       request was never acted on (parse error, invalid request, unknown
       method, invalid params), or a client refusal made before anything was
@@ -71,9 +74,10 @@ defmodule Raxol.Broker.Executor.Place do
           catalog: Catalog.session(),
           journal: Journal.server(),
           account: String.t(),
-          timeout: timeout()
+          timeout: timeout(),
+          customer_approval_required: boolean()
         }
-  @type status :: :placed | :failed | :unknown
+  @type status :: :placed | :pending_approval | :failed | :unknown
   @type outcome ::
           {:ok, status(), map()}
           | {:error, :invalid_receipt}
@@ -97,7 +101,7 @@ defmodule Raxol.Broker.Executor.Place do
     with :ok <- ReviewReceipt.verify(receipt, Executor.receipt_key(), intent, group_id),
          {:ok, tool, args} <- permitted_call(intent, env),
          :ok <- journal(group_id, {:placing}, env.journal) do
-      {status, response} = env.port |> Port.call(tool, args, env.timeout) |> classify(tool)
+      {status, response} = send_order(tool, args, intent, env)
 
       case journal(group_id, {:order, status, response}, env.journal) do
         :ok -> {:ok, status, response}
@@ -105,6 +109,20 @@ defmodule Raxol.Broker.Executor.Place do
       end
     end
   end
+
+  defp send_order(tool, args, intent, env) do
+    env.port
+    |> Port.call(tool, args, env.timeout)
+    |> classify(tool)
+    |> awaiting_owner(intent, env.customer_approval_required)
+  end
+
+  # A place the review marked `customer_approval_required` reaches Robinhood
+  # as a proposal for the owner, not as an order.
+  defp awaiting_owner({:placed, response}, %Intent{kind: kind}, true) when kind != :cancel,
+    do: {:pending_approval, response}
+
+  defp awaiting_owner(classified, _intent, required) when is_boolean(required), do: classified
 
   # The order tool for `intent`, only if it is `:write` for this session.
   defp permitted_call(intent, env) do

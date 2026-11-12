@@ -114,6 +114,21 @@ defmodule Raxol.Broker.Journal.ReplayTest do
     assert List.last(group) == "  outcome  UNKNOWN (counted)"
   end
 
+  test "a pending approval renders as its own outcome, counted", %{path: path} do
+    lines =
+      replay(path, [
+        intent("g1"),
+        context("g1"),
+        rec("g1", "placing", %{"notional" => "250"}),
+        rec("g1", "order", %{
+          "status" => "pending_approval",
+          "response" => %{"approval_id" => "apr-1"}
+        })
+      ])
+
+    assert outcome(lines, "g1") == "  outcome  PENDING APPROVAL (counted)"
+  end
+
   test "declined approval is a deny; a cancel placing renders as cancel", %{path: path} do
     lines =
       replay(path, [

@@ -10,7 +10,7 @@ defmodule Raxol.Broker.Executor do
         verdict          :post_review; DENY ends here, ASK parks the group
         [approval]       approve/3 or decline/3 on a parked group
         placing          Raxol.Broker.Executor.Place, with the ReviewReceipt
-        order            :placed | :failed | :unknown
+        order            :placed | :pending_approval | :failed | :unknown
 
   ## Context
 
@@ -82,6 +82,11 @@ defmodule Raxol.Broker.Executor do
       which Robinhood deduplicates on. Intent ids must be stable for a
       re-run to be recognised: pass `:id` to the `Raxol.Broker.Intent`
       constructor.
+    * Trade approvals: when the review says `customer_approval_required`,
+      a successful place is `:pending_approval`, not `:placed`. Robinhood
+      holds a proposal the owner approves or declines in its app. The group
+      keeps counting toward the caps and its intent is a duplicate, since
+      the proposal can still become an order. Nothing here resolves it yet.
 
   ## ASK
 
@@ -800,7 +805,10 @@ defmodule Raxol.Broker.Executor do
   end
 
   defp reviewed(state, pending, {:ok, response, warnings}) do
-    pending = %{pending | context: %{pending.context | review_warnings: warnings}}
+    pending =
+      pending
+      |> Map.put(:context, %{pending.context | review_warnings: warnings})
+      |> Map.put(:customer_approval_required, Review.customer_approval_required?(response))
 
     case append(state, pending.group_id, {:review, response}) do
       :ok -> post_review(state, pending)
@@ -813,10 +821,17 @@ defmodule Raxol.Broker.Executor do
     verdict = Policy.evaluate(intent, pending.context)
 
     case {append(state, group_id, {:verdict, :post_review, verdict}), verdict} do
-      {{:error, reason}, _verdict} -> {:reply, {:error, reason}, state}
-      {:ok, {:deny, reason}} -> {:reply, {:deny, group_id, reason}, state}
-      {:ok, {:ask, prompts}} -> park(state, pending, receipt, prompts)
-      {:ok, {:allow, _intent}} -> place(state, intent, group_id, receipt)
+      {{:error, reason}, _verdict} ->
+        {:reply, {:error, reason}, state}
+
+      {:ok, {:deny, reason}} ->
+        {:reply, {:deny, group_id, reason}, state}
+
+      {:ok, {:ask, prompts}} ->
+        park(state, pending, receipt, prompts)
+
+      {:ok, {:allow, _intent}} ->
+        place(state, intent, group_id, receipt, pending.customer_approval_required)
     end
   end
 
@@ -826,6 +841,7 @@ defmodule Raxol.Broker.Executor do
       context: pending.context,
       receipt: receipt,
       prompts: prompts,
+      customer_approval_required: pending.customer_approval_required,
       seq: System.unique_integer([:monotonic])
     }
 
@@ -879,7 +895,7 @@ defmodule Raxol.Broker.Executor do
         {:reply, {:deny, group_id, reason}, state}
 
       {:ok, _ask_answered_or_allow} ->
-        place(state, group.intent, group_id, group.receipt)
+        place(state, group.intent, group_id, group.receipt, group.customer_approval_required)
     end
   end
 
@@ -894,19 +910,20 @@ defmodule Raxol.Broker.Executor do
 
   # The port can go down between review and here (its EXIT handled before
   # the review result): close the group without `placing`, send nothing.
-  defp place(%{port_status: status, port: port} = state, _intent, group_id, _receipt)
+  defp place(%{port_status: status, port: port} = state, _intent, group_id, _receipt, _approval)
        when status != :ready or is_nil(port) do
     _ = close_group(state, group_id, :port_not_ready)
     {:reply, {:error, :port_not_ready}, state}
   end
 
-  defp place(state, intent, group_id, receipt) do
+  defp place(state, intent, group_id, receipt, customer_approval_required) do
     env = %{
       port: state.port,
       catalog: state.catalog,
       journal: state.journal,
       account: state.account,
-      timeout: state.place_timeout
+      timeout: state.place_timeout,
+      customer_approval_required: customer_approval_required
     }
 
     reply =

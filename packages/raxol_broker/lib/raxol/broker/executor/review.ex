@@ -29,6 +29,18 @@ defmodule Raxol.Broker.Executor.Review do
       with only a `"quote"`);
     * an `"alerts"`, `"warnings"` or `"errors"` key whose value is `null` or
       anything else that is not a list.
+
+  ## Trade approvals
+
+  Robinhood's `place_equity_order` text says that after a review with
+  `customer_approval_required` true, the place call "does not place the
+  order: it goes to the customer to approve or decline in the Robinhood app".
+  The review record carries that flag as `"customer_approval_required"`: true
+  only when a text block decodes to a JSON object holding
+  `"customer_approval_required": true`, at its top level or under `"data"`
+  (the envelope seen on live reads; a real review response has not been
+  recorded yet). Anything else, an absent key included, is false, and
+  `Raxol.Broker.Executor.Place` then reads a successful place as an order.
   """
 
   alias Raxol.Broker.Executor.Port
@@ -37,6 +49,7 @@ defmodule Raxol.Broker.Executor.Review do
 
   @equity_kinds [:buy_usd, :buy_shares, :sell, :limit, :stop_limit, :stop_market]
   @unreadable "unreadable review response"
+  @approval "customer_approval_required"
 
   @doc "The review tool for `intent`: a name, `:none` for a cancel, or `{:error, {:no_adapter, kind}}`."
   @spec tool(Intent.t()) :: {:ok, String.t() | :none} | {:error, {:no_adapter, atom()}}
@@ -48,6 +61,14 @@ defmodule Raxol.Broker.Executor.Review do
   @doc "Is `intent` an equity order (not a cancel)? The single list of equity kinds."
   @spec equity?(Intent.t()) :: boolean()
   def equity?(%Intent{kind: kind}), do: kind in @equity_kinds
+
+  @doc """
+  Did the review recorded as `response` say the order needs the owner's
+  approval in the Robinhood app? See "Trade approvals" in the moduledoc.
+  """
+  @spec customer_approval_required?(map()) :: boolean()
+  def customer_approval_required?(response) when is_map(response),
+    do: Map.get(response, @approval) == true
 
   @doc """
   Run the review for `intent` on `port`, whose tool classes are `catalog`.
@@ -72,25 +93,40 @@ defmodule Raxol.Broker.Executor.Review do
   end
 
   defp read({:ok, %{is_error: false, content: content}}, tool) when is_list(content) do
-    response = %{"tool" => tool, "is_error" => false, "content" => content}
-    {:ok, response, content_warnings(content)}
+    bodies = Enum.map(content, &body/1)
+
+    response = %{
+      "tool" => tool,
+      "is_error" => false,
+      "content" => content,
+      @approval => Enum.any?(bodies, &approval_required?/1)
+    }
+
+    {:ok, response, bodies_warnings(bodies)}
   end
 
   defp read({:ok, %{is_error: true}}, tool), do: {:error, {:review_failed, tool, :is_error}}
   defp read({:ok, _other}, tool), do: {:error, {:review_failed, tool, :invalid_response}}
   defp read({:error, reason}, tool), do: {:error, {:review_failed, tool, reason}}
 
-  defp content_warnings([]), do: [@unreadable]
-  defp content_warnings(content), do: Enum.flat_map(content, &warnings/1)
-
-  defp warnings(%{"type" => "text", "text" => text}) when is_binary(text) do
+  defp body(%{"type" => "text", "text" => text}) when is_binary(text) do
     case Jason.decode(text) do
-      {:ok, %{} = body} -> body_warnings(body) ++ error_warnings(body)
-      _ -> [@unreadable]
+      {:ok, %{} = body} -> body
+      _ -> :unreadable
     end
   end
 
-  defp warnings(_block), do: [@unreadable]
+  defp body(_block), do: :unreadable
+
+  defp approval_required?(%{@approval => true}), do: true
+  defp approval_required?(%{"data" => %{@approval => true}}), do: true
+  defp approval_required?(_body), do: false
+
+  defp bodies_warnings([]), do: [@unreadable]
+  defp bodies_warnings(bodies), do: Enum.flat_map(bodies, &warnings/1)
+
+  defp warnings(:unreadable), do: [@unreadable]
+  defp warnings(body), do: body_warnings(body) ++ error_warnings(body)
 
   defp body_warnings(body) do
     case Enum.filter(["alerts", "warnings"], &is_map_key(body, &1)) do

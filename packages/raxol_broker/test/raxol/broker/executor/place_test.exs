@@ -44,7 +44,8 @@ defmodule Raxol.Broker.Executor.PlaceTest do
       catalog: Catalog.static(),
       journal: name,
       account: @account,
-      timeout: 5_000
+      timeout: 5_000,
+      customer_approval_required: false
     }
 
     {:ok, server: server, port: port, env: env, journal: name, key: key, path: path}
@@ -176,6 +177,27 @@ defmodule Raxol.Broker.Executor.PlaceTest do
 
       assert {:error, _already} = Place.run(receipt, intent, group, ctx.env)
       assert Fake.calls(ctx.server, "place_") == [@tool]
+    end
+
+    test "a place the review marked for the owner's approval is pending; a cancel never is",
+         ctx do
+      env = %{ctx.env | customer_approval_required: true}
+      intent = intent("int-proposal")
+      group = reviewed_group(intent, ctx.journal)
+      receipt = ReviewReceipt.issue(ctx.key, intent, group)
+
+      assert {:ok, :pending_approval, %{"tool" => @tool, "is_error" => false}} =
+               Place.run(receipt, intent, group, env)
+
+      assert %{"type" => "order", "status" => "pending_approval"} = List.last(records(ctx.path))
+
+      order_id = "ord-" <> Place.ref_id("int-proposal")
+      {:ok, cancel} = Intent.cancel(order_id, provenance: :strategy, id: "int-cancel")
+      group = reviewed_group(cancel, ctx.journal)
+      receipt = ReviewReceipt.issue(ctx.key, cancel, group)
+
+      assert {:ok, :placed, %{"tool" => "cancel_equity_order"}} =
+               Place.run(receipt, cancel, group, env)
     end
 
     test "an unreviewed group is refused by the journal and nothing is sent", ctx do

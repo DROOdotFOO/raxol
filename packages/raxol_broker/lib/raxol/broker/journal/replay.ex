@@ -171,6 +171,7 @@ defmodule Raxol.Broker.Journal.Replay do
   defp outcome(group) do
     case Groups.outcome(group) do
       :placed -> "PLACED"
+      :pending_approval -> "PENDING APPROVAL" <> counted(group)
       :failed -> "FAILED"
       :unknown -> "UNKNOWN" <> unknown_reason(group) <> counted(group)
       :denied -> "DENY" <> deny_reason(group)
