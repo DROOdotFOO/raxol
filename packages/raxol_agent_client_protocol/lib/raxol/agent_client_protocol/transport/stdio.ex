@@ -57,10 +57,12 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
       loses whatever arrived before it opened (a client's `initialize`).
       Only meaningful when this process's real stdio is dedicated to the
       ACP wire protocol — e.g. a compiled release, or `mix run` with
-      stdio piped by the peer. Not for an interactive `iex` session. The
-      device's encoding must be `unicode` (`-kernel standard_io_encoding
-      unicode` in a release; Mix sets it), or non-ASCII frames are
-      written escaped.
+      stdio piped by the peer. Not for an interactive `iex` session. Both
+      devices are switched to `encoding: :latin1`, which moves bytes
+      unchanged: the wire is UTF-8 whatever the locale, and a byte that is
+      not UTF-8 reaches the JSON decoder as it was sent. A `unicode` device
+      would transcode by the locale's rules, and falls back to latin1 for
+      good at the first invalid byte it reads.
     * `start_spawn/3` — launch a peer executable via
       `Port.open({:spawn_executable, ...}, ...)` and speak to *its*
       stdin/stdout. The peer's exit is delivered to the owner as
@@ -109,7 +111,9 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     * `:owner` — pid to receive inbound `{:acp_transport, ...}` messages;
       defaults to `nil` (adopt later via `set_owner/2`).
     * `:input`, `:output` — the IO devices read and written (default
-      `:user` for both).
+      `:user` for both). Each is sent `:io.setopts(device, encoding:
+      :latin1)`; a device that has no options (`{:error, :enotsup}`) is
+      used as it is.
   """
   @spec start_self(keyword()) :: {:ok, t()}
   def start_self(opts \\ []) do
@@ -194,6 +198,8 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
           | {:spawn, String.t(), [String.t()], keyword(), pid() | nil}
         ) :: {:ok, server_state()}
   def init({:self, {input, output}, owner}) do
+    :ok = byte_transparent(input)
+    :ok = byte_transparent(output)
     transport = self()
     reader = spawn_link(fn -> read_lines(input, transport) end)
     {:ok, %{new_state(:self, owner) | reader: reader, output: output}}
@@ -218,11 +224,20 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     }
   end
 
+  # Read and written with `IO.binread/2` and `IO.binwrite/2`, a latin1
+  # device passes every byte through.
+  defp byte_transparent(device) do
+    case :io.setopts(device, encoding: :latin1) do
+      :ok -> :ok
+      {:error, :enotsup} -> :ok
+    end
+  end
+
   # One line per message, so the transport's mailbox orders them. Linked:
   # it ends with the transport, and a read blocked on the device ends when
   # `close/1` kills it.
   defp read_lines(input, transport) do
-    case IO.gets(input, "") do
+    case IO.binread(input, :line) do
       :eof ->
         send(transport, {:stdin, self(), :eof})
 
@@ -230,7 +245,7 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
         send(transport, {:stdin, self(), :eof})
 
       line ->
-        send(transport, {:stdin, self(), {:data, IO.chardata_to_string(line)}})
+        send(transport, {:stdin, self(), {:data, IO.iodata_to_binary(line)}})
         read_lines(input, transport)
     end
   end
@@ -371,11 +386,13 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     state
   end
 
+  # A device that is gone raises; before Elixir 1.20 it answered
+  # `{:error, reason}`, which the match turns into a raise.
   @spec write(server_state(), String.t()) :: :ok | :closed
   defp write(%{mode: :self, output: output}, line) do
-    IO.write(output, line)
+    :ok = IO.binwrite(output, line)
   rescue
-    _error in [ArgumentError, ErlangError] -> :closed
+    _error in [ArgumentError, ErlangError, MatchError] -> :closed
   end
 
   defp write(%{port: port}, line) do

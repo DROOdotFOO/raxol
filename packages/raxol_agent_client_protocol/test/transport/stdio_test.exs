@@ -190,6 +190,18 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
       assert_receive {:acp_transport, _ref, {:message, %{"ok" => true}}}, 2_000
     end
 
+    test "moves bytes unchanged: a byte that is not UTF-8 is reported, later text is intact" do
+      {:ok, io} = StringIO.open(<<0xFF, "{}\n", ~s({"text":"é中"}\n)::binary>>)
+      {:ok, transport} = Stdio.start_self(owner: self(), input: io, output: io)
+
+      assert_receive {:acp_transport, _ref, {:decode_error, _reason, <<0xFF, "{}">>}}, 2_000
+      assert_receive {:acp_transport, _ref, {:message, %{"text" => "é中"}}}, 2_000
+      assert_receive {:acp_transport, _ref, {:closed, :eof}}, 2_000
+
+      {:ok, _transport} = Stdio.send_message(transport, %{"text" => "é中"})
+      assert StringIO.contents(io) == {"", ~s({"text":"é中"}\n)}
+    end
+
     test "refuses a send after close" do
       {:ok, io} = StringIO.open("")
       {:ok, transport} = Stdio.start_self(owner: self(), input: io, output: io)

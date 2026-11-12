@@ -14,7 +14,10 @@ defmodule Raxol.Agent.AcpLoopbackTest do
       between the port reader and the `Connection`, which is the only place
       a non-JSON line is reported;
     * closing the peer's stdin ends it, and the agent's journal is whole on
-      disk afterwards.
+      disk afterwards;
+    * under `LC_ALL=C` the peer's stdio still moves UTF-8 unchanged, and a
+      byte that is not UTF-8 is answered as a parse error without changing
+      how later frames are read or written.
 
   The peer's environment: `MIX_ENV=dev` pins it to the build `setup_all`
   compiles (the shim sets no `MIX_ENV`, so dev is what a person launching it
@@ -249,6 +252,70 @@ defmodule Raxol.Agent.AcpLoopbackTest do
     end
   end
 
+  # An echo does not show a transcoding device: latin1 turns each byte into
+  # a code point on the way in and back into the same byte on the way out.
+  # What shows it is the peer acting on the text (a `cwd` it records) and
+  # the peer writing a character above U+00FF that it did not just read.
+  describe "bin/raxol-acp, byte for byte" do
+    @initialize ~s({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}})
+    @authenticate ~s({"jsonrpc":"2.0","id":2,"method":"authenticate","params":{"methodId":"é中"}})
+    @echoed ~S(unknown auth method \"é中\")
+
+    test "under LC_ALL=C, non-ASCII text in a request is read as it was sent", %{tmp: tmp} do
+      peer = spawn_raw_peer(tmp, ["--agent", @counter], "C")
+      initialize(peer)
+
+      write_line(peer, @authenticate)
+      reply = read_line(peer, @request_ms)
+      assert reply =~ @echoed
+      assert %{"id" => 2, "error" => %{"code" => -32_602}} = Jason.decode!(reply)
+
+      assert recorded_cwd(peer, tmp, 3) == "é中"
+      close_peer(peer)
+    end
+
+    test "under LC_ALL=C, text the peer did not just read is written as UTF-8",
+         %{tmp: tmp, id: id} do
+      first = spawn_raw_peer(tmp, ["--agent", "#{@counter}:#{id}"], "C")
+      initialize(first)
+      write_line(first, new_session(2, tmp))
+      assert %{"result" => %{"sessionId" => ^id}} = Jason.decode!(read_line(first, @request_ms))
+      close_peer(first)
+
+      # The journal now names another root, so the next start is refused
+      # with that root, read from disk, in the message.
+      [meta] = Path.wildcard(Path.join([tmp, "sessions", "*", id, "meta.json"]))
+      recorded = meta |> File.read!() |> Jason.decode!()
+      File.write!(meta, Jason.encode!(%{recorded | "cwd" => "/elsewhere/中—"}))
+
+      second = spawn_raw_peer(tmp, ["--agent", "#{@counter}:#{id}"], "C")
+      initialize(second)
+      write_line(second, new_session(2, tmp))
+      refusal = read_line(second, @request_ms)
+      assert refusal =~ "belongs to project root /elsewhere/中—"
+      assert %{"id" => 2, "error" => %{"code" => -32_602}} = Jason.decode!(refusal)
+      close_peer(second)
+    end
+
+    test "a byte that is not UTF-8 is a parse error, and later frames are read as sent",
+         %{tmp: tmp} do
+      peer = spawn_raw_peer(tmp, ["--agent", @counter], "C.UTF-8")
+      initialize(peer)
+
+      for line <- [<<0xFF, "{}">>, String.replace(@authenticate, "é中", <<0xFF>>)] do
+        write_line(peer, line)
+
+        assert %{"id" => nil, "error" => %{"code" => -32_700}} =
+                 Jason.decode!(read_line(peer, @request_ms))
+      end
+
+      write_line(peer, @authenticate)
+      assert read_line(peer, @request_ms) =~ @echoed
+      assert recorded_cwd(peer, tmp, 3) == "é中"
+      close_peer(peer)
+    end
+  end
+
   # ==========================================================================
   # Helpers
   # ==========================================================================
@@ -271,6 +338,68 @@ defmodule Raxol.Agent.AcpLoopbackTest do
     end)
 
     %{stdio: handle, handle: WireTap.wrap(handle, self()), os_pid: os_pid}
+  end
+
+  # The peer on a port of the test's own, one stdout line per message: the
+  # bytes written and read are the wire's.
+  defp spawn_raw_peer(tmp, args, locale) do
+    port =
+      Port.open({:spawn_executable, String.to_charlist(@peer)}, [
+        :binary,
+        :exit_status,
+        {:line, 1_000_000},
+        args: args,
+        cd: tmp,
+        env: [{~c"LC_ALL", String.to_charlist(locale)}, {~c"LANG", false} | peer_env(tmp)]
+      ])
+
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    on_exit(fn -> kill_peer(os_pid) end)
+    %{port: port, os_pid: os_pid}
+  end
+
+  defp initialize(peer) do
+    write_line(peer, @initialize)
+    assert %{"id" => 1, "result" => %{}} = Jason.decode!(read_line(peer, @boot_ms))
+  end
+
+  defp new_session(request_id, cwd) do
+    Jason.encode!(%{
+      "jsonrpc" => "2.0",
+      "id" => request_id,
+      "method" => "session/new",
+      "params" => %{"cwd" => cwd, "mcpServers" => []}
+    })
+  end
+
+  # Opens a session whose `cwd` is a directory named `é中` and returns the
+  # last segment of the root its journal recorded.
+  defp recorded_cwd(peer, tmp, request_id) do
+    cwd = Path.join(tmp, "é中")
+    File.mkdir_p!(cwd)
+    write_line(peer, new_session(request_id, cwd))
+
+    assert %{"id" => ^request_id, "result" => %{"sessionId" => session_id}} =
+             Jason.decode!(read_line(peer, @request_ms))
+
+    [meta] = Path.wildcard(Path.join([tmp, "sessions", "*", session_id, "meta.json"]))
+    meta |> File.read!() |> Jason.decode!() |> Map.fetch!("cwd") |> Path.basename()
+  end
+
+  defp close_peer(%{port: port, os_pid: os_pid}) do
+    Port.close(port)
+    assert_peer_reaped(os_pid)
+  end
+
+  defp write_line(%{port: port}, line), do: Port.command(port, [line, "\n"])
+
+  defp read_line(%{port: port}, timeout) do
+    receive do
+      {^port, {:data, {:eol, line}}} -> line
+      {^port, {:exit_status, status}} -> flunk("the peer exited with #{status}")
+    after
+      timeout -> flunk("the peer wrote no line within #{timeout} ms")
+    end
   end
 
   # Charlists, not binaries: `:env` goes straight to `Port.open/2`.
