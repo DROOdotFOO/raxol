@@ -4,10 +4,10 @@ defmodule Raxol.Payments.Accounting do
 
   The accounting sidecar (a read-only container that books each Xochi settlement
   into `Raxol.Payments.SettlementLedger`) is configured entirely through env vars.
-  Two deployments read the same contract: the main `raxol` release (root
-  `config/runtime.exs`) and the slim `raxol_earn` sidecar release
-  (`packages/raxol_earn/config/runtime.exs`). Both call `env_config/0` so the
-  contract lives in one place and the two config files cannot drift.
+  The `raxol_earn` sidecar release reads the contract
+  (`packages/raxol_earn/config/runtime.exs`). A release's `config/runtime.exs`
+  calls `env_config/0`, so the contract lives in one place and two releases
+  cannot drift.
 
   ## Contract
 

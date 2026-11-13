@@ -9,12 +9,13 @@ import Config
 #     tx. In this mode the "read-only/keyless" framing below does NOT hold.
 #
 # Prod-gated so `mix`/tests in this package are unaffected. Reads the accounting
-# deployment contract via `Raxol.Payments.Accounting.env_config/0` -- the same
-# helper the root raxol release uses -- so the two configs cannot drift.
+# deployment contract via `Raxol.Payments.Accounting.env_config/0`, where the
+# contract is documented.
 #
-# Deliberately NOT included: the origin-pull solver-pin guard from the root
-# config/runtime.exs. That guard fails a boot closed unless XOCHI_SOLVER_* is set,
-# to protect a node that SIGNS origin pulls -- it is not wired here. The
+# Deliberately NOT included: the origin-pull solver-pin guard,
+# `Raxol.Payments.Protocols.Xochi.origin_pull_pin_env_config!/0`. That guard fails
+# a boot closed unless XOCHI_SOLVER_* is set, to protect a node that SIGNS origin
+# pulls -- it is not wired here. The
 # distribution/REPL boot gates in Raxol.Payments.Deployment are likewise not wired.
 # Because those gates are absent, solver mode instead fails the boot CLOSED below if
 # Erlang distribution is on (see the RELEASE_DISTRIBUTION guard): the signing node

@@ -54,7 +54,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   alias Raxol.Payments.Poll
   alias Raxol.Payments.Protocols.Permit2
-  alias Raxol.Payments.Xochi.{Capabilities, Client, DepositAttestation}
+  alias Raxol.Payments.Xochi.{Capabilities, Client, DepositAttestation, PullContracts}
 
   alias Raxol.Payments.Xochi.Schemas.{
     DepositRouteRequest,
@@ -656,6 +656,50 @@ defmodule Raxol.Payments.Protocols.Xochi do
     end
 
     :ok
+  end
+
+  @solver_env ~w(
+    XOCHI_SOLVER_ETH XOCHI_SOLVER_BASE XOCHI_SOLVER_ARBITRUM
+    XOCHI_SOLVER_OPTIMISM XOCHI_SOLVER_POLYGON
+  )
+
+  @doc """
+  Reads the origin-pull solver pin from the environment, for the
+  `config/runtime.exs` of a release that signs origin pulls:
+
+      config :raxol_payments,
+             Raxol.Payments.Protocols.Xochi.origin_pull_pin_env_config!()
+
+  `XOCHI_SOLVER_ETH`, `XOCHI_SOLVER_BASE`, `XOCHI_SOLVER_ARBITRUM`,
+  `XOCHI_SOLVER_OPTIMISM` and `XOCHI_SOLVER_POLYGON` name the solver collection
+  address the agent signs pulls to. The allowlist is flat, so one address that
+  serves every chain needs one variable. `XOCHI_PULL_REQUIRE_SOLVER_PIN=true`
+  pins ERC-3009 with no address set; Permit2 is fail-closed regardless.
+
+  Raises as `assert_origin_pull_pinned!/2` does when no address is set and the
+  pin is not required, so the release does not boot fail-open. The returned
+  `:pull_solver_allowlist` is the configured addresses plus
+  `Raxol.Payments.Xochi.PullContracts.pull_recipients/0`: the origin pull routes
+  to the verified per-chain pull contracts, not the bare solver address.
+  """
+  @spec origin_pull_pin_env_config!() :: [
+          pull_solver_allowlist: [String.t()],
+          pull_require_solver_pin: boolean()
+        ]
+  def origin_pull_pin_env_config! do
+    solvers =
+      @solver_env
+      |> Enum.map(&System.get_env/1)
+      |> Enum.reject(&(is_nil(&1) or &1 == ""))
+
+    require_pin? = System.get_env("XOCHI_PULL_REQUIRE_SOLVER_PIN", "false") == "true"
+
+    assert_origin_pull_pinned!(solvers, require_pin?)
+
+    [
+      pull_solver_allowlist: Enum.uniq(solvers ++ PullContracts.pull_recipients()),
+      pull_require_solver_pin: require_pin?
+    ]
   end
 
   # -- Private --
