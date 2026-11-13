@@ -91,6 +91,21 @@ jobs:
              && grep -q 'packaged binary' /tmp/doctor.txt \
              && grep -q 'acp surface available' /tmp/doctor.txt && echo SMOKE-OK"
 
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # `raxol mcp` through the npm launcher, from the vendored layout
+      # `scripts/pack.sh` produces: boots the runtime in MCP mode, lists the
+      # tools and drives a session over stdio.
+      - name: Smoke raxol mcp through the launcher
+        run: |
+          mkdir -p packages/raxol_cli/npm/vendor
+          cp out/raxol_cli_* packages/raxol_cli/npm/vendor/
+          chmod +x packages/raxol_cli/npm/vendor/raxol_cli_*
+          cd packages/raxol_cli/npm && node scripts/mcp_smoke.mjs
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
