@@ -69,7 +69,7 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   After a turn's blocks are built, `build_turn/3` scans the turn's raw
   events for the LAST `turn_completed` whose payload `final` is `true`
   (string or atom key -- the wire is string-keyed JSON, live producer
-  events are atom-keyed, see `Raxol.Agent.Contract.gated_done_payload/4`,
+  events are atom-keyed, see `Raxol.Agent.StreamPump.gated_done_payload/4`,
   read-only ground truth in `packages/raxol_agent`). A non-final turn
   (no such event) is untouched -- byte-identical output, no `:completion`
   key anywhere.
@@ -104,7 +104,7 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
 
   This is a DISPLAY-side decision, not a re-implementation of the
   producer's evidence gate: the honest producer
-  (`Raxol.Agent.Contract.gated_done_payload/4` / the evidence gate it
+  (`Raxol.Agent.StreamPump.gated_done_payload/4` / the evidence gate it
   consults) only ever emits gate-accepted, SAME-turn refs -- the gate is
   the sole acceptance authority. A direct call back into the gate is
   impossible (`raxol_agent` depends on main `raxol`, never the reverse),

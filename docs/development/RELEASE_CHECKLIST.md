@@ -11,6 +11,7 @@ window, and an npm version cannot be reused.
 | `raxol` | Hex | 2.7.0 |
 | `raxol_core` | Hex | 2.7.0 |
 | `raxol_sensor` | Hex | 2.7.0 |
+| `raxol_journal` | Hex | unpublished |
 | `raxol_terminal` | Hex | 2.7.0 |
 | `raxol_mcp` | Hex | 2.7.0 |
 | `raxol_liveview` | Hex | 2.7.0 |
@@ -65,7 +66,10 @@ reactivating it. Never move a published version tag as routine recovery.
    file is tracked, runs each `HEX_BUILD=1 mix hex.build --unpack`, and compares
    the generated package metadata with the source project configuration.
    `Raxol.Release.PackageCheck` holds the train order; a new package under
-   `packages/` fails the catalog check until it is classified there.
+   `packages/` fails the catalog check until it is classified there. A package
+   the train publishes for the first time joins `@published` in
+   `web/lib/raxol_playground/capabilities.ex` in the release commit, so the
+   `llms.txt` generated from the tag lists it.
 4. Push package-scoped documentation tags for changed independent-version
    packages. They must point at the release commit:
 

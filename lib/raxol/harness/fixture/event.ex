@@ -4,7 +4,7 @@ defmodule Raxol.Harness.Fixture.Event do
   agent run.
 
   Field names are aligned with the shipped `Raxol.Agent.Contract.Event`
-  (`packages/raxol_agent/lib/raxol/agent/contract.ex`): `id`,
+  (`packages/raxol_journal/lib/raxol/agent/contract.ex`): `id`,
   `turn_id`, `ts`, `family`, `type`, `tier`, `payload` match exactly.
   `scope` and `provenance` are not yet in Contract v0 — they are optional
   here and filled with defaults by `Raxol.Harness.Fixture.Upcast` so

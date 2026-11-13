@@ -38,10 +38,10 @@ cd packages/raxol_core     && MIX_ENV=test mix test
 cd packages/raxol_terminal && MIX_ENV=test mix test
 cd packages/raxol_sensor   && MIX_ENV=test mix test
 cd packages/raxol_agent    && MIX_ENV=test mix test
-# ... plus raxol_mcp, raxol_payments, raxol_liveview, raxol_plugin,
-# raxol_speech, raxol_telegram, raxol_watch, raxol_earn, raxol_gateway,
-# raxol_agent_client_protocol, raxol_cli, raxol_console, raxol_web3,
-# raxol_broker
+# ... plus raxol_journal, raxol_mcp, raxol_payments, raxol_liveview,
+# raxol_plugin, raxol_speech, raxol_telegram, raxol_watch, raxol_earn,
+# raxol_gateway, raxol_agent_client_protocol, raxol_cli, raxol_console,
+# raxol_web3, raxol_broker
 ```
 
 ### All quality checks
