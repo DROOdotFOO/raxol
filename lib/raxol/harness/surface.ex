@@ -1102,9 +1102,9 @@ defmodule Raxol.Harness.Surface do
   -- this call changes the constant factor of a growing session's upkeep,
   not its complexity class.
 
-  Raises `ArgumentError` on a non-map element: the boundary normalizer is
-  expected to run upstream of this call, so a non-map element reaching here
-  is a caller bug, not a value this function silently tolerates.
+  Raises `ArgumentError` on a non-map element: the caller hands over
+  event-shaped maps, so a non-map element reaching here is a caller bug,
+  not a value this function silently tolerates.
   """
   @spec append_events(t(), [map()]) :: t()
   def append_events(model, events) when is_list(events) do
@@ -1187,10 +1187,11 @@ defmodule Raxol.Harness.Surface do
   @doc """
   Sets (or clears, with `nil`) the status strip's `:stall_verdict` seam
   (`Raxol.Harness.StatusStrip`'s own documented integration point) and
-  repaints the footer. The strip already renders the `ALERT: <evidence>`
-  segment for a `:stalled`/`:looping` verdict with non-empty evidence; this
-  function is only the model-side plumbing that gets a verdict into
-  `model.status` in the first place.
+  repaints the footer. A verdict is
+  `%{class: class, evidence: %{summary: binary}}`: the strip renders
+  `ALERT: <summary>` when `class` is `:stalled` or `:looping` and the
+  summary is non-empty, and nothing for any other shape. This function is
+  only the model-side plumbing that gets a verdict into `model.status`.
   """
   @spec put_stall_verdict(t(), map() | nil) :: t()
   def put_stall_verdict(model, nil) do

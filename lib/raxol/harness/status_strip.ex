@@ -266,8 +266,9 @@ defmodule Raxol.Harness.StatusStrip do
 
   # -- stall verdict notice -------------------------------------------------
 
-  # An optional `:stall_verdict` state entry: a map with a `:class` and an
-  # `:evidence` summary. Only `:stalled` / `:looping` render; `:suspect` is
+  # An optional `:stall_verdict` state entry:
+  # `%{class: class, evidence: %{summary: binary}}`. Any other shape renders
+  # nothing. Only `:stalled` / `:looping` render; `:suspect` is
   # a pre-alarm deliberately kept off the strip (the same false-alarm
   # economy behind its honesty floor).
   #

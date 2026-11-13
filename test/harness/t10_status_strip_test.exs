@@ -265,7 +265,7 @@ defmodule Raxol.Harness.T10StatusStripTest do
     end
   end
 
-  describe "stall verdict notice (the stall detector's one integration seam)" do
+  describe "stall verdict notice (the :stall_verdict seam)" do
     # RED-FIRST: these tests were written and run before `render/2` knew
     # the `:stall_verdict` key existed -- every rendering assertion below
     # failed (the key was silently ignored, no ALERT segment appeared)
@@ -363,7 +363,7 @@ defmodule Raxol.Harness.T10StatusStripTest do
   end
 
   describe "shared thresholds (single source of truth for the hung heuristic)" do
-    test "the warn/hung defaults are exposed for the stall detector to reuse" do
+    test "the warn/hung defaults are exposed for reuse" do
       assert StatusStrip.default_warn_after_ms() == 15_000
       assert StatusStrip.default_hung_after_ms() == 60_000
     end
