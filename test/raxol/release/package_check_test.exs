@@ -17,11 +17,23 @@ defmodule Raxol.Release.PackageCheckTest do
       refute :raxol_gateway in apps
     end
 
-    test "publishes raxol_journal before raxol_agent, which depends on it" do
+    # ADR-0043 gives these to the agent repository. A root tag publishes every
+    # package on the public train whose version Hex lacks.
+    @agent_side [
+      :raxol_agent,
+      :raxol_payments,
+      :raxol_broker,
+      :raxol_earn,
+      :raxol_web3,
+      :raxol_console,
+      :raxol_cli,
+      :raxol_agent_client_protocol
+    ]
+
+    test "the public train holds no agent-side package" do
       apps = Enum.map(PackageCheck.public_packages(), & &1.app)
 
-      assert Enum.find_index(apps, &(&1 == :raxol_journal)) <
-               Enum.find_index(apps, &(&1 == :raxol_agent))
+      assert Enum.filter(apps, &(&1 in @agent_side)) == []
     end
 
     test "keeps --only in caller order" do

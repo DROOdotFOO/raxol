@@ -42,12 +42,15 @@ defmodule Raxol.Release.PackageCheck do
     %{app: :raxol_speech, path: "packages/raxol_speech", class: :public},
     %{app: :raxol_watch, path: "packages/raxol_watch", class: :public},
     %{app: :raxol, path: ".", class: :public},
-    %{app: :raxol_agent, path: "packages/raxol_agent", class: :public},
-    %{app: :raxol_payments, path: "packages/raxol_payments", class: :public},
     %{app: :raxol_telegram, path: "packages/raxol_telegram", class: :public}
   ]
 
   @pre_alpha_packages [
+    # On Hex, and off this train: ADR-0043 gives their releases to the agent
+    # repository, so a root tag publishes neither. They sit here because this
+    # list is every package the train does not publish.
+    %{app: :raxol_agent, path: "packages/raxol_agent", class: :pre_alpha},
+    %{app: :raxol_payments, path: "packages/raxol_payments", class: :pre_alpha},
     %{
       app: :raxol_agent_client_protocol,
       path: "packages/raxol_agent_client_protocol",

@@ -94,6 +94,7 @@ defmodule RaxolPlayground.Capabilities do
     {"raxol_sensor", "Sensor fusion"},
     {"raxol_terminal", "Terminal emulation"},
     {"raxol_core", "Behaviours, events"},
+    {"raxol_journal", "Session journal"},
     {"raxol_plugin", "Plugin SDK"},
     {"raxol_speech", "TTS/STT"},
     {"raxol_telegram", "Telegram bot"},
