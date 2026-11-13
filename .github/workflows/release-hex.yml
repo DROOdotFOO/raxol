@@ -158,40 +158,44 @@ jobs:
 
       # PackageCheck owns the public train and its topological order. A failed
       # run is resumable: versions already visible on Hex are skipped.
+      #
+      # The list arrives on descriptor 3 and every command in the body reads
+      # /dev/null. On stdin, the first `mix` would take the remaining lines as
+      # its own input and the loop would end after one package.
       - name: Publish packages in dependency order
         id: publish
         run: |
           set -euo pipefail
 
-          while IFS=$'\t' read -r package path; do
+          while IFS=$'\t' read -r package path <&3; do
             pushd "$path" >/dev/null
 
-            HEX_BUILD=1 mix deps.get
+            HEX_BUILD=1 mix deps.get </dev/null
             version="$(HEX_BUILD=1 mix run --no-start --no-compile --no-deps-check \
-              -e 'IO.write(Mix.Project.config()[:version])')"
+              -e 'IO.write(Mix.Project.config()[:version])' </dev/null)"
             release_url="https://hex.pm/api/packages/$package/releases/$version"
 
-            if curl --fail --silent --output /dev/null "$release_url"; then
+            if curl --fail --silent --output /dev/null "$release_url" </dev/null; then
               echo "$package $version is already published; skipping"
               popd >/dev/null
               continue
             fi
 
             echo "::group::Publishing $package $version"
-            HEX_BUILD=1 mix hex.publish --dry-run
-            HEX_BUILD=1 mix hex.publish --yes
+            HEX_BUILD=1 mix hex.publish --dry-run --yes </dev/null
+            HEX_BUILD=1 mix hex.publish --yes </dev/null
             curl --fail --silent --show-error --output /dev/null \
-              --retry 12 --retry-all-errors --retry-delay 5 "$release_url"
+              --retry 12 --retry-all-errors --retry-delay 5 "$release_url" </dev/null
             echo "::endgroup::"
 
             popd >/dev/null
-          done < <(
+          done 3< <(
             mix run --no-start -e '
               Raxol.Release.PackageCheck.public_packages()
               |> Enum.each(fn %{app: app, path: path} ->
                 IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
               end)
-            ' | sed -n 's/^RAXOL_PACKAGE\t//p'
+            ' </dev/null | sed -n 's/^RAXOL_PACKAGE\t//p'
           )
 
   verify:
@@ -234,23 +238,24 @@ jobs:
           mix local.rebar --force
           mix deps.get --check-locked
 
+      # Descriptor 3 and /dev/null for the same reason as the publish loop.
       - name: Verify registry and documentation
         run: |
           set -euo pipefail
 
-          while IFS=$'\t' read -r package path; do
+          while IFS=$'\t' read -r package path <&3; do
             pushd "$path" >/dev/null
             version="$(HEX_BUILD=1 mix run --no-start --no-compile --no-deps-check \
-              -e 'IO.write(Mix.Project.config()[:version])')"
+              -e 'IO.write(Mix.Project.config()[:version])' </dev/null)"
             popd >/dev/null
 
             curl --fail --silent --show-error --output /dev/null \
-              "https://hex.pm/api/packages/$package/releases/$version"
+              "https://hex.pm/api/packages/$package/releases/$version" </dev/null
             echo "$package $version is visible on Hex"
 
             docs_url="https://hexdocs.pm/$package/$version/"
             for attempt in {1..60}; do
-              if curl --fail --silent --output /dev/null "$docs_url"; then
+              if curl --fail --silent --output /dev/null "$docs_url" </dev/null; then
                 echo "$package $version documentation is visible"
                 break
               fi
@@ -261,13 +266,13 @@ jobs:
               echo "Waiting for $package $version documentation ($attempt/60)"
               sleep 10
             done
-          done < <(
+          done 3< <(
             mix run --no-start -e '
               Raxol.Release.PackageCheck.public_packages()
               |> Enum.each(fn %{app: app, path: path} ->
                 IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
               end)
-            ' | sed -n 's/^RAXOL_PACKAGE\t//p'
+            ' </dev/null | sed -n 's/^RAXOL_PACKAGE\t//p'
           )
 
       - name: Compile a fresh Hex consumer
