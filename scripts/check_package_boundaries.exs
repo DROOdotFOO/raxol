@@ -94,9 +94,10 @@
 # `Module.concat([Raxol, Agent, name])`). A name followed by an alternation,
 # as a regex writes one (`Raxol\.Agent\.(Journal|Contract)`), is read as one
 # name per alternative and not as the bare prefix, so a pattern over exempt
-# modules names only those. Comments are not in the AST.
-# The text of `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated`
-# is skipped; code interpolated into it is not. A name assembled at run time
+# modules names only those. Comments are not in the AST, and the text of
+# `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated` is skipped;
+# code interpolated into it is not. A template or an Erlang source has no
+# AST here, so there a name in a comment counts. A name assembled at run time
 # from parts that are not literal (`Module.concat(base, name)`) is invisible
 # to both rules.
 #

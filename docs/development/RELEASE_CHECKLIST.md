@@ -270,7 +270,7 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
    in the same change; a `web` test holds the two lists equal.
 2. **Declare requirements that used to be dropped.** Once `raxol_gateway` is on
    Hex, `raxol_telegram`'s `gateway_dep/0` can declare
-   `raxol_gateway "~> 0.1", optional: true` under `HEX_BUILD` instead of
+   `raxol_gateway "~> 0.2", optional: true` under `HEX_BUILD` instead of
    returning `[]`. That removes the documented
    `mix deps.compile raxol_telegram --force` ordering hazard for consumers who
    add `raxol_gateway` themselves, and it clears the expected warning from
