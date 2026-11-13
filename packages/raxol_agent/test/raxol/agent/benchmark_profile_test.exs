@@ -4,55 +4,10 @@ defmodule Raxol.Agent.BenchmarkProfileTest do
   alias Raxol.Agent.BenchmarkProfile
 
   describe "from_env/1" do
-    test "empty env yields an inactive profile with no caps" do
+    test "empty env yields a profile with no caps" do
       assert {:ok, profile} = BenchmarkProfile.from_env(%{})
-      refute profile.active?
-      assert profile.backend == nil
       assert profile.max_turns == nil
-      assert profile.trajectory_path == nil
-    end
-
-    test "RAXOL_PROFILE=benchmark activates the profile" do
-      assert {:ok, %{active?: true}} =
-               BenchmarkProfile.from_env(%{"RAXOL_PROFILE" => "benchmark"})
-    end
-
-    test "other RAXOL_PROFILE values stay inactive" do
-      assert {:ok, %{active?: false}} =
-               BenchmarkProfile.from_env(%{"RAXOL_PROFILE" => "dev"})
-    end
-
-    test "RAXOL_MODEL splits provider/model against supported backends" do
-      assert {:ok, profile} =
-               BenchmarkProfile.from_env(%{"RAXOL_MODEL" => "mock/test-model"})
-
-      assert profile.backend == :mock
-      assert profile.model == "test-model"
-    end
-
-    test "RAXOL_MODEL keeps slashes inside the model segment" do
-      assert {:ok, profile} =
-               BenchmarkProfile.from_env(%{
-                 "RAXOL_MODEL" => "openrouter/qwen/qwen3-coder"
-               })
-
-      assert profile.backend == :openrouter
-      assert profile.model == "qwen/qwen3-coder"
-    end
-
-    test "unknown provider is a boot error naming the supported set" do
-      assert {:error, message} =
-               BenchmarkProfile.from_env(%{"RAXOL_MODEL" => "nope/model"})
-
-      assert message =~ "nope"
-      assert message =~ "supported"
-    end
-
-    test "RAXOL_MODEL without a slash is a boot error" do
-      assert {:error, message} =
-               BenchmarkProfile.from_env(%{"RAXOL_MODEL" => "claude"})
-
-      assert message =~ "provider/model"
+      assert profile.max_cost_usd == nil
     end
 
     test "RAXOL_MAX_TURNS parses and rejects garbage" do

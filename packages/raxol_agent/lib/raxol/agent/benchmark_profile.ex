@@ -1,48 +1,28 @@
 defmodule Raxol.Agent.BenchmarkProfile do
   @moduledoc """
-  The env-driven contract `raxol.p` honors when a benchmark harness (or any
-  unattended caller) drives it. All configuration arrives as environment
-  variables so the adapter side needs no flags:
+  The turn and spend caps an unattended run is held to. They arrive as
+  environment variables, so the caller needs no flags:
 
-    * `RAXOL_MODEL`        — `provider/model` (e.g. `anthropic/claude-sonnet-4-6`);
-      the provider segment must be a supported backend
-    * `RAXOL_PROFILE`      — `benchmark` activates profile semantics
-    * `RAXOL_MAX_TURNS`    — hard turn cap per run; exceeding it exits 2
+    * `RAXOL_MAX_TURNS`    — hard turn cap per run
     * `RAXOL_MAX_COST_USD` — hard spend cap per run; requires
       `RAXOL_COST_PER_MTOK_IN` and `RAXOL_COST_PER_MTOK_OUT` (USD per million
       tokens) so cost can actually be computed from usage — a cap that cannot
       be enforced is refused at boot rather than silently ignored
-    * `RAXOL_TRAJECTORY_PATH` — where the trajectory JSON is written on every
-      exit path (success, error, timeout, budget, SIGTERM)
 
-  `RAXOL_PROFILE=benchmark` forces, for the run:
-
-    * allow-all tool authorizer + the mutating coding tools (there is no
-      human to ask; the task container is the blast radius)
-    * skills/self-improvement OFF — task attempts must be independent
-    * trajectory capture ON when a path is set
-
-  CLI flags win over env: the human channel outranks the harness channel.
+  `Raxol.Agent.ClientProtocol.Budget` holds one `raxol acp` connection to
+  them.
   """
 
-  defstruct active?: false,
-            backend: nil,
-            model: nil,
-            max_turns: nil,
+  defstruct max_turns: nil,
             max_cost_usd: nil,
             cost_per_mtok_in: nil,
-            cost_per_mtok_out: nil,
-            trajectory_path: nil
+            cost_per_mtok_out: nil
 
   @type t :: %__MODULE__{
-          active?: boolean(),
-          backend: atom() | nil,
-          model: String.t() | nil,
           max_turns: pos_integer() | nil,
           max_cost_usd: float() | nil,
           cost_per_mtok_in: float() | nil,
-          cost_per_mtok_out: float() | nil,
-          trajectory_path: String.t() | nil
+          cost_per_mtok_out: float() | nil
         }
 
   # The largest integer a float carries exactly. A usage figure arrives from
@@ -69,28 +49,22 @@ defmodule Raxol.Agent.BenchmarkProfile do
   Build a profile from an env map (defaults to `System.get_env/0`).
 
   Returns `{:error, message}` on any unparseable or unenforceable value —
-  a benchmark run with a misread cap must fail loudly at boot, not run
-  uncapped.
+  a run with a misread cap must fail loudly at boot, not run uncapped.
   """
   @spec from_env(%{optional(String.t()) => String.t()}) ::
           {:ok, t()} | {:error, String.t()}
   def from_env(env \\ System.get_env()) do
-    with {:ok, backend, model} <- parse_model(env["RAXOL_MODEL"]),
-         {:ok, max_turns} <- parse_pos_int(env, "RAXOL_MAX_TURNS"),
+    with {:ok, max_turns} <- parse_pos_int(env, "RAXOL_MAX_TURNS"),
          {:ok, max_cost} <- parse_pos_float(env, "RAXOL_MAX_COST_USD"),
          {:ok, rate_in} <- parse_pos_float(env, "RAXOL_COST_PER_MTOK_IN"),
          {:ok, rate_out} <- parse_pos_float(env, "RAXOL_COST_PER_MTOK_OUT"),
          :ok <- check_cost_enforceable(max_cost, rate_in, rate_out) do
       {:ok,
        %__MODULE__{
-         active?: env["RAXOL_PROFILE"] == "benchmark",
-         backend: backend,
-         model: model,
          max_turns: max_turns,
          max_cost_usd: max_cost,
          cost_per_mtok_in: rate_in,
-         cost_per_mtok_out: rate_out,
-         trajectory_path: blank_to_nil(env["RAXOL_TRAJECTORY_PATH"])
+         cost_per_mtok_out: rate_out
        }}
     end
   end
@@ -167,33 +141,6 @@ defmodule Raxol.Agent.BenchmarkProfile do
   end
 
   # -- Parsing ---------------------------------------------------------------
-
-  defp parse_model(nil), do: {:ok, nil, nil}
-  defp parse_model(""), do: {:ok, nil, nil}
-
-  defp parse_model(value) do
-    case String.split(value, "/", parts: 2) do
-      [provider, model] when provider != "" and model != "" ->
-        resolve_backend(provider, model)
-
-      _ ->
-        {:error, "RAXOL_MODEL must be provider/model (got #{inspect(value)})"}
-    end
-  end
-
-  defp resolve_backend(provider, model) do
-    supported = Raxol.Agent.Backend.Selector.supported_backends()
-
-    case Enum.find(supported, &(Atom.to_string(&1) == provider)) do
-      nil ->
-        list = Enum.map_join(supported, ", ", &Atom.to_string/1)
-
-        {:error, "RAXOL_MODEL provider #{inspect(provider)} unknown; supported: #{list}"}
-
-      backend ->
-        {:ok, backend, model}
-    end
-  end
 
   defp parse_pos_int(env, key) do
     case blank_to_nil(env[key]) do

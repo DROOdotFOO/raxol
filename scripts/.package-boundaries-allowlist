@@ -10,7 +10,6 @@
 # the package runs without that tree. Remove an entry when the site is fixed
 # (module moved into the owning package, implementation injected via
 # application config, or reference deleted).
-packages/raxol_agent/lib/raxol/agent/code/cost_ledger.ex	Raxol.Payments.Ledger	raxol_payments
 packages/raxol_agent/lib/raxol/agent/scheduler/delivery.ex	Raxol.Gateway.Delivery	raxol_gateway
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.BarChart	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.LineChart	raxol
