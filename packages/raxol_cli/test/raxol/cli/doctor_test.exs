@@ -161,6 +161,23 @@ defmodule Raxol.CLI.DoctorTest do
   # CLI, and clear every variable a provider could resolve from, so the block
   # reflects only what a test writes.
   defp isolate_provider_environment(_context) do
+    dir = private_tmp_dir!()
+    store = Path.join(dir, "providers.json")
+    saved = Map.new(managed_variables(), &{&1, System.get_env(&1)})
+
+    Enum.each(Map.keys(saved), &System.delete_env/1)
+    System.put_env("RAXOL_PROVIDERS", store)
+    System.put_env("PATH", path_without_op(saved["PATH"] || ""))
+
+    on_exit(fn ->
+      restore_environment(saved)
+      File.rm_rf!(dir)
+    end)
+
+    %{store: store}
+  end
+
+  defp private_tmp_dir! do
     dir =
       Path.join(
         System.tmp_dir!(),
@@ -169,34 +186,23 @@ defmodule Raxol.CLI.DoctorTest do
 
     File.mkdir_p!(dir)
     File.chmod!(dir, 0o700)
-    store = Path.join(dir, "providers.json")
+    dir
+  end
 
+  defp managed_variables do
     provider_variables =
       Enum.flat_map(Catalog.entries(), fn entry ->
         ["RAXOL_#{entry.id |> to_string() |> String.upcase()}_OP" | entry.env_keys]
       end)
 
-    variables =
-      ["RAXOL_PROVIDERS", "PATH", "__BURRITO", "AI_API_KEY" | provider_variables]
+    ["RAXOL_PROVIDERS", "PATH", "__BURRITO", "AI_API_KEY" | provider_variables]
+  end
 
-    saved = Map.new(variables, &{&1, System.get_env(&1)})
-
-    Enum.each(provider_variables, &System.delete_env/1)
-    System.delete_env("AI_API_KEY")
-    System.delete_env("__BURRITO")
-    System.put_env("RAXOL_PROVIDERS", store)
-    System.put_env("PATH", path_without_op(saved["PATH"] || ""))
-
-    on_exit(fn ->
-      Enum.each(saved, fn
-        {name, nil} -> System.delete_env(name)
-        {name, value} -> System.put_env(name, value)
-      end)
-
-      File.rm_rf!(dir)
+  defp restore_environment(saved) do
+    Enum.each(saved, fn
+      {name, nil} -> System.delete_env(name)
+      {name, value} -> System.put_env(name, value)
     end)
-
-    %{store: store}
   end
 
   defp path_without_op(path) do
