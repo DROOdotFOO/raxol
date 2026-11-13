@@ -32,7 +32,7 @@ mix new my_app && cd my_app
 # mix.exs: pick what you need
 {:raxol, "~> 2.7"}         # Full framework (TUI + rendering + widgets)
 {:raxol_agent, "~> 2.7"}   # Agent framework only (teams, strategies, streaming)
-{:raxol_mcp, "~> 2.7"}     # MCP server + tool derivation only
+{:raxol_mcp, "~> 2.8"}     # MCP server + tool derivation only
 ```
 
 ## What you get
@@ -163,7 +163,7 @@ Raxol.Headless.send_key(session, "q")
 |-------------|-------------|
 | Build a TUI app | `{:raxol, "~> 2.7"}` |
 | Build an AI agent | `{:raxol_agent, "~> 2.7"}` |
-| Serve MCP tools | `{:raxol_mcp, "~> 2.7"}` |
+| Serve MCP tools | `{:raxol_mcp, "~> 2.8"}` |
 | Render in LiveView | `{:raxol_liveview, "~> 2.7"}` |
 | Add agent payments | `{:raxol_payments, "~> 0.3"}` |
 | Use sensor fusion | `{:raxol_sensor, "~> 2.7"}` (zero deps) |

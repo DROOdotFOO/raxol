@@ -58,7 +58,7 @@ defmodule RaxolWeb3.MixProject do
       # ships a build whose dead backends are retried on every call. Its own
       # runtime dependencies are `raxol_core` and `jason`, so it costs one
       # package.
-      raxol_dep(:raxol_mcp, "~> 2.7", "../raxol_mcp"),
+      raxol_dep(:raxol_mcp, "~> 2.8", "../raxol_mcp"),
       {:mint, "~> 1.8"},
       {:castore, "~> 1.0"},
       # ADR-0040 decision 3: FX figures are parsed with `floats: :decimals`, so

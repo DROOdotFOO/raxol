@@ -77,7 +77,7 @@ defmodule RaxolConsole.MixProject do
       # messaging gateway (channels + per-chat sessions) are the boot substrate;
       # raxol_earn is the ACP package format + seller/registration seam.
       raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent"),
-      raxol_dep(:raxol_gateway, "~> 0.1", "../raxol_gateway"),
+      raxol_dep(:raxol_gateway, "~> 0.2", "../raxol_gateway"),
       raxol_dep(:raxol_earn, "~> 0.2", "../raxol_earn"),
       {:jason, "~> 1.4"},
 

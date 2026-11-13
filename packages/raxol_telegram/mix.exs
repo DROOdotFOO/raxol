@@ -84,7 +84,7 @@ defmodule RaxolTelegram.MixProject do
     if hex_package?() do
       []
     else
-      [raxol_dep(:raxol_gateway, "~> 0.1", path, optional: true)]
+      [raxol_dep(:raxol_gateway, "~> 0.2", path, optional: true)]
     end
   end
 

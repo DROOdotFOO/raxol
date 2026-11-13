@@ -189,17 +189,17 @@ raxol-cli-channel latest.json --clobber`.
 
 ## Package-specific manual gates
 
-### `raxol_gateway` 0.1.1
+### `raxol_gateway` 0.2.0
 
 Nothing external blocks it. `raxol_speech` 0.2.1 and the 2.7 framework line are
 already on Hex, so its registry requirements resolve.
 
 Metadata, license, changelog, docs entry point, and the tarball are in place:
-`HEX_BUILD=1 mix hex.build` produces `raxol_gateway-0.1.1.tar` carrying `lib/`,
+`HEX_BUILD=1 mix hex.build` produces `raxol_gateway-0.2.0.tar` carrying `lib/`,
 `.formatter.exs`, `mix.exs`, `README.md`, `LICENSE.md`, and `CHANGELOG.md`.
 
 Its only required dependencies are `raxol_core "~> 2.7"`, `telemetry`, and
-`jason`. Everything else (`raxol`, `raxol_agent`, `raxol_speech`, `gen_smtp`,
+`jason`. Everything else (`raxol`, `raxol_speech`, `gen_smtp`,
 `mint_web_socket`, `req`) is optional and gated at runtime, so a consumer who
 wants only the Telegram or in-memory adapter pulls nothing extra.
 
