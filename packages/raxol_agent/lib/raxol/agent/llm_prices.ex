@@ -2,8 +2,8 @@ defmodule Raxol.Agent.LlmPrices do
   @moduledoc """
   A small static price table: USD per million tokens, by provider model
   family, for estimating the cost of a turn on a well-known hosted model when
-  the `RAXOL_COST_PER_MTOK_IN/OUT` env rates are not set. It has no caller in
-  the tree.
+  the `RAXOL_COST_PER_MTOK_IN/OUT` env rates are not set. It has no non-test
+  caller.
 
   Prices drift; these are approximate list prices, matched by model-name
   prefix (longest prefix wins). The env rates always take precedence,

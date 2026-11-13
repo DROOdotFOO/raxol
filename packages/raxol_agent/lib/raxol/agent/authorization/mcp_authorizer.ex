@@ -6,7 +6,7 @@ defmodule Raxol.Agent.Authorization.McpAuthorizer do
 
   It lives on the `raxol_agent` side, so `raxol_mcp` never has to depend on
   `raxol_agent` (which would be a dependency cycle). The MCP server owns only
-  the seam; this fills it with the engine. Nothing in the tree installs it: a
+  the seam; this fills it with the engine. No non-test code installs it: a
   host passes it to `Raxol.MCP.Server.start_link/1`.
 
   ## Usage

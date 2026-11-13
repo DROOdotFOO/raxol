@@ -227,14 +227,14 @@ tested, and none is in the path of a session started by `raxol acp` or
   (`:interrupt_signaled`, `:interrupt_waited`, `:interrupt_killed` /
   `:interrupt_kill_failed`, `:turn_canceled`). BEAM-native `Port.close` /
   `Process.exit` are insufficient against a wedged child, which is why the OS
-  path exists. Nothing in the tree calls `interrupt/3`.
+  path exists. `interrupt/3` has no non-test caller.
 - **Steer as compare-and-swap.** `Raxol.Agent.Steer` carries an
   `expected_turn_id`; a stale-turn rejection changes nothing and is
   non-journaled. Interrupt and steer are deliberately asymmetric: interrupt is
   fire-and-forget and its acknowledgment is the event stream; steer returns a
   synchronous typed decision, because a silently-dropped steer would leave the
   surface unable to tell "accepted" from "lost" (see `Raxol.Harness.SessionLane`).
-  Nothing in the tree calls `Steer.resolve/2`.
+  `Steer.resolve/2` has no non-test caller.
 - **Atomic spend and blast-radius gates.** `Raxol.Agent.SpendGate` journals
   `reserve → call → settle` per spend-bearing call, correlated by an opaque
   `cost_ref`, and fails closed: no reserve, no call. raxol_agent does not
@@ -244,7 +244,7 @@ tested, and none is in the path of a session started by `raxol acp` or
   `Raxol.Agent.SpendGate.JournalWriteError` instead of dropping a record on
   irreversible spend state. It runs only where a host puts
   `Raxol.Agent.McpSpendHook` in a context's `:tool_call_hooks` beside a
-  `:spend_gate`; nothing in the tree does.
+  `:spend_gate`; no non-test code does.
   `Raxol.Agent.Authorization.BlastRadiusGate` gates write and destructive
   tools the same way (locked by default, escalate to a human, live approval
   state rebuildable by a fold over `approval_decided` events); it has no
