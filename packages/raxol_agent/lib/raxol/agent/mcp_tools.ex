@@ -18,9 +18,10 @@ defmodule Raxol.Agent.McpTools do
   This process registers the tools with `Raxol.MCP.Registry` and owns them,
   so they leave the registry with it. Whether it registers is decided once
   per BEAM, when `Raxol.Agent.McpTools` first starts: it does if the registry
-  is running then (the `:mcp` startup mode, where the MCP tree is up before
-  `:raxol_agent` starts) and `config :raxol_agent, :mcp_tools` is not `false`.
-  A restart repeats that decision.
+  is running then (the `:mcp` and `:full` startup modes, where `:raxol` has
+  the MCP tree up before `:raxol_agent` starts) and
+  `config :raxol_agent, :mcp_tools` is not `false`. A restart repeats that
+  decision.
 
   ## Spawnable apps
 

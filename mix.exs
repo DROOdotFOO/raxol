@@ -616,9 +616,6 @@ defmodule Raxol.MixProject do
         "UI Components": [
           ~r/^Raxol\.UI\..*/
         ],
-        "AI Agents": [
-          ~r/^Raxol\.Agent.*/
-        ],
         "Distributed Swarm": [
           ~r/^Raxol\.Swarm\..*/
         ],
@@ -663,7 +660,6 @@ defmodule Raxol.MixProject do
         Raxol.Core,
         Raxol.Terminal,
         Raxol.UI,
-        Raxol.Agent,
         Raxol.Swarm,
         Raxol.Sensor,
         Raxol.Adaptive,
