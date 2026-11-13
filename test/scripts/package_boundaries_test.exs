@@ -295,7 +295,44 @@ defmodule Raxol.PackageBoundariesTest do
            docs: [nest_modules_by_prefix: [Raxol.Core, Raxol.Agent]]
          ]
      end
-     """, "Raxol.Agent", "value"}
+     """, "Raxol.Agent", "value"},
+    {"application atoms in a word sigil", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Enum.each(~w(raxol_agent raxol_payments)a, &Application.load/1)
+     end
+     """, "raxol_payments", "app"},
+    {"an application atom made from a string", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Application.ensure_all_started(String.to_atom("raxol_agent"))
+     end
+     """, "raxol_agent", "app"},
+    {"dependencies built from a word sigil", "packages/raxol_core/mix.exs",
+     ~S"""
+     defmodule RaxolCore.MixProject do
+       use Mix.Project
+       def project, do: [app: :raxol_core, version: "0.1.0", deps: deps()]
+
+       defp deps do
+         for app <- ~w(raxol_agent raxol_payments)a,
+             do: {app, path: "../#{app}", optional: true}
+       end
+     end
+     """, "raxol_agent", "app"},
+    {"a dependency whose atom is made from a string",
+     "packages/raxol_core/mix.exs",
+     ~S"""
+     defmodule RaxolCore.MixProject do
+       use Mix.Project
+       def project, do: [app: :raxol_core, version: "0.1.0", deps: deps()]
+
+       defp deps do
+         for name <- ["raxol_earn"],
+             do: {String.to_atom(name), path: Path.join("..", name)}
+       end
+     end
+     """, "raxol_earn", "app"}
   ]
 
   # {label, file, source}
@@ -363,6 +400,13 @@ defmodule Raxol.PackageBoundariesTest do
      defmodule Raxol.Exempt do
        def f, do: Application.get_env(:raxol_core, :x)
        def g, do: Application.get_env(:raxol_gateway, :x)
+     end
+     """},
+    {"application names that only resemble an agent one", "lib/raxol/exempt.ex",
+     ~S"""
+     defmodule Raxol.Exempt do
+       def f, do: ~w(raxol_core raxol_agents raxol_clients my_raxol_cli)a
+       def g, do: String.to_atom("raxol_earnings")
      end
      """},
     {"agent application atoms in the release catalog",

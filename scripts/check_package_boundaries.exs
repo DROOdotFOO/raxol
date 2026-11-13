@@ -67,8 +67,10 @@
 #   * a module that only agent trees define, while those trees are here.
 #     `Raxol.CLI.*` is the reason: the root and raxol_cli both define modules
 #     under it, so no prefix describes the agent's half;
-#   * an agent application atom (`:raxol_agent`, ...). In a mix.exs that is a
-#     dependency, `optional:` and `only:` included.
+#   * an agent application's name: the atom (`:raxol_agent`), or the whole
+#     word in a string or sigil (`~w(raxol_agent)a`,
+#     `String.to_atom("raxol_agent")`, `"../raxol_agent"`). In a mix.exs that
+#     is a dependency, `optional:` and `only:` included.
 #
 # The first and third go by name, not by owner, so they hold once the agent
 # trees are gone and nothing here defines those names. Every form the first
@@ -76,7 +78,7 @@
 # sigil (`"Raxol.Agent.Session"`, with or without `Elixir.`, and
 # `~r/^Raxol\.Agent\./`), an atom spelled
 # as a module name without the `Elixir.` prefix (`:"Raxol.Agent.Registry"`),
-# and the application atoms. Comments are not in the AST. The text of
+# and the application names. Comments are not in the AST. The text of
 # `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated` is skipped;
 # code interpolated into it is not. A name assembled at run time
 # (`Module.concat(base, name)`) is invisible to both rules.
@@ -776,27 +778,49 @@ defmodule PackageBoundaries do
   end
 
   # Doc text is prose; a string anywhere else may be handed to
-  # `Module.concat/1`, `String.to_existing_atom/1` or a registry. The dots may
-  # be escaped, as a regex over module names writes them.
+  # `Module.concat/1`, `String.to_atom/1` or a registry, and a word sigil may
+  # be a list of atoms (`~w(raxol_agent)a`).
   defp walk(text, %{doc: false} = env, acc) when is_binary(text) do
-    if String.contains?(text, ".") do
-      acc =
-        ~r/(?<![\w.])(?:Elixir\\?\.)?([A-Z]\w*(?:\\?\.[A-Z]\w*)+)/
-        |> Regex.scan(text, capture: :all_but_first)
-        |> Enum.reduce(acc, fn [mod], acc ->
-          record(acc, String.replace(mod, "\\", ""), [line: env.line], :string)
-        end)
+    acc =
+      Enum.reduce(text_refs(text), acc, fn {name, kind}, acc ->
+        record(acc, name, [line: env.line], kind)
+      end)
 
-      {env, acc}
-    else
-      {env, acc}
-    end
+    {env, acc}
   end
 
   defp walk(node, env, acc), do: walk_children(node, env, acc)
 
   defp module_name?(text),
     do: Regex.match?(~r/^[A-Z]\w*(?:\.[A-Z]\w*)+$/, text)
+
+  # [{name, kind}] for what a piece of text names: modules, and agent
+  # applications.
+  defp text_refs(text), do: module_refs(text) ++ app_refs(text)
+
+  # The dots may be escaped, as a regex over module names writes them.
+  defp module_refs(text) do
+    if String.contains?(text, ".") do
+      ~r/(?<![\w.])(?:Elixir\\?\.)?([A-Z]\w*(?:\\?\.[A-Z]\w*)+)/
+      |> Regex.scan(text, capture: :all_but_first)
+      |> Enum.map(fn [mod] -> {String.replace(mod, "\\", ""), :string} end)
+    else
+      []
+    end
+  end
+
+  # An agent application's name as a whole word: `raxol_agent` in
+  # `"../raxol_agent/lib"`, not in `"raxol_agents"`.
+  defp app_refs(text) do
+    if String.contains?(text, "raxol_") do
+      "(?<!\\w)(#{Enum.join(@agent_trees, "|")})(?!\\w)"
+      |> Regex.compile!()
+      |> Regex.scan(text, capture: :all_but_first)
+      |> Enum.map(fn [app] -> {app, :app} end)
+    else
+      []
+    end
+  end
 
   defp walk_children({form, meta, args}, env, acc) do
     env = at(env, meta)
