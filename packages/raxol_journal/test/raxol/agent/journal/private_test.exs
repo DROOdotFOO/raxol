@@ -117,4 +117,34 @@ defmodule Raxol.Agent.Journal.PrivateTest do
       :ok = FileStore.close(j)
     end
   end
+
+  describe "the refusal names the directory and the rule it failed" do
+    # The owner rule needs a directory another account owns: `/usr`, unless this
+    # account owns it (root does).
+    @foreign_dir "/usr"
+    @foreign? match?({:unix, _}, :os.type()) and
+                match?({:ok, %File.Stat{type: :directory}}, File.lstat(@foreign_dir)) and
+                Integer.to_string(File.stat!(@foreign_dir).uid) !=
+                  "id" |> System.cmd(["-u"]) |> elem(0) |> String.trim()
+
+    test "a group-writable directory is {:group_or_other_writable, mode}",
+         %{base: base, session: session} do
+      dir = Path.join(base, session)
+      File.mkdir_p!(dir)
+      File.chmod!(dir, 0o770)
+
+      assert FileStore.open(session, base_dir: base, private: true) ==
+               {:error, {:untrusted_dir, {dir, {:group_or_other_writable, 0o770}}}}
+    end
+
+    @tag skip: !@foreign? && "this account owns #{@foreign_dir}"
+    test "another account's directory is {:not_owned, uid}", %{session: session} do
+      owner = File.stat!(@foreign_dir).uid
+
+      assert FileStore.open(session, base_dir: @foreign_dir, private: true) ==
+               {:error, {:untrusted_dir, {@foreign_dir, {:not_owned, owner}}}}
+
+      refute File.exists?(Path.join(@foreign_dir, session))
+    end
+  end
 end

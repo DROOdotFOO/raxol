@@ -41,15 +41,19 @@ defmodule Raxol.Agent.Journal.FileStore do
   writes it: the session directory, `journal/` and `snapshots/` are 0700 and
   every file the Writer creates is 0600 before a byte is written to it. The
   base and session directories must be real directories (not symlinks), owned
-  by this account and writable by no one else (the owner and mode rules of
-  `Raxol.Agent.OperatorFile.owned_unshared/1`); otherwise the open is refused
+  by this account and writable by no one else; otherwise the open is refused
   with `{:error, {:untrusted_dir, {path, reason}}}` and nothing is created.
+  `reason` is `:symlink`, `{:not_a_directory, type}`, `{:stat_failed, posix}`,
+  `{:not_owned, uid}` (the directory's owner) or
+  `{:group_or_other_writable, mode}`. A Windows host reports neither a uid nor
+  POSIX mode bits, so the owner and mode rules pass there.
   """
 
   @behaviour Raxol.Agent.Journal
 
+  import Bitwise, only: [band: 2]
+
   alias Raxol.Agent.Journal.FileStore.{Reader, Writer}
-  alias Raxol.Agent.OperatorFile
 
   @enforce_keys [:session_id, :dir, :writer]
   defstruct [:session_id, :dir, :writer, owner?: true]
@@ -63,6 +67,7 @@ defmodule Raxol.Agent.Journal.FileStore do
 
   @env_base "RAXOL_SESSIONS_DIR"
   @default_base "~/.raxol/sessions"
+  @group_other_write 0o022
 
   # A session_id is also the on-disk directory name, so it must not be able to
   # escape the base dir. Allow only a conservative filename charset (no `/`, no
@@ -73,9 +78,9 @@ defmodule Raxol.Agent.Journal.FileStore do
   Resolve `session_id` to its on-disk session directory under the configured
   base (`:base_dir` option, `$RAXOL_SESSIONS_DIR`, or `~/.raxol/sessions`).
 
-  This is the single resolution point `open/2` and the read-side reattach path
-  (`Raxol.Agent.Reattach.FileReader`) share, so a session opened for writing and
-  one reattached read-side always name the same directory.
+  This is the single resolution point `open/2` and the read-side functions
+  share, so a session opened for writing and one read without a Writer always
+  name the same directory.
   """
   @spec session_dir(String.t(), keyword()) :: Path.t()
   def session_dir(session_id, opts \\ []) when is_binary(session_id) do
@@ -149,10 +154,8 @@ defmodule Raxol.Agent.Journal.FileStore do
     # `{:error, reason}` return. A raising `Writer.init` (e.g. the session dir
     # path blocked by a regular file, or an unwritable base) exits ABNORMALLY,
     # and an abnormal init exit kills a non-trapping linked caller outright —
-    # so without this check the documented `{:error, _}` open contract (and
-    # EmitBridge's fail-closed `:journal_open_failed` arm) never fires for
-    # real filesystem failures. (Found by the I1 `:open_fail` fault site in
-    # test/invariants/identity_invariants_test.exs.)
+    # so without this check the documented `{:error, _}` open contract never
+    # fires for real filesystem failures.
     with :ok <- preflight(session_id, dir, opts) do
       writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
 
@@ -411,11 +414,57 @@ defmodule Raxol.Agent.Journal.FileStore do
   defp tighten(path, true), do: chmod_700(path)
   defp tighten(_path, false), do: :ok
 
-  defp owned_unshared(path, stat) do
-    case OperatorFile.owned_unshared(stat) do
-      :ok -> :ok
-      {:error, reason} -> untrusted(path, reason)
+  # The owner and mode rule: the directory belongs to the uid this VM runs as
+  # and carries no group- or other-write bit. Windows reports neither a
+  # meaningful uid nor POSIX mode bits through File.Stat, so both pass there.
+  defp owned_unshared(path, %File.Stat{uid: dir_uid, mode: mode}) do
+    permissions = band(mode, 0o777)
+    owner = uid()
+
+    cond do
+      match?({:win32, _}, :os.type()) ->
+        :ok
+
+      owner != :unknown and dir_uid != owner ->
+        untrusted(path, {:not_owned, dir_uid})
+
+      band(permissions, @group_other_write) != 0 ->
+        untrusted(path, {:group_or_other_writable, permissions})
+
+      true ->
+        :ok
     end
+  end
+
+  # The BEAM exposes no `getuid`, so ask the system once and remember the
+  # answer. `:unknown` (Windows, or an image with no `id`) drops the ownership
+  # half of the rule; the mode half still applies.
+  defp uid do
+    case :persistent_term.get({__MODULE__, :uid}, :unset) do
+      :unset ->
+        discovered = discover_uid()
+        :persistent_term.put({__MODULE__, :uid}, discovered)
+        discovered
+
+      discovered ->
+        discovered
+    end
+  end
+
+  defp discover_uid do
+    case System.cmd("id", ["-u"], stderr_to_stdout: true) do
+      {out, 0} ->
+        case Integer.parse(String.trim(out)) do
+          {uid, ""} -> uid
+          _ -> :unknown
+        end
+
+      _nonzero ->
+        :unknown
+    end
+  rescue
+    # No `id` on PATH at all: System.cmd/3 raises rather than returning.
+    _ -> :unknown
   end
 
   defp mkdir(path) do
