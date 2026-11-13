@@ -28,7 +28,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | [`raxol_payments`](https://hex.pm/packages/raxol_payments) | 0.3 here, unpublished; Hex has 0.2 | Agent payments, Xochi cross-chain, stealth  |
 | `raxol_earn` (pre-alpha)                                    | `path: "packages/raxol_earn"`  | Virtuals Agent Commerce Protocol (seller)   |
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
-| `raxol_gateway` (pre-alpha)                                | `path: "packages/raxol_gateway"`  | Unified messaging gateway (multi-platform) |
+| `raxol_gateway`                                            | 0.x, published on its own, outside the train | Unified messaging gateway (multi-platform) |
 | `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command (`acp`, `mcp`, `doctor`, `update`, `playground`, `new`), packaged as a self-contained Burrito binary |
 | `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
 | `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
