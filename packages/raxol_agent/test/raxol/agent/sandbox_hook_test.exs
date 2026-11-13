@@ -2,9 +2,8 @@ defmodule Raxol.Agent.SandboxHookTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.Directive
-  alias Raxol.Agent.Sandbox.Shell
+  alias Raxol.Agent.Sandbox.{Async, SendAgent, Shell}
   alias Raxol.Agent.SandboxHook
-  alias Raxol.Agent.Test.DenyAction
 
   defmodule AllowAgent do
     def sandbox, do: []
@@ -18,8 +17,8 @@ defmodule Raxol.Agent.SandboxHookTest do
     def sandbox do
       [
         Shell.denylist(["rm"]),
-        %DenyAction{action: :send_agent, deny?: &(&1.target_id == :bad_actor)},
-        %DenyAction{action: :async}
+        SendAgent.deny([:bad_actor]),
+        Async.deny()
       ]
     end
   end
@@ -92,13 +91,13 @@ defmodule Raxol.Agent.SandboxHookTest do
                  ctx(MixedAgent)
                )
 
-      assert {:deny, {:denied, :send_agent}} =
+      assert {:deny, {:send_agent_denied, _, :bad_actor}} =
                SandboxHook.pre_execute(
                  Directive.send_agent(:bad_actor, :msg),
                  ctx(MixedAgent)
                )
 
-      assert {:deny, {:denied, :async}} =
+      assert {:deny, :async_denied} =
                SandboxHook.pre_execute(
                  Directive.async(fn _ -> :ok end),
                  ctx(MixedAgent)
@@ -190,7 +189,7 @@ defmodule Raxol.Agent.SandboxHookTest do
 
     test "the program name is bounded in bytes, not graphemes" do
       # 40 two-byte graphemes: under a grapheme cap of 64, over the 64-byte
-      # identifier bound.
+      # identifier bound `ThreadLogRouter` enforces on the persisted payload.
       program = String.duplicate("\u00e9", 40)
       assert byte_size(program) == 80
 

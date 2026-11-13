@@ -1,8 +1,7 @@
 defmodule Raxol.Agent.SandboxTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.Agent.Sandbox.{Chain, Shell}
-  alias Raxol.Agent.Test.DenyAction
+  alias Raxol.Agent.Sandbox.{Async, Chain, SendAgent, Shell}
 
   @ctx %{agent_id: :test, agent_module: nil}
 
@@ -54,11 +53,11 @@ defmodule Raxol.Agent.SandboxTest do
     test "abstaining sandboxes pass through to applicable ones" do
       chain = [
         Shell.deny_all(),
-        %DenyAction{action: :send_agent, deny?: &(&1.target_id != :worker)},
-        %DenyAction{action: :async}
+        SendAgent.allow_only([:worker]),
+        Async.deny()
       ]
 
-      # :send_agent action -- Shell abstains, the send_agent sandbox allows.
+      # :send_agent action -- Shell abstains, SendAgent allows.
       assert :ok =
                Chain.authorize(
                  chain,
@@ -67,8 +66,8 @@ defmodule Raxol.Agent.SandboxTest do
                  @ctx
                )
 
-      # :async action -- Shell and the send_agent sandbox abstain, async denies.
-      assert {:deny, {:denied, :async}} =
+      # :async action -- Shell + SendAgent abstain, Async denies.
+      assert {:deny, :async_denied} =
                Chain.authorize(
                  chain,
                  :async,
@@ -84,7 +83,8 @@ defmodule Raxol.Agent.SandboxTest do
     test "multi-dimensional composition: each dimension policed independently" do
       chain = [
         Shell.denylist(["rm", "dd"]),
-        %DenyAction{action: :send_agent, deny?: &(&1.target_id == :bad_actor)}
+        SendAgent.deny([:bad_actor]),
+        Async.allow()
       ]
 
       # Allowed across all dimensions.
@@ -102,8 +102,8 @@ defmodule Raxol.Agent.SandboxTest do
       assert {:deny, {:shell_denied, _, _}} =
                Chain.authorize(chain, :shell, %{command: "rm -rf /"}, @ctx)
 
-      # The send_agent sandbox hits.
-      assert {:deny, {:denied, :send_agent}} =
+      # SendAgent deny hits.
+      assert {:deny, {:send_agent_denied, _, :bad_actor}} =
                Chain.authorize(
                  chain,
                  :send_agent,

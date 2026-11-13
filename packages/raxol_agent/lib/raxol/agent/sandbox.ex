@@ -10,10 +10,14 @@ defprotocol Raxol.Agent.Sandbox do
   `Raxol.Agent.Sandbox.authorize_chain/4`) and short-circuiting on
   the first `:deny` is the canonical composition.
 
-  ## Built-in dimension
+  ## Built-in dimensions
 
   - `Raxol.Agent.Sandbox.Shell` -- gates `Raxol.Agent.Directive.Shell`
     via allowlist / denylist / `deny_all`.
+  - `Raxol.Agent.Sandbox.SendAgent` -- gates
+    `Raxol.Agent.Directive.SendAgent` via allow_only / deny.
+  - `Raxol.Agent.Sandbox.Async` -- gates
+    `Raxol.Agent.Directive.Async` (wholesale allow / deny).
 
   Filesystem, Network, and Resource dimensions are planned
   but deferred to a follow-up because their enforcement layer

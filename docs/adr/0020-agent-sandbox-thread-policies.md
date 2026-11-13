@@ -6,7 +6,7 @@ Accepted, 2026-07-22 (implemented in `Raxol.Agent.Sandbox`, `Raxol.Agent.ThreadL
 
 Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.ContextCompactor` and the `compaction_config/0` callback are removed. The passages below on how the ThreadLog interacts with compaction describe code that no longer exists.
 
-Narrowed, 2026-11-13: `Raxol.Agent.Policy` with its `Retry`, `Timeout` and `Cache` structs, `PolicyApplier`, `Raxol.Agent.Cache` and its adapters, `ThreadLogRouter`, `PermissionHook`, `Sandbox.SendAgent` and `Sandbox.Async` are removed. What stands is the `Raxol.Agent.Sandbox` protocol with `Sandbox.Shell`, and `Raxol.Agent.ThreadLog` with its Ets and Postgrex adapters.
+Narrowed, 2026-11-13: `Raxol.Agent.Policy` with its `Retry`, `Timeout` and `Cache` structs, `PolicyApplier`, `Raxol.Agent.Cache` and its adapters, `ThreadLogRouter` and `PermissionHook` are removed. What stands is the `Raxol.Agent.Sandbox` protocol with its `Shell`, `SendAgent` and `Async` dimensions, and `Raxol.Agent.ThreadLog` with its Ets and Postgrex adapters.
 
 ## Context
 
