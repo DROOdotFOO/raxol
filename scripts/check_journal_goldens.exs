@@ -23,13 +23,12 @@
 #      is a review event, not a silent one.
 #
 # Deliberately dependency-free (OTP `:json`, no Mix project load): it has to
-# run in the per-PR `format` job, where `raxol_agent` -- which is a local gate,
-# not a per-PR CI package -- is never compiled.
+# run in the per-PR `format` job, where no package is compiled.
 
 repo_root = Path.expand("..", __DIR__)
-package = Path.join(repo_root, "packages/raxol_agent")
+package = Path.join(repo_root, "packages/raxol_journal")
 writer_path = Path.join(package, "lib/raxol/agent/journal/file_store/writer.ex")
-goldens_dir = Path.join(package, "test/invariants/fixtures/golden")
+goldens_dir = Path.join(package, "priv/golden")
 manifest_path = Path.join(goldens_dir, "MANIFEST.json")
 freezer = "packages/raxol_agent/scripts/freeze_golden_journal.exs"
 

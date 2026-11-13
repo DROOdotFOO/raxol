@@ -17,6 +17,13 @@ defmodule Raxol.Release.PackageCheckTest do
       refute :raxol_gateway in apps
     end
 
+    test "publishes raxol_journal before raxol_agent, which depends on it" do
+      apps = Enum.map(PackageCheck.public_packages(), & &1.app)
+
+      assert Enum.find_index(apps, &(&1 == :raxol_journal)) <
+               Enum.find_index(apps, &(&1 == :raxol_agent))
+    end
+
     test "keeps --only in caller order" do
       assert {:ok, packages} =
                PackageCheck.select_packages(

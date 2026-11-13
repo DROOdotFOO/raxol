@@ -588,11 +588,14 @@ jobs:
         # called the real tb_init() because the suite never set
         # :terminal_test_mode. The other five join already clean.
         #
+        # raxol_journal's suite holds the journal's storage invariants and its
+        # cross-process writer-lock tests.
+        #
         # Keep on ONE line. test/raxol/formatter_delegation_test.exs parsed it
         # with `^\s*package: \[...\]` until #906 made that test enumerate
         # packages/*/mix.exs instead. Nothing reads it now; one line keeps the
         # whole gated set on the line a grep for any one package lands on.
-        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_web3, raxol_broker, raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor, raxol_speech, raxol_watch]
+        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_web3, raxol_broker, raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor, raxol_speech, raxol_watch, raxol_journal]
 
     steps:
       - uses: actions/checkout@v7
@@ -702,9 +705,9 @@ jobs:
       #
       # :skip_on_ci is the repo-wide "this needs a real workstation" marker, and
       # the root suite honours it whenever SKIP_TERMBOX2_TESTS is set -- which is
-      # workflow-global here. raxol_agent's test_helper never wired it up, so its
-      # one tagged test (a chmod-0500 write-failure fault in the journal Writer)
-      # was inert. Excluding it here applies the convention rather than inventing
+      # workflow-global here. raxol_journal's test_helper does not wire it up, so
+      # its one tagged test (a chmod-0500 write-failure fault in the journal
+      # Writer) would run. Excluding it here applies the convention rather than inventing
       # a package-local one. raxol_terminal's one tagged module (the IOTerminal
       # fallback, which needs the termbox2 NIF absent) is excluded by its own
       # test_helper as well.

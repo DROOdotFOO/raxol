@@ -81,7 +81,7 @@ while IFS= read -r file; do
   check_file "$file"
 done < <(git ls-files '*.md')
 
-# Dependency-graph drift across the 18 lockfiles.
+# Dependency-graph drift across the lockfiles.
 #
 # The sweep above compares only sibling `:raxol_*, "~> X.Y"` CONSTRAINTS, which
 # is why nothing had ever reported that ex_doc was pinned at four different
