@@ -216,7 +216,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 | ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |
 | **TEA Command**  | A side effect returned from `update/2`. Tagged tuple: `:async`, `:shell`, `:send_agent`, etc.      | effect, action, side effect    |
 | **Agent Action** | An LLM-callable tool. Implements the `Raxol.Agent.Action` behaviour.                               | tool, function, skill, command |
-| **Hook**         | A function the framework calls at a defined extension point: CommandHook, SandboxHook, McpHook.    | callback, listener, middleware |
+| **Hook**         | A function the framework calls at an extension point: CommandHook, SandboxHook, McpSpendHook.      | callback, listener, middleware |
 | **Plugin**       | A package that adds Components, themes, hooks, or actions via `use Raxol.Plugin`.                  | extension, addon, mod          |
 
 ### Flagged ambiguities

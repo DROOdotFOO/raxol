@@ -16,7 +16,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 **MCP surface (Phases 8-13):** extracted `raxol_mcp` (server/client/registry, stdio + SSE). Auto-derives tools from the widget tree (16 Component modules implement `ToolProvider`) with a focus/hover lens; `@mcp_exclude` opt-out. Full spec coverage (prompts, logging, completion, notifications, circuit breaker). Resources + ContextTree + StructuredScreenshot + model-projection diffs. Pipe-friendly test harness with functor-law property tests.
 
-**Agent framework:** TEA-based agents, coordinator/worker teams, command hooks, permissions, an MCP client, streams, and SSE. AI cockpit with SSE streaming for 9 backends. Virtual File System (pure-functional in-memory VFS, REPL helpers).
+**Agent framework:** TEA-based agents, coordinator/worker teams, command hooks, sandboxes, and streams. AI cockpit with SSE streaming for 9 backends. Virtual File System (pure-functional in-memory VFS, REPL helpers).
 
 **Skills:** `SKILL.md` skills (agentskills.io format) in a disk-backed `Raxol.Agent.Skills.Store`, exposed to an agent as `skills_list`/`skill_view`/`skill_manage` through `skills_provider/0`.
 

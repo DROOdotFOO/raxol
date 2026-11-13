@@ -11,9 +11,8 @@ defmodule Raxol.Harness.Fixture.Session do
   Every envelope carries two orthogonal positions:
 
     * **`body.id`** — the event's monotonic per-session id, i.e. the
-      journal offset. This is the *seek/identity axis*: `attach`/`seek`
-      commands, replay identity, and dedup/ordering semantics all key
-      off it. Query it with `by_id/2`.
+      journal offset. This is the *identity axis*: replay identity and
+      dedup/ordering semantics key off it. Query it with `by_id/2`.
     * **`offset`** — the 1-based physical line in the fixture file.
       This is the *diagnostic axis*: where in the recorded stream a
       thing sits, what a `DecodeError` points at, what

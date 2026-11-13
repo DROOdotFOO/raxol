@@ -85,10 +85,9 @@ defmodule Raxol.Agent.DoneGate do
     * `[:raxol, :agent, :done_gate, :rejected_evidence]` — a done whose cited
       evidence the gate rejected (metadata carries the `reason`).
 
-  Promoting this to a hard block is the U21-I impl unit, which follows U8 and
-  the refs-citation seam (how an agent names its own evidence offsets). Both
-  remain open: the U21 gating-strength ruling and the wiring itself are
-  undecided.
+  Promoting this to a hard block needs those classes and the refs-citation
+  seam (how an agent names its own evidence offsets). Both remain open, as
+  does the gating strength.
 
   The gate never transitions the turn to done on a rejected claim; the turn
   stays open and the typed error is surfaced.

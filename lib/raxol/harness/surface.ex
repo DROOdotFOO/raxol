@@ -301,11 +301,10 @@ defmodule Raxol.Harness.Surface do
 
   ## Precondition #6 -- command bifurcation (fixture mode = honest UI stubs)
 
-  `:interrupt`/`:steer` are the two commands that cross to the agent lane
-  in the future agent-lane surface (`%Command{}`, `raxol_agent`'s
-  channel). This module has no agent lane by design, so both are
-  rendered as honest, visibly-labeled stubs instead of silently doing
-  nothing OR pretending to act:
+  `:interrupt`/`:steer` are the two commands meant for an agent, and they
+  leave only through `:command_sink`. Without one this module has no
+  agent to reach, so both are rendered as honest, visibly-labeled stubs
+  instead of silently doing nothing OR pretending to act:
 
     * `:interrupt` -- sets a one-frame footer notice ("interrupt requested
       (stub -- no agent lane in fixture mode)"), consumed (cleared) after

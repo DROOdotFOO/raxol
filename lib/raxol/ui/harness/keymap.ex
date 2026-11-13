@@ -56,9 +56,9 @@ defmodule Raxol.UI.Harness.Keymap do
       `$EDITOR`) are in this class, because all three are non-printable
       control keys/chords that can never be part of typed text, and ESC
       in particular must never be swallowed by whatever currently has
-      focus (AD-1: interrupt is a supervised kill now, not a cooperative
-      flag queued behind typing). Ctrl+E is the first `char:`-kind chord
-      in the table -- a `char:` bind that declares `mods:` requires an
+      focus (interrupt must not queue behind typing). Ctrl+E is the first
+      `char:`-kind chord in the table -- a `char:` bind that declares
+      `mods:` requires an
       EXACT modifier match against the normalized event (mirroring the
       `key:`-kind rule below) instead of the printable-char path, which
       is nil under ctrl by design.
@@ -100,8 +100,8 @@ defmodule Raxol.UI.Harness.Keymap do
   An open `Raxol.UI.Harness.OverlayPicker` (hosted by
   `Raxol.Harness.Surface.open_overlay/3`) needs ESC to close ITSELF, not
   fire the global interrupt -- an overlay is transient UI-local state, and
-  a stray ESC-while-picking must never look like a supervised kill of the
-  running turn. `binds/0`'s FIRST entry (`%{key: :escape, command_type:
+  a stray ESC-while-picking must never interrupt the running turn.
+  `binds/0`'s FIRST entry (`%{key: :escape, command_type:
   :overlay_dismiss, guard: :overlay}`) captures exactly that, ahead of the
   `:always`-guarded `%{key: :escape, command_type: :interrupt}` entry
   later in the table -- `resolve/2` walks `@binds` in order and takes the

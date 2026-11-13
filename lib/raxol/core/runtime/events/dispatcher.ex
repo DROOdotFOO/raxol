@@ -47,7 +47,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               # Harness loop vocabulary: the turn currently in flight. Minted at
               # the agent-message dispatch (a prompt = a turn) and stamped onto
               # every event emitted while it is set, so all items within one turn
-              # share a stable turn_id (U6's expected_turn_id CAS depends on it).
+              # share a stable turn_id (`Raxol.Harness.Projection` buckets a
+              # turn's items by it).
               # Cleared back to nil when the turn's closing bracket
               # (turn_completed / error) is emitted — see dispatch_agent_turn/2.
               turn_id: nil,
@@ -648,7 +649,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
         # dispatcher is a single mailbox: by the time an async delta lands the
         # minting turn is closed (turn_id nil'd) or a later turn may be the
         # current one, so an emit-time read would stamp the delta with nil or
-        # with the WRONG turn — poisoning U6's expected_turn_id CAS.
+        # with the WRONG turn.
         emit(
           %{state | turn_id: turn_id},
           :command_result,
@@ -734,8 +735,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # CLEARED (nil) in the state returned from both arms, after the bracket
   # event: a turn_id must never outlive its closing bracket, or any later
   # non-agent event (tick, key, subscription) would emit a durable
-  # `:app_update` attributed to a finished turn AFTER its `turn_completed` —
-  # poisoning U6's `expected_turn_id` CAS.
+  # `:app_update` attributed to a finished turn AFTER its `turn_completed`.
   #
   # NOTE (v0 limitation): turn_completed is emitted when the synchronous fold
   # returns. Agents that stream via async commands will emit their ephemeral

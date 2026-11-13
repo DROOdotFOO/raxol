@@ -5,9 +5,8 @@ defmodule Raxol.Harness.Fixture.Envelope do
   `Raxol.Harness.Fixture.Event`.
 
   `offset` is the 1-based line number in the source file; the fixture
-  design fixes offset = line number, so this is what
-  `attach{from_offset}` / `seek{to_offset}` replay-from-offset tests key
-  off. It is set by the loader, never present in the JSON on disk.
+  design fixes offset = line number, so this is what replay-from-offset
+  tests key off. It is set by the loader, never present in the JSON on disk.
   """
 
   alias Raxol.Harness.Fixture.Event
