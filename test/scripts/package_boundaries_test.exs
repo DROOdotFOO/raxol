@@ -270,6 +270,26 @@ defmodule Raxol.PackageBoundariesTest do
        def f, do: Raxol.Agent.Session.start()
      end
      """, "Raxol.Agent.Session", "call"},
+    {"an agent application outside the release catalog's rows",
+     "lib/raxol/release/package_check.ex",
+     ~S"""
+     defmodule Raxol.Release.PackageCheck do
+       @packages [%{app: :raxol_agent, path: "packages/raxol_agent"}]
+       def packages, do: @packages
+       def f, do: Application.get_env(:raxol_payments, :x)
+     end
+     """, "raxol_payments", "app"},
+    {"a release catalog row whose path is another directory",
+     "lib/raxol/release/package_check.ex",
+     ~S"""
+     defmodule Raxol.Release.PackageCheck do
+       @packages [
+         %{app: :raxol_agent, path: "packages/raxol_agent"},
+         %{app: :raxol_cli, path: "packages/raxol_core"}
+       ]
+       def packages, do: @packages
+     end
+     """, "raxol_cli", "app"},
     {"a runtime package's lib",
      "packages/raxol_core/lib/raxol/core/crossing.ex",
      ~S"""
@@ -639,7 +659,7 @@ defmodule Raxol.PackageBoundariesTest do
       assert {output, 1} = results["release catalog without agent applications"]
 
       assert output =~
-               "lib/raxol/release/package_check.ex names no agent application"
+               "lib/raxol/release/package_check.ex has no row for an agent package"
     end
 
     test "a package on neither side stops the check", %{results: results} do

@@ -95,10 +95,12 @@
 # second under `Raxol.CLI.*`, where raxol_cli keeps its own. Both lists are
 # exact and checked both ways: a runtime tree that defines any other
 # agent-side name fails, and so does an entry no runtime tree defines.
-# @train_catalog may name agent applications: it
-# classifies every directory under `packages/`, and `mix raxol.release.check`
-# fails when the two disagree, so its rows leave with the directories. The
-# check fails once it names none, until the exemption is removed here.
+# @train_catalog's rows for agent packages are exempt, each a map with
+# `app: :raxol_agent` and `path: "packages/raxol_agent"`: it classifies every
+# directory under `packages/`, and `mix raxol.release.check` fails when the
+# two disagree, so the rows leave with the directories. Anything else that
+# file names is checked like any other. The check fails once the catalog has
+# no such row, until the exemption is removed here.
 #
 # Nothing on this rule is grandfathered, and an allowlist entry whose file and
 # owning tree sit on different sides of the line fails as well.
@@ -199,7 +201,7 @@ defmodule PackageBoundaries do
 
     scanned =
       for {tree, file, {:ok, ast}} <- parsed do
-        {tree, file, scan(ast)}
+        {tree, file, scan(without_exempt_rows(file, ast))}
       end
 
     owners =
@@ -241,7 +243,7 @@ defmodule PackageBoundaries do
     misplaced = misplaced_definitions(owners)
     unnamed = unnamed_agent_modules(owners)
     crossing_entries = allowed |> Enum.filter(&crossing_entry?/1) |> Enum.sort()
-    unused = unused_catalog_exemption(scanned)
+    unused = unused_catalog_exemption(parsed)
 
     report_new(new)
     report_stale(stale)
@@ -295,7 +297,7 @@ defmodule PackageBoundaries do
 
     for {file, refs} <- sources ++ project_files,
         {name, line, kind} <- refs,
-        crosses?(name, kind, file),
+        crosses?(name, kind),
         reduce: %{} do
       acc ->
         Map.update(acc, {file, name}, [{line, kind}], &[{line, kind} | &1])
@@ -308,8 +310,8 @@ defmodule PackageBoundaries do
   defp config_of(pkg),
     do: Path.wildcard("packages/#{pkg}/config/**/*.exs") |> Enum.sort()
 
-  defp crosses?(_app, :app, file), do: file != @train_catalog
-  defp crosses?(mod, _kind, _file), do: agent_side?(mod)
+  defp crosses?(_app, :app), do: true
+  defp crosses?(mod, _kind), do: agent_side?(mod)
 
   # Agent-side by name, and not a name the runtime side defines.
   defp agent_side?(mod) do
@@ -372,14 +374,44 @@ defmodule PackageBoundaries do
     |> Enum.sort()
   end
 
-  # The catalog's exemption lasts as long as the catalog names an agent
-  # application.
-  defp unused_catalog_exemption(scanned) do
-    case List.keyfind(scanned, @train_catalog, 1) do
-      {_tree, file, %{refs: refs}} ->
-        if Enum.any?(refs, &match?({_app, _line, :app}, &1)),
-          do: [],
-          else: [file]
+  # The catalog's rows for agent packages are exempt, and nothing else in the
+  # file is: `%{app: :raxol_agent, path: "packages/raxol_agent", ...}` loses
+  # its `app:` and `path:` before the scan.
+  defp without_exempt_rows(@train_catalog, ast),
+    do: ast |> take_catalog_rows() |> elem(0)
+
+  defp without_exempt_rows(_file, ast), do: ast
+
+  # {ast without the agent rows' names, number of agent rows}
+  defp take_catalog_rows(ast) do
+    Macro.prewalk(ast, 0, fn
+      {:%{}, meta, pairs} = node, rows when is_list(pairs) ->
+        if catalog_row?(pairs),
+          do: {{:%{}, meta, Keyword.drop(pairs, [:app, :path])}, rows + 1},
+          else: {node, rows}
+
+      node, rows ->
+        {node, rows}
+    end)
+  end
+
+  defp catalog_row?(pairs) do
+    with true <- Keyword.keyword?(pairs),
+         app when is_atom(app) and app != nil <- pairs[:app],
+         name = Atom.to_string(app),
+         true <- name in @agent_trees do
+      pairs[:path] == "packages/" <> name
+    else
+      _ -> false
+    end
+  end
+
+  # The catalog's exemption lasts as long as the catalog has a row for an
+  # agent package.
+  defp unused_catalog_exemption(parsed) do
+    case List.keyfind(parsed, @train_catalog, 1) do
+      {_tree, file, {:ok, ast}} ->
+        if elem(take_catalog_rows(ast), 1) > 0, do: [], else: [file]
 
       nil ->
         []
@@ -1296,7 +1328,7 @@ defmodule PackageBoundaries do
 
   defp report_unused_exemption([file]) do
     err("""
-    ERROR: #{file} names no agent application, so its exemption is unused.
+    ERROR: #{file} has no row for an agent package, so its exemption is unused.
     Remove @train_catalog from this script.\
     """)
   end
