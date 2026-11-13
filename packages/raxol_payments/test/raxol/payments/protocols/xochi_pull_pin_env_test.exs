@@ -14,17 +14,12 @@ defmodule Raxol.Payments.Protocols.XochiPullPinEnvTest do
   @other "0x00000000000000000000000000000000000000b2"
 
   setup do
-    saved = Map.new(@env_vars, fn v -> {v, System.get_env(v)} end)
+    for var <- @env_vars, saved = System.get_env(var) do
+      on_exit(fn -> System.put_env(var, saved) end)
+    end
+
     Enum.each(@env_vars, &System.delete_env/1)
-
-    on_exit(fn ->
-      Enum.each(saved, fn
-        {v, nil} -> System.delete_env(v)
-        {v, val} -> System.put_env(v, val)
-      end)
-    end)
-
-    :ok
+    on_exit(fn -> Enum.each(@env_vars, &System.delete_env/1) end)
   end
 
   describe "origin_pull_pin_env_config!/0" do
