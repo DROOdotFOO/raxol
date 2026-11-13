@@ -430,7 +430,47 @@ defmodule Raxol.PackageBoundariesTest do
      -module(raxol_core_bridge).
      -export([total/0]).
      total() -> 'Elixir.Raxol.Payments.Ledger':total().
-     """, "Raxol.Payments.Ledger", "string"}
+     """, "Raxol.Payments.Ledger", "string"},
+    {"a source directory inside an agent tree", "packages/raxol_core/mix.exs",
+     ~S"""
+     defmodule RaxolCore.MixProject do
+       use Mix.Project
+
+       def project,
+         do: [
+           app: :raxol_core,
+           version: "0.1.0",
+           elixirc_paths: ["lib", "../raxol_agent/lib/raxol/agent"],
+           deps: []
+         ]
+     end
+     """, "../raxol_agent", "path"},
+    {"an agent tree's config imported into root config", "config/config.exs",
+     ~S"""
+     import Config
+     import_config "../packages/raxol_agent/config/config.exs"
+     """, "packages/raxol_agent", "path"},
+    {"a path expanded into an agent tree",
+     "packages/raxol_core/lib/raxol/core/crossing.ex",
+     ~S"""
+     defmodule Raxol.Core.Crossing do
+       def f, do: Path.expand("../../../../raxol_payments/priv", __DIR__)
+     end
+     """, "../raxol_payments", "path"},
+    {"Module.concat over a list that starts in an agent namespace",
+     "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f(name), do: Module.concat([Raxol, Agent, name])
+     end
+     """, "Raxol.Agent", "prefix"},
+    {"a regex alternation with one alternative that is not exempt",
+     "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f(name), do: name =~ ~r/^Raxol\.Agent\.(Journal|Session)/
+     end
+     """, "Raxol.Agent.Session", "string"}
   ]
 
   # {label, file, source}
@@ -524,6 +564,34 @@ defmodule Raxol.PackageBoundariesTest do
      ~S"""
      <%= Raxol.Core.Thing.render(@thing) %>
      <%= inspect(Raxol.Agent.Journal.Tip) %> raxol_core raxol_agents
+     """},
+    {"a regex alternation over raxol_journal's modules",
+     "packages/raxol_journal/mix.exs",
+     ~S"""
+     defmodule RaxolJournal.MixProject do
+       use Mix.Project
+
+       def project,
+         do: [
+           app: :raxol_journal,
+           version: "0.1.0",
+           deps: [],
+           docs: [
+             groups_for_modules: [
+               Journal: ~r/^Raxol\.Agent\.(Journal|Contract)/,
+               Records: ~r/^Raxol\.Agent\.Journal\.(?:Chain|Tip)$/
+             ]
+           ]
+         ]
+     end
+     """},
+    {"paths into runtime trees", "lib/raxol/exempt.ex",
+     ~S"""
+     defmodule Raxol.Exempt do
+       def f, do: Path.expand("../../packages/raxol_core/priv", __DIR__)
+       def g, do: ["../raxol_journal/lib", "packages/raxol_agents"]
+       def h(name), do: Module.concat([Raxol, Core, name])
+     end
      """},
     {"an agent package's template",
      "packages/raxol_cli/priv/templates/app.ex.eex",
@@ -653,7 +721,7 @@ defmodule Raxol.PackageBoundariesTest do
       assert {output, 1} = results["runtime defines an agent namespace"]
 
       assert output =~
-               ~r/Raxol\.Agent\.Thing\s+defined in raxol_core, which is runtime-side/
+               ~r/Raxol\.Agent\.Thing\s+defined in raxol_core, which is runtime-side; move it to an agent package$/m
     end
 
     test "a runtime tree may not define the agent handler or bridge",
@@ -661,7 +729,7 @@ defmodule Raxol.PackageBoundariesTest do
       assert {output, 1} = results["runtime defines an exact agent module"]
 
       assert output =~
-               ~r/Raxol\.MCP\.AgentBridge\s+defined in raxol_core, which is runtime-side/
+               ~r/Raxol\.MCP\.AgentBridge\s+defined in raxol_core, which is runtime-side; move it to an agent package$/m
     end
 
     test "an exempt name must be defined by a runtime tree",
@@ -669,7 +737,17 @@ defmodule Raxol.PackageBoundariesTest do
       assert {output, 1} = results["exemption without a definition"]
 
       assert output =~
-               ~r/Raxol\.Agent\.Journal\.Tip\s+exempt, but no runtime tree defines it/
+               ~r/Raxol\.Agent\.Journal\.Tip\s+exempt, but no runtime tree defines it; drop it from the list$/m
+    end
+
+    test "an unlisted module under raxol_journal's names is theirs to list",
+         %{results: results} do
+      assert {output, 1} = results["raxol_journal defines an unlisted module"]
+
+      assert output =~
+               ~r/Raxol\.Agent\.Journal\.Compactor\s+defined in raxol_journal, which is runtime-side; add it to @journal_modules if raxol_journal owns it$/m
+
+      refute output =~ "move it to an agent package"
     end
 
     test "an allowlist entry on one side of the line is kept",
@@ -714,7 +792,7 @@ defmodule Raxol.PackageBoundariesTest do
       assert {output, 1} = results["runtime defines another Raxol.CLI module"]
 
       assert output =~
-               ~r/Raxol\.CLI\.Thing\s+defined in raxol, which is runtime-side/
+               ~r/Raxol\.CLI\.Thing\s+defined in raxol, which is runtime-side; add it to @root_cli_modules if the root owns it$/m
     end
 
     test "a listed root Raxol.CLI module must be defined by a runtime tree",
@@ -792,6 +870,11 @@ defmodule Raxol.PackageBoundariesTest do
           import Config
           config :raxol, mcp_authorizer: {Raxol.CLI.MCP, :authorize}
           """}
+       ]},
+      {"raxol_journal defines an unlisted module",
+       [
+         {"packages/raxol_journal/lib/raxol/agent/journal/compactor.ex",
+          "defmodule Raxol.Agent.Journal.Compactor do\nend\n"}
        ]},
       {"runtime defines another Raxol.CLI module",
        [{"lib/raxol/cli/thing.ex", "defmodule Raxol.CLI.Thing do\nend\n"}]},

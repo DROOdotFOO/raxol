@@ -73,8 +73,10 @@
 #     (`Mix.Tasks.RaxolEarn.Order`) are named;
 #   * an agent application's name: the atom (`:raxol_agent`), or the whole
 #     word in a string or sigil (`~w(raxol_agent)a`,
-#     `String.to_atom("raxol_agent")`, `"../raxol_agent"`). In a mix.exs that
-#     is a dependency, `optional:` and `only:` included.
+#     `String.to_atom("raxol_agent")`). In a mix.exs that is a dependency,
+#     `optional:` and `only:` included. After `packages/` or `../` it is
+#     reported as a path into the agent tree (`elixirc_paths`,
+#     `import_config`, `Path.expand/2`).
 #
 # All three go by name, not by owner, so they hold once the agent trees are
 # gone and nothing here defines those names. While the trees are here, a
@@ -86,9 +88,13 @@
 # (`"Raxol.Agent.Session"`, with or without `Elixir.`, and
 # `~r/^Raxol\.Agent\./`), an atom spelled as a module name without the
 # `Elixir.` prefix (`:"Raxol.Agent.Registry"`), the application names, the
-# target of an `alias` whether or not the file uses it, and the literal first
-# argument of `Module.concat/2` or `Module.safe_concat/2`
-# (`Module.concat(Raxol.Agent.Actions, name)`). Comments are not in the AST.
+# target of an `alias` whether or not the file uses it, and the literal
+# segments a `Module.concat` or `Module.safe_concat` call starts with
+# (`Module.concat(Raxol.Agent.Actions, name)`,
+# `Module.concat([Raxol, Agent, name])`). A name followed by an alternation,
+# as a regex writes one (`Raxol\.Agent\.(Journal|Contract)`), is read as one
+# name per alternative and not as the bare prefix, so a pattern over exempt
+# modules names only those. Comments are not in the AST.
 # The text of `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated`
 # is skipped; code interpolated into it is not. A name assembled at run time
 # from parts that are not literal (`Module.concat(base, name)`) is invisible
@@ -119,9 +125,10 @@ defmodule PackageBoundaries do
   @doc_attrs [:moduledoc, :doc, :typedoc, :shortdoc, :deprecated]
 
   # Kinds only the runtime/agent rule reads: a module name in a string, an atom
-  # spelled as one, an agent application's name, the target of an `alias`, the
-  # literal namespace a `Module.concat/2` builds under.
-  @line_kinds [:string, :name, :app, :alias, :prefix]
+  # spelled as one, an agent application's name, a path into an agent tree,
+  # the target of an `alias`, the literal namespace a `Module.concat` builds
+  # under.
+  @line_kinds [:string, :name, :app, :path, :alias, :prefix]
 
   @runtime_trees ~w(
     raxol raxol_core raxol_gateway raxol_journal raxol_liveview raxol_mcp
@@ -342,7 +349,7 @@ defmodule PackageBoundaries do
     end
   end
 
-  defp crosses?(_app, :app), do: true
+  defp crosses?(_app, kind) when kind in [:app, :path], do: true
   defp crosses?(mod, _kind), do: agent_side?(mod)
 
   # Agent-side by name, and not a name the runtime side defines.
@@ -927,28 +934,43 @@ defmodule PackageBoundaries do
     do: Regex.match?(~r/^[A-Z]\w*(?:\.[A-Z]\w*)+$/, text)
 
   # [{name, kind}] for what a piece of text names: modules, and agent
-  # applications.
+  # applications or paths into their trees.
   defp text_refs(text), do: module_refs(text) ++ app_refs(text)
 
-  # The dots may be escaped, as a regex over module names writes them.
+  # The dots may be escaped, as a regex over module names writes them, and
+  # the last segment may be an alternation: `Raxol\.Agent\.(Journal|Contract)`
+  # names `Raxol.Agent.Journal` and `Raxol.Agent.Contract`.
   defp module_refs(text) do
     if String.contains?(text, ".") do
-      ~r/(?<![\w.])(?:Elixir\\?\.)?([A-Z]\w*(?:\\?\.[A-Z]\w*)+)/
+      ~r/(?<![\w.])(?:Elixir\\?\.)?([A-Z]\w*(?:\\?\.[A-Z]\w*)*)(?:\\?\.\((?:\?:)?([A-Z][\w.\\]*(?:\|[A-Z][\w.\\]*)*)\))?/
       |> Regex.scan(text, capture: :all_but_first)
-      |> Enum.map(fn [mod] -> {String.replace(mod, "\\", ""), :string} end)
+      |> Enum.flat_map(fn [base | alternation] ->
+        base
+        |> module_names(List.first(alternation, ""))
+        |> Enum.map(&{String.replace(&1, "\\", ""), :string})
+      end)
     else
       []
     end
   end
 
-  # An agent application's name as a whole word: `raxol_agent` in
-  # `"../raxol_agent/lib"`, not in `"raxol_agents"`.
+  defp module_names(base, ""),
+    do: if(String.contains?(base, "."), do: [base], else: [])
+
+  defp module_names(base, alternation),
+    do: Enum.map(String.split(alternation, "|"), &(base <> "." <> &1))
+
+  # An agent application's name as a whole word (`raxol_agent`, not
+  # `raxol_agents`), and as a path when `packages/` or `../` leads to it.
   defp app_refs(text) do
     if String.contains?(text, "raxol_") do
-      "(?<!\\w)(#{Enum.join(@agent_trees, "|")})(?!\\w)"
+      "(?<!\\w)(packages/|\\.\\./)?(#{Enum.join(@agent_trees, "|")})(?!\\w)"
       |> Regex.compile!()
       |> Regex.scan(text, capture: :all_but_first)
-      |> Enum.map(fn [app] -> {app, :app} end)
+      |> Enum.map(fn
+        ["", app] -> {app, :app}
+        [prefix, app] -> {prefix <> app, :path}
+      end)
     else
       []
     end
@@ -1109,11 +1131,21 @@ defmodule PackageBoundaries do
     end)
   end
 
-  defp concat_prefix([{:__aliases__, _, parts}, _name], env) do
-    with {:ok, full} <- expand(parts, env), do: {:ok, join(full)}
-  end
+  # The literal segments the call starts with: `Raxol.Agent.Actions` in
+  # `Module.concat(Raxol.Agent.Actions, name)`, `Raxol.Agent` in
+  # `Module.concat([Raxol, Agent, name])`.
+  defp concat_prefix([list], env) when is_list(list),
+    do: concat_prefix(list, env)
 
-  defp concat_prefix(_args, _env), do: :error
+  defp concat_prefix(args, env) do
+    args
+    |> Enum.map(&literal_concat([&1], env))
+    |> Enum.take_while(&match?({:ok, _}, &1))
+    |> case do
+      [] -> :error
+      segments -> {:ok, Enum.map_join(segments, ".", &elem(&1, 1))}
+    end
+  end
 
   defp literal_concat([list], env) when is_list(list),
     do: literal_concat(list, env)
@@ -1317,23 +1349,38 @@ defmodule PackageBoundaries do
       case tree do
         nil ->
           err(
-            "  #{String.pad_trailing(mod, 60)} exempt, but no runtime tree defines it"
+            "  #{String.pad_trailing(mod, 60)} exempt, but no runtime tree defines it; drop it from the list"
           )
 
         tree ->
           err(
-            "  #{String.pad_trailing(mod, 60)} defined in #{tree}, which is runtime-side"
+            "  #{String.pad_trailing(mod, 60)} defined in #{tree}, which is runtime-side; #{remedy(mod)}"
           )
       end
     end
 
     err("""
 
-    Only the modules raxol_journal defines under `Raxol.Agent` and the root
-    defines under `Raxol.CLI` are exempt (@journal_modules and
-    @root_cli_modules in this script). Move an agent-side module to an agent
-    package; drop a listed name that is gone.\
+    The runtime side defines exactly the agent-side names in @journal_modules
+    (raxol_journal's, under `Raxol.Agent`) and @root_cli_modules (the root's,
+    under `Raxol.CLI`) in this script.\
     """)
+  end
+
+  # A name beside the exempt ones is most likely another of theirs.
+  defp remedy(mod) do
+    name = agent_name(mod)
+
+    cond do
+      Enum.any?(@journal_modules, &String.starts_with?(name, &1 <> ".")) ->
+        "add it to @journal_modules if raxol_journal owns it"
+
+      String.starts_with?(name, "Raxol.CLI.") ->
+        "add it to @root_cli_modules if the root owns it"
+
+      true ->
+        "move it to an agent package"
+    end
   end
 
   defp report_unnamed([]), do: :ok
