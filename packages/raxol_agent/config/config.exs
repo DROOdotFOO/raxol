@@ -7,13 +7,8 @@ import Config
 # `skills_provider/0` returns it exposes the skills_list / skill_view /
 # skill_manage tools.
 #
-#   skills_root          -- writable managed root for agent-authored skills;
-#                           runtime state, left unmanaged by chezmoi.
-#   skills_external_dirs  -- read-only skill sources, scanned for **/SKILL.md:
-#                              ~/.agents/skills        chezmoi external ->
-#                                                      DROOdotFOO/agent-skills
-#                              ~/.agents/skills-extra  chezmoi-vendored
-#                                                      third-party skills
+#   skills_root          -- writable managed root for agent-authored skills.
+#   skills_external_dirs  -- read-only skill sources, scanned for **/SKILL.md.
 # Not enabled in :test — the suite must not depend on the machine's on-disk
 # skills; tests set :skills_provider explicitly to exercise both states.
 if config_env() != :test do

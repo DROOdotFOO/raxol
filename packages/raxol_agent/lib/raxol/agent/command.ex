@@ -51,8 +51,8 @@ defmodule Raxol.Agent.Command do
   U5 turn-supervisor pattern-matches it). The `:prompt` action
   (`{:start_turn, session_id, payload}`) is what the session runtime turns into
   a `Raxol.Agent.Contract.pump/3` over a `Raxol.Agent.Stream.react/2` run.
-  Actually spawning that turn subtree is U5's job; here we validate and
-  dispatch.
+  Spawning that turn subtree is the session runtime's; this module validates
+  and dispatches.
   """
 
   alias Raxol.Agent.Command.EventCodec
