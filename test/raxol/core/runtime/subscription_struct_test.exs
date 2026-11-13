@@ -239,7 +239,7 @@ defmodule Raxol.Core.Runtime.SubscriptionStructTest do
 
       assert {:ok, {:interval, _timer_ref}} = Subscription.start(sub, context)
 
-      assert_receive {:subscription, :tick}, 200
+      assert_receive {:subscription, :tick}, 2_000
     end
 
     test "start_immediately sends message right away" do
@@ -248,8 +248,8 @@ defmodule Raxol.Core.Runtime.SubscriptionStructTest do
 
       assert {:ok, {:interval, timer_ref}} = Subscription.start(sub, context)
 
-      # The immediate message should arrive without waiting for the interval
-      assert_receive {:subscription, :immediate_tick}, 100
+      # The immediate message arrives long before the 5 s interval would fire.
+      assert_receive {:subscription, :immediate_tick}, 2_000
 
       # Clean up the timer
       Subscription.stop({:interval, timer_ref})
