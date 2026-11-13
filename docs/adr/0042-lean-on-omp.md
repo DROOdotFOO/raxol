@@ -19,6 +19,11 @@ become session-scoped and a session's tool set becomes sticky (Decision 2).
 
 2026-11-13: the harness is deleted.
 
+2026-11-13: modules listed below as kept that nothing called are removed:
+`Raxol.Agent.Turn`, `Command`, `Policy`, `Cache`, `LlmPrices`,
+`Raxol.Agent.Harness.SessionLane` and the root `Raxol.Harness.SessionLane`
+behaviour. ADR-0035 is superseded rather than narrowed.
+
 ## Context
 
 Raxol grew a full coding-agent harness: the coding TUI (`raxol code`,

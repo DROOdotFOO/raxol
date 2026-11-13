@@ -19,6 +19,9 @@ Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.SelfImprove
 `Raxol.Agent.Curator` are removed. What stands is the skill runtime: `Raxol.Agent.Skill`,
 `Raxol.Agent.Skills.Store` and the three skill actions.
 
+Narrowed, 2026-11-13: `Raxol.Agent.Turn` and `Raxol.Agent.Conversation.{Item,Store,Log,Recorder}` are
+removed, so the after-turn data source described below no longer exists.
+
 ## Context
 
 The agent stack is feature-complete for the prompt-then-react loop. `use Raxol.Agent`

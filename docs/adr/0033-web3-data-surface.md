@@ -14,6 +14,9 @@ Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Code.McpLoad
 The aggregator's janitor lifecycle and `admit/1` bounds are as decision 1 describes them, with
 no loader left in the tree to copy them from.
 
+Amended, 2026-11-13: `Raxol.Agent.Cache` is removed. `Raxol.Web3.Cache` is the only cache of
+this shape in the tree.
+
 ## Context
 
 Raxol settles real money across chains. `raxol_payments` runs Xochi cross-chain intents over

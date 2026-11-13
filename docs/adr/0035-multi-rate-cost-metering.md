@@ -15,7 +15,10 @@ rule it implemented stays as written for whatever reads a provider-reported cost
 
 Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Code.App` and
 `Harness.GrokBuild` are removed, so nothing in this tree meters a turn through
-`Raxol.Agent.LlmPrices` or reports a cost to it. The price tables and `turn_cost_usd/4` stand.
+`Raxol.Agent.LlmPrices` or reports a cost to it.
+
+Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: `Raxol.Agent.LlmPrices` is removed,
+and with it the price tables and `turn_cost/4`. Nothing in this tree prices a turn.
 
 Written against DeepSeek as the forcing case, but the model it breaks was already straining:
 two of the three collision hazards below are live today on OpenRouter and LLM7, and Anthropic's

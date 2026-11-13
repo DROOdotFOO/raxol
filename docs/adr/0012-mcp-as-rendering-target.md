@@ -3,6 +3,8 @@
 ## Status
 Accepted, 2026-04-05. Implemented in `packages/raxol_mcp/` (ToolProvider, FocusLens, ContextTree, structured screenshots, stdio + SSE transports).
 
+Amended, 2026-11-13: `Raxol.Agent.McpClient` is removed. An agent reaches an external MCP server through `Raxol.MCP.Client`.
+
 ## Context
 
 Raxol's MCP integration is held together with duct tape. Six tools get injected into Tidewave's ETS table via `:sys.replace_state` at startup, with a retry loop polling up to 10 times. A bash script proxies stdio to HTTP because Claude Code needs stdio and Tidewave speaks HTTP. The tools are low-level: raw keystrokes and plain-text screenshots. It works in dev only, and it's coupled to Tidewave's internals. One upstream change and it breaks.
