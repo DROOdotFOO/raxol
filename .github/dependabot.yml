@@ -38,7 +38,7 @@ updates:
       prefix: "chore"
       include: "scope"
 
-  # The 18 package lockfiles and the deployed web application. `directory: "/"`
+  # The package lockfiles and the deployed web application. `directory: "/"`
   # alone scanned NONE of them, yet every package publishes to Hex and `web/`
   # deploys independently. An advisory against a dependency only one project
   # locks otherwise produces no PR and no alert indefinitely. `directories`
