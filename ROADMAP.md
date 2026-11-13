@@ -16,11 +16,9 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 **MCP surface (Phases 8-13):** extracted `raxol_mcp` (server/client/registry, stdio + SSE). Auto-derives tools from the widget tree (16 Component modules implement `ToolProvider`) with a focus/hover lens; `@mcp_exclude` opt-out. Full spec coverage (prompts, logging, completion, notifications, circuit breaker). Resources + ContextTree + StructuredScreenshot + model-projection diffs. Pipe-friendly test harness with functor-law property tests.
 
-**Agent framework:** TEA-based agents, coordinator/worker teams, 7 harness gaps closed (compaction, hooks, permissions, MCP client, streams, LSP, SSE). AI cockpit with SSE streaming for 9 backends. Virtual File System (pure-functional in-memory VFS, REPL helpers, 7 agent actions).
+**Agent framework:** TEA-based agents, coordinator/worker teams, command hooks, permissions, an MCP client, streams, and SSE. AI cockpit with SSE streaming for 9 backends. Virtual File System (pure-functional in-memory VFS, REPL helpers).
 
-**Coding agent:** two surfaces on one launch path (`Raxol.Agent.Code.Launcher`): `mix raxol.code` (interactive TUI, also served over SSH single-tenant via `--authorized-keys` or multi-tenant via `--ssh-tenants`) and `mix raxol.p` (headless one-shot). ALLOW/ASK/DENY approval on every mutating tool call, a durable per-session journal behind `--continue`/`--resume`/`--replay`/`/rewind`, `/share` read-only transcript links, `.mcp.json` servers bridged into the toolset, four `harness_*` MCP tools, and LLM spend metered into the shared `Raxol.Payments.Ledger` with budgets that halt a running turn.
-
-**Agent memory + self-improving skills** (hermes-agent pickup): pluggable `Raxol.Agent.Memory` (`Store.Ets`, ETS+DETS, BM25-lite + recency + tags), pre-turn recall injection, `memory_remember`/`recall`/`forget`. Self-improving skill loop: `Curator` on an idle gate plus an isolated post-turn reviewer (`SelfImprove`) that authors/patches/consolidates `SKILL.md` skills (agentskills.io format). The same background pass does post-turn memory auto-capture and refreshes a dialectic per-user `UserModel` (both in `turn.ex`), and feeds a full-text `session_search` index. Config via `memory_provider/0` / `skills_provider/0` / `self_improve/0`. Remaining: recall-MCP bridge, hub client, paid skills.
+**Skills:** `SKILL.md` skills (agentskills.io format) in a disk-backed `Raxol.Agent.Skills.Store`, exposed to an agent as `skills_list`/`skill_view`/`skill_manage` through `skills_provider/0`.
 
 **Video render target** (hermes-agent pickup): one TEA module to MP4/WebM/GIF, server-side frames at a virtual `Animation.Clock`, themed HTML via `TerminalBridge` rasterized through headless Chrome (zero-dep + warm-pool ChromicPDF), FFmpeg-encoded, `mix raxol.render`.
 
@@ -50,10 +48,9 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 
 | Item | What | Effort | Tag |
 | ---- | ---- | ------ | --- |
-| Install funnel | `flake.nix` and the Burrito-packaged `raxol` binary (`raxol_cli`, with an npm wrapper in `packages/raxol_cli/npm`) landed. Remaining: publishing the binary, `raxol doctor`/`setup`/`update`, and the Windows PowerShell installer | M | CATCH-UP |
+| Install funnel | `flake.nix` and the Burrito-packaged `raxol` binary (`raxol_cli`, with an npm wrapper in `packages/raxol_cli/npm`) landed, with `raxol doctor` and `raxol update`. Remaining: publishing the binary and the Windows PowerShell installer | M | CATCH-UP |
 | Gateway breadth | Built: the `Gateway.Adapter` behaviour is frozen, Telegram is ported behind it (`Raxol.Telegram.GatewayAdapter`), Discord and Email adapters ship in-gateway, and `Gateway.Pipeline.Transcribe` gives every adapter voice memos through `raxol_speech` STT. Remaining: the first Hex release of `raxol_gateway` | M | SURFACE |
 | Cron scheduler | DONE. `Raxol.Agent.Schedule.parse/1` (relative / interval / 5-field cron / ISO) plus `Raxol.Agent.Scheduler`, one timer per job with DETS persistence and boot replay, the `cronjob` Action, and `Scheduler.Delivery` to a gateway target or an in-process callback | M | SURFACE |
-| Memory remainder | The `UserModel` + post-turn auto-capture already ship; finish the `Provider.RecallMcp` bridge, optionally back `session_search` with SQLite FTS5, and extract `raxol_memory`/`raxol_skills` | S/M | RAILS-adjacent |
 
 **P1: differentiation**
 
@@ -62,38 +59,19 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 | Desktop app | Tauri shell over the LiveView surface with a Burrito'd BEAM sidecar (zero new UI); defaults the harness to `:openrouter` for the attribution funnel | L | SURFACE |
 | Metered tool gateway | Creative-media actions (`image`/`video`/`tts`/`transcribe`) behind an axol-hosted service that answers HTTP 402; any 402-speaking agent auto-pays per call via x402/Xochi (the commerce wedge) | M | RAILS |
 | Paid skills market | agentskills.io-format serializer + hub pull client + tradeable skills (a `SKILL.md` bundle with an ACP offering, settled on Base) | M | RAILS |
-| Migration on-ramp | `mix raxol.import --from hermes/openclaw`: SOUL.md -> persona, memories -> `Memory.Store`, skills, allowlists -> PermissionHook | S | CATCH-UP |
+| Migration on-ramp | `mix raxol.import --from hermes/openclaw`: SOUL.md -> persona, skills, allowlists -> PermissionHook | S | CATCH-UP |
 | Windows first-class | Tune the pure-Elixir driver + Windows CI + the PowerShell installer path | M | CATCH-UP |
 | OpenRouter funnel | Run the #414 live smoke with a real key, confirm the `openrouter.ai/apps?url=https://raxol.io` listing, bump site copy to v2.6 / 14 packages | S | Funnel |
 
 **P2: deliberate laggards** (do when pulled, not pushed)
 
-- **FLAME** elastic exec on Fly Machines (BEAM-native idle hibernation, replaces Modal/Daytona).
+- **FLAME** elastic exec on Fly Machines (replaces Modal/Daytona).
 - More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
 - i18n: wire the present `gettext` through surface rendering, extract locale files.
 - Agent Client Protocol adapter: shipped. `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves a Raxol agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`: a prompt is one turn of the agent, and a sensitive Action the agent passes to the turn's approver is gated on a `session/request_permission` round trip) for editors that spawn an agent. Distinct from `raxol_earn`.
 - Expose the AST-checked REPL as an agent action for scripted single-turn tool pipelines. The checker is a mitigation, not a boundary (see `Raxol.REPL.Sandbox`), so this needs a node that already opted into evaluation and holds no keys.
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
-
-### Coding agent parity
-
-Tracked in [#940](https://github.com/DROOdotFOO/raxol/issues/940). The Hermes analysis above measures the agent against a personal assistant; this measures `mix raxol.code` against a coding agent, [omp](https://github.com/can1357/oh-my-pi) (31 tools, 60+ providers, 14 LSP ops, 28 DAP ops). Both comparisons are kept, because they pull in different directions and neither alone describes the product.
-
-Shipped: `AGENTS.md`/`CLAUDE.md` discovery on all three surfaces, the hash-anchored edit format (`read_file` anchors every line, `edit_file` addresses ranges by anchor), actionable model-facing tool errors, parallel sub-agent fan-out under a supervisor, and the LSP tools ([#943](https://github.com/DROOdotFOO/raxol/pull/943)): `Raxol.Agent.Actions.Lsp` exposes `lsp` (diagnostics, symbols, definition, references, hover) plus a gated `lsp_rename` that applies the server's own `textDocument/rename` edits inside a blast-radius cap, both registered in `Raxol.Agent.Code.App`'s default actions, and `write_file`/`edit_file` append the file's diagnostics to their own results.
-
-| Item | What | Effort |
-| ---- | ---- | ------ |
-| File-move rename | `Raxol.Agent.LSPContext.will_rename/3` speaks `workspace/willRenameFiles` and the client advertises the capability, but no tool calls it, so moving a file still breaks every reference to it ([#932](https://github.com/DROOdotFOO/raxol/issues/932)) | S |
-| Reach | `web_search` + `fetch`, so the agent can read outside the workspace ([#933](https://github.com/DROOdotFOO/raxol/issues/933)) | M |
-| `todo` | Session-scoped plan tracking that survives compaction ([#934](https://github.com/DROOdotFOO/raxol/issues/934)) | S |
-| Routing | Model roles, fallback chains, credential rotation; the sub-agent fan-out is the first beneficiary and the cost ledger makes it measurable ([#937](https://github.com/DROOdotFOO/raxol/issues/937)) | M |
-| `bash` | PTY and background jobs; today nothing over 30 seconds can run at all ([#938](https://github.com/DROOdotFOO/raxol/issues/938)) | M |
-| `ask` | Structured mid-turn questions ([#935](https://github.com/DROOdotFOO/raxol/issues/935)) | S |
-| Vision | Image content blocks on the Anthropic and OpenAI paths ([#936](https://github.com/DROOdotFOO/raxol/issues/936)) | S |
-| Inherited config | Read Cursor/Cline/Copilot/Windsurf instruction files where they already sit ([#939](https://github.com/DROOdotFOO/raxol/issues/939)) | S |
-
-**Do not build:** DAP/debugger control, structural `ast_edit`, persistent Python/JS eval cells, browser and desktop control, commit splitting, or read-write collab. Revisit only when pulled.
 
 ### Console runtime (Virtuals ACP)
 
@@ -116,7 +94,7 @@ One free, indexer-agnostic read layer over the chains we settle on, served as MC
 
 | Item | What | Effort | Status |
 | ---- | ---- | ------ | ------ |
-| `Raxol.MCP.Aggregator` | The one missing conversion direction: upstream MCP server -> `Raxol.MCP.Registry` tool defs, over the existing `MCP.Client`. Janitor lifecycle and `admit/1` bounds copied from `Code.McpLoader` | S | Planned |
+| `Raxol.MCP.Aggregator` | The one missing conversion direction: upstream MCP server -> `Raxol.MCP.Registry` tool defs, over the existing `MCP.Client`, with a janitor lifecycle and `admit/1` bounds | S | Planned |
 | Package skeleton | `raxol_web3` at 0.1.0, standalone on `raxol_core` + `raxol_mcp` + `req`; `Backend` behaviour (6 required + 8 optional callbacks, CAIP-2/10/19 refs, opaque cursors) + `Stub` in `lib/`; move `ChainReader`, `Tron.Address`, `Pxe.Client`, `Payments.Poll` down with shims; rate limiting reuses `Raxol.Core.TokenBucket`, and a `Cache` behaviour + ETS adapter is built here since `Raxol.Agent.Cache` is not reachable from this graph | L | Planned |
 | EVM backend | Blockscout REST v2 + Chainscout resolution (746 chains, keyless, includes 4663) + RPC fallback. Identifies honestly and treats a Cloudflare challenge as backend-unhealthy so the router fails over, rather than sending a browser User-Agent; per-chain health checks (base and polygon were 500ing) | M | Planned |
 | Tron backend | TronGrid MCP (149 tools, keyless, verified live) and SQD Portal via `mcp_proxy`; TronScan secondary, pinned to a serialized policy since parallel calls on one session fail | S | Planned |
@@ -146,7 +124,7 @@ Determinism discipline (the FATE rule, "flaky is deterministic, dig in"): render
 
 Supported now:
 
-- **Mock** (fallback for the example agents and `raxol` chat; the coding-agent surfaces auto-detect a real provider and error with a setup hint when none is configured): instant offline demo, no API key
+- **Mock** (fallback for the example agents): instant offline demo, no API key
 - **Proton Lumo** (`PROTON_UID=... PROTON_ACCESS_TOKEN=...`): zero-access encrypted AI, full U2L encryption via `Backend.Lumo`
 - **Proton Lumo via lumo-tamer** (`LUMO_TAMER_URL=http://localhost:3000`): OpenAI-compatible proxy fallback
 - **Kimi K2.5** (`KIMI_API_KEY=...`): Moonshot AI, $0.60/M input, 256K context, named `:kimi` provider

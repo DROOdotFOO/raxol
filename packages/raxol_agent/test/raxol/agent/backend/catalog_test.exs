@@ -10,21 +10,16 @@ defmodule Raxol.Agent.Backend.CatalogTest do
   @managed_env ~w(
     ANTHROPIC_API_KEY ANTHROPIC_MODEL OPENAI_API_KEY OPENAI_MODEL
     KIMI_API_KEY MOONSHOT_API_KEY KIMI_MODEL OPENROUTER_API_KEY OPENROUTER_MODEL
-    LONGCAT_API_KEY LONGCAT_MODEL PROTON_ACCESS_TOKEN OLLAMA_MODEL GROK_MODEL
+    LONGCAT_API_KEY LONGCAT_MODEL PROTON_ACCESS_TOKEN OLLAMA_MODEL
     AI_API_KEY AI_BASE_URL AI_MODEL RAXOL_ALLOW_PAID_API
     RAXOL_ANTHROPIC_OP RAXOL_OPENAI_OP RAXOL_KIMI_OP RAXOL_OPENROUTER_OP
     RAXOL_LONGCAT_OP RAXOL_LUMO_OP RAXOL_OLLAMA_OP RAXOL_LM_STUDIO_OP
-    RAXOL_LLM7_OP RAXOL_MOCK_OP RAXOL_CURSOR_OP
+    RAXOL_LLM7_OP RAXOL_MOCK_OP
   )
 
   setup do
     saved = Map.new(@managed_env, fn key -> {key, System.get_env(key)} end)
     Enum.each(@managed_env, &System.delete_env/1)
-
-    # Whether a vendor CLI is installed is a property of this host, not of the
-    # registry under test, so the probe seam answers instead of PATH.
-    prev_probe = Application.fetch_env(:raxol_agent, :native_probe)
-    Application.put_env(:raxol_agent, :native_probe, fn _mod -> false end)
 
     store =
       Path.join(
@@ -37,11 +32,6 @@ defmodule Raxol.Agent.Backend.CatalogTest do
 
     on_exit(fn ->
       File.rm(store)
-
-      case prev_probe do
-        {:ok, value} -> Application.put_env(:raxol_agent, :native_probe, value)
-        :error -> Application.delete_env(:raxol_agent, :native_probe)
-      end
 
       if prev_store,
         do: System.put_env("RAXOL_PROVIDERS", prev_store),
@@ -56,15 +46,9 @@ defmodule Raxol.Agent.Backend.CatalogTest do
     :ok
   end
 
-  # ADR-0034 Validation, "Gap 4: five registries disagree about which backends
-  # exist".
-  #
-  # The first and third assertions here FAIL on pre-change code: `:grok_native`
-  # was selectable and resolvable while missing from `ExecutorConfig.backend()`,
-  # so Dialyzer could not see it. The other two hold before and after -- they
-  # pin the derivations that make the first two impossible to break again, which
-  # is the point of the catalog. The "cursor" block below also fails on
-  # pre-change code.
+  # The selector table, the resolver registry and `ExecutorConfig.backend()`
+  # are all projections of the catalog. These pin the derivations, so the three
+  # cannot disagree about which backends exist.
   describe "registry convention" do
     test "every selectable backend is a legal ExecutorConfig.backend() value" do
       legal = MapSet.new(backend_type_atoms())
@@ -92,41 +76,17 @@ defmodule Raxol.Agent.Backend.CatalogTest do
              )
     end
 
-    test "the selector table is the catalog's runnable kinds" do
-      runnable =
-        Catalog.by_kind([:http, :native, :mock]) |> Enum.map(& &1.id) |> MapSet.new()
-
-      assert MapSet.equal?(runnable, MapSet.new(Selector.supported_backends()))
-      refute :codex in Selector.supported_backends()
-
-      assert {:error, {:backend_not_implemented, :codex}} =
-               Selector.select(ExecutorConfig.new(backend: :codex))
-    end
-  end
-
-  describe "cursor" do
-    # The user-visible defect Gap 4 closes: `cursor` was selectable in code and
-    # unreachable from `/login`, `--backend` string resolution and
-    # `.raxol/config.json`, because `@by_string` derives from the resolver
-    # registry the hand-written list had never gained it in.
-    test "resolves from its string name" do
-      assert {:ok, :cursor} = Resolver.harness_from_string("cursor")
+    test "the selector table is the catalog" do
+      assert MapSet.equal?(
+               MapSet.new(Catalog.ids()),
+               MapSet.new(Selector.supported_backends())
+             )
     end
 
-    test "named as a string, it resolves to its native backend module" do
-      assert {:ok, config, :explicit} = Resolver.resolve(harness: "cursor")
-      assert config.backend == :cursor
-
-      assert {:ok, Raxol.Agent.Backend.Cursor, _opts} = Selector.select(config)
-    end
-
-    test "is still never auto-selected, even with its CLI installed" do
-      Application.put_env(:raxol_agent, :native_probe, fn
-        Raxol.Agent.Backend.Cursor -> true
-        _other -> false
-      end)
-
-      assert :no_provider = Resolver.resolve()
+    test "every entry names a loadable backend module" do
+      for %{id: id, module: module} <- Catalog.entries() do
+        assert Code.ensure_loaded?(module), "#{id} names #{inspect(module)}, which does not load"
+      end
     end
   end
 

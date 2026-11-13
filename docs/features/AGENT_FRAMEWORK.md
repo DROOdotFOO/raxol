@@ -2,7 +2,7 @@
 
 An agent is a TEA module where input comes from LLMs and tools instead of a keyboard. Same `init/update/view` loop, same OTP supervision, same crash isolation. The "user" is an AI model issuing commands and processing results.
 
-For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md). For the interactive coding agent built on this framework, see [Coding Agent](CODING_AGENT.md). For the learning and recall layers an agent can opt into, see [Self-Improvement](SELF_IMPROVEMENT.md) and [Memory](MEMORY.md).
+For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md).
 
 ## Quick start
 
@@ -211,66 +211,78 @@ The `:deepseek` harness targets DeepSeek's OpenAI-compatible endpoint (`https://
 ## Turn driver
 
 `Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Turn` drives a whole
-self-improving turn: it assembles tool context from the agent module's callbacks, runs the
-reasoning loop, records the turn to a conversation log, then fires the background side
-effects.
+turn: it assembles tool context from the agent module's callbacks, runs the
+reasoning loop, and records the turn to a conversation log.
 
 ```elixir
 {:ok, items} =
   Raxol.Agent.Turn.run(MyAgent, "refactor lib/foo.ex",
     backend: MyBackend,
     log: log_server,
-    conversation_id: cid,
-    agent_id: "my-agent",
-    user_id: "user-123",        # optional, with :user_model
-    user_model: MyApp.UserModel,
-    session_search: MyApp.SessionSearch
+    conversation_id: cid
   )
 ```
 
-- `build_context/2` builds the tool context, each key present only when configured: memory
-  (from `memory_providers`/`memory_provider`), skills (`skills_provider`), user context, and
-  session search.
+- `build_context/2` builds the tool context: `:skills` is present when the agent module's
+  `skills_provider/0` returns a provider.
 - `run/3` runs `Stream.react/2` with that context and records the stream into a
   [Conversation Log](#conversation-item-log).
-- `after_turn/4` fires [self-improvement](SELF_IMPROVEMENT.md), the user-model refresh, and
-  session indexing.
 
-The agent *module* declares which providers it wants through zero-arity callbacks; the
-*caller* supplies the running server instances through opts. Turn is the canonical driver
-other runtimes can adopt.
+The agent *module* declares which provider it wants through a zero-arity callback; the
+*caller* supplies the running server instance through opts.
 
-## Native multi-vendor harness
+## Backends
 
-An agent can run its own reasoning loop, or hand the loop to a vendor CLI (Claude Code,
-Cursor) and expose Raxol's tools to it over MCP. `Raxol.Agent.ExecutorConfig`
-(`%{harness, model, auth, opts}`) plus `Raxol.Agent.Backend.Selector.select/1` map a harness
-atom to a backend:
+`Raxol.Agent.ExecutorConfig` (`%{harness, model, auth, opts}`) plus
+`Raxol.Agent.Backend.Selector.select/1` map a harness atom to a backend:
 
 | Harness | Backend |
 |---------|---------|
 | `:anthropic`, `:openai`, `:kimi`, `:ollama`, `:lm_studio`, `:llm7`, `:longcat`, `:deepseek`, `:openrouter` | `Backend.HTTP` |
 | `:lumo` | `Backend.Lumo` |
-| `:claude_native` | `Backend.ClaudeCode` |
-| `:grok_native` | `Backend.GrokBuild` |
-| `:cursor` | `Backend.Cursor` |
 | `:mock` | `Backend.Mock` |
 
 `Raxol.Agent.Backend.Catalog` is the single declaration this table, the resolver's provider
 registry and `ExecutorConfig.backend()` are all derived from (`Catalog.ids/0` lists every
-backend); see ADR-0034.
+backend). `select/1` returns `{:error, {:unknown_backend, harness}}` for a harness the
+catalog does not declare.
 
-A native backend reports `handles_tools_internally?/0` as `true`, which tells the framework
-not to drive the reasoning loop: the CLI runs its own loop and calls Raxol's tools through an
-injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-config`). The
-`:codex` harness is reserved (it speaks a stateful app-server protocol served by
-Symphony's Codex runner outside this repository, not an agent backend), so
-`select/1` returns `{:error, {:backend_not_implemented, :codex}}` for it.
+### Credentials
+
+`Raxol.Agent.Backend.Resolver.resolve/1` turns the environment into an `ExecutorConfig`.
+`Raxol.Agent.Stream` calls it when given `auto_provider: true` and no `:executor`.
+
+- **A named provider** (`harness:` to the resolver, `provider:` to `Stream`). Its key is the
+  first of: the `:api_key` option; a 1Password reference, read with the `op` CLI, from the
+  store or from `RAXOL_<HARNESS>_OP`; the provider's environment variable
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...). With none of them the result is
+  `{:no_key, harness}`. `:ollama`, `:lm_studio`, `:llm7` and `:mock` need no key.
+- **No provider named.** The resolver walks the catalog in order and takes the first provider
+  with a stored reference or an environment key, or a keyless one with an entry in the store.
+  Providers billed in API credits (`:anthropic`, `:openai`, `:kimi`, `:openrouter`,
+  `:longcat`, `:deepseek`) and the generic `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` endpoint
+  are skipped unless `RAXOL_ALLOW_PAID_API` is `1`, `true`, `TRUE` or `yes`. With nothing
+  found the result is `:no_provider`, and `Stream` answers from its `:backend` option, by
+  default `Backend.Mock`.
+
+The store is `~/.raxol/providers.json`, or the file `$RAXOL_PROVIDERS` names. It maps a
+provider to an `op://` reference and an optional model and base URL, never to a key, and is
+written with mode `0600`. A store the account does not own, or that its group or others may
+write, is refused with a logged warning, and resolution continues with environment variables.
+
+```elixir
+Raxol.Agent.Setup.connect_ref(:anthropic, %{op_ref: "op://Vault/Item/api_key"})
+Raxol.Agent.Setup.remove(:anthropic)
+```
+
+`connect_ref/3` stores a reference and reports whether it authorizes. `connect_key/3` first
+puts a raw key into a new 1Password item. `remove/1` deletes a provider's entry. `status/0`
+is what `raxol doctor` prints under `providers`.
 
 ## Authorization (ALLOW/ASK/DENY)
 
 `Raxol.Agent.Authorization` is a three-way policy engine, richer than the deny-only
-`PermissionHook`. It is what [`mix raxol.code`](CODING_AGENT.md) gates every mutating tool on.
+`PermissionHook`.
 
 - `Engine` is a pure reducer over a list of policies. It folds with `reduce_while`: a DENY
   short-circuits, an ALLOW merges whitelisted label writes, an ASK escrows writes and
@@ -282,10 +294,13 @@ Symphony's Codex runner outside this repository, not an agent backend), so
   composes the engine into the `CommandHook` chain at the `:tool_call` phase, resolving an
   ASK through a synchronous prompter.
 
+A host wires the engine in: through `Hook`, or through `McpAuthorizer` for an MCP server.
+The LLM tool-call path does not consult it. There a `sensitive` action is denied unless the
+context of the call carries a `:tool_authorizer` (`Raxol.Agent.ToolPolicy`).
+
 ## Conversation item-log
 
-`Raxol.Agent.Conversation` is a durable, append-only record of what an agent did, separate
-from its compacted working memory.
+`Raxol.Agent.Conversation` is a durable, append-only record of what an agent did.
 
 - `Item` is an immutable typed entry (message, tool_call, tool_result, reasoning, error, and
   more) with a stable id `"<conversation_id>:<seq>"` and a monotonic, store-assigned seq.
@@ -297,7 +312,7 @@ from its compacted working memory.
   subscriber in one serialized call, so the snapshot and the live tail partition exactly:
   every item once, no gap, no duplicate. Reconnect with an `:after` cursor.
 - `Recorder` bridges `Stream` events into items (tool_use to tool_call, done to message, and
-  so on). [Session search](MEMORY.md#session-search) indexes this log.
+  so on).
 
 ## Tunnel (reverse co-drive)
 

@@ -31,7 +31,6 @@ if System.get_env("RAXOL_MODE") == "mcp" or
     startup_mode: :mcp,
     mcp_authorizer: {Raxol.CLI.MCP, :authorize},
     mcp_read_authorizer: {Raxol.CLI.MCP, :authorize_read},
-    mcp_harness_tools: false,
     mcp_server_version: Raxol.CLI.version()
 
   config :raxol_cli, mcp_boot: true

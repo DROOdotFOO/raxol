@@ -42,6 +42,7 @@ defmodule RaxolPlaygroundWeb.Router do
     get("/demos", RedirectController, :demos)
     live("/demos/:demo", DemoLive, :show)
     get("/repl", RedirectController, :repl)
+    get("/coding-agent", RedirectController, :coding_agent)
 
     # The deep dives the landing used to stack. Listed one per line rather
     # than as `/:topic` so an unknown path 404s in the router instead of
@@ -49,7 +50,6 @@ defmodule RaxolPlaygroundWeb.Router do
     live("/surfaces", TopicLive, :surfaces)
     live("/ssh", TopicLive, :ssh)
     live("/agents", TopicLive, :agent)
-    live("/coding-agent", TopicLive, :coding_agent)
     live("/payments", TopicLive, :payments)
     live("/token", TopicLive, :token)
   end

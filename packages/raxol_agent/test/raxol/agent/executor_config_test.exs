@@ -98,7 +98,7 @@ defmodule Raxol.Agent.ExecutorConfigTest do
   end
 
   # Regression guard for the session-key-to-disk leak class: a session-only key
-  # lives in `auth` (e.g. `/login openai sk-...` in the coding TUI). If the
+  # lives in `auth` (a key a user supplies for one session). If the
   # snapshot codec is ever wired to persist an agent model, `auth` must be
   # redacted, never serialized. Removing the @derive (undeclared -> dropped
   # whole) or moving `:auth` into `persist:` would regress this.

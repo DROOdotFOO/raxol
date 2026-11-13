@@ -4,11 +4,10 @@ defmodule Raxol.Agent.Authorization.McpAuthorizer do
   `tools/call` authorizer -- the closure `Raxol.MCP.Server` evaluates before a
   tool runs.
 
-  This is the "one engine, two enforcement points" wiring: the same policy engine
-  that gates `raxol.code`'s tool calls now gates the MCP surface, and it does so
-  from the `raxol_agent` side, so `raxol_mcp` never has to depend on `raxol_agent`
-  (which would be a dependency cycle). The MCP server owns only the seam; this
-  fills it with the real engine.
+  It lives on the `raxol_agent` side, so `raxol_mcp` never has to depend on
+  `raxol_agent` (which would be a dependency cycle). The MCP server owns only
+  the seam; this fills it with the engine. No non-test code installs it: a
+  host passes it to `Raxol.MCP.Server.start_link/1`.
 
   ## Usage
 

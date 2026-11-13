@@ -1,11 +1,11 @@
 # Build Your First Agent
 
 The [Quickstart](QUICKSTART.md) builds a terminal app. This one builds an autonomous
-agent: a program an LLM drives, with tools, memory, and a learning loop. Same TEA model,
+agent: a program an LLM drives, with tools and skills. Same TEA model,
 same OTP supervision. The "user" is a model issuing tool calls instead of a keyboard.
 
 By the end you will have an agent that reasons on a real model, calls tools you define,
-remembers across sessions, and improves itself after each turn.
+and reads the skills you give it.
 
 ## 1. A message-driven agent
 
@@ -53,24 +53,22 @@ defmodule Tools.CountLines do
 end
 ```
 
-Declare which tools an agent may call with `available_actions/0`. Raxol ships a full
-toolset already (file read/write, shell, grep, glob, memory, skills); the
-[Tool Catalog](../reference/TOOL_CATALOG.md) lists every built-in tool and its
-authorization tier.
+Declare which tools an agent may call with `available_actions/0`. The
+[Tool Catalog](../reference/TOOL_CATALOG.md) lists every built-in tool and whether
+it is sensitive.
 
 ```elixir
 defmodule MyAgent do
   use Raxol.Agent
 
-  def available_actions do
-    [Tools.CountLines | Raxol.Agent.Actions.Fs.all()]
-  end
+  def available_actions, do: [Tools.CountLines]
 end
 ```
 
-Sensitive tools (writing files, running shell commands) are denied by default and gated
-through the [ALLOW/ASK/DENY authorization engine](../features/AGENT_FRAMEWORK.md#authorization-allowaskdeny).
-The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval UX.
+A tool marked `sensitive: true` is denied unless the context of the call carries a
+`:tool_authorizer` that allows it (`Raxol.Agent.ToolPolicy`). `Turn.run/3` sets none, so
+under it a sensitive tool is always denied; `Raxol.Agent.Stream.react/2` takes one in its
+`:context` option.
 
 ## 3. Reason on a real model
 
@@ -94,44 +92,40 @@ Pick a backend with `ExecutorConfig` and `Backend.Selector`, then drive a turn w
     backend: backend,
     backend_opts: backend_opts,
     log: MyLog,
-    conversation_id: "session-1",
-    agent_id: "my-agent"
+    conversation_id: "session-1"
   )
 ```
 
 The harness atom selects the provider: `:anthropic`, `:openai`, `:ollama`, `:lm_studio`,
-`:claude_native` (Claude Code), `:cursor`, and more. See
-[Agent Framework](../features/AGENT_FRAMEWORK.md#native-multi-vendor-harness).
+and more. See [Agent Framework](../features/AGENT_FRAMEWORK.md#backends).
 
-## 4. Memory, skills, and self-improvement
+## 4. Skills
 
-These are opt-in callbacks on the agent module. Turn wires them into every turn:
+Skills are opt-in. Start the store through app config:
+
+```elixir
+config :raxol_agent,
+  skills_provider: Raxol.Agent.Skills.Store,
+  skills_root: "~/.raxol/skills"
+```
+
+Then name the provider on the agent module and add the skill tools to its actions:
 
 ```elixir
 defmodule MyAgent do
   use Raxol.Agent
 
-  # Recall facts across sessions, and search prior conversation history.
-  def memory_providers, do: [Raxol.Agent.Memory.Store.Ets]
+  def available_actions, do: [Tools.CountLines | Raxol.Agent.Actions.Skills.actions()]
 
-  # Author and reuse SKILL.md procedures.
+  # Read and author SKILL.md procedures.
   def skills_provider, do: Raxol.Agent.Skills.Store
-
-  # After each successful turn, review it on a cheap model and write down
-  # what was learned (durable memory + new skills).
-  def self_improve, do: %{enabled: true, model: "claude-haiku-4-5", min_tool_calls: 5}
-
-  def available_actions, do: Raxol.Agent.Actions.Fs.all()
 end
 ```
 
-Setting `memory_providers/0` and `skills_provider/0` auto-exposes the memory and skills
-tools. `self_improve/0` runs a background reviewer after each turn (isolated, so a review
-crash never touches the turn). Nothing else changes: the same `Turn.run/3` call now
-recalls memory, offers skills, and learns.
+`Raxol.Agent.Actions.Skills.actions/0` is the three skill tools (`skills_list`, `skill_view`,
+`skill_manage`). An agent that does not define `available_actions/0` gets them from
+`skills_provider/0` alone. The same `Turn.run/3` call now offers skills.
 
-- [Memory](../features/MEMORY.md): the provider stack, session search, and user model.
-- [Self-Improvement](../features/SELF_IMPROVEMENT.md): the after-turn loop and the Curator.
 - [Skill Authoring](../guides/SKILL_AUTHORING.md): how to write a `SKILL.md`.
 
 ## 5. Run a complete example
@@ -144,11 +138,8 @@ mix run examples/agents/react_agent.exs                        # Mock backend
 ANTHROPIC_API_KEY=sk-ant-... mix run examples/agents/react_agent.exs   # real model
 ```
 
-For an interactive coding agent you can talk to right now, see the
-[Coding Agent](../features/CODING_AGENT.md) (`mix raxol.code`).
-
 ## Where next
 
-- [Agent Framework](../features/AGENT_FRAMEWORK.md): teams, the native harness, the item-log, the tunnel.
+- [Agent Framework](../features/AGENT_FRAMEWORK.md): teams, backends, the item-log, the tunnel.
 - [Agentic Commerce](../features/AGENTIC_COMMERCE.md): give the agent a wallet and spending limits.
 - [Why Raxol](../WHY_RAXOL.md): why an OTP runtime is the right substrate for agents.

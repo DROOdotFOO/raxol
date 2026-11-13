@@ -4,12 +4,10 @@ defmodule Raxol.Core.ChildEnv do
   the BEAM consumes.
 
   An Erlang port inherits the whole environment of the node. Every place raxol
-  spawns something a model or a third party chose -- a shell command, a
-  background job, a directive, an LSP server, an MCP stdio server, a vendor
-  agent CLI, a Symphony runner or workspace hook, a benchmarked agent package
-  -- would otherwise hand that process the Sleuth key the `fx` tool spends, a
-  share-link secret, a signing key or a bearer token, for a prompt-injected
-  `printenv` to read.
+  spawns something a model or a third party chose -- a directive's shell
+  command, an MCP stdio server, a benchmarked agent package -- would otherwise
+  hand that process the Sleuth key the `fx` tool spends, a share-link secret,
+  a signing key or a bearer token, for a prompt-injected `printenv` to read.
 
   `port_env/1` builds the `{:env, _}` value for `Port.open/2`: the caller's own
   variables, plus each secret the caller did not set, mapped to `false`, which
@@ -33,10 +31,10 @@ defmodule Raxol.Core.ChildEnv do
         pass: ["RAXOL_SLEUTH_API_KEY"]
 
   `pass:` is global: a passed name reaches every child the node spawns --
-  shell commands and jobs, directives, MCP and LSP servers, vendor agent
-  CLIs, Symphony runners and hooks, the earn bench's agent packages -- not
-  only the one that needs it. A nested raxol node that needs the Sleuth key
-  should get it from its own `config :raxol_agent, :web3, fx: [sleuth_api_key:
+  directive shell commands, MCP stdio servers, the earn bench's agent
+  packages -- not only the one that needs it. A nested raxol node that needs
+  the Sleuth key should get it from its own
+  `config :raxol_agent, :web3, fx: [sleuth_api_key:
   ...]` instead; a single spawn site that must hand one child a secret names
   it in that call's `env` (`port_env/1` keeps an explicitly given secret).
 
@@ -55,11 +53,8 @@ defmodule Raxol.Core.ChildEnv do
   putting it in the node's environment at all: a config provider, a 0600 file
   or `op`.
 
-  Nor does it hide what a caller hands a child on purpose. A vendor agent CLI
-  runs its own shell tool as the node's user, so a variable passed to the CLI,
-  or written into the MCP config of a server it launches
-  (`Raxol.Agent.Backend.Native`'s `:env` and `:mcp_env`), is readable by any
-  command the CLI's model runs.
+  Nor does it hide what a caller hands a child on purpose: a variable named
+  in a spawn's `env` is readable by everything that child runs.
   """
 
   @secrets ~w(

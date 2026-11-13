@@ -18,38 +18,29 @@ This page is about agents.
 | Payments | none | none | wallets, spend limits, cross-chain settlement |
 
 The BEAM was built for systems that cannot go down, cannot lose state, and hot-swap code
-while running. An agent runtime wants exactly those properties. When a background reviewer
-crashes, the turn is unaffected because it runs in an isolated process. When a node
-restarts, an agent's memory and skills survive because they are backed by a supervision tree
-and durable stores, not held in one process. When you want a thousand agents, you spawn a
+while running. An agent runtime wants exactly those properties. When a turn's process
+crashes, the agent is unaffected because the turn runs in an isolated process. When a node
+restarts, an agent's journal and skills survive because they are on disk, not held in one
+process. When you want a thousand agents, you spawn a
 thousand lightweight processes, not a thousand OS threads.
 
-## Four things Raxol does that the others do not
+## Three things Raxol does that the others do not
 
-### Governed execution (ALLOW / ASK / DENY)
+### Governed execution
 
-Every tool call passes through an [authorization engine](features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
-that returns allow, ask, or deny, with per-scope approval memory. This is stronger than a
-binary approve/deny prompt: an agent can be allowed to read anywhere, asked before writing,
-and denied the shell entirely, declaratively. The [Coding Agent](features/CODING_AGENT.md)
-runs every mutating action through it, and the [Tool Catalog](reference/TOOL_CATALOG.md)
-marks which tools are gated.
+A tool marked `sensitive` is denied unless the context of the call carries a
+`:tool_authorizer` that allows it, so a model cannot reach one just by emitting a tool call.
+Over ACP the agent is handed an authorizer that asks the editor once for each sensitive
+call. `Raxol.Agent.Authorization` is an
+[allow/ask/deny policy reducer](features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
+that a host can wire in; no tool-call path consults it by default. The
+[Tool Catalog](reference/TOOL_CATALOG.md) marks which tools are sensitive.
 
 ### One app, every surface
 
 The same TEA module renders to a terminal, a LiveView, an SSH session, an agent over MCP, a
 watch, and a chat, through one OTP fan-out. Competitors integrate each platform separately;
 Raxol projects one running module. See [Surfaces](guides/SURFACES.md).
-
-### A learning loop backed by supervision
-
-Raxol has an after-turn [self-improvement](features/SELF_IMPROVEMENT.md) loop, agent-authored
-skills, a provider-stack [memory](features/MEMORY.md) layer, and a dialectic user model, the
-same capabilities Hermes markets as its differentiator. The difference is the substrate: the
-reviewer is an isolated Task, skills are on-disk `SKILL.md` files with DETS telemetry
-replayed on boot, and every Curator pass is reversible. A learning loop that cannot lose
-state because it is backed by OTP supervision is a stronger claim than one backed by a
-single-process database.
 
 ### Agentic commerce
 

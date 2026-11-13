@@ -21,10 +21,9 @@ defmodule RaxolPlayground.BrandMarks do
 
   @dir Path.expand("../../priv/brand_marks", __DIR__)
 
-  # Display name => file. Two entries wear their vendor's mark rather than
-  # their own: "Proton Lumo" carries Proton's, and "Grok" carries xAI's,
-  # because neither product has a separate mark and the vendor's is the honest
-  # stand-in. OpenAI, VS Code, Grok and LongCat come from vendor-published
+  # Display name => file. "Proton Lumo" wears Proton's mark rather than its
+  # own, because the product has no separate mark and the vendor's is the
+  # honest stand-in. OpenAI, VS Code and LongCat come from vendor-published
   # assets normalized to this directory's shape (the README records each
   # source); LLM7 has no mark anywhere and is deliberately not mapped to a
   # near-miss.
@@ -34,15 +33,12 @@ defmodule RaxolPlayground.BrandMarks do
   # row's own third group rather than to a registry, and its file is generated
   # rather than sourced: see `priv/brand_marks/README.md`.
   @sources %{
-    "Claude" => "claude.svg",
     "Anthropic" => "anthropic.svg",
     "OpenAI" => "openai.svg",
-    "Grok" => "xai.svg",
     "Kimi" => "kimi.svg",
     "OpenRouter" => "openrouter.svg",
     "LongCat" => "longcat.svg",
     "DeepSeek" => "deepseek.svg",
-    "Cursor" => "cursor.svg",
     "Proton Lumo" => "proton.svg",
     "Ollama" => "ollama.svg",
     "LM Studio" => "lmstudio.svg",

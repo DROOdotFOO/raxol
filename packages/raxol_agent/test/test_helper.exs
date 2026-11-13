@@ -18,7 +18,7 @@ end
 # is longer than the budget of any assertion waiting on the other side of it,
 # so a LOCKED vault (which blocks `op` on its desktop authorization prompt)
 # turns a passing test red on a machine state that has nothing to do with the
-# code. `/inspect` was failing exactly this way.
+# code. The provider diagnostic fails exactly this way.
 #
 # Set rather than defaulted: an unlocked vault answers in well under a second,
 # so this only ever truncates a wait that was going to be answered by a human
@@ -34,7 +34,6 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 # Red-suite support (reference gates, dead injectors, shared contours) lives
 # under test/raxol/agent/red/support/ — load it explicitly, same mechanic.
 Code.require_file("raxol/agent/red/support/u8_gates.ex", __DIR__)
-Code.require_file("raxol/agent/red/support/u10_compaction.ex", __DIR__)
 
 # The U11-R red suite's oracle + generators live under test/raxol/agent/red/
 # support (also outside elixirc_paths) — load them explicitly. Guard against a
@@ -69,8 +68,8 @@ os_excludes =
 # authored BEFORE their units against the freeze contracts; excluded from every
 # regular run so CI stays GREEN while the contract is pinned. A suite loses the
 # tag (and joins CI green) the day its unit implements it. U11-R (meta family +
-# provenance/taint) has graduated — U11-I implemented `Raxol.Agent.Meta` /
-# `Raxol.Agent.Fingerprint`, so it now runs untagged in CI; the tag is kept in
+# provenance/taint) has graduated — U11-I implemented `Raxol.Agent.Meta`, so it
+# now runs untagged in CI; the tag is kept in
 # the exclude list for the next failing-first red. The negative CONTROLS for the
 # same contours are NOT tagged :harness_red — they run in CI to prove each red
 # has teeth (meta-invariant m4). (The former `:action_surface` marker on U8-R's
@@ -87,11 +86,7 @@ ExUnit.start(
     :harness_red,
     # :live_longcat hits the real LongCat API; run with
     # `LONGCAT_API_KEY=<key> mix test --only live_longcat`.
-    :live_longcat,
-    # :live_lsp drives a real language server (rust-analyzer) and indexes a
-    # crate, so it is minutes and a toolchain rather than seconds; run with
-    # `mix test --only live_lsp`.
-    :live_lsp
+    :live_longcat
     | os_excludes
   ]
 )

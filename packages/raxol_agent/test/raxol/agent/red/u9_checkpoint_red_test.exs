@@ -66,6 +66,35 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
     {j, session, dir}
   end
 
+  # Two healthy snapshot checkpoints, each at a turn boundary, with distinct
+  # models so their content-addressed snapshot files differ. Returns the journal
+  # handle, the session dir, and the two raw checkpoint records, older first.
+  defp two_checkpoints!(base) do
+    {j, _session, dir} = seed_conversation!(base)
+
+    assert {:ok, _off} =
+             Checkpoint.write(j, CR.fold(CR.raw_records(dir)), reason: "manual")
+
+    CR.append_all!(j, [
+      CR.loop_event("turn_started"),
+      CR.loop_event("item_completed", %{"text" => "more"}),
+      CR.loop_event("turn_completed")
+    ])
+
+    assert {:ok, _off} =
+             Checkpoint.write(j, CR.fold(CR.raw_records(dir)), reason: "manual")
+
+    [older, newer] =
+      dir |> CR.raw_records() |> Enum.filter(&(&1["kind"] == "checkpoint"))
+
+    {j, dir, older, newer}
+  end
+
+  defp corrupt_snapshot!(dir, ref) do
+    path = Path.join(dir, ref)
+    File.write!(path, File.read!(path) <> "corruption")
+  end
+
   # ===========================================================================
   # P-JS1 — a checkpoint consumes exactly one offset; ids stay dense
   # ===========================================================================
@@ -620,6 +649,27 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       :ok = FileStore.close(j)
     end
 
+    test "a checkpoint with tip_offset: null → :malformed_checkpoint, not a fold that drops the tail",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+      {ref, hash} = CR.stage_snapshot!(dir, %{"applied" => []})
+
+      # Present but nil: `id > nil` is false for every id, so an unguarded
+      # restore would fold nothing forward onto the snapshot.
+      CR.inject_single_counter_checkpoint!(dir, %{
+        "tip_offset" => nil,
+        "snapshot_ref" => ref,
+        "snapshot_hash" => hash,
+        "reason" => "manual"
+      })
+
+      assert {:error, :malformed_checkpoint} = Checkpoint.restore(j),
+             "a nil tip_offset must surface a typed reject"
+
+      assert FileStore.status(j) == :ok
+      :ok = FileStore.close(j)
+    end
+
     test "a checkpoint missing snapshot_ref → :malformed_checkpoint (no KeyError)",
          %{base: base} do
       {j, _session, dir} = seed_conversation!(base)
@@ -667,6 +717,48 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       # Nothing deleted on the damaged read (FI-7).
       assert File.ls!(Path.join(dir, "journal")) != []
       :ok = FileStore.close(j)
+    end
+  end
+
+  describe "restore-path hardening — a snapshot_ref outside the snapshot store is refused before any read" do
+    for {label, hostile_ref} <- [
+          {"path traversal", "snapshots/../../../../etc/passwd"},
+          {"non-hex name", "snapshots/not-a-sha.json"},
+          {"bare traversal", "../secrets.json"}
+        ] do
+      test "a #{label} ref → :malformed_pointer on restore and restore_checkpoint; floor skips it",
+           %{base: base} do
+        {j, dir, older, healthy} = two_checkpoints!(base)
+
+        # The hostile record claims the older tip, so a floor that took it
+        # would differ from the healthy one.
+        assert older["tip_offset"] < healthy["tip_offset"]
+
+        CR.inject_single_counter_checkpoint!(dir, %{
+          "tip_offset" => older["tip_offset"],
+          "snapshot_ref" => unquote(hostile_ref),
+          "snapshot_hash" => String.duplicate("a", 64),
+          "reason" => "manual"
+        })
+
+        assert {:error, :malformed_pointer} = Checkpoint.restore(j),
+               "a hostile ref must be refused, never joined onto the session dir"
+
+        {:ok, records} = FileStore.read(j)
+        hostile = List.last(records)
+        assert hostile["snapshot_ref"] == unquote(hostile_ref)
+
+        assert {:error, :malformed_pointer} =
+                 Checkpoint.restore_checkpoint(j, records, hostile)
+
+        # The hostile newest is unhealthy, so the floor is the checkpoint
+        # beneath it.
+        assert Checkpoint.protected_floor(j, records) ==
+                 {:offset, healthy["tip_offset"]}
+
+        assert FileStore.status(j) == :ok
+        :ok = FileStore.close(j)
+      end
     end
   end
 
@@ -854,6 +946,64 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
       assert Checkpoint.protected_floor(cps) == {:offset, 7}
       assert Checkpoint.protected_floor([]) == :none
+    end
+  end
+
+  describe "protected_floor/2 — the floor is the newest HEALTHY checkpoint's tip" do
+    test "healthy newest → the newest checkpoint's tip", %{base: base} do
+      {j, _dir, older, newer} = two_checkpoints!(base)
+      {:ok, records} = FileStore.read(j)
+
+      assert newer["tip_offset"] > older["tip_offset"]
+
+      assert Checkpoint.protected_floor(j, records) ==
+               {:offset, newer["tip_offset"]}
+
+      :ok = FileStore.close(j)
+    end
+
+    test "corrupt newest + healthy older → the OLDER healthy tip", %{base: base} do
+      {j, dir, older, newer} = two_checkpoints!(base)
+      corrupt_snapshot!(dir, newer["snapshot_ref"])
+      {:ok, records} = FileStore.read(j)
+
+      # The record-only arity cannot see snapshot health and keeps the corrupt
+      # newest's higher tip; truncating up to it would cut records the older
+      # checkpoint's restore still folds.
+      assert Checkpoint.protected_floor(records) ==
+               {:offset, newer["tip_offset"]}
+
+      assert Checkpoint.protected_floor(j, records) ==
+               {:offset, older["tip_offset"]},
+             "the floor must be the newest healthy checkpoint's tip, not the corrupt newest's"
+
+      # The floor names a checkpoint that restores; the newest does not.
+      assert {:error, :snapshot_corrupt} = Checkpoint.restore(j)
+      assert {:ok, _model} = Checkpoint.restore_checkpoint(j, records, older)
+
+      :ok = FileStore.close(j)
+    end
+
+    test "no checkpoint at all → :none", %{base: base} do
+      {j, _session, _dir} = seed_conversation!(base)
+      {:ok, records} = FileStore.read(j)
+
+      assert Checkpoint.protected_floor(j, records) == :none
+
+      :ok = FileStore.close(j)
+    end
+
+    test "every checkpoint corrupt → :none (nothing healthy to protect)", %{
+      base: base
+    } do
+      {j, dir, older, newer} = two_checkpoints!(base)
+      corrupt_snapshot!(dir, older["snapshot_ref"])
+      corrupt_snapshot!(dir, newer["snapshot_ref"])
+      {:ok, records} = FileStore.read(j)
+
+      assert Checkpoint.protected_floor(j, records) == :none
+
+      :ok = FileStore.close(j)
     end
   end
 

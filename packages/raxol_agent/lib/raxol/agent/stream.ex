@@ -51,9 +51,8 @@ defmodule Raxol.Agent.Stream do
   - `:backend` -- AIBackend module (default: `Raxol.Agent.Backend.Mock`); ignored
     when `:executor` is given
   - `:auto_provider` -- when `true` and no `:executor` is given, resolve one from
-    the environment via `Raxol.Agent.Backend.Resolver` (the same op-ref ->
-    provider-env -> `AI_API_KEY` onboarding the coding TUI and `mix raxol.setup`
-    use). An optional `:provider` pins a specific one. Falls through to
+    the environment via `Raxol.Agent.Backend.Resolver` (op-ref ->
+    provider-env -> `AI_API_KEY`). An optional `:provider` pins a specific one. Falls through to
     `:backend`/Mock when nothing resolves, so it never crashes an unconfigured
     caller. This is how a headless/embedded agent surface gets the same
     credential story without hand-rolling a resolver call.
@@ -174,14 +173,14 @@ defmodule Raxol.Agent.Stream do
   @doc """
   Whether the backend resolved from `opts` runs its own tool loop.
 
-  Native / vendor-owns-loop backends (`handles_tools_internally? == true`)
-  execute tools out-of-process over MCP, where the framework cannot thread run
-  context -- `:tool_authorizer`, `:tool_call_hooks`, and app flags such as the
-  cron `:in_cron` recursion guard -- into tool execution. A caller that exposes a
-  context-guarded tool uses this to fail closed: withhold the tool on that path
-  rather than hand over capability the guard cannot police. Resolution mirrors
-  `react/2` (executor / auto_provider / `:backend`), so the answer matches the
-  backend the turn will actually use.
+  A backend whose `handles_tools_internally?/0` returns true executes tools
+  itself, where the framework cannot thread run context -- `:tool_authorizer`,
+  `:tool_call_hooks`, and app flags such as the cron `:in_cron` recursion
+  guard -- into tool execution. No backend in the catalog does. A caller that
+  exposes a context-guarded tool uses this to fail closed: withhold the tool
+  on that path rather than hand over capability the guard cannot police.
+  Resolution mirrors `react/2` (executor / auto_provider / `:backend`), so the
+  answer matches the backend the turn will actually use.
   """
   @spec native_tool_loop?(keyword()) :: boolean()
   def native_tool_loop?(opts) do
@@ -189,26 +188,16 @@ defmodule Raxol.Agent.Stream do
     Raxol.Agent.AIBackend.handles_tools_internally?(backend)
   end
 
-  # Vendor-owns-loop backends (native CLI harnesses) run their own tool loop with
-  # Raxol's tools injected over MCP, so the framework just streams their output.
+  # A backend that owns its tool loop runs the tools itself, so the framework
+  # just streams its output.
   defp native_react(messages, backend, backend_opts, opts) do
-    context = Keyword.get(opts, :context, %{})
-
-    messages
-    |> maybe_enrich_memory(context)
-    |> maybe_enrich_user_context(context)
-    |> then(&do_completion(backend, &1, backend_opts, opts))
+    do_completion(backend, messages, backend_opts, opts)
   end
 
   defp framework_react(messages, backend, backend_opts, opts) do
     actions = Keyword.get(opts, :actions, [])
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     context = Keyword.get(opts, :context, %{})
-
-    messages =
-      messages
-      |> maybe_enrich_memory(context)
-      |> maybe_enrich_user_context(context)
 
     tools = ToolConverter.to_tool_definitions(actions)
     tool_opts = Keyword.merge(backend_opts, tools: tools)
@@ -613,8 +602,8 @@ defmodule Raxol.Agent.Stream do
     {backend, backend_opts}
   end
 
-  # Native (vendor-owns-loop) backends expose Raxol's tools to the CLI over MCP,
-  # so they need the Action modules in their opts to build the MCP config.
+  # A backend that owns its tool loop needs the Action modules in its opts to
+  # expose them as tools.
   defp maybe_inject_actions(backend_opts, backend, opts) do
     with true <- Raxol.Agent.AIBackend.handles_tools_internally?(backend),
          actions when is_list(actions) and actions != [] <-
@@ -629,8 +618,18 @@ defmodule Raxol.Agent.Stream do
     case Keyword.get(opts, :executor) || resolve_executor(opts) do
       %Raxol.Agent.ExecutorConfig{} = executor ->
         case Raxol.Agent.Backend.Selector.select(executor) do
-          {:ok, backend, executor_opts} -> {backend, executor_opts}
-          {:error, _reason} -> {fallback_backend(opts), []}
+          {:ok, backend, executor_opts} ->
+            {backend, executor_opts}
+
+          {:error, reason} ->
+            fallback = fallback_backend(opts)
+
+            Logger.warning(
+              "executor backend not selectable (#{inspect(reason)}); " <>
+                "answering from #{inspect(fallback)}"
+            )
+
+            {fallback, []}
         end
 
       _ ->
@@ -641,9 +640,9 @@ defmodule Raxol.Agent.Stream do
   @doc false
   # Opt-in environment/1Password onboarding for any programmatic agent surface.
   # With `auto_provider: true` and no explicit `:executor`, resolve one through
-  # the shared `Raxol.Agent.Backend.Resolver` — the SAME op-ref -> provider-env
-  # (`ANTHROPIC_API_KEY`, ...) -> `AI_API_KEY`/`AI_BASE_URL` precedence the coding
-  # TUI and `mix raxol.setup` use — so a surface gets the same credential story
+  # the shared `Raxol.Agent.Backend.Resolver` — op-ref -> provider-env
+  # (`ANTHROPIC_API_KEY`, ...) -> `AI_API_KEY`/`AI_BASE_URL` — so a surface
+  # gets the same credential story
   # for free instead of hand-rolling a resolver call. A resolution that finds no
   # credential returns `nil`, so `backend_from_opts/1` falls through to
   # `:backend`/Mock and the opt never crashes a caller with no provider set up.
@@ -707,29 +706,6 @@ defmodule Raxol.Agent.Stream do
           [%{role: :system, content: sys} | messages]
         end
     end
-  end
-
-  defp maybe_enrich_memory(messages, context) do
-    Raxol.Agent.Memory.Manager.enrich_messages(
-      messages,
-      Map.get(context, :memory),
-      last_user_content(messages)
-    )
-  end
-
-  defp maybe_enrich_user_context(messages, context) do
-    Raxol.Agent.Memory.Manager.enrich_user_context(
-      messages,
-      Map.get(context, :user_context)
-    )
-  end
-
-  defp last_user_content(messages) do
-    messages
-    |> Enum.reverse()
-    |> Enum.find_value("", fn msg ->
-      if Map.get(msg, :role) == :user, do: Map.get(msg, :content)
-    end)
   end
 
   defp format_tool_text(tool_calls) do

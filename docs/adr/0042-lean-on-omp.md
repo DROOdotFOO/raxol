@@ -11,12 +11,13 @@ live. Revised on 2026-10-24 after a third pass: agents keep their journal
 across a respawn but not their state, payment limits need durable
 single-owner state, and surfaces need an authenticated user.
 
-Supersedes [ADR-0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent
-seams) once the harness is deleted. The same deletion supersedes ADRs 0022,
-0024, 0026, 0027 and 0028 and narrows 0021, 0032, 0035, 0036 and 0037 (table
-under Consequences); each is re-marked in the PR that removes its code, not
-before. Amends [ADR-0012](0012-mcp-as-rendering-target.md): derived tool names
+Supersedes ADRs 0022, 0024, 0026, 0027 and 0028 and narrows 0021, 0032,
+[0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent seams), 0035,
+0036 and 0037 (table under Consequences); each is marked in its own Status.
+Amends [ADR-0012](0012-mcp-as-rendering-target.md): derived tool names
 become session-scoped and a session's tool set becomes sticky (Decision 2).
+
+2026-11-13: the harness is deleted.
 
 ## Context
 
@@ -216,8 +217,8 @@ The cutover also resolves its outside edges in the same PR:
 - `raxol_cli`'s `doctor`.
 - The `raxol_payments` tools-docs task and its `Code.CostLedger` test.
 - The CI entrypoint and ACP loopback jobs.
-- The CLI release workflow's `raxol p` smoke, replaced by the `raxol mcp`
-  smoke.
+- The CLI release workflow's `raxol p` smoke, replaced by a `raxol doctor`
+  check and the `raxol mcp` smoke.
 - The quality baseline.
 - The docs, the web landing page and `llms.txt` sources that describe the
   coding agent.
@@ -379,7 +380,7 @@ agent.
 | 0027 | Superseded | `Actions.Task` goes; OMP owns subagent fan-out |
 | 0028 | Superseded | `Auxiliary`'s only callers (`SelfImprove`, `UserModel`) go, leaving it dead |
 | 0032 | Narrowed | `Actions.Fs` goes; its sandboxed-spawn design stays as the open follow-up for unattended runners such as the Symphony `omp` runner |
-| 0034 | Superseded | the foreign coding-agent seams go; its catalog derivation policy and Symphony-on-OMP notes carry into this ADR's follow-up PRs |
+| 0034 | Narrowed | the native seam and Gap 1 go; the catalog as the single backend declaration and the `handles_tools_internally?/0` seam stay |
 | 0035 | Narrowed | `LlmPrices` prices `omp_gateway` replies; its DeepSeek scoped rows go with the backend |
 | 0036 | Narrowed | the tier-1 events are emitted only from `Code.App` |
 | 0037 | Narrowed | `.mcp.json` admission lived in `Code.McpConfig` |

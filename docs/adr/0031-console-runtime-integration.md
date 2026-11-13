@@ -14,6 +14,10 @@ persona seam (`Raxol.Agent.SystemPrompt`), and the Virtuals ACP stack (`raxol_ea
 `Raxol.Agent.SystemPrompt` has since been removed: nothing called it, and
 `Raxol.Console.RuntimeConfig` builds the persona from the package's `soul.md` and `AGENTS.md` itself.
 
+Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Memory` is removed, so the
+console runtime has no native memory and `Raxol.Agent.Supervisor` starts no memory store. The
+two passages below that list memory among its capabilities no longer hold.
+
 ## Context
 
 The Virtuals ACP Console (`app.virtuals.io/acp/new`, part of EconomyOS) provisions a managed agent

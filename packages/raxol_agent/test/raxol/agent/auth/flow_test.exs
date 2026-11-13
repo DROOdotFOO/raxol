@@ -78,7 +78,7 @@ defmodule Raxol.Agent.Auth.FlowTest do
 
     test "are pointed at the method that does work for them" do
       assert Flow.describe({:no_oauth_flow, :anthropic}) =~
-               "raxol login anthropic"
+               "set its API key in the environment"
     end
 
     test "are absent from the advertised list" do
@@ -88,7 +88,7 @@ defmodule Raxol.Agent.Auth.FlowTest do
     end
 
     # The brokerage sign-in has a flow, but it is not a model-provider sign-in
-    # and must never be offered to ACP clients, `raxol login` or the TUI.
+    # and must never be offered to ACP clients.
     test "do not include the brokerage sign-in" do
       refute :robinhood in Flow.providers()
       refute Flow.supported?(:robinhood)

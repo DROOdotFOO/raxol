@@ -172,6 +172,27 @@ Where the same BEAM also serves the `agent_*` MCP tools, they do not list, ask
 or stop an agent an ACP session started. The two share the id namespace and,
 for one project root, the journal directory.
 
+### Provider sign-in
+
+`authMethods` offers "Sign in with OpenRouter". Approving it in the browser
+mints an OpenRouter API key, puts it into a new 1Password item (vault
+`$RAXOL_OP_VAULT`, by default `Private`) and writes that item's `op://`
+reference under `openrouter` in the
+[provider store](AGENT_FRAMEWORK.md#credentials), `~/.raxol/providers.json`.
+The key is not kept on disk: it passes through a `0600` temporary file that is
+removed when `op item create` returns. Without the `op` CLI the sign-in fails.
+
+OpenRouter is billed in API credits, so an agent that leaves the choice of
+provider to Raxol (`auto_provider: true`) is not given this key. It names the
+provider (`provider: :openrouter`), or runs with `RAXOL_ALLOW_PAID_API=1`,
+under which the first provider that resolves is taken, paid ones included.
+The reference counter makes no model call.
+
+`raxol doctor` lists the stored provider under `providers`. To forget it, call
+`Raxol.Agent.Setup.remove(:openrouter)` from Elixir or, with the packaged
+binary, delete the `openrouter` entry from `~/.raxol/providers.json`. Neither
+deletes the 1Password item.
+
 ### Limits and refusals
 
 - **Sessions directory.** Journals are kept under `$RAXOL_SESSIONS_DIR`, by
@@ -247,5 +268,4 @@ package `NOTICE.md`.
 ## See also
 
 - [Agent Commerce Protocol](ACP.md): the unrelated on-chain payments ACP.
-- [Coding Agent](CODING_AGENT.md): Raxol's own terminal coding agent.
 - `scripts/acp_probe.py`: a minimal ACP client for verifying an integration.

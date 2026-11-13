@@ -42,18 +42,10 @@ lib/raxol/core/metrics/metrics_collector.ex
 lib/raxol/recording/recorder.ex
 packages/raxol_terminal/lib/raxol/terminal/buffer/safe_manager.ex
 
-# Unlinked (`GenServer.start`) named singletons. The guard matched only
-# `start_link` until now, so these were invisible to it rather than approved:
-# an unlinked singleton is the MORE dangerous shape, since nothing supervises
+# Unlinked (`GenServer.start`) named singletons: an unlinked singleton is the
+# MORE dangerous shape, since nothing supervises
 # it, a crash takes its whole state with it and skips `terminate/2`, and
 # nothing stops it on application shutdown.
-#
-# `shell/jobs.ex` starts under `Raxol.Agent.DynSup` whenever the agent subtree
-# is running; the bare `start` is the fallback for a VM that has no subtree to
-# supervise under (a plain script, a focused test). The other two are
-# pre-existing and still take the bare path unconditionally.
-packages/raxol_agent/lib/raxol/agent/shell/jobs.ex
-packages/raxol_agent/lib/raxol/agent/probe/runner/pool.ex
 packages/raxol_agent/lib/raxol/agent/spend_gate/reservations.ex
 
 # `Raxol.MCP.Client.Tables` owns the era-verdict table and the client-side

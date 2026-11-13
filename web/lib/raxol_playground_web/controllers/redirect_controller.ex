@@ -36,4 +36,16 @@ defmodule RaxolPlaygroundWeb.RedirectController do
     |> redirect(to: "/playground")
     |> halt()
   end
+
+  @doc """
+  `/coding-agent` -> `/agents`.
+
+  The page's ACP and MCP commands are on `/agents`.
+  """
+  def coding_agent(conn, _params) do
+    conn
+    |> put_status(:moved_permanently)
+    |> redirect(to: "/agents")
+    |> halt()
+  end
 end

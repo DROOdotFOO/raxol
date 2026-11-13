@@ -739,19 +739,6 @@ jobs:
         working-directory: packages/raxol_agent
         run: mix test --include integration test/raxol/agent/acp_loopback_test.exs
 
-      # Same hole, other entrypoints: `bin/raxol` and `bin/raxol-code` are
-      # shell scripts, so nothing in the Elixir suite goes through them -- unit
-      # tests call `Raxol.Agent.P.run/1` directly and never see the process
-      # contract the scripts own. Every defect these two shipped lived there:
-      # Mix's loadpaths pass printing "==> raxol_terminal" / "Compiling N
-      # files" onto the answer channel, and `app.start`'s log banner doing the
-      # same. `:integration` for the BEAM boot, so included by file for the
-      # same reason as the loopback above.
-      - name: Run CLI entrypoint smoke (bin/raxol, bin/raxol-code)
-        if: matrix.package == 'raxol_agent'
-        working-directory: packages/raxol_agent
-        run: mix test --include integration test/raxol/agent/cli_entrypoint_smoke_test.exs
-
       # `raxol mcp` as an OS process (`:integration`, excluded by
       # packages/raxol_cli/test/test_helper.exs): end of input exits 0, an
       # app's OSC output lands on stderr, and every stdout line is JSON-RPC.

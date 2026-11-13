@@ -49,21 +49,6 @@ defmodule Raxol.Agent do
       def terminate(_, _), do: :ok
 
       @doc """
-      Returns compaction config for automatic session history compaction.
-
-      Override to customize token limits. Return `nil` to disable compaction.
-      Agents that store message history in `model.history` get automatic
-      compaction after each action in `Agent.Process`.
-
-      ## Default Config
-
-          %{max_tokens: 8_000, preserve_recent: 4, summary_max_tokens: 1_000}
-      """
-      def compaction_config do
-        %{max_tokens: 8_000, preserve_recent: 4, summary_max_tokens: 1_000}
-      end
-
-      @doc """
       Returns a list of `Raxol.Agent.CommandHook` modules for this agent.
 
       Hooks intercept command execution with pre/post semantics.
@@ -94,29 +79,7 @@ defmodule Raxol.Agent do
       def thread_log, do: nil
 
       @doc """
-      Returns the cross-session memory provider for this agent, or `nil`.
-
-      Override to return a `Raxol.Agent.Memory` provider module (e.g.
-      `Raxol.Agent.Memory.Store.Ets`). When set, memory actions are exposed
-      automatically and the agent should put
-      `Raxol.Agent.Memory.provider_context(provider, agent_id)` under
-      `context[:memory]` when invoking a Strategy or `Raxol.Agent.Stream`.
-      Defaults to `nil` (memory disabled).
-      """
-      def memory_provider, do: nil
-
-      @doc """
-      Returns a list of memory providers to stack for this agent.
-
-      Each entry is a provider module or `{module, opts}` pair. When non-empty,
-      the runtime composes them via `Raxol.Agent.Memory.stack_context/3` so the
-      built-in store and external providers run together. Defaults to `[]`
-      (use the single `memory_provider/0`).
-      """
-      def memory_providers, do: []
-
-      @doc """
-      Returns the procedural-memory (skills) provider for this agent, or `nil`.
+      Returns the skills provider for this agent, or `nil`.
 
       Override to return a `Raxol.Agent.Skills.Store`-compatible module. When
       set, the skill actions (`skills_list`, `skill_view`, `skill_manage`) are
@@ -128,32 +91,15 @@ defmodule Raxol.Agent do
       def skills_provider, do: nil
 
       @doc """
-      Returns the self-improvement config for this agent, or `nil` to disable.
-
-      When set, the runtime calls `Raxol.Agent.SelfImprove.after_turn/3` after
-      recording each turn. A qualifying turn (succeeded, at least
-      `min_tool_calls` tool calls) spawns a background reviewer that writes
-      durable memory and `created_by: :agent` skills on an auxiliary model.
-
-          %{enabled: true, backend: module, model: term, min_tool_calls: 5}
-
-      Defaults to `nil` (self-improvement disabled).
-      """
-      def self_improve, do: nil
-
-      @doc """
       Returns a list of Action modules available to this agent.
 
       Used by `Agent.Process` with a Strategy to determine which
       Actions can be invoked. Override to expose Actions as tools.
-      Defaults to the memory actions when `memory_provider/0` is set and the
-      skill actions when `skills_provider/0` is set, otherwise `[]`.
+      Defaults to the skill actions when `skills_provider/0` is set, otherwise
+      `[]`.
       """
       def available_actions do
-        memory_on? = memory_provider() || not Enum.empty?(memory_providers())
-        memory = if memory_on?, do: Raxol.Agent.Actions.Memory.actions(), else: []
-        skills = if skills_provider(), do: Raxol.Agent.Actions.Skills.actions(), else: []
-        memory ++ skills
+        if skills_provider(), do: Raxol.Agent.Actions.Skills.actions(), else: []
       end
 
       defoverridable init: 1,
@@ -165,14 +111,10 @@ defmodule Raxol.Agent do
                      handle_tick: 1,
                      handle_message: 2,
                      terminate: 2,
-                     compaction_config: 0,
                      command_hooks: 0,
                      sandbox: 0,
                      thread_log: 0,
-                     memory_provider: 0,
-                     memory_providers: 0,
                      skills_provider: 0,
-                     self_improve: 0,
                      available_actions: 0
 
       @doc false

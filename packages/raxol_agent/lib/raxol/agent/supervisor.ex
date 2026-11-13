@@ -6,13 +6,11 @@ defmodule Raxol.Agent.Supervisor do
   - `Raxol.Agent.Registry` -- unique Registry for agent discovery
   - `Raxol.Agent.DynSup` -- DynamicSupervisor for Agent.Process instances
     (and per-session `Raxol.Agent.EmitBridge` sinks)
-  - `Raxol.Agent.TaskSupervisor` -- unlinked short-lived work, so a
-    crashing sub-agent fan-out cannot take its caller's turn down with it
+  - `Raxol.Agent.TaskSupervisor` -- a `Task.Supervisor` for unlinked
+    short-lived work; nothing in the tree starts a task under it
   - `Raxol.Agent.SessionStreamer` -- singleton harness event stream
   - `Raxol.Agent.Orchestrator` -- multi-agent coordinator
-  - `Raxol.Agent.Memory.Store.Ets` -- when configured as the memory provider
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
-  - `Raxol.Agent.Curator` -- when a `:curator` config is set
   - `Raxol.Agent.Scheduler` -- when a `:scheduler` config is set
   - `Raxol.Agent.McpTools` -- the `agent_*` MCP tools
 
@@ -51,9 +49,7 @@ defmodule Raxol.Agent.Supervisor do
         Raxol.Agent.SessionStreamer,
         Raxol.Agent.Orchestrator
       ] ++
-        memory_children() ++
         skills_children() ++
-        curator_children() ++
         scheduler_children() ++
         mcp_tools_children(opts)
 
@@ -63,27 +59,10 @@ defmodule Raxol.Agent.Supervisor do
   defp mcp_tools_children(opts),
     do: [{Raxol.Agent.McpTools, Keyword.get(opts, :mcp_tools, [])}]
 
-  # Start the default ETS memory store only when it is the configured provider.
-  defp memory_children do
-    case Application.get_env(:raxol_agent, :memory_provider) do
-      Raxol.Agent.Memory.Store.Ets -> [Raxol.Agent.Memory.Store.Ets]
-      _ -> []
-    end
-  end
-
   # Start the skills store only when a skills provider is configured.
   defp skills_children do
     case Application.get_env(:raxol_agent, :skills_provider) do
       Raxol.Agent.Skills.Store -> [Raxol.Agent.Skills.Store]
-      _ -> []
-    end
-  end
-
-  # Start the Curator only when a :curator config (a keyword list including
-  # `:skills`) is set.
-  defp curator_children do
-    case Application.get_env(:raxol_agent, :curator) do
-      opts when is_list(opts) -> [{Raxol.Agent.Curator, opts}]
       _ -> []
     end
   end

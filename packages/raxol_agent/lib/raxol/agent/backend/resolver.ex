@@ -4,11 +4,8 @@ defmodule Raxol.Agent.Backend.Resolver do
   turning the user's environment and stored references into a ready
   `Raxol.Agent.ExecutorConfig`.
 
-  This replaces the per-example `cond` blocks that each re-read env vars, and
-  fills the gap that left `mix raxol.code` blind (it defaulted to a local
-  server and never populated `auth`). Every agent surface — the coding TUI,
-  the agent framework, the MCP/headless default — resolves credentials here so
-  provider onboarding has one shape.
+  Every agent surface resolves credentials here, so provider onboarding has
+  one shape.
 
   ## Precedence
 
@@ -28,16 +25,16 @@ defmodule Raxol.Agent.Backend.Resolver do
   ## Auto-detection never spends
 
   Auto-detection considers only providers that cost nothing per request: a
-  subscription the user already holds, a local server, or a free tier.
+  local server or a free tier.
   Providers billed in API credits are skipped even when fully configured, so
   an unattended run cannot quietly draw down a prepaid balance. Reaching one
-  is explicit: name it (`--backend openrouter`, `harness: :openrouter`) or set
+  is explicit: name it (`harness: :openrouter`) or set
   `RAXOL_ALLOW_PAID_API=1` to restore the walk-everything order.
 
   A backend the catalog marks `detectable?: false` is skipped by the walk
   regardless of billing, and stays fully nameable. The registry itself is a
   projection of `Raxol.Agent.Backend.Catalog` rather than a second list, which
-  is what makes every catalog entry reachable by name (ADR-0034).
+  is what makes every catalog entry reachable by name.
   """
 
   alias Raxol.Agent.Backend.Catalog
@@ -47,27 +44,21 @@ defmodule Raxol.Agent.Backend.Resolver do
   # What one `op read` may cost inside `diagnostics/0`.
   #
   # Deliberately far below the 15s interactive default, which is sized so a
-  # human can approve a 1Password prompt. Nobody is on the other side of
-  # `/inspect`, so the only thing that budget buys there is a wait for an
+  # human can approve a 1Password prompt. Nobody is on the other side of a
+  # diagnostic, so the only thing that budget buys there is a wait for an
   # approval that is not coming. And because a timeout demotes `op` to
   # `:unresponsive` for the rest of the sweep, this is the ceiling for the whole
   # diagnostic rather than the price of each provider.
   @diagnostic_op_timeout_ms 1_500
 
   # Provider registry, PROJECTED from `Raxol.Agent.Backend.Catalog` rather than
-  # declared here. ADR-0034 measured this list, the selector's module table and
-  # `ExecutorConfig.backend()` disagreeing about which backends exist: `:cursor`
-  # was selectable in code and unnameable through `@by_string` below, purely
-  # because the hand-written copy that used to live here had never gained it. A
-  # filter cannot fall out of date the way a copy did.
+  # declared here, so the two cannot disagree about which backends exist.
   #
   # `keyless: true` providers need no API key (local servers, the free LLM7
   # endpoint, Mock), which is exactly "the catalog declares no env keys for it";
-  # `env_keys` are checked in order. `native_module` is set only for native
-  # harnesses, because its PRESENCE is what routes `detect_available/2` to the
-  # vendor-CLI probe instead of key resolution.
-  @providers Enum.map(Catalog.by_kind([:http, :native, :mock]), fn entry ->
-               spec = %{
+  # `env_keys` are checked in order.
+  @providers Enum.map(Catalog.entries(), fn entry ->
+               %{
                  harness: entry.id,
                  label: entry.label,
                  env_keys: entry.env_keys,
@@ -76,30 +67,24 @@ defmodule Raxol.Agent.Backend.Resolver do
                  billing: entry.billing,
                  detectable?: entry.detectable?
                }
-
-               if entry.kind == :native,
-                 do: Map.put(spec, :native_module, entry.module),
-                 else: spec
              end)
 
   # Detection walks this list top-to-bottom, and a keyless local provider is
   # only auto-selected when the user has explicitly stored a reference for it.
   # A backend the catalog marks undetectable is absent HERE and still present in
   # `@providers`, so it stays nameable while never being chosen on the user's
-  # behalf by a PATH probe.
+  # behalf.
   #
   # `billing` is what auto-detection routes on. `:api_credits` means a request
   # draws down a prepaid balance, so those are NEVER auto-selected -- reaching
-  # one takes an explicit `--backend`/`harness:` or `RAXOL_ALLOW_PAID_API=1`.
-  # Everything else is already paid for: a `:subscription` the user holds, a
-  # `:local` server, or a `:free` tier. Ordering still matters within the
-  # allowed set, and the subscription harness comes first because it is the
-  # one that costs nothing extra AND is a frontier model.
+  # one takes an explicit `harness:` or `RAXOL_ALLOW_PAID_API=1`.
+  # Everything else costs nothing per request: a `:local` server or a `:free`
+  # tier.
   @detectable_providers Enum.filter(@providers, & &1.detectable?)
 
   @by_string Map.new(@providers, &{to_string(&1.harness), &1.harness})
 
-  @type source :: :explicit | :op | :env | :generic | :configured | :subscription
+  @type source :: :explicit | :op | :env | :generic | :configured
   @type resolution ::
           {:ok, ExecutorConfig.t(), source()}
           | {:no_key, atom()}
@@ -141,7 +126,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   defp seal_internal_opts(opts), do: opts
 
   @doc """
-  Per-provider availability, for the setup panel and `/login` status.
+  Per-provider availability.
 
   Each entry is `%{harness, label, keyless?, available?, source}` where
   `source` is the resolution source when available, else `nil`. Availability
@@ -174,7 +159,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   end
 
   @doc """
-  Detection diagnostics for the setup panel: the `op` CLI state plus, per
+  Detection diagnostics: the `op` CLI state plus, per
   provider, an actionable `note` when it is unavailable (a stored `op://`
   reference that needs `op signin`, or an env var that is set but empty).
 
@@ -213,9 +198,8 @@ defmodule Raxol.Agent.Backend.Resolver do
   # A stored `op://` reference cannot resolve while the CLI is absent or signed
   # out, so probing one here is a shell-out per provider that is guaranteed to
   # fail. Against a LOCKED vault each probe additionally raises a desktop
-  # authorization prompt and then waits out the full `op` timeout, and there is
-  # one per provider: measured, that turned `/inspect` into a 12-to-22 second
-  # stall where `op_status/0` alone accounted for under 7s of it.
+  # authorization prompt and then waits out the full `op` timeout, one per
+  # provider: 12 to 22 seconds in all, of which `op_status/0` is under 7.
   #
   # Skipping costs no information. `diag_note/3` already answers a stored
   # reference under a signed-out CLI with "run `op signin`" -- the same
@@ -242,7 +226,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   #
   # A diagnostic budget rather than the interactive one. The 15s default is
   # sized so a human can approve a 1Password prompt; nobody is waiting on the
-  # other side of `/inspect`, and the wait it buys is a wait for an approval
+  # other side of a diagnostic, and the wait it buys is a wait for an approval
   # that is not coming.
   defp probe_op_ref(spec, op) do
     ref = op_ref(spec.harness)
@@ -282,6 +266,7 @@ defmodule Raxol.Agent.Backend.Resolver do
     cond do
       op_ref(spec.harness) && op != :ok -> op_hint(op)
       empty_env_key(spec) -> "#{empty_env_key(spec)} is set but empty"
+      op_ref(spec.harness) -> "op reference stored, but it could not be read"
       true -> nil
     end
   end
@@ -312,8 +297,8 @@ defmodule Raxol.Agent.Backend.Resolver do
   defp resolve_explicit(harness, opts) do
     case spec_for(harness) do
       nil ->
-        # Unknown to the registry (e.g. a native harness): build a bare config
-        # and let the Selector accept or reject it.
+        # Unknown to the registry: build a bare config and let the Selector
+        # accept or reject it.
         {:ok, build_config(harness, nil, model_opt(opts), base_url_opt(opts)), :explicit}
 
       spec ->
@@ -342,10 +327,9 @@ defmodule Raxol.Agent.Backend.Resolver do
   # Auto-detection never spends money. A provider billed in `:api_credits` is
   # skipped no matter how well configured it is -- including the generic
   # `AI_API_KEY` endpoint, which is someone's prepaid balance too. Naming one
-  # explicitly (`--backend openrouter`, `harness:`) still works and is the
+  # explicitly (`harness: :openrouter`) still works and is the
   # opt-in; `RAXOL_ALLOW_PAID_API=1` restores the old walk-everything order for
-  # a deployment that wants it. Without this, a stored OpenRouter key outranked
-  # an installed, already-paid-for Claude subscription on every single turn.
+  # a deployment that wants it.
   defp auto_detect(opts) do
     Enum.find_value(auto_detect_providers(), fn spec ->
       ok_or_nil(detect_available(spec, opts))
@@ -362,19 +346,6 @@ defmodule Raxol.Agent.Backend.Resolver do
 
   defp auto_detect_generic(opts) do
     if paid_api_allowed?(), do: detect_generic(opts), else: nil
-  end
-
-  # Whether the vendor CLI behind a native harness is installed and signed in.
-  # Auto-detection would otherwise depend on what happens to be on the host's
-  # PATH, which no test can control: `:native_probe` is the seam that makes
-  # resolution deterministic. It takes a boolean (the whole answer) or a
-  # 1-arity fun receiving the backend module; unset means ask the CLI.
-  defp native_available?(mod) do
-    case Application.get_env(:raxol_agent, :native_probe) do
-      probe when is_function(probe, 1) -> probe.(mod)
-      answer when is_boolean(answer) -> answer
-      _unset -> Code.ensure_loaded?(mod) and mod.available?()
-    end
   end
 
   @doc """
@@ -398,21 +369,6 @@ defmodule Raxol.Agent.Backend.Resolver do
   # A provider is auto-available when it resolves a key, or — for a keyless
   # provider — only when the user has stored a reference for it (so a bare
   # localhost server is never silently selected as the default).
-  # A native harness is available when its CLI is on PATH -- that CLI holds the
-  # subscription, so there is no key here to resolve and nothing to store.
-  # Unlike the keyless local servers below it needs no `configured?/1` opt-in:
-  # an installed vendor CLI is a deliberate act, not a stray localhost port that
-  # could be anything. Note the probe is presence, not sign-in: a CLI installed
-  # but never logged into resolves here and then fails at run time with its own
-  # auth message, which is a clearer signal than silently falling through.
-  defp detect_available(%{native_module: mod} = spec, opts) do
-    if native_available?(mod) do
-      {:ok, build_config(spec.harness, nil, resolve_model(spec, opts), nil), :subscription}
-    else
-      :none
-    end
-  end
-
   defp detect_available(%{keyless: true} = spec, opts) do
     if configured?(spec.harness) do
       {:ok, build_config(spec.harness, nil, resolve_model(spec, opts), stored_base_url(spec)),

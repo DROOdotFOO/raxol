@@ -13,6 +13,10 @@ exists for. This records the metering model for a provider whose prices do not f
 flat-table one. `AcpStreamAdapter` has since been removed (ADR-0042); the per-turn delta
 rule it implemented stays as written for whatever reads a provider-reported cost next.
 
+Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Code.App` and
+`Harness.GrokBuild` are removed, so nothing in this tree meters a turn through
+`Raxol.Agent.LlmPrices` or reports a cost to it. The price tables and `turn_cost_usd/4` stand.
+
 Written against DeepSeek as the forcing case, but the model it breaks was already straining:
 two of the three collision hazards below are live today on OpenRouter and LLM7, and Anthropic's
 own cached-read tier is mispriced by the same mechanism.
@@ -429,7 +433,6 @@ The tests an implementation must produce.
   default, the `max_tokens` trap, and the `reasoning_content` channel already handled
 - `packages/raxol_agent/lib/raxol/agent/backend/selector.ex:33-38`: LLM7 hosting DeepSeek names
 - `packages/raxol_agent/lib/raxol/agent/harness/grok_build.ex:98-107`: the dead `usage["cost"]`
-- `docs/features/CODING_AGENT.md:416-423`: the fail-closed behaviour as currently documented
 - `packages/raxol_agent_client_protocol/lib/raxol/agent_client_protocol/schema/session_update.ex:491-616`:
   `UsageUpdate` and `Cost`, the wire shape a foreign agent reports cost in
 - `scripts/acp_probe.py`: used to observe a real `usage_update` frame carrying USD

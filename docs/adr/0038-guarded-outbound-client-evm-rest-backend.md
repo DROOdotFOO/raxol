@@ -26,6 +26,10 @@ vendored source in `deps/` (req 0.7.4, finch 0.23.0, mint 1.10.0, per `mix.lock:
 mandates. Those probes resolve three items ADR-0033 listed as unverified and retire one of its
 probe-day findings; see "Validation".
 
+Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Actions.Fetch` and
+`Actions.WebSearch` are removed. The passages below on migrating `Fetch` to
+`Raxol.Core.Outbound` describe code that no longer exists.
+
 ## Context
 
 ### Gap 1: the guard already exists once, privately, and is missing its hardest rule

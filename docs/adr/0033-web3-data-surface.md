@@ -10,6 +10,10 @@ Builds on the MCP stack (ADR-0012, `raxol_mcp`), the agent Action surface
 (`Raxol.Agent.Action`), and the payment rails that own every chain reference in the repo
 today (`raxol_payments`, `raxol_earn`).
 
+Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Code.McpLoader` is removed.
+The aggregator's janitor lifecycle and `admit/1` bounds are as decision 1 describes them, with
+no loader left in the tree to copy them from.
+
 ## Context
 
 Raxol settles real money across chains. `raxol_payments` runs Xochi cross-chain intents over

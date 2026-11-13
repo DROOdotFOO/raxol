@@ -195,9 +195,8 @@ defmodule Raxol.Web3.HTTP do
     * `:exchange` - the dial-and-read stage, as
       `(vetted, request, opts -> {:ok, response} | {:error, reason})`. The seam
       exists because the stages before it cannot be exercised against a real
-      socket: a local endpoint listens on loopback, which the vet refuses. It is
-      the same injection `Raxol.Agent.Actions.Fetch` uses for its transport, and
-      it replaces no behaviour of this module. The options it receives carry
+      socket: a local endpoint listens on loopback, which the vet refuses. It
+      replaces no behaviour of this module. The options it receives carry
       `:connect_timeout_ms` and `:deadline_ms` already clamped to the budget,
       plus the `:dial_budget_ms` the whole address list shares.
 

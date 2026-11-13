@@ -32,15 +32,6 @@ kill_signal = 'SIGTERM'
   # gated on the SSH safety defaults (loopback-unless-acknowledged bind, boot
   # posture line, accept/close logging, host keys on a persistent volume) and
   # on verification from outside the app over BOTH address families.
-  # Hosted coding agent (multi-tenant, port 2223): flip on once a tenants
-  # volume exists. The build already carries raxol_agent, raxol_payments and
-  # req (see web/mix.exs); boot refuses to serve without all three, and
-  # without BOTH the per-user key root and a per-tenant spend cap -- a hosted
-  # tenant spends the host's provider credential.
-  # RAXOL_SSH_CODE = 'true'
-  # RAXOL_SSH_CODE_PORT = '2223'
-  # RAXOL_SSH_CODE_TENANTS = '/data/tenants'
-  # RAXOL_SSH_CODE_BUDGET_USD = '5.00'
 
 [http_service]
   internal_port = 8080

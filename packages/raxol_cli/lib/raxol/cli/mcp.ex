@@ -25,7 +25,7 @@ defmodule Raxol.CLI.MCP do
   how `raxol mcp` boots is decided earlier, by the one predicate in
   `config/runtime.exs` (`RAXOL_MODE=mcp`, or the Burrito binary run as
   `raxol mcp`). It starts `:raxol` in `:mcp` mode with the two authorizers
-  below, leaves out the coding-agent harness tools, reports this binary's
+  below, reports this binary's
   version as `serverInfo.version`, and points every later application's
   group leader at stderr. `run/1` refuses to serve when that predicate did
   not fire, when `RAXOL_MODE` names another mode (it beats the predicate's

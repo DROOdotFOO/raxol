@@ -49,9 +49,9 @@ defmodule RaxolCli.MixProject do
   end
 
   # Burrito 1.6.0 spawns the BEAM with stdout on a pipe so its launcher can
-  # notice a downstream consumer going away (`raxol code | head -5`). That costs
+  # notice a downstream consumer going away (`raxol help | head -5`). That costs
   # the child its terminal, and two separate gates then read as "no terminal":
-  # `:io.getopts()` (which vetoed `raxol code` and `raxol playground` outright)
+  # `:io.getopts()` (which vetoed `raxol playground` outright)
   # and `:prim_tty.isatty(:stdout)` behind
   # `Raxol.Terminal.TerminalUtils.has_terminal_device?/0` (which made the driver
   # skip raw mode and the alternate screen, so the TUI drew but ignored every
@@ -130,7 +130,7 @@ defmodule RaxolCli.MixProject do
     Neither the original source nor the patched form was found, so burrito's
     launcher has changed and this patch no longer describes it. Re-derive it
     against the new source before releasing: without it the packaged `raxol
-    code` and `raxol playground` refuse to start, and lifting only that veto
+    playground` refuses to start, and lifting only that veto
     leaves a TUI that renders and ignores the keyboard.
     """
   end
@@ -165,7 +165,7 @@ defmodule RaxolCli.MixProject do
   defp deps do
     [
       # Main raxol for the terminal runtime + the Playground app; raxol_agent for
-      # the interactive agent turn. raxol_agent pulls main raxol transitively, but
+      # the `acp` and `mcp` agent surfaces. raxol_agent pulls main raxol transitively, but
       # the direct dep documents the CLI's reliance on Raxol.start_link/Playground.
       raxol_dep(:raxol, "~> 2.7", "../.."),
       raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent"),
@@ -234,7 +234,7 @@ defmodule RaxolCli.MixProject do
 
   defp description do
     """
-    The `raxol` command: an interactive AI agent and Raxol toolkit in your
+    The `raxol` command: the Raxol toolkit and agent servers in your
     terminal, shipped as a self-contained binary via an npm wrapper.
     """
   end

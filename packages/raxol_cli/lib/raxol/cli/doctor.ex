@@ -1,34 +1,30 @@
 defmodule Raxol.CLI.Doctor do
   @moduledoc """
-  `raxol doctor` — what this install actually is, and why it resolves the way
-  it does.
+  `raxol doctor` — what this install actually is.
 
-  Two audiences, one command. Someone who just installed and finds the agent
-  answering with mock text needs to know no provider resolved, and which one it
-  looked for. Someone reporting a bug needs to say which build they are on,
-  which is not answerable from the release version alone: a months-old binary
-  and one built minutes ago both call themselves `0.2.6`.
+  Someone reporting a bug needs to say which build they are on, which is not
+  answerable from the release version alone: a months-old binary and one built
+  minutes ago both call themselves `0.2.6`. So this prints build provenance,
+  packaging, runtime, and whether the ACP surface is compiled into this build
+  (a Hex install of `raxol_agent` has none) and can start an agent on this
+  platform.
 
-  The configuration half is `Raxol.Agent.Code.Inspection`, the same snapshot
-  `mix raxol.inspect` and the TUI's `/inspect` render — reused rather than
-  reimplemented, so all three agree. What this adds is the install header:
-  build provenance, packaging, runtime, and whether the ACP surface is
-  compiled into this build (a Hex install of `raxol_agent` has none) and can
-  start an agent on this platform.
+  It then lists the providers an agent could reach from this environment, from
+  `Raxol.Agent.Setup.status/0`: each one that resolves, each one whose stored
+  1Password reference cannot be read, and the state of the `op` CLI. A key or a
+  reference is never printed.
   """
 
   alias Raxol.Agent.ClientProtocol.Serve
-  alias Raxol.Agent.Code.Inspection
   alias Raxol.Agent.McpTools
+  alias Raxol.Agent.Setup
 
   @doc "Print the install report for `cwd`, returning an exit code."
   @spec run([String.t()]) :: non_neg_integer()
   def run(_args \\ []) do
-    cwd = File.cwd!()
-
-    IO.puts(header(cwd))
+    IO.puts(header(File.cwd!()))
     IO.puts("")
-    IO.puts(Inspection.render(Inspection.gather(cwd)))
+    IO.puts(providers(Setup.status()))
     IO.puts("")
     IO.puts(next_steps())
 
@@ -84,17 +80,52 @@ defmodule Raxol.CLI.Doctor do
     end
   end
 
+  @doc false
+  @spec providers(%{op: atom(), providers: [map()]}) :: String.t()
+  def providers(%{op: op, providers: providers}) do
+    rows =
+      providers
+      |> Enum.filter(&(&1.available? or &1.note != nil))
+      |> Enum.map(&provider_row/1)
+
+    Enum.join(
+      ["providers (op CLI: #{op_state(op)})" | rows_or_none(rows)],
+      "\n"
+    )
+  end
+
+  defp rows_or_none([]), do: ["  none connected"]
+  defp rows_or_none(rows), do: rows
+
+  defp provider_row(%{available?: true} = provider) do
+    row(
+      to_string(provider.harness),
+      "#{provider.label}, via #{source(provider.source)}"
+    )
+  end
+
+  defp provider_row(provider) do
+    row(
+      to_string(provider.harness),
+      "#{provider.label}, not usable: #{provider.note}"
+    )
+  end
+
+  defp op_state(op), do: op |> to_string() |> String.replace("_", " ")
+
+  defp source(:op), do: "1Password reference"
+  defp source(:env), do: "environment variable"
+  defp source(:configured), do: "stored entry"
+  defp source(other), do: to_string(other)
+
   defp next_steps do
     """
     next:
-      connect or inspect providers:
-        raxol setup
+      serve a Raxol agent to an ACP editor:
+        raxol acp --agent <app>
 
-      start the agent:
-        raxol
-
-      coding TUI:
-        raxol code
+      serve Raxol apps as MCP tools:
+        raxol mcp
 
       component catalog:
         raxol playground

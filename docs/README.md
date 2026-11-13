@@ -5,7 +5,7 @@ Raxol is a multi-surface application runtime for Elixir. One TEA module renders 
 ## Start here
 
 - [Quickstart](getting-started/QUICKSTART.md): build a terminal app
-- [Build Your First Agent](getting-started/BUILD_AN_AGENT.md): add tools, memory, and a learning loop
+- [Build Your First Agent](getting-started/BUILD_AN_AGENT.md): add tools and skills
 - [Core Concepts](getting-started/CORE_CONCEPTS.md): understand TEA, Components, and the runtime
 - [Component Gallery](getting-started/COMPONENT_GALLERY.md): browse Components and examples
 
@@ -21,7 +21,7 @@ Raxol is a multi-surface application runtime for Elixir. One TEA module renders 
 
 - [Components](getting-started/COMPONENT_GALLERY.md): browse the component catalog and demos
 - [Surfaces](guides/SURFACES.md): render one TEA app to terminal, LiveView, SSH, and MCP
-- [Coding Agent](features/CODING_AGENT.md): run `raxol code`, `raxol -p`, SSH, and MCP agent surfaces
+- [Agents](features/AGENT_FRAMEWORK.md): TEA agents, backends, tools, and teams
 - [Payments](features/AGENTIC_COMMERCE.md): wallets, spend gates, HTTP 402, Xochi, and settlement receipts
 - [$RAXOL token facts](https://raxol.io/token): contract addresses and pair link
 

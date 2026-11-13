@@ -257,8 +257,7 @@ defmodule Raxol.Core.OutboundTest do
     test "refuses a port nothing serves HTTP on, so a vetted fetch is not a port prober" do
       # Every other rule here judges the ADDRESS, so `https://<public
       # host>:22/` passes all of them and the connect result then reports
-      # whether 22 is open. The port is model-chosen in
-      # `Raxol.Agent.Actions.Fetch`.
+      # whether 22 is open. A fetch tool's port is model-chosen.
       for port <- [22, 25, 3306, 6379, 9200, 11_211] do
         assert {:error, :invalid_url} = Outbound.vet("https://93.184.216.34:#{port}/"),
                "port #{port} was not refused"

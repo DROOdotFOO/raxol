@@ -76,8 +76,8 @@ defmodule Raxol.Agent.AIBackend do
   # `function_exported?/3` answers false for a module that is merely not loaded
   # YET, which in interactive mode is any backend nothing has called into. That
   # false negative is not cosmetic here: `handles_tools_internally?/1` decides
-  # whether the vendor CLI owns the tool loop, so a native backend answering
-  # "no" would put the framework in charge of tools the CLI serves itself.
+  # whether the backend owns the tool loop, so a backend that does answering
+  # "no" would put the framework in charge of tools the backend serves itself.
   defp exports?(module, fun) do
     Code.ensure_loaded?(module) and function_exported?(module, fun, 0)
   end

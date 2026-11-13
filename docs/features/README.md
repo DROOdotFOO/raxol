@@ -5,9 +5,6 @@ Use this page to find a feature; each linked page owns its details.
 | Area | Feature | Purpose |
 | --- | --- | --- |
 | Agents | [Agent framework](AGENT_FRAMEWORK.md) | TEA agents, backends, tools, and teams |
-| Agents | [Coding agent](CODING_AGENT.md) | Interactive, headless, SSH, and MCP sessions |
-| Agents | [Memory](MEMORY.md) | Recall providers and the user model |
-| Agents | [Self-improvement](SELF_IMPROVEMENT.md) | After-turn review and skill curation |
 | Protocols | [MCP](MCP.md) | Component trees projected as agent tools |
 | Protocols | [Editor ACP](EDITOR_ACP.md) | Editor-to-agent JSON-RPC (pre-alpha) |
 | Commerce | [Agentic commerce](AGENTIC_COMMERCE.md) | Wallets, spending controls, and HTTP 402 payment |
@@ -19,7 +16,7 @@ Use this page to find a feature; each linked page owns its details.
 | Developer tools | [Recording and replay](RECORDING_REPLAY.md) | Asciinema capture and playback |
 | Developer tools | [Time-travel debugging](TIME_TRAVEL_DEBUGGING.md) | Snapshot, step, and restore |
 | Developer tools | [REPL](REPL.md) | AST-checked Elixir evaluation |
-| Developer tools | [Virtual filesystem](FILESYSTEM.md) | Pure in-memory filesystem and agent actions |
+| Developer tools | [Virtual filesystem](FILESYSTEM.md) | Pure in-memory filesystem |
 | Surfaces | [Gateway](GATEWAY.md) | Shared adapter for messaging platforms (pre-alpha) |
 | Surfaces | [Telegram](TELEGRAM.md) | TEA apps as Telegram bots |
 | Surfaces | [Speech](SPEECH.md) | TTS, Whisper STT, and voice commands |

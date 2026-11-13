@@ -32,7 +32,7 @@ defmodule RaxolPlaygroundWeb.LandingLive do
        # "Raxol · Raxol". The claim reads better in a tab and in a search result.
        page_title: "One module, every surface",
        page_description:
-         "Raxol renders one Elixir module to terminal, LiveView, SSH, MCP, Telegram, Watch, and Speech, with an agent harness and payment rails on OTP.",
+         "Raxol renders one Elixir module to terminal, LiveView, SSH, MCP, Telegram, Watch, and Speech, with an agent framework and payment rails on OTP.",
        og_title: "Raxol: one Elixir module, every surface",
        canonical_url: "https://raxol.io/",
        mobile_menu_open: false,
@@ -41,7 +41,9 @@ defmodule RaxolPlaygroundWeb.LandingLive do
        # XOCHI_CAPABILITIES_BASE_URL) skips the network entirely and serves
        # the static fallback, which renders as a "cached" badge.
        xochi_matrix:
-         XochiCapabilities.get(Application.get_env(:raxol_playground, :xochi_capabilities))
+         XochiCapabilities.get(
+           Application.get_env(:raxol_playground, :xochi_capabilities)
+         )
      )}
   end
 
@@ -54,7 +56,8 @@ defmodule RaxolPlaygroundWeb.LandingLive do
     names = hero_example_names()
     idx = Enum.find_index(names, &(&1 == socket.assigns.example)) || 0
 
-    {:noreply, assign(socket, :example, Enum.at(names, rem(idx + 1, length(names))))}
+    {:noreply,
+     assign(socket, :example, Enum.at(names, rem(idx + 1, length(names))))}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}

@@ -15,9 +15,7 @@ normalizes to). The fold icon is `▾` expanded, `▸` folded.
   neutral chrome baseline `#B4B4B4` when `context[:prominence]` says to, and
   its style is byte-identical at full prominence.
 - A user prompt is never a block. `turn_started` is structural and produces
-  nothing in the fold (`Raxol.Harness.Projection.BlockBuilder`); the export
-  path re-attaches it, heading each turn's blocks with `"> " <> prompt`
-  (`Raxol.Agent.Code.Replay.transcript_text/1`).
+  nothing in the fold (`Raxol.Harness.Projection.BlockBuilder`).
 
 ## The input zone
 
@@ -84,9 +82,6 @@ every call and re-wraps, so a resize cannot leave a stale wrap behind.
   from that hidden state is dropped rather than sent, and a second
   `:open_palette` while an overlay or a diff expansion is open answers with a
   typed refusal (`:overlay_already_open`, `:expansion_open`).
-- A fresh session is the default per launch; resuming is explicit.
-  `Raxol.Agent.Code.Launcher` parses `--continue` (most recently updated
-  session), `--resume ID`, `--sessions`, and `--replay ID`.
 - **The command palette.** Ctrl+P opens it, and its entries are exactly
   `Keymap.palette_binds/0`, the labeled subset of the bind table in table
   order, plus the two focus transitions that exist only at the assembly layer.
@@ -94,26 +89,10 @@ every call and re-wraps, so a resize cannot leave a stale wrap behind.
   membership except the table itself. Picking an entry dispatches through the
   same path a keypress takes, so there is no second execution mechanism a
   palette pick could diverge on.
-- **Slash commands** are a separate vocabulary, owned by the coding TUI rather
-  than by the keymap. `Raxol.Agent.Code.App` hands any submitted line starting
-  with `/` to `Raxol.Agent.Code.App.Commands`, which routes it into
-  per-command function clauses: `/help`, `/login`,
-  `/logout`, `/model`, `/plan`, `/clear`, `/compact`, `/rewind`, `/context`,
-  `/usage`, `/sessions`, `/resume`, `/fork`, `/rename`, `/export`,
-  `/transcript`, `/copy`, `/find`, `/share`, `/mcp`, `/hooks`, `/inspect`. An
-  unmatched name answers with an `unknown command` notice pointing at
-  `/help`. In a jailed multi-tenant session `/login`, `/logout`, and `/copy`
-  refuse, because they reach host-global state the keyboard principal does not
-  own. During the onboarding wizard's `:credential` and `:confirm_save` modal
-  steps `Raxol.Agent.Code.App.Wizard` owns the keyboard outright: Esc cancels,
-  Enter submits, and shortcuts such as Ctrl+P are swallowed rather than
-  dispatched, so a pasted key never leaks into the prompt or a slash command.
 
 ## The approval footer
 
-Two approval surfaces ship, for two different hosts.
-
-`Raxol.UI.Components.Harness.ApprovalPrompt` is the Component-tree one: it
+`Raxol.UI.Components.Harness.ApprovalPrompt` is the approval surface: it
 renders the action, its blast radius (an embedded
 `Raxol.UI.Components.Harness.BlastRadiusPreview`), and four options matching
 the `:once`/`:session`/`:root` scopes plus deny. Up/Down and the digit keys
@@ -125,21 +104,6 @@ arrives as props, and `handle_event/3` emits
 carries color-by-danger; the only visual differentiator between rows is which
 one holds keyboard focus, so the safe default is never fighting the
 destructive one visually.
-
-`Raxol.Agent.Code.App` uses a one-line footer instead, naming the tool and
-its three answers, answered by `a` (allow once), `s` (always), `d` (deny),
-with `y`/`n` aliases, or by Escape. While an approval is pending, printable
-characters, Enter, and Backspace are all inert, so an answer cannot be typed
-into the prompt buffer by accident.
-
-Both shapes park a blocked tool worker and release it with the answer, and each
-owns its own park. `Raxol.Agent.Code.App` keeps `pending_approval` as
-`%{ref, from, name}` and answers with `{:authorize_decision, ref, verdict}` to
-the worker that asked; Escape denies. `Raxol.Agent.Harness.SessionInbox` is the
-other one: it parks on a `GenServer.call` keyed by `request_id` before the
-consequential tool and replies to that caller later, and its `pending` never
-outlives the turn that parked it, including a die-mid-approval `:DOWN`. Nothing
-outside its test starts a `SessionInbox` yet, so the TUI path is the one in use.
 
 ## Navigation
 

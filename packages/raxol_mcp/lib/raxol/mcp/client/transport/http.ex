@@ -75,9 +75,9 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     A `tools/call` for a tool the spec declares as priced is refused unless the
     call carries a reservation handle, with no request issued. This is not
-    redundant with the spend-gate hook: `hook.ex:21-31` records that backends
-    whose `handles_tools_internally?/0` returns true drive their own tool loop
-    and bypass that seam entirely, so a native harness reaches this transport
+    redundant with the spend-gate hook: a backend
+    whose `handles_tools_internally?/0` returns true drives its own tool loop
+    and bypasses that seam entirely, so it reaches this transport
     with no hook in the path. An unknown price on a metered origin is denied by
     default and logged with the tool and the origin, so an operator sees a
     reason rather than an absence.

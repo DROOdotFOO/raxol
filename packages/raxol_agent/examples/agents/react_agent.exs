@@ -115,8 +115,8 @@ end
 defmodule ReactExample.Config do
   @moduledoc false
 
-  # Resolve the backend through the shared `Backend.Resolver` — the same
-  # env/op/precedence path `mix raxol.code` uses — so this example never
+  # Resolve the backend through the shared `Backend.Resolver`
+  # (op reference, then provider env) so this example never
   # re-implements provider detection. Falls back to the Mock backend (which
   # simulates the tool calls below) when nothing resolves.
   def detect_backend do

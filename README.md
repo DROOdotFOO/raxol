@@ -44,30 +44,15 @@ session
 |> stop_session()
 ```
 
-`mix mcp.server` starts the MCP server on stdio for Claude Code integration, and `mix raxol.code` is an interactive terminal coding agent (the axol face) with every mutating tool call gated by an ALLOW/ASK/DENY authorization engine. See the [Coding Agent](docs/features/CODING_AGENT.md).
+`mix mcp.server` starts the MCP server on stdio for Claude Code integration. Editors that speak the [Agent Client Protocol](https://agentclientprotocol.com) reach a Raxol agent: `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves one on stdio. The sensitive actions an agent runs past the turn's approver cost a `session/request_permission` round trip. See [Editor ACP](docs/features/EDITOR_ACP.md).
 
-**Code** is the coding-agent product, in two hands-on surfaces: `mix raxol.code` is the interactive terminal TUI (the axol face `≡··≡`), and `mix raxol.p` is its headless twin (prompt in on argv, answer to stdout, contract events to stderr) for pipes and CI. Every mutating tool call is gated by an ALLOW/ASK/DENY authorization engine. From a clone, one setup command and one launch:
-
-```bash
-(cd packages/raxol_agent && mix deps.get)   # once
-bin/raxol-code                              # the TUI, your cwd as the workspace
-```
-
-No API key configured? The TUI opens on a provider wizard instead of failing. `/inspect` (or `mix raxol.inspect` from `packages/raxol_agent`) shows every config source the agent will use in the current directory.
-
-Sessions are durable. Each session journals its events to disk, so `--continue` and `--resume <id>` restore the model context and the scrollback together, `--replay <id>` prints a transcript straight from the journal (`--to-offset N` stops at an offset), `/rewind` drops back to an earlier turn, and `/share` mints a signed 24-hour link to a read-only transcript that follows the session live (needs `RAXOL_SHARE_SECRET` and a host mounting `Raxol.Agent.Code.ShareLive`).
-
-The same TUI serves over SSH: `mix raxol.code --ssh --ssh-tenants /srv/tenants` hosts many users from one daemon, each behind their own public key with their own cwd jail, session store, and spending identity (`ssh <you>@your-host -p 2222` is the whole client). Single-tenant (`--authorized-keys`) and hosted deployment (`RAXOL_SSH_CODE=true`) are in [Coding Agent](docs/features/CODING_AGENT.md).
-
-One unattended surface runs the same agent: `Raxol.Agent.Harness.McpTools` registers `harness_start_session`, `harness_send_prompt`, `harness_read_transcript`, and `harness_list_sessions` with the MCP registry, so a session started by an MCP client resumes later in the TUI. The MCP surface stays read-only: `write_file`, `edit_file`, and `bash` are absent where nobody is there to answer an approval prompt. Editors that speak the [Agent Client Protocol](https://agentclientprotocol.com) reach a Raxol agent rather than the coding agent: `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves one on stdio. The sensitive actions an agent runs past the turn's approver cost a `session/request_permission` round trip. See [Editor ACP](docs/features/EDITOR_ACP.md).
-
-Every one of those surfaces sits on the **Harness**, the agent-session engine: a durable event journal (`Raxol.Agent.Journal`), a typed event/command contract (`Raxol.Agent.Contract`), and surface state that is a pure fold over the event stream (`Raxol.Harness.Projection`), with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
+Agent sessions sit on the **Harness**, the agent-session engine: a durable event journal (`Raxol.Agent.Journal`), a typed event/command contract (`Raxol.Agent.Contract`), and surface state that is a pure fold over the event stream (`Raxol.Harness.Projection`). See [Harness architecture](docs/harness/architecture.md).
 
 The agent subsystems ship as standalone packages:
 
 - **Pay** ([`raxol_payments`](docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).
 - **Earn** (`raxol_earn`): the sell side. Declare an offering, implement two callbacks, and a buyer agent discovers it, escrows funds, and settles on-chain through the [Virtuals](https://virtuals.io) ACP job lifecycle (request, negotiation, transaction, evaluation, completed), one supervised process per job. Pre-alpha.
-- **Improve** ([`raxol_agent`](docs/features/SELF_IMPROVEMENT.md)): a solved task becomes a reusable `SKILL.md`. A background reviewer runs on a cheap model after each turn, writing durable memory and new skills without spending the live turn's latency or context.
+- **Skills** ([`raxol_agent`](docs/guides/SKILL_AUTHORING.md)): reusable `SKILL.md` procedures in the agentskills.io format, which an agent lists, reads, and writes through three tools.
 - **Reach** (`raxol_gateway`): one adapter contract to many chat platforms, process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
 - **Bridge** (`raxol_agent_client_protocol`): Elixir/OTP implementation of the [Agent Client Protocol](https://agentclientprotocol.com): the JSON-RPC 2.0 wire protocol between code editors and AI coding agents (the protocol Zed and a growing ecosystem speak). Bidirectional agent/client roles, pluggable transports (stdio, in-process), and durable resumable sessions (offset-based reattach/replay) as a vendor extension. Zero raxol-internal deps. Pre-alpha.
 
@@ -148,7 +133,7 @@ Start with the [documentation index](docs/README.md), or jump to:
 - [Quickstart](docs/getting-started/QUICKSTART.md)
 - [Components](docs/getting-started/COMPONENT_GALLERY.md)
 - [Surfaces](docs/guides/SURFACES.md)
-- [Coding Agent](docs/features/CODING_AGENT.md)
+- [Agent framework](docs/features/AGENT_FRAMEWORK.md)
 - [Payments](docs/features/AGENTIC_COMMERCE.md)
 - [$RAXOL token facts](https://raxol.io/token)
 - [API docs](https://hexdocs.pm/raxol)

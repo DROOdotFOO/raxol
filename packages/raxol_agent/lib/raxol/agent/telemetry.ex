@@ -58,35 +58,6 @@ defmodule Raxol.Agent.Telemetry do
   # Each entry carries WHY it lands where it does. The verdicts were read off
   # the emit sites, not guessed from the event names.
   @events %{
-    # OPERATIONAL. `Code.App` stopped a running turn because the wired ledger
-    # could not answer: the process is down or hung. A host dependency being
-    # down, not a defect; split from `:over_limit` because the remedy is
-    # infrastructure, not a policy decision (ADR-0036, rule 1).
-    [:raxol, :agent, :budget, :halt, :ledger_unreachable] => :operational,
-
-    # OPERATIONAL. `Code.App` stopped a running turn because the ledger and
-    # policy refused further spend: `:per_request`, `:session`, `:lifetime`,
-    # or the operator's `:frozen` kill switch. Every reason is a user's policy
-    # decision; the gate firing is the gate working (ADR-0036).
-    [:raxol, :agent, :budget, :halt, :over_limit] => :operational,
-
-    # OPERATIONAL. The fail-closed halt of ADR-0035: a model the tables cannot
-    # price burned tokens under a wired ledger and policy. The model name is
-    # the user's choice and the missing price is a table gap, not a defect.
-    # `app_metering_test.exs` drives it on purpose.
-    [:raxol, :agent, :budget, :halt, :unpriced] => :operational,
-
-    # OPERATIONAL. One per metered provider call whose cost resolved. The
-    # happy path of the money path; `source:` says which resolution step
-    # priced it, which is the whole point (ADR-0036).
-    [:raxol, :agent, :cost, :priced] => :operational,
-
-    # OPERATIONAL. A provider call burned tokens and no step could price it:
-    # a user-chosen model absent from every table, a peer that reported no
-    # cost, or a backend that reports no usage. Fires whether or not the halt
-    # is armed, so the single-user configuration can see the hole too.
-    [:raxol, :agent, :cost, :unpriced] => :operational,
-
     # OPERATIONAL, despite looking like a violation. `DoneGate` runs in
     # observe-only mode and is fully fail-closed on v0 producer journals (no
     # tool result can green-light a done yet), so EVERY tool-less turn fires

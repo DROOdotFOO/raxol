@@ -201,22 +201,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # `settle.ex` cannot be expected to infer which noun it is answering, so each
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
-                        {"settle", "settle.ex",
-                         "quote, gate, sign, poll -- no funds", @settle_source},
-                        {"pulse", "pulse.exs", "one module, four surfaces",
-                         @pulse_source},
-                        {"halo", "halo.exs", "the mark, as a program",
-                         @halo_source},
-                        {"harness", "harness.ex",
-                         "a Virtuals ACP job, run by raxol_earn",
+                        {"settle", "settle.ex", "quote, gate, sign, poll -- no funds",
+                         @settle_source},
+                        {"pulse", "pulse.exs", "one module, four surfaces", @pulse_source},
+                        {"halo", "halo.exs", "the mark, as a program", @halo_source},
+                        {"harness", "harness.ex", "a Virtuals ACP job, run by raxol_earn",
                          @harness_source}
                       ] do
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
 
                     lines = source |> String.trim() |> String.split("\n")
 
-                    {name, file, module, blurb,
-                     Makeup.highlight_inner_html(source),
+                    {name, file, module, blurb, Makeup.highlight_inner_html(source),
                      %{
                        lines: length(lines),
                        cols: lines |> Enum.map(&String.length/1) |> Enum.max()
@@ -231,11 +227,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @install_command "curl -fsSL https://raxol.io/install | bash"
 
-  # The hero halo's face cycles the coding agent's REAL status glyphs:
+  # The hero halo's face cycles the REAL agent status glyphs:
   # AxolFace.glyph/3 is the single source of truth every surface renders,
   # and exporting its frames here keeps the page and the product in
   # agreement. Four wrapped frames per state (cycles are 4/3/2/1 long, and
-  # the TUI wraps the same way).
+  # a TUI wraps the same way).
   @halo_faces Jason.encode!(
                 for state <- [:idle, :thinking, :working, :done] do
                   %{
@@ -334,7 +330,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </h1>
 
         <p class="screen-sub">
-          Runtime, agent harness, and payment rails run on OTP. Render to terminal,
+          Runtime, agent framework, and payment rails run on OTP. Render to terminal,
           LiveView, SSH, MCP, Telegram, Watch, and Speech.
         </p>
 
@@ -481,8 +477,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
               </svg>
               <%!-- The reveal has room the row does not, so it shows the
                    registry's own label. The short head is what fits in the
-                   flow, but it is also the part that cannot tell "Claude
-                   (subscription, via CLI)" from "Anthropic (Claude)". --%>
+                   flow. --%>
               <span class="integrations-name">{if entry.mark, do: entry.label, else: entry.name}</span>
             </span>
           </span>
@@ -615,7 +610,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   #
   # No ACP tab. ACP is how an editor drives a Raxol agent, not a surface a
   # TEA module renders to, so a pane captioned "pulse, driven over ACP" would
-  # describe a program that does not exist. It has its own page.
+  # describe a program that does not exist. It is on the agents page.
   #
   # All four panes are server-rendered; the HeroDemo hook only toggles
   # `hidden`/aria-selected, auto-advancing tabs and stepping the recorded
@@ -967,8 +962,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
   def example_grid(name) do
-    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _b, _c,
-                                                              grid} ->
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _b, _c, grid} ->
       n == name && grid
     end)
   end
@@ -1195,22 +1189,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             peer, user, duration, outcome
           </li>
         </ul>
-
-        <h2 class="heading-xl mt-14 mb-3">Multi-tenant, keys in a directory</h2>
-        <p class="body-text mb-4">
-          A tenant is a directory:
-          <code class="text-axol-coral">&lt;dir&gt;/&lt;user&gt;/ssh/authorized_keys</code>
-          for access, <code class="text-axol-coral">work/</code> for files,
-          ledger for spend. The authenticated username picks that directory.
-        </p>
-        <div class="mb-6">
-          <.copyable_command
-            id="copy-ssh-tenants"
-            command="raxol code --ssh --ssh-tenants ./tenants"
-            comment="port 2223"
-            tone={:sky}
-          />
-        </div>
       </div>
     </section>
     """
@@ -1267,56 +1245,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           creates, lists, pauses, resumes, runs, and removes; fires never block
           the scheduler.
         </p>
-      </div>
-    </section>
-    """
-  end
 
-  # ---------------------------------------------------------------------------
-  # 2d. Deep dive 04: Coding agent + ACP
-  # ---------------------------------------------------------------------------
-
-  def coding_agent_deep_dive(assigns) do
-    ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="coding-agent-title">
-      <div class="mb-8">
-        <h1 id="coding-agent-title" class="heading-2xl mb-3">A coding agent, and agents for ACP editors.</h1>
-        <p class="body-text max-w-2xl">
-          TUI, headless mode, and MCP sessions share one journal. raxol acp
-          serves a Raxol agent to editors that speak
+        <h2 class="heading-xl mt-14 mb-3">Served to editors and MCP clients</h2>
+        <p class="body-text mb-4">
+          raxol acp serves a Raxol agent to editors that speak
           <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>.
+          The MCP schema is derived from the widget tree; no second tool
+          manifest.
         </p>
-      </div>
-
-      <div class="space-y-3 mb-6 ch-snap">
-        <.copyable_command id="copy-agent-code" command="mix raxol.code" comment="interactive coding-agent TUI" tone={:coral} />
-        <.copyable_command id="copy-agent-acp" command="raxol acp --agent Raxol.Agent.Reference.Counter" comment="serve an agent to ACP editors" tone={:sky} />
-        <.copyable_command id="copy-agent-p" command={~S(raxol -p "fix the failing test")} comment="headless, JSON events on stderr" tone={:sky} />
-        <.copyable_command id="copy-agent-mcp" command="mix mcp.server" comment="expose the UI itself as agent tools" tone={:sky} />
-      </div>
-
-      <p class="body-text-dim max-w-2xl">
-        The MCP schema is derived from the widget tree; no second tool
-        manifest.
-      </p>
-
-      <div class="max-w-2xl">
-        <h2 class="heading-xl mt-14 mb-3">Every session is a journal</h2>
-        <p class="body-text mb-4">
-          Each session is a disk journal. Resume with
-          <code class="text-axol-coral">--continue</code>, list with
-          <code class="text-axol-coral">--sessions</code>, replay with
-          <code class="text-axol-coral">--replay ID</code>, rewind with
-          <code class="text-axol-coral">/rewind</code>.
-        </p>
-
-        <h2 class="heading-xl mt-14 mb-3">Metered spend</h2>
-        <p class="body-text mb-4">
-          Every LLM call is priced into a ledger. Exhausted budgets halt the
-          turn. Unknown model price fails closed once a ledger is wired. Share
-          links are expiring, signed, read-only tokens scoped to session and
-          tenant.
-        </p>
+        <div class="space-y-3 mb-6 ch-snap">
+          <.copyable_command id="copy-agent-acp" command="raxol acp --agent Raxol.Agent.Reference.Counter" comment="serve an agent to ACP editors" tone={:sky} />
+          <.copyable_command id="copy-agent-mcp" command="mix mcp.server" comment="expose the UI itself as agent tools" tone={:sky} />
+        </div>
       </div>
     </section>
     """
@@ -1416,8 +1356,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         routes: routes(),
         payment_actions: payment_actions(),
         action_groups: action_groups(),
-        show_future_svm:
-          not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
+        show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
       )
 

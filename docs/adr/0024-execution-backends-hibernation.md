@@ -7,6 +7,10 @@ Accepted, 2026-07-22 (execution backends implemented in `Raxol.Agent.Backend.{Na
 Builds on ADR-0020 (the `Raxol.Agent.Sandbox` protocol and the `CommandHook`/`ThreadLog` seams) and
 the omnigent item-log (`Raxol.Agent.Conversation.{Store,Log}`).
 
+Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: the native execution backends
+(`Raxol.Agent.Backend.{Native,ClaudeCode,Cursor,GrokBuild}` and `Raxol.Agent.NativeHarness`) are
+removed, and serverless hibernation is dropped rather than deferred.
+
 ## Context
 
 Where an agent's shell commands and code actually run is fixed today. `Raxol.Agent.Sandbox.Shell`

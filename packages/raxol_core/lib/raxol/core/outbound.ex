@@ -117,7 +117,7 @@ defmodule Raxol.Core.Outbound do
   # to close is the tool being used as a port prober against PUBLIC hosts:
   # `https://example.com:22/` resolves to a public address and passes every
   # address rule, after which the connect result reports whether 22 is open.
-  # `Raxol.Agent.Actions.Fetch`'s port is model-chosen, so the answer is the
+  # A fetch tool's port is model-chosen, so the answer is the
   # ports that speak HTTP; a caller with a documented non-standard port passes
   # `:ports` the way it passes `:schemes`.
   @default_ports [80, 443, 8080, 8443]

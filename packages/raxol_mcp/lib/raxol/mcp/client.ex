@@ -276,12 +276,12 @@ defmodule Raxol.MCP.Client do
 
   # -- Server Callbacks ---------------------------------------------------------
 
-  # Exits are TRAPPED, and the subprocess is why. `Raxol.Agent.Code.McpLoader`'s
-  # janitor ends a session with `Process.exit(client_pid, :shutdown)` on the
-  # documented assumption that it reaps the client, its linked port and the OS
-  # server with it. It reaped only the first two: a non-trapping process never
+  # Exits are TRAPPED, and the subprocess is why. An owner ends a session
+  # with `Process.exit(client_pid, :shutdown)`, expecting it to reap the
+  # client, its linked port and the OS server with it. Untrapped, it reaps
+  # only the first two: a non-trapping process never
   # runs `terminate/2`, closing a port closes the child's stdio and nothing
-  # else, and every `npx`/`uvx` server that does not exit on stdin EOF survived
+  # else, and every `npx`/`uvx` server that does not exit on stdin EOF survives
   # -- one orphan per session, forever, on a long-lived host.
   #
   # Trapping makes that signal a message, so `terminate/2` runs and

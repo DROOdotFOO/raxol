@@ -14,6 +14,13 @@ driver, the `Stdio.*` extraction from `Runners.Codex`, and Gap 1 (still not deci
 2026-11-12: `Raxol.Agent.AcpStreamAdapter` (`acp_stream_adapter.ex`) is removed (ADR-0042). The
 table row and the reference below that name it describe code that no longer exists.
 
+Narrowed by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: the native CLI backends, their
+drivers (`NativeHarness`, `Harness.{ClaudeCode,Cursor,GrokBuild,StreamJson}`) and the reserved
+`codex` catalog entry are removed, so the native seam and Gap 1 describe code that no longer
+exists. `Raxol.Agent.Backend.Catalog` remains the single backend declaration, and
+`Raxol.Agent.AIBackend.handles_tools_internally?/0` remains the seam for a backend that runs
+its own tool loop.
+
 Revised the same day, after the forcing case turned out to be installed locally and every
 claim below could be measured instead of read. Four findings inverted, each corrected where it
 lands rather than quietly amended: the ACP seam is not prospective for this agent but shipped;

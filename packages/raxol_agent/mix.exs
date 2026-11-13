@@ -42,9 +42,6 @@ defmodule RaxolAgent.MixProject do
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
       {:req, "~> 0.5", optional: true},
-      # Optional: only for the read-only session-share LiveView
-      # (Raxol.Agent.Code.ShareLive, compile-gated on its presence).
-      {:phoenix_live_view, "~> 1.0 or ~> 0.20", optional: true},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

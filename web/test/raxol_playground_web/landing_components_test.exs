@@ -276,16 +276,11 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   test "the grown topic sections keep their commands and facts" do
     ssh = render_component(&LandingComponents.ssh_deep_dive/1, %{})
-    assert ssh =~ "raxol code --ssh --ssh-tenants"
     assert ssh =~ "max connections"
 
     agent = render_component(&LandingComponents.agent_deep_dive/1, %{})
     assert agent =~ ":agent_message"
     assert agent =~ "cronjob"
-
-    coding = render_component(&LandingComponents.coding_agent_deep_dive/1, %{})
-    assert coding =~ "--replay"
-    assert coding =~ "fails closed"
 
     token = render_component(&LandingComponents.token_deep_dive/1, %{})
     assert token =~ "not settlement"
@@ -819,9 +814,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   end
 
   # The reveal shows the registry's own label rather than the shortened head of
-  # it. Two entries reach Claude, the CLI subscription and the API key, and the
-  # head is the one part of the label that cannot say which is which: they
-  # shorten to "Claude" and "Anthropic" and read as a duplicate.
+  # it: the head drops the qualifier that says what an entry is.
   test "a marked entry reveals the full label, not the short head" do
     row = render_component(&LandingComponents.screen_integrations/1, %{})
 
@@ -914,7 +907,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     |> String.replace("&amp;", "&")
   end
 
-  test "the hero halo exports the coding agent's real face frames" do
+  test "the hero halo exports the real agent face frames" do
     hero =
       render_component(&LandingComponents.screen_hero/1,
         example: List.first(LandingComponents.hero_example_names())
@@ -980,7 +973,6 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert footer =~ "github.com/DROOdotFOO/raxol"
     refute footer =~ ~s(href="/token")
     refute footer =~ "$RAXOL"
-    refute footer =~ ~s(href="/coding-agent")
     refute footer =~ ~s(href="/skill.md")
     refute footer =~ ~r/>\s*\d+\s+packages\s*</
   end
@@ -1213,15 +1205,13 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute header =~ "$RAXOL verified"
   end
 
-  test "coding agent section links the ACP site and prints the four commands" do
-    coding = render_component(&LandingComponents.coding_agent_deep_dive/1, %{})
+  test "the agents page links the ACP site and prints the serve commands" do
+    agent = render_component(&LandingComponents.agent_deep_dive/1, %{})
 
-    assert coding =~ "agentclientprotocol.com"
-    refute coding =~ "Zed"
-    assert coding =~ "mix raxol.code"
-    assert coding =~ "raxol acp"
-    assert coding =~ "raxol -p"
-    assert coding =~ "mix mcp.server"
+    assert agent =~ "agentclientprotocol.com"
+    refute agent =~ "Zed"
+    assert agent =~ "raxol acp --agent"
+    assert agent =~ "mix mcp.server"
   end
 
   test "copy control and mobile menu use native accessible controls" do

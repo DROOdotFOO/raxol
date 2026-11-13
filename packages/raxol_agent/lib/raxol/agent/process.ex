@@ -17,7 +17,6 @@ defmodule Raxol.Agent.Process do
 
   require Logger
 
-  alias Raxol.Agent.ContextCompactor
   alias Raxol.Agent.ContextStore
   alias Raxol.Agent.Protocol
 
@@ -337,7 +336,6 @@ defmodule Raxol.Agent.Process do
       :legacy ->
         case state.agent_module.act(action, state.agent_state) do
           {:ok, agent_state} ->
-            agent_state = maybe_compact_history(agent_state, state.agent_module)
             state = %{state | agent_state: agent_state, status: :waiting}
             save_context(state)
             state
@@ -369,7 +367,6 @@ defmodule Raxol.Agent.Process do
     do: handle_strategy_result({:ok, agent_state, []}, state)
 
   defp handle_strategy_result({:ok, agent_state, _commands}, state) do
-    agent_state = maybe_compact_history(agent_state, state.agent_module)
     state = %{state | agent_state: agent_state, status: :waiting}
     save_context(state)
     state
@@ -405,36 +402,6 @@ defmodule Raxol.Agent.Process do
       {:ok, state} -> state
       state when is_map(state) -> state
       _ -> %{}
-    end
-  end
-
-  defp maybe_compact_history(agent_state, agent_module) do
-    if function_exported?(agent_module, :compaction_config, 0) do
-      do_compact_history(agent_state, agent_module.compaction_config())
-    else
-      agent_state
-    end
-  end
-
-  defp do_compact_history(agent_state, nil), do: agent_state
-
-  defp do_compact_history(agent_state, config) do
-    case Map.get(agent_state, :history) do
-      history when is_list(history) ->
-        case ContextCompactor.compact(history, config) do
-          %{compacted: true, messages: compacted} ->
-            Logger.debug(
-              "[Agent.Process] Compacted history: #{length(history)} -> #{length(compacted)} messages"
-            )
-
-            Map.put(agent_state, :history, compacted)
-
-          _ ->
-            agent_state
-        end
-
-      _ ->
-        agent_state
     end
   end
 

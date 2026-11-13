@@ -13,9 +13,9 @@ defmodule Raxol.Agent.ThreadEvent do
   | `:directive` | the Directive struct emitted | record the agent's intent to fire an effect |
   | `:tool_call` | `%{name, arguments}` | record an LLM tool invocation request |
   | `:tool_result` | `%{name, result}` | record the result of a tool call |
-  | `:message` | the message string or struct | a raw conversation message preserved before compaction |
+  | `:message` | the message string or struct | a raw conversation message |
   | `:state_snapshot` | the agent state map | a periodic snapshot for audit / replay |
-  | `:summary` | the compactor's summary string | the marker left when `ContextCompactor` summarized older messages |
+  | `:summary` | a summary string | the marker a host leaves when it summarizes older messages |
   | `:sandbox_deny` | `%{dimension, reason}` | record a sandbox denial |
   | `:policy_result` | `%{policy, decision, ...}` | record a policy outcome (cache hit, retry attempt, timeout, ...) |
 

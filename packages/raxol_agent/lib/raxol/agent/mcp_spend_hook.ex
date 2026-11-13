@@ -7,7 +7,7 @@ defmodule Raxol.Agent.McpSpendHook do
   last, so a capability veto from an earlier hook happens before any money is
   reserved:
 
-      context: %{tool_call_hooks: [Raxol.Agent.Code.Hooks, Raxol.Agent.McpSpendHook],
+      context: %{tool_call_hooks: [MyApp.CapabilityHook, Raxol.Agent.McpSpendHook],
                  spend_gate: %{emit: emit_fun, try_reserve: try_reserve_fun}}
 
   ## Three cases, decided from the tool
@@ -42,8 +42,8 @@ defmodule Raxol.Agent.McpSpendHook do
   hook authorized, wrapped around the request and before the request is built.
   The closure is the authority: without this hook in the pipeline there is no
   reservation and no handle, which is exactly why the transport refuses a
-  priced `tools/call` that arrives without one. A native harness drives its own
-  tool loop and bypasses this seam entirely, so that second enforcement site is
+  priced `tools/call` that arrives without one. A backend that drives its own
+  tool loop bypasses this seam entirely, so that second enforcement site is
   not redundancy.
 
   The reserved key cannot be forged from model-supplied arguments: its value

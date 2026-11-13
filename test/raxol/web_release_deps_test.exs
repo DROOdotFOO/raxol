@@ -1,12 +1,12 @@
 defmodule Raxol.WebReleaseDepsTest do
   @moduledoc """
-  The deploy app must carry what the hosted coding agent needs.
+  The deploy app must carry what the site calls at run time.
 
-  `raxol_agent` declares `req` optional and main raxol does not depend on
-  `raxol_payments` at all. Optional deps do not propagate, so a release that
-  merely depends on `raxol_agent` gets neither -- and every gate would pass
-  while every LLM turn failed with `:req_not_available`, or the agent would
-  refuse to start for want of a ledger.
+  `web/lib` reads the agent framework's provider registry, renders the
+  payments pages from `raxol_payments`, and fetches the release manifest with
+  `req`. `raxol_agent` declares `req` optional and main raxol does not depend
+  on `raxol_payments` at all. Optional deps do not propagate, so a release
+  that merely depends on `raxol_agent` gets neither.
 
   This asserts on `web/mix.exs` and `web/mix.lock` rather than on
   `Code.ensure_loaded?/1`, deliberately: `req` is an optional dep of the ROOT
@@ -22,7 +22,7 @@ defmodule Raxol.WebReleaseDepsTest do
   defp mix_exs, do: File.read!(Path.join(@web_root, "mix.exs"))
   defp mix_lock, do: File.read!(Path.join(@web_root, "mix.lock"))
 
-  test "web/mix.exs declares the hosted coding agent's dependencies" do
+  test "web/mix.exs declares the agent, payments and HTTP dependencies" do
     source = mix_exs()
 
     assert source =~ ~s({:raxol_agent, path: "../packages/raxol_agent"})

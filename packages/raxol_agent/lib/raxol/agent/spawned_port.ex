@@ -2,25 +2,23 @@ defmodule Raxol.Agent.SpawnedPort do
   @moduledoc """
   Lifecycle helpers shared by every port that spawns an OS process.
 
-  The agent spawns processes from four places -- the native CLI backend, the
-  two shell tools, and the directive executor -- and each one had drifted into
-  its own answer for the same two questions. This module holds the answers
-  once.
+  Every spawner asks the same two questions, and this module holds the
+  answers once.
 
   ## Why stdin is `/dev/null`
 
-  Every spawner here passes its input over argv: the native backend puts the
-  prompt in `-p`, the shell tools pass the command to `sh -c`, and `op` takes
-  its reference as an argument. None of them ever calls `Port.command/2`, so
+  Every spawner here passes its input over argv: a shell command goes to
+  `sh -c`, and `op` takes its reference as an argument. None of them ever
+  calls `Port.command/2`, so
   a child that reads stdin must see EOF at once.
 
   No port option gives it that on Unix. Opened for both directions, the port
   hands the child a pipe that carries nothing and never closes, so anything
   that drains stdin blocks until the caller's deadline. Opened with `:in`,
   erts skips the stdin `dup2` entirely (`erl_child_setup.c`) and the child
-  inherits the BEAM's own fd 0 -- under the TUI, the user's terminal. The
-  child then races the TUI for keystrokes (a key being typed for `/login`
-  included) and can rewrite its termios. erts does start the child in a new
+  inherits the BEAM's own fd 0 -- under a TUI, the user's terminal. The
+  child then races the TUI for keystrokes
+  and can rewrite its termios. erts does start the child in a new
   session, so `/dev/tty` is unreachable; fd 0 is the whole problem.
 
   So on Unix the redirect is done by a shell: `spawn_spec/2` wraps an

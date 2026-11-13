@@ -2,11 +2,10 @@ defmodule Raxol.Agent.SessionKey do
   @moduledoc """
   Mints and checks the identifier a session is stored under.
 
-  One authority, because a session key is a filesystem path in two places at
-  once: `Raxol.Agent.Journal.FileStore.session_dir/2` joins it onto the
-  journal base, and a surface's own session store uses it as a filename. The
-  coding TUI mints these, and the share token checks ids against the same
-  pattern, so the format cannot live in each of them separately. An agent
+  One authority, because a session key is a filesystem path:
+  `Raxol.Agent.Journal.FileStore.session_dir/2` joins it onto the journal
+  base, and a surface's own session store may use it as a filename, so the
+  format cannot live in each of them separately. An agent
   served over ACP is not named by one: its id is the `--agent` id or
   `acp-<12 hex>`, checked by `Raxol.Agent.McpTools`.
 
@@ -27,16 +26,13 @@ defmodule Raxol.Agent.SessionKey do
 
   ## Validity
 
-  `valid?/1` is the one pattern that decides what may become a path; the
-  share token's session-id check delegates here rather than restating it. Use
+  `valid?/1` is the one pattern that decides what may become a path. Use
   it on any key that arrived from outside this VM BEFORE it reaches
   `session_dir/2`, which joins without sanitizing.
   """
 
-  # Ids ride inside signed share tokens too, so they refuse anything that could
-  # not name a journal directory (a `:` would also break the token's
-  # `v2:<scope>:<id>:<exp>` framing, so an unvalidated id mints a permanently
-  # unverifiable token). `.` and `..` match the charset but are dot segments,
+  # An id refuses anything that could not name a journal directory. `.` and
+  # `..` match the charset but are dot segments,
   # not names: the same pair `Raxol.SSH.Server.sanitize_tenant/1` refuses,
   # excluded here so the two id validators cannot disagree.
   @key_re ~r/\A[A-Za-z0-9._-]+\z/

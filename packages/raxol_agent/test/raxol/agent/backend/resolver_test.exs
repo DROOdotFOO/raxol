@@ -20,22 +20,6 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     saved = Map.new(@managed_env, fn key -> {key, System.get_env(key)} end)
     Enum.each(@managed_env, &System.delete_env/1)
 
-    # Auto-detection now considers an installed vendor CLI (the subscription
-    # harness), which would otherwise make every assertion here depend on
-    # whether `claude` happens to be on this host's PATH. `config/config.exs`
-    # already pins this false for :test; save and RESTORE it rather than
-    # deleting, or the tests that follow this module lose that pin and start
-    # resolving against the real CLI.
-    prev_probe = Application.fetch_env(:raxol_agent, :native_probe)
-    Application.put_env(:raxol_agent, :native_probe, fn _mod -> false end)
-
-    on_exit(fn ->
-      case prev_probe do
-        {:ok, value} -> Application.put_env(:raxol_agent, :native_probe, value)
-        :error -> Application.delete_env(:raxol_agent, :native_probe)
-      end
-    end)
-
     store =
       Path.join(
         System.tmp_dir!(),
@@ -100,58 +84,6 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       System.put_env("OPENROUTER_API_KEY", "sk-or")
 
       assert {:ok, %{backend: :lm_studio}, :configured} = Resolver.resolve()
-    end
-  end
-
-  describe "subscription harness" do
-    test "an installed vendor CLI is auto-selected ahead of a paid provider" do
-      Application.put_env(:raxol_agent, :native_probe, fn _mod -> true end)
-      allow_paid!()
-      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
-
-      assert {:ok, config, :subscription} = Resolver.resolve()
-      assert config.backend == :claude_native
-      assert config.auth == %{}
-    end
-
-    test "an absent CLI falls through rather than resolving to it" do
-      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
-      assert :no_provider = Resolver.resolve()
-    end
-
-    # Naming a harness resolves it whether or not its CLI is installed, and the
-    # source is the naming itself -- `:subscription` is what AUTO-detection
-    # reports when it picks one up on its own.
-    test "grok resolves by name with no credential to supply" do
-      assert {:ok, config, :explicit} = Resolver.resolve(harness: :grok_native)
-      assert config.backend == :grok_native
-      assert config.auth == %{}
-    end
-
-    test "grok is auto-selected when its CLI is present" do
-      Application.put_env(:raxol_agent, :native_probe, fn
-        Raxol.Agent.Backend.GrokBuild -> true
-        _other -> false
-      end)
-
-      assert {:ok, %{backend: :grok_native}, :subscription} = Resolver.resolve()
-    end
-
-    # Both subscription harnesses are registry entries, so the setup panel and
-    # /login list them whether or not their CLI is installed.
-    test "both subscription harnesses are in the registry, ahead of the paid ones" do
-      harnesses = Enum.map(Resolver.providers(), & &1.harness)
-
-      assert :claude_native in harnesses
-      assert :grok_native in harnesses
-
-      subscription_last =
-        harnesses |> Enum.find_index(&(&1 == :grok_native))
-
-      paid_first =
-        harnesses |> Enum.find_index(&(&1 in [:anthropic, :openai, :openrouter]))
-
-      assert subscription_last < paid_first
     end
   end
 
@@ -496,6 +428,54 @@ defmodule Raxol.Agent.Backend.ResolverTest do
         assert entry.note =~ "did not answer",
                "#{harness} got #{inspect(entry.note)}"
       end
+    end
+  end
+
+  describe "diagnostics/0 against a signed-in vault that refuses a read" do
+    # The fake `op` below is a `#!/bin/sh` script.
+    @describetag :unix_only
+
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-op-refuse-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      fake_op = Path.join(dir, "op")
+
+      # Signed in, and every `read` fails at once: the item was deleted or moved.
+      File.write!(fake_op, """
+      #!/bin/sh
+      case "$1" in
+        whoami) exit 0 ;;
+      esac
+      exit 1
+      """)
+
+      File.chmod!(fake_op, 0o755)
+
+      prev_path = System.get_env("PATH")
+      System.put_env("PATH", dir <> ":" <> (prev_path || ""))
+
+      on_exit(fn ->
+        System.put_env("PATH", prev_path || "")
+        File.rm_rf!(dir)
+      end)
+
+      :ok
+    end
+
+    test "a stored reference that cannot be read says so" do
+      System.put_env("RAXOL_ANTHROPIC_OP", "op://vault/anthropic/credential")
+
+      diag = Resolver.diagnostics()
+      anthropic = Enum.find(diag.providers, &(&1.harness == :anthropic))
+
+      assert diag.op == :ok
+      refute anthropic.available?
+      assert anthropic.note =~ "could not be read"
     end
   end
 

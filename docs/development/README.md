@@ -229,10 +229,9 @@ mix raxol.check               # Run all quality checks before committing
 
 Authorization and input validation sit on the function that performs the side
 effect, not on the routing clause that reaches it; a dispatch-level check is UX
-only. The `%{jail: true}` gate is the worked example: `/login` refusing at
-`apply_command/3` still left `Commands.connect/4` writing the host-global
-credential store from the onboarding wizard, so the refusal moved into
-`connect/4` and `Wizard.save_key_to_op/1` (#1011). Same shape elsewhere: the
+only. The network gate is the worked example: `Raxol.Agent.Actions.Web3.run/2`
+calls `Raxol.Agent.Policy.Grants.network_allow/1` itself, so no route to the
+tool reaches the request around the check. Same shape elsewhere: the
 mode allow-list belongs with the handlers that apply a mode, and a startup
 barrier cannot trust the lane to report its own readiness.
 

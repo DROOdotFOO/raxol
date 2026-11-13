@@ -8,6 +8,9 @@ Accepted, 2026-06-21 (implemented in `Raxol.Agent.Auxiliary`; `SelfImprove` and
 ad-hoc auxiliary-model plumbing already present in ADR-0021's `SelfImprove`/`Curator` and ADR-0022's
 `UserModel`.
 
+Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: `Raxol.Agent.Auxiliary` is removed
+with its two callers, `SelfImprove` and `UserModel`.
+
 ## Context
 
 Not every model call deserves the frontier model. Compression, titling, triage, decomposition,

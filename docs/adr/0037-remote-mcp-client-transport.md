@@ -59,6 +59,10 @@ tools that are discovered at connect time and billed per call. It is described b
 the wire behaviour its public documentation states. Nothing vendor-specific is decided here,
 and no integration is committed by this ADR.
 
+Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Code.McpConfig` and
+`Raxol.Agent.Code.McpLoader` are removed, so nothing in this tree reads `.mcp.json`. The
+transport, the provenance rule in `Raxol.Agent.McpBundle` and the spend-gate reservation stand.
+
 ## Context
 
 ### Gap 1: the transport is four inlined assumptions, not a seam

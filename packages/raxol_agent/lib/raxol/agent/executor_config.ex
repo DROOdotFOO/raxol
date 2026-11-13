@@ -40,12 +40,9 @@ defmodule Raxol.Agent.ExecutorConfig do
   defstruct backend: nil, model: nil, auth: %{}, opts: []
 
   # The union is unquoted from `Raxol.Agent.Backend.Catalog.ids/0` rather than
-  # written out, because the hand-maintained copy drifted: `:grok_native` was
-  # resolvable and selectable while absent from this type, so Dialyzer could not
-  # see it (ADR-0034, "Gap 4: five registries disagree about which backends
-  # exist"). A union is a compile-time construct and cannot be folded at
-  # runtime, hence the explicit `{:|, [], [...]}` AST rather than a reduce over
-  # the ids at call time.
+  # written out, so the type cannot fall behind the catalog. A union is a
+  # compile-time construct and cannot be folded at runtime, hence the explicit
+  # `{:|, [], [...]}` AST rather than a reduce over the ids at call time.
   @type backend ::
           unquote(
             Raxol.Agent.Backend.Catalog.ids()

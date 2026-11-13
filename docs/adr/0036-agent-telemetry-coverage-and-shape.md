@@ -30,6 +30,11 @@ invariant, and every row below that names `turn_runner.ex` or `acp_turn_runner.*
 code that no longer exists. A `raxol acp --agent` turn is bracketed in the journal by
 `Raxol.Agent.Session` and emits no telemetry of its own.
 
+Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Code.App` is removed, and
+with it the tier-1 events it alone emitted (the `[:raxol, :agent, :cost, ...]` and
+`[:raxol, :agent, :budget, :halt, ...]` families). The money path below describes code that no
+longer exists.
+
 ## Context
 
 ### What exists
