@@ -2,27 +2,21 @@ defmodule Raxol.Agent.Backend.Catalog do
   @moduledoc """
   The single declaration of which agent backends exist.
 
-  Three registries used to declare this independently: `Backend.Selector`'s
-  module table, `Backend.Resolver`'s provider list, and
-  `Raxol.Agent.ExecutorConfig`'s `backend()` union. They drifted, and each drift
-  was a live defect rather than untidiness -- `:grok_native` was resolvable and
-  selectable while invisible to Dialyzer, and `:cursor` was selectable in code
-  while unnameable from `/login`, `--backend` and `.raxol/config.json`. See
-  ADR-0034, "Gap 4: five registries disagree about which backends exist".
+  `Backend.Selector`'s module table, `Backend.Resolver`'s provider list and
+  `Raxol.Agent.ExecutorConfig`'s `backend()` union are all projected from the
+  entries here, so the three cannot disagree about which backends exist.
 
   The policy is derive, not merge: this module is the declaration and the three
   consumers each project the slice they need out of it. Nothing here knows about
-  credential resolution, request building, or Symphony's runner registry
-  (outside this repository), which answer different questions and keep their
-  own logic.
+  credential resolution or request building, which answer different questions
+  and keep their own logic.
 
   ## Entry shape
 
     * `:id` -- the backend atom, canonical everywhere (`:harness` in the
       resolver is the same value under its deprecated name)
-    * `:label` -- human name for the setup panel and `/login`
-    * `:kind` -- `:http`, `:native`, `:mock`, or `:reserved`. `:reserved` names
-      a backend the type system accepts and the selector deliberately refuses
+    * `:label` -- human name shown where a backend is listed
+    * `:kind` -- `:http` or `:mock`
     * `:module` -- the backend module the selector resolves to
     * `:backend_opts` -- defaults merged under the config's own options
     * `:env_keys` -- API key env vars, checked in order; `[]` means keyless
@@ -34,14 +28,14 @@ defmodule Raxol.Agent.Backend.Catalog do
       at all, independent of what `:billing` then allows
   """
 
-  @type kind :: :http | :native | :mock | :reserved
+  @type kind :: :http | :mock
   @type billing :: :subscription | :api_credits | :local | :free
 
   @type entry :: %{
           id: atom(),
           label: String.t(),
           kind: kind(),
-          module: module() | nil,
+          module: module(),
           backend_opts: keyword(),
           env_keys: [String.t()],
           model_env: String.t() | nil,
@@ -50,32 +44,9 @@ defmodule Raxol.Agent.Backend.Catalog do
         }
 
   # Declaration order IS the auto-detect order for detectable entries, so this
-  # list is not alphabetised. The subscription harnesses come first because they
-  # cost nothing extra AND are frontier models; everything billed in API credits
-  # sits behind them and behind the `RAXOL_ALLOW_PAID_API` gate in the resolver.
+  # list is not alphabetised. Everything billed in API credits sits behind the
+  # `RAXOL_ALLOW_PAID_API` gate in the resolver.
   @entries [
-    %{
-      id: :claude_native,
-      label: "Claude (subscription, via CLI)",
-      kind: :native,
-      module: Raxol.Agent.Backend.ClaudeCode,
-      backend_opts: [],
-      env_keys: [],
-      model_env: nil,
-      billing: :subscription,
-      detectable?: true
-    },
-    %{
-      id: :grok_native,
-      label: "Grok (subscription, via CLI)",
-      kind: :native,
-      module: Raxol.Agent.Backend.GrokBuild,
-      backend_opts: [],
-      env_keys: [],
-      model_env: "GROK_MODEL",
-      billing: :subscription,
-      detectable?: true
-    },
     %{
       id: :anthropic,
       label: "Anthropic (Claude)",
@@ -246,41 +217,6 @@ defmodule Raxol.Agent.Backend.Catalog do
       model_env: nil,
       billing: :free,
       detectable?: true
-    },
-    # Cursor is declared undetectable rather than left out. Its CLI probe would
-    # answer like the other native harnesses and thereby insert it into the
-    # auto-detect order, changing which backend an unattended run picks; that is
-    # a product decision, not a registry cleanup. Declaring it here is what makes
-    # it nameable from `/login`, `--backend cursor` and `.raxol/config.json`,
-    # which it was not while the resolver's list was written out by hand.
-    %{
-      id: :cursor,
-      label: "Cursor (subscription, via CLI)",
-      kind: :native,
-      module: Raxol.Agent.Backend.Cursor,
-      backend_opts: [],
-      env_keys: [],
-      model_env: nil,
-      billing: :subscription,
-      detectable?: false
-    },
-    # Codex speaks a stateful `app-server` JSON-RPC protocol (not the
-    # stream-json NDJSON interface the native backends share); it is served by
-    # Symphony's Codex runner, outside this repository since ADR-0043, rather
-    # than by an agent backend here. It stays in the catalog so the type
-    # accepts it and the selector can answer
-    # `{:error, {:backend_not_implemented, :codex}}` instead of pretending the
-    # name is a typo.
-    %{
-      id: :codex,
-      label: "Codex (via Symphony runner)",
-      kind: :reserved,
-      module: nil,
-      backend_opts: [],
-      env_keys: [],
-      model_env: nil,
-      billing: :subscription,
-      detectable?: false
     }
   ]
 
@@ -293,15 +229,6 @@ defmodule Raxol.Agent.Backend.Catalog do
   @doc "Every backend id, in declaration order."
   @spec ids() :: [atom()]
   def ids, do: @ids
-
-  @doc """
-  Entries of one kind, or of any kind in a list, preserving declaration order.
-  """
-  @spec by_kind(kind() | [kind()]) :: [entry()]
-  def by_kind(kind) when is_atom(kind), do: by_kind([kind])
-
-  def by_kind(kinds) when is_list(kinds),
-    do: Enum.filter(@entries, &(&1.kind in kinds))
 
   @doc "Fetch one entry by id."
   @spec fetch(atom()) :: {:ok, entry()} | :error
