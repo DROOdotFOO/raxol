@@ -165,7 +165,7 @@ Raxol.Headless.send_key(session, "q")
 | Build an AI agent | `{:raxol_agent, "~> 2.7"}` |
 | Serve MCP tools | `{:raxol_mcp, "~> 2.8"}` |
 | Render in LiveView | `{:raxol_liveview, "~> 2.8"}` |
-| Add agent payments | `{:raxol_payments, "~> 0.3"}` |
+| Add agent payments | `raxol_payments` (0.3 is unpublished; Hex has 0.2) |
 | Use sensor fusion | `{:raxol_sensor, "~> 2.8"}` (zero deps) |
 | Build a plugin | `{:raxol_plugin, "~> 2.8"}` |
 | Add voice commands | `{:raxol_speech, "~> 0.2"}` |

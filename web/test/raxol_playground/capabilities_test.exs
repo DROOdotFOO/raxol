@@ -73,8 +73,9 @@ defmodule RaxolPlayground.CapabilitiesTest do
   # package moves it from here to `@published`.
   @awaiting_first_publish []
 
-  # On Hex, and released outside this repository's train.
-  @off_train ["raxol_agent", "raxol_payments"]
+  # On Hex at the minor its mix.exs states, and released outside this
+  # repository's train. `raxol_payments` is not: Hex has 0.2, the tree 0.3.
+  @off_train ["raxol_agent"]
 
   test "the published set is the release train, less the packages awaiting a first publish, plus the off-train ones" do
     train =

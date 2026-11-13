@@ -1329,9 +1329,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # Stables lead, WETH trails; unknown symbols land after, alphabetically.
   @token_order %{"USDC" => 0, "USDT" => 1, "USDG" => 2, "WETH" => 3}
 
-  @payments_version Enum.find_value(Capabilities.packages(), fn
+  # From the repository's packages, not the published list: the page
+  # describes the package this site is built against.
+  @payments_version Enum.find_value(Capabilities.repo_packages(), fn
                       %{name: "raxol_payments", version: v} ->
-                        String.replace(v, "~> ", "")
+                        v |> String.split(".") |> Enum.take(2) |> Enum.join(".")
 
                       _ ->
                         nil
