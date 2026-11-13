@@ -19,7 +19,7 @@ defmodule Raxol.Agent.EmitBridge do
 
   so any surface already subscribed to `SessionStreamer` (a TUI, SSE)
   receives Dispatcher-originated events on the same channel as
-  `Raxol.Agent.Contract.pump/3` output. Producers differ; the contract does not.
+  `Raxol.Agent.StreamPump.pump/3` output. Producers differ; the contract does not.
 
   ## The id authority (kills the dual-id landmine)
 

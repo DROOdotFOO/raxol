@@ -1,9 +1,10 @@
-defmodule Raxol.Agent.ContractTest do
+defmodule Raxol.Agent.StreamPumpTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Agent.Contract
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.SessionStreamer
+  alias Raxol.Agent.StreamPump
 
   setup do
     start_supervised!({SessionStreamer, []})
@@ -27,7 +28,7 @@ defmodule Raxol.Agent.ContractTest do
       :ok = SessionStreamer.subscribe(session_id)
 
       assert {:ok, _} =
-               Contract.pump(session_id, mock_stream("answer"), prompt: "hi")
+               StreamPump.pump(session_id, mock_stream("answer"), prompt: "hi")
 
       completed =
         session_id
@@ -43,7 +44,7 @@ defmodule Raxol.Agent.ContractTest do
       :ok = SessionStreamer.subscribe(session_id)
 
       assert {:ok, %{content: content}} =
-               Contract.pump(session_id, mock_stream("Hello!"), prompt: "hi")
+               StreamPump.pump(session_id, mock_stream("Hello!"), prompt: "hi")
 
       assert content =~ "Hello"
 
@@ -69,7 +70,7 @@ defmodule Raxol.Agent.ContractTest do
       session_id = "contract-test-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(session_id)
 
-      {:ok, _} = Contract.pump(session_id, mock_stream("chunky"), prompt: "hi")
+      {:ok, _} = StreamPump.pump(session_id, mock_stream("chunky"), prompt: "hi")
 
       events = drain_events(session_id)
 
@@ -98,7 +99,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{output_tokens: 1}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
 
       final = session_id |> drain_events() |> List.last()
       assert final.type == :turn_completed
@@ -133,7 +134,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
 
       final = session_id |> drain_events() |> List.last()
       assert final.payload.final == true
@@ -158,7 +159,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "after"}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
 
       events = drain_events(session_id)
 
@@ -199,7 +200,7 @@ defmodule Raxol.Agent.ContractTest do
       on_exit(fn -> :telemetry.detach(handler) end)
 
       {:ok, _} =
-        Contract.pump(session_id, mock_stream("plain answer"), prompt: "hi")
+        StreamPump.pump(session_id, mock_stream("plain answer"), prompt: "hi")
 
       final = session_id |> drain_events() |> List.last()
 
@@ -218,7 +219,7 @@ defmodule Raxol.Agent.ContractTest do
       error_stream = [{:error, {:http, 500, "boom"}}]
 
       assert {:error, {:http, 500, "boom"}} =
-               Contract.pump(session_id, error_stream, prompt: "hi")
+               StreamPump.pump(session_id, error_stream, prompt: "hi")
 
       events = drain_events(session_id)
       assert Enum.any?(events, &(&1.type == :error))
@@ -234,7 +235,7 @@ defmodule Raxol.Agent.ContractTest do
         {:error, :timeout}
       ]
 
-      assert {:error, :timeout} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:error, :timeout} = StreamPump.pump(session_id, stream, prompt: "q")
 
       events = drain_events(session_id)
 
@@ -299,7 +300,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "Hello!", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "hi")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "hi")
 
       events = drain_events(session_id)
 
@@ -349,7 +350,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
 
       events = drain_events(session_id)
 
@@ -385,7 +386,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
 
       completed =
         session_id
@@ -415,7 +416,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "final answer", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
 
       events = drain_events(session_id)
 
@@ -470,7 +471,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "the answer", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       # Exactly ONE sealed message — the real answer. The blank pre-tool
@@ -504,7 +505,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: " \n\t", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       assert completed_messages(events) == []
@@ -526,7 +527,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       assert completed_messages(events) == []
@@ -554,7 +555,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "final", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       # The lazily-opened item's sealed content keeps the leading blank
@@ -602,7 +603,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "the answer", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
 
       events = drain_events(session_id)
 
@@ -651,7 +652,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "x", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       started =
@@ -685,7 +686,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "hi", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       assert reasoning_items(events) == []
@@ -710,7 +711,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "final", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       contents = reasoning_items(events) |> Enum.map(& &1.content)
@@ -741,7 +742,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       assert [%{content: "just thinking, no words"}] = reasoning_items(events)
@@ -770,7 +771,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       marker =
@@ -792,7 +793,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "hi", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       # Only the real answer message seals; no empty marker block.
@@ -812,7 +813,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "partial", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "q")
       events = drain_events(session_id)
 
       reasoning_started =
@@ -861,43 +862,6 @@ defmodule Raxol.Agent.ContractTest do
     end
   end
 
-  describe "encode_line/1" do
-    test "produces one decodable JSON line per event" do
-      event = %Event{
-        id: 1,
-        session_id: "s",
-        turn_id: "t",
-        ts: 123,
-        type: :turn_started,
-        payload: %{prompt: "hi"}
-      }
-
-      line = event |> Contract.encode_line() |> IO.iodata_to_binary()
-      assert String.ends_with?(line, "\n")
-
-      assert {:ok, decoded} = Jason.decode(String.trim_trailing(line))
-      assert decoded["type"] == "turn_started"
-      assert decoded["payload"]["prompt"] == "hi"
-      assert decoded["tier"] == "durable"
-    end
-
-    test "sanitizes non-JSON payload terms instead of crashing" do
-      event = %Event{
-        id: 1,
-        session_id: "s",
-        turn_id: "t",
-        ts: 123,
-        type: :error,
-        payload: %{reason: {:http, 500, {:nested, :tuple}}}
-      }
-
-      line = event |> Contract.encode_line() |> IO.iodata_to_binary()
-      assert {:ok, decoded} = Jason.decode(String.trim_trailing(line))
-      assert is_binary(decoded["payload"]["reason"])
-      assert decoded["payload"]["reason"] =~ "http"
-    end
-  end
-
   describe "pump/3 — tool-execution vocabulary" do
     test "approval events sequence into the run's id stream between tool_use and result" do
       session_id = "contract-appr-#{System.unique_integer([:positive])}"
@@ -911,7 +875,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
       events = drain_events(session_id)
       types = Enum.map(events, & &1.type)
 
@@ -941,7 +905,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
       events = drain_events(session_id)
 
       tr =
@@ -966,7 +930,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
       events = drain_events(session_id)
 
       marker =
@@ -1010,14 +974,14 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, rejected_stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, rejected_stream, prompt: "p")
       rejected_final = session_id |> drain_events() |> List.last()
 
       # Absent arm: a zero-tool turn — no evidence ever offered.
       absent_session_id = "u21-marker-absent-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(absent_session_id)
 
-      {:ok, _} = Contract.pump(absent_session_id, mock_stream("plain answer"), prompt: "hi")
+      {:ok, _} = StreamPump.pump(absent_session_id, mock_stream("plain answer"), prompt: "hi")
       absent_final = absent_session_id |> drain_events() |> List.last()
 
       # Both close `final: true` with no `refs` — the wire-identical shape
@@ -1043,7 +1007,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{output_tokens: 1}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
       final = session_id |> drain_events() |> List.last()
 
       # the item lifecycle emits item_started siblings, so the accepted
@@ -1063,7 +1027,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
       final = session_id |> drain_events() |> List.last()
 
       assert final.payload.evidence == :rejected
@@ -1095,7 +1059,7 @@ defmodule Raxol.Agent.ContractTest do
       session_id = "u21-marker-absent-detail-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(session_id)
 
-      {:ok, _} = Contract.pump(session_id, mock_stream("plain answer"), prompt: "hi")
+      {:ok, _} = StreamPump.pump(session_id, mock_stream("plain answer"), prompt: "hi")
       final = session_id |> drain_events() |> List.last()
 
       assert final.payload.evidence == :absent
@@ -1118,7 +1082,7 @@ defmodule Raxol.Agent.ContractTest do
         {:done, %{content: "done", usage: %{}}}
       ]
 
-      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      assert {:ok, _} = StreamPump.pump(session_id, stream, prompt: "p")
       final = session_id |> drain_events() |> List.last()
 
       allowed_keys = MapSet.new([:usage, :final, :evidence, :evidence_rejected])
@@ -1126,75 +1090,6 @@ defmodule Raxol.Agent.ContractTest do
 
       refute Map.has_key?(final.payload, :reason)
       refute Map.has_key?(final.payload, :ref)
-    end
-  end
-
-  describe "evidence_status/1 (grandfather decode rule)" do
-    test "an authoritative marker key wins outright" do
-      assert Contract.evidence_status(%{evidence: :accepted}) == :accepted
-      assert Contract.evidence_status(%{evidence: :rejected, refs: []}) == :rejected
-      assert Contract.evidence_status(%{evidence: :absent}) == :absent
-
-      # String-keyed / string-valued (as replayed off the journal via
-      # Jason.decode).
-      assert Contract.evidence_status(%{"evidence" => "accepted"}) == :accepted
-      assert Contract.evidence_status(%{"evidence" => "rejected"}) == :rejected
-      assert Contract.evidence_status(%{"evidence" => "absent"}) == :absent
-    end
-
-    test "legacy record (no evidence key) with refs present grandfathers to :accepted" do
-      assert Contract.evidence_status(%{final: true, refs: [3]}) == :accepted
-      assert Contract.evidence_status(%{"final" => true, "refs" => [3]}) == :accepted
-    end
-
-    test "legacy record (no evidence key, no refs) is genuinely unknown — never guessed as :absent" do
-      assert Contract.evidence_status(%{final: true, usage: %{}}) == :unknown
-      assert Contract.evidence_status(%{"final" => true, "usage" => %{}}) == :unknown
-
-      # In particular it must NOT be `:absent`: that would launder a
-      # historical rejection into a false "never offered" claim.
-      refute Contract.evidence_status(%{final: true, usage: %{}}) == :absent
-    end
-
-    # S1 (PR #631, Drew's reproduction) — the decoder must be TOTAL. The
-    # `evidence` enum is grow-only (AD-11 upcast-on-read): a reader on 1.1.0
-    # WILL meet a future 1.2.0 journal carrying a 4th value, and a corrupt or
-    # forged line can carry anything. Before the fix `normalize_evidence/1` had
-    # exactly three clauses and raised `FunctionClauseError` on the replay
-    # surface. Every unrecognized value must degrade to `:unknown`, never crash,
-    # never `:accepted`.
-    test "a future/unknown string enum value decodes to :unknown (Drew's exact repro), never crashes" do
-      # Drew's reproduction: a 1.2.0 journal's 4th evidence value replayed as a
-      # JSON string on a 1.1.0 reader.
-      assert Contract.evidence_status(%{"evidence" => "verified_v2"}) == :unknown
-    end
-
-    test "a future/unknown atom enum value decodes to :unknown" do
-      assert Contract.evidence_status(%{evidence: :verified_v2}) == :unknown
-    end
-
-    test "a garbage-typed evidence value decodes to :unknown, never crashes" do
-      for garbage <- [42, nil, true, %{}, [1, 2, 3], {:tuple, :val}, 3.14] do
-        assert Contract.evidence_status(%{evidence: garbage}) == :unknown,
-               "garbage evidence value #{inspect(garbage)} did not decode :unknown"
-
-        assert Contract.evidence_status(%{"evidence" => garbage}) == :unknown,
-               "string-keyed garbage evidence #{inspect(garbage)} did not decode :unknown"
-      end
-    end
-
-    test "an unrecognized authoritative marker never launders to :accepted, even with refs present" do
-      # S2 hardening face: the `evidence` key IS present (not a legacy record),
-      # so the refs-grandfather arm must never be consulted — a forged/unknown
-      # marker value sitting atop a refs list decodes :unknown, NOT :accepted.
-      assert Contract.evidence_status(%{"evidence" => "bogus", "refs" => [3]}) ==
-               :unknown
-
-      refute Contract.evidence_status(%{"evidence" => "bogus", "refs" => [3]}) ==
-               :accepted
-
-      assert Contract.evidence_status(%{evidence: :forged, refs: [1, 2]}) ==
-               :unknown
     end
   end
 end
