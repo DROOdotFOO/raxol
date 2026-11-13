@@ -387,7 +387,7 @@ agent.
 | 0028 | Superseded | `Auxiliary`'s only callers (`SelfImprove`, `UserModel`) go, leaving it dead |
 | 0032 | Narrowed | `Actions.Fs` goes; its sandboxed-spawn design stays as the open follow-up for unattended runners such as the Symphony `omp` runner |
 | 0034 | Narrowed | the native seam and Gap 1 go; the catalog as the single backend declaration and the `handles_tools_internally?/0` seam stay |
-| 0035 | Narrowed | `LlmPrices` prices `omp_gateway` replies; its DeepSeek scoped rows go with the backend |
+| 0035 | Superseded | `LlmPrices` and its price tables go |
 | 0036 | Narrowed | the tier-1 events are emitted only from `Code.App` |
 | 0037 | Narrowed | `.mcp.json` admission lived in `Code.McpConfig` |
 

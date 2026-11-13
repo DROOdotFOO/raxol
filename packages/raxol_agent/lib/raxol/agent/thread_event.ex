@@ -30,9 +30,7 @@ defmodule Raxol.Agent.ThreadEvent do
 
   ## Metadata
 
-  Arbitrary map. The framework attaches `:causation_id` when
-  available (chained from the CloudEvents envelope). Callers
-  may attach anything; adapters preserve it verbatim.
+  Arbitrary map; adapters preserve it verbatim. The Scheduler attaches none.
   """
 
   @type kind ::

@@ -126,9 +126,9 @@ defmodule Raxol.Agent.Telemetry do
   # Metadata is context, and a host's log or metrics pipeline persists it
   # verbatim, so `bound/1` passes a binary through only when it is no longer
   # than an identifier. Long enough for every identifier this repo mints -- a
-  # session key is `sess-<epoch>-<int>`, a trace id is 16 hex characters, a
-  # UUID is 36 and a SHA-256 hex digest is exactly 64 -- and short enough that
-  # no prompt, tool argument or file body fits.
+  # trace id is 16 hex characters, a UUID is 36 and a SHA-256 hex digest is
+  # exactly 64 -- and short enough that no prompt, tool argument or file body
+  # fits.
   @max_identifier_bytes 64
 
   # The digest key lives for one VM run and is never persisted, so a digest

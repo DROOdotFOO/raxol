@@ -3,7 +3,7 @@
 The harness is a headless agent-session **core** that owns all durable state
 and speaks a typed **contract** of events. Surfaces are pure subscribers that
 hold nothing persistent: a surface's view is
-`Raxol.Harness.Projection.project/2` over journal records, a throwaway
+`Raxol.Harness.Projection.project/2` over the session's events, a throwaway
 materialization. Kill a surface and respawn it and it shows the same truth,
 because the truth was never in the surface.
 
@@ -65,8 +65,8 @@ of the fold: `filter_ids/1` drops duplicate/out-of-order records and marks a
 forward gap `damaged?` without withholding the survivors; `partition_families`
 keeps only `:loop` events; `bucket_by_turn` groups by `turn_id` in first-seen
 order; `BlockBuilder` folds each turn's items into blocks. Because the model is
-a pure fold over the event stream, time-travel is a re-fold of the records up
-to an offset.
+a pure fold over the event stream, a view at an earlier offset is a re-fold of
+the events up to it; nothing in the tree does that.
 
 ### Frozen golden corpora
 
