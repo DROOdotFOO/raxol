@@ -11,16 +11,11 @@ defmodule Raxol.MCP.AgentBridge do
       actions = [MyApp.Actions.ReadFile, MyApp.Actions.WriteFile]
       tools = AgentBridge.actions_to_mcp_tools(actions)
       Raxol.MCP.Registry.register_tools(registry, tools)
-
-  The bridge also provides meta-tools for agent management:
-  `agent.list`, `agent.send`, `agent.get_model`.
   """
 
   require Logger
 
   alias Raxol.MCP.TreeWalker
-
-  @compile {:no_warn_undefined, [Raxol.Agent.Registry, Raxol.Headless]}
 
   @doc """
   Convert a list of Action modules to MCP tool definitions.
@@ -90,148 +85,6 @@ defmodule Raxol.MCP.AgentBridge do
 
   defp put_sensitive(tool, true), do: Map.put(tool, :annotations, %{sensitive: true})
   defp put_sensitive(tool, false), do: tool
-
-  @doc """
-  Returns meta-tools for agent management: list, send, get_model.
-  """
-  @spec meta_tools() :: [Raxol.MCP.Registry.tool_def()]
-  def meta_tools do
-    [
-      %{
-        name: "agent.list",
-        description: "List all active agent sessions with their IDs and status.",
-        inputSchema: %{type: "object", properties: %{}},
-        callback: &list_agents/1
-      },
-      %{
-        name: "agent.send",
-        description: "Send a message to a running agent session.",
-        inputSchema: %{
-          type: "object",
-          required: ["id", "message"],
-          properties: %{
-            id: %{type: "string", description: "Agent session ID"},
-            message: %{
-              type: "string",
-              description: "Message to send to the agent"
-            }
-          }
-        },
-        # Types the message as keystrokes into any Headless session, the same
-        # input surface `raxol_send_key` drives, so it is gated the same way.
-        annotations: %{sensitive: true},
-        callback: &send_to_agent/1
-      },
-      %{
-        name: "agent.get_model",
-        description: "Get the current TEA model state of an agent session.",
-        inputSchema: %{
-          type: "object",
-          required: ["id"],
-          properties: %{
-            id: %{type: "string", description: "Agent session ID"}
-          }
-        },
-        # The whole model of any Headless session, as `raxol_get_model`
-        # returns it, so it is gated the same way.
-        annotations: %{sensitive: true},
-        callback: &get_agent_model/1
-      }
-    ]
-  end
-
-  # -- Callbacks ---------------------------------------------------------------
-
-  defp list_agents(_args) do
-    sessions =
-      if Code.ensure_loaded?(Raxol.Headless) and
-           function_exported?(Raxol.Headless, :list, 0) do
-        # Headless.list/0 returns a bare list (and [] on exit).
-        case Raxol.Headless.list() do
-          list when is_list(list) -> list
-          {:ok, list} when is_list(list) -> list
-          _ -> []
-        end
-      else
-        []
-      end
-
-    text =
-      if sessions == [] do
-        "No active agent sessions."
-      else
-        sessions
-        |> Enum.map(fn s -> "- #{s}" end)
-        |> Enum.join("\n")
-      end
-
-    {:ok, [%{type: "text", text: text}]}
-  end
-
-  defp send_to_agent(%{"id" => id, "message" => message}) do
-    send_to_agent(%{id: id, message: message})
-  end
-
-  defp send_to_agent(%{id: id, message: message}) when is_binary(id) do
-    if Code.ensure_loaded?(Raxol.Headless) and
-         function_exported?(Raxol.Headless, :send_key, 3) do
-      if id in Raxol.Headless.list() do
-        # Send the message as individual keystrokes, and report honestly:
-        # a failed keystroke must not be summarized as success. Queued, not
-        # awaited: this runs in the MCP server's one process, so waiting for
-        # update/2 per keystroke held every client for the length of the
-        # message times the app's update time.
-        results =
-          for char <- String.graphemes(message) do
-            Raxol.Headless.send_key(id, char, wait: false)
-          end
-
-        case Enum.reject(results, &(&1 == :ok)) do
-          [] ->
-            {:ok,
-             [
-               %{
-                 type: "text",
-                 text: "Enqueued #{String.length(message)} keystrokes for agent #{id}"
-               }
-             ]}
-
-          failures ->
-            {:error,
-             "#{length(failures)}/#{length(results)} keystrokes failed for " <>
-               "agent #{id}: #{inspect(List.first(failures))}"}
-        end
-      else
-        {:error, "Unknown agent session: #{id}"}
-      end
-    else
-      {:error, "Headless module not available"}
-    end
-  end
-
-  defp send_to_agent(_), do: {:error, "Missing required arguments: id, message"}
-
-  defp get_agent_model(%{"id" => id}), do: get_agent_model(%{id: id})
-
-  defp get_agent_model(%{id: id}) when is_binary(id) do
-    if Code.ensure_loaded?(Raxol.Headless) and
-         function_exported?(Raxol.Headless, :get_model, 1) do
-      case Raxol.Headless.get_model(id) do
-        {:ok, model} ->
-          {:ok, [%{type: "text", text: inspect(model, pretty: true, limit: :infinity)}]}
-
-        {:error, :not_found} ->
-          {:error, "Unknown agent session: #{id}"}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:error, "Headless module not available"}
-    end
-  end
-
-  defp get_agent_model(_), do: {:error, "Missing required argument: id"}
 
   # -- Private -----------------------------------------------------------------
 

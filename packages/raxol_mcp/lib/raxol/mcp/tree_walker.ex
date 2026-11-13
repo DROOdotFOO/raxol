@@ -332,8 +332,8 @@ defmodule Raxol.MCP.TreeWalker do
   @doc """
   An action spec's `description` and `inputSchema` as the client's tool list
   gets them: cleaned as the moduledoc describes, or the `t:spec_fault/0`
-  that refuses the spec. `Raxol.MCP.AgentBridge` applies it to an Action's
-  meta.
+  that refuses the spec. Public so that a tool derived from another source
+  goes through the same cleaning.
   """
   @spec clean_spec(term(), term()) :: {:ok, String.t() | nil, term()} | {:error, spec_fault()}
   def clean_spec(description, input_schema) do

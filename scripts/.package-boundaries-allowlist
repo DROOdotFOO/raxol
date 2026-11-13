@@ -33,8 +33,6 @@ packages/raxol_liveview/lib/raxol/live_view/terminal_bridge.ex	Raxol.Effects.Bor
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.BehaviorTracker	raxol
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.FeedbackLoop	raxol
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.LayoutRecommender	raxol
-packages/raxol_mcp/lib/raxol/mcp/agent_bridge.ex	Raxol.Agent.Registry	undefined
-packages/raxol_mcp/lib/raxol/mcp/agent_bridge.ex	Raxol.Headless	raxol
 packages/raxol_mcp/lib/raxol/mcp/server.ex	Raxol.Headless	raxol
 packages/raxol_mcp/lib/raxol/mcp/test.ex	Raxol.Headless	raxol
 packages/raxol_mcp/lib/raxol/mcp/test.ex	Raxol.Headless.EventBuilder	raxol
