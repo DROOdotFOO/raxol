@@ -50,8 +50,20 @@ reactivating it. Never move a published version tag as routine recovery.
 ## Prepare the release commit
 
 1. Bump the package versions that are changing.
-2. Date each released package's changelog entry.
-3. Run the release gates from a clean tree:
+2. For each package the train publishes for the first time, which is each
+   name in `@awaiting_first_publish` in
+   `web/test/raxol_playground/capabilities_test.exs`:
+   - Set its version to the train's. Its `source_ref` is the root tag of its
+     own version, and no earlier tag contains its directory.
+   - Move every requirement on it to that version: each dependant's
+     `mix.exs`, the install line in its README and its row in
+     `docs/PACKAGES.md`, which also gains the Hex link. For `raxol_journal`
+     the dependants are `raxol_agent` and `raxol_broker`.
+   - Add it to `@published` in `web/lib/raxol_playground/capabilities.ex` and
+     remove it from `@awaiting_first_publish`, so the `llms.txt` generated
+     from the tag lists it.
+3. Date each released package's changelog entry.
+4. Run the release gates from a clean tree:
 
    ```bash
    mix compile --warnings-as-errors
@@ -66,11 +78,8 @@ reactivating it. Never move a published version tag as routine recovery.
    file is tracked, runs each `HEX_BUILD=1 mix hex.build --unpack`, and compares
    the generated package metadata with the source project configuration.
    `Raxol.Release.PackageCheck` holds the train order; a new package under
-   `packages/` fails the catalog check until it is classified there. A package
-   the train publishes for the first time joins `@published` in
-   `web/lib/raxol_playground/capabilities.ex` in the release commit, so the
-   `llms.txt` generated from the tag lists it.
-4. Push package-scoped documentation tags for changed independent-version
+   `packages/` fails the catalog check until it is classified there.
+5. Push package-scoped documentation tags for changed independent-version
    packages. They must point at the release commit:
 
    ```bash
