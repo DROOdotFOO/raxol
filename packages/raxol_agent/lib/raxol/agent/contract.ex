@@ -212,8 +212,7 @@ defmodule Raxol.Agent.Contract do
 
   @doc """
   Encode an event as a JSON line (newline-terminated) for wire surfaces
-  (the CLI's stderr event feed, SSE bodies). Decoding arrives with the
-  command channel; v0 is emit-only.
+  (SSE bodies). Decoding arrives with the command channel; v0 is emit-only.
   """
   @spec encode_line(Event.t()) :: iodata()
   def encode_line(%Event{} = event) do

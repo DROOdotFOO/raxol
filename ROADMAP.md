@@ -48,7 +48,7 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 
 | Item | What | Effort | Tag |
 | ---- | ---- | ------ | --- |
-| Install funnel | `flake.nix` and the Burrito-packaged `raxol` binary (`raxol_cli`, with an npm wrapper in `packages/raxol_cli/npm`) landed. Remaining: publishing the binary, `raxol doctor`/`update`, and the Windows PowerShell installer | M | CATCH-UP |
+| Install funnel | `flake.nix` and the Burrito-packaged `raxol` binary (`raxol_cli`, with an npm wrapper in `packages/raxol_cli/npm`) landed, with `raxol doctor` and `raxol update`. Remaining: publishing the binary and the Windows PowerShell installer | M | CATCH-UP |
 | Gateway breadth | Built: the `Gateway.Adapter` behaviour is frozen, Telegram is ported behind it (`Raxol.Telegram.GatewayAdapter`), Discord and Email adapters ship in-gateway, and `Gateway.Pipeline.Transcribe` gives every adapter voice memos through `raxol_speech` STT. Remaining: the first Hex release of `raxol_gateway` | M | SURFACE |
 | Cron scheduler | DONE. `Raxol.Agent.Schedule.parse/1` (relative / interval / 5-field cron / ISO) plus `Raxol.Agent.Scheduler`, one timer per job with DETS persistence and boot replay, the `cronjob` Action, and `Scheduler.Delivery` to a gateway target or an in-process callback | M | SURFACE |
 

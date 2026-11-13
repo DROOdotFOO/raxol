@@ -201,22 +201,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # `settle.ex` cannot be expected to infer which noun it is answering, so each
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
-                        {"settle", "settle.ex",
-                         "quote, gate, sign, poll -- no funds", @settle_source},
-                        {"pulse", "pulse.exs", "one module, four surfaces",
-                         @pulse_source},
-                        {"halo", "halo.exs", "the mark, as a program",
-                         @halo_source},
-                        {"harness", "harness.ex",
-                         "a Virtuals ACP job, run by raxol_earn",
+                        {"settle", "settle.ex", "quote, gate, sign, poll -- no funds",
+                         @settle_source},
+                        {"pulse", "pulse.exs", "one module, four surfaces", @pulse_source},
+                        {"halo", "halo.exs", "the mark, as a program", @halo_source},
+                        {"harness", "harness.ex", "a Virtuals ACP job, run by raxol_earn",
                          @harness_source}
                       ] do
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
 
                     lines = source |> String.trim() |> String.split("\n")
 
-                    {name, file, module, blurb,
-                     Makeup.highlight_inner_html(source),
+                    {name, file, module, blurb, Makeup.highlight_inner_html(source),
                      %{
                        lines: length(lines),
                        cols: lines |> Enum.map(&String.length/1) |> Enum.max()
@@ -481,8 +477,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
               </svg>
               <%!-- The reveal has room the row does not, so it shows the
                    registry's own label. The short head is what fits in the
-                   flow, but it is also the part that cannot tell "Claude
-                   (subscription, via CLI)" from "Anthropic (Claude)". --%>
+                   flow. --%>
               <span class="integrations-name">{if entry.mark, do: entry.label, else: entry.name}</span>
             </span>
           </span>
@@ -967,8 +962,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
   def example_grid(name) do
-    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _b, _c,
-                                                              grid} ->
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _b, _c, grid} ->
       n == name && grid
     end)
   end
@@ -1362,8 +1356,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         routes: routes(),
         payment_actions: payment_actions(),
         action_groups: action_groups(),
-        show_future_svm:
-          not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
+        show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
       )
 

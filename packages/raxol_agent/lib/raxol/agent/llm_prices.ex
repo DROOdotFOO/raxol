@@ -1,9 +1,9 @@
 defmodule Raxol.Agent.LlmPrices do
   @moduledoc """
   A small static price table: USD per million tokens, by provider model
-  family. Used when the `RAXOL_COST_PER_MTOK_IN/OUT` env rates are not
-  set, so `/usage` and the spending ledger can estimate cost out of the
-  box for well-known hosted models.
+  family, for estimating the cost of a turn on a well-known hosted model when
+  the `RAXOL_COST_PER_MTOK_IN/OUT` env rates are not set. It has no caller in
+  the tree.
 
   Prices drift; these are approximate list prices, matched by model-name
   prefix (longest prefix wins). The env rates always take precedence,
@@ -225,8 +225,7 @@ defmodule Raxol.Agent.LlmPrices do
   # `cache_read_input_tokens`): `rates/2` callers never billed those tokens
   # at all, and this path bills them at the input rate, which is above the
   # real cache-read rate. Upward, on purpose: a spend gate that guesses
-  # errs toward the cap (ADR-0035), and `/usage` prices through this same
-  # function so the figure it shows is the figure the ledger charged.
+  # errs toward the cap (ADR-0035).
   defp flat_cost(backend, model, usage) do
     case rates(backend, model) do
       {:ok, {rin, rout}} -> {:ok, price(split_tokens(usage), {rin, rin, rout}), :flat_table}

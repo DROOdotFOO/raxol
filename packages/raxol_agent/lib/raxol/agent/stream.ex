@@ -173,14 +173,14 @@ defmodule Raxol.Agent.Stream do
   @doc """
   Whether the backend resolved from `opts` runs its own tool loop.
 
-  Native / vendor-owns-loop backends (`handles_tools_internally? == true`)
-  execute tools out-of-process over MCP, where the framework cannot thread run
-  context -- `:tool_authorizer`, `:tool_call_hooks`, and app flags such as the
-  cron `:in_cron` recursion guard -- into tool execution. A caller that exposes a
-  context-guarded tool uses this to fail closed: withhold the tool on that path
-  rather than hand over capability the guard cannot police. Resolution mirrors
-  `react/2` (executor / auto_provider / `:backend`), so the answer matches the
-  backend the turn will actually use.
+  A backend whose `handles_tools_internally?/0` returns true executes tools
+  itself, where the framework cannot thread run context -- `:tool_authorizer`,
+  `:tool_call_hooks`, and app flags such as the cron `:in_cron` recursion
+  guard -- into tool execution. No backend in the catalog does. A caller that
+  exposes a context-guarded tool uses this to fail closed: withhold the tool
+  on that path rather than hand over capability the guard cannot police.
+  Resolution mirrors `react/2` (executor / auto_provider / `:backend`), so the
+  answer matches the backend the turn will actually use.
   """
   @spec native_tool_loop?(keyword()) :: boolean()
   def native_tool_loop?(opts) do

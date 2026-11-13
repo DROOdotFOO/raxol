@@ -12,6 +12,7 @@ packaging approach.
     raxol new <name> # scaffold a new Raxol app
     raxol mcp        # serve Raxol apps as MCP tools on stdio (for OMP)
     raxol acp        # serve a Raxol agent to ACP editors on stdio
+    raxol doctor     # what this install is: build, runtime, ACP surface, providers
     raxol update     # replace this binary with the latest verified release
     raxol help
 
