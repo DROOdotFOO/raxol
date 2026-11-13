@@ -3,7 +3,7 @@ defmodule Raxol.Headless.DocsResource do
   Exposes the Raxol documentation tree as MCP resources under `raxol://docs/...`.
 
   An agent connected to `mix mcp.server` can pull Raxol's own docs mid-task
-  (`resources/read` on `raxol://docs/features/CODING_AGENT.md`, and so on),
+  (`resources/read` on `raxol://docs/features/AGENT_FRAMEWORK.md`, and so on),
   because doc-serving is just another registry surface alongside the headless
   tools. Neither a static `llms.txt` nor a hosted docs site can do this.
 

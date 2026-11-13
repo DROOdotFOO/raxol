@@ -17,9 +17,8 @@ defmodule Raxol.UI.Components.Harness.AxolFace do
   | `:done` | `≡^^≡` | happy squint |
   | `:error` | `≡xx≡` | knocked-out eyes |
 
-  The state maps directly from harness contract events (see
-  `Raxol.UI.Components.Harness.AxolFace` usage in the `mix raxol.code`
-  surface): `turn_started` → `:thinking`, tool activity → `:working`,
+  The state maps directly from harness contract events:
+  `turn_started` → `:thinking`, tool activity → `:working`,
   `turn_completed{final}` → `:done`, `error` → `:error`, otherwise
   `:idle`. Frame advance is event-driven (bump on each `item_delta`) or a
   subscription tick.
