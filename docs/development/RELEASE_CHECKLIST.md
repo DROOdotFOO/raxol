@@ -4,6 +4,32 @@ Release process for the public Hex train and the `@raxol/cli` npm package.
 Publishing is close to irreversible: a new Hex version has a one-hour update
 window, and an npm version cannot be reused.
 
+## State for 2.8.0
+
+The release pull request did steps 1 to 4 of "Prepare the release commit".
+What remains, in order: the one-time prerequisites below, step 5, step 6 (on
+the merge commit), "Publish the public Hex train", and the `raxol_gateway`
+0.2.0 block. npm and the CLI are not part of this release: skip
+"Publish the npm CLI" and the npm half of "Registry verification".
+
+## One-time prerequisites
+
+- `HEX_API_KEY` lives in the `release` environment, not in repository
+  secrets, so only an approved job can read it:
+
+  ```bash
+  gh secret set HEX_API_KEY --env release -R DROOdotFOO/raxol
+  gh secret delete HEX_API_KEY -R DROOdotFOO/raxol
+  ```
+
+  The workflow also accepts a repository secret, which `release.yml` passes
+  explicitly; the environment's copy wins when both exist.
+- "Allow GitHub Actions to create and approve pull requests" is on (Settings,
+  Actions, General), so `llms-sync` can open its pull request.
+- Your hex.pm account has two-factor authentication: the first release of a
+  new package (`raxol_journal`, `raxol_gateway`) is held until you approve it
+  there.
+
 ## Published surfaces
 
 | Package | Registry | Current version |
@@ -37,7 +63,8 @@ jobs run only after approval in the protected GitHub `release` environment.
 That environment accepts the root `v*` tags, `raxol-cli-v*` tags, and approved
 manual resumes from `master`.
 
-- Hex uses the repository `HEX_API_KEY`; keep it scoped to API write.
+- Hex uses `HEX_API_KEY` from the `release` environment; keep it scoped to API
+  write. Only the key check and the publish step see it.
 - npm uses OIDC-only GitHub Actions trusted publishing and emits provenance.
   All five packages trust `release-raxol-cli.yml` with environment `release`.
 - Every publisher checks the registry first, so a failed train can resume
@@ -70,50 +97,48 @@ reactivating it. Never move a published version tag as routine recovery.
    ```bash
    mix compile --warnings-as-errors
    mix format --check-formatted
-   mix credo
+   ./scripts/check-quality-ratchet.sh --gate credo
    mix raxol.check_docs
    mix raxol.release.check
-   SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test
+   SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test --exclude integration
    ```
+
+   Without `--exclude integration` the suite needs PostgreSQL.
 
    `mix raxol.release.check` validates the public train, proves every packaged
    file is tracked, runs each `HEX_BUILD=1 mix hex.build --unpack`, and compares
    the generated package metadata with the source project configuration.
    `Raxol.Release.PackageCheck` holds the train order; a new package under
    `packages/` fails the catalog check until it is classified there.
-5. Validate before tagging. On the release commit, run what the workflow's
-   validate job runs:
+5. Validate the merge commit before tagging, from a clean checkout of
+   `master`:
 
    ```bash
+   git fetch origin
+   git switch --detach origin/master
+   git status --short                # empty
+   git log -1 --format='%H %s'       # the release pull request's merge commit
    mix deps.get --check-locked
    mix raxol.release.check
+   (cd packages/raxol_core && HEX_BUILD=1 mix hex.publish --dry-run --yes)   # sends nothing
    ```
 
-   `release-hex.yml` takes only an existing `vMAJOR.MINOR.PATCH` tag, so it
-   cannot be dispatched for a commit before its tag exists. Once the tag is
-   pushed, `release.yml` runs the validate job and then waits for approval;
-   the manual form re-runs that job and neither the publish loop nor the
-   verify job:
+6. Tag that commit. Create the root tag first, then the package-scoped
+   documentation tags of the changed independent-version packages on the same
+   commit, check, and push the four tags by name (never `--tags`):
 
    ```bash
-   gh workflow run release-hex.yml -f release_ref=v2.8.0 -f publish=false
-   ```
-6. Tag the release commit once it is on `master` and checked out. Create the
-   root tag first, without pushing it, so the package-scoped documentation
-   tags of the changed independent-version packages can name its commit, and
-   push those:
-
-   ```bash
-   git tag -a v2.8.0 -m "Raxol 2.8.0"
+   git tag -a v2.8.0 -m "Raxol 2.8.0" HEAD
    git tag -a raxol_speech-v0.3.0 -m "raxol_speech 0.3.0" 'v2.8.0^{commit}'
    git tag -a raxol_watch-v0.3.0 -m "raxol_watch 0.3.0" 'v2.8.0^{commit}'
    git tag -a raxol_telegram-v0.3.0 -m "raxol_telegram 0.3.0" 'v2.8.0^{commit}'
-   git push origin raxol_speech-v0.3.0 raxol_watch-v0.3.0 \
-     raxol_telegram-v0.3.0
+   git rev-parse 'v2.8.0^{commit}' origin/master   # two identical lines
+   git push origin raxol_speech-v0.3.0 raxol_watch-v0.3.0 raxol_telegram-v0.3.0
    ```
 
    Create only the tags for packages whose version changed. Framework packages
-   use the root `vMAJOR.MINOR.PATCH` source ref.
+   use the root `vMAJOR.MINOR.PATCH` source ref. The validate job refuses a tag
+   that is not on `master`.
 
 Never export `HEX_BUILD` globally. The release check and publisher set it only
 for package subprocesses; an ambient value strips root path dependencies before
@@ -129,17 +154,24 @@ git push origin v2.8.0
 
 `.github/workflows/release.yml` then:
 
-1. calls the reusable `release-hex.yml` preflight on the exact tag;
-2. verifies `v2.8.0` matches the root Mix project version;
+1. calls the reusable `release-hex.yml` preflight on `refs/tags/v2.8.0`;
+2. checks that the tag is on `master` and matches the root Mix project version,
+   and records its commit for the later jobs;
 3. runs `mix raxol.release.check`;
-4. waits for `release` environment approval;
+4. waits for approval: open the run under Actions, "Review deployments",
+   tick `release`, approve;
 5. publishes `Raxol.Release.PackageCheck.public_packages/0` in dependency
-   order, skipping versions already on Hex;
+   order, skipping versions already on Hex. At `raxol_journal`, a new
+   package, hex.pm holds the release for approval: the log prints
+   "Package staged for approval at <url>". Open it and approve with your
+   second factor; the job waits (`--wait`) and continues;
 6. verifies every package through the public Hex API, waits for newly published
-   HexDocs, and compiles a clean consumer against the released root package; and
-7. creates the GitHub Release only after consumer verification succeeds.
+   HexDocs, and compiles a clean consumer against the released root package;
+7. creates the GitHub Release only after consumer verification succeeds; and
+8. regenerates `llms.txt` from the tag and opens the `bot/llms-sync` pull
+   request against `master`.
 
-Validate or resume an existing tag manually:
+Validate or resume an existing tag manually (after it is pushed):
 
 ```bash
 gh workflow run release-hex.yml \
@@ -231,15 +263,20 @@ It is not on the train, so it is published by hand, from the release commit,
 with the steps the train runs for each package. Its docs link to the
 `raxol_gateway-v0.2.0` tag:
 
+It needs a local Hex login (`mix hex.user auth`) and the tags fetched. It is a
+new package, so hex.pm holds the release until you approve it; `--wait` blocks
+until then:
+
 ```bash
+git fetch origin --tags
 git tag -a raxol_gateway-v0.2.0 -m "raxol_gateway 0.2.0" 'v2.8.0^{commit}'
 git push origin raxol_gateway-v0.2.0
 git switch --detach v2.8.0
 
 cd packages/raxol_gateway
 HEX_BUILD=1 mix deps.get
-HEX_BUILD=1 mix hex.publish --dry-run
-HEX_BUILD=1 mix hex.publish
+HEX_BUILD=1 mix hex.publish --dry-run --yes
+HEX_BUILD=1 mix hex.publish --wait
 git checkout -- mix.lock
 cd ../..
 git switch -
@@ -309,9 +346,10 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
 1. **Add the package to the release train.** Move its entry from
    `@pre_alpha_packages` to `@public_packages` in
    [`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex),
-   positioned after everything it requires. Until you do, the checker treats it
-   as off-train and reports any sibling that depends on it as dropping the
-   requirement. Add it to `@published` in
+   positioned after everything it requires, and change its `class:` from
+   `:pre_alpha` to `:public`. Until you do, the checker treats it as off-train
+   and reports any sibling that depends on it as dropping the requirement. Add
+   it to `@published` in
    [`web/lib/raxol_playground/capabilities.ex`](../../web/lib/raxol_playground/capabilities.ex)
    in the same change; a `web` test holds `@published` equal to the train,
    less `@awaiting_first_publish`, plus the `@off_train` packages it names.
@@ -328,3 +366,9 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
    the moment a publish lands.
 4. **Verify the docs.** `https://hexdocs.pm/<package>/<version>/` should resolve, and a
    module source link should land on the `<package>-v<version>` tag you pushed.
+5. **Merge the `llms.txt` pull request.** `bot/llms-sync` is opened with the
+   workflow token, which starts no CI: close and reopen it, then merge it once
+   green.
+6. **One follow-up pull request** carries items 1 to 3 for `raxol_gateway`.
+   Optionally turn staged publishing off for `raxol_journal` and
+   `raxol_gateway` in their hex.pm settings; the workflow waits either way.
