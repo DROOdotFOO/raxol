@@ -4,6 +4,9 @@
 #   elixir scripts/check_package_boundaries.exs --base REF    # ... and that the
 #                                                              # allowlist did not
 #                                                              # grow since REF
+#   elixir scripts/check_package_boundaries.exs --root DIR    # check the tree at
+#                                                              # DIR (the tests'
+#                                                              # fixtures)
 #
 # docs/PACKAGES.md declares `raxol --> raxol_core, raxol_terminal, ...` and
 # never the reverse. Every package in CI compiles standalone with
@@ -50,6 +53,43 @@
 # with an in-package default, or by deleting the dead call. Do NOT add
 # `Code.ensure_loaded?/1`: that is the guard that hid the originals.
 #
+# A second rule draws the line between the two repositories this tree becomes
+# (docs/adr/0043-two-repositories-runtime-and-agent.md). The runtime side is
+# the root and the packages in @runtime_trees; the agent side is @agent_trees.
+# No runtime-side `lib/**/*.ex`, `config/**/*.exs` or `mix.exs` may name
+# agent-side code:
+#
+#   * a module under an agent namespace (`Raxol.Agent.*`, `Raxol.Payments.*`,
+#     `Raxol.Broker.*`, `Raxol.Earn.*`, `Raxol.Web3.*`, `Raxol.Console.*`,
+#     `Raxol.AgentClientProtocol.*`, and the application namespaces,
+#     `RaxolAgent.*` and the like), or one of @agent_modules, which are
+#     agent-side modules under a runtime namespace;
+#   * a module that only agent trees define, while those trees are here.
+#     `Raxol.CLI.*` is the reason: the root and raxol_cli both define modules
+#     under it, so no prefix describes the agent's half;
+#   * an agent application atom (`:raxol_agent`, ...). In a mix.exs that is a
+#     dependency, `optional:` and `only:` included.
+#
+# The first and third go by name, not by owner, so they hold once the agent
+# trees are gone and nothing here defines those names. Every form the first
+# rule collects counts, and three more: a module name inside a string or
+# sigil (`"Raxol.Agent.Session"`, with or without `Elixir.`), an atom spelled
+# as a module name without the `Elixir.` prefix (`:"Raxol.Agent.Registry"`),
+# and the application atoms. Comments are not in the AST. The text of
+# `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated` is skipped;
+# code interpolated into it is not. A name assembled at run time
+# (`Module.concat(base, name)`) is invisible to both rules.
+#
+# @journal_modules are exempt: raxol_journal, a runtime package, defines them
+# under `Raxol.Agent.*`. The list is exact and checked both ways: a runtime
+# tree that defines any other agent-side name fails, and so does an entry no
+# runtime tree defines. @train_catalog may name agent applications: it
+# classifies every directory under `packages/`, and `mix raxol.release.check`
+# fails when the two disagree, so its rows leave with the directories.
+#
+# Nothing on this rule is grandfathered, and an allowlist entry whose file and
+# owning tree sit on different sides of the line fails as well.
+#
 # Needs only `elixir`: no compiled app, no fetched deps, no git (except for
 # `--base`).
 
@@ -57,20 +97,58 @@ defmodule PackageBoundaries do
   @allowlist "scripts/.package-boundaries-allowlist"
   @typespec_attrs [:spec, :type, :typep, :opaque, :callback, :macrocallback]
   @sticky_kinds [:compile, :typespec]
+  @doc_attrs [:moduledoc, :doc, :typedoc, :shortdoc, :deprecated]
+
+  # Kinds only the runtime/agent rule reads: a module name in a string, an atom
+  # spelled as one, an agent application atom.
+  @line_kinds [:string, :name, :app]
+
+  @runtime_trees ~w(
+    raxol raxol_core raxol_gateway raxol_journal raxol_liveview raxol_mcp
+    raxol_plugin raxol_sensor raxol_speech raxol_telegram raxol_terminal
+    raxol_watch
+  )
+
+  @agent_trees ~w(
+    raxol_agent raxol_agent_client_protocol raxol_broker raxol_cli
+    raxol_console raxol_earn raxol_payments raxol_web3
+  )
+
+  @agent_namespaces ~w(
+                      Raxol.Agent Raxol.AgentClientProtocol Raxol.Broker
+                      Raxol.Console Raxol.Earn Raxol.Payments Raxol.Web3
+                    ) ++ Enum.map(@agent_trees, &Macro.camelize/1)
+
+  @agent_modules ~w(Raxol.Gateway.Handler.Agent Raxol.MCP.AgentBridge)
+
+  @journal_modules ~w(
+    Raxol.Agent.Contract
+    Raxol.Agent.Contract.Event
+    Raxol.Agent.Journal
+    Raxol.Agent.Journal.Chain
+    Raxol.Agent.Journal.FileStore
+    Raxol.Agent.Journal.FileStore.Reader
+    Raxol.Agent.Journal.FileStore.Writer
+    Raxol.Agent.Journal.Records.Checkpoint
+    Raxol.Agent.Journal.Records.Checkpoint.FileBackend
+    Raxol.Agent.Journal.Tip
+  )
+
+  @train_catalog "lib/raxol/release/package_check.ex"
 
   def main(argv) do
-    File.cd!(Path.expand("..", __DIR__))
-
-    base =
-      case OptionParser.parse(argv, strict: [base: :string]) do
+    {base, root} =
+      case OptionParser.parse(argv, strict: [base: :string, root: :string]) do
         {opts, [], []} ->
-          opts[:base]
+          {opts[:base], opts[:root] || Path.expand("..", __DIR__)}
 
         _ ->
           fatal([
-            "usage: elixir scripts/check_package_boundaries.exs [--base REF]"
+            "usage: elixir scripts/check_package_boundaries.exs [--base REF] [--root DIR]"
           ])
       end
+
+    File.cd!(root)
 
     trees = trees()
     sources = Map.new(trees, &{&1, sources_of(&1)})
@@ -129,19 +207,128 @@ defmodule PackageBoundaries do
 
     stale = allowed |> MapSet.difference(found_keys) |> Enum.sort()
     grown = if base, do: grown_since(base, allowed), else: []
+    crossings = line_crossings(scanned, trees, owners)
+    misplaced = misplaced_definitions(owners)
+    crossing_entries = allowed |> Enum.filter(&crossing_entry?/1) |> Enum.sort()
 
     report_new(new)
     report_stale(stale)
     report_grown(grown, base)
+    report_crossings(crossings)
+    report_misplaced(misplaced)
+    report_crossing_entries(crossing_entries)
 
-    if new == [] and stale == [] and grown == [] do
+    if Enum.all?(
+         [new, stale, grown, crossings, misplaced, crossing_entries],
+         &(&1 == [])
+       ) do
       IO.puts(
-        "OK: package boundaries hold (#{MapSet.size(found_keys)} grandfathered cross-package references)"
+        "OK: package boundaries hold (#{MapSet.size(found_keys)} grandfathered cross-package references, none across the runtime/agent line)"
       )
     else
       exit({:shutdown, 1})
     end
   end
+
+  ## The runtime/agent line
+
+  # {{file, name}, [{line, kind}]} for every agent-side name a runtime-side
+  # source file, config file or mix.exs carries.
+  defp line_crossings(scanned, trees, owners) do
+    runtime = Enum.filter(trees, &(&1 in @runtime_trees))
+
+    sources =
+      for {tree, file, %{refs: refs}} <- scanned, tree in runtime do
+        {file, refs}
+      end
+
+    project_files =
+      for tree <- runtime, file <- [mixfile(tree) | config_of(tree)] do
+        case parse(file) do
+          {:ok, ast} -> {file, scan(ast).refs}
+          {:error, msg} -> fatal(["cannot parse, refusing to guess:", msg])
+        end
+      end
+
+    for {file, refs} <- sources ++ project_files,
+        {name, line, kind} <- refs,
+        crosses?(name, kind, file, owners),
+        reduce: %{} do
+      acc ->
+        Map.update(acc, {file, name}, [{line, kind}], &[{line, kind} | &1])
+    end
+    |> Enum.sort()
+  end
+
+  defp config_of("raxol"), do: Path.wildcard("config/**/*.exs") |> Enum.sort()
+
+  defp config_of(pkg),
+    do: Path.wildcard("packages/#{pkg}/config/**/*.exs") |> Enum.sort()
+
+  defp crosses?(_app, :app, file, _owners), do: file != @train_catalog
+
+  defp crosses?(mod, _kind, _file, owners) do
+    mod not in @journal_modules and
+      (agent_name?(mod) or agent_owned?(mod, owners))
+  end
+
+  defp agent_name?(mod) do
+    Enum.any?(
+      @agent_namespaces ++ @agent_modules,
+      &(mod == &1 or String.starts_with?(mod, &1 <> "."))
+    )
+  end
+
+  defp agent_owned?(mod, owners) do
+    case Map.fetch(owners, mod) do
+      {:ok, trees} -> Enum.all?(trees, &(&1 in @agent_trees))
+      :error -> false
+    end
+  end
+
+  # The exemption is exact in both directions: {module, tree} for an agent-side
+  # name a runtime tree defines without being listed, {module, nil} for a
+  # listed name no runtime tree defines.
+  defp misplaced_definitions(owners) do
+    defined =
+      for {mod, trees} <- owners,
+          agent_name?(mod),
+          mod not in @journal_modules,
+          tree <- trees,
+          tree in @runtime_trees do
+        {mod, tree}
+      end
+
+    unbacked =
+      for mod <- @journal_modules,
+          owners
+          |> Map.get(mod, MapSet.new())
+          |> Enum.all?(&(&1 not in @runtime_trees)) do
+        {mod, nil}
+      end
+
+    Enum.sort(defined ++ unbacked)
+  end
+
+  defp crossing_entry?({file, mod, owner}) do
+    from = side(tree_of(file))
+
+    case side(owner) do
+      nil -> from == :runtime and agent_name?(mod)
+      to -> to != from
+    end
+  end
+
+  defp tree_of(file) do
+    case Path.split(file) do
+      ["packages", pkg | _] -> pkg
+      _ -> "raxol"
+    end
+  end
+
+  defp side(tree) when tree in @runtime_trees, do: :runtime
+  defp side(tree) when tree in @agent_trees, do: :agent
+  defp side(_tree), do: nil
 
   ## Trees, sources, parsing
 
@@ -155,6 +342,19 @@ defmodule PackageBoundaries do
     case Enum.reject(packages, &File.regular?(mixfile(&1))) do
       [] -> :ok
       missing -> fatal(Enum.map(missing, &"packages/#{&1} has no mix.exs"))
+    end
+
+    case packages -- (@runtime_trees ++ @agent_trees) do
+      [] ->
+        :ok
+
+      unsided ->
+        fatal(
+          Enum.map(
+            unsided,
+            &"packages/#{&1} is on neither side of the runtime/agent line; add it to @runtime_trees or @agent_trees"
+          )
+        )
     end
 
     Enum.sort(["raxol" | packages])
@@ -339,6 +539,9 @@ defmodule PackageBoundaries do
   # A Raxol.* name that no tree defines is only a module reference when code
   # calls or compiles against it; as a plain value it is usually a process
   # name (`name: Raxol.Agent.Registry`), which is not a module at all.
+  defp violations(_mod, kind, _owners, _visible) when kind in @line_kinds,
+    do: []
+
   defp violations(mod, kind, owners, visible) do
     case Map.fetch(owners, mod) do
       {:ok, trees} ->
@@ -355,9 +558,18 @@ defmodule PackageBoundaries do
   ## Source scan: module definitions and references
 
   # Returns %{defs: [module], refs: [{module, line, kind}]}, module names as
-  # strings without the "Elixir." prefix.
+  # strings without the "Elixir." prefix. An `:app` ref carries an application
+  # name instead.
   def scan(ast) do
-    env = %{module: nil, aliases: %{}, attrs: %{}, kind: :value, line: nil}
+    env = %{
+      module: nil,
+      aliases: %{},
+      attrs: %{},
+      kind: :value,
+      line: nil,
+      doc: false
+    }
+
     {_env, acc} = walk(ast, env, %{defs: [], refs: []})
     acc
   end
@@ -452,7 +664,8 @@ defmodule PackageBoundaries do
         true -> env.kind
       end
 
-    {_, acc} = walk(value, %{env | kind: kind}, acc)
+    doc = env.doc or name in @doc_attrs
+    {_, acc} = walk(value, %{env | kind: kind, doc: doc}, acc)
     {%{env | attrs: Map.put(env.attrs, name, {value, env})}, acc}
   end
 
@@ -529,12 +742,42 @@ defmodule PackageBoundaries do
 
   defp walk(atom, env, acc) when is_atom(atom) do
     case Atom.to_string(atom) do
-      "Elixir." <> mod -> {env, record(acc, mod, [line: env.line], :atom)}
-      _ -> {env, acc}
+      "Elixir." <> mod ->
+        {env, record(acc, mod, [line: env.line], :atom)}
+
+      "raxol_" <> _ = app ->
+        if app in @agent_trees,
+          do: {env, record(acc, app, [line: env.line], :app)},
+          else: {env, acc}
+
+      text ->
+        if module_name?(text),
+          do: {env, record(acc, text, [line: env.line], :name)},
+          else: {env, acc}
+    end
+  end
+
+  # Doc text is prose; a string anywhere else may be handed to
+  # `Module.concat/1`, `String.to_existing_atom/1` or a registry.
+  defp walk(text, %{doc: false} = env, acc) when is_binary(text) do
+    if String.contains?(text, ".") do
+      acc =
+        ~r/(?<![\w.])(?:Elixir\.)?([A-Z]\w*(?:\.[A-Z]\w*)+)/
+        |> Regex.scan(text, capture: :all_but_first)
+        |> Enum.reduce(acc, fn [mod], acc ->
+          record(acc, mod, [line: env.line], :string)
+        end)
+
+      {env, acc}
+    else
+      {env, acc}
     end
   end
 
   defp walk(node, env, acc), do: walk_children(node, env, acc)
+
+  defp module_name?(text),
+    do: Regex.match?(~r/^[A-Z]\w*(?:\.[A-Z]\w*)+$/, text)
 
   defp walk_children({form, meta, args}, env, acc) do
     env = at(env, meta)
@@ -846,6 +1089,80 @@ defmodule PackageBoundaries do
         do: err("  #{String.pad_trailing(file, 75)} #{mod}\t#{tree}")
 
     err("\nFix the reference instead of listing it.")
+  end
+
+  defp report_crossings([]), do: :ok
+
+  defp report_crossings(crossings) do
+    err("ERROR: runtime-side file names agent-side code:\n")
+
+    for {{file, name}, sites} <- crossings do
+      line =
+        sites
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.min(fn -> nil end)
+
+      kinds =
+        sites
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.uniq()
+        |> Enum.sort()
+        |> Enum.join(", ")
+
+      where = if line, do: "#{file}:#{line}", else: file
+
+      err(
+        "  #{String.pad_trailing(where, 75)} #{String.pad_trailing(name, 50)} (#{kinds})"
+      )
+    end
+
+    err("""
+
+    The runtime side (the root and #{Enum.join(@runtime_trees -- ["raxol"], ", ")})
+    becomes its own repository, where none of these names resolve. Move the
+    code to the side that owns it, or have the application that composes both
+    sides pass the behaviour in. This rule has no allowlist. See
+    docs/PACKAGES.md ("Boundary rule").\
+    """)
+  end
+
+  defp report_misplaced([]), do: :ok
+
+  defp report_misplaced(misplaced) do
+    err("ERROR: the agent-side names the runtime side may define are exact:\n")
+
+    for {mod, tree} <- misplaced do
+      case tree do
+        nil ->
+          err(
+            "  #{String.pad_trailing(mod, 60)} exempt, but no runtime tree defines it"
+          )
+
+        tree ->
+          err(
+            "  #{String.pad_trailing(mod, 60)} defined in #{tree}, which is runtime-side"
+          )
+      end
+    end
+
+    err("""
+
+    Only the modules raxol_journal defines are exempt (@journal_modules in
+    this script). Move an agent-side module to an agent package; drop a listed
+    name that is gone.\
+    """)
+  end
+
+  defp report_crossing_entries([]), do: :ok
+
+  defp report_crossing_entries(entries) do
+    err("ERROR: #{@allowlist} entries cross the runtime/agent line:\n")
+
+    for {file, mod, tree} <- entries,
+        do: err("  #{String.pad_trailing(file, 75)} #{mod}\t#{tree}")
+
+    err("\nRemove the reference; a crossing is never grandfathered.")
   end
 
   defp err(line), do: IO.puts(:stderr, line)

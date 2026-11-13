@@ -1,0 +1,614 @@
+defmodule Raxol.PackageBoundariesTest do
+  @moduledoc """
+  `scripts/check_package_boundaries.exs` over fixture trees: each way a
+  runtime-side file can name agent-side code fails the check on its own, and
+  each exemption passes it.
+
+  Every case is the base tree plus one file. The base tree has a root, two
+  runtime packages (`raxol_core`, and `raxol_journal` defining the exempt
+  modules) and two agent packages (`raxol_agent`, `raxol_cli`). The checker
+  boots a VM per tree, so the trees are checked concurrently, once.
+  """
+  use ExUnit.Case, async: true
+
+  @script Path.expand("../../scripts/check_package_boundaries.exs", __DIR__)
+
+  @journal_modules ~w(
+    Raxol.Agent.Contract
+    Raxol.Agent.Contract.Event
+    Raxol.Agent.Journal
+    Raxol.Agent.Journal.Chain
+    Raxol.Agent.Journal.FileStore
+    Raxol.Agent.Journal.FileStore.Reader
+    Raxol.Agent.Journal.FileStore.Writer
+    Raxol.Agent.Journal.Records.Checkpoint
+    Raxol.Agent.Journal.Records.Checkpoint.FileBackend
+    Raxol.Agent.Journal.Tip
+  )
+
+  # {label, file, source, reported name, reported kind}
+  @crossings [
+    {"a remote call", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Raxol.Agent.Session.start()
+     end
+     """, "Raxol.Agent.Session", "call"},
+    {"a call through an alias", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       alias Raxol.Payments.Ledger
+       def f, do: Ledger.total()
+     end
+     """, "Raxol.Payments.Ledger", "call"},
+    {"a capture", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: &Raxol.Earn.Seller.run/1
+     end
+     """, "Raxol.Earn.Seller", "call"},
+    {"apply/3", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: apply(Raxol.Broker.Executor, :run, [])
+     end
+     """, "Raxol.Broker.Executor", "apply"},
+    {"a module atom", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: :"Elixir.Raxol.Earn.Seller"
+     end
+     """, "Raxol.Earn.Seller", "atom"},
+    {"a string that names a module", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f(lookup), do: lookup.("Raxol.Web3.Router")
+     end
+     """, "Raxol.Web3.Router", "string"},
+    {"a string with the Elixir prefix", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: String.to_existing_atom("Elixir.Raxol.Console.Boot")
+     end
+     """, "Raxol.Console.Boot", "atom, string"},
+    {"a module name inside prose in a string", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: raise("start Raxol.Agent.Supervisor first")
+     end
+     """, "Raxol.Agent.Supervisor", "string"},
+    {"a word sigil", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: ~w(Raxol.Agent.Team Raxol.Core.Thing)
+     end
+     """, "Raxol.Agent.Team", "string"},
+    {"a process name", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: GenServer.whereis(Raxol.Agent.Registry)
+     end
+     """, "Raxol.Agent.Registry", "value"},
+    {"a process name spelled as a plain atom", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Process.whereis(:"Raxol.Agent.Registry")
+     end
+     """, "Raxol.Agent.Registry", "name"},
+    {"@compile no_warn_undefined", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       @compile {:no_warn_undefined, [Raxol.Agent.Stream]}
+     end
+     """, "Raxol.Agent.Stream", "compile"},
+    {"a Code.ensure_loaded? guard", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Code.ensure_loaded?(Raxol.Agent.Supervisor)
+     end
+     """, "Raxol.Agent.Supervisor", "value"},
+    {"a child spec", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def children, do: [{Raxol.Agent.Supervisor, []}]
+     end
+     """, "Raxol.Agent.Supervisor", "value"},
+    {"@behaviour", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       @behaviour Raxol.Agent.Action
+     end
+     """, "Raxol.Agent.Action", "directive"},
+    {"use of the bare namespace", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       use Raxol.Agent
+     end
+     """, "Raxol.Agent", "directive"},
+    {"a typespec", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       @spec f() :: Raxol.Agent.Session.t()
+       def f, do: nil
+     end
+     """, "Raxol.Agent.Session", "typespec"},
+    {"a struct", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: %Raxol.Payments.Ledger{}
+     end
+     """, "Raxol.Payments.Ledger", "value"},
+    {"a literal Module.concat", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Module.concat(Raxol.Agent, Session)
+     end
+     """, "Raxol.Agent.Session", "concat"},
+    {"code interpolated into a doc", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       @moduledoc "Wraps #{inspect(Raxol.Agent.Session)}."
+     end
+     """, "Raxol.Agent.Session", "value"},
+    {"the protocol package's namespace", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Raxol.AgentClientProtocol.Client.start()
+     end
+     """, "Raxol.AgentClientProtocol.Client", "call"},
+    {"an agent application's own namespace", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Process.whereis(RaxolAgent.Supervisor)
+     end
+     """, "RaxolAgent.Supervisor", "value"},
+    {"the gateway's agent handler, by exact name", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: {Raxol.Gateway.Handler.Agent, []}
+     end
+     """, "Raxol.Gateway.Handler.Agent", "value"},
+    {"the agent bridge, by exact name", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Raxol.MCP.AgentBridge.actions_to_mcp_tools([])
+     end
+     """, "Raxol.MCP.AgentBridge", "call"},
+    {"a module only an agent tree defines, outside the namespaces",
+     "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Raxol.CLI.MCP.authorize(nil)
+     end
+     """, "Raxol.CLI.MCP", "call"},
+    {"a module under an exempt one that raxol_journal does not define",
+     "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Raxol.Agent.Journal.Compactor.run()
+     end
+     """, "Raxol.Agent.Journal.Compactor", "call"},
+    {"a name that only starts like an exempt one", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Raxol.Agent.JournalIndex.build()
+     end
+     """, "Raxol.Agent.JournalIndex", "call"},
+    {"an agent application atom", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Application.get_env(:raxol_agent, :mcp_tools)
+     end
+     """, "raxol_agent", "app"},
+    {"a module reference in the release catalog",
+     "lib/raxol/release/package_check.ex",
+     ~S"""
+     defmodule Raxol.Release.PackageCheck do
+       def f, do: Raxol.Agent.Session.start()
+     end
+     """, "Raxol.Agent.Session", "call"},
+    {"a runtime package's lib",
+     "packages/raxol_core/lib/raxol/core/crossing.ex",
+     ~S"""
+     defmodule Raxol.Core.Crossing do
+       def f, do: Raxol.Agent.Session.start()
+     end
+     """, "Raxol.Agent.Session", "call"},
+    {"a guarded call in root config", "config/runtime.exs",
+     ~S"""
+     import Config
+
+     if Code.ensure_loaded?(Raxol.Payments.Accounting) do
+       Raxol.Payments.Accounting.env_config()
+     end
+     """, "Raxol.Payments.Accounting", "call, value"},
+    {"an agent application configured in root config", "config/runtime.exs",
+     ~S"""
+     import Config
+     config :raxol_payments, :accounting, []
+     """, "raxol_payments", "app"},
+    {"an agent application configured in a runtime package's config",
+     "packages/raxol_core/config/config.exs",
+     ~S"""
+     import Config
+     config :raxol_earn, accounting_enabled: false
+     """, "raxol_earn", "app"},
+    {"a dependency in a runtime package's mix.exs",
+     "packages/raxol_core/mix.exs",
+     ~S"""
+     defmodule RaxolCore.MixProject do
+       use Mix.Project
+       def project, do: [app: :raxol_core, version: "0.1.0", deps: deps()]
+       defp deps, do: [{:raxol_agent, path: "../raxol_agent"}]
+     end
+     """, "raxol_agent", "app"},
+    {"an optional dependency behind a helper", "packages/raxol_core/mix.exs",
+     ~S"""
+     defmodule RaxolCore.MixProject do
+       use Mix.Project
+       def project, do: [app: :raxol_core, version: "0.1.0", deps: deps()]
+
+       defp deps,
+         do: [raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent", optional: true)]
+
+       defp raxol_dep(name, version, path, opts),
+         do: {name, version, [path: path] ++ opts}
+     end
+     """, "raxol_agent", "app"},
+    {"a test-only dependency", "packages/raxol_core/mix.exs",
+     ~S"""
+     defmodule RaxolCore.MixProject do
+       use Mix.Project
+       def project, do: [app: :raxol_core, version: "0.1.0", deps: deps()]
+       defp deps, do: [{:raxol_payments, "~> 0.1", only: :test}]
+     end
+     """, "raxol_payments", "app"},
+    {"a dependency in the root mix.exs", "mix.exs",
+     ~S"""
+     defmodule Raxol.MixProject do
+       use Mix.Project
+       def project, do: [app: :raxol, version: "0.1.0", deps: deps()]
+
+       defp deps,
+         do: [
+           {:raxol_core, path: "packages/raxol_core"},
+           {:raxol_cli, path: "packages/raxol_cli"}
+         ]
+     end
+     """, "raxol_cli", "app"},
+    {"a module named in the root mix.exs", "mix.exs",
+     ~S"""
+     defmodule Raxol.MixProject do
+       use Mix.Project
+
+       def project,
+         do: [
+           app: :raxol,
+           version: "0.1.0",
+           deps: [{:raxol_core, path: "packages/raxol_core"}],
+           docs: [nest_modules_by_prefix: [Raxol.Core, Raxol.Agent]]
+         ]
+     end
+     """, "Raxol.Agent", "value"}
+  ]
+
+  # {label, file, source}
+  @exemptions [
+    {"the modules raxol_journal defines", "lib/raxol/exempt.ex",
+     """
+     defmodule Raxol.Exempt do
+       def f, do: [#{Enum.join(@journal_modules, ", ")}]
+       def g(event), do: Raxol.Agent.Contract.encode_line(event)
+       def h, do: %Raxol.Agent.Contract.Event{}
+     end
+     """},
+    {"a comment", "lib/raxol/exempt.ex",
+     ~S"""
+     defmodule Raxol.Exempt do
+       # Raxol.Agent.Session owns the turn; `:raxol_agent` starts it.
+       def f, do: nil
+     end
+     """},
+    {"doc attributes", "lib/raxol/exempt.ex",
+     ~S'''
+     defmodule Raxol.Exempt do
+       @moduledoc """
+       The neutral half of `Raxol.Agent.EmitBridge`.
+
+           struct(Raxol.Agent.Command, cmd)
+       """
+
+       @typedoc "What `Raxol.Payments.Ledger` books."
+       @type t :: map()
+
+       @doc ~S"""
+       See `Raxol.Agent.Session`.
+       """
+       @doc deprecated: "Raxol.Earn.Seller replaces it"
+       def f, do: nil
+
+       @deprecated "Use Raxol.Web3.Router"
+       def g, do: nil
+     end
+     '''},
+    {"a Mix task's @shortdoc", "lib/mix/tasks/exempt.ex",
+     ~S"""
+     defmodule Mix.Tasks.Exempt do
+       @shortdoc "Lists what Raxol.Agent.Session would run"
+       def run(_argv), do: :ok
+     end
+     """},
+    {"the root's own Raxol.CLI modules", "lib/raxol/exempt.ex",
+     ~S"""
+     defmodule Raxol.Exempt do
+       def f, do: Raxol.CLI.Colors.red("x")
+     end
+     """},
+    {"names that only resemble an agent namespace", "lib/raxol/exempt.ex",
+     ~S"""
+     defmodule Raxol.Exempt do
+       def f, do: [Raxol.Agents.Roster, Raxol.Agentic, Raxol.PaymentsTable]
+       def g, do: "Raxol.Agentless.Mode"
+       def h, do: Raxol.Gateway.Handler.AgentLike
+     end
+     """},
+    {"runtime application atoms", "lib/raxol/exempt.ex",
+     ~S"""
+     defmodule Raxol.Exempt do
+       def f, do: Application.get_env(:raxol_core, :x)
+       def g, do: Application.get_env(:raxol_gateway, :x)
+     end
+     """},
+    {"agent application atoms in the release catalog",
+     "lib/raxol/release/package_check.ex",
+     ~S"""
+     defmodule Raxol.Release.PackageCheck do
+       @packages [
+         %{app: :raxol_core, path: "packages/raxol_core"},
+         %{app: :raxol_agent, path: "packages/raxol_agent"},
+         %{app: :raxol_cli, path: "packages/raxol_cli"}
+       ]
+       def packages, do: @packages
+     end
+     """},
+    {"a root test", "test/raxol/crossing_test.exs",
+     ~S"""
+     defmodule Raxol.CrossingTest do
+       def f, do: Raxol.Agent.Session.start()
+     end
+     """},
+    {"a runtime package's test", "packages/raxol_core/test/crossing_test.exs",
+     ~S"""
+     defmodule Raxol.Core.CrossingTest do
+       def f, do: Raxol.Agent.Session.start()
+     end
+     """},
+    {"an agent package naming both sides",
+     "packages/raxol_agent/lib/raxol/agent/free.ex",
+     ~S"""
+     defmodule Raxol.Agent.Free do
+       def f, do: [Raxol.Core.Thing, Raxol.Agent.Session, Raxol.Agent.Journal]
+       def g, do: Application.get_env(:raxol_payments, :accounting)
+     end
+     """}
+  ]
+
+  setup_all do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol_boundaries_#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    single_file =
+      for {label, file, source, _name, _kind} <- @crossings do
+        {label, [{file, source}]}
+      end ++
+        for {label, file, source} <- @exemptions do
+          {label, [{file, source}]}
+        end
+
+    results =
+      (single_file ++ structural_cases())
+      |> Enum.with_index()
+      |> Task.async_stream(
+        fn {{label, files}, index} ->
+          dir = Path.join(root, Integer.to_string(index))
+          build(dir, files)
+          {label, check(dir)}
+        end,
+        max_concurrency: 4,
+        timeout: 120_000
+      )
+      |> Map.new(fn {:ok, result} -> result end)
+
+    %{results: results}
+  end
+
+  describe "a runtime-side file naming agent-side code fails:" do
+    for {label, file, _source, name, kind} <- @crossings do
+      test label, %{results: results} do
+        {output, status} = Map.fetch!(results, unquote(label))
+
+        assert status == 1, output
+        assert output =~ "runtime-side file names agent-side code"
+
+        assert Enum.any?(
+                 String.split(output, "\n"),
+                 &Regex.match?(
+                   ~r/^\s+#{Regex.escape(unquote(file))}:\d+\s+#{Regex.escape(unquote(name))}\s+\(#{Regex.escape(unquote(kind))}\)$/,
+                   &1
+                 )
+               ),
+               output
+      end
+    end
+  end
+
+  describe "exempt:" do
+    for {label, _file, _source} <- @exemptions do
+      test label, %{results: results} do
+        {output, status} = Map.fetch!(results, unquote(label))
+
+        assert status == 0, output
+        assert output =~ "none across the runtime/agent line"
+      end
+    end
+  end
+
+  describe "the line itself:" do
+    test "the base tree holds", %{results: results} do
+      assert {output, 0} = results["base"]
+      assert output =~ "OK: package boundaries hold (0 grandfathered"
+    end
+
+    test "a runtime tree may not define a module under an agent namespace",
+         %{results: results} do
+      assert {output, 1} = results["runtime defines an agent namespace"]
+
+      assert output =~
+               ~r/Raxol\.Agent\.Thing\s+defined in raxol_core, which is runtime-side/
+    end
+
+    test "a runtime tree may not define the agent handler or bridge",
+         %{results: results} do
+      assert {output, 1} = results["runtime defines an exact agent module"]
+
+      assert output =~
+               ~r/Raxol\.MCP\.AgentBridge\s+defined in raxol_core, which is runtime-side/
+    end
+
+    test "an exempt name must be defined by a runtime tree",
+         %{results: results} do
+      assert {output, 1} = results["exemption without a definition"]
+
+      assert output =~
+               ~r/Raxol\.Agent\.Journal\.Tip\s+exempt, but no runtime tree defines it/
+    end
+
+    test "an allowlist entry on one side of the line is kept",
+         %{results: results} do
+      assert {output, 0} = results["allowlist entry within the runtime side"]
+      assert output =~ "(1 grandfathered"
+    end
+
+    test "an allowlist entry across the line fails", %{results: results} do
+      assert {output, 1} = results["allowlist entry across the line"]
+      assert output =~ "entries cross the runtime/agent line"
+
+      assert output =~
+               ~r/packages\/raxol_cli\/lib\/raxol\/cli\/mcp\.ex\s+Raxol\.Core\.Thing\traxol_core/
+    end
+
+    test "a package on neither side stops the check", %{results: results} do
+      assert {output, 2} = results["package on neither side"]
+
+      assert output =~
+               "packages/raxol_other is on neither side of the runtime/agent line"
+    end
+  end
+
+  # {label, [{file, source}]}; a `nil` source removes the base tree's file.
+  defp structural_cases do
+    [
+      {"base", []},
+      {"runtime defines an agent namespace",
+       [
+         {"packages/raxol_core/lib/raxol/agent/thing.ex",
+          "defmodule Raxol.Agent.Thing do\nend\n"}
+       ]},
+      {"runtime defines an exact agent module",
+       [
+         {"packages/raxol_core/lib/raxol/mcp/agent_bridge.ex",
+          "defmodule Raxol.MCP.AgentBridge do\nend\n"}
+       ]},
+      {"exemption without a definition",
+       [
+         {"packages/raxol_journal/lib/raxol/agent/journal.ex",
+          journal_source(@journal_modules -- ["Raxol.Agent.Journal.Tip"])}
+       ]},
+      {"allowlist entry within the runtime side",
+       [
+         {"packages/raxol_core/lib/raxol/core/reach.ex",
+          """
+          defmodule Raxol.Core.Reach do
+            def f, do: Raxol.CLI.Colors.red("x")
+          end
+          """},
+         {"scripts/.package-boundaries-allowlist",
+          "packages/raxol_core/lib/raxol/core/reach.ex\tRaxol.CLI.Colors\traxol\n"}
+       ]},
+      {"allowlist entry across the line",
+       [
+         {"packages/raxol_cli/lib/raxol/cli/mcp.ex",
+          """
+          defmodule Raxol.CLI.MCP do
+            def f, do: Raxol.Core.Thing.new()
+          end
+          """},
+         {"scripts/.package-boundaries-allowlist",
+          "packages/raxol_cli/lib/raxol/cli/mcp.ex\tRaxol.Core.Thing\traxol_core\n"}
+       ]},
+      {"package on neither side",
+       [{"packages/raxol_other/mix.exs", mix_source(:raxol_other, [])}]}
+    ]
+  end
+
+  defp build(dir, files) do
+    for {file, source} <- base_tree() ++ files do
+      path = Path.join(dir, file)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, source)
+    end
+  end
+
+  defp check(dir) do
+    System.cmd("elixir", [@script, "--root", dir], stderr_to_stdout: true)
+  end
+
+  defp base_tree do
+    [
+      {"mix.exs", mix_source(:raxol, raxol_core: "packages/raxol_core")},
+      {"config/config.exs", "import Config\n"},
+      {"lib/raxol/cli/colors.ex", "defmodule Raxol.CLI.Colors do\nend\n"},
+      {"scripts/.package-boundaries-allowlist", "# none\n"},
+      {"packages/raxol_core/mix.exs", mix_source(:raxol_core, [])},
+      {"packages/raxol_core/lib/raxol/core/thing.ex",
+       "defmodule Raxol.Core.Thing do\nend\n"},
+      {"packages/raxol_journal/mix.exs", mix_source(:raxol_journal, [])},
+      {"packages/raxol_journal/lib/raxol/agent/journal.ex",
+       journal_source(@journal_modules)},
+      {"packages/raxol_agent/mix.exs",
+       mix_source(:raxol_agent,
+         raxol: "../..",
+         raxol_core: "../raxol_core",
+         raxol_journal: "../raxol_journal"
+       )},
+      {"packages/raxol_agent/lib/raxol/agent/session.ex",
+       "defmodule Raxol.Agent.Session do\nend\n"},
+      {"packages/raxol_cli/mix.exs", mix_source(:raxol_cli, [])},
+      {"packages/raxol_cli/lib/raxol/cli/mcp.ex",
+       "defmodule Raxol.CLI.MCP do\nend\n"}
+    ]
+  end
+
+  defp mix_source(app, deps) do
+    entries =
+      Enum.map_join(deps, ", ", fn {name, path} ->
+        "{#{inspect(name)}, path: #{inspect(path)}}"
+      end)
+
+    """
+    defmodule #{Macro.camelize(Atom.to_string(app))}.MixProject do
+      use Mix.Project
+      def project, do: [app: #{inspect(app)}, version: "0.1.0", deps: [#{entries}]]
+    end
+    """
+  end
+
+  defp journal_source(modules) do
+    Enum.map_join(modules, "\n", &"defmodule #{&1} do\nend\n")
+  end
+end
