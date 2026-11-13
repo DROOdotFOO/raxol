@@ -17,11 +17,19 @@ defmodule Raxol.Agent.McpTools do
 
   This process registers the tools with `Raxol.MCP.Registry` and owns them,
   so they leave the registry with it. Whether it registers is decided once
-  per BEAM, when `Raxol.Agent.McpTools` first starts: it does if the registry
-  is running then (the `:mcp` and `:full` startup modes, where `:raxol` has
-  the MCP tree up before `:raxol_agent` starts) and
-  `config :raxol_agent, :mcp_tools` is not `false`. A restart repeats that
-  decision.
+  per BEAM, when `Raxol.Agent.McpTools` first starts, and a restart repeats
+  that decision. It registers if the registry is running then and
+  `config :raxol_agent, :mcp_tools` allows it:
+
+    * unset - only on a node whose startup mode is `:mcp` (`raxol mcp`,
+      `mix mcp.server`), as `Raxol.Application.health_status/0` reports it
+    * `true` - wherever the registry runs, the `:full` startup mode included
+    * `false` - never
+
+  The setting is read at that first start, so it belongs in `config/*.exs`:
+  `Application.put_env/3` after `:raxol_agent` has started changes nothing.
+  The tools answer to the authorizer the node gives `Raxol.MCP.Server`
+  (`config :raxol, :mcp_authorizer`), as every tool there does.
 
   ## Spawnable apps
 
@@ -391,15 +399,23 @@ defmodule Raxol.Agent.McpTools do
 
     case :persistent_term.get(key, nil) do
       nil ->
-        decision =
-          Application.get_env(:raxol_agent, :mcp_tools, true) != false and
-            GenServer.whereis(registry) != nil
-
+        # The registry first: `wanted?/0` asks `Raxol.Supervisor`, which
+        # cannot answer while it is starting this process as its own child,
+        # and a `raxol` that does so starts it before the MCP tree.
+        decision = GenServer.whereis(registry) != nil and wanted?()
         :persistent_term.put(key, decision)
         decision
 
       decision ->
         decision
+    end
+  end
+
+  # Unset, the tools belong to a node booted to serve MCP.
+  defp wanted? do
+    case Application.get_env(:raxol_agent, :mcp_tools) do
+      nil -> Raxol.Application.health_status().mode == :mcp
+      setting -> setting == true
     end
   end
 

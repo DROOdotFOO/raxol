@@ -102,7 +102,7 @@ The MCP client can read `myapp://state/cart` to inspect what the agent is workin
 
 ## Agents
 
-With `raxol_agent` started, a node whose MCP registry is up before it (`raxol mcp`, `mix mcp.server`, and the default `:full` startup mode) also serves `agent_spawn`, `agent_list`, `agent_ask`, `agent_status` and `agent_stop`, and one resource per agent, `raxol://agent/<id>/journal` (`Raxol.Agent.McpTools`). `agent_spawn` starts only the apps in `config :raxol_agent, :mcp_spawnable_apps`, and the tools act only on agents that server started or that `:mcp_exposed_agents` names. These are Raxol agents (`use Raxol.Agent`), not headless sessions.
+With `raxol_agent` started, a node booted for MCP (`raxol mcp`, `mix mcp.server`: the `:mcp` startup mode) also serves `agent_spawn`, `agent_list`, `agent_ask`, `agent_status` and `agent_stop`, and one resource per agent, `raxol://agent/<id>/journal` (`Raxol.Agent.McpTools`). In any other mode that runs the MCP registry, `:full` included, they register only with `config :raxol_agent, mcp_tools: true`; `false` keeps them out everywhere. The setting is read once, when `Raxol.Agent.McpTools` first starts, so it belongs in `config/*.exs`, and the tools answer to the node's `:mcp_authorizer` like every other tool. `agent_spawn` starts only the apps in `config :raxol_agent, :mcp_spawnable_apps`, and the tools act only on agents that server started or that `:mcp_exposed_agents` names. These are Raxol agents (`use Raxol.Agent`), not headless sessions.
 
 ## Test harness
 
