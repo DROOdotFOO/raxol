@@ -384,6 +384,17 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
          read_authorizer: Raxol.MCP.Authorizer.allow_all()}
       )
 
+      # The tools register on a node booted for MCP, as `raxol mcp` is.
+      configured = Application.fetch_env(:raxol, :startup_mode)
+      Application.put_env(:raxol, :startup_mode, :mcp)
+
+      on_exit(fn ->
+        case configured do
+          {:ok, mode} -> Application.put_env(:raxol, :startup_mode, mode)
+          :error -> Application.delete_env(:raxol, :startup_mode)
+        end
+      end)
+
       start_supervised!({McpTools, registry: registry, server: server})
       %{mcp: server}
     end
