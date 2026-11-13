@@ -31,13 +31,18 @@ defmodule RaxolAgent.MixProject do
     end
   end
 
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # `Raxol.Agent.ForeignBeam` is `raxol_journal`'s test support; a dependency
+  # does not compile its `test/support`, so it is compiled from there.
+  defp elixirc_paths(:test),
+    do: ["lib", "test/support", Path.expand("../raxol_journal/test/support", __DIR__)]
+
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
       raxol_dep(:raxol, "~> 2.7", "../.."),
       raxol_dep(:raxol_mcp, "~> 2.7", "../raxol_mcp"),
+      raxol_dep(:raxol_journal, "~> 2.7", "../raxol_journal"),
       {:circular_buffer, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},

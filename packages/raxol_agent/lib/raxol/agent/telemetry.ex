@@ -1,7 +1,9 @@
 defmodule Raxol.Agent.Telemetry do
   @moduledoc """
-  The registry of every `:telemetry` event `raxol_agent` emits, each classified
-  as exactly one of `:invariant`, `:peer` or `:operational`.
+  The registry of every `:telemetry` event `raxol_agent` emits, and of the
+  journal events `raxol_journal` emits under the same `[:raxol, :agent, ...]`
+  prefix, each classified as exactly one of `:invariant`, `:peer` or
+  `:operational`.
 
   ## Why this exists
 
@@ -30,8 +32,8 @@ defmodule Raxol.Agent.Telemetry do
   makes the suite flaky, and a flaky guard gets deleted, which is strictly
   worse than a missed one. That criterion is why several alarming-looking
   events below are `:operational` -- `:write_failed` and `:damaged` are the
-  filesystem talking, and this package has a deliberate chmod-0500 fault test
-  that drives them on purpose.
+  filesystem talking, and `raxol_journal` has a deliberate chmod-0500 fault
+  test that drives them on purpose.
 
   No event here is `:invariant` at present, so the sentinel arms nothing in
   those modules. An event classified `:invariant` is enforced there as soon
@@ -47,9 +49,9 @@ defmodule Raxol.Agent.Telemetry do
   ## Completeness is asserted, not trusted
 
   `test/raxol/agent/telemetry_registry_test.exs` parses this package's `lib/`
-  for `[:raxol, ...]` event literals and fails if any of them is missing from
-  `events/0`. That is the whole point of the design: a new event cannot be
-  added without someone classifying it.
+  and `raxol_journal`'s for `[:raxol, ...]` event literals and fails if any of
+  them is missing from `events/0`. That is the whole point of the design: a new
+  event cannot be added without someone classifying it.
   """
 
   @typedoc "How a fired event should be read."
@@ -78,7 +80,7 @@ defmodule Raxol.Agent.Telemetry do
 
     # OPERATIONAL. Interior segment corruption found on replay: truncated
     # writes, bit rot, an editor that touched a segment. Filesystem-caused, and
-    # driven on purpose by this package's fault-injection suite.
+    # driven on purpose by `raxol_journal`'s fault-injection suite.
     [:raxol, :agent, :journal, :damaged] => :operational,
 
     # OPERATIONAL. Same reason as `:damaged`: the write was refused by the OS.

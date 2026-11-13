@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
   @moduledoc """
-  Tier-1 storage invariants I5–I8 + I10 (see `docs/harness/architecture.md`'s
-  "Journal and projection" section for the durable-journal model).
+  Tier-1 storage invariants I5–I8 + I10 (see the package README's "The
+  journal" section for the durable-journal model).
 
     * I5  — recovery beyond byte-cut: truncation fuzz, multi-segment, corrupt
       interior, corrupt HEAD, mid-UTF-8 cut, empty file, zero-length segment.

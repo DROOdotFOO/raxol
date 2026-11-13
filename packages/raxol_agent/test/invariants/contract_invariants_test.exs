@@ -1,23 +1,23 @@
 defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   @moduledoc """
-  Tier-1 invariant I9 — the contract only grows, DEEP (see
-  `docs/harness/architecture.md`'s "The contract only grows" rule).
+  Tier-1 invariant I9 — the contract only grows, DEEP (see the `raxol_journal`
+  README's "The contract only grows" rule).
 
   `fixtures/contract_snapshot.json` is the checked-in floor: per-type payload
   shapes, enum values, field requiredness, tier assignments, and the neutral →
   contract mapping. This module re-produces every snapshotted shape through the
-  REAL producers (`Contract.pump/3` and the Dispatcher→EmitBridge path) and
+  REAL producers (`StreamPump.pump/3` and the Dispatcher→EmitBridge path) and
   fails on removal, rename, type-narrowing, required→optional flip, tier flip,
   enum-value removal, or event-type removal. Additions never fail — growth is
   legal without touching the snapshot.
 
-  `fixtures/golden/v<version>/` holds one REAL journal per `schema_version`,
-  written by the Writer that was current when the version was — the corpus
-  seed for future upcast-on-read properties: every future schema version must
-  still open, replay, and validate these journals. A version is frozen once and
-  never edited (`scripts/freeze_golden_journal.exs`); `MANIFEST.json` pins the
-  bytes and `scripts/check_journal_goldens.exs` enforces that a bump arrives
-  with a fixture for the version it leaves behind.
+  `raxol_journal`'s `priv/golden/v<version>/` holds one REAL journal per
+  `schema_version`, written by the Writer that was current when the version
+  was — the corpus seed for future upcast-on-read properties: every future
+  schema version must still open, replay, and validate these journals. A
+  version is frozen once and never edited (`scripts/freeze_golden_journal.exs`);
+  `MANIFEST.json` pins the bytes and `scripts/check_journal_goldens.exs`
+  enforces that a bump arrives with a fixture for the version it leaves behind.
   """
   use ExUnit.Case, async: false
 
@@ -29,28 +29,29 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
+  alias Raxol.Agent.StreamPump
   alias Raxol.Core.Runtime.EmitBus
 
-  @fixtures Path.join(__DIR__, "fixtures")
-  @snapshot @fixtures
-            |> Path.join("contract_snapshot.json")
+  @snapshot __DIR__
+            |> Path.join("fixtures/contract_snapshot.json")
             |> File.read!()
             |> Jason.decode!()
-  @golden Path.join(@fixtures, "golden/v1.0.0/golden-v1")
+  @goldens Application.app_dir(:raxol_journal, "priv/golden")
+  @golden Path.join(@goldens, "v1.0.0/golden-v1")
 
   # The corpus for whatever the Writer currently defaults to, resolved through
   # the same manifest `scripts/check_journal_goldens.exs` enforces — so a
   # `schema_version` bump that skips freezing fails here too, not only in CI
   # (`raxol_agent` is a local gate, not a per-PR CI package).
-  @manifest @fixtures
-            |> Path.join("golden/MANIFEST.json")
+  @manifest @goldens
+            |> Path.join("MANIFEST.json")
             |> File.read!()
             |> Jason.decode!()
   @current_version Raxol.Agent.Journal.FileStore.Writer.default_schema_version()
   @current_session get_in(@manifest, ["versions", @current_version, "session"])
   @current_golden Path.join([
-                    @fixtures,
-                    "golden/v#{@current_version}",
+                    @goldens,
+                    "v#{@current_version}",
                     @current_session || ""
                   ])
 
@@ -118,7 +119,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   end
 
   # ===========================================================================
-  # Producer 1: Contract.pump — every snapshotted shape still producible
+  # Producer 1: StreamPump.pump — every snapshotted shape still producible
   # ===========================================================================
 
   describe "I9 — pump producer" do
@@ -135,7 +136,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       ]
 
       task =
-        Task.async(fn -> Contract.pump(session_id, stream, prompt: "p") end)
+        Task.async(fn -> StreamPump.pump(session_id, stream, prompt: "p") end)
 
       assert {:ok, %{content: "final answer"}} = Task.await(task)
 
@@ -197,7 +198,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
       task =
         Task.async(fn ->
-          Contract.pump(session_id, [{:error, :kaboom}], prompt: "p")
+          StreamPump.pump(session_id, [{:error, :kaboom}], prompt: "p")
         end)
 
       assert {:error, :kaboom} = Task.await(task)
@@ -390,7 +391,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
     test "the writer's current default has a frozen corpus the manifest pins" do
       assert @current_session,
              "the Writer defaults to schema_version #{@current_version} but " <>
-               "fixtures/golden/MANIFEST.json pins no corpus for it — freeze one " <>
+               "raxol_journal's priv/golden/MANIFEST.json pins no corpus for it — freeze one " <>
                "(packages/raxol_agent/scripts/freeze_golden_journal.exs) before the " <>
                "version moves on and the material becomes unrecoverable"
 
@@ -510,7 +511,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
     test "each pinned version opens, replays densely, and keeps its chain mode", %{base: base} do
       for {version, %{"session" => session}} <- @manifest["versions"] do
         File.cp_r!(
-          Path.join([@fixtures, "golden/v#{version}", session]),
+          Path.join([@goldens, "v#{version}", session]),
           Path.join(base, session)
         )
 

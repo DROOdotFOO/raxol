@@ -23,4 +23,5 @@ os_excludes =
     _ -> []
   end
 
-ExUnit.start(exclude: [:slow | os_excludes])
+# :mutation is the negative-control checklist, run on demand.
+ExUnit.start(exclude: [:slow, :mutation | os_excludes])

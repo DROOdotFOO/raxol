@@ -435,7 +435,7 @@ defmodule Raxol.Agent.Red.U4ReattachGuardsTest do
 
   @moduletag :capture_log
 
-  @golden Path.expand("../../../invariants/fixtures/golden/v1.0.0/golden-v1", __DIR__)
+  @golden Application.app_dir(:raxol_journal, "priv/golden/v1.0.0/golden-v1")
 
   setup do
     base =

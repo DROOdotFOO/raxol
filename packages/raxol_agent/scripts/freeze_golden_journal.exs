@@ -6,11 +6,11 @@
 # again: a frozen corpus is history. `scripts/check_journal_goldens.exs` (run
 # in CI) refuses a `schema_version` bump that arrives without one, and pins
 # every frozen fixture byte-for-byte through
-# `test/invariants/fixtures/golden/MANIFEST.json`.
+# `packages/raxol_journal/priv/golden/MANIFEST.json`.
 #
 # What is real here, and what is normalized:
 #
-#   * REAL producer — `Raxol.Agent.Contract.pump/3` generates every payload
+#   * REAL producer — `Raxol.Agent.StreamPump.pump/3` generates every payload
 #     shape, including the `evidence` tri-state marker, from the same
 #     `DoneGate.gate/3` verdict production uses. Nothing is hand-written.
 #   * REAL writer — the captured durable events are replayed through
@@ -21,10 +21,10 @@
 #     (pump mints `turn-<unique_integer>`), and `meta.json`'s `created_at`.
 #     `cwd`/`git_branch`/`title` are passed in as writer opts, not rewritten.
 
-alias Raxol.Agent.Contract
 alias Raxol.Agent.Contract.Event
 alias Raxol.Agent.EmitBridge
 alias Raxol.Agent.SessionStreamer
+alias Raxol.Agent.StreamPump
 alias Raxol.Core.Runtime.EmitBus
 
 schema_version = Raxol.Agent.Journal.FileStore.Writer.default_schema_version()
@@ -32,7 +32,7 @@ schema_version = Raxol.Agent.Journal.FileStore.Writer.default_schema_version()
 session_id =
   "golden-v#{schema_version |> String.split(".") |> Enum.take(2) |> Enum.join()}"
 
-fixtures = Path.expand("../test/invariants/fixtures/golden", __DIR__)
+fixtures = Path.expand("../../raxol_journal/priv/golden", __DIR__)
 target = Path.join([fixtures, "v#{schema_version}", session_id])
 
 # Frozen stamps. The base is the freeze date in microseconds; every record
@@ -108,7 +108,7 @@ captured =
 
     task =
       Task.async(fn ->
-        Contract.pump(pump_session, stream, prompt: turn_label)
+        StreamPump.pump(pump_session, stream, prompt: turn_label)
       end)
 
     _ = Task.await(task)
