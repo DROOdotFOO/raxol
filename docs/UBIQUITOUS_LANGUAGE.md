@@ -176,13 +176,13 @@ role/label/state form that Surfaces serialize for assistive technology.
 | **Coordinator**         | The top-level Agent in a Team that delegates to Workers.                                              | parent agent, master agent, dispatcher |
 | **Worker**              | A specialized Agent supervised by a Coordinator.                                                      | sub-agent, child agent                 |
 | **Action**              | An LLM-callable tool exposed by an Agent: a function described by a name, schema, and handler.        | tool, function, capability, skill      |
-| **Strategy**            | The decision-making style of an Agent: `Direct` (single-shot) or `ReAct` (reason-act-observe loop).   | mode, behaviour, planner               |
+| **Strategy**            | The decision-making style of an Agent: `ReAct` (reason-act-observe loop) is the one shipped.          | mode, behaviour, planner               |
 | **Backend**             | The LLM provider integration: Anthropic, OpenAI, Ollama, Lumo, Kimi, LLM7, Mock.                      | provider, API, vendor, LLM             |
 | **Inter-agent message** | A `{:agent_message, from, payload}` tuple delivered to an Agent via the Agent Registry.               | RPC, IPC, message-pass                 |
 
 ### Relationships
 
-- An Agent has zero or one Strategy (default: Direct) (1:0..1).
+- An Agent has zero or one Strategy (1:0..1).
 - A Team has exactly one Coordinator and many Workers (1:1, 1:N).
 - An Agent exposes many Actions to its Backend (1:N).
 - An Agent calls one Backend at a time per request (1:1 per request).
@@ -216,7 +216,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 | ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |
 | **TEA Command**  | A side effect returned from `update/2`. Tagged tuple: `:async`, `:shell`, `:send_agent`, etc.      | effect, action, side effect    |
 | **Agent Action** | An LLM-callable tool. Implements the `Raxol.Agent.Action` behaviour.                               | tool, function, skill, command |
-| **Hook**         | A function the framework calls at a defined extension point: CommandHook, PermissionHook, McpHook. | callback, listener, middleware |
+| **Hook**         | A function the framework calls at a defined extension point: CommandHook, SandboxHook, McpHook.    | callback, listener, middleware |
 | **Plugin**       | A package that adds Components, themes, hooks, or actions via `use Raxol.Plugin`.                  | extension, addon, mod          |
 
 ### Flagged ambiguities

@@ -46,8 +46,7 @@ not the pixels.
 - Motion exists only while events flow. Spinners and meters tick on event
   arrival; events stop and the screen goes still. "The panel shows nothing"
   therefore *means* "nothing is happening". It is a property of the render
-  loop, not a promise. (`Raxol.Harness.StreamCadence` paces egress off real
-  ingest; the `StatusStrip` spinner rides the existing tick, never a new timer.)
+  loop, not a promise. (The `StatusStrip` spinner rides the existing tick, never a new timer.)
 - Moving is an in-flight claim (dim/italic); still is a settled fact. The
   freeze to full weight is the commit beat.
 - Completion is one event-driven blink, after which the widget dies into the

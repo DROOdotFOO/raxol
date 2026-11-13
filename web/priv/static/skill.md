@@ -104,7 +104,6 @@ Raxol.Agent.Team.start_link(
 
 | Strategy | When to Use |
 |----------|------------|
-| `Strategy.Direct` | Sequential action execution, deterministic pipelines |
 | `Strategy.ReAct` | LLM reasoning loop with tool use, autonomous agents |
 
 ## MCP Integration

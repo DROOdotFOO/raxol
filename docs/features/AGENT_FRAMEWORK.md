@@ -206,30 +206,29 @@ The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI
 
 The `:longcat` harness targets Meituan's LongCat (`https://api.longcat.chat/openai`, model `LongCat-2.0`), also OpenAI-compatible. It rides the `:openai` request/SSE path, which already handles LongCat's non-standard frames (a full `message` chunk instead of `delta`, the `reasoning_content` channel, and the underscore-less `finishreason` key). Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
 
-The `:deepseek` harness targets DeepSeek's OpenAI-compatible endpoint (`https://api.deepseek.com`, default model `deepseek-v4-flash`, key from `DEEPSEEK_API_KEY`). Its usage frames carry `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, and `Raxol.Agent.LlmPrices` prices them exactly through its backend-scoped table (cache tier and UTC peak clock, ADR-0035); the rows are keyed to this harness, so the same model name via OpenRouter or LLM7 stays unpriced rather than borrowing the direct rate.
+The `:deepseek` harness targets DeepSeek's OpenAI-compatible endpoint (`https://api.deepseek.com`, default model `deepseek-v4-flash`, key from `DEEPSEEK_API_KEY`).
 
-## Turn driver
+## Turn loop
 
-`Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Turn` drives a whole
-turn: it assembles tool context from the agent module's callbacks, runs the
-reasoning loop, and records the turn to a conversation log.
+`Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Stream.react/2` drives a
+whole turn: the model sees the tools in `:actions`, each call it makes is run, and the loop
+continues until it answers in text or `:max_iterations` is reached.
 
 ```elixir
-{:ok, items} =
-  Raxol.Agent.Turn.run(MyAgent, "refactor lib/foo.ex",
+{:ok, result} =
+  "refactor lib/foo.ex"
+  |> Raxol.Agent.Stream.react(
     backend: MyBackend,
-    log: log_server,
-    conversation_id: cid
+    actions: MyAgent.available_actions(),
+    context: %{skills: Raxol.Agent.Skills.provider_context(MyAgent.skills_provider())}
   )
+  |> Raxol.Agent.Stream.collect()
 ```
 
-- `build_context/2` builds the tool context: `:skills` is present when the agent module's
-  `skills_provider/0` returns a provider.
-- `run/3` runs `Stream.react/2` with that context and records the stream into a
-  [Conversation Log](#conversation-item-log).
-
-The agent *module* declares which provider it wants through a zero-arity callback; the
-*caller* supplies the running server instance through opts.
+- `:context` is handed to every tool call. `:skills` is where the skill tools find their
+  store.
+- The result is a lazy stream of events; `collect/1` drains it to `{:ok, info}`, whose
+  `:messages` is the conversation the loop built.
 
 ## Backends
 
@@ -281,8 +280,7 @@ is what `raxol doctor` prints under `providers`.
 
 ## Authorization (ALLOW/ASK/DENY)
 
-`Raxol.Agent.Authorization` is a three-way policy engine, richer than the deny-only
-`PermissionHook`.
+`Raxol.Agent.Authorization` is a three-way policy engine.
 
 - `Engine` is a pure reducer over a list of policies. It folds with `reduce_while`: a DENY
   short-circuits, an ALLOW merges whitelisted label writes, an ASK escrows writes and
@@ -290,45 +288,10 @@ is what `raxol doctor` prints under `providers`.
 - `Policy` is a data struct (`phases`, `conditions`, `writable_labels`, `scope`). Scope is
   `:once`, `:session`, or `:root`; a remembered ASK auto-allows within its scope, so
   "approve once covers the tree" works.
-- `Server` is a per-workflow GenServer holding the policies and pending ASKs; `Hook`
-  composes the engine into the `CommandHook` chain at the `:tool_call` phase, resolving an
-  ASK through a synchronous prompter.
 
-A host wires the engine in: through `Hook`, or through `McpAuthorizer` for an MCP server.
-The LLM tool-call path does not consult it. There a `sensitive` action is denied unless the
-context of the call carries a `:tool_authorizer` (`Raxol.Agent.ToolPolicy`).
-
-## Conversation item-log
-
-`Raxol.Agent.Conversation` is a durable, append-only record of what an agent did.
-
-- `Item` is an immutable typed entry (message, tool_call, tool_result, reasoning, error, and
-  more) with a stable id `"<conversation_id>:<seq>"` and a monotonic, store-assigned seq.
-- `Store` is a behaviour with cursor pagination (`:after`/`:before`/`:limit`/`:order`/`:type`);
-  `Store.ETS` is the shipped adapter (an `ordered_set` keyed `{conversation_id, seq}`). Append
-  is the only writer.
-- `Log` is a GenServer that wraps a store (durability) with in-process subscriber fan-out
-  (liveness) and no replay buffer. `subscribe/3` returns the snapshot and registers the
-  subscriber in one serialized call, so the snapshot and the live tail partition exactly:
-  every item once, no gap, no duplicate. Reconnect with an `:after` cursor.
-- `Recorder` bridges `Stream` events into items (tool_use to tool_call, done to message, and
-  so on).
-
-## Tunnel (reverse co-drive)
-
-`Raxol.Agent.Tunnel` lets a teammate attach to an agent running on your machine over a single
-outbound link, without your files or credentials leaving it. The host dials out to a server;
-many logical channels multiplex over the one link; when a peer opens a channel, its frames
-tunnel to the host, which spawns the channel's handler locally.
-
-- `Frame` has four kinds: `:hello` (host identity, once), `:open`, `:data` (base64 when
-  binary), `:close`. Kinds are decoded through a whitelist, never `String.to_atom` on link
-  input.
-- `Tunnel` is the endpoint GenServer (`role: :host` or `:server`), transport-agnostic:
-  outbound frames go through a `send_fun`, inbound bytes arrive as `{:tunnel_recv, binary}`.
-- `Tunnel.Link.connect/2` wires two endpoints in-process for tests and same-node co-driving.
-  The cross-machine transport (a WebSocket host and server) is a drop-in doing the same two
-  things.
+A host calls `Engine.evaluate/4` itself and holds the engine state; `raxol_broker` does for
+its order policy. The LLM tool-call path does not consult it. There a `sensitive` action is
+denied unless the context of the call carries a `:tool_authorizer` (`Raxol.Agent.ToolPolicy`).
 
 ## Examples
 

@@ -276,7 +276,7 @@ defmodule RaxolPlayground.Capabilities do
     %{
       models: ["TEA (message-driven)", "Process (tick-driven)"],
       commands: ["shell", "async", "send_agent"],
-      strategies: ["Strategy.Direct", "Strategy.ReAct"],
+      strategies: ["Strategy.ReAct"],
       payments: ["x402", "MPP", "Xochi"],
       backends: @backends
     }

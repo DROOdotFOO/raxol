@@ -66,18 +66,15 @@ end
 ```
 
 A tool marked `sensitive: true` is denied unless the context of the call carries a
-`:tool_authorizer` that allows it (`Raxol.Agent.ToolPolicy`). `Turn.run/3` sets none, so
-under it a sensitive tool is always denied; `Raxol.Agent.Stream.react/2` takes one in its
-`:context` option.
+`:tool_authorizer` that allows it (`Raxol.Agent.ToolPolicy`). `Raxol.Agent.Stream.react/2`
+takes one in its `:context` option; without one a sensitive tool is always denied.
 
 ## 3. Reason on a real model
 
 Pick a backend with `ExecutorConfig` and `Backend.Selector`, then drive a turn with
-`Raxol.Agent.Turn`, which runs the reasoning loop and records the conversation:
+`Raxol.Agent.Stream.react/2`, which runs the reasoning loop and the tool calls:
 
 ```elixir
-{:ok, log} = Raxol.Agent.Conversation.Log.start_link(name: MyLog)
-
 {:ok, backend, backend_opts} =
   Raxol.Agent.Backend.Selector.select(
     Raxol.Agent.ExecutorConfig.new(
@@ -87,14 +84,21 @@ Pick a backend with `ExecutorConfig` and `Backend.Selector`, then drive a turn w
     )
   )
 
-{:ok, items} =
-  Raxol.Agent.Turn.run(MyAgent, "how many lines are in mix.exs?",
+{:ok, result} =
+  "how many lines are in mix.exs?"
+  |> Raxol.Agent.Stream.react(
     backend: backend,
     backend_opts: backend_opts,
-    log: MyLog,
-    conversation_id: "session-1"
+    actions: MyAgent.available_actions()
   )
+  |> Raxol.Agent.Stream.collect()
+
+IO.puts(result.content)
 ```
+
+`react/2` returns a lazy stream of events (`{:text_delta, text}`, `{:tool_use, call}`,
+`{:tool_result, result}`, `{:done, info}`); `collect/1` drains it and returns the final
+`{:ok, info}`.
 
 The harness atom selects the provider: `:anthropic`, `:openai`, `:ollama`, `:lm_studio`,
 and more. See [Agent Framework](../features/AGENT_FRAMEWORK.md#backends).
@@ -124,7 +128,20 @@ end
 
 `Raxol.Agent.Actions.Skills.actions/0` is the three skill tools (`skills_list`, `skill_view`,
 `skill_manage`). An agent that does not define `available_actions/0` gets them from
-`skills_provider/0` alone. The same `Turn.run/3` call now offers skills.
+`skills_provider/0` alone. The skill tools read the store from the context of the call, so
+pass it to `react/2`:
+
+```elixir
+{:ok, result} =
+  "which skills do you have?"
+  |> Raxol.Agent.Stream.react(
+    backend: backend,
+    backend_opts: backend_opts,
+    actions: MyAgent.available_actions(),
+    context: %{skills: Raxol.Agent.Skills.provider_context(MyAgent.skills_provider())}
+  )
+  |> Raxol.Agent.Stream.collect()
+```
 
 - [Skill Authoring](../guides/SKILL_AUTHORING.md): how to write a `SKILL.md`.
 
@@ -140,6 +157,6 @@ ANTHROPIC_API_KEY=sk-ant-... mix run examples/agents/react_agent.exs   # real mo
 
 ## Where next
 
-- [Agent Framework](../features/AGENT_FRAMEWORK.md): teams, backends, the item-log, the tunnel.
+- [Agent Framework](../features/AGENT_FRAMEWORK.md): teams, backends, authorization.
 - [Agentic Commerce](../features/AGENTIC_COMMERCE.md): give the agent a wallet and spending limits.
 - [Why Raxol](../WHY_RAXOL.md): why an OTP runtime is the right substrate for agents.

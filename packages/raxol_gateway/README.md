@@ -30,8 +30,8 @@ unified session keying, and DM pairing authorization.
 - `Raxol.Gateway.Supervisor`: the daemon that ties them together.
 
 A session optionally records each inbound event and each successfully delivered
-outbound reply to a `:log` (any `append(server, conversation_id, items)`, e.g.
-`Conversation.Log`) keyed by a stable `conversation_id`. Adapter errors,
+outbound reply to a `:log` (any module with `append(server, conversation_id, items)`)
+keyed by a stable `conversation_id`. Adapter errors,
 exceptions, and exits emit `[:raxol_gateway, :session, :delivery_failed]` and do
 not create phantom outbound history. `SessionRouter.handoff/3` rebinds a
 conversation to another platform's route, reusing that `conversation_id` so the

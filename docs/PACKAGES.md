@@ -34,7 +34,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
 | `raxol_broker` (pre-alpha)                                 | `path: "packages/raxol_broker"`   | Fail-closed brokerage policy parsing and initialization |
 
-The **Harness** is the agent-session engine: the event contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_journal`, the command contract and the session processes in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`. The `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
+The **Harness** is the agent-session engine: the event contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_journal`, the session processes in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`. The `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
 `raxol_symphony`, the tracker-driven coding-agent orchestrator, left this repository on 2026-10-27 (ADR-0043). It is frozen at [DROOdotFOO/raxol-symphony](https://github.com/DROOdotFOO/raxol-symphony): archived, unpublished, its raxol dependencies pinned to `ce40937c4`.
 

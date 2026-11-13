@@ -70,10 +70,9 @@ every call and re-wraps, so a resize cannot leave a stale wrap behind.
   precedes the `guard: :always` ESC entry, so ESC dismisses an open overlay
   before it can interrupt a turn.
 - **Command bifurcation.** A resolved command is a plain
-  `%{type: atom(), payload: map()}` map, the same field names
-  `Raxol.Agent.Command` uses, so main raxol mints one without depending on
+  `%{type: atom(), payload: map()}` map, so main raxol mints one without depending on
   `raxol_agent`. `:interrupt` and `:steer` are the lane-crossing types and
-  leave through the `:command_sink` closure onto `Raxol.Harness.SessionLane`;
+  leave through the `:command_sink` closure;
   `:fold_toggle`, `:jump_next`, `:jump_prev`, `:expand_diff`, `:open_panel`,
   `:overlay_dismiss`, `:open_palette`, and the three `:open_*_picker` types
   never leave the UI lane.
@@ -116,9 +115,7 @@ destructive one visually.
   into `OverlayPicker.fuzzy_filter/3`, the `Raxol.UI.ListScorer` adapter;
   hosts that do not opt in keep the substring default. `g`, `s`, and `/` are
   plain letters gated `:not_composing`, so they never steal a character out of
-  the composer. `Raxol.UI.Components.Harness.Picker` is the sibling for the
-  other substrate, the Component-tree variant that ranks with
-  `ListScorer.rank/4` directly.
+  the composer.
 - One overlay is open at a time; the second one is refused, by name, instead
   of stacking.
 - Returning is evidential: `Raxol.Harness.UnreadDivider` records exactly one

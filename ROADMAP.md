@@ -59,7 +59,7 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 | Desktop app | Tauri shell over the LiveView surface with a Burrito'd BEAM sidecar (zero new UI); defaults the harness to `:openrouter` for the attribution funnel | L | SURFACE |
 | Metered tool gateway | Creative-media actions (`image`/`video`/`tts`/`transcribe`) behind an axol-hosted service that answers HTTP 402; any 402-speaking agent auto-pays per call via x402/Xochi (the commerce wedge) | M | RAILS |
 | Paid skills market | agentskills.io-format serializer + hub pull client + tradeable skills (a `SKILL.md` bundle with an ACP offering, settled on Base) | M | RAILS |
-| Migration on-ramp | `mix raxol.import --from hermes/openclaw`: SOUL.md -> persona, skills, allowlists -> PermissionHook | S | CATCH-UP |
+| Migration on-ramp | `mix raxol.import --from hermes/openclaw`: SOUL.md -> persona, skills, allowlists -> `Sandbox.Shell` | S | CATCH-UP |
 | Windows first-class | Tune the pure-Elixir driver + Windows CI + the PowerShell installer path | M | CATCH-UP |
 | OpenRouter funnel | Run the #414 live smoke with a real key, confirm the `openrouter.ai/apps?url=https://raxol.io` listing, bump site copy to v2.6 / 14 packages | S | Funnel |
 
@@ -95,7 +95,7 @@ One free, indexer-agnostic read layer over the chains we settle on, served as MC
 | Item | What | Effort | Status |
 | ---- | ---- | ------ | ------ |
 | `Raxol.MCP.Aggregator` | The one missing conversion direction: upstream MCP server -> `Raxol.MCP.Registry` tool defs, over the existing `MCP.Client`, with a janitor lifecycle and `admit/1` bounds | S | Planned |
-| Package skeleton | `raxol_web3` at 0.1.0, standalone on `raxol_core` + `raxol_mcp` + `req`; `Backend` behaviour (6 required + 8 optional callbacks, CAIP-2/10/19 refs, opaque cursors) + `Stub` in `lib/`; move `ChainReader`, `Tron.Address`, `Pxe.Client`, `Payments.Poll` down with shims; rate limiting reuses `Raxol.Core.TokenBucket`, and a `Cache` behaviour + ETS adapter is built here since `Raxol.Agent.Cache` is not reachable from this graph | L | Planned |
+| Package skeleton | `raxol_web3` at 0.1.0, standalone on `raxol_core` + `raxol_mcp` + `req`; `Backend` behaviour (6 required + 8 optional callbacks, CAIP-2/10/19 refs, opaque cursors) + `Stub` in `lib/`; move `ChainReader`, `Tron.Address`, `Pxe.Client`, `Payments.Poll` down with shims; rate limiting reuses `Raxol.Core.TokenBucket`, and a response cache over one owned ETS table is built here | L | Planned |
 | EVM backend | Blockscout REST v2 + Chainscout resolution (746 chains, keyless, includes 4663) + RPC fallback. Identifies honestly and treats a Cloudflare challenge as backend-unhealthy so the router fails over, rather than sending a browser User-Agent; per-chain health checks (base and polygon were 500ing) | M | Planned |
 | Tron backend | TronGrid MCP (149 tools, keyless, verified live) and SQD Portal via `mcp_proxy`; TronScan secondary, pinned to a serialized policy since parallel calls on one session fail | S | Planned |
 | Solana backend | SQD Portal `solana-mainnet` + public RPC fallback. Requests per second binds long before monthly volume does | S | Planned |
