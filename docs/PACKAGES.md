@@ -18,7 +18,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |
 | [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.7"}`   | Plugin SDK, testing, generator             |
 | [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.7"}`   | Sensor fusion (zero deps)                  |
-| [`raxol_journal`](https://hex.pm/packages/raxol_journal)   | `{:raxol_journal, "~> 2.7"}`  | Session journal, event contract            |
+| `raxol_journal` (not yet on Hex)                           | `path: "packages/raxol_journal"` | Session journal, event contract         |
 
 ## Agents
 
