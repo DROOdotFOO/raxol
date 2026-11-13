@@ -2,7 +2,7 @@
 
 **Contract-shape status.** This fixture is hand-authored, not recorded from
 a live agent run. Every `family: meta, type: extract` envelope here matches
-the frozen `extract` entry in `Raxol.Agent.Meta.Registry` (required payload
+the frozen `extract` contract shape (required payload
 keys `[:class, :op, :item, :refs]`, scope `:session`) — that much is load-
 bearing and verified. The per-class `item` field shapes consumed by
 `Raxol.Harness.PanelProjection` (worktracks: `id`/`lane`/`title`/`status`;

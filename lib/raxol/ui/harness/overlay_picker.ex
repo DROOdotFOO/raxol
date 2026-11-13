@@ -13,23 +13,11 @@ defmodule Raxol.UI.Harness.OverlayPicker do
   a query row plus a scrollable window of matches, anchored above the
   composer, never a centered modal over history.
 
-  ## `Raxol.UI.Components.Harness.Picker` vs. this module
-
-  `Raxol.UI.Components.Harness.Picker` is the Component-tree variant:
-  fuzzy-ranked matching with an inline preview, mounted through the
-  normal `Preparer -> LayoutEngine -> UIRenderer` pipeline, awaiting a
-  Component host. This module is the answer for the OTHER substrate --
-  the byte-level, pinned-footer-viewport rendering path
-  (`InlineAuthority`/`FlatAuthority`) that has no Component tree to mount
-  anything into at all. The two are siblings serving different hosts,
-  not a migration of one into the other.
-
   ## `filter_fn` is the fuzzy seam
 
   `filter_fn` (arity 3: `(query, items, label_fn) -> [item]`) is exactly
-  where a future fuzzy ranker -- the same kind of scorer
-  `Raxol.UI.Components.Harness.Picker` already uses for its own matching
-  -- drops in without touching `handle_key/2`'s dispatch at all: swap the
+  where a fuzzy ranker drops in without touching `handle_key/2`'s dispatch
+  at all: swap the
   option, keep every keystroke/selection/render mechanism unchanged. The
   default is deliberately simple and honest about it: case-insensitive
   substring matching (`label_fn.(item)` downcased, `query` downcased,

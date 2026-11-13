@@ -190,26 +190,16 @@ defmodule Raxol.UI.Harness.Keymap do
   verified across the real termbox and ANSI wires by `InputEvent`'s own
   tests, and Composer does not otherwise bind it.
 
-  ## Command shape: reusing the agent command channel without a compile-time dependency
+  ## Command shape
 
-  `packages/raxol_agent` owns the live command struct
-  (`Raxol.Agent.Command`, `%Command{type: atom(), payload: map()}`)
-  and the harness protocol's validation seam (`decode/1`). Main
+  `command()` is a **plain map** -- `%{type: atom(), payload: map()}`. Main
   `raxol` does not (and per the package dependency graph, must not) depend
   on `raxol_agent` -- this module ships in the harness-UI lane, which is
-  fixture-driven and requires no agent lane. Per the documented cross-package convention
-  (`docs/development/README.md#package-boundaries`: "Struct patterns across package boundaries use map
-  patterns... instead of struct patterns"), `command()` here is a **plain
-  map** with the *same field names* as the struct -- `%{type: atom(), payload:
-  map()}` -- not the struct. This is not a parallel command type: it is the
-  identical wire shape, one `struct(Raxol.Agent.Command, cmd)` away from
-  the real thing at the one boundary (the live wiring) that actually
-  depends on `raxol_agent`.
+  fixture-driven and requires no agent lane, and struct patterns do not
+  cross package boundaries (`docs/development/README.md#package-boundaries`).
 
-  `:interrupt` mirrors the agent's existing type verbatim (empty payload, same as
-  its own `:interrupt` validation). `:steer` mirrors the protocol's
-  documented `steer` type
-  (`%{text}`) -- the keymap emits an empty payload
+  `:interrupt` carries an empty payload. `:steer` carries
+  `%{text}` -- the keymap emits an empty payload
   since it has no access to composer text (a pure keymap
   takes the event + a *small* mode context, not component state); the
   assembly layer that already has the composer's buffer fills `payload.text`

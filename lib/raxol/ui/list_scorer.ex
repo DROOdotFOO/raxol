@@ -11,8 +11,8 @@ defmodule Raxol.UI.ListScorer do
   list-item ranking) that happens to share the word "fuzzy". Folding this
   into `Search.Fuzzy` would conflate the two.
 
-  Used by `Raxol.UI.Components.Harness.Picker` (the overlay picker
-  primitive, AD-U3) and any future "pick one of N" projection (palette,
+  Used by `Raxol.UI.Harness.OverlayPicker.fuzzy_filter/3` and any future
+  "pick one of N" projection (palette,
   session picker, jump-to-block, file mentions -- F2's eventual sources).
 
   ## Algorithm

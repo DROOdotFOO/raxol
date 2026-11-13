@@ -27,9 +27,7 @@ defmodule Raxol.Harness.Surface.Golden do
      moduledoc ("The elapsed ticker and R11 (no wall-clock in the default
      suite)") documents that `render/2` never calls
      `System.monotonic_time/1` or any wall-clock function -- elapsed is a
-     pure subtraction of two caller-supplied integers. `StallDetector`'s
-     notion of time is likewise caller-owned and is never fed into this
-     render path at all (this module never touches `StallDetector`).
+     pure subtraction of two caller-supplied integers.
 
   2. **Environment.** An explicit `:mode` option to `Surface.new/2` bypasses
      `ModeSelect.select_with_reason/3` entirely (see that function's own

@@ -743,8 +743,7 @@ defmodule Raxol.Harness.Surface do
       the moduledoc's "Command bifurcation" section). `nil` keeps
       today's honest stubs untouched; a fun receives
       `%{type: :interrupt, payload: %{}}` or `%{type: :steer, payload:
-      %{text: composer_text}}` -- see `Raxol.Harness.SessionLane` for the
-      seam a live implementation dispatches through on the other side.
+      %{text: composer_text}}`.
     * `:stream_open` (default `false`) -- declares that more events may
       still arrive beyond whatever `append_events/2` has delivered so
       far, so the reveal is never treated as finished merely for being
@@ -1094,9 +1093,7 @@ defmodule Raxol.Harness.Surface do
   @doc """
   Appends `events` (event-shaped maps -- the same fixture wire shape
   `advance/2` already consumes) to `model.events`. This is the live-session
-  seam: a `Raxol.Harness.SessionLane` subscriber normalizes each incoming
-  live event through `Raxol.Harness.EventBoundary.normalize/1` upstream of
-  this call, then hands the result here. Appended events are revealed with
+  seam: the caller hands already-normalized live events here. Appended events are revealed with
   `advance/2` exactly like fixture events -- there is no separate reveal
   path for "live" vs. "fixture" once an event has landed in `model.events`.
 
@@ -1779,8 +1776,7 @@ defmodule Raxol.Harness.Surface do
 
   # Live command_sink: dispatch and leave the model otherwise unchanged --
   # no stub notice (the embedder owns pending/ack rendering via
-  # `put_lane_notice/2`; the real acknowledgment is event-observed, see
-  # `Raxol.Harness.SessionLane`'s moduledoc). Must precede the plain
+  # `put_lane_notice/2`; the real acknowledgment is event-observed). Must precede the plain
   # stub clause below, which stays as the `command_sink == nil` fallback.
   defp dispatch_command(%{command_sink: sink} = model, %{type: :interrupt})
        when is_function(sink, 1) do

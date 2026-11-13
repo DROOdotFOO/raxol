@@ -68,8 +68,7 @@ defmodule Raxol.Harness.StatusStrip do
   | `Cost`  | session cost   | `cost`                                 |
 
   One conditional notice sits outside the slot system: an optional
-  `:stall_verdict` entry (the stall detector's one integration seam --
-  see `Raxol.Harness.StallDetector` and the private `stall_notice/1`)
+  `:stall_verdict` entry (see the private `stall_notice/1`)
   prepends an `ALERT: <evidence>` segment at the very highest priority
   when, and only when, the verdict is `:stalled`/`:looping` with a
   non-empty evidence summary.
@@ -218,8 +217,8 @@ defmodule Raxol.Harness.StatusStrip do
 
   @doc """
   The default "slow but plausible" threshold for the Stage elapsed
-  ticker, in milliseconds. Public so the stall detector's no-progress
-  signal formalizes THIS heuristic instead of inventing a parallel
+  ticker, in milliseconds. Public so a caller computing a stall verdict
+  reuses THIS heuristic instead of inventing a parallel
   constant -- the strip stays the single source of truth for what
   "quiet too long" means.
   """
@@ -267,12 +266,10 @@ defmodule Raxol.Harness.StatusStrip do
 
   # -- stall verdict notice -------------------------------------------------
 
-  # The stall detector's one integration seam (see
-  # `Raxol.Harness.StallDetector`): an optional `:stall_verdict` state
-  # entry -- the detector's verdict struct or any map of the same shape.
-  # Only `:stalled` / `:looping` render; `:suspect` is a pre-alarm the
-  # detector surfaces for callers that want it, deliberately kept off
-  # the strip (the same false-alarm economy behind its honesty floor).
+  # An optional `:stall_verdict` state entry: a map with a `:class` and an
+  # `:evidence` summary. Only `:stalled` / `:looping` render; `:suspect` is
+  # a pre-alarm deliberately kept off the strip (the same false-alarm
+  # economy behind its honesty floor).
   #
   # This is a conditional NOTICE, not a fifth labelled slot: the
   # always-render-`—` convention exists so missing *data* is visibly
@@ -283,8 +280,7 @@ defmodule Raxol.Harness.StatusStrip do
   # and unlike needs-input it arrives with no other on-screen trace.
   #
   # No notice ever renders without evidence text: an alarm the operator
-  # cannot act on is noise (the detector's own law, enforced again here
-  # defensively). Evidence summaries embed tool names straight from
+  # cannot act on is noise. Evidence summaries embed tool names straight from
   # agent events -- the same injection surface as `turn_stage` -- so the
   # summary passes through the same control-character sweep.
   defp stall_notice(state) do

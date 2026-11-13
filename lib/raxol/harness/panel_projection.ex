@@ -5,12 +5,12 @@ defmodule Raxol.Harness.PanelProjection do
 
   ## Frozen contract vs. contract-shape assumption
 
-  This module builds against the **frozen** meta-event contract shapes: the
-  `extract` entry in `Raxol.Agent.Meta.Registry` (required payload keys
+  This module builds against the **frozen** meta-event contract shape of
+  the `extract` event (required payload keys
   `[:class, :op, :item, :refs]`, scope `:session`), and against contract-
-  shape fixtures authored to that registry
-  (`test/fixtures/harness/sessions/projection-panels.jsonl`). The registry
-  entry is load-bearing and settled. The per-class `item` field shapes this
+  shape fixtures authored to it
+  (`test/fixtures/harness/sessions/projection-panels.jsonl`). That shape
+  is load-bearing and settled. The per-class `item` field shapes this
   module reads (worktracks: `id`/`lane`/`title`/`status`; memory:
   `key`/`value`; plan: `id`/`title`/`status`) are **contract-shape
   ASSUMPTIONS** — they must be verified against real agent-emitted `extract`
