@@ -198,9 +198,8 @@ defmodule Raxol.Agent.Backend.Resolver do
   # A stored `op://` reference cannot resolve while the CLI is absent or signed
   # out, so probing one here is a shell-out per provider that is guaranteed to
   # fail. Against a LOCKED vault each probe additionally raises a desktop
-  # authorization prompt and then waits out the full `op` timeout, and there is
-  # one per provider: measured, that turned the diagnostic into a 12-to-22 second
-  # stall where `op_status/0` alone accounted for under 7s of it.
+  # authorization prompt and then waits out the full `op` timeout, one per
+  # provider: 12 to 22 seconds in all, of which `op_status/0` is under 7.
   #
   # Skipping costs no information. `diag_note/3` already answers a stored
   # reference under a signed-out CLI with "run `op signin`" -- the same
@@ -267,6 +266,7 @@ defmodule Raxol.Agent.Backend.Resolver do
     cond do
       op_ref(spec.harness) && op != :ok -> op_hint(op)
       empty_env_key(spec) -> "#{empty_env_key(spec)} is set but empty"
+      op_ref(spec.harness) -> "op reference stored, but it could not be read"
       true -> nil
     end
   end

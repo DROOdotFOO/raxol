@@ -431,6 +431,54 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     end
   end
 
+  describe "diagnostics/0 against a signed-in vault that refuses a read" do
+    # The fake `op` below is a `#!/bin/sh` script.
+    @describetag :unix_only
+
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-op-refuse-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      fake_op = Path.join(dir, "op")
+
+      # Signed in, and every `read` fails at once: the item was deleted or moved.
+      File.write!(fake_op, """
+      #!/bin/sh
+      case "$1" in
+        whoami) exit 0 ;;
+      esac
+      exit 1
+      """)
+
+      File.chmod!(fake_op, 0o755)
+
+      prev_path = System.get_env("PATH")
+      System.put_env("PATH", dir <> ":" <> (prev_path || ""))
+
+      on_exit(fn ->
+        System.put_env("PATH", prev_path || "")
+        File.rm_rf!(dir)
+      end)
+
+      :ok
+    end
+
+    test "a stored reference that cannot be read says so" do
+      System.put_env("RAXOL_ANTHROPIC_OP", "op://vault/anthropic/credential")
+
+      diag = Resolver.diagnostics()
+      anthropic = Enum.find(diag.providers, &(&1.harness == :anthropic))
+
+      assert diag.op == :ok
+      refute anthropic.available?
+      assert anthropic.note =~ "could not be read"
+    end
+  end
+
   describe "resolve/1 opts" do
     # The fake `op` below is a `#!/bin/sh` script.
     @describetag :unix_only
