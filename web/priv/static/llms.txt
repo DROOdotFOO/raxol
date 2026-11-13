@@ -32,7 +32,7 @@ Governance: an ALLOW/ASK/DENY authorization engine gates every tool call, and a 
 
 - raxol `{:raxol, "~> 2.7"}`: Full framework
 - raxol_agent `{:raxol_agent, "~> 2.7"}`: AI agents
-- raxol_mcp `{:raxol_mcp, "~> 2.8"}`: MCP server
+- raxol_mcp `{:raxol_mcp, "~> 2.7"}`: MCP server
 - raxol_payments `{:raxol_payments, "~> 0.3"}`: Agent commerce
 - raxol_liveview `{:raxol_liveview, "~> 2.7"}`: LiveView bridge
 - raxol_sensor `{:raxol_sensor, "~> 2.7"}`: Sensor fusion

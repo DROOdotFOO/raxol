@@ -710,6 +710,26 @@ defmodule Raxol.Agent.McpToolsTest do
 
       assert agent_tools() == []
     end
+
+    @tag mode: :mcp, mcp: false
+    test "unset, a start under Raxol.Supervisor registers nothing and does not wait on it" do
+      registry = :"mcp_tools_registry_#{uniq()}"
+      server = :"mcp_tools_server_#{uniq()}"
+      Process.put(:mcp, {registry, server})
+      start_mcp()
+      stop_supervised!(McpTools)
+
+      spec = %{
+        id: McpTools,
+        start: {McpTools, :start_link, [[registry: registry, server: server]]},
+        restart: :temporary
+      }
+
+      assert {:ok, _pid} = Supervisor.start_child(Raxol.Supervisor, spec)
+      on_exit(fn -> Supervisor.terminate_child(Raxol.Supervisor, McpTools) end)
+
+      assert agent_tools() == []
+    end
   end
 
   @doc false

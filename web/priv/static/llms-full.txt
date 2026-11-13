@@ -1817,7 +1817,7 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------ |
 | [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.8"}`     | Behaviours, events, config, plugins        |
 | [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.7"}` | Terminal emulation, termbox2 NIF           |
-| [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.8"}`      | MCP server, client, registry, test harness |
+| [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.7"}`      | MCP server, client, registry, test harness |
 | [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |
 | [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.7"}`   | Plugin SDK, testing, generator             |
 | [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.7"}`   | Sensor fusion (zero deps)                  |
