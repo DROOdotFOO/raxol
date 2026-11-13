@@ -358,9 +358,8 @@ defmodule Raxol.Journal.Test.FaultJournal do
 
   # --- shared runtime setup helpers -------------------------------------------
   #
-  # The bridge/session-based invariant tests need the same app-level singletons
-  # the existing keystone tests bootstrap. Kept here so every module shares one
-  # idiom.
+  # Invariant tests that run a bridge or a session need a few app-level
+  # singletons. Kept here so every module shares one idiom.
 
   @doc false
   def ensure_registry(keys, name) do

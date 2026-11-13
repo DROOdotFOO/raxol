@@ -1,6 +1,6 @@
 defmodule Raxol.Agent.Invariants.HarnessMetaTest do
   @moduledoc """
-  The harness proving itself (harness-invariants.md, meta-invariants):
+  The harness proving itself (the meta-invariants):
 
     * m1 — dead-injector detection: every named fault site actually injects
       (each one is fired here against a real journal and its counter observed),

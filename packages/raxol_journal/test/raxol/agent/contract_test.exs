@@ -68,16 +68,15 @@ defmodule Raxol.Agent.ContractTest do
       refute Contract.evidence_status(%{final: true, usage: %{}}) == :absent
     end
 
-    # S1 (PR #631, Drew's reproduction) — the decoder must be TOTAL. The
-    # `evidence` enum is grow-only (AD-11 upcast-on-read): a reader on 1.1.0
-    # WILL meet a future 1.2.0 journal carrying a 4th value, and a corrupt or
-    # forged line can carry anything. Before the fix `normalize_evidence/1` had
-    # exactly three clauses and raised `FunctionClauseError` on the replay
-    # surface. Every unrecognized value must degrade to `:unknown`, never crash,
-    # never `:accepted`.
-    test "a future/unknown string enum value decodes to :unknown (Drew's exact repro), never crashes" do
-      # Drew's reproduction: a 1.2.0 journal's 4th evidence value replayed as a
-      # JSON string on a 1.1.0 reader.
+    # The decoder must be TOTAL. The `evidence` enum is grow-only: a reader
+    # WILL meet a journal from a later version carrying a 4th value, and a
+    # corrupt or forged line can carry anything. With only the three known
+    # clauses `normalize_evidence/1` would raise `FunctionClauseError` on the
+    # replay surface. Every unrecognized value must degrade to `:unknown`,
+    # never crash, never `:accepted`.
+    test "a future/unknown string enum value decodes to :unknown, never crashes" do
+      # A later version's 4th evidence value replayed as a JSON string on this
+      # reader.
       assert Contract.evidence_status(%{"evidence" => "verified_v2"}) == :unknown
     end
 
@@ -96,7 +95,7 @@ defmodule Raxol.Agent.ContractTest do
     end
 
     test "an unrecognized authoritative marker never launders to :accepted, even with refs present" do
-      # S2 hardening face: the `evidence` key IS present (not a legacy record),
+      # The `evidence` key IS present (not a legacy record),
       # so the refs-grandfather arm must never be consulted — a forged/unknown
       # marker value sitting atop a refs list decodes :unknown, NOT :accepted.
       assert Contract.evidence_status(%{"evidence" => "bogus", "refs" => [3]}) ==

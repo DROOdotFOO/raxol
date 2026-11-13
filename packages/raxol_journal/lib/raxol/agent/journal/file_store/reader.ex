@@ -299,8 +299,8 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
   end
 
   # The writer stamps strictly consecutive integer ids, so any healthy journal
-  # replays as prev + 1 steps. The first record anchors the sequence (a later
-  # GC unit may legally drop a prefix, so it need not be id 1).
+  # replays as prev + 1 steps. The first record anchors the sequence: it need
+  # not be id 1, so a journal whose prefix was truncated still replays.
   defp continuous?([], %{"id" => id}) when is_integer(id), do: true
 
   defp continuous?([%{"id" => prev} | _], %{"id" => id})

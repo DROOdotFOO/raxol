@@ -3,13 +3,12 @@ defmodule Raxol.Agent.Journal.Tip do
   The FROZEN conversational-tip predicate — the single contract implementation
   of `conversational?/1` and `tip/2`.
 
-  Frozen contract. U4 (reattach, AD-15/FI-12) locates the resume
-  point by a backward scan under this predicate; U9 (checkpoint, AD-10) validates
-  its stamped `tip_offset` against it. Both units consume THIS module — neither
-  re-invents tip semantics (that shared re-invention was the U4∥U9 false parallel
-  the freeze dissolves at the contract layer).
+  Frozen contract. A resume locates its point by a backward scan under this
+  predicate. `Raxol.Agent.Journal.Records.Checkpoint.FileBackend` validates a
+  stamped `tip_offset` against the same predicate, with its own copy of the
+  whitelist.
 
-  ## The predicate (verbatim from §1.1)
+  ## The predicate
 
       conversational?(record) :=
         record.kind == "event"
@@ -24,12 +23,12 @@ defmodule Raxol.Agent.Journal.Tip do
   ## Frozen decisions this module encodes
 
     * **The grandfather clause.** A record with no `"kind"` reads as `"event"`; a
-      record with no `"branch_id"` reads as `"main"`. Every pre-freeze journal
-      (which stamps neither) therefore keeps its historical tip byte-for-byte.
+      record with no `"branch_id"` reads as `"main"`. Every journal written
+      before those keys existed therefore keeps its historical tip byte-for-byte.
     * **The closure rule.** `CONVERSATIONAL` is a whitelist and the ONLY door:
       every future record kind and every future `family: "loop"` type is
       tip-excluded unless explicitly added here. Nothing becomes a tip by default.
-    * **The Dormammu exclusion (FI-12).** `state_change`, `idle`, every
+    * **The exclusions.** `state_change`, `idle`, every
       `family: "meta"` event, every non-`"event"` kind, and — deliberately, though
       it is `family: "loop"` — `woken` are excluded. A trailing checkpoint / meta
       event / idle marker / `woken` must never be selected as the tip.
@@ -38,12 +37,11 @@ defmodule Raxol.Agent.Journal.Tip do
 
   This module is pure and reader-side only: it never touches the journal, the
   bus, or a writer. It reads decoded journal records (string-keyed maps) as
-  produced by the tolerant Reader or by an independent raw decoder — that dual
-  sourcing is what the U4-R dual-oracle tip-determinism property (P-JS2) checks.
+  produced by the tolerant Reader or by an independent raw decoder.
   """
 
-  # CONVERSATIONAL — the frozen, grow-only whitelist (§1.1). `item_started` and
-  # `approval_requested` are members from day one (OQ-JS3 RULED: INCLUDE). Adding
+  # CONVERSATIONAL — the frozen, grow-only whitelist. `item_started` and
+  # `approval_requested` are members. Adding
   # a member is a `schema_version` minor bump; removing one is forbidden (it would
   # silently move historical tips).
   @conversational ~w(
@@ -56,7 +54,7 @@ defmodule Raxol.Agent.Journal.Tip do
     approval_requested
   )
 
-  @doc "The frozen CONVERSATIONAL whitelist (§1.1), as a list of type strings."
+  @doc "The frozen CONVERSATIONAL whitelist, as a list of type strings."
   @spec conversational_types() :: [String.t()]
   def conversational_types, do: @conversational
 
@@ -100,10 +98,10 @@ defmodule Raxol.Agent.Journal.Tip do
 
   # --- field access with the frozen grandfather defaults ----------------------
 
-  # §1.1 grandfather clause: absent "kind" ⇒ "event".
+  # Grandfather clause: absent "kind" ⇒ "event".
   defp kind(record), do: to_string(Map.get(record, "kind", "event"))
 
-  # §1.1 grandfather clause: absent "branch_id" ⇒ "main".
+  # Grandfather clause: absent "branch_id" ⇒ "main".
   defp branch_id(record), do: to_string(Map.get(record, "branch_id", "main"))
 
   # family/type have no default — a real event record always stamps them, and a

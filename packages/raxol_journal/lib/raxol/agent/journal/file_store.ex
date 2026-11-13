@@ -10,7 +10,7 @@ defmodule Raxol.Agent.Journal.FileStore do
       ├── journal/
       │   ├── 000001.jsonl   # framed JSONL, size-capped ascending segments
       │   └── 000002.jsonl
-      └── snapshots/         # checkpoint payloads (populated by a later unit)
+      └── snapshots/         # checkpoint payloads, named by SHA-256
 
   The base directory defaults to `~/.raxol/sessions/`, overridable via the
   `:base_dir` option or the `RAXOL_SESSIONS_DIR` env var.

@@ -1,34 +1,30 @@
 defmodule Raxol.Agent.Journal.Records.Checkpoint do
   @moduledoc """
-  U9 — checkpoint pointer records (AD-10 / AD-3a).
+  Checkpoint pointer records.
 
   A checkpoint is an **in-log pointer record**, not a second store. The snapshot
   payload lives content-addressed and out-of-line at
   `<session>/snapshots/<sha256-hex>.json`; the `checkpoint` record carries only
   the pointer + hash + the conversational tip it was taken at. It is appended
   through the **same single Writer** as every other record, consuming exactly one
-  offset from the one id space (JS-FREEZE §1.1 — the offset law;
-  single-counter lockstep).
+  offset from the one id space.
 
-  This module began as the enabler skeleton for the permanent U9-R red suite:
-  the frozen record shape (`t/0`) and the `write/3` / `restore/2` seam were
-  declared ahead of implementation so the red suite could compile and pin the
-  contract. The implementation has since landed: the default backend (no
-  registration) is the file-store `FileBackend` below, and `write`/`restore`
-  dispatch to it. `{:error, :not_implemented}` remains only the explicit
-  nil-backend opt-out.
+  The record shape (`t/0`) and the `write/3` / `restore/2` seam are a behaviour.
+  The default backend (no registration) is the file-store `FileBackend`, and
+  `write`/`restore` dispatch to it. `{:error, :not_implemented}` is only the
+  explicit nil-backend opt-out.
 
-  ## Write discipline (frozen — JS-FREEZE §1.1)
+  ## Write discipline (frozen)
 
     * The snapshot file is written **before** the record is appended (a record
-      cannot be named by its own offset before it exists — chicken/egg), via the
-      FI-8 atomic temp+fsync+rename. A crash between file-write and record-append
-      leaves a harmless orphan file (FI-7: never deleted implicitly).
+      cannot be named by its own offset before it exists), via an atomic
+      temp+fsync+rename. A crash between file-write and record-append leaves a
+      harmless orphan file, which is never deleted implicitly.
     * `snapshot_hash` = lowercase-hex `sha256` of the snapshot file bytes; it is
       verified at restore. A missing file → `{:error, :snapshot_missing}`; a
       hash mismatch → `{:error, :snapshot_corrupt}` — and in **both** cases the
       journal stays `:ok` and nothing is deleted.
-    * `snapshot_ref: nil` is a legal tip-only pointer (OQ-JS1 RULED LEGAL);
+    * `snapshot_ref: nil` is a legal tip-only pointer;
       restore then falls back to a full `fold(0..tip_offset)`.
     * `tip_offset` is frozen at write time and validated at write time: the
       record it names MUST satisfy `conversational?/1` on the checkpoint's own
@@ -36,31 +32,29 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
     * A checkpoint MUST NOT be appended mid-turn (between `turn_started` and its
       close) nor mid-reserve (between a spend-gate reserve and its terminal),
       else `{:error, :mid_turn}` / `{:error, :mid_reserve}`.
-    * FI-10: the record body carries **no model content** — pointer + hash only.
-      Snapshot-content sanitization + MS secret exclusion bind to the MS codec,
-      which is not yet landed: the interim surrogate codec typed-rejects any
-      non-JSON-native model (`{:error, :surrogate_backend_unbound}`) and writes
-      a JSON-safe model **verbatim, with no redaction** — see the "FI-10 scope
-      note" in `Checkpoint.FileBackend`'s moduledoc. Re-bind redaction together
-      with the codec when MS lands.
+    * The record body carries **no model content** — pointer + hash only.
+      The default backend's surrogate codec typed-rejects any non-JSON-native
+      model (`{:error, :surrogate_backend_unbound}`) and writes a JSON-safe
+      model **verbatim, with no redaction** — see "No redaction" in
+      `Checkpoint.FileBackend`'s moduledoc.
   """
 
   alias Raxol.Agent.Journal.FileStore
 
   @kind "checkpoint"
 
-  # Grow-only `reason` enum (JS-FREEZE §1.1). Unknown reasons are tolerated on
+  # Grow-only `reason` enum. Unknown reasons are tolerated on
   # READ (forward-compat, reader-seam tolerance); only these are ever emitted.
   @reasons ~w(manual compaction auto)
 
   # The complete frozen field set of a checkpoint record (string keys on disk).
-  # Used by the red suite's FI-10 contour to assert the record body carries no
-  # model content — pointer + hash only.
+  # Tests use it to assert the record body carries no model content — pointer
+  # + hash only.
   @record_keys ~w(id schema_version kind branch_id session_id ts tip_offset snapshot_ref snapshot_hash reason)
 
   @typedoc """
   A `checkpoint` record — the frozen on-disk shape (string keys on disk; this is
-  the Elixir-side view). Every field below is frozen by JS-FREEZE §1.1: none is
+  the Elixir-side view). Every field below is frozen: none is
   ever renamed, repurposed, type-narrowed, or flipped optional→required.
   """
   @type t :: %{
@@ -76,7 +70,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
           reason: String.t()
         }
 
-  @typedoc "A folded harness model (MS-owned snapshot content; opaque to JS-FREEZE)."
+  @typedoc "A folded harness model: snapshot content, opaque to this module."
   @type model :: term()
 
   @doc "The record `kind` string every checkpoint carries."
@@ -119,8 +113,8 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   Restore the model captured by the latest healthy checkpoint of `journal`.
 
   Locates the latest healthy checkpoint, verifies `sha256(bytes) ==
-  snapshot_hash`, loads the snapshot (MS codec), and folds the journal forward
-  from `tip_offset` — equal to a full fold over the persistent slice (P-JS4). A
+  snapshot_hash`, loads the snapshot, and folds the journal forward
+  from `tip_offset` — equal to a full fold over the persistent slice. A
   missing/corrupt snapshot surfaces
   `{:error, :snapshot_missing | :snapshot_corrupt}` with the journal left `:ok`
   and nothing deleted. A tip-only checkpoint (`snapshot_ref: nil`) falls
@@ -133,7 +127,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   Restore the model captured by ONE specific already-read `checkpoint` record of
   `journal` (the hardened single-checkpoint restore).
 
-  This is the seam U10 compaction resume delegates to for its newest-first walk:
+  This is the seam a compaction resume delegates to for its newest-first walk:
   it applies the SAME restore-path hardening as `restore/2`
   (`tip_offset`/`snapshot_ref` presence guard ⇒ `:malformed_checkpoint`;
   `@ref_re` path-traversal reject ⇒ `:malformed_pointer`; snapshot size ceiling,
@@ -161,8 +155,8 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
 
   # A backend implementing `c:write/3` / `c:restore/2` may be injected via
   # `:persistent_term` under this key (how an alternate storage backend slots in
-  # behind the behaviour). The DEFAULT (no registration) is the landed
-  # `FileBackend` — the U9 file-store implementation. `put_backend(nil)` forces
+  # behind the behaviour). The DEFAULT (no registration) is `FileBackend`, the
+  # file-store implementation. `put_backend(nil)` forces
   # the inert `{:error, :not_implemented}` seam back on (e.g. to disable
   # checkpointing in a constrained deployment).
   @backend_key {__MODULE__, :backend}
@@ -207,17 +201,17 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
 
   defp backend, do: :persistent_term.get(@backend_key, @default_backend)
 
-  # --- GC protection floor (Drew MEDIUM; JS-FREEZE §1.1-GC) ------------------
+  # --- GC protection floor ----------------------------------------------------
 
   @doc """
   The GC-protected floor for `journal`'s already-read `records`: records at or
   above this offset MUST NEVER be truncated, so the checkpoint restore path
-  stays intact (**frozen law: GC never orphans checkpoints**, JS-FREEZE §1.1).
+  stays intact (**frozen law: GC never orphans checkpoints**).
 
   It is the `tip_offset` of the newest **healthy** checkpoint — the one resume
   actually restores from. "Healthy" means its snapshot is present and
   hash-verified (restore succeeds); a corrupt newest is skipped so the floor
-  lands on the older healthy checkpoint U10's fall-back restores from, never on
+  lands on the older healthy checkpoint a fall-back restore uses, never on
   a corrupt newest's higher tip (which would let GC truncate records the
   fall-back fold still needs — an orphaned fall-back tip). `:none` when no
   healthy checkpoint exists (nothing to protect).
@@ -250,8 +244,8 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   healthy tip resume actually falls back to. A GC writer with a journal handle
   MUST use `protected_floor/2`.
 
-  **Fail-closed on malformed checkpoints** (adversarial-review hardening): the
-  tolerant Reader accepts a truncated/adversarial checkpoint record missing
+  **Fail-closed on malformed checkpoints**: the
+  tolerant Reader accepts a truncated or hostile checkpoint record missing
   `id`/`tip_offset` (or carrying non-integer junk). Restore typed-rejects
   those (`:malformed_checkpoint`); this floor — the "never orphan a
   checkpoint" safety check — must not raise a `KeyError` on the same records.

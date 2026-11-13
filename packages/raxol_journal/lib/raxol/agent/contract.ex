@@ -43,21 +43,19 @@ defmodule Raxol.Agent.Contract do
       `"not_evidence"`, `"foreign_turn"`, `"stale_evidence"`,
       `"mutation_echo"`.
 
-  Before this marker, a rejected done and a never-offered done were
-  byte-identical on the wire (`%{usage, final: true}`, no `refs`), so a
-  replayed surface could not tell "offered but refused" from "never offered".
-  `evidence_status/1` decodes the field with the grandfather rule this gap
-  requires: an `evidence` key present is authoritative; a **legacy** record
-  (key absent) with `refs` present grandfathers to `:accepted` (the `refs`
-  carrier never lied); a legacy record with neither key present is genuinely
-  `:unknown` — it must NEVER be guessed as `:absent`, which would launder a
-  historical rejection into a false "never offered" claim.
+  A record without the marker cannot tell a rejected done from a never-offered
+  one: both are `%{usage, final: true}` with no `refs`. `evidence_status/1`
+  therefore decodes the field with a grandfather rule: an `evidence` key
+  present is authoritative; a **legacy** record (key absent) with `refs`
+  present grandfathers to `:accepted` (the `refs` carrier never lied); a
+  legacy record with neither key present is genuinely `:unknown` — it must
+  NEVER be guessed as `:absent`, which would launder a historical rejection
+  into a false "never offered" claim.
 
-  The journal `schema_version` default moved 1.0.0 -> 1.1.0
-  (`Raxol.Agent.Journal.FileStore.Writer`, additive per upcast-on-read) with
-  this payload growth; the pinned `v1.0.0` golden corpus stays literal "1.0.0"
-  and unrewritten (an old journal's records are never rewritten in place, only
-  decoded — covered by the grandfather rule above).
+  The marker is in journals written at `schema_version` 1.1.0 and later
+  (`Raxol.Agent.Journal.FileStore.Writer` stamps the version). The `v1.0.0`
+  golden corpus has none: an old journal's records are never rewritten in
+  place, only decoded through the grandfather rule above.
 
   ## Trust boundary — producer-stamped, journal-trusted
 
@@ -87,14 +85,13 @@ defmodule Raxol.Agent.Contract do
   `:unknown`, never `:accepted` (see `normalize_evidence/1`). A forged
   non-legacy line thus cannot launder a bogus marker into acceptance.
 
-  **Read-side re-derivation was considered and deliberately rejected.**
-  Re-running the gate at decode time would (a) require the whole journal +
-  turn + refs, coupling a pure single-record decode to journal state it does
-  not carry, and (b) resurrect exactly the display-side re-evaluation of
-  *open* gate predicates (staleness relative to *later* mutations) that must
-  NOT be frozen or recomputed at the display surface. Documenting the
-  append-only trust assumption is the honest close; a hostile-journal re-check
-  is out of scope for a producer-stamped durable marker.
+  **The decoder does not re-derive the verdict.** Re-running the gate at
+  decode time would (a) require the whole journal + turn + refs, coupling a
+  pure single-record decode to journal state it does not carry, and (b)
+  re-evaluate at the display surface the *open* gate predicates (staleness
+  relative to *later* mutations), which must NOT be frozen or recomputed
+  there. A hostile-journal re-check is out of scope for a producer-stamped
+  durable marker.
   """
 
   defmodule Event do
@@ -114,7 +111,7 @@ defmodule Raxol.Agent.Contract do
               tier: :durable,
               payload: %{},
               # --- envelope growth ---------------------------------------------
-              # All defaulted; every landed v0 event and every journal record
+              # All defaulted; every v0 event and every journal record
               # without these keys decodes to these values — the grandfather
               # clause. The contract-only-grows rule is honored: new fields
               # are optional-with-default, never required (removal / rename /
@@ -122,13 +119,13 @@ defmodule Raxol.Agent.Contract do
               scope: :session,
               provenance: %{source: :primary, trust: :trusted},
               actor: nil,
-              # The speculation branch this record belongs to (freeze §1.1).
+              # The speculation branch this record belongs to.
               # Optional-with-default "main"; a non-default branch is written to
-              # (and now read back from) the journal, "main" stays implicit on the
+              # (and read back from) the journal, "main" stays implicit on the
               # wire (grandfather-safe, byte-identical for default records — I2).
               branch_id: "main"
 
-    @typedoc "FI-5 provenance — grow-only; later keys (e.g. :model_family) are additive."
+    @typedoc "Provenance — grow-only; later keys (e.g. :model_family) are additive."
     @type provenance :: %{
             required(:source) => atom(),
             required(:trust) => :trusted | :tainted
@@ -218,12 +215,12 @@ defmodule Raxol.Agent.Contract do
   wins outright. A legacy record (key absent) with `refs` present
   grandfathers to `:accepted` — the `refs` carrier never lied about
   acceptance. A legacy record with **neither** key present is genuinely
-  `:unknown`: before this marker, a rejected done and a never-offered done
-  were wire-identical, so there is no way to tell them apart after the
-  fact. This case must NEVER decode as `:absent` — that would launder a
+  `:unknown`: without the marker, a rejected done and a never-offered done
+  are wire-identical, so there is no way to tell them apart. This case must
+  NEVER decode as `:absent` — that would launder a
   historical rejection into a false "never offered" claim.
 
-  Totality (S1): the decoder never crashes. An `evidence` value it does not
+  Totality: the decoder never crashes. An `evidence` value it does not
   recognize — a future grow-only enum value, a forged string, a garbage type —
   degrades to `:unknown` (fail-safe, never `:accepted`); see
   `normalize_evidence/1`. The decode is quaternary — `:accepted | :rejected |
@@ -233,7 +230,7 @@ defmodule Raxol.Agent.Contract do
 
   Trust: this reports the stamped enum, it does not re-derive the verdict from
   the journal — see the "Trust boundary" section in the moduledoc for what that
-  does and does not defend (S2).
+  does and does not defend.
   """
   @spec evidence_status(map()) :: :accepted | :rejected | :absent | :unknown
   def evidence_status(payload) when is_map(payload) do
@@ -254,7 +251,7 @@ defmodule Raxol.Agent.Contract do
   defp normalize_evidence(value) when value in [:absent, "absent"], do: :absent
 
   # Total fallthrough. The `evidence` enum is grow-only (upcast-on-read): a
-  # reader on 1.1.0 WILL meet a future 1.2.0 journal carrying
+  # reader WILL meet a journal from a later version carrying
   # a 4th value — exactly the grow-forward case the enum promises — and must
   # degrade, not `FunctionClauseError` on the replay surface. A corrupt or
   # forged line (`evidence: "bogus"`, a number, nil) lands here too. Every

@@ -1,15 +1,15 @@
 defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   @moduledoc """
-  U9 — the file-store backend for `Raxol.Agent.Journal.Records.Checkpoint`
-  (AD-10 / AD-3a). Implements the checkpoint **pointer-record** discipline over
-  a `Raxol.Agent.Journal.FileStore` session.
+  The file-store backend for `Raxol.Agent.Journal.Records.Checkpoint`.
+  Implements the checkpoint **pointer-record** discipline over a
+  `Raxol.Agent.Journal.FileStore` session.
 
   A checkpoint is an in-log pointer, not a second store: the snapshot payload is
   content-addressed and written out-of-line to `<session>/snapshots/<sha256>.json`
-  (FI-8 atomic temp+fsync+rename) **before** the pointer record is appended
+  (atomic temp+fsync+rename) **before** the pointer record is appended
   through the one single Writer, consuming exactly one offset from the one id
-  space (the offset law, JS-FREEZE §1.1). The record body carries only the
-  pointer + hash + tip — never model content (FI-10).
+  space. The record body carries only the pointer + hash + tip — never model
+  content.
 
   ## Write path (`write/3`)
 
@@ -19,7 +19,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
        be CONVERSATIONAL on the branch; **nothing is appended**;
     4. reject a mid-turn / mid-reserve write (`:mid_turn` / `:mid_reserve`);
     5. stage the snapshot file (content-addressed, atomic) — skipped for a
-       `nil` model, which is a legal tip-only pointer (OQ-JS1);
+       `nil` model, which is a legal tip-only pointer;
     6. append the pointer record through the single Writer ⇒ `{:ok, offset}`.
        The turn-boundary check is **re-run atomically at the commit
        point** (`FileStore.append_checked/3` — the check executes inside the
@@ -38,15 +38,15 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
       journal `:ok` and delete nothing), load the snapshot, then fold the
       CONVERSATIONAL tail (records with `id > tip_offset`) forward onto it.
 
-  Restore folds equal a full fold over the persistent slice (P-JS4).
+  A restore equals a full fold over the persistent slice.
 
   ## Restore-path hardening
 
     * **Bounded nesting BEFORE decode** — the raw snapshot bytes are pre-scanned
       (`nesting_within_bound?/1`, an O(n) byte walk that never builds a term)
       and rejected `:snapshot_corrupt` when JSON nesting exceeds
-      `@max_decode_depth` — **before** `Jason.decode/1` ever runs, so an
-      adversarial small-but-deep snapshot can never force the parser to
+      `@max_decode_depth` — **before** `Jason.decode/1` ever runs, so a
+      hostile small-but-deep snapshot can never force the parser to
       materialize an unbounded term. The depth-bounded structural walk
       (`safe_term?/2`) still runs after decode as defense in depth.
     * **`$s` deref-gadget guard** — a decoded map carrying a `"$s"` struct-module
@@ -60,51 +60,39 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
     * **Snapshot-size ceiling** — a snapshot file over `@max_snapshot_bytes` is
       refused (`:snapshot_corrupt`) rather than loaded whole.
 
-  ## Model fold (surrogate — re-bind to MS when it lands)
+  ## Model fold (surrogate)
 
-  The Snapshot codec (#559) owns serialization; this
-  backend owns only the pointer discipline. The concrete *fold* (applying
-  conversational events onto a model) is not yet frozen against the MS codec on
-  this branch, so it is the deterministic surrogate the U9-R red suite pins:
-  each CONVERSATIONAL event appends its `id` to `model["applied"]`. Re-bind
-  `fold_forward/3` (and `dump/1`) to the real MS fold when MS lands — the
-  round-trip *equation* (P-JS4) is codec-independent.
+  This backend owns the pointer discipline, not the model. It has no codec for
+  a harness model and no reducer for its events, so both are surrogates:
+  `dump/1` writes a JSON-native model as it is, and the *fold* (applying
+  conversational events onto a model) appends each CONVERSATIONAL event's `id`
+  to `model["applied"]`. The round-trip *equation* (a restore equals a full
+  fold) does not depend on the codec.
 
   ### Surrogate safety (this backend is the DEFAULT — it must fail loud)
 
-  Because this backend is the active default while the MS codec is pending,
-  the surrogate is gated rather than trusted:
+  Because this backend is the active default, the surrogate is gated rather
+  than trusted:
 
     * **Write** — `dump/1` typed-rejects any model the surrogate JSON codec
       cannot *faithfully* round-trip (structs, tuples, pids, refs, functions,
       atom keys/values, non-UTF-8 binaries, non-map top-level):
       `{:error, :surrogate_backend_unbound}`, nothing staged, nothing appended
-      — never an uncaught `Jason.EncodeError` crashing the caller. The error is
-      permanent-by-construction until the MS reducer lands and `dump/1` is
-      re-bound.
+      — never an uncaught `Jason.EncodeError` crashing the caller.
     * **Restore** — every successful restore through the surrogate is LOUD:
       it emits `[:raxol, :agent, :journal, :checkpoint, :surrogate]` telemetry
       (metadata `%{op: :restore, session_id:, tip_offset:}` — offsets only,
-      never content, FI-10) and logs a warning, so a caller can never mistake
+      never content) and logs a warning, so a caller can never mistake
       the surrogate `%{"applied" => [ids]}` fold for real harness state.
       Writes that stage a surrogate snapshot emit the same event with
       `op: :write`.
 
-  ### FI-10 scope note (sanitize / secret exclusion)
+  ### No redaction (sanitize / secret exclusion)
 
-  The freeze binds snapshot-content sanitization + MS secret exclusion to the
-  MS codec. The surrogate performs NO redaction: a JSON-safe model is written
+  The surrogate performs NO redaction: a JSON-safe model is written
   verbatim (plaintext) to `snapshots/` — the same trust domain and permissions
   as the journal segments, which already persist event payloads in plaintext.
-  The record body itself never carries model content (FI-10 proper). Re-bind
-  redaction together with `dump/1` when MS lands.
-
-  ### Acronym legend
-
-  AD-10/AD-3a checkpoint decisions · FI-7 never delete implicitly · FI-8 atomic
-  temp+fsync+rename · FI-10 no model content in records/telemetry · P-JS4
-  restore == full fold · OQ-JS1 tip-only pointer ruled legal · JS-FREEZE §1.1
-  the frozen record shape/offset law.
+  The record body itself never carries model content.
   """
 
   require Logger
@@ -117,7 +105,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   @reasons Raxol.Agent.Journal.Records.Checkpoint.reasons()
   @turn_closers Raxol.Agent.Journal.Records.Checkpoint.turn_closers()
 
-  # The frozen CONVERSATIONAL whitelist (JS-FREEZE §1.1 — the closure rule).
+  # The frozen CONVERSATIONAL whitelist (the closure rule).
   @conversational MapSet.new(~w(
     turn_started item_started item_completed
     turn_completed turn_canceled error approval_requested
@@ -148,8 +136,8 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   def write(_journal, _model, _opts), do: {:error, :invalid_journal}
 
   defp append_checkpoint(%FileStore{} = journal, model, tip, reason) do
-    # File-BEFORE-record (FI-8): a crash after this and before the append leaves
-    # a harmless content-addressed orphan (FI-7: never deleted implicitly).
+    # File-BEFORE-record: a crash after this and before the append leaves a
+    # harmless content-addressed orphan, which is never deleted implicitly.
     with {:ok, ref, hash} <- stage_snapshot(journal, model) do
       record = %{
         "kind" => @kind,
@@ -173,12 +161,12 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
       # INSIDE the single Writer against the freshest on-disk records, so
       # check-and-append is one atomic step and a checkpoint can never land
       # mid-turn through the race window. (A staged snapshot rejected here is a
-      # harmless content-addressed orphan, FI-7.)
+      # harmless content-addressed orphan.)
       FileStore.append_checked(journal, record, &check_turn_boundary/1)
     end
   end
 
-  # nil model ⇒ legal tip-only pointer (OQ-JS1): no snapshot file.
+  # nil model ⇒ legal tip-only pointer: no snapshot file.
   defp stage_snapshot(%FileStore{}, nil), do: {:ok, nil, nil}
 
   defp stage_snapshot(%FileStore{dir: dir} = journal, model) do
@@ -200,14 +188,14 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   def restore(%FileStore{} = journal, _opts) do
     with {:ok, records} <- read_records(journal),
          {:ok, checkpoint} <- newest_checkpoint(records),
-         # Delegates to the SAME hardened single-checkpoint restore U10
+         # Delegates to the SAME hardened single-checkpoint restore a
          # compaction resume uses — restore/2 IS restore_checkpoint/3 applied
          # to the newest checkpoint (structural resume-equivalence; no fork).
          {:ok, model} <- restore_checkpoint(journal, records, checkpoint) do
       # The restored model is the SURROGATE fold, not real harness state — be
       # loud so a caller can never mistake it for a real restore (see the
       # "Surrogate safety" moduledoc section). Telemetry carries offsets only,
-      # never content (FI-10).
+      # never content.
       surrogate_event(:restore, journal.session_id, Map.get(checkpoint, "tip_offset"))
 
       Logger.warning(
@@ -225,7 +213,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   @doc """
   Restore ONE specific already-read `checkpoint` record — the hardened
-  single-checkpoint restore U10 compaction resume delegates to for its
+  single-checkpoint restore a compaction resume delegates to for its
   newest-first walk. `restore/2` is exactly this applied to the newest
   checkpoint; both share the same validation + snapshot hardening so
   compaction-restore IS checkpoint-restore (structural resume-equivalence).
@@ -250,7 +238,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
         # The Reader is tolerant of a partial record; restore is NOT. Pick the
         # newest without `fetch!` (a missing `id` is sentinel-ranked, never a
         # raise); `restore_checkpoint/3` then validates the keys restore
-        # dereferences downstream so an adversarial/truncated checkpoint yields a
+        # dereferences downstream so a hostile or truncated checkpoint yields a
         # typed reject, not a KeyError.
         {:ok, Enum.max_by(cps, &Map.get(&1, "id", -1))}
     end
@@ -263,7 +251,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   # `tip_offset` must be a POSITIVE INTEGER, not merely present: a nil/absent
   # `tip_offset` would otherwise fold nothing forward (`id > nil` is always false
   # under Elixir term order), silently dropping the entire conversational tail
-  # (the zero-fold hazard flagged in adversarial review). `tip_offset`'s frozen type is
+  # (the zero-fold hazard). `tip_offset`'s frozen type is
   # `pos_integer()` — a checkpoint can only be written where a real tip exists —
   # so a non-positive-integer value on disk is a malformed checkpoint.
   defp validate_checkpoint(cp) do
@@ -445,7 +433,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   defp decode_scanned(bytes) do
     case Jason.decode(bytes) do
       # A snapshot's top-level term is ALWAYS a folded model map (the codec dumps
-      # `%{"applied" => ...}`). A scalar/list top-level is adversarial disk data:
+      # `%{"applied" => ...}`). A scalar/list top-level is hostile disk data:
       # reject it here, before it can reach `fold_step`'s `Map.update` and raise a
       # `BadMapError` on a non-empty conversational tail (typed-reject, never raise).
       {:ok, term} when is_map(term) ->
@@ -462,7 +450,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   end
 
   @doc false
-  # PRE-decode nesting bound (adversarial-disk hardening): a
+  # PRE-decode nesting bound (hostile-disk hardening): a
   # tail-recursive O(n) walk over the raw bytes that counts `{`/`[` nesting
   # (string contents and escapes skipped) WITHOUT building any term. Public
   # (`@doc false`) so the regression suite pins that the bound exists ahead of
@@ -501,7 +489,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   # Depth-bounded structural guard + `$s` deref-gadget reject. A snapshot is a
   # plain JSON-safe term; a `"$s"` struct-module tag on untrusted disk data is
-  # refused rather than resolved to a module (parked hardening).
+  # refused rather than resolved to a module.
   defp safe_term?(_term, depth) when depth < 0, do: false
 
   defp safe_term?(map, depth) when is_map(map) do
@@ -534,8 +522,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   # Surrogate dump (see the "Surrogate safety" moduledoc section): typed-reject
   # any model the surrogate JSON codec cannot faithfully round-trip, never an
-  # uncaught `Jason.EncodeError`. `:surrogate_backend_unbound` is permanent
-  # until the MS reducer lands and this is re-bound.
+  # uncaught `Jason.EncodeError`.
   defp dump(model) do
     if surrogate_encodable?(model) do
       case Jason.encode(model) do
@@ -570,7 +557,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   defp json_native?(nil), do: true
   defp json_native?(_), do: false
 
-  # The surrogate-backend runtime marker (never carries content, FI-10).
+  # The surrogate-backend runtime marker (never carries content).
   defp surrogate_event(op, session_id, tip_offset) do
     :telemetry.execute(
       [:raxol, :agent, :journal, :checkpoint, :surrogate],
@@ -591,7 +578,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   defp sha256_hex(bytes),
     do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 
-  # FI-8 atomic write: temp + fsync + rename, then best-effort dir fsync.
+  # Atomic write: temp + fsync + rename, then best-effort dir fsync.
   defp atomic_write(path, data) do
     dir = Path.dirname(path)
 
