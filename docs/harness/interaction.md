@@ -64,15 +64,16 @@ every call and re-wraps, so a resize cannot leave a stale wrap behind.
   touching the Composer. Only `:passthrough` reaches
   `Composer.handle_event/3`. The `:always` binds (ESC interrupt, Tab steer,
   Ctrl+E edit draft, Ctrl+P palette) fire regardless of `composing?`, because
-  ESC must never be swallowed by whatever holds focus: interrupt is a
-  supervised kill and must reach the lane rather than queue behind typing.
+  ESC must never be swallowed by whatever holds focus: with no overlay open it
+  resolves to `:interrupt` even mid-typing, and the Surface hands that to its
+  `:command_sink`, or shows a footer notice when it has none.
   Clause order in `binds/0` is load-bearing: the `guard: :overlay` ESC entry
   precedes the `guard: :always` ESC entry, so ESC dismisses an open overlay
   before it can interrupt a turn.
 - **Command bifurcation.** A resolved command is a plain
   `%{type: atom(), payload: map()}` map, so main raxol mints one without depending on
-  `raxol_agent`. `:interrupt` and `:steer` are the lane-crossing types and
-  leave through the `:command_sink` closure;
+  `raxol_agent`. `:interrupt` and `:steer` are the two types that leave the
+  Surface, through the `:command_sink` closure;
   `:fold_toggle`, `:jump_next`, `:jump_prev`, `:expand_diff`, `:open_panel`,
   `:overlay_dismiss`, `:open_palette`, and the three `:open_*_picker` types
   never leave the UI lane.

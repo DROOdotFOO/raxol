@@ -1,11 +1,11 @@
 # Harness Architecture
 
 The harness is a headless agent-session **core** that owns all durable state
-and speaks a typed **contract** of events (core → surface) and commands
-(surface → core). Surfaces are pure subscribers that hold nothing persistent:
-attach and reattach are replay from an offset, so the local view is a
-throwaway materialization. Kill a surface and respawn it and it shows the
-same truth, because the truth was never in the surface.
+and speaks a typed **contract** of events. Surfaces are pure subscribers that
+hold nothing persistent: a surface's view is
+`Raxol.Harness.Projection.project/2` over journal records, a throwaway
+materialization. Kill a surface and respawn it and it shows the same truth,
+because the truth was never in the surface.
 
 ## Where this sits
 
@@ -18,7 +18,7 @@ the RATE render-determinism suite.
 
 ## The event contract
 
-Events flow core → surface; commands flow surface → core.
+Events flow core → surface. The contract defines no commands.
 
 The event envelope, its two families and two tiers, and the rule that the
 contract only grows are described in the
@@ -28,10 +28,11 @@ contract only grows are described in the
 `:loop` events become transcript blocks, and `item_delta`, the one ephemeral
 event, feeds the live tail.
 
-Commands run the other way. A command minted by `Raxol.UI.Harness.Keymap` is a
-plain `%{type: atom(), payload: map()}` map, so the surface never depends on
-`raxol_agent`. `:interrupt` and `:steer` leave `Raxol.Harness.Surface` through
-its `:command_sink` option; nothing in the tree consumes them.
+A surface's own commands are outside the contract. A command minted by
+`Raxol.UI.Harness.Keymap` is a plain `%{type: atom(), payload: map()}` map, so
+the surface never depends on `raxol_agent`. `:interrupt` and `:steer` leave
+`Raxol.Harness.Surface` through its `:command_sink` option; nothing in the
+tree consumes them.
 
 On the surface side readers are tolerant and skip what they do not recognize
 (`Block` normalizes an unknown `kind` to `:opaque` and renders it safely). A
@@ -64,9 +65,8 @@ of the fold: `filter_ids/1` drops duplicate/out-of-order records and marks a
 forward gap `damaged?` without withholding the survivors; `partition_families`
 keeps only `:loop` events; `bucket_by_turn` groups by `turn_id` in first-seen
 order; `BlockBuilder` folds each turn's items into blocks. Because the model is
-a pure fold over the event stream, time-travel is a re-fold rather than a
-mechanism: the `:seek` command folds every durable record with id <= offset
-back into the same block read-model.
+a pure fold over the event stream, time-travel is a re-fold of the records up
+to an offset.
 
 ### Frozen golden corpora
 
