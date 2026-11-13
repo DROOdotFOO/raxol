@@ -618,8 +618,18 @@ defmodule Raxol.Agent.Stream do
     case Keyword.get(opts, :executor) || resolve_executor(opts) do
       %Raxol.Agent.ExecutorConfig{} = executor ->
         case Raxol.Agent.Backend.Selector.select(executor) do
-          {:ok, backend, executor_opts} -> {backend, executor_opts}
-          {:error, _reason} -> {fallback_backend(opts), []}
+          {:ok, backend, executor_opts} ->
+            {backend, executor_opts}
+
+          {:error, reason} ->
+            fallback = fallback_backend(opts)
+
+            Logger.warning(
+              "executor backend not selectable (#{inspect(reason)}); " <>
+                "answering from #{inspect(fallback)}"
+            )
+
+            {fallback, []}
         end
 
       _ ->

@@ -1,6 +1,8 @@
 defmodule Raxol.Agent.StreamTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Agent.Stream, as: AgentStream
 
   # -- Test Actions -----------------------------------------------------------
@@ -663,6 +665,22 @@ defmodule Raxol.Agent.StreamTest do
         |> AgentStream.collect_text()
 
       assert text == "model=\"fallback\""
+    end
+
+    test "a backend id the catalog does not declare logs a warning and answers from Mock" do
+      cfg = Raxol.Agent.ExecutorConfig.new(backend: :claude_native)
+
+      {result, log} =
+        with_log(fn ->
+          "hi"
+          |> AgentStream.run(executor: cfg, stream: false)
+          |> AgentStream.collect_text()
+        end)
+
+      assert result == "Mock response"
+      assert log =~ "[warning]"
+      assert log =~ "{:unknown_backend, :claude_native}"
+      assert log =~ "Raxol.Agent.Backend.Mock"
     end
   end
 
