@@ -28,7 +28,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   local server or a free tier.
   Providers billed in API credits are skipped even when fully configured, so
   an unattended run cannot quietly draw down a prepaid balance. Reaching one
-  is explicit: name it (`--backend openrouter`, `harness: :openrouter`) or set
+  is explicit: name it (`harness: :openrouter`) or set
   `RAXOL_ALLOW_PAID_API=1` to restore the walk-everything order.
 
   A backend the catalog marks `detectable?: false` is skipped by the walk
@@ -44,8 +44,8 @@ defmodule Raxol.Agent.Backend.Resolver do
   # What one `op read` may cost inside `diagnostics/0`.
   #
   # Deliberately far below the 15s interactive default, which is sized so a
-  # human can approve a 1Password prompt. Nobody is on the other side of
-  # `/inspect`, so the only thing that budget buys there is a wait for an
+  # human can approve a 1Password prompt. Nobody is on the other side of a
+  # diagnostic, so the only thing that budget buys there is a wait for an
   # approval that is not coming. And because a timeout demotes `op` to
   # `:unresponsive` for the rest of the sweep, this is the ceiling for the whole
   # diagnostic rather than the price of each provider.
@@ -77,7 +77,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   #
   # `billing` is what auto-detection routes on. `:api_credits` means a request
   # draws down a prepaid balance, so those are NEVER auto-selected -- reaching
-  # one takes an explicit `--backend`/`harness:` or `RAXOL_ALLOW_PAID_API=1`.
+  # one takes an explicit `harness:` or `RAXOL_ALLOW_PAID_API=1`.
   # Everything else costs nothing per request: a `:local` server or a `:free`
   # tier.
   @detectable_providers Enum.filter(@providers, & &1.detectable?)
@@ -199,7 +199,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   # out, so probing one here is a shell-out per provider that is guaranteed to
   # fail. Against a LOCKED vault each probe additionally raises a desktop
   # authorization prompt and then waits out the full `op` timeout, and there is
-  # one per provider: measured, that turned `/inspect` into a 12-to-22 second
+  # one per provider: measured, that turned the diagnostic into a 12-to-22 second
   # stall where `op_status/0` alone accounted for under 7s of it.
   #
   # Skipping costs no information. `diag_note/3` already answers a stored
@@ -227,7 +227,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   #
   # A diagnostic budget rather than the interactive one. The 15s default is
   # sized so a human can approve a 1Password prompt; nobody is waiting on the
-  # other side of `/inspect`, and the wait it buys is a wait for an approval
+  # other side of a diagnostic, and the wait it buys is a wait for an approval
   # that is not coming.
   defp probe_op_ref(spec, op) do
     ref = op_ref(spec.harness)
@@ -327,7 +327,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   # Auto-detection never spends money. A provider billed in `:api_credits` is
   # skipped no matter how well configured it is -- including the generic
   # `AI_API_KEY` endpoint, which is someone's prepaid balance too. Naming one
-  # explicitly (`--backend openrouter`, `harness:`) still works and is the
+  # explicitly (`harness: :openrouter`) still works and is the
   # opt-in; `RAXOL_ALLOW_PAID_API=1` restores the old walk-everything order for
   # a deployment that wants it.
   defp auto_detect(opts) do

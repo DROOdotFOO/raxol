@@ -50,7 +50,7 @@ Hex until the tag publishes (the #1275 regression).
 ### 3. `mix raxol.release.notes`: notes written by a Raxol agent
 
 A `raxol_agent` task that runs on Raxol's own backend stack, with
-`--backend openrouter` given explicitly (`Backend.Resolver` does not pick a
+`harness: :openrouter` given explicitly (`Backend.Resolver` does not pick a
 paid backend on its own), so the generation goes through the attributed
 catalog entry.
 

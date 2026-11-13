@@ -565,7 +565,7 @@ defmodule Raxol.Agent.Backend.HTTP do
   # header and lets the endpoint answer: LLM7 serves the request, and a
   # key-required host answers 401, which reaches the user as a legible error.
   # `Keyword.fetch!/2` instead raised a KeyError that killed the turn before
-  # any request was built, which is how `--backend llm7` came to be unusable.
+  # any request was built, which made the `:llm7` backend unusable.
   defp auth_header(opts, name, format) do
     case Keyword.get(opts, :api_key) do
       key when is_binary(key) and key != "" -> [{name, format.(key)}]

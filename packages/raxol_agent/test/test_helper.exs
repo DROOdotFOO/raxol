@@ -18,7 +18,7 @@ end
 # is longer than the budget of any assertion waiting on the other side of it,
 # so a LOCKED vault (which blocks `op` on its desktop authorization prompt)
 # turns a passing test red on a machine state that has nothing to do with the
-# code. `/inspect` was failing exactly this way.
+# code. The provider diagnostic fails exactly this way.
 #
 # Set rather than defaulted: an unlocked vault answers in well under a second,
 # so this only ever truncates a wait that was going to be answered by a human
@@ -86,11 +86,7 @@ ExUnit.start(
     :harness_red,
     # :live_longcat hits the real LongCat API; run with
     # `LONGCAT_API_KEY=<key> mix test --only live_longcat`.
-    :live_longcat,
-    # :live_lsp drives a real language server (rust-analyzer) and indexes a
-    # crate, so it is minutes and a toolchain rather than seconds; run with
-    # `mix test --only live_lsp`.
-    :live_lsp
+    :live_longcat
     | os_excludes
   ]
 )
