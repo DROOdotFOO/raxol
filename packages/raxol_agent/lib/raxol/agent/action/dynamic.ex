@@ -26,8 +26,8 @@ defmodule Raxol.Agent.Action.Dynamic do
   origin that bills it. `Raxol.Agent.McpSpendHook` reads both: a price is
   reserved before the request, and a metered origin with no price is denied.
 
-  Dynamic tools are a framework-react concern: a native (vendor-owns-loop)
-  backend reaches its MCP servers directly, so it does not consume these.
+  Dynamic tools are a framework-react concern: a backend that runs its own
+  tool loop reaches its MCP servers directly, so it does not consume these.
   """
 
   require Logger
@@ -176,11 +176,10 @@ defmodule Raxol.Agent.Action.Dynamic do
 
   defp wrap(tool, _server, server_name, _sensitive), do: drop(server_name, tool)
 
-  # A `tools/list` entry is upstream data and was treated as a map with a
-  # string name: a non-map entry, or a map-valued `name` or `description`,
-  # raised `Protocol.UndefinedError` here. `Raxol.Agent.McpBundle.list_tools/3`
-  # guarded only `:exit`, so the raise reached `McpLoader.load/2`'s outer
-  # catch and ONE hostile server dropped every server's tools. The entry is
+  # A `tools/list` entry is upstream data and is not trusted to be a map with
+  # a string name: a non-map entry, or a map-valued `name` or `description`,
+  # would raise `Protocol.UndefinedError` here, and one hostile server could
+  # drop every server's tools. The entry is
   # dropped instead, and only its TYPE is logged: the value is upstream text.
   defp drop(server_name, unusable) do
     Logger.warning(fn ->

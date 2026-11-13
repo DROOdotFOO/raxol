@@ -12,8 +12,7 @@ defmodule Raxol.Web3.HTTPTest do
   #
   # Two injections, both of them the house pattern rather than a mock. The
   # resolver is `Raxol.Core.Outbound`'s documented seam, and it is what lets a
-  # made-up host be vetted without a DNS lookup. The `:exchange` stage is the
-  # same injection `Raxol.Agent.Actions.Fetch` uses for its transport, and it is
+  # made-up host be vetted without a DNS lookup. The `:exchange` stage is
   # what lets the stages BEFORE the socket be tested at all: a local endpoint
   # listens on loopback, which the vet refuses, so there is no arrangement in
   # which a real socket exercises this pipeline locally.

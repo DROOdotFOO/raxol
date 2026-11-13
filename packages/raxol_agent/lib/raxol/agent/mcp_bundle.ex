@@ -46,9 +46,9 @@ defmodule Raxol.Agent.McpBundle do
   says. The rule, in one sentence: a spec DECLARED `source: :workspace` may
   only run a command the operator listed in `~/.raxol/mcp_hosts.json`, while
   a `:user` spec and an untagged one may run anything -- an untagged spec was
-  assembled in code (`default_servers/1`, an embedder's own list), and every
-  spec parsed out of repository content is tagged by
-  `Raxol.Agent.Code.McpConfig`.
+  assembled in code (`default_servers/1`, an embedder's own list), and a
+  caller that parses specs out of repository content tags each one
+  `:workspace`.
 
   Both gates travel with the spec to the client as `:source` and `:permit`,
   so `Raxol.MCP.Client.Transport`'s `connect/1` -- the function that opens
@@ -180,10 +180,9 @@ defmodule Raxol.Agent.McpBundle do
   # names allowed hosts.
   #
   # Provenance here is what the spec DECLARES, and only `:workspace` is
-  # gated. That differs from the remote default below, deliberately: every
-  # spec parsed out of a repository is tagged `:workspace` by
-  # `Raxol.Agent.Code.McpConfig` and keeps that tag through
-  # `Raxol.Agent.Code.McpLoader`, while an UNTAGGED spec was assembled in
+  # gated. That differs from the remote default below, deliberately: a spec
+  # parsed out of a repository is tagged `:workspace` by whoever parsed it,
+  # while an UNTAGGED spec was assembled in
   # code -- the pinned `default_servers/1` catalog, or an embedder's own list
   # -- which is the operator's own program rather than repository content.
   defp start_stdio(spec, start) do
@@ -336,9 +335,7 @@ defmodule Raxol.Agent.McpBundle do
   # handle_continue, past the start return) makes the listing call EXIT with
   # :noproc rather than return an error. A hostile `tools/list` shape can also
   # RAISE while it is being wrapped. Absorb both so fail-open stays per
-  # server: one server must not be able to drop every other server's tools,
-  # which is what an escaping exit or exception did at `McpLoader.load/2`'s
-  # outer catch.
+  # server: one server must not be able to drop every other server's tools.
   defp list_tools(server, name, sensitive) do
     Dynamic.from_client(server, name, sensitive: sensitive)
   rescue

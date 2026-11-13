@@ -358,11 +358,11 @@ defmodule Raxol.MCP.ClientTest do
 
   describe "stopping the client stops the server" do
     test "the owner's :shutdown reaps the OS subprocess, not just the port" do
-      # `Raxol.Agent.Code.McpLoader`'s janitor ends a session with exactly this
-      # signal, documented as reaping the client, its linked port AND the OS
+      # An owner ends a session with exactly this signal, expecting it to reap
+      # the client, its linked port AND the OS
       # subprocess. A non-trapping GenServer never runs `terminate/2`, and
       # closing a port only closes the child's stdio, so every `npx`/`uvx`
-      # server that does not exit on EOF survived -- one orphan per session.
+      # server that does not exit on EOF would survive -- one orphan per session.
       Process.flag(:trap_exit, true)
       client = start_peer(:deaf, [])
       os_pid = await_os_pid(client)

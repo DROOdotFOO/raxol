@@ -51,9 +51,8 @@ defmodule Raxol.Agent.Stream do
   - `:backend` -- AIBackend module (default: `Raxol.Agent.Backend.Mock`); ignored
     when `:executor` is given
   - `:auto_provider` -- when `true` and no `:executor` is given, resolve one from
-    the environment via `Raxol.Agent.Backend.Resolver` (the same op-ref ->
-    provider-env -> `AI_API_KEY` onboarding the coding TUI and `mix raxol.setup`
-    use). An optional `:provider` pins a specific one. Falls through to
+    the environment via `Raxol.Agent.Backend.Resolver` (op-ref ->
+    provider-env -> `AI_API_KEY`). An optional `:provider` pins a specific one. Falls through to
     `:backend`/Mock when nothing resolves, so it never crashes an unconfigured
     caller. This is how a headless/embedded agent surface gets the same
     credential story without hand-rolling a resolver call.
@@ -189,8 +188,8 @@ defmodule Raxol.Agent.Stream do
     Raxol.Agent.AIBackend.handles_tools_internally?(backend)
   end
 
-  # Vendor-owns-loop backends (native CLI harnesses) run their own tool loop with
-  # Raxol's tools injected over MCP, so the framework just streams their output.
+  # A backend that owns its tool loop runs the tools itself, so the framework
+  # just streams its output.
   defp native_react(messages, backend, backend_opts, opts) do
     do_completion(backend, messages, backend_opts, opts)
   end
@@ -603,8 +602,8 @@ defmodule Raxol.Agent.Stream do
     {backend, backend_opts}
   end
 
-  # Native (vendor-owns-loop) backends expose Raxol's tools to the CLI over MCP,
-  # so they need the Action modules in their opts to build the MCP config.
+  # A backend that owns its tool loop needs the Action modules in its opts to
+  # expose them as tools.
   defp maybe_inject_actions(backend_opts, backend, opts) do
     with true <- Raxol.Agent.AIBackend.handles_tools_internally?(backend),
          actions when is_list(actions) and actions != [] <-
@@ -631,9 +630,9 @@ defmodule Raxol.Agent.Stream do
   @doc false
   # Opt-in environment/1Password onboarding for any programmatic agent surface.
   # With `auto_provider: true` and no explicit `:executor`, resolve one through
-  # the shared `Raxol.Agent.Backend.Resolver` — the SAME op-ref -> provider-env
-  # (`ANTHROPIC_API_KEY`, ...) -> `AI_API_KEY`/`AI_BASE_URL` precedence the coding
-  # TUI and `mix raxol.setup` use — so a surface gets the same credential story
+  # the shared `Raxol.Agent.Backend.Resolver` — op-ref -> provider-env
+  # (`ANTHROPIC_API_KEY`, ...) -> `AI_API_KEY`/`AI_BASE_URL` — so a surface
+  # gets the same credential story
   # for free instead of hand-rolling a resolver call. A resolution that finds no
   # credential returns `nil`, so `backend_from_opts/1` falls through to
   # `:backend`/Mock and the opt never crashes a caller with no provider set up.

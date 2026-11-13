@@ -210,7 +210,7 @@ defmodule Raxol.Web3.Backend.Canton do
   alias Raxol.Web3.TTL
 
   # The struct carries a credential, so it declares what `inspect/1` may show.
-  # `Raxol.Agent.Code.ExecutorConfig` is the precedent. It is load-bearing
+  # `Raxol.Agent.ExecutorConfig` is the precedent. It is load-bearing
   # rather than tidy: `Raxol.Web3.Router.candidates/3` hands these handles to
   # an operator, and a `FunctionClauseError` anywhere below formats the whole
   # struct into a crash log, which is how the ccscan key would reach one.

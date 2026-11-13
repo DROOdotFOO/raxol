@@ -209,7 +209,7 @@ fi
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*)
-    note "raxol: run 'raxol doctor' to check providers and config"
+    note "raxol: run 'raxol doctor' to check this install"
     ;;
   *)
     note ""

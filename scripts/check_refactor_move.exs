@@ -387,7 +387,7 @@ defmodule RefactorMove do
     end)
   end
 
-  # `App.notice/2` inside `Raxol.Agent.Code.App` is written `App.notice(...)`
+  # `App.notice/2` inside `MyApp.Code.App` is written `App.notice(...)`
   # after an alias, so the alias parts are a SUFFIX of the defining module's
   # parts. Match on the suffix rather than on equality, and only for modules
   # the diff actually defines.

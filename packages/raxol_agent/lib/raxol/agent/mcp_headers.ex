@@ -40,7 +40,7 @@ defmodule Raxol.Agent.McpHeaders do
       server is skipped rather than started, and the refusal is logged once.
 
   A jailed session declines to read `.mcp.json` at all, so this rule is for
-  the single-tenant workspace that `Raxol.Agent.Code.McpLoader` describes as
+  the single-tenant workspace, which is
   merely careless rather than hostile. Reference resolution is what changes
   that calculus, so the rule arrives with the capability rather than after it.
 

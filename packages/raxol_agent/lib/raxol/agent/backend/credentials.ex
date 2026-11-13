@@ -9,8 +9,8 @@ defmodule Raxol.Agent.Backend.Credentials do
   (`op read op://...`), so the secret is fetched fresh at launch and no
   plaintext key ever touches disk.
 
-  A raw key can still be supplied per session (an env var, or `/login` in the
-  coding TUI), but such a key is held in memory only and is never written here.
+  A raw key can still be supplied per session (an env var or an `:api_key`
+  option), but such a key is held in memory only and is never written here.
 
   ## File shape
 
@@ -235,7 +235,7 @@ defmodule Raxol.Agent.Backend.Credentials do
 
   # `System.cmd` has no timeout, and a locked 1Password vault blocks `op`
   # on its desktop-app authorization prompt indefinitely — freezing
-  # whatever process asked (the TUI's update loop during /login, every
+  # whatever process asked (a TUI's update loop, every
   # op-shelling test). This Port-based runner bounds the wait and KILLS
   # the OS process on timeout; `Port.close/1` alone would leave the hung
   # `op` (and its auth prompt) alive. Generous default so an interactive
@@ -333,8 +333,8 @@ defmodule Raxol.Agent.Backend.Credentials do
     end
 
     # Anything the port delivered between the deadline firing and the
-    # close stays in the CALLER's mailbox (the TUI's dispatcher during
-    # /login) — including a {:data, secret} the child flushed as it
+    # close stays in the CALLER's mailbox — including a {:data, secret} the
+    # child flushed as it
     # died, which a catch-all handle_info would inspect into the log.
     drain_port_messages(port)
   end

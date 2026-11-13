@@ -246,9 +246,9 @@ defmodule Raxol.Terminal.TerminalUtils do
   though, because stdout being a terminal and a terminal being *available* come
   apart whenever something interposes on the stream. Burrito's launcher does
   exactly that: it spawns the BEAM with stdout on a pipe so it can notice a
-  downstream consumer going away, and a packaged `raxol code` then found
-  `isatty(:stdout)` false on every run and skipped terminal setup entirely --
-  no raw mode, no alternate screen, so the TUI drew and ignored the keyboard.
+  downstream consumer going away, and a packaged TUI would then find
+  `isatty(:stdout)` false on every run and skip terminal setup entirely --
+  no raw mode, no alternate screen, so the TUI draws and ignores the keyboard.
 
   Nothing in the driver actually needs stdout to be the terminal. Raw mode goes
   through `/dev/tty` (`Raxol.Terminal.Driver.Stty`), and the ANSI it writes
@@ -285,7 +285,7 @@ defmodule Raxol.Terminal.TerminalUtils do
   # Opening /dev/tty is the question itself: it succeeds only for a process
   # with a controlling terminal, and fails on Windows and under a daemon or a
   # CI runner, which is the answer those cases want. Requiring stdin to be a
-  # tty as well keeps `raxol code < script.txt` reading as non-interactive.
+  # tty as well keeps `raxol playground < script.txt` reading as non-interactive.
   defp probe_controlling_terminal do
     with true <- :prim_tty.isatty(:stdin) == true,
          {:ok, device} <- File.open("/dev/tty", [:read]) do

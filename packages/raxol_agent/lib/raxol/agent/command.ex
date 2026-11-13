@@ -50,9 +50,9 @@ defmodule Raxol.Agent.Command do
   as a `{:harness_command, action}` OTP message to the session process (the
   U5 turn-supervisor pattern-matches it). The `:prompt` action
   (`{:start_turn, session_id, payload}`) is what the session runtime turns into
-  a `Raxol.Agent.Contract.pump/3` over a `Raxol.Agent.Stream.react/2` run — the
-  exact path `mix raxol.p` already drives. Actually spawning that turn subtree
-  is U5's job; here we validate and dispatch.
+  a `Raxol.Agent.Contract.pump/3` over a `Raxol.Agent.Stream.react/2` run.
+  Actually spawning that turn subtree is U5's job; here we validate and
+  dispatch.
   """
 
   alias Raxol.Agent.Command.EventCodec

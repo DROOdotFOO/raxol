@@ -88,7 +88,7 @@ defmodule Raxol.Agent.Backend.HTTP do
   Cheap credential check via the provider's model-list endpoint.
 
   Unlike a completion, listing models costs no tokens, so this is the
-  preferred `/login` validation for the hosted providers. Returns:
+  preferred credential validation for the hosted providers. Returns:
 
     * `:valid`                    — a 2xx (authorized),
     * `{:rejected, status}`       — 401/403 (bad key),

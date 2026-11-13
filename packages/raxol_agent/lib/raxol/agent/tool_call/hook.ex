@@ -18,17 +18,14 @@ defmodule Raxol.Agent.ToolCall.Hook do
   reserve-budget-before-call (SpendGate) and blast-radius approval gates
   register here rather than wrapping the loop themselves.
 
-  ## Scope: framework-managed ReAct only (native-harness gap)
+  ## Scope: framework-managed ReAct only
 
   This pipeline gates **only** the framework-managed ReAct/Stream.react loop.
-  Backends whose `handles_tools_internally?/0` returns `true`
-  (`Raxol.Agent.Backend.Native` -- the Claude Code / Cursor harnesses) route
-  through `native_react` and drive their own tool loop inside the harness
-  process; those calls **bypass** this seam entirely. Consequently
-  `:tool_call_hooks` (and the future U7/U8 authorization/approval gates that
-  build on them) apply to framework-driven tool calls, not to tool calls a
-  native harness executes internally. U7/U8 authors: treat the native-harness
-  path as out of scope for this chokepoint.
+  A backend whose `handles_tools_internally?/0` returns `true` routes
+  through `native_react` and drives its own tool loop; those calls **bypass**
+  this seam entirely. Consequently `:tool_call_hooks` apply to
+  framework-driven tool calls, not to tool calls such a backend executes
+  internally.
 
   ## Contract
 

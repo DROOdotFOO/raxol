@@ -168,8 +168,8 @@ defmodule Raxol.Agent.LlmPrices do
   end
 
   # A cost the counterparty reported for THIS turn, always `%{amount,
-  # currency}`: `Harness.GrokBuild` stamps it from the CLI's `total_cost_usd`
-  # with the currency the field name asserts, and an ACP peer sends it in
+  # currency}`: a backend stamps it from what its vendor reported, and an ACP
+  # peer sends it in
   # that shape on the wire. Preferred over any table because whoever billed
   # the turn knows its price -- but it is a claim, not an invoice, so currency
   # is never coerced: anything other than USD falls through to the table

@@ -58,8 +58,6 @@ defmodule Raxol.Core.Boundary.TermText do
     * **Append/paint authority** — `Raxol.Harness.Surface.ViewText`
       sanitizes per line while flattening the view tree, over this module's
       `strip_codepoint?/2` deny set.
-    * **Replay/export text** — `Raxol.Agent.Code.Replay` sanitizes the
-      exported transcript per line.
 
   A cell sink and a text sink differ in exactly ONE respect: a cell owns a
   column, so a disallowed cell is BLANKED (`sanitize_cell/1`), while

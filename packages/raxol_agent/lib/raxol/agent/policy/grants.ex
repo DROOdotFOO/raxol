@@ -15,21 +15,15 @@ defmodule Raxol.Agent.Policy.Grants do
   configured `Raxol.Agent.Sandbox.Shell` policy.
 
   Use this rather than calling `shell_jail_allow/1` and `sandbox_allow/2`
-  separately. Four places run a shell string, and when each applied its own
-  subset they disagreed about what was permitted. What each does now:
+  separately, so every place that runs a shell string applies the same rule.
 
-    * `Raxol.Agent.Actions.Code.Bash` -- calls this.
-    * `Raxol.Agent.Actions.Shell` -- calls this. It applied nothing at all.
-    * `Raxol.Agent.Code.Hooks` -- the jail half only, via `jailed?/1`. Hooks
-      are refused wholesale in a jail, so the sandbox half has nothing left
-      to decide.
-    * the `Directive.Shell` executor -- calls this, but binds on the
-      DISPATCHER context, which does not carry `:jail` or `:shell_sandbox`.
-      So it is a real gate for a surface that scopes that context and a
-      pass-through for the ones in this repo. Confining that path in a jail
-      needs those keys plumbed through the runtime, which is not done yet;
-      `Raxol.Agent.SandboxHook` is the only thing standing in front of it,
-      and it is opt-in on the agent's own `sandbox/0`.
+  The `Directive.Shell` executor calls this, but binds on the DISPATCHER
+  context, which does not carry `:jail` or `:shell_sandbox`. So it is a real
+  gate for a surface that scopes that context and a pass-through for the ones
+  in this repo. Confining that path in a jail needs those keys plumbed
+  through the runtime, which is not done yet; `Raxol.Agent.SandboxHook` is
+  the only thing standing in front of it, and it is opt-in on the agent's own
+  `sandbox/0`.
   """
   @spec shell_allow(map(), String.t()) :: :ok | {:error, term()}
   def shell_allow(context, command) do
@@ -39,8 +33,8 @@ defmodule Raxol.Agent.Policy.Grants do
   @doc """
   Refuse the shell surface for a jailed (multi-tenant) session.
 
-  The cwd jail confines the *fs* tools (they resolve every path through
-  `Fs.resolve/2`), but a `/bin/sh -c` command string is not a path — it can
+  A cwd jail confines path arguments, but a `/bin/sh -c` command string is
+  not a path — it can
   `cd ..`, name an absolute path, or read the daemon's own files, none of
   which `{:cd, cwd}` prevents. On a shared host that is a cross-tenant read
   and write primitive.
@@ -60,12 +54,11 @@ defmodule Raxol.Agent.Policy.Grants do
   end
 
   @doc """
-  Whether `context` may reach the network (`fetch`, `web_search`).
+  Whether `context` may reach the network.
 
-  Default-on, and off by default in a jail. `fetch` and `web_search` joined
-  the DEFAULT toolset, which changes what a hosted multi-tenant session is:
-  every tenant gets outbound HTTP from the operator's address and spends the
-  operator's search quota, on a surface whose whole premise is that tenants do
+  Default-on, and off by default in a jail: a hosted multi-tenant session
+  would otherwise give every tenant outbound HTTP from the operator's address
+  and the operator's quota, on a surface whose whole premise is that tenants do
   not share. A path sandbox does not bear on that either way, which is why
   this is its own gate rather than a second reading of `jailed?/1` -- but a
   jail is the marker this codebase has for "this session is somebody else's",
@@ -86,9 +79,7 @@ defmodule Raxol.Agent.Policy.Grants do
   @doc """
   Whether `context` marks a jailed (multi-tenant) session.
 
-  The one definition of what a jail is. `Raxol.Agent.Code.Hooks` used to carry
-  a copy of this test with a comment saying it mirrored this one, which is the
-  arrangement that lets two answers drift apart.
+  The one definition of what a jail is.
   """
   @spec jailed?(map()) :: boolean()
   def jailed?(context),

@@ -5,7 +5,7 @@ defmodule Raxol.Agent.Authorization.McpAuthorizer do
   tool runs.
 
   This is the "one engine, two enforcement points" wiring: the same policy engine
-  that gates `raxol.code`'s tool calls now gates the MCP surface, and it does so
+  that gates an agent's own tool calls gates the MCP surface, and it does so
   from the `raxol_agent` side, so `raxol_mcp` never has to depend on `raxol_agent`
   (which would be a dependency cycle). The MCP server owns only the seam; this
   fills it with the real engine.

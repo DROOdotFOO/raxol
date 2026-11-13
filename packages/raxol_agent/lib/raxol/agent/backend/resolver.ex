@@ -126,7 +126,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   defp seal_internal_opts(opts), do: opts
 
   @doc """
-  Per-provider availability, for the setup panel and `/login` status.
+  Per-provider availability.
 
   Each entry is `%{harness, label, keyless?, available?, source}` where
   `source` is the resolution source when available, else `nil`. Availability
@@ -159,7 +159,7 @@ defmodule Raxol.Agent.Backend.Resolver do
   end
 
   @doc """
-  Detection diagnostics for the setup panel: the `op` CLI state plus, per
+  Detection diagnostics: the `op` CLI state plus, per
   provider, an actionable `note` when it is unavailable (a stored `op://`
   reference that needs `op signin`, or an env var that is set but empty).
 
