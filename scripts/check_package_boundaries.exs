@@ -86,7 +86,8 @@
 # tree that defines any other agent-side name fails, and so does an entry no
 # runtime tree defines. @train_catalog may name agent applications: it
 # classifies every directory under `packages/`, and `mix raxol.release.check`
-# fails when the two disagree, so its rows leave with the directories.
+# fails when the two disagree, so its rows leave with the directories. The
+# check fails once it names none, until the exemption is removed here.
 #
 # Nothing on this rule is grandfathered, and an allowlist entry whose file and
 # owning tree sit on different sides of the line fails as well.
@@ -211,6 +212,7 @@ defmodule PackageBoundaries do
     crossings = line_crossings(scanned, trees, owners)
     misplaced = misplaced_definitions(owners)
     crossing_entries = allowed |> Enum.filter(&crossing_entry?/1) |> Enum.sort()
+    unused = unused_catalog_exemption(scanned)
 
     report_new(new)
     report_stale(stale)
@@ -218,9 +220,10 @@ defmodule PackageBoundaries do
     report_crossings(crossings)
     report_misplaced(misplaced)
     report_crossing_entries(crossing_entries)
+    report_unused_exemption(unused)
 
     if Enum.all?(
-         [new, stale, grown, crossings, misplaced, crossing_entries],
+         [new, stale, grown, crossings, misplaced, crossing_entries, unused],
          &(&1 == [])
        ) do
       IO.puts(
@@ -309,6 +312,20 @@ defmodule PackageBoundaries do
       end
 
     Enum.sort(defined ++ unbacked)
+  end
+
+  # The catalog's exemption lasts as long as the catalog names an agent
+  # application.
+  defp unused_catalog_exemption(scanned) do
+    case List.keyfind(scanned, @train_catalog, 1) do
+      {_tree, file, %{refs: refs}} ->
+        if Enum.any?(refs, &match?({_app, _line, :app}, &1)),
+          do: [],
+          else: [file]
+
+      nil ->
+        []
+    end
   end
 
   defp crossing_entry?({file, mod, owner}) do
@@ -1153,6 +1170,15 @@ defmodule PackageBoundaries do
     Only the modules raxol_journal defines are exempt (@journal_modules in
     this script). Move an agent-side module to an agent package; drop a listed
     name that is gone.\
+    """)
+  end
+
+  defp report_unused_exemption([]), do: :ok
+
+  defp report_unused_exemption([file]) do
+    err("""
+    ERROR: #{file} names no agent application, so its exemption is unused.
+    Remove @train_catalog from this script.\
     """)
   end
 

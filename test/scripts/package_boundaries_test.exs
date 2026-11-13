@@ -508,6 +508,14 @@ defmodule Raxol.PackageBoundariesTest do
                ~r/packages\/raxol_cli\/lib\/raxol\/cli\/mcp\.ex\s+Raxol\.Core\.Thing\traxol_core/
     end
 
+    test "the release catalog's exemption fails once it is unused",
+         %{results: results} do
+      assert {output, 1} = results["release catalog without agent applications"]
+
+      assert output =~
+               "lib/raxol/release/package_check.ex names no agent application"
+    end
+
     test "a package on neither side stops the check", %{results: results} do
       assert {output, 2} = results["package on neither side"]
 
@@ -556,6 +564,15 @@ defmodule Raxol.PackageBoundariesTest do
           """},
          {"scripts/.package-boundaries-allowlist",
           "packages/raxol_cli/lib/raxol/cli/mcp.ex\tRaxol.Core.Thing\traxol_core\n"}
+       ]},
+      {"release catalog without agent applications",
+       [
+         {"lib/raxol/release/package_check.ex",
+          """
+          defmodule Raxol.Release.PackageCheck do
+            def packages, do: [%{app: :raxol_core, path: "packages/raxol_core"}]
+          end
+          """}
        ]},
       {"package on neither side",
        [{"packages/raxol_other/mix.exs", mix_source(:raxol_other, [])}]}
