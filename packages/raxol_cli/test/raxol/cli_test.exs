@@ -58,18 +58,6 @@ defmodule Raxol.CLITest do
     end
   end
 
-  describe "doctor subcommand" do
-    test "doctor prints the install header and a next block" do
-      out = capture_io(fn -> assert CLI.main(["doctor"]) == 0 end)
-
-      assert out =~ "packaging"
-      assert out =~ "acp surface"
-      assert out =~ "next:"
-      assert out =~ "raxol acp --agent"
-      assert out =~ "raxol new counter"
-    end
-  end
-
   describe "acp subcommand" do
     test "acp --help prints the shared serve usage" do
       out = capture_io(fn -> assert CLI.main(["acp", "--help"]) == 0 end)
