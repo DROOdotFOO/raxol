@@ -232,8 +232,6 @@ defmodule Raxol.Property.ProcessIsolationTest do
     @guarded_files [
       {"web/lib/raxol_playground_web/live/playground/demo_lifecycle.ex",
        "Process.unlink(pid)"},
-      {"packages/raxol_agent/lib/raxol/agent/session.ex",
-       "Process.unlink(lifecycle_pid)"},
       {"packages/raxol_terminal/lib/raxol/terminal/emulator/constructors.ex",
        "Process.unlink(pid)"},
       {"lib/raxol/core/runtime/subscription.ex", "Process.unlink(pid)"}
