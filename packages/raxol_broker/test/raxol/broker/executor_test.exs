@@ -131,7 +131,7 @@ defmodule Raxol.Broker.ExecutorTest do
 
   defp writer(path) do
     {base, session} = Journal.location(path)
-    :global.whereis_name({Writer, Path.join(base, session)})
+    Writer.whereis(Path.join(base, session))
   end
 
   defp stop_and_wait(pid, reason \\ :kill) do

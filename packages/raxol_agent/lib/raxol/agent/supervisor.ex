@@ -14,10 +14,16 @@ defmodule Raxol.Agent.Supervisor do
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
   - `Raxol.Agent.Curator` -- when a `:curator` config is set
   - `Raxol.Agent.Scheduler` -- when a `:scheduler` config is set
+  - `Raxol.Agent.McpTools` -- the `agent_*` MCP tools
 
   Strategy is `:rest_for_one`: if the DynSup crashes, the Orchestrator
   restarts and rebuilds from ContextStore. If the Registry crashes,
-  everything restarts.
+  everything restarts. `McpTools` is last, so its own restart restarts
+  nothing; a restart of an earlier child restarts it, and it finds its
+  running agents again in the Registry.
+
+  `start_link(mcp_tools: opts)` passes `opts` to `Raxol.Agent.McpTools`
+  (`:registry`, `:server`).
   """
 
   use Supervisor
@@ -36,7 +42,7 @@ defmodule Raxol.Agent.Supervisor do
   end
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     children =
       [
         {Registry, keys: :unique, name: Raxol.Agent.Registry},
@@ -48,10 +54,14 @@ defmodule Raxol.Agent.Supervisor do
         memory_children() ++
         skills_children() ++
         curator_children() ++
-        scheduler_children()
+        scheduler_children() ++
+        mcp_tools_children(opts)
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
+
+  defp mcp_tools_children(opts),
+    do: [{Raxol.Agent.McpTools, Keyword.get(opts, :mcp_tools, [])}]
 
   # Start the default ETS memory store only when it is the configured provider.
   defp memory_children do

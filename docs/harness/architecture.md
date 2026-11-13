@@ -71,12 +71,26 @@ permanent transcript).
 
 The durable journal is the source of truth. `Raxol.Agent.Journal` is the
 append-only behaviour; `Raxol.Agent.Journal.FileStore` is the file-backed
-implementation: one directory per session under `~/.raxol/sessions/<id>/`,
-size-capped `NNNNNN.jsonl` segments, and each event assigned a monotonic
-offset that is its id. Interior corruption is fail-closed: `Reader.scan/2`
-returns `{:damaged, records_before}`, deletes nothing, fires a `Logger.error`
-plus `[:raxol, :agent, :journal, :damaged]` telemetry, and the damaged content
+implementation: one directory per session under `~/.raxol/sessions/<id>/`
+(an agent started over MCP lives one level down, under
+`<first 8 hex of sha256(project root)>/<id>/`), size-capped `NNNNNN.jsonl`
+segments, and each event assigned a monotonic offset that is its id. While a
+Writer has the journal open, `writer.lock` in that directory names its OS
+process, so a second BEAM does not write the same journal. Interior
+corruption is fail-closed: `Reader.scan/2` returns
+`{:damaged, records_before}`, deletes nothing, fires a `Logger.error` plus
+`[:raxol, :agent, :journal, :damaged]` telemetry, and the damaged content
 never reaches a surface.
+
+Two record shapes come from the session rather than the Dispatcher. A session
+started with `journal_required: true` writes `agent_started` (payload
+`prior_offset`) each time it opens its journal, followed by a `turn_canceled`
+(reason `agent_restarted`) for every turn the run before left open.
+`Raxol.Agent.Session` brackets each prompt turn under a turn id of its own
+(`acp-...`): `turn_started`, then one of `turn_completed`, `turn_canceled`
+(reason `cancelled` or `caller_down`) or `error` (reason `turn_failed` or
+`agent_down`). `agent_started` is a `loop` record outside the conversational
+set, so it is never a tip.
 
 Reads never write. A torn tail (a parse failure on the last line of the last
 segment, the signature of a crash mid-write) is tolerated in memory by

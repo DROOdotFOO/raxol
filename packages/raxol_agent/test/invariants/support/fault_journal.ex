@@ -228,8 +228,8 @@ defmodule Raxol.Agent.Invariants.FaultJournal do
   end
 
   defp await_global_release(dir, tries) do
-    case :global.whereis_name({Writer, dir}) do
-      :undefined ->
+    case Writer.whereis(dir) do
+      nil ->
         :ok
 
       _pid when tries > 0 ->

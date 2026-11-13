@@ -6,10 +6,11 @@ defmodule Raxol.Core.Behaviours.BaseManager do
 
   @doc """
   Called to initialize the manager state.
-  Must return {:ok, state}. For initialization failures, raise an exception
-  to let the supervisor handle restart logic.
+  Returns `{:ok, state}`, or `{:stop, reason}` to refuse to start: the
+  process exits with `reason` and `start_link` returns `{:error, reason}`.
+  For a failure that is a bug, raise.
   """
-  @callback init_manager(term()) :: {:ok, any()}
+  @callback init_manager(term()) :: {:ok, any()} | {:stop, term()}
 
   @doc """
   Called to handle manager-specific requests.

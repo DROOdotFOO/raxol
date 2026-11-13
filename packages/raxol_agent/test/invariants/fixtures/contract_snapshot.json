@@ -57,6 +57,7 @@
     "turn_started": "turn_started",
     "turn_completed": "turn_completed",
     "error": "error",
+    "turn_canceled": "turn_canceled",
     "_fallback": "item_completed"
   },
   "producers": {

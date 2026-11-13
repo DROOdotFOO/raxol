@@ -36,7 +36,7 @@ defmodule Raxol.Agent.Comm do
   caller's, so a process that knows only the caller's ref can cancel the
   turn but not answer it, run its work or message its process. A
   `{:acp_cancel, ref}` (via `send/3`, or `call/3` for an `:ok` that returns
-  once the turn's process is dead) kills that process and answers the prompt
+  once the turn's process is dead) stops that process and answers the prompt
   `{:error, :cancelled}`. Pass `ref: ref` to `call/4` to know the prompt's
   ref; it must be a fresh `make_ref/0`, used for one call only. A prompt is
   also cancelled when its caller goes down, or when `call/4` times out (the
@@ -52,7 +52,7 @@ defmodule Raxol.Agent.Comm do
   process crashed or was killed), `update/2` then receives
   `{:acp_cancel, turn_ref}`, so an agent drops what it tracks for the turn
   in one place. An inline `reply/3` ends the turn even while its
-  `run_turn/3` process runs: that process is killed first, and `update/2`
+  `run_turn/3` process runs: that process is stopped first, and `update/2`
   receives `{:acp_cancel, turn_ref}` too. The session does not check a
   reply's shape: whatever the agent passes to `reply/3`, or `run_turn/3`'s
   function returns, reaches the caller as is.
@@ -198,10 +198,17 @@ defmodule Raxol.Agent.Comm do
 
   @doc """
   Answer an `{:acp_prompt, text, approver}` call by running `fun` in a turn
-  process the session owns; `fun`'s return is the reply. `{:acp_cancel, ref}`
-  kills that process. Call it from `update/2` with the ref in the prompt it
-  received (the session's `turn_ref`) and `session`, the pid in the prompt's
-  caller position (the session stands in for the real caller).
+  process the session owns; `fun`'s return is the reply. Call it from
+  `update/2` with the ref in the prompt it received (the session's
+  `turn_ref`) and `session`, the pid in the prompt's caller position (the
+  session stands in for the real caller).
+
+  `{:acp_cancel, ref}` stops that process: it gets an exit signal with reason
+  `:shutdown`, and `:kill` if it is still alive after
+  `config :raxol_agent, :turn_cancel_grace_ms` (default 500). A `fun` that
+  starts something its own death does not end (a Port's OS process) traps
+  exits and, on `{:EXIT, _from, :shutdown}`, stops it before returning; a
+  `fun` that does not trap exits ends at once.
   """
   @spec run_turn(pid(), reference(), (-> term())) :: :ok
   def run_turn(session, ref, fun)

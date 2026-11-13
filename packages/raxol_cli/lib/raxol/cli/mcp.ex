@@ -105,7 +105,10 @@ defmodule Raxol.CLI.MCP do
   a session running in this VM: `raxol mcp` is its own OS process, and the
   only thing in it that starts sessions is `raxol_start` on this server.
   Under `--no-derived` the session URIs that list tools are denied too.
-  Every other read is denied.
+
+  `resources/read` of an agent journal (`raxol://agent/<id>/journal`) is
+  allowed here and decided by the resource itself: `Raxol.Agent.McpTools`
+  serves only the journals of agents it started. Every other read is denied.
   """
   @spec authorize_read(String.t(), map(), map()) :: :allow | {:deny, String.t()}
   def authorize_read(method, _detail, _ctx) when method in @listing_methods, do: :allow
@@ -124,6 +127,12 @@ defmodule Raxol.CLI.MCP do
       true ->
         :allow
     end
+  end
+
+  def authorize_read("resources/read", %{"uri" => "raxol://agent/" <> _ = uri}, _ctx) do
+    if Raxol.Agent.McpTools.journal_uri?(uri),
+      do: :allow,
+      else: {:deny, "raxol mcp serves no such agent resource"}
   end
 
   def authorize_read(method, _detail, _ctx),

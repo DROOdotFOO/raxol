@@ -1,6 +1,19 @@
 defmodule Raxol.Agent.Reference.Counter do
   @moduledoc """
-  Reference agent for the agent turn contract (see `Raxol.Agent.Comm`).
+  Reference agent: a counter, for tests, smoke runs and as a template.
+
+  The count lives in the model only. A journal outlives the agent and a model
+  does not, so an agent started again under the same id continues its journal
+  and counts from zero: journal continues, state fresh.
+
+  ## Plain calls
+
+  A `Raxol.Agent.Comm.call/3` whose message is a binary is answered with a
+  binary through `Raxol.Agent.Comm.reply/3`: `increment` and `get` reply
+  `"count: N"`, anything else replies the command list. No approver travels
+  with a plain call, so `reset` is not offered here.
+
+  ## Turns
 
   Answers `{:acp_prompt, text, approver}` with `{:ok, text, usage}`. The
   prompt text is one command:
@@ -15,7 +28,7 @@ defmodule Raxol.Agent.Reference.Counter do
   Actions run through `Raxol.Agent.Action.ToolConverter` with `approver` as
   the turn's `:tool_authorizer`, in the turn process
   `Raxol.Agent.Comm.run_turn/3` starts, never in the agent process: a
-  blocked approver holds up only its turn, and a cancel kills it. `increment`
+  blocked approver holds up only its turn, and a cancel stops it. `increment`
   and `reset` return a change that the turn process sends back to `update/2`,
   which applies it and hands the new count to the turn for its reply, so a
   turn cancelled before its change is sent changes nothing; a change already
@@ -70,6 +83,7 @@ defmodule Raxol.Agent.Reference.Counter do
   @actions [Increment, Reset, Hold]
   @usage %{input_tokens: 0, output_tokens: 0}
   @help "commands: increment, get, reset, hold, release"
+  @plain_help "commands: increment, get"
 
   def init(_context), do: %{count: 0, holds: MapSet.new(), changes: %{}}
 
@@ -80,6 +94,10 @@ defmodule Raxol.Agent.Reference.Counter do
         model
       ),
       do: prompt(String.trim(text), session, ref, approver, model)
+
+  def update({:agent_message, _from, {:call, caller, ref, message}}, model)
+      when is_pid(caller) and is_reference(ref) and is_binary(message),
+      do: plain(String.trim(message), caller, ref, model)
 
   def update({:agent_message, _from, {:acp_cancel, ref}}, model) do
     model = %{model | holds: MapSet.delete(model.holds, ref)}
@@ -101,6 +119,22 @@ defmodule Raxol.Agent.Reference.Counter do
   end
 
   def update(_msg, model), do: {model, []}
+
+  defp plain("increment", caller, ref, model) do
+    count = model.count + 1
+    Comm.reply(caller, ref, "count: #{count}")
+    {%{model | count: count}, []}
+  end
+
+  defp plain("get", caller, ref, model) do
+    Comm.reply(caller, ref, "count: #{model.count}")
+    {model, []}
+  end
+
+  defp plain(_unknown, caller, ref, model) do
+    Comm.reply(caller, ref, @plain_help)
+    {model, []}
+  end
 
   defp prompt(command, session, ref, approver, model) when command in ["increment", "reset"] do
     agent = self()

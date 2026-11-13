@@ -240,6 +240,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
         "command_result" => %{message: "delta"},
         "turn_completed" => %{},
         "error" => %{reason: "boom"},
+        "turn_canceled" => %{reason: "cancelled"},
         "_fallback" => %{message: "unknown"}
       }
 

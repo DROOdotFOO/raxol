@@ -6,6 +6,7 @@ defmodule Raxol.Agent.Journal.FileStore do
       <base>/<session_id>/
       ├── meta.json          # created_at, cwd, git branch, title, schema_version
       ├── HEAD               # sidecar: current durable offset + config
+      ├── writer.lock        # the live Writer's OS pid + BEAM start time
       ├── journal/
       │   ├── 000001.jsonl   # framed JSONL, size-capped ascending segments
       │   └── 000002.jsonl
@@ -83,32 +84,39 @@ defmodule Raxol.Agent.Journal.FileStore do
 
   @doc """
   The current durable high-watermark (highest offset) for `session_id`, read
-  read-side via the tolerant Reader — `0` for an empty/absent/damaged journal.
+  read-side via the tolerant Reader — `0` for an empty/absent/damaged journal,
+  `{:error, :invalid_session_id}` for an id that names no session directory.
 
   Used by the `attach` command's `:live` history policy to stream only records
   above the decision-time watermark (`from_offset = high_watermark + 1`).
   """
-  @spec high_watermark(String.t(), keyword()) :: non_neg_integer()
-  def high_watermark(session_id, opts \\ []) when is_binary(session_id) do
-    Reader.last_offset(session_dir(session_id, opts))
+  @spec high_watermark(term(), keyword()) ::
+          non_neg_integer() | {:error, :invalid_session_id}
+  def high_watermark(session_id, opts \\ []) do
+    with :ok <- validate_session_id(session_id) do
+      Reader.last_offset(session_dir(session_id, opts))
+    end
   end
 
   @doc """
   Read `session_id`'s durable records read-side via the tolerant Reader
   (writerless-safe — no Writer needed). `{:error, :damaged}` on interior
-  corruption (the damaged content is never surfaced). Used by the read-side
-  reattach and seek paths.
+  corruption (the damaged content is never surfaced),
+  `{:error, :invalid_session_id}` for an id that names no session directory.
+  Used by the read-side reattach and seek paths.
   """
-  @spec read_records(String.t(), keyword()) ::
-          {:ok, [map()]} | {:error, :damaged}
-  def read_records(session_id, opts \\ []) when is_binary(session_id) do
+  @spec read_records(term(), keyword()) ::
+          {:ok, [map()]} | {:error, :damaged | :invalid_session_id}
+  def read_records(session_id, opts \\ []) do
     # Read-side only: never self-heal (physically truncate) a torn tail
     # here — the dir may belong to a live Writer in another OS process
     # (a concurrent `--replay`), or sit on read-only media. The partial
     # line is tolerated in-memory; the Writer heals it at its own boot.
-    case Reader.scan(session_dir(session_id, opts)) do
-      {:ok, records} -> {:ok, records}
-      {:damaged, _partial} -> {:error, :damaged}
+    with :ok <- validate_session_id(session_id) do
+      case Reader.scan(session_dir(session_id, opts)) do
+        {:ok, records} -> {:ok, records}
+        {:damaged, _partial} -> {:error, :damaged}
+      end
     end
   end
 
@@ -126,6 +134,12 @@ defmodule Raxol.Agent.Journal.FileStore do
     * `:private` — `true` for a journal only this account can read (see
       "Private journals"): directories 0700, files 0600, and an untrusted base
       or session directory refused with `{:error, {:untrusted_dir, {path, reason}}}`.
+    * `:require_lock` — `true` to refuse a journal whose cross-process writer
+      lock cannot be taken (no `kill`, a non-Unix host, the lock file cannot be
+      created) with `{:error, {:journal_locked, :lock_unavailable}}`, instead
+      of writing without one. A live holder is refused either way, as
+      `{:error, {:journal_locked, os_pid}}`;
+      `Raxol.Agent.Journal.FileStore.Writer.lock_path/1` names the lock file.
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
@@ -165,17 +179,41 @@ defmodule Raxol.Agent.Journal.FileStore do
              owner?: false
            }}
 
-        # `Writer.init/1` answers a live foreign lock holder with `:ignore`
-        # (an abnormal init exit would kill this non-trapping caller before it
-        # could read an error). Report it as the refusal it is; the pre-flight
-        # above names the holder in the common case, and this covers the race
-        # where the lock was taken between the check and the start.
+        # `Writer.init/1` answers a live foreign lock holder, and a lock it was
+        # required to take and could not, with `:ignore` (an abnormal init exit
+        # would kill this non-trapping caller before it could read an error).
+        # Report it as the refusal it is; the pre-flight above names the holder
+        # in the common case, and this covers the race where the lock was taken
+        # between the check and the start.
         :ignore ->
-          {:error, {:journal_locked, Writer.lock_holder(dir)}}
+          {:error, {:journal_locked, lock_refusal(dir, opts)}}
 
         {:error, _} = err ->
           err
       end
+    end
+  end
+
+  defp lock_refusal(dir, opts) do
+    case {Writer.lock_holder(dir), Keyword.get(opts, :require_lock, false)} do
+      {nil, true} -> :lock_unavailable
+      {holder, _required?} -> holder
+    end
+  end
+
+  @doc """
+  The decoded `meta.json` of an open journal: what its first opener recorded
+  (`"cwd"`, `"title"`, `"created_at"`, ...). `{:error, reason}` when the file
+  is missing or is not a JSON object.
+  """
+  @spec read_meta(t()) :: {:ok, map()} | {:error, term()}
+  def read_meta(%__MODULE__{dir: dir}) do
+    with {:ok, body} <- File.read(Path.join(dir, "meta.json")),
+         {:ok, %{} = meta} <- Jason.decode(body) do
+      {:ok, meta}
+    else
+      {:ok, _not_an_object} -> {:error, :invalid_meta}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -410,6 +448,9 @@ defmodule Raxol.Agent.Journal.FileStore do
   end
 
   defp validate_session_id(id) when id in [".", ".."],
+    do: {:error, :invalid_session_id}
+
+  defp validate_session_id(id) when not is_binary(id),
     do: {:error, :invalid_session_id}
 
   defp validate_session_id(id) do

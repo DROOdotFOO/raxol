@@ -18,22 +18,62 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   ## Single-writer across OS processes
 
-  The process name is `{:global, {Writer, dir}}`, but `:global` only spans a
-  CONNECTED cluster — two unclustered OS processes on one session dir would
-  each start a Writer and mint duplicate offsets, permanently damaging the
-  journal. A pid lock file (`writer.lock`) closes the same-host case: it is
-  acquired at init and released on terminate, a stale lock (dead holder) is
-  reclaimed via `kill -0`, and init refuses (`{:stop, {:journal_locked, _}}`)
-  ONLY when a confirmed-live foreign process holds it. The lock fails OPEN
-  (proceeds lockless) where it cannot prove liveness (non-Unix / no `kill`) so
-  a lock-subsystem hiccup can never block journaling. Residual: two processes
-  both reclaiming the same stale lock in the same instant still race.
+  The process name is `{:global, {Writer, key}}`, keyed on the session
+  directory's device and inode (its symlink-resolved path where a directory
+  has no inode), so every spelling of one directory names one Writer. But
+  `:global` only spans a CONNECTED cluster — two unclustered OS processes on
+  one session dir would each start a Writer and mint duplicate offsets,
+  permanently damaging the journal. A lock file (`writer.lock`) closes the
+  same-host case. It holds the writer's OS pid and a token for when that BEAM
+  started, and is removed on terminate if it is still this Writer's. The
+  token is `ticks:<n>` on Linux (`starttime` in `/proc/<pid>/stat`, clock
+  ticks since boot) and `lstart:<time>` elsewhere (`ps -o lstart=`, read with
+  `LC_ALL=C TZ=UTC`). Linux does not use `ps`: procps derives `lstart` from
+  the current time and the uptime on every run, so one process can print two
+  start times.
+
+  The lock appears already filled: its content is written to
+  `writer.lock.tmp.<our pid>` and that file is linked to `writer.lock`, which
+  fails if a lock exists. No reader sees an empty or partial lock, so an
+  empty one is a leftover and stale.
+
+  A holder counts as alive only when `kill -0 <pid>` succeeds and the pid is
+  a `beam` whose start equals the recorded token, so a pid the OS reused for
+  another program, or for a later BEAM, is stale. So is a pid `kill -0` may
+  not signal (another account's process): a private journal's directory is
+  0700, and no other account's BEAM can hold its lock. A lock with no token,
+  or a token of another kind than this host reads, is judged by the pid and
+  the `beam` name alone. A holder whose state cannot be read (`ps` fails, or
+  this BEAM cannot read its own start) counts as alive: only "no such
+  process" makes it gone. `kill` and `ps` are run from `/bin` or `/usr/bin`
+  when they are there, and looked up on `PATH` only otherwise.
+
+  A lock naming this BEAM's own pid is stale: a second Writer for the same
+  directory cannot be running here.
+
+  A stale lock is removed inside a gate, `writer.lock.reclaim`, which is
+  created the same way as the lock, and only if it still reads as it did when
+  it was judged; the reclaimer then creates `writer.lock` as above. So one
+  reclaimer acts at a time and none removes a lock created after it looked. A
+  claimer that finds a live BEAM in the gate is refused: that BEAM, or a
+  claimer that beats it to the lock, is taking the journal. A gate whose
+  holder is gone was left by a reclaimer that died inside it, and the next one
+  removes it. Residual: two claimers that judge such a leftover gate at once
+  can both enter.
+
+  Init refuses when a confirmed-live foreign BEAM holds the lock. Where no
+  lock can be taken (non-Unix, no `kill`, the lock file cannot be created)
+  the Writer proceeds without one, so a lock-subsystem hiccup never blocks
+  journaling, unless it was started with `require_lock: true`: then it
+  refuses too, and `FileStore.open/2` answers
+  `{:error, {:journal_locked, :lock_unavailable}}`.
 
   A refusal is `:ignore`, never `{:stop, reason}`: an abnormal init exit also
   reaches the linked opener as an exit signal, which kills a non-trapping
-  caller before it can read the `{:error, _}` return. Refusing to journal must
-  degrade the session, not end it — `FileStore.open/2` turns the `:ignore`
-  into `{:error, {:journal_locked, _}}` and the surface carries on unjournaled.
+  caller before it can read the `{:error, _}` return. `FileStore.open/2`
+  turns the `:ignore` into `{:error, {:journal_locked, _}}`; what the opener
+  does then is its own choice (a surface carries on unjournaled, a session
+  that requires its journal does not start).
 
   ## Write-failure tolerance
 
@@ -76,6 +116,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   @default_immediate_types ["tool_result", "approval"]
   @default_schema_version "1.2.0"
   @lock_file "writer.lock"
+  @claim_attempts 3
 
   defstruct [
     :session_id,
@@ -93,6 +134,11 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     # The path of the cross-process lock file when THIS Writer owns it; nil
     # when the lock was skipped (non-Unix / no `kill`) or not acquired.
     :lock_path,
+    # What this Writer wrote into the lock: it removes only a lock that still
+    # says so.
+    :lock_identity,
+    # The key of this Writer's `:global` name.
+    :name_key,
     # Chained journals only: `{:ok, tip_hash}` while the chain verifies,
     # `:damaged` when it did not at start. nil for an unchained journal.
     chain: nil,
@@ -115,6 +161,9 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   def start_link(opts) do
     dir = Keyword.fetch!(opts, :dir)
+    # The name is keyed on the directory's inode, so the directory is made
+    # first; `init/1` reports a directory that cannot be.
+    _ = File.mkdir_p(dir)
     # Single-writer invariant: at most one Writer per physical journal dir,
     # globally (survives across processes and — on shared storage — nodes).
     # A second `start_link` for the same dir returns `{:error, {:already_started, pid}}`
@@ -122,8 +171,50 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     GenServer.start_link(__MODULE__, opts, name: global_name(dir))
   end
 
+  @max_links 32
+
   @doc false
-  def global_name(dir), do: {:global, {__MODULE__, dir}}
+  def global_name(dir), do: {:global, name_key(dir)}
+
+  @doc "The Writer that has the journal in `dir` open, or `nil`."
+  @spec whereis(Path.t()) :: pid() | nil
+  def whereis(dir) do
+    case :global.whereis_name(name_key(dir)) do
+      pid when is_pid(pid) -> pid
+      :undefined -> nil
+    end
+  end
+
+  # The directory itself, however its path is spelled: another case on a
+  # case-insensitive volume, a symlink, `..`. The path stands in only where
+  # there is no inode to read.
+  defp name_key(dir) do
+    case File.stat(dir) do
+      {:ok, %File.Stat{major_device: device, inode: inode}} when inode != 0 ->
+        {__MODULE__, {device, inode}}
+
+      _no_inode ->
+        {__MODULE__, canonical(dir, @max_links)}
+    end
+  end
+
+  # One spelling per directory: expanded, with every symlink on the way
+  # resolved, so two paths to one journal cannot name two Writers.
+  defp canonical(dir, links) do
+    [root | parts] = dir |> Path.expand() |> Path.split()
+
+    Enum.reduce(parts, root, fn part, resolved ->
+      path = Path.join(resolved, part)
+
+      case links > 0 and :file.read_link_all(path) do
+        {:ok, target} ->
+          target |> IO.chardata_to_string() |> Path.expand(resolved) |> canonical(links - 1)
+
+        _not_a_link ->
+          path
+      end
+    end)
+  end
 
   @spec append(pid(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def append(pid, event), do: GenServer.call(pid, {:append, event})
@@ -175,25 +266,29 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
     File.mkdir_p!(journal_dir)
     File.mkdir_p!(Path.join(dir, "snapshots"))
-    sweep_tmp_files(dir)
 
     # Cross-process single-writer lock. `:global` (the process name) only spans
     # a CONNECTED cluster, so two unclustered OS processes on one session dir
     # would each start a Writer and mint duplicate offsets, permanently
-    # damaging the journal. A pid lock file closes the same-host case; it fails
-    # OPEN (proceeds without a lock) on any uncertainty, and refuses ONLY when
-    # the holder is a confirmed-live foreign OS process.
-    case acquire_lock(dir, private?(opts)) do
+    # damaging the journal. A pid lock file closes the same-host case. It
+    # refuses when the holder is a confirmed-live foreign BEAM and, unless
+    # `require_lock: true`, proceeds without a lock where none can be taken.
+    identity = lock_identity()
+
+    case acquire_lock(dir, identity, opts) do
       {:ok, lock_path} ->
         try do
-          init_after_lock(opts, dir, session_id, journal_dir, lock_path)
+          # Only now: before the claim, a temp file here may belong to the
+          # Writer that holds the journal.
+          sweep_tmp_files(dir)
+          init_after_lock(opts, dir, session_id, journal_dir, {lock_path, identity})
         rescue
           error ->
-            release_lock_on_init_failure(lock_path)
+            release_lock(lock_path, identity)
             reraise error, __STACKTRACE__
         catch
           kind, reason ->
-            release_lock_on_init_failure(lock_path)
+            release_lock(lock_path, identity)
             :erlang.raise(kind, reason, __STACKTRACE__)
         end
 
@@ -206,23 +301,32 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
         # the session down with it. `:ignore` exits `:normal`, so `start_link`
         # returns cleanly and `FileStore.open/2` maps it to the documented
         # `{:error, {:journal_locked, _}}`.
-        Logger.warning(
-          "journal writer refused: #{inspect(dir)} is locked by live " <>
-            "OS process #{inspect(holder)}"
-        )
+        Logger.warning("journal writer refused: #{refusal(dir, holder)}")
 
         :ignore
     end
   end
 
-  # An init failure AFTER the lock was taken (a segment open on a full disk, a
-  # stat race) never reaches terminate, so the lock would be left holding THIS
-  # live BEAM's pid — and every future open of the session would then be
-  # refused (a confirmed-live holder) until the node restarts. Release it here.
-  defp release_lock_on_init_failure(nil), do: :ok
-  defp release_lock_on_init_failure(path), do: File.rm(path)
+  defp refusal(dir, :lock_unavailable),
+    do: "no lock could be taken on #{inspect(dir)} and :require_lock is set"
 
-  defp init_after_lock(opts, dir, session_id, journal_dir, lock_path) do
+  defp refusal(dir, holder),
+    do: "#{inspect(dir)} is locked by live OS process #{inspect(holder)}"
+
+  # The lock goes only while it still says what this Writer wrote: one that
+  # another process has since claimed is that process's. An init failure
+  # after the lock was taken never reaches `terminate/2`, so it releases here,
+  # or the lock would name this live BEAM until the node restarts.
+  defp release_lock(nil, _identity), do: :ok
+
+  defp release_lock(path, identity) do
+    case File.read(path) do
+      {:ok, ^identity} -> File.rm(path)
+      _not_ours -> :ok
+    end
+  end
+
+  defp init_after_lock(opts, dir, session_id, journal_dir, {lock_path, lock_identity}) do
     schema_version = Keyword.get(opts, :schema_version, @default_schema_version)
     seg_cap = Keyword.get(opts, :segment_cap, @default_segment_cap)
 
@@ -251,6 +355,8 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       immediate_types: immediate_types,
       sync_ceiling_ms: Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms),
       lock_path: lock_path,
+      lock_identity: lock_identity,
+      name_key: name_key(dir),
       chain: chain,
       private?: private?(opts)
     }
@@ -401,13 +507,14 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   def terminate(_reason, state) do
     state = flush_now(state)
     if state.io, do: :file.close(state.io)
+    # The lock first, then the name: once the name is free a successor may
+    # start, and it must not find this Writer about to remove a lock (a crash
+    # leaves the lock behind, and the stale-lock reclaim handles that).
+    release_lock(state.lock_path, state.lock_identity)
     # Free the global name synchronously (before the process exits) so a
     # close-then-reopen on the same dir never races the async :global cleanup
     # and gets handed the corpse of the writer we just stopped.
-    if state.dir, do: :global.unregister_name({__MODULE__, state.dir})
-    # Release the cross-process lock so the next opener re-acquires cleanly
-    # (a crash leaves it behind, but the stale-pid reclaim below handles that).
-    if state.lock_path, do: File.rm(state.lock_path)
+    if state.name_key, do: :global.unregister_name(state.name_key)
     :ok
   end
 
@@ -689,13 +796,14 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   # --- cross-process single-writer lock --------------------------------------
 
-  # Acquire the pid lock for `dir`. Returns `{:ok, lock_path | nil}` to proceed
-  # (lock_path is nil when locking is unavailable — we degrade rather than block
-  # journaling) or `{:refused, holder_pid}` only when a CONFIRMED-live foreign
-  # OS process already holds it.
+  @doc "The path of `dir`'s writer lock file."
+  @spec lock_path(Path.t()) :: Path.t()
+  def lock_path(dir), do: Path.join(dir, @lock_file)
+
   @doc """
-  The OS pid holding `dir`'s writer lock when it is a CONFIRMED-LIVE foreign
-  process, else `nil` (no lock, a stale one, our own, or liveness unprovable).
+  The OS pid holding `dir`'s writer lock, or reclaiming a stale one, when it
+  is a CONFIRMED-LIVE foreign BEAM, else `nil` (no lock, a stale one, our own,
+  or liveness unprovable).
 
   A read-only pre-flight for `FileStore.open/2`, so a refusal is reported as
   a plain `{:error, {:journal_locked, holder}}` naming the holder. It does not
@@ -703,32 +811,59 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   """
   @spec lock_holder(Path.t()) :: String.t() | nil
   def lock_holder(dir) do
-    with true <- lockable?(),
-         {:ok, contents} <- File.read(Path.join(dir, @lock_file)),
-         holder when holder != "" <- String.trim(contents),
-         false <- holder == System.pid(),
-         true <- os_pid_alive?(holder) do
+    if lockable?() do
+      live_holder(lock_path(dir)) || live_holder(lock_path(dir) <> ".reclaim")
+    end
+  end
+
+  defp live_holder(path) do
+    with {:ok, contents} <- File.read(path),
+         {:live, holder} <- holder_state(contents) do
       holder
     else
       _no_live_foreign_holder -> nil
     end
   end
 
-  defp acquire_lock(dir, private?) do
-    if lockable?() do
-      claim_lock(Path.join(dir, @lock_file), System.pid(), private?)
-    else
-      {:ok, nil}
+  # Returns `{:ok, lock_path}` to proceed holding the lock, `{:ok, nil}` to
+  # proceed without one (locking is unavailable and was not required),
+  # `{:refused, holder_pid}` when a confirmed-live foreign BEAM holds it, and
+  # `{:refused, :lock_unavailable}` when `require_lock: true` and no lock
+  # could be taken.
+  defp acquire_lock(dir, identity, opts) do
+    claimed =
+      if lockable?() do
+        sweep_lock_leftovers(dir)
+        claim_lock(lock_path(dir), identity, private?(opts), @claim_attempts)
+      else
+        {:ok, nil}
+      end
+
+    case {claimed, Keyword.get(opts, :require_lock, false)} do
+      {{:ok, nil}, true} -> {:refused, :lock_unavailable}
+      {claimed, _required?} -> claimed
     end
   end
 
-  defp claim_lock(path, our_pid, private?) do
-    case write_lock(path, our_pid, [:exclusive], private?) do
+  # A claimer that loses a round (the lock was released or reclaimed under it)
+  # starts over; one still losing after `@claim_attempts` rounds goes without a
+  # lock rather than spin.
+  defp claim_lock(path, _identity, _private?, 0) do
+    Logger.warning(
+      "journal writer lock not acquired on #{inspect(Path.dirname(path))}: " <>
+        "kept losing the claim"
+    )
+
+    {:ok, nil}
+  end
+
+  defp claim_lock(path, identity, private?, attempts) do
+    case create_lock(path, identity, private?) do
       :ok ->
         {:ok, path}
 
       {:error, :eexist} ->
-        resolve_existing_lock(path, our_pid, private?)
+        resolve_existing_lock(path, identity, private?, attempts)
 
       {:error, reason} ->
         # Could not even create the lock (e.g. a read-only dir): do not block
@@ -738,53 +873,171 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
-  defp resolve_existing_lock(path, our_pid, private?) do
+  defp resolve_existing_lock(path, identity, private?, attempts) do
     case File.read(path) do
-      {:ok, contents} ->
-        holder = String.trim(contents)
-
-        cond do
-          holder == "" or holder == our_pid -> reclaim_lock(path, our_pid, private?)
-          os_pid_alive?(holder) -> {:refused, holder}
-          true -> reclaim_lock(path, our_pid, private?)
+      {:ok, contents} = judged ->
+        case holder_state(contents) do
+          {:live, holder} -> {:refused, holder}
+          :stale -> reclaim_lock(path, judged, identity, private?, attempts)
         end
 
-      {:error, _reason} ->
+      {:error, :enoent} ->
+        # Released between the create and the read.
+        claim_lock(path, identity, private?, attempts - 1)
+
+      {:error, _reason} = judged ->
         # Unreadable lock: treat as stale and reclaim (fail open).
-        reclaim_lock(path, our_pid, private?)
+        reclaim_lock(path, judged, identity, private?, attempts)
     end
   end
 
-  defp reclaim_lock(path, our_pid, private?) do
-    case write_lock(path, our_pid, [], private?) do
-      :ok -> {:ok, path}
-      {:error, _reason} -> {:ok, nil}
+  # `{:live, pid}` for a lock a live foreign BEAM holds; `:stale` for an empty
+  # or malformed one, one naming this BEAM's own pid (left by a Writer here
+  # that never ran `terminate/2`, or by an earlier process with the same pid)
+  # and one whose holder is gone.
+  defp holder_state(contents) do
+    with [pid | start] <- String.split(String.trim(contents), " ", parts: 2),
+         true <- Regex.match?(~r/\A\d+\z/, pid),
+         false <- pid == System.pid(),
+         true <- holder_alive?(pid, parse_start(List.first(start))) do
+      {:live, pid}
+    else
+      _ -> :stale
     end
   end
 
-  # `File.write/3`, except that a private journal's lock is 0600 before the
-  # pid is written into it.
-  defp write_lock(path, our_pid, modes, private?) do
-    case :file.open(path, [:write, :raw, :binary | modes]) do
-      {:ok, io} ->
-        result = with :ok <- restrict(path, private?), do: :file.write(io, our_pid)
-        _ = :file.close(io)
-        result
+  # `judged` is what reading the lock returned when it was found stale. The
+  # lock is removed only inside the gate and only if it still reads that way,
+  # so a lock another reclaimer created in the meantime is left alone.
+  defp reclaim_lock(path, judged, identity, private?, attempts) do
+    gate = path <> ".reclaim"
 
-      {:error, _reason} = error ->
-        error
+    case create_lock(gate, identity, private?) do
+      :ok ->
+        if File.read(path) == judged, do: File.rm(path)
+        File.rm(gate)
+        claim_lock(path, identity, private?, attempts - 1)
+
+      {:error, :eexist} ->
+        behind_reclaimer(gate, path, identity, private?, attempts)
+
+      {:error, reason} ->
+        Logger.warning("journal writer lock reclaim failed: #{inspect(reason)}")
+        {:ok, nil}
     end
+  end
+
+  # Another reclaimer has the gate. A live one is about to hold the lock, or
+  # to lose it to a claimer that does. A gate whose holder is gone is removed,
+  # if it is still that gate; one that vanished means its reclaimer is done.
+  defp behind_reclaimer(gate, path, identity, private?, attempts) do
+    read = File.read(gate)
+
+    case gate_holder(read) do
+      {:live, holder} ->
+        {:refused, holder}
+
+      :stale ->
+        if File.read(gate) == read, do: File.rm(gate)
+        claim_lock(path, identity, private?, attempts - 1)
+
+      :gone ->
+        claim_lock(path, identity, private?, attempts - 1)
+    end
+  end
+
+  defp gate_holder({:ok, contents}), do: holder_state(contents)
+  defp gate_holder({:error, _gone_or_unreadable}), do: :gone
+
+  # The lock is linked into place from a file that already holds the identity
+  # (0600 first, for a private journal), so it never exists empty or half
+  # written, and the link fails with `:eexist` if a lock is there.
+  defp create_lock(path, identity, private?) do
+    tmp = path <> ".tmp." <> System.pid()
+
+    result =
+      with :ok <- write_temp(tmp, identity, private?),
+           do: :file.make_link(tmp, path)
+
+    _ = File.rm(tmp)
+    result
+  end
+
+  # What a claimer killed mid-claim left behind: the temp file of a lock or of
+  # a gate. One of a live process is in use and stays.
+  defp sweep_lock_leftovers(dir) do
+    with {:ok, names} <- File.ls(dir) do
+      for name <- names,
+          [_name, pid] <- [Regex.run(~r/\Awriter\.lock(?:\.reclaim)?\.tmp\.(\d+)\z/, name)],
+          pid == System.pid() or not signalable?(pid),
+          do: File.rm(Path.join(dir, name))
+    end
+
+    :ok
   end
 
   # Locking needs a way to prove the holder is dead before reclaiming a stale
   # lock; without that a crash would lock the session out forever. Only enable
   # it where `kill -0` can answer (Unix with a kill binary).
   defp lockable? do
-    match?({:unix, _}, :os.type()) and System.find_executable("kill") != nil
+    match?({:unix, _}, :os.type()) and tool("kill") != nil
   end
 
-  defp os_pid_alive?(pid) do
-    case System.find_executable("kill") do
+  # `kill` and `ps` decide who holds a journal, so a directory early on `PATH`
+  # must not be able to stand in for them.
+  defp tool(name) do
+    Enum.find(["/bin/" <> name, "/usr/bin/" <> name], &File.regular?/1) ||
+      System.find_executable(name)
+  end
+
+  # What this BEAM writes into a lock: its OS pid and, where it can be read,
+  # the token for its start.
+  defp lock_identity do
+    case own_start() do
+      {:ok, start} -> System.pid() <> " " <> format_start(start)
+      :unknown -> System.pid()
+    end
+  end
+
+  defp format_start({:ticks, ticks}), do: "ticks:#{ticks}"
+  defp format_start({:lstart, time}), do: "lstart:" <> time
+
+  defp parse_start("ticks:" <> ticks) do
+    case Integer.parse(ticks) do
+      {ticks, ""} -> {:ticks, ticks}
+      _malformed -> :unknown
+    end
+  end
+
+  defp parse_start("lstart:" <> time), do: {:lstart, time |> String.split() |> Enum.join(" ")}
+  defp parse_start(_none_or_unknown_kind), do: :unknown
+
+  # This BEAM's start never changes, so one successful read is kept. A failure
+  # is not: it also says other pids cannot be asked about.
+  defp own_start do
+    case :persistent_term.get({__MODULE__, :own_start}, nil) do
+      nil -> read_own_start()
+      start -> {:ok, start}
+    end
+  end
+
+  defp read_own_start do
+    case process(System.pid()) do
+      {:ok, start, _comm} ->
+        :persistent_term.put({__MODULE__, :own_start}, start)
+        {:ok, start}
+
+      _gone_or_unknown ->
+        :unknown
+    end
+  end
+
+  defp holder_alive?(pid, recorded) do
+    signalable?(pid) and beam_alive?(pid, recorded)
+  end
+
+  defp signalable?(pid) do
+    case tool("kill") do
       nil ->
         # Cannot determine liveness — assume alive so we never reclaim a lock
         # that might be held (fail toward refusing a second writer).
@@ -795,6 +1048,103 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   rescue
     _ -> true
+  end
+
+  # Only a holder known to be gone, or known not to be the BEAM the lock
+  # names, is not alive. One whose state cannot be read counts as alive:
+  # reclaiming a live holder's lock is the failure that damages a journal.
+  defp beam_alive?(pid, recorded) do
+    case {own_start(), process(pid)} do
+      {{:ok, _ours}, {:ok, start, comm}} -> beam?(comm) and same_start?(recorded, start)
+      {{:ok, _ours}, :gone} -> false
+      {_ours, _theirs} -> true
+    end
+  end
+
+  defp beam?(comm), do: comm |> Path.basename() |> String.contains?("beam")
+
+  # Tokens of one kind are compared; any other pairing decides nothing.
+  defp same_start?({kind, recorded}, {kind, actual}), do: recorded == actual
+  defp same_start?(_recorded, _actual), do: true
+
+  # `{:ok, start, comm}` for a running pid, `:gone` for one that does not
+  # exist, `:unknown` when that could not be found out.
+  defp process(pid) do
+    case :os.type() do
+      {:unix, :linux} -> proc_stat(pid)
+      _other -> ps(pid)
+    end
+  end
+
+  defp proc_stat(pid) do
+    with {:ok, stat} <- File.read("/proc/#{pid}/stat"),
+         {:ok, comm, ticks} <- parse_proc_stat(stat) do
+      {:ok, {:ticks, ticks}, comm}
+    else
+      {:error, reason} when reason in [:enoent, :esrch] -> :gone
+      _unreadable -> :unknown
+    end
+  end
+
+  @doc false
+  # `comm` and `starttime` (field 22) of a `/proc/<pid>/stat` line. `comm` may
+  # hold spaces and parentheses, so the fields are counted from its last `)`.
+  @spec parse_proc_stat(binary()) :: {:ok, String.t(), non_neg_integer()} | :error
+  def parse_proc_stat(stat) do
+    with [_pid, rest] <- String.split(stat, "(", parts: 2),
+         [_ | _] = closers <- :binary.matches(rest, ")"),
+         {close, 1} = List.last(closers),
+         {:ok, ticks} <- starttime(binary_part(rest, close + 1, byte_size(rest) - close - 1)) do
+      {:ok, binary_part(rest, 0, close), ticks}
+    else
+      _ -> :error
+    end
+  end
+
+  # `after_comm` starts at field 3, so field 22 is its twentieth.
+  defp starttime(after_comm) do
+    with {:ok, starttime} <- after_comm |> String.split() |> Enum.fetch(19),
+         {ticks, ""} <- Integer.parse(starttime) do
+      {:ok, ticks}
+    end
+  end
+
+  defp ps(pid) do
+    case tool("ps") do
+      nil ->
+        :unknown
+
+      exe ->
+        exe
+        |> System.cmd(["-o", "lstart=,comm=", "-p", pid],
+          env: [{"LC_ALL", "C"}, {"TZ", "UTC"}],
+          stderr_to_stdout: true
+        )
+        |> classify_ps()
+    end
+  rescue
+    _ -> :unknown
+  end
+
+  @doc false
+  # What `ps -o lstart=,comm= -p <pid>` said, as `{output, exit status}`.
+  # `lstart` is five fields in the C locale and the rest of the line is
+  # `comm`. Exit 1 with nothing printed is "no such process"; anything else
+  # that is not a row is a `ps` that did not answer.
+  @spec classify_ps({String.t(), non_neg_integer()}) ::
+          {:ok, {:lstart, String.t()}, String.t()} | :gone | :unknown
+  def classify_ps({out, status}) do
+    case {String.split(out), status} do
+      {[_, _, _, _, _, _ | _] = fields, 0} ->
+        {time, comm} = Enum.split(fields, 5)
+        {:ok, {:lstart, Enum.join(time, " ")}, Enum.join(comm, " ")}
+
+      {[], 1} ->
+        :gone
+
+      _no_answer ->
+        :unknown
+    end
   end
 
   defp sync_dir(dir) do
@@ -810,12 +1160,15 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     :ok
   end
 
-  # Remove stray `*.tmp.*` files left by a crash mid-atomic-write on a prior run.
+  # Remove stray `*.tmp.*` files left by a crash mid-atomic-write on a prior
+  # run. A lock's temp file may be a live claimer's: `sweep_lock_leftovers/1`
+  # decides those.
   defp sweep_tmp_files(dir) do
     case File.ls(dir) do
       {:ok, names} ->
         Enum.each(names, fn name ->
-          if String.contains?(name, ".tmp."), do: File.rm(Path.join(dir, name))
+          if String.contains?(name, ".tmp.") and not String.starts_with?(name, @lock_file),
+            do: File.rm(Path.join(dir, name))
         end)
 
       _ ->

@@ -50,4 +50,24 @@ Raxol.Agent.Team.start_link(
 )
 ```
 
+## Agents over MCP
+
+If a `Raxol.MCP.Registry` is running when `Raxol.Agent.McpTools` first starts
+(as under `raxol mcp` and `mix mcp.server`), it registers `agent_spawn`,
+`agent_list`, `agent_ask`, `agent_status`, `agent_stop` and the resource
+`raxol://agent/<id>/journal`. The decision is made once per BEAM.
+
+```elixir
+config :raxol_agent,
+  mcp_spawnable_apps: [MyAgent],      # default: [Raxol.Agent.Reference.Counter]
+  mcp_project_root: "/srv/project",   # default: the working directory
+  mcp_exposed_agents: ["ops"],        # agents started elsewhere, by binary id
+  mcp_tools: true                     # false registers nothing
+```
+
+An agent answers `agent_ask` by replying to a `Raxol.Agent.Comm.call/3` whose
+message is a string. Its journal is kept per project root and continues when
+a stopped id is spawned again with the same app; its state starts from
+`init/1`.
+
 See [main docs](../../README.md) for full examples and the agent framework guide.
