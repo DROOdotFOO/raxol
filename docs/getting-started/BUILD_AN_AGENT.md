@@ -101,19 +101,30 @@ and more. See [Agent Framework](../features/AGENT_FRAMEWORK.md#backends).
 
 ## 4. Skills
 
-Skills are an opt-in callback on the agent module. Turn wires them into every turn:
+Skills are opt-in. Start the store through app config:
+
+```elixir
+config :raxol_agent,
+  skills_provider: Raxol.Agent.Skills.Store,
+  skills_root: "~/.raxol/skills"
+```
+
+Then name the provider on the agent module and add the skill tools to its actions:
 
 ```elixir
 defmodule MyAgent do
   use Raxol.Agent
+
+  def available_actions, do: [Tools.CountLines | Raxol.Agent.Actions.Skills.actions()]
 
   # Read and author SKILL.md procedures.
   def skills_provider, do: Raxol.Agent.Skills.Store
 end
 ```
 
-Setting `skills_provider/0` auto-exposes the skill tools (`skills_list`, `skill_view`,
-`skill_manage`). Nothing else changes: the same `Turn.run/3` call now offers skills.
+`Raxol.Agent.Actions.Skills.actions/0` is the three skill tools (`skills_list`, `skill_view`,
+`skill_manage`). An agent that does not define `available_actions/0` gets them from
+`skills_provider/0` alone. The same `Turn.run/3` call now offers skills.
 
 - [Skill Authoring](../guides/SKILL_AUTHORING.md): how to write a `SKILL.md`.
 
