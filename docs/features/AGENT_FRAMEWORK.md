@@ -219,14 +219,14 @@ continues until it answers in text or `:max_iterations` is reached.
   "refactor lib/foo.ex"
   |> Raxol.Agent.Stream.react(
     backend: MyBackend,
-    actions: MyAgent.available_actions(),
-    context: %{skills: Raxol.Agent.Skills.provider_context(MyAgent.skills_provider())}
+    actions: MyAgent.available_actions()
   )
   |> Raxol.Agent.Stream.collect()
 ```
 
-- `:context` is handed to every tool call. `:skills` is where the skill tools find their
-  store.
+- `:context` is a map handed to every tool call. An agent with a skills provider passes
+  `context: %{skills: Raxol.Agent.Skills.provider_context(provider)}`, which is where the
+  skill tools find their store.
 - The result is a lazy stream of events; `collect/1` drains it to `{:ok, info}`, whose
   `:messages` is the conversation the loop built.
 
