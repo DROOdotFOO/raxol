@@ -722,6 +722,23 @@ defmodule Raxol.HeadlessTest do
       send(dispatcher, :release)
       assert {:ok, %{handled: 1}} = Headless.get_model(id)
     end
+
+    # Both calls return while update/2 is held on the first key, and only this
+    # test releases it: a call that waited for update/2 could not return.
+    test "wait: false returns while update/2 is held, and both keys land" do
+      {:ok, id} = Headless.start(BlockingApp, id: "key_queued")
+      :ok = Headless.send_message(id, {:notify, self()})
+
+      assert :ok = Headless.send_key(id, "b", wait: false)
+      assert_receive {:in_update, dispatcher}
+      assert :ok = Headless.send_key(id, "b", wait: false)
+
+      send(dispatcher, :release)
+      assert_receive {:in_update, ^dispatcher}
+      send(dispatcher, :release)
+
+      assert {:ok, %{handled: 2}} = Headless.get_model(id)
+    end
   end
 
   describe "send_resize/3" do
