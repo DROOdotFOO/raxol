@@ -363,6 +363,10 @@ jobs:
       # scripts/.package-boundaries-allowlist. On a pull request it also fails
       # when that list gained an entry the base commit does not have. Plain
       # `elixir`, no compile.
+      #
+      # The same run holds the runtime/agent line: no runtime-side lib/,
+      # config/ or mix.exs names a module, application or dependency of the
+      # agent side. That rule has no allowlist.
       - name: Check package boundaries
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

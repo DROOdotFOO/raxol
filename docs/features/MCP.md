@@ -102,7 +102,7 @@ The MCP client can read `myapp://state/cart` to inspect what the agent is workin
 
 ## Agents
 
-With `raxol_agent` in the release, `raxol mcp` and `mix mcp.server` also serve `agent_spawn`, `agent_list`, `agent_ask`, `agent_status` and `agent_stop`, and one resource per agent, `raxol://agent/<id>/journal` (`Raxol.Agent.McpTools`). `agent_spawn` starts only the apps in `config :raxol_agent, :mcp_spawnable_apps`, and the tools act only on agents that server started or that `:mcp_exposed_agents` names. These are Raxol agents (`use Raxol.Agent`), not headless sessions: the agent bridge's `agent.*` tools drive a headless session's app instead.
+With `raxol_agent` started, a node whose MCP registry is up before it (`raxol mcp`, `mix mcp.server`, and the default `:full` startup mode) also serves `agent_spawn`, `agent_list`, `agent_ask`, `agent_status` and `agent_stop`, and one resource per agent, `raxol://agent/<id>/journal` (`Raxol.Agent.McpTools`). `agent_spawn` starts only the apps in `config :raxol_agent, :mcp_spawnable_apps`, and the tools act only on agents that server started or that `:mcp_exposed_agents` names. These are Raxol agents (`use Raxol.Agent`), not headless sessions.
 
 ## Test harness
 

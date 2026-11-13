@@ -53,9 +53,10 @@ Raxol.Agent.Team.start_link(
 ## Agents over MCP
 
 If a `Raxol.MCP.Registry` is running when `Raxol.Agent.McpTools` first starts
-(as under `raxol mcp` and `mix mcp.server`), it registers `agent_spawn`,
-`agent_list`, `agent_ask`, `agent_status`, `agent_stop` and the resource
-`raxol://agent/<id>/journal`. The decision is made once per BEAM.
+(as under `raxol mcp`, `mix mcp.server` and the `:full` startup mode), it
+registers `agent_spawn`, `agent_list`, `agent_ask`, `agent_status`,
+`agent_stop` and the resource `raxol://agent/<id>/journal`. The decision is
+made once per BEAM.
 
 ```elixir
 config :raxol_agent,

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Raxol.Payments.Protocols.Xochi.origin_pull_pin_env_config!/0`: reads the
+  origin-pull solver pin from `XOCHI_SOLVER_ETH`, `_BASE`, `_ARBITRUM`,
+  `_OPTIMISM`, `_POLYGON` and `XOCHI_PULL_REQUIRE_SOLVER_PIN`, raises when the
+  result is fail-open, and returns the keyword list for
+  `config :raxol_payments` (the configured addresses plus
+  `PullContracts.pull_recipients/0`). For the `config/runtime.exs` of a release
+  that signs origin pulls.
 - Xochi read capability (xochi#563). `ExecuteResponse.read_token` carries the
   one-time token `POST /api/intent/execute` returns (nil from an older worker;
   excluded from `inspect`). `Xochi.Client.get_status/3` and `get_intent/3` take

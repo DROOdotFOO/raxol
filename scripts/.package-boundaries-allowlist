@@ -10,6 +10,9 @@
 # the package runs without that tree. Remove an entry when the site is fixed
 # (module moved into the owning package, implementation injected via
 # application config, or reference deleted).
+#
+# No entry crosses the runtime/agent line: the checker fails one whose file and
+# owning tree are on different sides of it.
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.BarChart	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.LineChart	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.ScatterChart	raxol
