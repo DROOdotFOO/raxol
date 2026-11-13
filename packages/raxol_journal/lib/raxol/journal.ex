@@ -21,7 +21,7 @@ defmodule Raxol.Journal do
   An alias carries functions and types only. The structs
   (`%Raxol.Agent.Journal.FileStore{}`, `%Raxol.Agent.Contract.Event{}`), the
   behaviours (`Raxol.Agent.Journal`, `Raxol.Agent.Journal.Records.Checkpoint`)
-  and the process and `:persistent_term` names keep the `Raxol.Agent` module.
+  and the process and `:persistent_term` names keep their `Raxol.Agent.*` names.
   """
 
   alias Raxol.Agent.Journal, as: Target

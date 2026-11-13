@@ -36,9 +36,9 @@ defmodule Raxol.Agent.Journal.ReaderHealTest do
 
   describe "read-side scans" do
     test "no read entry point truncates a torn tail", ctx do
-      # Reattach.FileReader.attach/4 and Reattach.Tailer.deliver_new/1 both
-      # reach the journal through Reader.scan/1 with no options, so the first
-      # row covers them too -- and the Tailer re-scans every poll, per viewer.
+      # A read-side attach and a tailer that re-scans every poll both reach
+      # the journal through Reader.scan/1 with no options, so the first row
+      # covers them too.
       readers = [
         {"Reader.scan/1", fn -> Reader.scan(ctx.dir) end},
         {"Reader.last_offset/1", fn -> Reader.last_offset(ctx.dir) end},

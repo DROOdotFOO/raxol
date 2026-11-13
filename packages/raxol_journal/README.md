@@ -114,4 +114,4 @@ golden = Application.app_dir(:raxol_journal, "priv/golden")
 Every module is also reachable under `Raxol.Journal`: `Raxol.Journal.FileStore`
 delegates to `Raxol.Agent.Journal.FileStore`, `Raxol.Journal.Contract` to
 `Raxol.Agent.Contract`, and so on. Structs, behaviours and process names keep
-the `Raxol.Agent` module. `Raxol.Journal` lists the pairs.
+their `Raxol.Agent.*` names. `Raxol.Journal` lists the pairs.
