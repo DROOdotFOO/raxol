@@ -184,7 +184,7 @@ problems =
         "the writer default is #{default_version} but the manifest pins " <>
           "#{inspect(manifest["current_schema_version"])} as current.\n" <>
           "  A schema_version bump must freeze a corpus for the new version:\n" <>
-          "    cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs\n" <>
+          "    (cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs #{goldens_dir})\n" <>
           "    elixir scripts/check_journal_goldens.exs --bless\n" <>
           "  The frozen corpus for every PRIOR version stays exactly as it is —\n" <>
           "  it is the only test material a future upcast-on-read will ever have."

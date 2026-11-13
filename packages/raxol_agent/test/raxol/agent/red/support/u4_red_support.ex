@@ -3,7 +3,7 @@ defmodule Raxol.Agent.Red.U4Support do
   Support harness for the U4-R red suite
   (`test/raxol/agent/red/u4_reattach_red_test.exs`).
 
-  Three responsibilities, mirroring `Raxol.Agent.Invariants.FaultJournal`:
+  Three responsibilities, mirroring `Raxol.Journal.Test.FaultJournal`:
 
     1. **Record builders + journal seeding** against the REAL
        `Raxol.Agent.Journal.FileStore` — no mock journal, ever. Builders cover
@@ -36,8 +36,8 @@ defmodule Raxol.Agent.Red.U4Support do
                                  the meta attach event is best-effort only)
   """
 
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Journal.Test.FaultJournal
 
   # ===========================================================================
   # Fired counters (m1) — same discipline as FaultJournal, U4-R's own sites.

@@ -27,8 +27,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
   import ExUnit.CaptureLog
 
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Journal.Test.FaultJournal
 
   @moduletag :capture_log
 

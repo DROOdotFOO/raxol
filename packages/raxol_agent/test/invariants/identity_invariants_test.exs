@@ -30,10 +30,10 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
 
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.EmitBridge
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Core.Runtime.EmitBus
+  alias Raxol.Journal.Test.FaultJournal
 
   @required_faults [
     :append_fail,

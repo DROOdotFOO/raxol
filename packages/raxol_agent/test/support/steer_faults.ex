@@ -4,7 +4,7 @@ defmodule Raxol.Agent.Red.SteerFaults do
   meta-invariant 1: "every named fault site keeps a counter; the suite FAILS if a
   site never fired — a dead injector = green lies").
 
-  Mirrors `Raxol.Agent.Invariants.FaultJournal`'s counter mechanics, scoped to
+  Mirrors `Raxol.Journal.Test.FaultJournal`'s counter mechanics, scoped to
   the seven U6 steer dead injectors (see `Raxol.Agent.Red.SteerInjectors`'s
   moduledoc table for the full injector -> contour map). A control arms every
   site, records each one as it confirms the matching contour is caught, and

@@ -12,10 +12,6 @@ unless System.get_env("RAXOL_SESSIONS_DIR") do
   System.at_exit(fn _ -> File.rm_rf(sessions_dir) end)
 end
 
-# The fault-injection harness lives under test/invariants/, outside
-# elixirc_paths: load it explicitly.
-Code.require_file("invariants/support/fault_journal.ex", __DIR__)
-
 # POSIX modes, uids and the writer lock's `kill` and `ps` have no Windows form.
 os_excludes =
   case :os.type() do

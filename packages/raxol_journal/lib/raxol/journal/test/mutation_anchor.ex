@@ -1,8 +1,9 @@
-defmodule Raxol.Agent.Invariants.MutationAnchor do
+defmodule Raxol.Journal.Test.MutationAnchor do
   @moduledoc """
-  The anchor check of the mutation-control checklists
-  (`test/invariants/mutation_controls_test.exs`): the line a control tells a
+  The anchor check of a mutation-control checklist: the line a control tells a
   reader to mutate must still exist verbatim in the source.
+
+  For ExUnit suites: a missing anchor fails the calling test.
   """
 
   import ExUnit.Assertions

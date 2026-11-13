@@ -115,3 +115,12 @@ Every module is also reachable under `Raxol.Journal`: `Raxol.Journal.FileStore`
 delegates to `Raxol.Agent.Journal.FileStore`, `Raxol.Journal.Contract` to
 `Raxol.Agent.Contract`, and so on. Structs, behaviours and process names keep
 their `Raxol.Agent.*` names. `Raxol.Journal` lists the pairs.
+
+## Test helpers
+
+`Raxol.Journal.Test.FaultJournal` (fault injection and a raw-read oracle for
+the storage path), `Raxol.Journal.Test.ForeignBeam` (a second BEAM, for the
+writer lock) and `Raxol.Journal.Test.MutationAnchor` are for ExUnit suites:
+this package's and a dependant's. They call ExUnit, which a test run has
+loaded. `:ex_unit` is not among the package's applications, and no other
+module in the package calls them.

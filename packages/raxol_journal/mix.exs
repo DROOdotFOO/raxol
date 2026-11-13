@@ -9,8 +9,6 @@ defmodule RaxolJournal.MixProject do
       app: :raxol_journal,
       version: @version,
       elixir: "~> 1.17 or ~> 1.18 or ~> 1.19 or ~> 1.20",
-      elixirc_paths: elixirc_paths(Mix.env()),
-      test_ignore_filters: ["test/invariants/support/fault_journal.ex"],
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: description(),
@@ -27,9 +25,6 @@ defmodule RaxolJournal.MixProject do
       extra_applications: [:logger, :crypto]
     ]
   end
-
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
-  defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [

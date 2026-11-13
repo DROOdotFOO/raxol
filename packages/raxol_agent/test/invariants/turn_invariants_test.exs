@@ -22,10 +22,10 @@ defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
   @moduletag :capture_log
 
   alias Raxol.Agent.Contract.Event
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Session
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Core.Runtime.EmitBus
+  alias Raxol.Journal.Test.FaultJournal
 
   # A streaming agent: {:park, coordinator, tag} dispatches an async command
   # whose task parks until released, then emits a delta carrying `tag` — so the

@@ -15,8 +15,8 @@ defmodule Raxol.Agent.Invariants.HarnessMetaTest do
 
   @moduletag :capture_log
 
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Journal.Test.FaultJournal
 
   setup do
     base =

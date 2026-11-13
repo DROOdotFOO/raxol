@@ -22,6 +22,8 @@ defmodule Raxol.Journal do
   (`%Raxol.Agent.Journal.FileStore{}`, `%Raxol.Agent.Contract.Event{}`), the
   behaviours (`Raxol.Agent.Journal`, `Raxol.Agent.Journal.Records.Checkpoint`)
   and the process and `:persistent_term` names keep their `Raxol.Agent.*` names.
+
+  `Raxol.Journal.Test.*` are not aliases: they are helpers for ExUnit suites.
   """
 
   alias Raxol.Agent.Journal, as: Target

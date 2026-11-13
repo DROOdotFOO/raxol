@@ -14,13 +14,13 @@ defmodule Raxol.Agent.JournalRequiredTest do
 
   alias Raxol.Agent.Comm
   alias Raxol.Agent.EmitBridge
-  alias Raxol.Agent.ForeignBeam
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
   alias Raxol.Agent.ToolPolicy
   alias Raxol.Core.Runtime.EmitBus
+  alias Raxol.Journal.Test.ForeignBeam
 
   @listener :journal_required_test_listener
 

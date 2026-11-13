@@ -61,11 +61,11 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.Tip
   alias Raxol.Agent.Reattach
   alias Raxol.Agent.Red.U4Support
+  alias Raxol.Journal.Test.FaultJournal
 
   @moduletag :capture_log
 
@@ -427,11 +427,11 @@ defmodule Raxol.Agent.Red.U4ReattachGuardsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.Tip
   alias Raxol.Agent.Reattach
   alias Raxol.Agent.Red.U4Support
+  alias Raxol.Journal.Test.FaultJournal
 
   @moduletag :capture_log
 

@@ -21,7 +21,7 @@ defmodule Raxol.Agent.Invariants.MutationControlsTest do
   """
   use ExUnit.Case, async: true
 
-  import Raxol.Agent.Invariants.MutationAnchor
+  import Raxol.Journal.Test.MutationAnchor
 
   @moduletag :mutation
 

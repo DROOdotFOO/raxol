@@ -31,12 +31,7 @@ defmodule RaxolAgent.MixProject do
     end
   end
 
-  # `raxol_journal`'s test support (`Raxol.Agent.ForeignBeam`, the mutation
-  # anchor check) is used here too; a dependency does not compile its
-  # `test/support`, so it is compiled from there.
-  defp elixirc_paths(:test),
-    do: ["lib", "test/support", Path.expand("../raxol_journal/test/support", __DIR__)]
-
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do

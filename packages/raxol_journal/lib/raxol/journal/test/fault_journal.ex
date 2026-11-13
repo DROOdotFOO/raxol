@@ -1,6 +1,6 @@
-defmodule Raxol.Agent.Invariants.FaultJournal do
+defmodule Raxol.Journal.Test.FaultJournal do
   @moduledoc """
-  Fault-injection harness for the invariant suite.
+  Fault-injection harness for ExUnit suites that exercise the journal.
 
   Instruments the REAL `Raxol.Agent.Journal.FileStore` (no mock journal — the
   code under test is the production storage path) with five named fault sites:

@@ -26,11 +26,11 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   alias Raxol.Agent.Contract
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.EmitBridge
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Agent.StreamPump
   alias Raxol.Core.Runtime.EmitBus
+  alias Raxol.Journal.Test.FaultJournal
 
   @snapshot __DIR__
             |> Path.join("fixtures/contract_snapshot.json")

@@ -1,12 +1,16 @@
-defmodule Raxol.Agent.ForeignBeam do
+defmodule Raxol.Journal.Test.ForeignBeam do
   @moduledoc """
-  A second BEAM OS process with this project's code on its path, for tests of
-  the journal's cross-process writer lock: a holder that is really another
-  BEAM.
+  A second BEAM OS process with every application built beside
+  `raxol_journal` on its path, for tests of the journal's cross-process writer
+  lock: a holder that is really another BEAM.
 
   It lives until its port closes (it reads its stdin to the end), so it ends
   with the test process that started it. `start_supervised/2` also kills it
   when the test exits, which covers a BEAM stuck before it reads.
+
+  For ExUnit suites: `start_supervised/2` registers an `on_exit` callback, so
+  it is called from a test process. Nothing else in this package calls this
+  module.
   """
 
   @type t :: %{port: port(), pid: String.t()}
@@ -40,8 +44,10 @@ defmodule Raxol.Agent.ForeignBeam do
     """
 
     code_paths =
-      Mix.Project.build_path()
-      |> Path.join("lib/*/ebin")
+      :raxol_journal
+      |> Application.app_dir()
+      |> Path.dirname()
+      |> Path.join("*/ebin")
       |> Path.wildcard()
       |> Enum.flat_map(&["-pa", &1])
 

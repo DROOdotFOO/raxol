@@ -103,7 +103,7 @@ reproducible.
 
 | step | command |
 | --- | --- |
-| freeze the current version | `cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs` |
+| freeze the current version | `cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs [DIR]` (`DIR` defaults to `priv/golden` of the `raxol_journal` path dependency) |
 | re-pin the manifest | `elixir scripts/check_journal_goldens.exs --bless` |
 | verify (CI, `format` job) | `elixir scripts/check_journal_goldens.exs` |
 

@@ -5,9 +5,9 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
 
   import ExUnit.CaptureLog
 
-  alias Raxol.Agent.ForeignBeam
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.FileStore.Writer
+  alias Raxol.Journal.Test.ForeignBeam
 
   import Bitwise
 
