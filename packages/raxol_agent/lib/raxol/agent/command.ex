@@ -50,7 +50,7 @@ defmodule Raxol.Agent.Command do
   as a `{:harness_command, action}` OTP message to the session process (the
   U5 turn-supervisor pattern-matches it). The `:prompt` action
   (`{:start_turn, session_id, payload}`) is what the session runtime turns into
-  a `Raxol.Agent.Contract.pump/3` over a `Raxol.Agent.Stream.react/2` run.
+  a `Raxol.Agent.StreamPump.pump/3` over a `Raxol.Agent.Stream.react/2` run.
   Spawning that turn subtree is the session runtime's; this module validates
   and dispatches.
   """
@@ -154,7 +154,7 @@ defmodule Raxol.Agent.Command do
   Dispatch a decoded command into a live `session`.
 
   * `:prompt`    → `{:start_turn, session_id, payload}` — the session runtime
-    pumps a `Raxol.Agent.Stream.react/2` run through `Contract.pump/3`.
+    pumps a `Raxol.Agent.Stream.react/2` run through `StreamPump.pump/3`.
   * `:interrupt` → `{:interrupt, session_id, payload}` — the supervised-kill
     seam (U5).
   * `:steer`     → `{:steer, session_id, payload}` — dispatched the same way;

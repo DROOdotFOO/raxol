@@ -1,6 +1,6 @@
 # Packages
 
-Raxol ships as a main package plus 18 focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
+Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
 
 ## Main
 
@@ -18,6 +18,7 @@ Raxol ships as a main package plus 18 focused subsystems. Use the main `raxol` p
 | [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |
 | [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.7"}`   | Plugin SDK, testing, generator             |
 | [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.7"}`   | Sensor fusion (zero deps)                  |
+| `raxol_journal` (not yet on Hex)                           | `path: "packages/raxol_journal"` | Session journal, event contract         |
 
 ## Agents
 
@@ -33,7 +34,7 @@ Raxol ships as a main package plus 18 focused subsystems. Use the main `raxol` p
 | `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
 | `raxol_broker` (pre-alpha)                                 | `path: "packages/raxol_broker"`   | Fail-closed brokerage policy parsing and initialization |
 
-The **Harness** is the agent-session engine: the event/command contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`. The `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
+The **Harness** is the agent-session engine: the event contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_journal`, the command contract and the session processes in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`. The `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
 `raxol_symphony`, the tracker-driven coding-agent orchestrator, left this repository on 2026-10-27 (ADR-0043). It is frozen at [DROOdotFOO/raxol-symphony](https://github.com/DROOdotFOO/raxol-symphony): archived, unpublished, its raxol dependencies pinned to `ce40937c4`.
 
@@ -56,14 +57,14 @@ raxol_mcp      --> raxol_core
 raxol_liveview --> raxol_core (+ phoenix_live_view optional)
 raxol_plugin   --> raxol_core
 
-raxol_agent    --> raxol + raxol_mcp (+ raxol_web3 optional, for the `web3` tool)
+raxol_agent    --> raxol + raxol_mcp + raxol_journal (+ raxol_web3 optional, for the `web3` tool)
 raxol_payments --> raxol_agent (compile-time only)
 raxol_earn      --> raxol_payments (runtime), raxol_mcp + raxol_agent (compile-time only)
 raxol_agent_client_protocol --> (none; jason only, zero raxol deps)
 raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp --agent`)
 raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
 raxol_web3     --> raxol_core, raxol_mcp (+ mint, castore)
-raxol_broker   --> raxol_agent (+ decimal)
+raxol_broker   --> raxol_agent, raxol_journal (+ decimal)
 
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core (+ raxol/telegex/raxol_gateway optional)
@@ -72,9 +73,10 @@ raxol_gateway  --> raxol_core (+ raxol_agent optional)
 
 raxol_core     --> telemetry (only external dep)
 raxol_sensor   --> (none)
+raxol_journal  --> jason, telemetry (zero raxol deps)
 ```
 
-The main `raxol` package does not depend on `raxol_agent`, `raxol_broker`, `raxol_earn`, `raxol_agent_client_protocol`, `raxol_gateway`, or any of the surface packages. You opt into those.
+The main `raxol` package does not depend on `raxol_journal`, `raxol_agent`, `raxol_broker`, `raxol_earn`, `raxol_agent_client_protocol`, `raxol_gateway`, or any of the surface packages. You opt into those.
 
 ### Boundary rule
 

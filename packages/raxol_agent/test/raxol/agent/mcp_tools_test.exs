@@ -14,12 +14,12 @@ defmodule Raxol.Agent.McpToolsTest do
   @moduletag :capture_log
   @moduletag :unix_only
 
-  alias Raxol.Agent.ForeignBeam
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.McpTools
   alias Raxol.Agent.Reference.Counter
   alias Raxol.Agent.Session
+  alias Raxol.Journal.Test.ForeignBeam
   alias Raxol.MCP.Authorizer
   alias Raxol.MCP.Server
 

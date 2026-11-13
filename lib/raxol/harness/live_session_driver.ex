@@ -212,7 +212,7 @@ defmodule Raxol.Harness.LiveSessionDriver do
   package, scripted fake lane) and
   `packages/raxol_agent/test/raxol/agent/harness/live_session_agent_test.exs`
   (real agent-side lane pieces: real `Interrupt.interrupt/3`, real
-  `Steer.resolve/2`, and the real `SessionStreamer` + `Contract.pump/3`
+  `Steer.resolve/2`, and the real `SessionStreamer` + `StreamPump.pump/3`
   keystone).
   """
 

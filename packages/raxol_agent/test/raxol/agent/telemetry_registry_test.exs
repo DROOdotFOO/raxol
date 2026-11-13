@@ -1,8 +1,9 @@
 defmodule Raxol.Agent.TelemetryRegistryTest do
   @moduledoc """
   Holds `Raxol.Agent.Telemetry`'s registry against the telemetry event
-  literals actually present in this package's `lib/`, so a new event cannot be
-  added without someone classifying it.
+  literals actually present in this package's `lib/` and in `raxol_journal`'s
+  (its events fire inside agent sessions under the same prefix), so a new
+  event cannot be added without someone classifying it.
 
   This is the load-bearing test of the whole mechanism. The classification is
   what makes an event enforceable (`Raxol.Agent.Test.InvariantSentinel` arms
@@ -24,7 +25,9 @@ defmodule Raxol.Agent.TelemetryRegistryTest do
   use ExUnit.Case, async: true
 
   @lib_root Path.expand("../../../lib", __DIR__)
-  @sources Path.wildcard(Path.join(@lib_root, "**/*.ex"))
+  @journal_lib Path.join(Mix.Project.deps_paths()[:raxol_journal], "lib")
+  @journal_sources Path.wildcard(Path.join(@journal_lib, "**/*.ex"))
+  @sources Path.wildcard(Path.join(@lib_root, "**/*.ex")) ++ @journal_sources
 
   for source <- @sources do
     @external_resource source
@@ -48,6 +51,10 @@ defmodule Raxol.Agent.TelemetryRegistryTest do
            "found only #{length(@sources)} modules under #{@lib_root}; if the " <>
              "package layout moved, point this test at its new home rather " <>
              "than deleting it"
+
+    assert @journal_sources != [],
+           "found no modules under #{@journal_lib}; the journal's events are " <>
+             "classified here, so its lib/ has to be scanned too"
 
     assert length(@found_events) > 10,
            "found only #{length(@found_events)} telemetry event literals under " <>

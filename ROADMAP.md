@@ -34,7 +34,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) move in lockstep on the 2.7.x line, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) have their own 0.x line. `raxol_earn`, `raxol_gateway`, `raxol_cli`, `raxol_console`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
+The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) move in lockstep on the 2.7.x line, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) have their own 0.x line. `raxol_journal` is on the framework line and unpublished until the next train. `raxol_earn`, `raxol_gateway`, `raxol_cli`, `raxol_console`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |

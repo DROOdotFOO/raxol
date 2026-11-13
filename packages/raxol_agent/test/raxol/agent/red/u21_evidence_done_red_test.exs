@@ -24,7 +24,7 @@
 # ## What counts as a mutation (U21-R3, the fail-safe ruling)
 #
 # EVERY completed `:tool_use` is a mutation. The real producer
-# (`Raxol.Agent.Contract.pump/3`) stamps no effect metadata on tool calls, and
+# (`Raxol.Agent.StreamPump.pump/3`) stamps no effect metadata on tool calls, and
 # the frozen effect taxonomy (§5.2 of the frozen contract) contains only
 # effect-BEARING classes and rules that effect enforcement is structural,
 # never self-reported. So an absent `effect_class` resolves toward "is a
@@ -121,7 +121,7 @@ defmodule Raxol.Agent.Red.U21.Build do
       )
 
   @doc """
-  A tool_use in the REAL producer's shape (`Contract.pump/3`): no
+  A tool_use in the REAL producer's shape (`StreamPump.pump/3`): no
   `effect_class`, no `mutating` flag — exactly the payload the fail-safe
   mutation default exists for.
   """
@@ -1093,7 +1093,7 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
     end
 
     test "a bare tool_use (no effect_class, no flag — the REAL producer shape) IS a mutation" do
-      # Literal for the round-3 CRITICAL: `Contract.pump/3` emits tool_use as
+      # Literal for the round-3 CRITICAL: `StreamPump.pump/3` emits tool_use as
       # %{item_type: :tool_use, name, arguments, call_id} — no effect_class,
       # no mutating flag. A gate that only recognizes stamped mutations sees
       # `last_mutation` nil on every real journal and its staleness check
@@ -1141,7 +1141,7 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
 end
 
 # ===========================================================================
-# U21-R3 — regressions built from the REAL producer (`Contract.pump/3`), not
+# U21-R3 — regressions built from the REAL producer (`StreamPump.pump/3`), not
 # the synthetic Build helpers. Round 3's CRITICAL finding was exactly that the
 # suite was green only on synthetic journals whose payloads carried fields
 # production never stamps — these tests journal a run through the real
@@ -1151,10 +1151,10 @@ defmodule Raxol.Agent.Red.U21RealProducerRegressionTest do
   # async: false — SessionStreamer is a named singleton.
   use ExUnit.Case, async: false
 
-  alias Raxol.Agent.Contract
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.DoneGate
   alias Raxol.Agent.SessionStreamer
+  alias Raxol.Agent.StreamPump
 
   setup do
     start_supervised!({SessionStreamer, []})
@@ -1180,7 +1180,7 @@ defmodule Raxol.Agent.Red.U21RealProducerRegressionTest do
       {:done, %{content: "All fixed.", usage: %{}}}
     ]
 
-    {:ok, _} = Contract.pump(session_id, stream, prompt: "fix the bug")
+    {:ok, _} = StreamPump.pump(session_id, stream, prompt: "fix the bug")
 
     journal = drain_events(session_id)
     [%Event{turn_id: turn_id} | _] = journal

@@ -11,6 +11,7 @@ window, and an npm version cannot be reused.
 | `raxol` | Hex | 2.7.0 |
 | `raxol_core` | Hex | 2.7.0 |
 | `raxol_sensor` | Hex | 2.7.0 |
+| `raxol_journal` | Hex | unpublished |
 | `raxol_terminal` | Hex | 2.7.0 |
 | `raxol_mcp` | Hex | 2.7.0 |
 | `raxol_liveview` | Hex | 2.7.0 |
@@ -49,8 +50,20 @@ reactivating it. Never move a published version tag as routine recovery.
 ## Prepare the release commit
 
 1. Bump the package versions that are changing.
-2. Date each released package's changelog entry.
-3. Run the release gates from a clean tree:
+2. For each package the train publishes for the first time, which is each
+   name in `@awaiting_first_publish` in
+   `web/test/raxol_playground/capabilities_test.exs`:
+   - Set its version to the train's. Its `source_ref` is the root tag of its
+     own version, and no earlier tag contains its directory.
+   - Move every requirement on it to that version: each dependant's
+     `mix.exs`, the install line in its README and its row in
+     `docs/PACKAGES.md`, which also gains the Hex link. For `raxol_journal`
+     the dependants are `raxol_agent` and `raxol_broker`.
+   - Add it to `@published` in `web/lib/raxol_playground/capabilities.ex` and
+     remove it from `@awaiting_first_publish`, so the `llms.txt` generated
+     from the tag lists it.
+3. Date each released package's changelog entry.
+4. Run the release gates from a clean tree:
 
    ```bash
    mix compile --warnings-as-errors
@@ -66,7 +79,7 @@ reactivating it. Never move a published version tag as routine recovery.
    the generated package metadata with the source project configuration.
    `Raxol.Release.PackageCheck` holds the train order; a new package under
    `packages/` fails the catalog check until it is classified there.
-4. Push package-scoped documentation tags for changed independent-version
+5. Push package-scoped documentation tags for changed independent-version
    packages. They must point at the release commit:
 
    ```bash
@@ -252,7 +265,9 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
    [`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex),
    positioned after everything it requires. Until you do, the checker treats it
    as off-train and reports any sibling that depends on it as dropping the
-   requirement.
+   requirement. Add it to `@published` in
+   [`web/lib/raxol_playground/capabilities.ex`](../../web/lib/raxol_playground/capabilities.ex)
+   in the same change; a `web` test holds the two lists equal.
 2. **Declare requirements that used to be dropped.** Once `raxol_gateway` is on
    Hex, `raxol_telegram`'s `gateway_dep/0` can declare
    `raxol_gateway "~> 0.1", optional: true` under `HEX_BUILD` instead of

@@ -27,12 +27,9 @@ unless System.get_env("RAXOL_OP_TIMEOUT_MS") do
   System.put_env("RAXOL_OP_TIMEOUT_MS", "2000")
 end
 
-# The invariant suite's fault-injection harness lives under test/invariants/
-# (not test/support/, which elixirc_paths compiles) — load it explicitly.
-Code.require_file("invariants/support/fault_journal.ex", __DIR__)
-
 # Red-suite support (reference gates, dead injectors, shared contours) lives
-# under test/raxol/agent/red/support/ — load it explicitly, same mechanic.
+# under test/raxol/agent/red/support/, outside elixirc_paths — load it
+# explicitly.
 Code.require_file("raxol/agent/red/support/u8_gates.ex", __DIR__)
 
 # The U11-R red suite's oracle + generators live under test/raxol/agent/red/

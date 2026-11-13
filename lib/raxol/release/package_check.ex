@@ -34,6 +34,7 @@ defmodule Raxol.Release.PackageCheck do
   @public_packages [
     %{app: :raxol_core, path: "packages/raxol_core", class: :public},
     %{app: :raxol_sensor, path: "packages/raxol_sensor", class: :public},
+    %{app: :raxol_journal, path: "packages/raxol_journal", class: :public},
     %{app: :raxol_terminal, path: "packages/raxol_terminal", class: :public},
     %{app: :raxol_mcp, path: "packages/raxol_mcp", class: :public},
     %{app: :raxol_liveview, path: "packages/raxol_liveview", class: :public},

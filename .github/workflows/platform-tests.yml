@@ -97,21 +97,32 @@ jobs:
         # keeps full coverage; genuine hangs still fail at the raised bound.
         run: mix test --timeout 180000 --exclude slow --exclude docker --exclude integration --exclude skip_on_ci --exclude skip_on_windows
 
+  # ci-unified's package matrix runs only on Linux, so the packages whose code
+  # has a Windows form of its own run here too.
+  #
   # raxol_agent spawns OS processes through `Raxol.Agent.SpawnedPort`, whose
   # Windows clause (a direct spawn whose stdin erts opens on NUL) has no
-  # wrapper shell to fall back on, and ci-unified's package matrix runs only on
-  # Linux. Its `:windows_only` tests (Credentials.run_executable/3 against
-  # native binaries) can run nowhere else. The package test_helper drops
-  # `:unix_only` / `:skip_on_windows` on Windows, as the root suite does.
-  # `--timeout`: same runner-speed reasoning as the root Windows leg above.
-  raxol-agent-windows:
-    name: Package Tests (raxol_agent, Windows)
+  # wrapper shell to fall back on. Its `:windows_only` tests
+  # (Credentials.run_executable/3 against native binaries) can run nowhere
+  # else. raxol_journal reads and writes the journal files: segment framing,
+  # torn-tail repair and path handling meet CRLF checkouts and Windows paths
+  # only here.
+  #
+  # Each package's test_helper drops `:unix_only` on Windows (raxol_agent's
+  # also `:skip_on_windows`), as the root suite does. `--timeout`: same
+  # runner-speed reasoning as the root Windows leg above.
+  packages-windows:
+    name: Package Tests (${{ matrix.package }}, Windows)
     runs-on: windows-2022
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [raxol_agent, raxol_journal]
     defaults:
       run:
         shell: bash
-        working-directory: packages/raxol_agent
+        working-directory: packages/${{ matrix.package }}
 
     steps:
       - uses: actions/checkout@v7
@@ -137,9 +148,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            packages/raxol_agent/deps
-            packages/raxol_agent/_build
-          key: pkg-raxol_agent-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('packages/raxol_agent/mix.lock') }}-${{ hashFiles('mix.exs', 'packages/*/mix.exs') }}
+            packages/${{ matrix.package }}/deps
+            packages/${{ matrix.package }}/_build
+          key: pkg-${{ matrix.package }}-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles(format('packages/{0}/mix.lock', matrix.package)) }}-${{ hashFiles('mix.exs', 'packages/*/mix.exs') }}
 
       - name: Compile package
         run: |
@@ -149,12 +160,13 @@ jobs:
           mix compile --warnings-as-errors
 
       # :skip_on_ci for the same reason as the Linux cell; no live_* tag in
-      # this package is outside its test_helper's own exclusions.
+      # either package is outside its test_helper's own exclusions.
       - name: Run package tests
         run: mix test --timeout 180000 --exclude skip_on_ci
 
-      # The run above prints dots. Re-run the `:windows_only` tests by name so
-      # the log shows each one ran here; they are the only coverage of the
-      # direct-spawn clause.
+      # The run above prints dots. Re-run raxol_agent's `:windows_only` tests
+      # by name so the log shows each one ran here; they are the only coverage
+      # of the direct-spawn clause.
       - name: List Windows-only tests
+        if: matrix.package == 'raxol_agent'
         run: mix test test/raxol/agent/backend/credentials_test.exs --only windows_only --trace

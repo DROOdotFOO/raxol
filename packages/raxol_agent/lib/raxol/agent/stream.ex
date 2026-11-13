@@ -311,7 +311,7 @@ defmodule Raxol.Agent.Stream do
       # Reasoning/thinking tokens the backend surfaced (Anthropic thinking
       # blocks, OpenAI reasoning). Forwarded as a distinct event so the
       # contract can give reasoning its own durable item lifecycle rather
-      # than folding it into the answer text — see `Contract.pump/3`.
+      # than folding it into the answer text — see `StreamPump.pump/3`.
       {:reasoning, text}, :running ->
         {[{:reasoning, text}], :running}
 
@@ -329,7 +329,7 @@ defmodule Raxol.Agent.Stream do
         # model's claimed tool call with zero receipt while the turn still
         # reports a clean done -- a green-wash. Seal an honest
         # `:tool_unexecuted` marker per call instead: the vocabulary already
-        # exists and `Contract.pump/3` already renders it as a visible ⚠
+        # exists and `StreamPump.pump/3` already renders it as a visible ⚠
         # message -- this is its producer on the streaming run/2 path. The
         # `:done` payload's own shape is untouched (content/tool_results/usage)
         # so nothing reading it directly is disturbed.

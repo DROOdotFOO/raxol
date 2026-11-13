@@ -20,17 +20,13 @@ the RATE render-determinism suite.
 
 Events flow core → surface; commands flow surface → core.
 
-An event carries `id`, `turn_id`, `ts`, `family`, `type`, `tier`, `scope`,
-`provenance`, and `payload`: the shape `Raxol.Harness.Projection`,
-`Raxol.Harness.EventBoundary`, and `Raxol.UI.Components.Harness.Block.from_events/3`
-all consume. Two properties of that shape are load-bearing:
-
-- **Two families.** `:loop` events are the agent's turns; `:meta` events are
-  everything else. Only `:loop` events become transcript blocks.
-- **Two tiers.** Durable events are journaled before they reach the surface.
-  `item_delta` is the one ephemeral event: it feeds the live tail, is never
-  journaled, and is reconstructable from the matching `item_completed`, so no
-  durable state ever depends on having seen every chunk.
+The event envelope, its two families and two tiers, and the rule that the
+contract only grows are described in the
+[`raxol_journal` README](../../packages/raxol_journal/README.md#the-event-contract).
+`Raxol.Harness.Projection`, `Raxol.Harness.EventBoundary`, and
+`Raxol.UI.Components.Harness.Block.from_events/3` all consume that shape. Only
+`:loop` events become transcript blocks, and `item_delta`, the one ephemeral
+event, feeds the live tail.
 
 Commands run the other way. `Raxol.Agent.Command.decode/1` is the single
 validation seam: it turns a JSON string or a plain map into a
@@ -45,8 +41,8 @@ surface-local commands minted by `Raxol.UI.Harness.Keymap` carry the same
 `%{type: atom(), payload: map()}` field names as a plain map, one
 `struct(Raxol.Agent.Command, cmd)` from the real thing.
 
-**The contract only grows.** Producers are strict; readers are tolerant and
-skip what they do not recognize (`EventBoundary` drops unknown fields; `Block`
+On the surface side the same rule holds: readers are tolerant and skip what
+they do not recognize (`EventBoundary` drops unknown fields; `Block`
 normalizes an unknown `kind` to `:opaque` and renders it safely). A surface
 must never need a lockstep update to keep painting.
 
@@ -65,18 +61,14 @@ permanent transcript).
 
 ## Journal and projection
 
-The durable journal is the source of truth. `Raxol.Agent.Journal` is the
-append-only behaviour; `Raxol.Agent.Journal.FileStore` is the file-backed
-implementation: one directory per session under `~/.raxol/sessions/<id>/`
-(an agent started over MCP lives one level down, under
-`<first 8 hex of sha256(project root)>/<id>/`), size-capped `NNNNNN.jsonl`
-segments, and each event assigned a monotonic offset that is its id. While a
-Writer has the journal open, `writer.lock` in that directory names its OS
-process, so a second BEAM does not write the same journal. Interior
-corruption is fail-closed: `Reader.scan/2` returns
-`{:damaged, records_before}`, deletes nothing, fires a `Logger.error` plus
-`[:raxol, :agent, :journal, :damaged]` telemetry, and the damaged content
-never reaches a surface.
+The durable journal is the source of truth. `Raxol.Agent.Journal` and its
+file-backed implementation `Raxol.Agent.Journal.FileStore` live in
+`raxol_journal`; its
+[README](../../packages/raxol_journal/README.md#the-journal) describes the
+on-disk layout, the writer lock, damage handling and why reads never write. A
+session's journal is one directory under `~/.raxol/sessions/<id>/`; an agent
+started over MCP lives one level down, under
+`<first 8 hex of sha256(project root)>/<id>/`.
 
 Two record shapes come from the session rather than the Dispatcher. A session
 started with `journal_required: true` writes `agent_started` (payload
@@ -87,14 +79,6 @@ started with `journal_required: true` writes `agent_started` (payload
 (reason `cancelled` or `caller_down`) or `error` (reason `turn_failed` or
 `agent_down`). `agent_started` is a `loop` record outside the conversational
 set, so it is never a tip.
-
-Reads never write. A torn tail (a parse failure on the last line of the last
-segment, the signature of a crash mid-write) is tolerated in memory by
-`Reader.scan/2` and repaired only by the owning Writer at its own boot, via
-`Reader.resume_scan/1`. A reader that truncated would compute the cut from a
-file it read moments ago, so against a live session it could delete a record
-the Writer already committed and counted, whose next append then lands past
-the hole and leaves the session permanently damaged.
 
 `Raxol.Harness.Projection.project/2` folds durable events into an ordered block
 list (`item_delta` feeds a live tail, never a durable block). Recovery is part
@@ -108,27 +92,23 @@ back into the same block read-model.
 
 ### Frozen golden corpora
 
-Every record carries the `schema_version` the Writer stamped. Upcast-on-read (
-letting a current reader open a journal written by an older version) can only
-be tested against real journals those versions actually wrote, and those become
-unrecoverable the moment the default moves on: nothing regenerates a 1.0.0
-journal once the writer emits 1.2.0.
-
-So each version is frozen exactly once, while it is current, under
-`packages/raxol_agent/test/invariants/fixtures/golden/v<version>/`. A corpus is
-produced by the real pipeline (`Contract.pump/3` generates the payloads,
+`raxol_journal` ships one frozen journal per `schema_version` under
+`packages/raxol_journal/priv/golden/v<version>/`; its
+[README](../../packages/raxol_journal/README.md#frozen-golden-corpora) says
+why. Each version is frozen exactly once, while it is current. A corpus is
+produced by the real pipeline (`StreamPump.pump/3` generates the payloads,
 `EmitBus` -> `EmitBridge` -> `FileStore.Writer` writes the journal) with only
 `ts`, `turn_id`, and `meta.json`'s `created_at` normalized so the bytes are
 reproducible.
 
 | step | command |
 | --- | --- |
-| freeze the current version | `cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs` |
+| freeze the current version | `cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs [DIR]` (`DIR` defaults to `priv/golden` of the `raxol_journal` path dependency) |
 | re-pin the manifest | `elixir scripts/check_journal_goldens.exs --bless` |
 | verify (CI, `format` job) | `elixir scripts/check_journal_goldens.exs` |
 
 `scripts/check_journal_goldens.exs` enforces three rules against
-`fixtures/golden/MANIFEST.json`: the current `@default_schema_version` has a
+`priv/golden/MANIFEST.json`: the current `@default_schema_version` has a
 frozen corpus (so a bump fails until one is frozen), every pinned corpus still
 exists with the exact same bytes (history is not editable or deletable), and
 nothing on disk is unpinned. `Raxol.Agent.Invariants.ContractInvariantsTest`

@@ -221,9 +221,9 @@ defmodule Raxol.Agent.OperatorFile do
   The owner and mode half of `trusted?/1` for a stat already taken: `:ok`
   when it belongs to `uid/0` and carries no group- or other-write bit.
 
-  No type check and no sticky-bit allowance: a caller vetting something other
-  than a control file (the journal's private session directories, say) adds
-  the rules its own resource needs.
+  It checks neither the type nor the sticky bit: `trusted?/1` checks the type
+  before calling it, and a caller vetting another kind of resource adds the
+  rules that resource needs.
   """
   @spec owned_unshared(File.Stat.t()) ::
           :ok

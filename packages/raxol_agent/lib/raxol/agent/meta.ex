@@ -1,9 +1,9 @@
 defmodule Raxol.Agent.Meta do
   @moduledoc """
   The U11 meta-event family seam — producer-strict emit + reader-tolerant
-  decode, plus the provenance / taint / actor / fingerprint folds (see
-  `docs/harness/architecture.md`, "The event contract", on the `:loop`/`:meta`
-  family split; FI-5).
+  decode, plus the provenance / taint / actor / fingerprint folds (see the
+  `raxol_journal` README, "The event contract", on the `:loop`/`:meta` family
+  split).
 
   `Raxol.Agent.Meta.Registry` carries the frozen v1 type table as data; this
   module is the algebra that consumes it. Every fold derives from the journal

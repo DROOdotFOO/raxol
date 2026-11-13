@@ -341,7 +341,7 @@ if Code.ensure_loaded?(Plug.Router) do
       :done
     ]
 
-    # The contract-envelope producer path (`Raxol.Agent.Contract.pump/3`,
+    # The contract-envelope producer path (`Raxol.Agent.StreamPump.pump/3`,
     # `Raxol.Agent.EmitBridge`) emits
     # `%Event{}` structs through the SAME `SessionStreamer.emit/3` channel the
     # legacy tuple producers use — the SSE surface must speak both vocabularies

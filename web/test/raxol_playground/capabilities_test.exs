@@ -68,4 +68,18 @@ defmodule RaxolPlayground.CapabilitiesTest do
       assert name in repo, "#{name} is advertised but is not a package in this repo"
     end
   end
+
+  # On the release train, not yet on Hex. The release that first publishes a
+  # package moves it from here to `@published`.
+  @awaiting_first_publish ["raxol_journal"]
+
+  test "the published set is the release train, less the packages awaiting a first publish" do
+    train =
+      Enum.map(Raxol.Release.PackageCheck.public_packages(), &Atom.to_string(&1.app))
+
+    assert @awaiting_first_publish -- train == []
+
+    assert Enum.sort(Enum.map(Capabilities.packages(), & &1.name)) ==
+             Enum.sort(train -- @awaiting_first_publish)
+  end
 end

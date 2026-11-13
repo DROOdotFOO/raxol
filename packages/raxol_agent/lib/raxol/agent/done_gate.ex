@@ -38,7 +38,7 @@ defmodule Raxol.Agent.DoneGate do
   ## What counts as a mutation (fail-safe by construction)
 
   **Every completed `:tool_use` is a mutation.** The real producer
-  (`Raxol.Agent.Contract.pump/3`) stamps no effect metadata on tool calls, and
+  (`Raxol.Agent.StreamPump.pump/3`) stamps no effect metadata on tool calls, and
   the frozen effect taxonomy (`:reversible_local | :bounded_sandboxable |
   :irreversible_external`) contains
   only effect-BEARING classes and rules that effect enforcement is *structural,
@@ -69,7 +69,7 @@ defmodule Raxol.Agent.DoneGate do
 
   ## Wiring status (disclosure)
 
-  `Contract.pump/3` consults `gate/3` on the real done path, in
+  `StreamPump.pump/3` consults `gate/3` on the real done path, in
   **observe-only** mode: it derives the turn's candidate evidence
   (`evidence_refs/2`), calls `gate/3`, and emits a telemetry signal for the
   verdict, but it does NOT hard-block completion — the turn still closes with
@@ -292,7 +292,7 @@ defmodule Raxol.Agent.DoneGate do
   # intrinsic type (§0 decision-time-fold law: ADMISSION gates fold truth
   # synchronously; a producer stamp is display/audit metadata, the fold is the
   # security boundary). Every completed `:tool_use` is a mutation: the real
-  # producer (`Contract.pump/3`) stamps no effect metadata, and the frozen
+  # producer (`StreamPump.pump/3`) stamps no effect metadata, and the frozen
   # effect taxonomy (§5.2) contains only effect-BEARING classes, so neither an
   # absent `effect_class` nor any self-reported flag (`mutating: false`, a
   # `destructiveHint`-style claim) may ever REMOVE a tool call from the
@@ -362,7 +362,7 @@ defmodule Raxol.Agent.DoneGate do
 
   # -- accessors tolerant of both decoded and JSON-replayed journals ----------
   #
-  # A journal that reaches the gate straight from `Contract.pump`/`EmitBridge`
+  # A journal that reaches the gate straight from `StreamPump.pump`/`EmitBridge`
   # is atom-keyed `%Event{}` structs. One replayed from disk via
   # `Raxol.Agent.Journal.FileStore.Reader` is `Jason.decode`d into string-keyed
   # maps — both the KEYS and the stringifiable enum VALUES (`type`, `item_type`,

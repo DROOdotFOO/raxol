@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
   @moduledoc """
-  Tier-1 identity invariants I1–I3 (see `docs/harness/architecture.md`'s
-  "Journal and projection" section for the durable-journal model).
+  Tier-1 identity invariants I1–I3 (see the `raxol_journal` README, "The
+  journal", for the durable-journal model).
 
     * I1 — id authority under failure/crash: under generated fault schedules
       ({append_fail, open_fail, kill_after_write_before_head,
@@ -30,10 +30,10 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
 
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.EmitBridge
-  alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Core.Runtime.EmitBus
+  alias Raxol.Journal.Test.FaultJournal
 
   @required_faults [
     :append_fail,
