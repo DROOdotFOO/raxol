@@ -4,8 +4,8 @@ Snippets and mix-task shortcuts for Raxol projects.
 
 This extension ships no language server and no TextMate grammar. Install an
 Elixir extension (ElixirLS, Lexical, or Next LS) for syntax highlighting,
-completion, and diagnostics; this one sits alongside it. For the coding agent,
-see [Coding agent](#coding-agent) below.
+completion, and diagnostics; this one sits alongside it. For Raxol agents,
+see [Raxol agents over ACP](#raxol-agents-over-acp) below.
 
 `package.json` also declares a `raxol-elixir` language over `.ex`/`.exs` that
 carries editing rules only (comment token, bracket pairs, indent patterns) and
@@ -54,18 +54,9 @@ npm run compile   # tsc -p ./, output in out/
 "VS Code Extension Development" from the Run and Debug view to try it in an
 Extension Development Host.
 
-## Coding agent
+## Raxol agents over ACP
 
-From a raxol checkout, run the agent TUI in the integrated terminal:
-
-```bash
-/path/to/raxol/bin/raxol-code
-```
-
-It needs deps fetched once: `cd packages/raxol_agent && mix deps.get`. See
-[`docs/features/CODING_AGENT.md`](../../docs/features/CODING_AGENT.md).
-
-A Raxol agent, not the coding agent, is served over the
+A Raxol agent is served over the
 [Agent Client Protocol](https://agentclientprotocol.com) to a client that
 speaks it: `/path/to/raxol/bin/raxol-acp --agent <app>` (see
 [`docs/features/EDITOR_ACP.md`](../../docs/features/EDITOR_ACP.md#serving-a-raxol-agent)).

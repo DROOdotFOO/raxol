@@ -5,8 +5,8 @@ and shortcuts to the Raxol mix tasks.
 
 There is no Raxol language server. Use ElixirLS, Lexical, or Next LS for
 completion, hover, and diagnostics; this plugin does not configure or
-replace them. For the coding agent inside your editor, see
-[Coding agent](#coding-agent) below.
+replace them. To drive a Raxol agent from your editor, see
+[Raxol agents over ACP](#raxol-agents-over-acp) below.
 
 ## Features
 
@@ -142,24 +142,12 @@ those names, so nothing loads it. To use these patterns, copy them into a
 `queries/elixir/highlights.scm` starting with `; extends` and give each capture
 a highlight group.
 
-## Coding agent
-
-Run the coding agent TUI in a terminal split:
-
-```vim
-:terminal /path/to/raxol/bin/raxol-code
-```
-
-It needs a raxol checkout with deps fetched
-(`cd packages/raxol_agent && mix deps.get`). See
-[`docs/features/CODING_AGENT.md`](../../docs/features/CODING_AGENT.md).
-
 ## Raxol agents over ACP
 
-A Raxol agent, not the coding agent, reaches editors over the
+A Raxol agent reaches editors over the
 [Agent Client Protocol](https://agentclientprotocol.com), which Zed and its
-ecosystem speak: point an ACP client at `bin/raxol-acp --agent <app>` in the
-same checkout (see
+ecosystem speak: point an ACP client at `bin/raxol-acp --agent <app>` in a
+raxol checkout with deps fetched (see
 [`docs/features/EDITOR_ACP.md`](../../docs/features/EDITOR_ACP.md#serving-a-raxol-agent)).
 
 ## Requirements
