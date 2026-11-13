@@ -81,13 +81,33 @@ reactivating it. Never move a published version tag as routine recovery.
    the generated package metadata with the source project configuration.
    `Raxol.Release.PackageCheck` holds the train order; a new package under
    `packages/` fails the catalog check until it is classified there.
-5. Push package-scoped documentation tags for changed independent-version
-   packages. They must point at the release commit:
+5. Validate before tagging. On the release commit, run what the workflow's
+   validate job runs:
 
    ```bash
-   git tag -a raxol_speech-v0.3.0 -m "raxol_speech 0.3.0"
-   git tag -a raxol_watch-v0.3.0 -m "raxol_watch 0.3.0"
-   git tag -a raxol_telegram-v0.3.0 -m "raxol_telegram 0.3.0"
+   mix deps.get --check-locked
+   mix raxol.release.check
+   ```
+
+   `release-hex.yml` takes only an existing `vMAJOR.MINOR.PATCH` tag, so it
+   cannot be dispatched for a commit before its tag exists. Once the tag is
+   pushed, `release.yml` runs the validate job and then waits for approval;
+   the manual form re-runs that job and neither the publish loop nor the
+   verify job:
+
+   ```bash
+   gh workflow run release-hex.yml -f release_ref=v2.8.0 -f publish=false
+   ```
+6. Tag the release commit once it is on `master` and checked out. Create the
+   root tag first, without pushing it, so the package-scoped documentation
+   tags of the changed independent-version packages can name its commit, and
+   push those:
+
+   ```bash
+   git tag -a v2.8.0 -m "Raxol 2.8.0"
+   git tag -a raxol_speech-v0.3.0 -m "raxol_speech 0.3.0" 'v2.8.0^{commit}'
+   git tag -a raxol_watch-v0.3.0 -m "raxol_watch 0.3.0" 'v2.8.0^{commit}'
+   git tag -a raxol_telegram-v0.3.0 -m "raxol_telegram 0.3.0" 'v2.8.0^{commit}'
    git push origin raxol_speech-v0.3.0 raxol_watch-v0.3.0 \
      raxol_telegram-v0.3.0
    ```
@@ -101,10 +121,9 @@ the checker can compare development and publish configurations.
 
 ## Publish the public Hex train
 
-Create and push the root tag after the release commit is on `master`:
+Push the root tag:
 
 ```bash
-git tag -a v2.8.0 -m "Raxol 2.8.0"
 git push origin v2.8.0
 ```
 
@@ -208,8 +227,9 @@ with the steps the train runs for each package. Its docs link to the
 `raxol_gateway-v0.2.0` tag:
 
 ```bash
-git tag -a raxol_gateway-v0.2.0 -m "raxol_gateway 0.2.0"
+git tag -a raxol_gateway-v0.2.0 -m "raxol_gateway 0.2.0" 'v2.8.0^{commit}'
 git push origin raxol_gateway-v0.2.0
+git switch --detach v2.8.0
 
 cd packages/raxol_gateway
 HEX_BUILD=1 mix deps.get
@@ -286,7 +306,8 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
    as off-train and reports any sibling that depends on it as dropping the
    requirement. Add it to `@published` in
    [`web/lib/raxol_playground/capabilities.ex`](../../web/lib/raxol_playground/capabilities.ex)
-   in the same change; a `web` test holds the two lists equal.
+   in the same change; a `web` test holds `@published` equal to the train,
+   less `@awaiting_first_publish`, plus the `@off_train` packages it names.
 2. **Declare requirements that used to be dropped.** Once `raxol_gateway` is on
    Hex, `raxol_telegram`'s `gateway_dep/0` can declare
    `raxol_gateway "~> 0.2", optional: true` under `HEX_BUILD` instead of
