@@ -70,11 +70,6 @@ defmodule Raxol.Agent do
       @doc """
       Returns the `Raxol.Agent.ThreadLog` adapter (`{module, config}`
       or bare module) for durable audit, or `nil` to disable.
-
-      When non-nil, consumers wire
-      `Raxol.Agent.ThreadLogRouter.attach/3` at agent startup so
-      every policy decision and sandbox denial lands as a durable
-      event keyed on the agent's id.
       """
       def thread_log, do: nil
 
@@ -195,7 +190,7 @@ defmodule Raxol.Agent do
   @doc """
   Return the normalized `Raxol.Agent.ThreadLog` adapter tuple from
   `agent_module.thread_log/0`, or `nil` when the agent doesn't
-  declare one. Useful for `Raxol.Agent.ThreadLogRouter.attach/3`.
+  declare one.
   """
   @spec thread_log_adapter(module()) :: {module(), map()} | nil
   def thread_log_adapter(agent_module) when is_atom(agent_module) do

@@ -4,7 +4,7 @@ defmodule Raxol.Agent.SessionStreamer do
 
   Provides a pub/sub mechanism for observing agent activity. Subscribers
   receive events as they happen -- tool calls, text output, state changes,
-  errors. Used by `SessionStreamServer` for HTTP/SSE delivery.
+  errors.
 
   ## Usage
 
@@ -42,9 +42,7 @@ defmodule Raxol.Agent.SessionStreamer do
   documented below (the original `Raxol.Agent.Stream`-mirroring producers),
   and `Raxol.Agent.Contract.Event.t()` (the harness contract's typed
   envelope — `StreamPump.pump/3`, `Raxol.Agent.EmitBridge`). Both flow
-  through `emit/3` and
-  `history/2` unchanged; `Raxol.Agent.SessionStreamServer.serialize_event/1`
-  has a clause for each.
+  through `emit/3` and `history/2` unchanged.
   """
   @type event ::
           {:text_delta, String.t()}

@@ -31,9 +31,8 @@ defmodule Raxol.Agent.SandboxHook do
   ## Telemetry
 
   On deny, emits `[:raxol, :agent, :sandbox, :denied]` with
-  metadata `%{agent_id, agent_module, action, reason}` so
-  `Raxol.Agent.ThreadLogRouter` (or any other handler) can route
-  the denial as durable audit.
+  metadata `%{agent_id, agent_module, action, reason}` so a handler
+  can route the denial as durable audit.
 
   The `reason` on the wire is not the `reason` the caller receives. A
   denial's reason names what was refused, and for a shell command that is the

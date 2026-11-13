@@ -25,16 +25,9 @@ defmodule Raxol.Agent.ExecutorConfig do
       [model: "gpt-5", api_key: "sk-x"]
   """
 
-  # Snapshot safety: `auth` holds the API credential, so it is redacted from any
-  # durable snapshot while the routing fields persist. Left undeclared this
-  # struct would be dropped whole by the codec; declaring the slice makes the
-  # secret boundary explicit and keeps a session key out of a checkpoint on
-  # disk. See `Raxol.Agent.Snapshot.Persist`.
-  @derive {Raxol.Agent.Snapshot.Persist, persist: [:backend, :model, :opts], redact: [:auth]}
   # `auth` holds the raw API credential; keep it out of every `inspect/1`
   # (crash dumps, the Lifecycle's boot-options log line, IEx) — the routing
-  # fields still show. Snapshot redaction above covers the on-disk path;
-  # this covers the in-memory one.
+  # fields still show.
   @derive {Inspect, except: [:auth]}
   @enforce_keys [:backend]
   defstruct backend: nil, model: nil, auth: %{}, opts: []

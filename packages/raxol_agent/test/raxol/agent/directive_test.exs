@@ -149,17 +149,17 @@ defmodule Raxol.Agent.DirectiveTest do
     # This module is not async, so setting the variable races nothing.
     @tag :unix_only
     test "the command does not inherit raxol's secrets, but does the rest" do
-      previous = System.get_env("RAXOL_SESSION_STREAM_TOKEN")
-      System.put_env("RAXOL_SESSION_STREAM_TOKEN", "probe-not-a-token")
+      previous = System.get_env("RAXOL_SHARE_SECRET")
+      System.put_env("RAXOL_SHARE_SECRET", "probe-not-a-secret")
 
       on_exit(fn ->
         if previous,
-          do: System.put_env("RAXOL_SESSION_STREAM_TOKEN", previous),
-          else: System.delete_env("RAXOL_SESSION_STREAM_TOKEN")
+          do: System.put_env("RAXOL_SHARE_SECRET", previous),
+          else: System.delete_env("RAXOL_SHARE_SECRET")
       end)
 
       directive =
-        Directive.shell(~s(printf '%s|%s' "${RAXOL_SESSION_STREAM_TOKEN-unset}" "${HOME:+home}"))
+        Directive.shell(~s(printf '%s|%s' "${RAXOL_SHARE_SECRET-unset}" "${HOME:+home}"))
 
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 

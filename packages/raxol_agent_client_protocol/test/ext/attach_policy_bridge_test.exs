@@ -55,7 +55,7 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.BridgeTest do
     {:ok, sup: sup}
   end
 
-  # The exact ctx shape `Raxol.Agent.Reattach.attach/4` builds: session_id,
+  # The ctx shape an in-process attach builds: session_id,
   # from_offset, the HISTORY policy, and surface: :beam_local. The `policy` key
   # is included to prove the bridge tolerates (drops) it.
   defp beam_ctx(overrides \\ %{}) do
@@ -123,7 +123,7 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.BridgeTest do
   end
 
   test "the verdict is shape-compatible with the authorize_fun contract", %{sup: sup} do
-    # Raxol.Agent.Reattach.attach/4 admits on {:ok, _grant} and denies otherwise.
+    # A host admits on {:ok, _grant} and denies otherwise.
     grant =
       Bridge.authorizer(
         policy: LocalNode,

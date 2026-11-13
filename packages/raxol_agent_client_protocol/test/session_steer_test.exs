@@ -24,8 +24,7 @@ defmodule Raxol.AgentClientProtocol.SessionSteerTest do
   alias Raxol.AgentClientProtocol.Session.Supervisor, as: SessionSup
   alias Raxol.AgentClientProtocol.Test.FakeConnection
 
-  # -- A faithful local CAS adapter (mirrors Raxol.Agent.Steer, which this
-  #    package must never depend on). steer_state is a plain map. ---------------
+  # -- A local CAS adapter. steer_state is a plain map. -----------------------
   defmodule Adapter do
     @moduledoc false
     @behaviour Raxol.AgentClientProtocol.Session.SteerAdapter
@@ -418,7 +417,7 @@ defmodule Raxol.AgentClientProtocol.SessionSteerTest do
     end
 
     # Regression: the round-trip test above only ever feeds `encode_result/1`
-    # integer tokens. `Raxol.Agent.Steer.swap/1` (raxol_agent) issues a CAS
+    # integer tokens. A CAS adapter (the `Adapter` above does) may issue a CAS
     # token that is a TUPLE (`{:steered, cur, System.unique_integer(...)}`) as
     # the new `turn_id` after every accept, and that value has nowhere
     # legitimate to go (an accept's `ref` only ever carries the PRE-swap
@@ -453,8 +452,7 @@ defmodule Raxol.AgentClientProtocol.SessionSteerTest do
       {session, _sid} = start_session(ctx, conn, turn_runner: live_runner(self()))
       _reply_ref = begin(session)
 
-      # First steer: accepted. The `Adapter` double (mirrors
-      # `Raxol.Agent.Steer.resolve/2` byte-for-byte) swaps `turn_id` forward to
+      # First steer: accepted. The `Adapter` double swaps `turn_id` forward to
       # a tuple as part of the accept.
       assert {:ok, {:accepted, _ref}} =
                Session.steer(session, %{

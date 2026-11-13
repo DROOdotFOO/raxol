@@ -10,12 +10,9 @@ defmodule Raxol.AgentClientProtocol.Session.SteerAdapter do
   holds ONLY if that read-modify-write is serialized by exactly one owner
   process. This behaviour lets the Session BE that owner — it holds the opaque
   steer state and calls these callbacks from inside its own `handle_call`, so the
-  serialization is satisfied by construction — WITHOUT the ACP package depending
-  on the module that owns the pure CAS decision core
-  (`Raxol.Agent.Steer.resolve/2`, in the `raxol_agent` package, which this
-  package must never depend on). The `raxol_agent` side injects an adapter that
-  closes over `Raxol.Agent.Steer`; this package ships only the seam and a
-  default that refuses.
+  serialization is satisfied by construction — WITHOUT the ACP package owning
+  the CAS decision itself. A host injects an adapter that makes that decision;
+  this package ships only the seam and a default that refuses.
 
   ## The three callbacks and how the Session drives them
 
@@ -54,7 +51,7 @@ defmodule Raxol.AgentClientProtocol.Session.SteerAdapter do
 
   @typedoc """
   The normalized steer request the Session hands to `resolve/2`. Mirrors the
-  `_raxol/session.steer` wire payload and `Raxol.Agent.Steer.Request`:
+  `_raxol/session.steer` wire payload:
 
     * `:text` — the steering text (forwarded to the turn on accept).
     * `:expected_turn_id` — the turn ordinal the client believes is running

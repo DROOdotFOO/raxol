@@ -56,7 +56,7 @@ defmodule Raxol.Agent.TelemetryRegistryTest do
            "found no modules under #{@journal_lib}; the journal's events are " <>
              "classified here, so its lib/ has to be scanned too"
 
-    assert length(@found_events) > 10,
+    assert length(@found_events) >= 8,
            "found only #{length(@found_events)} telemetry event literals under " <>
              "#{@lib_root}, which is fewer than this package is known to emit; " <>
              "the scan is broken, not the registry"
@@ -73,7 +73,7 @@ defmodule Raxol.Agent.TelemetryRegistryTest do
 
     Classify each one as :invariant (can only fire if this library is wrong),
     :peer (a misbehaving remote agent/client caused it) or :operational
-    (normal life -- filesystem, user config, cache, policy), with a comment
+    (normal life -- filesystem, user config), with a comment
     saying why. Err toward :peer/:operational: a false invariant makes the
     suite flaky, which is worse than a missed one.
     """

@@ -74,8 +74,8 @@ defmodule Raxol.Agent.DoneGate do
   (`evidence_refs/2`), calls `gate/3`, and emits a telemetry signal for the
   verdict, but it does NOT hard-block completion — the turn still closes with
   `turn_completed{final: true}`, carrying the accepted `refs` when the gate
-  accepts. Completion stays fail-open on purpose: until U8 (BlastRadiusGate)
-  introduces structural mutation classes and a real verification class, the
+  accepts. Completion stays fail-open on purpose: until structural mutation
+  classes and a real verification class exist, the
   gate is fully fail-closed on v0 producer journals (see "What counts as a
   mutation"), so blocking every done would be wrong. The observe-only wiring
   makes the boundary live and measurable now:

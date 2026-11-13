@@ -466,8 +466,8 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       # from its own mailbox (single-writer by construction) and returns the
       # honest CAS outcome synchronously (`SteerResponse` vocabulary). Additive:
       # a stock/older agent answers -32601 (unimplemented callback), identical to
-      # an unadvertised capability. Payload mirrors `Raxol.Agent.Command`'s
-      # `:steer` codec (text + expected_turn_id + client_msg_id).
+      # an unadvertised capability. Payload: text + expected_turn_id +
+      # client_msg_id.
       wire: "_raxol/session.steer",
       direction: :client_to_agent,
       kind: :request,

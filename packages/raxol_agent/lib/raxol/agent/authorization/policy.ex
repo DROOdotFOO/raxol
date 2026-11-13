@@ -2,9 +2,7 @@ defmodule Raxol.Agent.Authorization.Policy do
   @moduledoc """
   A single policy in the ALLOW/ASK/DENY authorization engine.
 
-  Distinct from `Raxol.Agent.Policy` (operational resilience: retry/cache/timeout)
-  and from the deny-only `Raxol.Agent.PermissionHook` -- this is the authorization
-  trichotomy with label state and human-in-the-loop ASK.
+  The authorization trichotomy with label state and human-in-the-loop ASK.
 
   A policy is data: when it applies (phase + condition gate), what labels it may
   write, how its ASK approvals are remembered, and an `evaluate` function that

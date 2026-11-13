@@ -673,8 +673,7 @@ defmodule Raxol.Agent.EmitBridge do
 
   # A wrong-shaped (non-map) module provenance fails CLOSED — replacing it
   # with the generation value could launder garbage into an explicit
-  # `:trusted`; mirroring `Meta.decode_provenance/1`'s wrong-shape arm keeps
-  # the write side and read side agreeing.
+  # `:trusted`.
   defp meet_provenance(module_prov, _gen_prov) when not is_map(module_prov),
     do: %{source: :primary, trust: :tainted}
 

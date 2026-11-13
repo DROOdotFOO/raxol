@@ -2,32 +2,23 @@ defmodule Raxol.Web3.Cache do
   @moduledoc """
   The response cache: four functions, lazy expiry, one owned bounded table.
 
-  ADR-0033 decision 6. `Raxol.Agent.Cache` is the shape this copies, and the
-  copy is deliberate: that module lives in `raxol_agent`, which depends on main
-  `raxol`, so consuming it would pull the framework and the agent runtime
-  underneath a read-only package. Lifting it into `raxol_core` is the right
-  eventual move and is not this package's to make, so the four callbacks are
-  reproduced here (`get`, `put`, `delete`, `flush`, TTL in milliseconds, `0`
-  meaning no expiry, expiry checked lazily on read) and the two converge
-  cheaply when someone merges them.
+  ADR-0033 decision 6. Four functions (`get`, `put`, `delete`, `flush`), TTL in
+  milliseconds, `0` meaning no expiry, expiry checked lazily on read.
 
-  Three deliberate divergences from that module, each with a reason:
+  Three deliberate properties, each with a reason:
 
-    * **No `config` argument and no behaviour.** `Raxol.Agent.Cache` dispatches
-      on `{module, config}` because a caller chooses its own table or a
-      Postgres connection. Here the table has exactly one owner
+    * **No `config` argument and no behaviour.** The table has exactly one owner
       (`Raxol.Web3.Tables`, ADR-0038 decision 5), so there is nothing to
       configure and a per-call config would be a parameter that can only be
       passed wrongly. A second storage medium, if one is ever needed, arrives
       as a behaviour at that point rather than as an abstraction waiting for it.
-    * **Monotonic time, not wall clock.** `Raxol.Agent.Cache.Ets` compares
-      against `DateTime.utc_now/0`. A clock stepping backwards, which happens
-      on a VM resumed from a snapshot, extends every outstanding TTL by the
-      size of the step. Monotonic milliseconds cannot do that.
-    * **A bounded table.** `Raxol.Agent.Cache.Ets` grows until someone calls
-      `clear/1`, which is right for a store whose owner decides its lifetime.
-      This table's owner is the application, so its lifetime is the node's,
-      and "until someone clears it" is not a bound. What replaces it is below.
+    * **Monotonic time, not wall clock.** Against `DateTime.utc_now/0`, a clock
+      stepping backwards, which happens on a VM resumed from a snapshot,
+      extends every outstanding TTL by the size of the step. Monotonic
+      milliseconds cannot do that.
+    * **A bounded table.** This table's owner is the application, so its
+      lifetime is the node's, and "until someone clears it" is not a bound.
+      What replaces it is below.
 
   ## Keys never come from a URL
 

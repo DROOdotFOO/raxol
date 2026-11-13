@@ -46,16 +46,13 @@ defmodule Raxol.Core.ProcessGroup do
 
   ## Callers
 
-  `Raxol.Agent.Interrupt` (the shell tool's staged TERM/KILL escalation), and
-  Symphony's `PortReaper` (port children, with an owner-death watcher) until
-  Symphony left this repository. Both used to carry their own copy of this;
-  they disagreed, and the `ps`-based one had the corpse-parent hole described
-  above.
+  `Raxol.MCP.Client.Transport.Stdio` (reaping a spawned server's group on
+  close).
 
   This module deliberately does NOT cover zombie-aware liveness. `kill -0`
   answers "is this pid still allocated", and a zombie still holds its pid, so a
   caller that needs to distinguish "exited but unreaped" from "running" needs a
-  `ps`-based oracle instead -- which is why `Interrupt` keeps one.
+  `ps`-based oracle instead.
   """
 
   require Logger

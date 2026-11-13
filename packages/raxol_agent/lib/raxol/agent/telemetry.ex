@@ -21,9 +21,8 @@ defmodule Raxol.Agent.Telemetry do
     * `:peer` -- caused by the remote agent/client misbehaving (malformed
       frame, unknown notification, duplicate id). Expected in negative tests,
       so not enforced.
-    * `:operational` -- normal life (cache hit, policy applied, sandbox
-      denied, journal write refused by the filesystem, idle reap). Not
-      enforced.
+    * `:operational` -- normal life (sandbox denied, journal write refused
+      by the filesystem, idle reap). Not enforced.
 
   ## The criterion, applied literally
 
@@ -88,17 +87,6 @@ defmodule Raxol.Agent.Telemetry do
     # entire job is to make this fire.
     [:raxol, :agent, :journal, :write_failed] => :operational,
 
-    # OPERATIONAL x6. The policy family is the routine bookkeeping of
-    # `PolicyApplier`: every wrapped call emits `:applied`, and cache
-    # hit/miss, retry and timeout are the policies doing exactly what they
-    # were configured to do.
-    [:raxol, :agent, :policy, :applied] => :operational,
-    [:raxol, :agent, :policy, :cache_hit] => :operational,
-    [:raxol, :agent, :policy, :cache_miss] => :operational,
-    [:raxol, :agent, :policy, :retry_attempt] => :operational,
-    [:raxol, :agent, :policy, :retry_exhausted] => :operational,
-    [:raxol, :agent, :policy, :timeout] => :operational,
-
     # OPERATIONAL. A sandbox refusing an action is the sandbox working. The
     # rules come from the app's `sandbox/0`, i.e. from a user.
     [:raxol, :agent, :sandbox, :denied] => :operational,
@@ -109,12 +97,6 @@ defmodule Raxol.Agent.Telemetry do
     # timing under load. Enforcing it would make the suite flaky on a busy
     # machine, which is the exact failure mode the criterion warns about.
     [:raxol, :agent, :session, :register_timeout] => :operational,
-
-    # OPERATIONAL. The name-based secret heuristic redacted a field the app
-    # explicitly listed in `persist:`. That is a declaration/outcome mismatch
-    # in USER code, made loud on purpose so it is not a silently-empty field
-    # on restore.
-    [:raxol, :agent, :snapshot, :persist_redacted_by_heuristic] => :operational,
 
     # OPERATIONAL. The exiting hook is app-supplied code, and the documented
     # shape of this event is a downed app dependency (e.g. a spend-ledger
@@ -158,13 +140,10 @@ defmodule Raxol.Agent.Telemetry do
   or a binary of at most `max_identifier_bytes/0` bytes.
 
   This is the metadata contract's one enforceable rule (ADR-0036). Metadata
-  is context, and two consumers persist it verbatim -- `Raxol.Agent.ThreadLogRouter`
-  into a durable audit log, and any host's log or metrics pipeline -- so a
+  is context, and a host's log or metrics pipeline persists it verbatim, so a
   value that is not an identifier is a value that must not be there. Maps,
   lists, tuples and structs are how content arrives; a binary longer than an
-  identifier is content. `Raxol.Agent.PolicyApplier.apply/4` refuses caller
-  metadata that fails this, and the router drops any mirrored key whose value
-  fails it, so the audit log does not rest on every emitter being careful.
+  identifier is content.
   """
   @spec identifier?(term()) :: boolean()
   def identifier?(value) when is_atom(value) or is_number(value), do: true
@@ -234,9 +213,7 @@ defmodule Raxol.Agent.Telemetry do
   container for content, and a pid or fun is meaningless once persisted.
 
   Emitters call this on any value they did not build themselves (an error
-  reason from a wrapped operation, a cache key from a user's `key_fn`), and
-  `Raxol.Agent.ThreadLogRouter` calls it on every payload it persists, so a
-  new emitter that forgets is still bounded at the audit log.
+  reason from a wrapped operation, a name supplied by a user).
   """
   @spec bound(term()) :: term()
   def bound(term), do: bound(term, @max_bound_depth)

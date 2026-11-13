@@ -3,8 +3,7 @@ defmodule Raxol.Agent.SecurityTest do
   Security-focused tests for the raxol_agent package.
 
   Covers atom exhaustion prevention, argument validation limits,
-  and input sanitization across Protocol, ToolConverter, and
-  SessionStreamServer.
+  and input sanitization across Protocol and ToolConverter.
   """
 
   use ExUnit.Case, async: true
@@ -177,64 +176,6 @@ defmodule Raxol.Agent.SecurityTest do
 
       assert {:error, :too_many_argument_keys} =
                ToolConverter.dispatch_tool_call(tool_call, @actions)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # SessionStreamServer parse_session_id safety
-  # ---------------------------------------------------------------------------
-
-  describe "SessionStreamServer parse_session_id" do
-    import Plug.Test
-
-    alias Raxol.Agent.SessionStreamServer
-    alias Raxol.Agent.SessionStreamer
-
-    setup do
-      {:ok, streamer} = SessionStreamer.start_link(name: nil, max_history: 50)
-      %{streamer: streamer}
-    end
-
-    defp call_server(conn, streamer) do
-      conn
-      |> Plug.Conn.put_private(:streamer, streamer)
-      |> Plug.Conn.put_private(:session_stream_require_auth, false)
-      |> SessionStreamServer.call(SessionStreamServer.init([]))
-    end
-
-    test "numeric session id is parsed as integer", %{streamer: streamer} do
-      SessionStreamer.subscribe(999, streamer)
-      SessionStreamer.emit(999, {:text_delta, "hello"}, streamer)
-      Process.sleep(20)
-
-      conn = conn(:get, "/sessions/999/history") |> call_server(streamer)
-
-      assert conn.status == 200
-      body = Jason.decode!(conn.resp_body)
-      assert body["session_id"] == "999"
-      assert length(body["events"]) == 1
-    end
-
-    test "non-numeric session id stays as string", %{streamer: streamer} do
-      SessionStreamer.subscribe("my_agent", streamer)
-      SessionStreamer.emit("my_agent", {:text_delta, "hi"}, streamer)
-      Process.sleep(20)
-
-      conn = conn(:get, "/sessions/my_agent/history") |> call_server(streamer)
-
-      assert conn.status == 200
-      body = Jason.decode!(conn.resp_body)
-      assert body["session_id"] == "my_agent"
-      assert length(body["events"]) == 1
-    end
-
-    test "session id with mixed chars stays as string", %{streamer: streamer} do
-      conn = conn(:get, "/sessions/agent-42x/history") |> call_server(streamer)
-
-      assert conn.status == 200
-      body = Jason.decode!(conn.resp_body)
-      # "agent-42x" cannot parse to integer, stays as string
-      assert body["session_id"] == "agent-42x"
     end
   end
 end
