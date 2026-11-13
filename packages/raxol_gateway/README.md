@@ -4,6 +4,26 @@ Unified messaging gateway for Raxol: one supervised daemon connects many chat
 platforms through a single adapter contract, with process-per-chat sessions,
 unified session keying, and DM pairing authorization.
 
+## Installation
+
+```elixir
+def deps do
+  [{:raxol_gateway, "~> 0.2"}]
+end
+```
+
+Start the daemon under your supervisor with the handler each chat session runs:
+
+```elixir
+children = [
+  {Raxol.Gateway.Supervisor,
+   handler: {MyApp.ChatHandler, []}, adapter: {MyApp.Adapter, conn}}
+]
+```
+
+`MyApp.ChatHandler` implements `Raxol.Gateway.Handler`; `MyApp.Adapter`
+implements `Raxol.Gateway.Adapter`, and `conn` is what its `connect/1` returned.
+
 ## Pieces
 
 - `Raxol.Gateway.Route`: the routing tuple and the session key
@@ -40,7 +60,9 @@ log resumes the same history.
 ## Platform adapters
 
 - Telegram: `Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`
-  (in the raxol_telegram package).
+  (in the raxol_telegram package). The adapter compiles only when
+  `raxol_gateway` is already compiled; after adding `raxol_gateway` to a
+  project that has `raxol_telegram`, run `mix deps.compile raxol_telegram --force`.
 - Discord: `Raxol.Gateway.Adapter.Discord` (REST sends, optional `req`) +
   `Raxol.Gateway.Adapter.Discord.GatewaySocket` (Gateway v10 WebSocket feed,
   optional `mint_web_socket`).
@@ -49,5 +71,3 @@ log resumes the same history.
   `normalize_event/1`, with `Adapter.Email.Inbox` as the sink-agnostic poll
   feed and `Adapter.Email.ThreadStore` for reply threading; the mailbox
   transport itself, IMAP/POP/Gmail, is deployment-supplied).
-
-See `docs/adr/0023-unified-messaging-gateway.md`.

@@ -418,8 +418,8 @@ defmodule Raxol.MixProject do
     """
     Multi-surface application runtime for Elixir. One TEA module renders to
     terminal, browser (LiveView), SSH, and MCP (agents). 30+ widgets, flexbox +
-    CSS grid, AI agent runtime, distributed swarm with CRDTs, time-travel
-    debugging, session recording, an AST-checked REPL, and agentic commerce.
+    CSS grid, distributed swarm with CRDTs, time-travel debugging, session
+    recording, and an AST-checked REPL.
     """
   end
 
@@ -522,7 +522,6 @@ defmodule Raxol.MixProject do
         {"docs/features/README.md", [title: "Features", filename: "features"]},
         {"docs/features/FILESYSTEM.md", [title: "Virtual Filesystem"]},
         {"docs/features/CURSOR_EFFECTS.md", [title: "Cursor Effects"]},
-        {"docs/features/AGENT_FRAMEWORK.md", [title: "Agent Framework"]},
         {"docs/features/SENSOR_FUSION.md", [title: "Sensor Fusion"]},
         {"docs/features/DISTRIBUTED_SWARM.md", [title: "Distributed Swarm"]},
         {"docs/features/ADAPTIVE_UI.md", [title: "Adaptive UI"]},
@@ -532,8 +531,6 @@ defmodule Raxol.MixProject do
          [title: "Time-Travel Debugging"]},
         {"docs/WHY_OTP.md", [title: "Why OTP"]},
         {"docs/PACKAGES.md", [title: "Package Ecosystem"]},
-        {"docs/features/AGENTIC_COMMERCE.md", [title: "Agentic Commerce"]},
-        {"docs/features/ACP.md", [title: "Agent Commerce Protocol"]},
         {"docs/features/MCP.md", [title: "MCP"]},
         {"docs/features/PLUGIN_SDK.md", [title: "Plugin SDK"]},
         {"docs/features/SPEECH.md", [title: "Speech"]},
@@ -570,15 +567,12 @@ defmodule Raxol.MixProject do
           docs/features/README.md
           docs/features/FILESYSTEM.md
           docs/features/CURSOR_EFFECTS.md
-          docs/features/AGENT_FRAMEWORK.md
           docs/features/SENSOR_FUSION.md
           docs/features/DISTRIBUTED_SWARM.md
           docs/features/ADAPTIVE_UI.md
           docs/features/RECORDING_REPLAY.md
           docs/features/REPL.md
           docs/features/TIME_TRAVEL_DEBUGGING.md
-          docs/features/AGENTIC_COMMERCE.md
-          docs/features/ACP.md
           docs/features/MCP.md
           docs/features/PLUGIN_SDK.md
           docs/features/SPEECH.md

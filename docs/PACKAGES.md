@@ -20,6 +20,8 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.8"}`   | Sensor fusion (zero deps)                  |
 | [`raxol_journal`](https://hex.pm/packages/raxol_journal)   | `{:raxol_journal, "~> 2.8"}`  | Session journal, event contract            |
 
+`raxol_journal` 2.8 holds the journal modules that `raxol_agent` 2.7.0 defines itself; do not add both to one project.
+
 ## Agents
 
 | Package                                                    | Hex                           | What                                        |

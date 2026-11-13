@@ -4,11 +4,11 @@ Use this page to find a feature; each linked page owns its details.
 
 | Area | Feature | Purpose |
 | --- | --- | --- |
-| Agents | [Agent framework](AGENT_FRAMEWORK.md) | TEA agents, backends, tools, and teams |
+| Agents | [Agent framework](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENT_FRAMEWORK.md) | TEA agents, backends, tools, and teams |
 | Protocols | [MCP](MCP.md) | Component trees projected as agent tools |
 | Protocols | [Editor ACP](EDITOR_ACP.md) | Editor-to-agent JSON-RPC (pre-alpha) |
-| Commerce | [Agentic commerce](AGENTIC_COMMERCE.md) | Wallets, spending controls, and HTTP 402 payment |
-| Commerce | [Agent Commerce Protocol](ACP.md) | Seller-side services and settlement (pre-alpha) |
+| Commerce | [Agentic commerce](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENTIC_COMMERCE.md) | Wallets, spending controls, and HTTP 402 payment |
+| Commerce | [Agent Commerce Protocol](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/ACP.md) | Seller-side services and settlement (pre-alpha) |
 | Extensibility | [Plugin SDK](PLUGIN_SDK.md) | Plugin manifests, helpers, and generator |
 | Runtime | [Sensor fusion](SENSOR_FUSION.md) | Polling, fusion, gauges, and sparklines |
 | Runtime | [Distributed swarm](DISTRIBUTED_SWARM.md) | CRDT state, discovery, and topology |

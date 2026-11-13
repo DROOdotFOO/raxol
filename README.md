@@ -4,8 +4,8 @@
 
 [![CI](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml/badge.svg?branch=master)](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml)
 [![Hex](https://img.shields.io/hexpm/v/raxol.svg)](https://hex.pm/packages/raxol)
-[![Frame bytes per keystroke](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDROOdotFOO%2Fraxol%2Fgh-pages%2Fscoreboard%2Fbadges%2Ftable.keystroke.bytes.json&label=frame%20bytes%2Fkeystroke)](bench/README.md#scoreboard)
-[![Keystroke cost](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDROOdotFOO%2Fraxol%2Fgh-pages%2Fscoreboard%2Fbadges%2Ftable.keystroke.work_ratio.json&label=keystroke%20cost)](bench/README.md#scoreboard)
+[![Frame bytes per keystroke](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDROOdotFOO%2Fraxol%2Fgh-pages%2Fscoreboard%2Fbadges%2Ftable.keystroke.bytes.json&label=frame%20bytes%2Fkeystroke)](https://github.com/DROOdotFOO/raxol/blob/master/bench/README.md#scoreboard)
+[![Keystroke cost](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDROOdotFOO%2Fraxol%2Fgh-pages%2Fscoreboard%2Fbadges%2Ftable.keystroke.work_ratio.json&label=keystroke%20cost)](https://github.com/DROOdotFOO/raxol/blob/master/bench/README.md#scoreboard)
 
 [![raxol MCP server](https://glama.ai/mcp/servers/DROOdotFOO/raxol/badges/card.svg)](https://glama.ai/mcp/servers/DROOdotFOO/raxol)
 
@@ -50,9 +50,9 @@ Agent sessions sit on the **Harness**, the agent-session engine: a durable event
 
 The agent subsystems ship as standalone packages:
 
-- **Pay** ([`raxol_payments`](docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).
+- **Pay** ([`raxol_payments`](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).
 - **Earn** (`raxol_earn`): the sell side. Declare an offering, implement two callbacks, and a buyer agent discovers it, escrows funds, and settles on-chain through the [Virtuals](https://virtuals.io) ACP job lifecycle (request, negotiation, transaction, evaluation, completed), one supervised process per job. Pre-alpha.
-- **Skills** ([`raxol_agent`](docs/guides/SKILL_AUTHORING.md)): reusable `SKILL.md` procedures in the agentskills.io format, which an agent lists, reads, and writes through three tools.
+- **Skills** ([`raxol_agent`](https://github.com/DROOdotFOO/raxol/blob/master/docs/guides/SKILL_AUTHORING.md)): reusable `SKILL.md` procedures in the agentskills.io format, which an agent lists, reads, and writes through three tools.
 - **Reach** (`raxol_gateway`): one adapter contract to many chat platforms, process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
 - **Bridge** (`raxol_agent_client_protocol`): Elixir/OTP implementation of the [Agent Client Protocol](https://agentclientprotocol.com): the JSON-RPC 2.0 wire protocol between code editors and AI coding agents (the protocol Zed and a growing ecosystem speak). Bidirectional agent/client roles, pluggable transports (stdio, in-process), and durable resumable sessions (offset-based reattach/replay) as a vendor extension. Zero raxol-internal deps. Pre-alpha.
 
@@ -133,8 +133,8 @@ Start with the [documentation index](docs/README.md), or jump to:
 - [Quickstart](docs/getting-started/QUICKSTART.md)
 - [Components](docs/getting-started/COMPONENT_GALLERY.md)
 - [Surfaces](docs/guides/SURFACES.md)
-- [Agent framework](docs/features/AGENT_FRAMEWORK.md)
-- [Payments](docs/features/AGENTIC_COMMERCE.md)
+- [Agent framework](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENT_FRAMEWORK.md)
+- [Payments](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENTIC_COMMERCE.md)
 - [$RAXOL token facts](https://raxol.io/token)
 - [API docs](https://hexdocs.pm/raxol)
 
