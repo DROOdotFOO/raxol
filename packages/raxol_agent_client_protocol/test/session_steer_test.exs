@@ -9,10 +9,11 @@ defmodule Raxol.AgentClientProtocol.SessionSteerTest do
   fires the emitter's durable steer hook, and every rejection changes nothing and
   journals nothing.
 
-  The CAS *correctness* (ABA, §5.1 idempotency, order-independence) is owned and
-  exhaustively covered by the pure decision core's suite in `raxol_agent`
-  (`Raxol.Agent.Red.U6SteerRedTest`). Here the adapter is a faithful local double
-  of that decision so the tests exercise the SEAM, not re-litigate the core.
+  No adapter with a compare-and-swap decision ships: `SteerAdapter.Unsupported`,
+  the default, refuses every steer. The CAS *correctness* of an adapter (ABA,
+  idempotency, order-independence) is the adapter's own and is covered nowhere
+  in this repository; the adapter here is a local one, so these tests exercise
+  the SEAM only.
   """
   use ExUnit.Case, async: false
   use Raxol.AgentClientProtocol.Test.InvariantSentinel

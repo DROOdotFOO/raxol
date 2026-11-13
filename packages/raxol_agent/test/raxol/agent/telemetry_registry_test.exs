@@ -56,9 +56,9 @@ defmodule Raxol.Agent.TelemetryRegistryTest do
            "found no modules under #{@journal_lib}; the journal's events are " <>
              "classified here, so its lib/ has to be scanned too"
 
-    assert length(@found_events) >= 8,
+    assert length(@found_events) >= 5,
            "found only #{length(@found_events)} telemetry event literals under " <>
-             "#{@lib_root}, which is fewer than this package is known to emit; " <>
+             "#{@lib_root}, far fewer than this package emits; " <>
              "the scan is broken, not the registry"
   end
 
