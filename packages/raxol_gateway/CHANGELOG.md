@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `Raxol.Gateway.Handler.Agent` ships in `raxol_console`, which
   requires `raxol_gateway ~> 0.2`. This package no longer has an optional
   dependency on `raxol_agent`.
+- `Raxol.Gateway.SessionRouter`, and so `Raxol.Gateway.Supervisor`, does not
+  start when the `:handler` module cannot be loaded: the start fails with
+  `{:handler_not_available, module}`. Such a handler used to fail one session
+  at a time, on each chat's first message.
 
 ## [0.1.0] - unreleased
 

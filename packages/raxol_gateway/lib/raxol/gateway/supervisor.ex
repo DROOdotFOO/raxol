@@ -7,7 +7,9 @@ defmodule Raxol.Gateway.Supervisor do
 
   ## Options
 
-    * `:handler` (required) -- `{module, opts}` the sessions run
+    * `:handler` (required) -- `{module, opts}` the sessions run. The
+      supervisor does not start when the module cannot be loaded (see
+      `SessionRouter`)
     * `:adapter` / `:deliver` -- how outbound is delivered (see `SessionRouter`)
     * `:router_name` -- the router's registered name (default
       `Raxol.Gateway.SessionRouter`)
