@@ -155,7 +155,7 @@ A process that holds a signing key is the crown jewel, so the fund-moving defaul
 - **Fail-closed defaults.** In production, `require_policy` and `require_checkpoint` default to true (see Spending Controls and Crash Recovery), and `Wallets.Env` refuses to load (see Wallet Backends).
 - **EIP-712 golden vectors.** The digest for every signed struct (x402 ERC-3009, the Xochi intent, the Permit2 witness, the Mandate) is pinned to a committed value that default CI checks on every run, so a change to a type definition or the encoder turns CI red rather than silently signing against the wrong struct.
 
-Two boot gates fail closed for a fund-moving deployment; call them at startup, alongside `Protocols.Xochi.assert_origin_pull_pinned!/2`:
+Two boot gates fail closed for a fund-moving deployment; call them at startup, alongside `Protocols.Xochi.assert_origin_pull_pinned!/2`. A release that signs origin pulls reads the pin from the environment in its own `config/runtime.exs` with `config :raxol_payments, Raxol.Payments.Protocols.Xochi.origin_pull_pin_env_config!()`, which raises when no `XOCHI_SOLVER_*` address is set and `XOCHI_PULL_REQUIRE_SOLVER_PIN` is not `true`. None of the shipped release configs calls it.
 
 ```elixir
 # In your application start/2, before serving traffic:

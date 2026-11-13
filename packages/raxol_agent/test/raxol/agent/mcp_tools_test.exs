@@ -40,6 +40,9 @@ defmodule Raxol.Agent.McpToolsTest do
 
     root = tmp_dir("mcp_tools_root")
     put_env(:mcp_project_root, root)
+    # Unset, the tools register on a node booted for MCP, as `raxol mcp` is.
+    delete_env(:mcp_tools)
+    put_startup_mode(Map.get(context, :mode, :mcp))
     for {key, value} <- Map.get(context, :env, []), do: put_env(key, value)
 
     if Map.get(context, :supervisor, false) do
@@ -664,8 +667,67 @@ defmodule Raxol.Agent.McpToolsTest do
       assert agent_tools() == []
     end
 
-    @tag env: [mcp_tools: false]
-    test "registers nothing when switched off" do
+    @tag mode: :mcp
+    test "unset, a node booted for MCP gets the tools and the journal resource", %{id: id} do
+      assert Enum.sort(agent_tools()) ==
+               ~w(agent_ask agent_list agent_spawn agent_status agent_stop)
+
+      assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert resource_uris() == [McpTools.journal_uri(id)]
+    end
+
+    @tag mode: :full
+    test "unset, a node in :full gets neither", %{id: id, registry: registry} do
+      assert is_pid(Process.whereis(registry))
+      assert agent_tools() == []
+
+      assert {:ok, %{id: ^id}} = McpTools.spawn_agent(@counter, id)
+      assert resource_uris() == []
+    end
+
+    @tag mode: :full, env: [mcp_tools: true]
+    test "true registers them in :full", %{id: id} do
+      assert Enum.sort(agent_tools()) ==
+               ~w(agent_ask agent_list agent_spawn agent_status agent_stop)
+
+      assert {:ok, _} = call("agent_spawn", %{"app" => @counter, "id" => id})
+      assert resource_uris() == [McpTools.journal_uri(id)]
+    end
+
+    @tag mode: :mcp, env: [mcp_tools: false]
+    test "false registers nothing on a node booted for MCP", %{id: id} do
+      assert agent_tools() == []
+
+      assert {:ok, %{id: ^id}} = McpTools.spawn_agent(@counter, id)
+      assert resource_uris() == []
+    end
+
+    @tag mode: :full
+    test "a setting put after the first start changes nothing", context do
+      put_env(:mcp_tools, true)
+      stop_supervised!(McpTools)
+      start_supervised!({McpTools, registry: context.registry, server: context.server})
+
+      assert agent_tools() == []
+    end
+
+    @tag mode: :mcp, mcp: false
+    test "unset, a start under Raxol.Supervisor registers nothing and does not wait on it" do
+      registry = :"mcp_tools_registry_#{uniq()}"
+      server = :"mcp_tools_server_#{uniq()}"
+      Process.put(:mcp, {registry, server})
+      start_mcp()
+      stop_supervised!(McpTools)
+
+      spec = %{
+        id: McpTools,
+        start: {McpTools, :start_link, [[registry: registry, server: server]]},
+        restart: :temporary
+      }
+
+      assert {:ok, _pid} = Supervisor.start_child(Raxol.Supervisor, spec)
+      on_exit(fn -> Supervisor.terminate_child(Raxol.Supervisor, McpTools) end)
+
       assert agent_tools() == []
     end
   end
@@ -790,13 +852,40 @@ defmodule Raxol.Agent.McpToolsTest do
   end
 
   defp put_env(key, value) do
-    previous = Application.fetch_env(:raxol_agent, key)
+    restore_env(key)
     Application.put_env(:raxol_agent, key, value)
+  end
+
+  defp delete_env(key) do
+    restore_env(key)
+    Application.delete_env(:raxol_agent, key)
+  end
+
+  defp restore_env(key) do
+    previous = Application.fetch_env(:raxol_agent, key)
 
     on_exit(fn ->
       case previous do
         {:ok, was} -> Application.put_env(:raxol_agent, key, was)
         :error -> Application.delete_env(:raxol_agent, key)
+      end
+    end)
+  end
+
+  # What `Raxol.Application.health_status/0` reports as the mode: `RAXOL_MODE`
+  # beats `config :raxol, :startup_mode`, so the variable is cleared.
+  defp put_startup_mode(mode) do
+    variable = System.get_env("RAXOL_MODE")
+    configured = Application.fetch_env(:raxol, :startup_mode)
+    System.delete_env("RAXOL_MODE")
+    Application.put_env(:raxol, :startup_mode, mode)
+
+    on_exit(fn ->
+      if variable, do: System.put_env("RAXOL_MODE", variable)
+
+      case configured do
+        {:ok, was} -> Application.put_env(:raxol, :startup_mode, was)
+        :error -> Application.delete_env(:raxol, :startup_mode)
       end
     end)
   end

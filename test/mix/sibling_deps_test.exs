@@ -55,7 +55,7 @@ defmodule Raxol.Mix.SiblingDepsTest do
   end
 
   # Only a project with a `package` config can be installed from Hex;
-  # raxol_web3 has none and declares its siblings as plain path deps.
+  # raxol_web3 has none.
   test "a Hex install takes every sibling from Hex", %{tmp_dir: tmp_dir} do
     for dir <- @project_dirs do
       sandbox = write_sandbox(tmp_dir, dir)

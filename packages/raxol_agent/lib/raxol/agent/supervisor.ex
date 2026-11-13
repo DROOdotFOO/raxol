@@ -27,10 +27,9 @@ defmodule Raxol.Agent.Supervisor do
   use Supervisor
 
   # Idempotent: the subtree is named, and more than one caller legitimately
-  # tries to bring it up -- RaxolAgent.Application, the main `raxol` app's
-  # maybe_add_agent_supervisor, and the example/test scripts that boot it
-  # manually. Whoever wins, everyone else gets the same running subtree back
-  # instead of an :already_started crash.
+  # tries to bring it up -- RaxolAgent.Application and the example/test
+  # scripts that boot it manually. Whoever wins, everyone else gets the same
+  # running subtree back instead of an :already_started crash.
   @spec start_link(keyword()) :: {:ok, pid()}
   def start_link(opts \\ []) do
     case Supervisor.start_link(__MODULE__, opts, name: __MODULE__) do

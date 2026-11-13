@@ -10,7 +10,9 @@
 # the package runs without that tree. Remove an entry when the site is fixed
 # (module moved into the owning package, implementation injected via
 # application config, or reference deleted).
-packages/raxol_agent/lib/raxol/agent/scheduler/delivery.ex	Raxol.Gateway.Delivery	raxol_gateway
+#
+# No entry crosses the runtime/agent line: the checker fails one whose file and
+# owning tree are on different sides of it.
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.BarChart	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.LineChart	raxol
 packages/raxol_core/lib/raxol/core/accessibility/projection.ex	Raxol.UI.Charts.ScatterChart	raxol
@@ -33,8 +35,6 @@ packages/raxol_liveview/lib/raxol/live_view/terminal_bridge.ex	Raxol.Effects.Bor
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.BehaviorTracker	raxol
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.FeedbackLoop	raxol
 packages/raxol_mcp/lib/raxol/mcp/adaptive_tools.ex	Raxol.Adaptive.LayoutRecommender	raxol
-packages/raxol_mcp/lib/raxol/mcp/agent_bridge.ex	Raxol.Agent.Registry	undefined
-packages/raxol_mcp/lib/raxol/mcp/agent_bridge.ex	Raxol.Headless	raxol
 packages/raxol_mcp/lib/raxol/mcp/server.ex	Raxol.Headless	raxol
 packages/raxol_mcp/lib/raxol/mcp/test.ex	Raxol.Headless	raxol
 packages/raxol_mcp/lib/raxol/mcp/test.ex	Raxol.Headless.EventBuilder	raxol

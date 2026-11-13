@@ -5,8 +5,7 @@ adapter that owns only its own I/O and translation; routing, per-chat sessions, 
 authorization, and history all live in the gateway. A chat becomes an OTP process, so
 platform fan-out is supervision rather than a single-process message queue.
 
-The package (`raxol_gateway`, pre-alpha) depends on `raxol_core`, with `raxol_agent`
-optional (used only to record turns to a durable conversation log). It has no auto-started
+The package (`raxol_gateway`, pre-alpha) depends on `raxol_core`. It has no auto-started
 tree: you wire the supervisor yourself.
 
 ## The adapter contract
@@ -39,6 +38,7 @@ long polling) feeding `normalize_event/1` into the router:
 ```elixir
 {:ok, conn} = Raxol.Telegram.GatewayAdapter.connect(bot_token: token)
 
+# Handler.Agent ships in raxol_console: see "Agent-backed handler" below.
 Raxol.Gateway.Supervisor.start_link(
   handler: {Raxol.Gateway.Handler.Agent, [system_prompt: "..."]},
   adapter: {Raxol.Telegram.GatewayAdapter, conn}
@@ -80,6 +80,7 @@ content arrives empty.
 ```elixir
 {:ok, conn} = Raxol.Gateway.Adapter.Discord.connect(bot_token: token)
 
+# Handler.Agent ships in raxol_console: see "Agent-backed handler" below.
 Raxol.Gateway.Supervisor.start_link(
   handler: {Raxol.Gateway.Handler.Agent, [system_prompt: "..."]},
   adapter: {Raxol.Gateway.Adapter.Discord, conn}
@@ -106,7 +107,8 @@ Raxol.Gateway.Adapter.Discord.GatewaySocket.start_link(
 
 `Raxol.Gateway.Handler.Agent` turns any chat into an agent conversation: each inbound
 `%{text: text}` event runs one synchronous turn through `Raxol.Agent.Stream` and replies
-with the collected answer. It requires the optional `raxol_agent` dependency.
+with the collected answer. It ships in `raxol_console`, which depends on both
+`raxol_gateway` and `raxol_agent`; `raxol_gateway` itself has no agent dependency.
 
 ```elixir
 Raxol.Gateway.Supervisor.start_link(
@@ -349,9 +351,9 @@ route = Raxol.Gateway.Route.new(%{platform: :in_memory, chat_type: :dm, chat_id:
 ## Status
 
 The gateway core (adapter contract, routing, sessions, pairing, delivery, handoff) is
-complete, the adapter contract is frozen, `Handler.Agent` (agent-backed conversations)
-and `Handler.Lifecycle` (a full TEA app per chat under `environment: :gateway`) ship,
-and three platforms sit behind the frozen contract: Telegram
+complete, the adapter contract is frozen, `Handler.Lifecycle` (a full TEA app per chat
+under `environment: :gateway`) ships, `Handler.Agent` (agent-backed conversations) ships
+in `raxol_console`, and three platforms sit behind the frozen contract: Telegram
 (`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text and voice notes -
 keyboards, callbacks, and other media are still the TEA surface's domain), Discord
 (`Raxol.Gateway.Adapter.Discord` + its `GatewaySocket`; text-only this slice), and

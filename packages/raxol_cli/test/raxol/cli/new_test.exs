@@ -5,7 +5,7 @@ defmodule Raxol.CLI.NewTest do
   import ExUnit.CaptureIO
 
   alias Raxol.CLI.New
-  alias Raxol.Test.GeneratedApp
+  alias Raxol.Headless
 
   describe "run/1 validation" do
     test "rejects a missing name" do
@@ -79,9 +79,12 @@ defmodule Raxol.CLI.NewTest do
       capture_io(fn -> assert File.cd!(base, fn -> New.run([name]) end) == 0 end)
 
       app = Module.concat([Macro.camelize(name)])
-      assert GeneratedApp.compile!([Path.join([base, name, "lib", "#{name}.ex"])]) == [app]
-      assert GeneratedApp.render!(app, "Count: 0") =~ "+/- to change, q to quit"
-      assert GeneratedApp.render!(app, "Count: 1", keys: ["+", "+", "-"])
+      assert compile!(Path.join([base, name, "lib", "#{name}.ex"])) == [app]
+
+      frame = frame!(app, [])
+      assert frame =~ "Count: 0"
+      assert frame =~ "+/- to change, q to quit"
+      assert frame!(app, ["+", "+", "-"]) =~ "Count: 1"
 
       ctrl_c = %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}}
       assert {_model, [quit]} = app.update(ctrl_c, app.init(%{}))
@@ -96,7 +99,41 @@ defmodule Raxol.CLI.NewTest do
       name = "counter_#{System.unique_integer([:positive])}"
       capture_io(fn -> assert File.cd!(base, fn -> New.run([name]) end) == 0 end)
 
-      GeneratedApp.assert_formatted!(Path.join(base, name))
+      project = Path.join(base, name)
+
+      try do
+        File.cd!(project, fn -> Mix.Tasks.Format.run(["--check-formatted"]) end)
+      rescue
+        error in Mix.Error -> flunk("#{project} is not `mix format` clean:\n" <> error.message)
+      end
     end
+  end
+
+  # Compiled with no warning, since generated CI compiles with
+  # `--warnings-as-errors`.
+  defp compile!(file) do
+    assert {:ok, modules, %{compile_warnings: [], runtime_warnings: []}} =
+             Kernel.ParallelCompiler.compile([file], return_diagnostics: true)
+
+    on_exit(fn -> Enum.each(modules, &purge/1) end)
+    modules
+  end
+
+  defp purge(module) do
+    :code.purge(module)
+    :code.delete(module)
+  end
+
+  # The app's frame in a headless session, after `keys`.
+  defp frame!(app, keys) do
+    if is_nil(Process.whereis(Headless)), do: start_supervised!({Headless, [name: Headless]})
+
+    id = "raxol_new_#{System.unique_integer([:positive])}"
+    assert {:ok, ^id} = Headless.start(app, id: id, width: 80, height: 24, subscriptions: false)
+    on_exit(fn -> if Process.whereis(Headless), do: Headless.stop(id) end)
+
+    Enum.each(keys, fn key -> assert :ok = Headless.send_key(id, key) end)
+    assert {:ok, frame} = Headless.screenshot(id)
+    frame
   end
 end

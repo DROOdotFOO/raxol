@@ -5,9 +5,8 @@ defmodule Raxol.Gateway.Handler do
   A handler is initialized once per chat with its route, then handles each
   inbound event, optionally returning a rendered message to deliver back.
   Any module satisfying `init/2` and `handle_event/2` works;
-  `Raxol.Gateway.Handler.Agent` (agent conversations) and
   `Raxol.Gateway.Handler.Lifecycle` (a full TEA app under
-  `environment: :gateway`) ship with the package.
+  `environment: :gateway`) ships with the package.
 
   The optional `terminate/2` runs when the session stops cleanly (idle
   timeout, `SessionRouter.stop_session/2`, supervisor shutdown, explicit

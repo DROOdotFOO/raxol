@@ -9,7 +9,9 @@ defmodule Raxol.Gateway.SessionRouter do
 
   ## Options
 
-    * `:handler` (required) -- `{module, opts}` the sessions run
+    * `:handler` (required) -- `{module, opts}` the sessions run. The router
+      refuses to start, with `{:handler_not_available, module}`, when the
+      module cannot be loaded.
     * `:sessions_sup` (required) -- a `DynamicSupervisor` name for the sessions
     * `:adapter` -- `{module, conn}`; outbound is delivered via its
       `send_message/3`. Or pass `:deliver`, a `(Route.t(), rendered -> any())`.
@@ -147,24 +149,44 @@ defmodule Raxol.Gateway.SessionRouter do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
-    {:ok,
-     %{
-       handler: Keyword.fetch!(opts, :handler),
-       sessions_sup: Keyword.fetch!(opts, :sessions_sup),
-       deliver: resolve_deliver(opts),
-       authorize: Keyword.get(opts, :authorize),
-       log: Keyword.get(opts, :log),
-       max_sessions: Keyword.get(opts, :max_sessions, @default_max_sessions),
-       idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
-       # Unset leaves Session on its own default rather than pinning a second
-       # copy of that number here.
-       handler_init_timeout: Keyword.get(opts, :handler_init_timeout),
-       cooldown_ms: Keyword.get(opts, :cooldown_ms, @default_cooldown_ms),
-       sessions: %{},
-       monitors: %{},
-       last_start: %{}
-     }}
+    handler = Keyword.fetch!(opts, :handler)
+
+    case handler_available(handler) do
+      :ok ->
+        {:ok,
+         %{
+           handler: handler,
+           sessions_sup: Keyword.fetch!(opts, :sessions_sup),
+           deliver: resolve_deliver(opts),
+           authorize: Keyword.get(opts, :authorize),
+           log: Keyword.get(opts, :log),
+           max_sessions: Keyword.get(opts, :max_sessions, @default_max_sessions),
+           idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
+           # Unset leaves Session on its own default rather than pinning a
+           # second copy of that number here.
+           handler_init_timeout: Keyword.get(opts, :handler_init_timeout),
+           cooldown_ms: Keyword.get(opts, :cooldown_ms, @default_cooldown_ms),
+           sessions: %{},
+           monitors: %{},
+           last_start: %{}
+         }}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
+
+  # A session calls the module only after `route/3` has accepted a chat's
+  # event, so a module that is missing would fail one chat at a time. Here it
+  # fails the start.
+  defp handler_available({module, _opts}) when is_atom(module) do
+    case Code.ensure_loaded(module) do
+      {:module, ^module} -> :ok
+      {:error, _reason} -> {:error, {:handler_not_available, module}}
+    end
+  end
+
+  defp handler_available(_handler), do: :ok
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:route, route, event}, _from, state) do
@@ -348,8 +370,8 @@ defmodule Raxol.Gateway.SessionRouter do
     end
   end
 
-  # A session blocked in a long handler turn (an LLM call in Handler.Agent is
-  # the common case) cannot answer before the call timeout; surface
+  # A session blocked in a long handler turn (an LLM call is the common
+  # case) cannot answer before the call timeout; surface
   # :session_busy instead of letting the exit crash the router and wipe all
   # session tracking.
   defp fetch_conversation_id(pid) do

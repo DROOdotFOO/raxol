@@ -52,22 +52,13 @@ defmodule RaxolWeb3.MixProject do
   # trust store at all and fails on the first HTTPS connect.
   defp deps do
     [
-      # A plain path dep, with no version constraint and no HEX_BUILD branch.
-      # Every other package carries a `raxol_dep/3` helper that swaps a path dep
-      # for `{name, "~> X.Y"}` when publishing, and this one deliberately does
-      # not: ADR-0033 leaves publication of `raxol_web3` open, so that branch
-      # would be dead code today, and a constraint that is never resolved
-      # against Hex is a constraint that can go stale without anything noticing.
-      # `scripts/check-lockstep-deps.sh` checks sibling `~> X.Y` constraints; a
-      # path dep has none to lag. The helper arrives with the publication
-      # decision, not before it.
-      {:raxol_core, path: "../raxol_core", override: true},
+      raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
       # Required, not optional. ADR-0033 decision 2: `Raxol.MCP.CircuitBreaker`
       # is what the router's failover is built on, so making it conditional
       # ships a build whose dead backends are retried on every call. Its own
       # runtime dependencies are `raxol_core` and `jason`, so it costs one
       # package.
-      {:raxol_mcp, path: "../raxol_mcp", override: true},
+      raxol_dep(:raxol_mcp, "~> 2.8", "../raxol_mcp"),
       {:mint, "~> 1.8"},
       {:castore, "~> 1.0"},
       # ADR-0040 decision 3: FX figures are parsed with `floats: :decimals`, so
@@ -81,6 +72,21 @@ defmodule RaxolWeb3.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
+  end
+
+  defp raxol_dep(name, version, path) do
+    if hex_package?() do
+      {name, version}
+    else
+      {name, version, [path: path, override: true]}
+    end
+  end
+
+  # Hex form for a publish (HEX_BUILD=1) and inside a Hex install, which Hex
+  # marks by unpacking hex_metadata.config beside mix.exs; a path dep anywhere
+  # else, whether or not the directory exists.
+  defp hex_package? do
+    System.get_env("HEX_BUILD") != nil or File.exists?("hex_metadata.config")
   end
 
   defp description do

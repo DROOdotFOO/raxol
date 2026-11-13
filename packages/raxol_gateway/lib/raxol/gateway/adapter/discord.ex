@@ -3,8 +3,8 @@ defmodule Raxol.Gateway.Adapter.Discord do
   `Raxol.Gateway.Adapter` implementation for Discord.
 
   Owns only platform I/O and translation: `MESSAGE_CREATE` dispatches
-  normalize to the gateway's `%{text: binary}` event shape (what
-  `Raxol.Gateway.Handler.Agent` consumes), and rendered replies go out as
+  normalize to the gateway's `%{text: binary}` event shape (what a text
+  handler consumes), and rendered replies go out as
   plain-text `POST /channels/:id/messages` REST calls.
 
   Deliberately out of scope here:

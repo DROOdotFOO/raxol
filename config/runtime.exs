@@ -10,67 +10,6 @@ if config_env() == :prod do
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     ssl: true
 
-  # Xochi origin-pull solver pin (#333). Pin the solver collection address the
-  # agent will sign pulls to, so a forged/MITM'd quote cannot redirect funds.
-  # These must equal Riddler's canonical solver address(es) (the HD-derived
-  # submitter; see Riddler Xochi.Config.solver_address/1). The allowlist is a flat
-  # set, so when one address serves every chain a single var covers all corridors;
-  # a per-chain var is here for each of the five supported chains in case they
-  # ever diverge. Permit2 is fail-closed regardless; set
-  # XOCHI_PULL_REQUIRE_SOLVER_PIN=true to hard-pin ERC-3009 too.
-  xochi_env_solvers =
-    ~w(XOCHI_SOLVER_ETH XOCHI_SOLVER_BASE XOCHI_SOLVER_ARBITRUM XOCHI_SOLVER_OPTIMISM XOCHI_SOLVER_POLYGON)
-    |> Enum.map(&System.get_env/1)
-    |> Enum.reject(&(is_nil(&1) or &1 == ""))
-
-  xochi_require_solver_pin =
-    System.get_env("XOCHI_PULL_REQUIRE_SOLVER_PIN", "false") == "true"
-
-  # Fail closed at boot rather than sign origin pulls to an unverified recipient:
-  # a deployment that includes the payments app must pin the solver (set the
-  # XOCHI_SOLVER_* addresses, or XOCHI_PULL_REQUIRE_SOLVER_PIN=true). Guarded so a
-  # release without the payments app (the module is absent) skips the check.
-  if Code.ensure_loaded?(Raxol.Payments.Protocols.Xochi) do
-    Raxol.Payments.Protocols.Xochi.assert_origin_pull_pinned!(
-      xochi_env_solvers,
-      xochi_require_solver_pin
-    )
-  end
-
-  # With XochiPull enabled (Riddler #591), the origin pull routes to the verified
-  # per-chain pull contracts, not the bare solver EOA. Trust those verified
-  # recipients in addition to any XOCHI_SOLVER_* addresses so a real settlement
-  # signs against the deployed contract instead of a rejected `to`/`spender`.
-  xochi_solver_allowlist =
-    if Code.ensure_loaded?(Raxol.Payments.Xochi.PullContracts) do
-      Enum.uniq(
-        xochi_env_solvers ++
-          Raxol.Payments.Xochi.PullContracts.pull_recipients()
-      )
-    else
-      xochi_env_solvers
-    end
-
-  config :raxol_payments,
-    pull_solver_allowlist: xochi_solver_allowlist,
-    pull_require_solver_pin: xochi_require_solver_pin
-
-  # Settlement accounting + rebalance advisor (default off). When enabled, each
-  # Xochi settlement is booked (fee vs on-chain gas) into a SettlementLedger and the
-  # RebalanceAdvisor runs periodically. Read-only: it reads the solver's balances
-  # and receipts over public RPC and never moves funds (the Riddler auto-rebalancer
-  # executes). Enable with RAXOL_ACCOUNTING_ENABLED=true and set the RPC_* + solver
-  # address vars. The env contract lives in Raxol.Payments.Accounting so this file and
-  # the raxol_earn sidecar release config read it identically. Guarded so a release
-  # without the payments app (the module is absent) skips it.
-  if Code.ensure_loaded?(Raxol.Payments.Accounting) do
-    {accounting_opts, accounting_enabled} =
-      Raxol.Payments.Accounting.env_config()
-
-    config :raxol_payments, :accounting, accounting_opts
-    config :raxol_earn, accounting_enabled: accounting_enabled
-  end
-
   # TERMINAL_LOG_LEVEL sets the Logger level for the WHOLE node, not just the
   # terminal: everything the release logs is filtered by it. "warn" is kept as
   # an alias for :warning because Logger still accepts it and operators had it

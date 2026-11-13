@@ -7,9 +7,6 @@ defmodule Raxol.Gateway.Handler.Agent do
   reply. Any other event shape is ignored (`:noreply`). Adapters that want a
   chat handled by an agent normalize their text messages to `%{text: binary}`.
 
-  Requires the optional `:raxol_agent` dependency; `init/2` returns
-  `{:error, :raxol_agent_not_loaded}` without it.
-
   ## Options
 
     * `:system_prompt` -- passed to every turn (never stored in history, so
@@ -48,8 +45,6 @@ defmodule Raxol.Gateway.Handler.Agent do
 
   @behaviour Raxol.Gateway.Handler
 
-  @compile {:no_warn_undefined, [Raxol.Agent.Stream]}
-
   require Logger
 
   alias Raxol.Core.ErrorHandling
@@ -58,29 +53,24 @@ defmodule Raxol.Gateway.Handler.Agent do
   @default_window_ms 60_000
 
   @impl true
-  @spec init(Raxol.Gateway.Route.t(), keyword()) ::
-          {:ok, map()} | {:error, :raxol_agent_not_loaded}
+  @spec init(Raxol.Gateway.Route.t(), keyword()) :: {:ok, map()}
   def init(_route, opts) do
-    if Code.ensure_loaded?(Raxol.Agent.Stream) do
-      agent_opts = default_agent_opts(Keyword.get(opts, :agent_opts, []))
+    agent_opts = default_agent_opts(Keyword.get(opts, :agent_opts, []))
 
-      warn_if_unresolved(
-        agent_opts,
-        Keyword.get(opts, :resolve_probe, &default_probe/1)
-      )
+    warn_if_unresolved(
+      agent_opts,
+      Keyword.get(opts, :resolve_probe, &default_probe/1)
+    )
 
-      {:ok,
-       %{
-         messages: [],
-         system_prompt: Keyword.get(opts, :system_prompt),
-         max_history: Keyword.get(opts, :max_history, @default_max_history),
-         agent_opts: agent_opts,
-         throttle: init_throttle(opts),
-         now_fn: Keyword.get(opts, :now_fn, &default_now/0)
-       }}
-    else
-      {:error, :raxol_agent_not_loaded}
-    end
+    {:ok,
+     %{
+       messages: [],
+       system_prompt: Keyword.get(opts, :system_prompt),
+       max_history: Keyword.get(opts, :max_history, @default_max_history),
+       agent_opts: agent_opts,
+       throttle: init_throttle(opts),
+       now_fn: Keyword.get(opts, :now_fn, &default_now/0)
+     }}
   end
 
   @impl true

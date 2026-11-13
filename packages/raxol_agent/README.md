@@ -52,17 +52,22 @@ Raxol.Agent.Team.start_link(
 
 ## Agents over MCP
 
-If a `Raxol.MCP.Registry` is running when `Raxol.Agent.McpTools` first starts
-(as under `raxol mcp` and `mix mcp.server`), it registers `agent_spawn`,
-`agent_list`, `agent_ask`, `agent_status`, `agent_stop` and the resource
-`raxol://agent/<id>/journal`. The decision is made once per BEAM.
+On a node booted for MCP (`raxol mcp`, `mix mcp.server`: the `:mcp` startup
+mode), `Raxol.Agent.McpTools` registers `agent_spawn`, `agent_list`,
+`agent_ask`, `agent_status`, `agent_stop` and the resource
+`raxol://agent/<id>/journal` with the running `Raxol.MCP.Registry`. In any
+other mode that runs the registry, `:full` included, it registers them only
+when `mcp_tools` is `true`. The decision is made once per BEAM, when
+`Raxol.Agent.McpTools` first starts, so `mcp_tools` belongs in `config/*.exs`:
+setting it after `:raxol_agent` has started changes nothing. The tools answer
+to the authorizer the node configures (`config :raxol, :mcp_authorizer`).
 
 ```elixir
 config :raxol_agent,
   mcp_spawnable_apps: [MyAgent],      # default: [Raxol.Agent.Reference.Counter]
   mcp_project_root: "/srv/project",   # default: the working directory
   mcp_exposed_agents: ["ops"],        # agents started elsewhere, by binary id
-  mcp_tools: true                     # false registers nothing
+  mcp_tools: true                     # unset: :mcp mode only; false: never
 ```
 
 An agent answers `agent_ask` by replying to a `Raxol.Agent.Comm.call/3` whose

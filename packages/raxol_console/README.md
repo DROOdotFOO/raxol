@@ -4,6 +4,10 @@ Console runtime for Raxol. Boots a Virtuals ACP Console agent package
 (`soul.md` + `tasks.json` + `skills/`) onto the gateway stack, making Raxol a
 provisionable runtime alongside Hermes and OpenClaw. See `docs/adr/0031`.
 
+The package also holds `Raxol.Gateway.Handler.Agent`, the gateway handler that
+answers each chat message with one agent turn. It needs both `raxol_gateway`
+and `raxol_agent`, and this is the package that depends on both.
+
 ## Packaging
 
 The runtime ships as a self-contained executable (Burrito, embedded ERTS) wrapped

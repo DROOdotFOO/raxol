@@ -1,16 +1,15 @@
 defmodule Raxol.MCP.AgentBridgeTest do
   @moduledoc """
   A bridged tool is gated like any other: an Action that declares itself
-  sensitive, and `agent.send`, which types into any Headless session, are
-  refused by a Server that has no authorizer.
+  sensitive is refused by a Server that has no authorizer.
   """
   use ExUnit.Case, async: true
 
   alias Raxol.MCP.{AgentBridge, Registry, Server, ToolDef}
 
   # The Action contract the bridge reads (`__action_meta__/0` and `call/2`, as
-  # `use Raxol.Agent.Action` generates them); raxol_agent is not a dependency
-  # of this package. `call/2` counts its runs in the context's counter.
+  # `use Raxol.Agent.Action` generates them). `call/2` counts its runs in the
+  # context's counter.
   defmodule ResetAction do
     def __action_meta__ do
       %{
@@ -120,13 +119,6 @@ defmodule Raxol.MCP.AgentBridgeTest do
     assert :counters.get(ran, 1) == 1
   end
 
-  test "agent.send is refused without an authorizer" do
-    send_tool = Enum.find(AgentBridge.meta_tools(), &(&1.name == "agent.send"))
-    server = unguarded_server([send_tool])
-
-    assert unguarded_refusal?(call_tool(server, "agent.send"))
-  end
-
   test "an Action's description and schema are cleaned, a misnamed one derives no tool" do
     {tools, log} =
       ExUnit.CaptureLog.with_log(fn ->
@@ -141,19 +133,17 @@ defmodule Raxol.MCP.AgentBridgeTest do
     assert log =~ ~s(action "go\\n<system>" derives no tool)
   end
 
-  test "agent.get_model is sensitive: it returns the whole model" do
-    model_tool = Enum.find(AgentBridge.meta_tools(), &(&1.name == "agent.get_model"))
-    server = unguarded_server([model_tool])
-
-    assert unguarded_refusal?(call_tool(server, "agent.get_model"))
-  end
-
   # The boot check leaves out derived widget tools by origin, not by the dot
-  # in their names: `agent.send` is a static tool with a dotted name.
-  test "a Server with no authorizer refuses to boot on the bridge's meta tools" do
+  # in their names: `agent.reset` is a static tool with a dotted name.
+  test "a Server with no authorizer refuses to boot on a bridged sensitive Action" do
     registry = :"reg_#{System.unique_integer([:positive])}"
     start_supervised!({Registry, name: registry}, id: registry)
-    :ok = Registry.register_tools(registry, AgentBridge.meta_tools())
+
+    :ok =
+      Registry.register_tools(
+        registry,
+        AgentBridge.actions_to_mcp_tools([ResetAction, ReadAction], %{ran: :counters.new(1, [])})
+      )
 
     # The raise happens in init/1 of a LINKED process, so it comes back as a
     # start_link error rather than propagating into this process.
@@ -163,7 +153,7 @@ defmodule Raxol.MCP.AgentBridgeTest do
              Server.start_link(name: :"srv_#{registry}", registry: registry)
 
     assert message =~ "refuses to boot"
-    assert message =~ "agent.send"
-    assert message =~ "agent.get_model"
+    assert message =~ "agent.reset"
+    refute message =~ "agent.read"
   end
 end

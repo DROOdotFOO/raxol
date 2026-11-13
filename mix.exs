@@ -220,7 +220,7 @@ defmodule Raxol.MixProject do
       raxol_dep(:raxol_core, "~> 2.8", "packages/raxol_core"),
       raxol_dep(:raxol_terminal, "~> 2.7", "packages/raxol_terminal"),
       raxol_dep(:raxol_sensor, "~> 2.7", "packages/raxol_sensor"),
-      raxol_dep(:raxol_mcp, "~> 2.7", "packages/raxol_mcp"),
+      raxol_dep(:raxol_mcp, "~> 2.8", "packages/raxol_mcp"),
       raxol_dep(:raxol_liveview, "~> 2.7", "packages/raxol_liveview"),
       raxol_dep(:raxol_plugin, "~> 2.7", "packages/raxol_plugin")
     ]
@@ -616,9 +616,6 @@ defmodule Raxol.MixProject do
         "UI Components": [
           ~r/^Raxol\.UI\..*/
         ],
-        "AI Agents": [
-          ~r/^Raxol\.Agent.*/
-        ],
         "Distributed Swarm": [
           ~r/^Raxol\.Swarm\..*/
         ],
@@ -663,7 +660,6 @@ defmodule Raxol.MixProject do
         Raxol.Core,
         Raxol.Terminal,
         Raxol.UI,
-        Raxol.Agent,
         Raxol.Swarm,
         Raxol.Sensor,
         Raxol.Adaptive,

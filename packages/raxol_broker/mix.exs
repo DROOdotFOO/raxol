@@ -31,7 +31,7 @@ defmodule RaxolBroker.MixProject do
     [
       raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent", []),
       raxol_dep(:raxol_journal, "~> 2.7", "../raxol_journal", []),
-      raxol_dep(:raxol_mcp, "~> 2.7", "../raxol_mcp", []),
+      raxol_dep(:raxol_mcp, "~> 2.8", "../raxol_mcp", []),
       # Floor: below 3.1.2, `Decimal.round/3` allocates in proportion to
       # `places` (CVE-2026-97853).
       {:decimal, "~> 3.1 and >= 3.1.2"},

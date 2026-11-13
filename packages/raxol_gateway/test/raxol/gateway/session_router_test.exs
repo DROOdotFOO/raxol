@@ -527,6 +527,47 @@ defmodule Raxol.Gateway.SessionRouterTest do
     end
   end
 
+  describe "a handler module that cannot be loaded" do
+    test "stops the router from starting, naming the module" do
+      sup = :"sup_#{uid()}"
+      start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+      router = :"router_#{uid()}"
+
+      assert {:error, {{:handler_not_available, Raxol.Gateway.Handler.Missing}, _child}} =
+               start_supervised(%{
+                 id: router,
+                 start:
+                   {SessionRouter, :start_link,
+                    [
+                      [
+                        name: router,
+                        handler: {Raxol.Gateway.Handler.Missing, []},
+                        sessions_sup: sup
+                      ]
+                    ]}
+               })
+
+      assert Process.whereis(router) == nil
+    end
+
+    test "stops the gateway supervisor from starting" do
+      name = :"gateway_#{uid()}"
+
+      assert {:error, {{:shutdown, {:failed_to_start_child, SessionRouter, reason}}, _child}} =
+               start_supervised(
+                 {Raxol.Gateway.Supervisor,
+                  name: name,
+                  handler: {Raxol.Gateway.Handler.Missing, []},
+                  router_name: :"router_#{uid()}",
+                  pairing_name: :"pairing_#{uid()}",
+                  sessions_sup: :"sup_#{uid()}"}
+               )
+
+      assert reason == {:handler_not_available, Raxol.Gateway.Handler.Missing}
+      assert Process.whereis(name) == nil
+    end
+  end
+
   defp uid, do: System.unique_integer([:positive])
 
   # Queue `call` in the router from a task, then kill `session` and let its

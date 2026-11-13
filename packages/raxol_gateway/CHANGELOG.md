@@ -5,6 +5,18 @@ All notable changes to `raxol_gateway` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - unreleased
+
+### Changed
+
+- **Breaking:** `Raxol.Gateway.Handler.Agent` ships in `raxol_console`, which
+  requires `raxol_gateway ~> 0.2`. This package no longer has an optional
+  dependency on `raxol_agent`.
+- `Raxol.Gateway.SessionRouter`, and so `Raxol.Gateway.Supervisor`, does not
+  start when the `:handler` module cannot be loaded: the start fails with
+  `{:handler_not_available, module}`. Such a handler used to fail one session
+  at a time, on each chat's first message.
+
 ## [0.1.0] - unreleased
 
 First release. One supervised daemon fronting many chat platforms behind a

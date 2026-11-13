@@ -26,7 +26,7 @@ defmodule Raxol.Agent.Invariants.MutationControlsTest do
   @moduletag :mutation
 
   @agent_lib Path.expand("../../lib/raxol/agent", __DIR__)
-  @main_lib Path.expand("../../../../lib/raxol", __DIR__)
+  @main_lib Path.join(Mix.Project.deps_paths()[:raxol], "lib/raxol")
 
   test "m4/I1 — invert append-before-publish in EmitBridge" do
     assert_anchor!(

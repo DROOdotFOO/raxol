@@ -5,7 +5,7 @@ MCP (Model Context Protocol) server and client for Elixir. JSON-RPC 2.0 protocol
 ## Install
 
 ```elixir
-{:raxol_mcp, "~> 2.7"}
+{:raxol_mcp, "~> 2.8"}
 ```
 
 ## Features

@@ -1243,7 +1243,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   end
 
   # Trust the verified XochiPull contracts so the intent's origin-pull authorization
-  # passes the anti-drain pin (Riddler #591; same set config/runtime.exs uses),
+  # passes the anti-drain pin (the set
+  # `Raxol.Payments.Protocols.Xochi.origin_pull_pin_env_config!/0` adds),
   # plus the spender this run was told to expect. The mirrored contract set is a
   # checked-in copy of a deployment record, so it is never widened silently: a
   # rotated address has to be named on the command line.

@@ -310,7 +310,7 @@ defmodule Raxol.Headless do
 
   `wait: false` skips the wait: the call returns once the key is queued at
   the dispatcher and says nothing about when `update/2` takes it. It is for
-  callers that only enqueue, such as `Raxol.MCP.AgentBridge`'s `agent.send`.
+  callers that only enqueue.
   Past 1000 queued messages the dispatcher applies backpressure and the
   call waits for it to take the key, as the live input path does.
 

@@ -7,7 +7,7 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
     `Raxol.Gateway.Adapter` implementation for Telegram.
 
     Owns only platform I/O and translation: text messages normalize to the
-    gateway's `%{text: binary}` event shape (what `Raxol.Gateway.Handler.Agent`
+    gateway's `%{text: binary}` event shape (what a text handler
     consumes), voice notes to `%{media: %{kind: :voice, ref: file_id, ...}}`
     (what `Raxol.Gateway.Pipeline.Transcribe` consumes, with `fetch_media/2`
     as its `:fetch_fn`), and rendered replies go out as plain-text

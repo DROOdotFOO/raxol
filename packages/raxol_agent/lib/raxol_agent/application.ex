@@ -9,12 +9,9 @@ defmodule RaxolAgent.Application do
     # the boot with its name instead of raising in every context build.
     Raxol.Agent.Web3.load!()
 
-    # The main `raxol` app already starts Raxol.Agent.Supervisor whenever
-    # the module is compiled in (application.ex maybe_add_agent_supervisor),
-    # and raxol_agent depends on raxol -- so when raxol_agent boots as the
-    # top application the dep starts the supervisor first. Starting it again
-    # here crashes with :already_started, which took down every agent
-    # example run from the package. Only own it when nobody else has.
+    # This application is what starts Raxol.Agent.Supervisor. An example or a
+    # host that started the named subtree itself keeps it: `start_link/1`
+    # would hand this supervisor a subtree it does not own.
     children =
       if Process.whereis(Raxol.Agent.Supervisor) do
         []

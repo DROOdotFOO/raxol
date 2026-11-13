@@ -17,10 +17,26 @@ defmodule Raxol.Agent.McpTools do
 
   This process registers the tools with `Raxol.MCP.Registry` and owns them,
   so they leave the registry with it. Whether it registers is decided once
-  per BEAM, when `Raxol.Agent.McpTools` first starts: it does if the registry
-  is running then (the `:mcp` startup mode, where the MCP tree is up before
-  `:raxol_agent` starts) and `config :raxol_agent, :mcp_tools` is not `false`.
-  A restart repeats that decision.
+  per BEAM, when `Raxol.Agent.McpTools` first starts, and a restart repeats
+  that decision. It registers if the registry is running then and
+  `config :raxol_agent, :mcp_tools` allows it:
+
+    * unset - only on a node whose startup mode is `:mcp` (`raxol mcp`,
+      `mix mcp.server`), as `Raxol.Application.health_status/0` reports it,
+      and never when this process is started under `Raxol.Supervisor`
+    * `true` - wherever the registry is running when this process starts
+    * `false`, or any other value - never
+
+  A `raxol` that starts `Raxol.Agent.Supervisor` itself (2.7 and earlier, in
+  `:full`) does so before the registry, so nothing registers there. This
+  boolean is not the `mcp_tools:` option of
+  `Raxol.Agent.Supervisor.start_link/1`, which carries this process's start
+  options (the registry and server names).
+
+  The setting is read at that first start, so it belongs in `config/*.exs`:
+  `Application.put_env/3` after `:raxol_agent` has started changes nothing.
+  The tools answer to the authorizer the node gives `Raxol.MCP.Server`
+  (`config :raxol, :mcp_authorizer`), as every tool there does.
 
   ## Spawnable apps
 
@@ -390,16 +406,33 @@ defmodule Raxol.Agent.McpTools do
 
     case :persistent_term.get(key, nil) do
       nil ->
-        decision =
-          Application.get_env(:raxol_agent, :mcp_tools, true) != false and
-            GenServer.whereis(registry) != nil
-
+        # The registry first: it is not up yet when a `raxol` that starts
+        # this process as its own child reaches it in a built-in mode.
+        decision = GenServer.whereis(registry) != nil and wanted?()
         :persistent_term.put(key, decision)
         decision
 
       decision ->
         decision
     end
+  end
+
+  # Unset, the tools belong to a node booted to serve MCP. The mode comes
+  # from `Raxol.Supervisor`, which cannot answer while it is starting this
+  # process: started under it, the answer is no.
+  defp wanted? do
+    case Application.get_env(:raxol_agent, :mcp_tools) do
+      nil -> not under_root_supervisor?() and Raxol.Application.health_status().mode == :mcp
+      setting -> setting == true
+    end
+  end
+
+  defp under_root_supervisor? do
+    root = Process.whereis(Raxol.Supervisor)
+
+    :"$ancestors"
+    |> Process.get([])
+    |> Enum.any?(&(&1 == Raxol.Supervisor or (is_pid(root) and &1 == root)))
   end
 
   defp warn_on_refused_tools(:ok), do: :ok

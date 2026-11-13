@@ -18,6 +18,10 @@ Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Memory` is r
 console runtime has no native memory and `Raxol.Agent.Supervisor` starts no memory store. The
 two passages below that list memory among its capabilities no longer hold.
 
+Amended, 2026-11-13: `Raxol.Agent.Scheduler.Delivery.gateway/1` is removed. Decision 4 names it
+as what routes a job's target; `Raxol.Console.Scheduler.Wiring` now gives the scheduler a
+`:deliver` closure over `Raxol.Gateway.Delivery.deliver/3` and the connected-adapters map.
+
 ## Context
 
 The Virtuals ACP Console (`app.virtuals.io/acp/new`, part of EconomyOS) provisions a managed agent

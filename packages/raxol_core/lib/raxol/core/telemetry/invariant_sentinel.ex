@@ -74,7 +74,7 @@ defmodule Raxol.Core.Telemetry.InvariantSentinel do
           `use Raxol.Core.Telemetry.InvariantSentinel` requires `registry:`, a
           module built with `use Raxol.Core.Telemetry.Invariants`, e.g.
 
-              use Raxol.Core.Telemetry.InvariantSentinel, registry: Raxol.Payments.Telemetry
+              use Raxol.Core.Telemetry.InvariantSentinel, registry: MyApp.Telemetry
           """
       end
 

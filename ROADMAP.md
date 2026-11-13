@@ -50,7 +50,7 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 | ---- | ---- | ------ | --- |
 | Install funnel | `flake.nix` and the Burrito-packaged `raxol` binary (`raxol_cli`, with an npm wrapper in `packages/raxol_cli/npm`) landed, with `raxol doctor` and `raxol update`. Remaining: publishing the binary and the Windows PowerShell installer | M | CATCH-UP |
 | Gateway breadth | Built: the `Gateway.Adapter` behaviour is frozen, Telegram is ported behind it (`Raxol.Telegram.GatewayAdapter`), Discord and Email adapters ship in-gateway, and `Gateway.Pipeline.Transcribe` gives every adapter voice memos through `raxol_speech` STT. Remaining: the first Hex release of `raxol_gateway` | M | SURFACE |
-| Cron scheduler | DONE. `Raxol.Agent.Schedule.parse/1` (relative / interval / 5-field cron / ISO) plus `Raxol.Agent.Scheduler`, one timer per job with DETS persistence and boot replay, the `cronjob` Action, and `Scheduler.Delivery` to a gateway target or an in-process callback | M | SURFACE |
+| Cron scheduler | DONE. `Raxol.Agent.Schedule.parse/1` (relative / interval / 5-field cron / ISO) plus `Raxol.Agent.Scheduler`, one timer per job with DETS persistence and boot replay, the `cronjob` Action, and delivery through a `:deliver` closure (`Scheduler.Delivery.local/1` for an in-process callback) | M | SURFACE |
 
 **P1: differentiation**
 
@@ -80,7 +80,7 @@ Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/ac
 | Item | What | Effort | Status |
 | ---- | ---- | ------ | ------ |
 | `:raxol` package target | Generator emits a raxol-targeted `soul.md`/`AGENTS.md`/`tasks.json`/`skills/`; `Console.Package` parses it back (round-trip tested) | S | Done |
-| Stage-3 seam | A scheduled task runs under the soul.md persona and delivers to a gateway channel (`Fire.runner` + `Scheduler.Delivery.gateway`), proven end-to-end | S | Done |
+| Stage-3 seam | A scheduled task runs under the soul.md persona and delivers to a gateway channel (`Fire.runner` + a `:deliver` closure over `Gateway.Delivery`), proven end-to-end | S | Done |
 | `raxol_console` loader | `RuntimeConfig` + `Scheduler.Wiring` + `Boot`/`Supervisor`/`Reconciler` (persona-wired scheduler + idempotent job convergence) + gateway channel subtree (per-chat sessions run the persona handler; MCP/dynamic tools dispatch via ReAct) + `Console.Bench.Adapter` (native bench: boots the runtime, runs boot/prompt/task-dry-run checks) + `Console.Application` (container entrypoint: plan from config/env -> load package -> boot; no-op when unconfigured, self-starts outside `:test`) | M | Done |
 | Tool breadth to 40+ | Dynamic-dispatch seam (`Action.Dynamic`) + `Agent.McpBundle` (default server set, fail-open, wraps each server's tools). `raxol_console` `Boot` loads the bundle and joins its tools into the chat handler's `:actions` (dispatched via ReAct). 25 built-ins + bundled filesystem/fetch/git/... -> ~50 callable tools | S | Done |
 | Native ACP registration | Scaffolded: `Chain` registry-address field + `require_service_registry/1` fail-closed gate; `JobApi.register_agent/2` optional callback (Mock impl); idempotent `Seller.Registration.ensure_registered/3`. Blocked on Virtuals: registry address, HTTP register endpoint, identity standard (ERC-8004/8183), and the on-chain `HookClient.register_agent` variant | M | Scaffolded / partner-blocked |

@@ -1,7 +1,7 @@
 defmodule RaxolGateway.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "0.2.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -34,9 +34,6 @@ defmodule RaxolGateway.MixProject do
       raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
       {:telemetry, "~> 1.3"},
       {:jason, "~> 1.4"},
-
-      # Per-chat durable history (optional -- only needed to record turns).
-      raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent", optional: true),
 
       # TEA runtime (optional -- only Handler.Lifecycle needs it; the path
       # points at the repo root, which carries the :gateway environment).

@@ -1,8 +1,6 @@
 defmodule Raxol.Gateway.SessionDeliveryTest do
   use ExUnit.Case, async: false
 
-  alias Raxol.Agent.Conversation.Log
-  alias Raxol.Agent.Conversation.Store.ETS
   alias Raxol.Gateway.Route
   alias Raxol.Gateway.Session
 
@@ -16,10 +14,23 @@ defmodule Raxol.Gateway.SessionDeliveryTest do
     def handle_event({:say, text}, state), do: {:reply, "echo: #{text}", state}
   end
 
-  setup do
-    table = :"gateway_delivery_log_#{System.unique_integer([:positive])}"
-    log = start_supervised!({Log, store: {ETS, %{table: table}}})
+  # The `:log` contract a session records through: any module with
+  # `append(server, conversation_id, items)`.
+  defmodule RecordingLog do
+    use Agent
 
+    def start_link(_opts), do: Agent.start_link(fn -> %{} end)
+
+    def append(server, conversation_id, items) do
+      Agent.update(server, &Map.update(&1, conversation_id, items, fn seen -> seen ++ items end))
+    end
+
+    def items(server, conversation_id) do
+      Agent.get(server, &Map.get(&1, conversation_id, []))
+    end
+  end
+
+  setup do
     route =
       Route.new(%{
         platform: :discord,
@@ -28,7 +39,24 @@ defmodule Raxol.Gateway.SessionDeliveryTest do
         user_id: "user"
       })
 
-    %{log: log, route: route, conversation_id: Route.key(route)}
+    %{log: start_supervised!(RecordingLog), route: route, conversation_id: Route.key(route)}
+  end
+
+  test "a delivered reply is recorded after the inbound event", context do
+    test = self()
+
+    session =
+      start_session!(context, fn route, rendered ->
+        send(test, {:delivered, route, rendered})
+        :ok
+      end)
+
+    Session.dispatch(session, {:say, "hello"})
+
+    assert_receive {:delivered, route, "echo: hello"}, 1_000
+    assert route == context.route
+    assert Session.route(session) == context.route
+    assert Enum.map(logged_items(context), & &1.created_by) == [:gateway_in, :gateway_out]
   end
 
   test "an adapter error is observable and is not recorded as delivered", context do
@@ -68,14 +96,11 @@ defmodule Raxol.Gateway.SessionDeliveryTest do
        handler: {EchoHandler, []},
        deliver: deliver,
        conversation_id: context.conversation_id,
-       log: {Log, context.log}}
+       log: {RecordingLog, context.log}}
     )
   end
 
-  defp logged_items(context) do
-    {:ok, %{snapshot: items}} = Log.subscribe(context.log, context.conversation_id)
-    items
-  end
+  defp logged_items(context), do: RecordingLog.items(context.log, context.conversation_id)
 
   defp attach_delivery_telemetry do
     handler_id = "gateway-delivery-#{System.unique_integer([:positive])}"

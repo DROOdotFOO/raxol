@@ -7,16 +7,17 @@ defmodule Raxol.Console.Scheduler.Wiring do
     * runner  -- `Raxol.Agent.Scheduler.Fire.runner/1` with `:system_prompt`
       (the resolved persona) and `:agent_opts` (the executor). Each fire is a
       fresh, history-free agent turn; the job's skills are injected on top.
-    * deliver -- `Raxol.Agent.Scheduler.Delivery.gateway/1`, which routes a
-      job's `"platform:chat_id"` target through `Raxol.Gateway.Delivery` against
-      the gateway's connected-adapters map.
+    * deliver -- a closure that routes a job's `"platform:chat_id"` target
+      through `Raxol.Gateway.Delivery` against the gateway's connected-adapters
+      map.
 
   Both halves ship with the cron scheduler; this is pure composition, consumed
   by `Raxol.Console.Boot` to build `config :raxol_agent, :scheduler`.
   """
 
-  alias Raxol.Agent.Scheduler.{Delivery, Fire}
+  alias Raxol.Agent.Scheduler.Fire
   alias Raxol.Agent.Skills
+  alias Raxol.Gateway.Delivery
 
   @type config :: %{
           required(:adapters) => Delivery.adapters(),
@@ -42,7 +43,8 @@ defmodule Raxol.Console.Scheduler.Wiring do
         skills: Map.get(config, :skills_store, Skills.Store)
       )
 
-    base = [runner: runner, deliver: Delivery.gateway(adapters)]
+    deliver = fn target, rendered -> Delivery.deliver(adapters, {:target, target}, rendered) end
+    base = [runner: runner, deliver: deliver]
 
     case Map.get(config, :dispatch) do
       dispatch when is_function(dispatch, 1) -> Keyword.put(base, :dispatch, dispatch)

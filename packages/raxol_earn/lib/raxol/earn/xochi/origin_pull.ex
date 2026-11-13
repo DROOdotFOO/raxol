@@ -27,8 +27,9 @@ defmodule Raxol.Earn.Xochi.OriginPull do
 
   Read the sentence above as scoped, because the signing layer underneath applies
   a WEAKER rule. `Raxol.Payments.Protocols.Xochi`'s `validate_permit2_pull/2` asks
-  only that the spender be in `:pull_solver_allowlist`, and both `config/runtime.exs`
-  and the live solver-fee gate populate that list from
+  only that the spender be in `:pull_solver_allowlist`, and both
+  `Raxol.Payments.Protocols.Xochi.origin_pull_pin_env_config!/0` and the live
+  solver-fee gate populate that list from
   `Raxol.Payments.Xochi.PullContracts.pull_recipients/0` -- the checked-in mirror,
   which contains the Permit2 pull proxy. So `XochiProtocol.quote_and_sign/3`
   called directly WILL sign a Permit2 pull naming that proxy with no operator

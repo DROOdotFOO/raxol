@@ -37,7 +37,7 @@ defmodule RaxolAgent.MixProject do
   defp deps do
     [
       raxol_dep(:raxol, "~> 2.7", "../.."),
-      raxol_dep(:raxol_mcp, "~> 2.7", "../raxol_mcp"),
+      raxol_dep(:raxol_mcp, "~> 2.8", "../raxol_mcp"),
       raxol_dep(:raxol_journal, "~> 2.7", "../raxol_journal"),
       {:circular_buffer, "~> 1.0"},
       {:jason, "~> 1.4"},

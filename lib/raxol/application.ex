@@ -201,7 +201,6 @@ defmodule Raxol.Application do
       Raxol.Core.Events.EventManager,
       {Raxol.DynamicSupervisor, []},
       {Raxol.Terminal.Supervisor, []},
-      maybe_add_agent_supervisor(),
       {Registry, keys: :duplicate, name: :raxol_event_subscriptions},
       Raxol.Core.Runtime.EmitBus,
       Raxol.Core.Runtime.Plugins.PluginSupervisor,
@@ -285,12 +284,6 @@ defmodule Raxol.Application do
       [{Raxol.Demo.SessionManager, []}]
     else
       []
-    end
-  end
-
-  defp maybe_add_agent_supervisor do
-    if module_available?(Raxol.Agent.Supervisor) do
-      {Raxol.Agent.Supervisor, []}
     end
   end
 
