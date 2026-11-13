@@ -15,11 +15,8 @@ defmodule Raxol.Agent.Sandbox.Async do
       Sandbox.Async.deny()
         # block every async task
 
-  When an agent wants finer-grained async controls (rate limiting,
-  per-task timeout, cancellation), it should use the
-  `Raxol.Agent.Policy` structs around the operation that *creates*
-  the async task, not the Sandbox dimension. The Sandbox is the
-  binary "are async tasks permitted at all" check.
+  The Sandbox is the binary "are async tasks permitted at all" check.
+  It does not rate-limit, time out or cancel a task.
   """
 
   @type mode :: :allow | :deny

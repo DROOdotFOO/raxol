@@ -92,8 +92,7 @@ defmodule Raxol.Agent.Journal.FileStore do
   read-side via the tolerant Reader — `0` for an empty/absent/damaged journal,
   `{:error, :invalid_session_id}` for an id that names no session directory.
 
-  Used by the `attach` command's `:live` history policy to stream only records
-  above the decision-time watermark (`from_offset = high_watermark + 1`).
+  `Raxol.Agent.McpTools` reads it as an agent's event count.
   """
   @spec high_watermark(term(), keyword()) ::
           non_neg_integer() | {:error, :invalid_session_id}
@@ -108,7 +107,7 @@ defmodule Raxol.Agent.Journal.FileStore do
   (writerless-safe — no Writer needed). `{:error, :damaged}` on interior
   corruption (the damaged content is never surfaced),
   `{:error, :invalid_session_id}` for an id that names no session directory.
-  Used by the read-side reattach and seek paths.
+  Read by `Raxol.Agent.McpTools` and `Raxol.Broker.Journal.Replay`.
   """
   @spec read_records(term(), keyword()) ::
           {:ok, [map()]} | {:error, :damaged | :invalid_session_id}

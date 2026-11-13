@@ -1,11 +1,11 @@
 # Harness Architecture
 
 The harness is a headless agent-session **core** that owns all durable state
-and speaks a typed **contract** of events (core → surface) and commands
-(surface → core). Surfaces are pure subscribers that hold nothing persistent:
-attach and reattach are replay from an offset, so the local view is a
-throwaway materialization. Kill a surface and respawn it and it shows the
-same truth, because the truth was never in the surface.
+and speaks a typed **contract** of events. Surfaces are pure subscribers that
+hold nothing persistent: a surface's view is
+`Raxol.Harness.Projection.project/2` over the session's events, a throwaway
+materialization. Kill a surface and respawn it and it shows the same truth,
+because the truth was never in the surface.
 
 ## Where this sits
 
@@ -18,46 +18,25 @@ the RATE render-determinism suite.
 
 ## The event contract
 
-Events flow core → surface; commands flow surface → core.
+Events flow core → surface. The contract defines no commands.
 
 The event envelope, its two families and two tiers, and the rule that the
 contract only grows are described in the
 [`raxol_journal` README](../../packages/raxol_journal/README.md#the-event-contract).
-`Raxol.Harness.Projection`, `Raxol.Harness.EventBoundary`, and
-`Raxol.UI.Components.Harness.Block.from_events/3` all consume that shape. Only
+`Raxol.Harness.Projection` and
+`Raxol.UI.Components.Harness.Block.from_events/3` consume that shape. Only
 `:loop` events become transcript blocks, and `item_delta`, the one ephemeral
 event, feeds the live tail.
 
-Commands run the other way. `Raxol.Agent.Command.decode/1` is the single
-validation seam: it turns a JSON string or a plain map into a
-`%Raxol.Agent.Command{type, payload}` over the vocabulary `:prompt`,
-`:interrupt`, `:attach`, `:seek`, `:steer`, `:approval_decision`. It is loud
-(a non-map, an unknown or missing `type`, or a missing required payload field
-is `{:error, {:invalid_command, reason}}`), it never raises, and it never
-mints an atom from a wire string: `type` and `history_policy` are whitelisted
-string-to-atom maps. `Raxol.Harness.SessionLane` is the behaviour main raxol
-dispatches through so the surface never depends on `raxol_agent`;
-surface-local commands minted by `Raxol.UI.Harness.Keymap` carry the same
-`%{type: atom(), payload: map()}` field names as a plain map, one
-`struct(Raxol.Agent.Command, cmd)` from the real thing.
+A surface's own commands are outside the contract. A command minted by
+`Raxol.UI.Harness.Keymap` is a plain `%{type: atom(), payload: map()}` map, so
+the surface never depends on `raxol_agent`. `:interrupt` and `:steer` leave
+`Raxol.Harness.Surface` through its `:command_sink` option; nothing in the
+tree consumes them.
 
-On the surface side the same rule holds: readers are tolerant and skip what
-they do not recognize (`EventBoundary` drops unknown fields; `Block`
-normalizes an unknown `kind` to `:opaque` and renders it safely). A surface
-must never need a lockstep update to keep painting.
-
-## The security seam
-
-A live event crosses a process boundary (`Raxol.Harness.SessionLane`'s
-`subscribe/1` delivers events from a process this side does not control) so it
-is untrusted input, not merely differently-shaped input.
-`Raxol.Harness.EventBoundary.normalize/1` enforces four properties on the way
-in: it never mints an atom from wire strings (no growing the atom table by
-sending events), drops every field outside the nine the pipeline understands,
-never launders taint (an ambiguous `provenance.trust` is absorbed to
-`:tainted`, never cleared), and never guesses `:tier` (anything but
-`:durable`/`:ephemeral` is a hard error, because tier decides what becomes
-permanent transcript).
+On the surface side readers are tolerant and skip what they do not recognize
+(`Block` normalizes an unknown `kind` to `:opaque` and renders it safely). A
+surface must never need a lockstep update to keep painting.
 
 ## Journal and projection
 
@@ -86,9 +65,8 @@ of the fold: `filter_ids/1` drops duplicate/out-of-order records and marks a
 forward gap `damaged?` without withholding the survivors; `partition_families`
 keeps only `:loop` events; `bucket_by_turn` groups by `turn_id` in first-seen
 order; `BlockBuilder` folds each turn's items into blocks. Because the model is
-a pure fold over the event stream, time-travel is a re-fold rather than a
-mechanism: the `:seek` command folds every durable record with id <= offset
-back into the same block read-model.
+a pure fold over the event stream, a view at an earlier offset is a re-fold of
+the events up to it; nothing in the tree does that.
 
 ### Frozen golden corpora
 
@@ -166,56 +144,24 @@ otherwise reorder the JSON and report drift that is not there.
 
 ## Process topology
 
-Two independent supervision facts, often conflated:
-
-- **The agent session.** `Raxol.Agent.Session.Supervisor` is one
-  `:rest_for_one` subtree per session, children in dependency order:
-  `Raxol.Agent.EmitBridge` (the per-session sink, owning the durable journal
-  handle and the EmitBus subscription), then `Raxol.Core.Runtime.Lifecycle`
-  (the per-session TEA runtime), then `Raxol.Agent.Session` (the thin
-  forwarder). A session crash restarts only the session, which re-resolves the
-  same running Lifecycle through `Raxol.Agent.Registry` so the model survives;
-  a bridge crash restarts the whole subtree in dependency order, so a durable
-  event is never emitted into a dead-sink gap.
-- **The live surface stack.** `Raxol.Harness.LiveSessionDriver` supervises one
-  live session as a plain process loop, deliberately not a GenServer. Inside
-  its own process it builds the injected `{lane_module, session}`, a
-  `Raxol.Harness.StreamCadence` server, a linked forwarder that owns the
-  `subscribe/1` call and re-shapes `{:session_event, sid, event}` into
-  `StreamCadence.ingest/2`, and a `Raxol.Harness.StallDetector`.
-
-Ordering holds because `loop/1`'s first move on every pass is a `receive`
-matching only `{:inline_input, _}` and `{:surface_command, _}` with `after 0`,
-falling through immediately into a second blocking receive that also matches
-`{:render_batch, _}`. That is the owner half of the cadence contract, which a
-single `handle_info/2` callback cannot express. `StreamCadence`'s
-`:input_check` source-side hold is a latency optimization layered on top of
-that guarantee, and it defaults off until a caller wires a real check.
+`Raxol.Agent.Session.Supervisor` is one `:rest_for_one` subtree per session,
+children in dependency order: `Raxol.Agent.EmitBridge` (the per-session sink,
+owning the durable journal handle and the EmitBus subscription), then
+`Raxol.Core.Runtime.Lifecycle` (the per-session TEA runtime), then
+`Raxol.Agent.Session` (the thin forwarder). A session crash restarts only the
+session, which re-resolves the same running Lifecycle through
+`Raxol.Agent.Registry` so the model survives; a bridge crash restarts the whole
+subtree in dependency order, so a durable event is never emitted into a
+dead-sink gap.
 
 ## The safety substrate
 
-Three guarantees live in enforcement layers, outside the model, because a model
-under adversarial input cannot be trusted to enforce them. Each is built and
-tested, and none is in the path of a session started by `raxol acp` or
+Spend is gated in an enforcement layer, outside the model, because a model
+under adversarial input cannot be trusted to enforce it. The gate is built and
+tested, and is not in the path of a session started by `raxol acp` or
 `raxol mcp`.
 
-- **Staged supervised interrupt.** `Raxol.Agent.Interrupt.interrupt/3` runs a
-  cooperative signal → bounded wait → OS process-group SIGKILL
-  (`kill -9 -<os_pid>`; the BEAM makes each port program its own process-group
-  leader, so `pgid == os_pid`), and confirms death at the OS level rather than
-  trusting `:exit_status`. Each stage is a durable event
-  (`:interrupt_signaled`, `:interrupt_waited`, `:interrupt_killed` /
-  `:interrupt_kill_failed`, `:turn_canceled`). BEAM-native `Port.close` /
-  `Process.exit` are insufficient against a wedged child, which is why the OS
-  path exists. `interrupt/3` has no non-test caller.
-- **Steer as compare-and-swap.** `Raxol.Agent.Steer` carries an
-  `expected_turn_id`; a stale-turn rejection changes nothing and is
-  non-journaled. Interrupt and steer are deliberately asymmetric: interrupt is
-  fire-and-forget and its acknowledgment is the event stream; steer returns a
-  synchronous typed decision, because a silently-dropped steer would leave the
-  surface unable to tell "accepted" from "lost" (see `Raxol.Harness.SessionLane`).
-  `Steer.resolve/2` has no non-test caller.
-- **Atomic spend and blast-radius gates.** `Raxol.Agent.SpendGate` journals
+- **Atomic spend gate.** `Raxol.Agent.SpendGate` journals
   `reserve → call → settle` per spend-bearing call, correlated by an opaque
   `cost_ref`, and fails closed: no reserve, no call. raxol_agent does not
   depend on raxol_payments, so the gate replicates the atomic `try_spend`
@@ -225,41 +171,19 @@ tested, and none is in the path of a session started by `raxol acp` or
   irreversible spend state. It runs only where a host puts
   `Raxol.Agent.McpSpendHook` in a context's `:tool_call_hooks` beside a
   `:spend_gate`; no non-test code does.
-  `Raxol.Agent.Authorization.BlastRadiusGate` gates write and destructive
-  tools the same way (locked by default, escalate to a human, live approval
-  state rebuildable by a fold over `approval_decided` events); it has no
-  non-test caller.
-  `Raxol.Agent.Authorization.Engine` is the pure ALLOW/ASK/DENY reducer for
+- `Raxol.Agent.Authorization.Engine` is the pure ALLOW/ASK/DENY reducer for
   tool calls. A string denylist is
   provably incomplete; enforce typed intent instead.
 
-## The live TUI chain
+## The surface
 
-`Raxol.Harness.LiveSessionDriver` is the harness-native TUI chain, a process loop
-over the assembled `Raxol.Harness.Surface`. It is built and tested but not yet
-launched: its only caller in the tree is
-`test/harness/live_session_driver_test.exs`, and `Surface` has no consumer
-outside it. The chain it assembles:
-
-```
-Raxol.Harness.SessionLane   (behaviour in main raxol: the seam main satisfies
-                             without depending on raxol_agent)
-  ← Raxol.Agent.Harness.SessionLane   (agent-side impl: SessionStreamer out,
-                                       Raxol.Agent.Command in)
-Raxol.Harness.LiveSessionDriver   (the process loop; input-first receive)
-  → live events through EventBoundary.normalize/1  (the untrusted-input seam)
-  → Raxol.Harness.StreamCadence   (decouples token ingest from render egress)
-  → Raxol.Harness.Surface
-      (Projection folds blocks; Composer, Keymap, StatusStrip, pickers)
-  → out: %{type, payload} commands the driver runs against SessionLane
-Raxol.Harness.StallDetector  (pure observer; verdict + evidence to the human)
-```
-
-`StreamCadence` load-sheds rather than applies
-backpressure: the newest deltas are the live tail's value, and blocking the
-SSE reader would cascade into transport timeouts, so visibly lossy above the
-watermark beats dead. `StallDetector` never acts on the agent; judgment over
-visible output belongs to the human it reports to.
+`Raxol.Harness.Surface` is the assembled harness surface: `Projection` folds
+blocks, and `Composer`, `Keymap`, `StatusStrip` and the overlay pickers sit
+around them. It replays a fixture session, and
+`examples/harness_fixture_demo.exs` is its process loop on a real terminal.
+`append_events/2` and the `:command_sink` option are where a live session
+would feed events in and take `:interrupt` and `:steer` out; nothing in the
+tree drives them.
 
 ## ACP wiring
 
@@ -293,8 +217,6 @@ answers method-not-found denies it. `session/load` is not offered. The protocol
 package is a path dependency, so `StdioAgent` compiles only when raxol_agent is
 built from source with it present; a Hex install exits 1 with an explanation.
 
-Steer does not bridge. `Raxol.Agent.Harness.SessionLane.steer/2` returns
-`{:error, :no_steer_channel}`, always: no shipped session runtime owns a live
-turn's `Raxol.Agent.Steer.TurnState` to resolve the compare-and-swap against,
-and dispatching a fire-and-forget steer with no decision reply would let a
-surface render a queued banner it could never know was accepted.
+Steer does not bridge. `Raxol.AgentClientProtocol.Session` refuses every steer
+with `{:error, :no_steer_channel}` unless a host injects a `SteerAdapter`, and
+none ships.

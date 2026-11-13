@@ -173,8 +173,7 @@ defmodule Raxol.System.PortCommand do
   # orphan the command: `Port.close/1` closes the port yet leaves the OS process
   # alive. The `sh -c 'exec ...'` shell replaces itself with the command, so the
   # port's os_pid IS the command -- always kill it. Where the port is also its
-  # OWN process-group leader (macOS; NOT guaranteed on Linux/OTP, same as
-  # `Raxol.Agent.Interrupt`, which likewise degrades) the kill signals the whole
+  # OWN process-group leader (macOS; NOT guaranteed on Linux/OTP) the kill signals the whole
   # GROUP so descendants die too; otherwise it is a per-pid kill of the command.
   # The real callers (pbcopy/xclip/flamegraph) are single processes either way.
   # Best-effort, Unix only.

@@ -1,8 +1,7 @@
 defmodule Raxol.Agent.Session.Supervisor do
   @moduledoc """
   One supervised OTP subtree per harness session, plus the `session_id → pid`
-  registry the Wave 2 units resolve against (U4 reattach, U5/U6 turn
-  kill/steer, U9 pointer records).
+  registry.
 
   ## Tree shape
 

@@ -6,8 +6,6 @@ defmodule Raxol.Agent.Supervisor do
   - `Raxol.Agent.Registry` -- unique Registry for agent discovery
   - `Raxol.Agent.DynSup` -- DynamicSupervisor for Agent.Process instances
     (and per-session `Raxol.Agent.EmitBridge` sinks)
-  - `Raxol.Agent.TaskSupervisor` -- a `Task.Supervisor` for unlinked
-    short-lived work; nothing in the tree starts a task under it
   - `Raxol.Agent.SessionStreamer` -- singleton harness event stream
   - `Raxol.Agent.Orchestrator` -- multi-agent coordinator
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
@@ -44,7 +42,6 @@ defmodule Raxol.Agent.Supervisor do
       [
         {Registry, keys: :unique, name: Raxol.Agent.Registry},
         {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one},
-        {Task.Supervisor, name: Raxol.Agent.TaskSupervisor},
         Raxol.Agent.SessionStreamer,
         Raxol.Agent.Orchestrator
       ] ++

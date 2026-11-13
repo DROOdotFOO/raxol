@@ -1,8 +1,8 @@
 defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.Bridge do
   @moduledoc """
-  The BEAM-local `:authorize` bridge — make the in-process
-  `Raxol.Agent.Reattach` attach seam defer to the SAME fail-closed admission
-  funnel (`Ext.AttachPolicy.Runner`) the untrusted ACP boundary uses.
+  The BEAM-local `:authorize` bridge — make an in-process attach seam defer
+  to the SAME fail-closed admission funnel (`Ext.AttachPolicy.Runner`) the
+  untrusted ACP boundary uses.
 
   ## Why this exists (the two-wire boundary — harness freeze §1.5, OQ-JS6/OQ-JS7)
 
@@ -12,49 +12,44 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.Bridge do
     * **ACP boundary (untrusted peers) — HARD-GATED.** `session/load` and
       `_raxol/session.load` converge on `Ext.Reattach.attach/1`, which runs the
       Runner funnel before any read. This is the security boundary.
-    * **BEAM-local `Raxol.Agent.Reattach.attach/4` (in-process) — OPTIONAL
-      SEAM.** It carries `opts[:authorize]` (an `authorize_fun`, default
-      `{:ok, :in_process}`): an in-process caller can already
-      `FileStore.Reader.scan` the session dir directly, so a gate on the function
-      is bypassable — it is a SEAM for a host that fronts reattach with its own
-      transport, not a boundary.
+    * **BEAM-local attach (in-process) — OPTIONAL SEAM.** An in-process caller
+      can already `FileStore.Reader.scan` the session dir directly, so a gate
+      on an in-process attach function is bypassable — it is a SEAM for a host
+      that fronts reattach with its own transport, not a boundary.
 
   This module is that seam's ready-made implementation. `authorizer/1` returns an
   `authorize_fun` that translates the BEAM-local attach ctx into the CDI-2 Runner
-  ctx and returns the Runner's verdict verbatim. A host that depends on both
-  packages wires it:
+  ctx and returns the Runner's verdict verbatim. A host calls it before its own
+  in-process attach reads anything:
 
-      Raxol.Agent.Reattach.attach(session_id, from_offset, history_policy,
-        authorize:
-          Raxol.AgentClientProtocol.Ext.AttachPolicy.Bridge.authorizer(
-            policy: MyPolicy,
-            transport: %{kind: :process, peer: self()}
-          ))
+      authorize =
+        Raxol.AgentClientProtocol.Ext.AttachPolicy.Bridge.authorizer(
+          policy: MyPolicy,
+          transport: %{kind: :process, peer: self()}
+        )
+
+      authorize.(%{session_id: session_id, from_offset: from_offset})
 
   ## Dependency direction (why it lives in THIS package)
 
-  `raxol_agent` does not depend on `raxol_agent_client_protocol`, and this package
-  has zero raxol-internal deps. The bridge references only THIS package's Runner /
-  Grant / policies and produces a PLAIN closure; the BEAM ctx it receives is a
-  duck-typed map, so there is no compile-time reference to `Raxol.Agent.Reattach`
-  in either direction. The host (which depends on both) does the wiring.
+  This package has zero raxol-internal deps. The bridge references only THIS
+  package's Runner / Grant / policies and produces a PLAIN closure; the BEAM ctx
+  it receives is a duck-typed map. The host does the wiring.
 
   ## Fail-closed
 
-  The Runner returns `{:ok, %Grant{}}` (admit) or `{:denied, reason}` (deny) — the
-  exact `authorize_fun` contract `Raxol.Agent.Reattach.attach/4` consumes: it
-  admits only on `{:ok, _grant}` and maps everything else to
-  `{:error, :attach_denied}` (nothing read, nothing tailed), so a denied verdict
-  cannot "mostly" admit. `transport` is Connection-sourced knowledge the host MUST
-  supply; absent (`nil`) the default `LocalNode` policy denies (`:not_local` →
-  `{:denied, :policy_error}`).
+  The Runner returns `{:ok, %Grant{}}` (admit) or `{:denied, reason}` (deny). A
+  host admits only on `{:ok, _grant}` and reads nothing otherwise, so a denied
+  verdict cannot "mostly" admit. `transport` is Connection-sourced knowledge the
+  host MUST supply; absent (`nil`) the default `LocalNode` policy denies
+  (`:not_local` → `{:denied, :policy_error}`).
   """
 
   alias Raxol.AgentClientProtocol.Ext.AttachPolicy
   alias Raxol.AgentClientProtocol.Ext.AttachPolicy.{Grant, Runner}
 
   @typedoc """
-  The BEAM-local attach ctx built by `Raxol.Agent.Reattach.attach/4`
+  The BEAM-local attach ctx a host builds
   (`%{session_id, from_offset, policy, surface: :beam_local}`). Grow-only and
   duck-typed — only `:session_id` is dereferenced hard; the rest default.
   """
@@ -69,8 +64,8 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.Bridge do
   @type verdict :: {:ok, Grant.t()} | {:denied, atom()}
 
   @doc """
-  Build an `authorize_fun` for `Raxol.Agent.Reattach.attach/4`'s `:authorize`
-  option that defers to `Ext.AttachPolicy.Runner`.
+  Build an `authorize_fun` for an in-process attach that defers to
+  `Ext.AttachPolicy.Runner`.
 
   Options:
 

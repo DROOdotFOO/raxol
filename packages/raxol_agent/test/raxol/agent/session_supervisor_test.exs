@@ -1,8 +1,6 @@
 defmodule Raxol.Agent.Session.SupervisorTest do
   @moduledoc """
-  SS — the per-session OTP tree + `session_id → pid` registry that the Wave 2
-  units (U4 reattach, U5/U6 turn kill/steer, U9 pointer records) resolve
-  against.
+  SS — the per-session OTP tree + `session_id → pid` registry.
 
   Proves:
 

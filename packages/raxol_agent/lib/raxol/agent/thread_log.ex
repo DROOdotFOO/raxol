@@ -46,14 +46,17 @@ defmodule Raxol.Agent.ThreadLog do
 
   ## Configuration
 
-  When wired into an agent's `thread_log/0` callback:
+  `Raxol.Agent.Scheduler` takes an adapter as its `:thread_log` option and
+  appends one `:cron_fire` event per fire:
 
-      def thread_log do
-        {Raxol.Agent.ThreadLog.Postgrex,
-         %{conn: MyApp.Postgrex, table: "agent_threads"}}
-      end
+      Raxol.Agent.Scheduler.start_link(
+        thread_log:
+          {Raxol.Agent.ThreadLog.Postgrex,
+           %{conn: MyApp.Postgrex, table: "agent_threads"}}
+      )
 
-  Bare modules (no tuple) inherit `%{}`.
+  Bare modules (no tuple) inherit `%{}`. Nothing else in the package
+  appends: a host that wants its own audit trail calls `append/4`.
   """
 
   alias Raxol.Agent.ThreadEvent

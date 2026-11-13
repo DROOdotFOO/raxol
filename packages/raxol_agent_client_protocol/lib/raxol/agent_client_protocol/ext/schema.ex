@@ -222,8 +222,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Schema.SteerRequest do
   new user input WITHOUT killing it, addressed by `sessionId`. A steer is the
   sibling of interrupt (kill-now); it injects at the next turn boundary.
 
-  Mirrors the routed command shape `Raxol.Agent.Command`'s `:steer` codec
-  validates and `Raxol.Agent.Steer.Request`:
+  Fields:
 
     * `session_id` — the target session (routing key).
     * `text` — the steering text.
@@ -355,8 +354,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Schema.SteerResponse do
   end
 
   # A turn token is USUALLY the session's integer turn ordinal, but a real
-  # `SteerAdapter` (e.g. the one closing over `Raxol.Agent.Steer` in the
-  # `raxol_agent` package) issues a CAS-swap token after every accept --
+  # `SteerAdapter` may issue a CAS-swap token after every accept --
   # `{:steered, cur, System.unique_integer(...)}`, a TUPLE -- as the new
   # `turn_id`. That swapped value has nowhere legitimate to go (an accept's
   # `ref` only ever carries the PRE-swap token, so no client can legitimately

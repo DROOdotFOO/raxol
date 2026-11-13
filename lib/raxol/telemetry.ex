@@ -97,12 +97,6 @@ defmodule Raxol.Telemetry do
       # refusal as observable using a device that always refuses.
       [:raxol, :harness, :seal, :write_failed] => :operational,
 
-      # OPERATIONAL. Drop-oldest load shedding at the `:max_pending`
-      # watermark. A producer faster than the flush cadence is load, not a
-      # defect -- `StreamCadence`'s whole contract is that ingest never
-      # blocks and excess is shed loudly.
-      [:raxol, :harness, :stream_cadence, :overflow] => :operational,
-
       # PEER. Projection recovery: duplicate, out-of-order or forward-gapped
       # ids and unknown item types in the inbound agent journal. Every reason
       # is a fact about what the remote producer sent.

@@ -508,7 +508,7 @@ defmodule Raxol.PackageBoundariesTest do
        @moduledoc """
        The neutral half of `Raxol.Agent.EmitBridge`.
 
-           struct(Raxol.Agent.Command, cmd)
+           struct(Raxol.Agent.ExecutorConfig, opts)
        """
 
        @typedoc "What `Raxol.Payments.Ledger` books."

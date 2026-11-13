@@ -124,11 +124,11 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
 
     Raxol is an Elixir framework built on OTP. It uses The Elm Architecture (TEA): init/1, update/2, view/1. The same module renders to these surfaces without modification: #{surfaces}.
 
-    Agent framework: TEA agents (message-driven) and Process agents (tick-driven), teams with coordinator/worker supervision, reasoning strategies (#{strategies}), a Turn driver, and skills in the agentskills.io SKILL.md format. Backends: #{backends}.
+    Agent framework: TEA agents (message-driven) and Process agents (tick-driven), teams with coordinator/worker supervision, reasoning strategies (#{strategies}), and skills in the agentskills.io SKILL.md format. Backends: #{backends}.
 
     Agent commerce: autonomous payments (x402, MPP, Xochi cross-chain), spending limits, stealth and shielded settlement, and ZKSAR trust attestations. No other agent runtime ships this.
 
-    Governance: a tool marked sensitive is denied unless the call's context carries an authorizer that allows it, and a durable conversation item-log records what the agent did.
+    Governance: a tool marked sensitive is denied unless the call's context carries an authorizer that allows it.
     """
   end
 

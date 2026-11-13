@@ -124,8 +124,7 @@ defmodule Raxol.UI.Harness.InputEvent do
 
   ## The shared shortcut/text-input predicate
 
-  Composer (`lib/raxol/ui/components/harness/composer.ex`) and picker
-  (`lib/raxol/ui/components/harness/picker.ex`) both use the pattern below
+  Composer (`lib/raxol/ui/components/harness/composer.ex`) uses the pattern below
   instead of hand-rolling a `text_input?/1`-style predicate that reads
   `data[:modifiers] || []` alongside `data[:ctrl]`/`data[:alt]` booleans.
   Note the

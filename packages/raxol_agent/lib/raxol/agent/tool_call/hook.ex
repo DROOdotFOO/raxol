@@ -14,9 +14,8 @@ defmodule Raxol.Agent.ToolCall.Hook do
   directly, but those are agent-internal and never LLM-reachable, so they
   legitimately sit outside this seam.)
 
-  This is the interception point assumed by upcoming harness units:
-  reserve-budget-before-call (SpendGate) and blast-radius approval gates
-  register here rather than wrapping the loop themselves.
+  A gate that must run before the call registers here rather than wrapping
+  the loop itself: `Raxol.Agent.McpSpendHook` reserves budget this way.
 
   ## Scope: framework-managed ReAct only
 

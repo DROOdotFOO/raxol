@@ -1,13 +1,9 @@
 defmodule Raxol.Agent.CommandHookWiringTest do
   @moduledoc """
-  C2 regression: the permission/sandbox/audit hook chain must run at dispatch
-  time.
-
-  Pre-fix, `CommandHook.wrap_commands` had no call site, so `PermissionHook`,
-  `SandboxHook`, and any declared `command_hooks/0` never ran and every agent
-  directive (Shell/Async/SendAgent) executed unguarded. This proves an agent's
-  declared hooks are invoked, with the agent identity, before a directive runs,
-  and that a `{:deny, _}` actually blocks execution.
+  The sandbox and command hook chain runs at dispatch time: an agent's
+  declared hooks (`SandboxHook` and any `command_hooks/0`) are invoked, with
+  the agent identity, before a Shell/Async/SendAgent directive runs, and a
+  `{:deny, _}` blocks execution.
   """
   use ExUnit.Case, async: false
 

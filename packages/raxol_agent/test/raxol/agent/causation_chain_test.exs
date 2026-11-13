@@ -107,7 +107,7 @@ defmodule Raxol.Agent.CausationChainTest do
   # die with each test and ERTS would reap it asynchronously, so the next
   # `setup` could resolve it with `:ets.whereis` and then have
   # `:ets.delete_all_objects` raise on a table that had gone in between -- the
-  # check-then-act race that took `Raxol.Agent.ThreadLogRouterTest` red.
+  # check-then-act race.
   setup_all do
     :ets.new(@config_table, [:named_table, :public, read_concurrency: true])
     :ok

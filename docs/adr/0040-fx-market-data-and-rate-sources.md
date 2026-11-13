@@ -20,8 +20,8 @@ guarded outbound client every request goes through) and
 answer). Nothing in those decisions changes.
 
 Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): of the wiring sites decision 5 lists,
-`Raxol.Agent.Code.App.run_context/2` (1) and `SessionInbox.start_turn/2` (5) are removed.
-`Raxol.Console.Boot.gateway_opts/5` (2) and `Raxol.Agent.Turn.build_context/2` (3) remain.
+`Raxol.Agent.Code.App.run_context/2` (1), `Raxol.Agent.Turn.build_context/2` (3) and
+`SessionInbox.start_turn/2` (5) are removed. `Raxol.Console.Boot.gateway_opts/5` (2) remains.
 
 ## Context
 

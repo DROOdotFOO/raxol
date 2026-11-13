@@ -74,8 +74,8 @@ defmodule Raxol.Agent.DoneGate do
   (`evidence_refs/2`), calls `gate/3`, and emits a telemetry signal for the
   verdict, but it does NOT hard-block completion — the turn still closes with
   `turn_completed{final: true}`, carrying the accepted `refs` when the gate
-  accepts. Completion stays fail-open on purpose: until U8 (BlastRadiusGate)
-  introduces structural mutation classes and a real verification class, the
+  accepts. Completion stays fail-open on purpose: until structural mutation
+  classes and a real verification class exist, the
   gate is fully fail-closed on v0 producer journals (see "What counts as a
   mutation"), so blocking every done would be wrong. The observe-only wiring
   makes the boundary live and measurable now:
@@ -85,10 +85,9 @@ defmodule Raxol.Agent.DoneGate do
     * `[:raxol, :agent, :done_gate, :rejected_evidence]` — a done whose cited
       evidence the gate rejected (metadata carries the `reason`).
 
-  Promoting this to a hard block is the U21-I impl unit, which follows U8 and
-  the refs-citation seam (how an agent names its own evidence offsets). Both
-  remain open: the U21 gating-strength ruling and the wiring itself are
-  undecided.
+  Promoting this to a hard block needs those classes and the refs-citation
+  seam (how an agent names its own evidence offsets). Both remain open, as
+  does the gating strength.
 
   The gate never transitions the turn to done on a rejected claim; the turn
   stays open and the typed error is surfaced.

@@ -218,7 +218,10 @@ process per chat under a `DynamicSupervisor`, keyed by that string, with an idle
 (default 1000). Sessions run a `Raxol.Gateway.Handler` (`init/2` and `handle_event/2`,
 plus an optional `terminate/2` invoked on clean session stops for handlers that own
 linked processes). Each inbound event and each reply can be recorded to an optional log
-keyed by a stable `conversation_id`.
+keyed by a stable `conversation_id`: start one with
+`Raxol.Agent.Conversation.Log.start_link(name: MyLog)` and pass
+`router: [log: {Raxol.Agent.Conversation.Log, MyLog}]` to `Raxol.Gateway.Supervisor`
+([Conversation item-log](AGENT_FRAMEWORK.md#conversation-item-log)).
 
 ## Pairing and authorization
 

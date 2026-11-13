@@ -130,11 +130,7 @@ defmodule Raxol.Agent.Backend.Catalog do
       kind: :http,
       module: Raxol.Agent.Backend.HTTP,
       # DeepSeek is OpenAI-compatible; build_request appends
-      # "/v1/chat/completions" to the base. Its usage carries
-      # `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens`, which is what
-      # `LlmPrices`' backend-scoped table prices (ADR-0035): the rows are
-      # keyed to THIS id, so the same model name served by a reseller or a
-      # free host keeps failing closed rather than borrowing the direct rate.
+      # "/v1/chat/completions" to the base.
       backend_opts: [
         provider: :openai,
         base_url: "https://api.deepseek.com",

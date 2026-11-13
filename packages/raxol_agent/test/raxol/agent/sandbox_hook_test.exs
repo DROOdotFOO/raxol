@@ -189,7 +189,7 @@ defmodule Raxol.Agent.SandboxHookTest do
 
     test "the program name is bounded in bytes, not graphemes" do
       # 40 two-byte graphemes: under a grapheme cap of 64, over the 64-byte
-      # identifier bound `ThreadLogRouter` enforces on the persisted payload.
+      # bound of `Raxol.Agent.Telemetry.bound/1`.
       program = String.duplicate("\u00e9", 40)
       assert byte_size(program) == 80
 

@@ -152,8 +152,7 @@ defmodule Raxol.AgentClientProtocol.Session do
   # The steer seam. The DEFAULT refuses every steer with
   # `{:error, :no_steer_channel}` and no-ops the turn hooks, so a base Session is
   # byte-identical to frozen v2 (no steer state ever mutates). A live-steering
-  # deployment injects a real `SteerAdapter` (the `raxol_agent` side, closing over
-  # `Raxol.Agent.Steer`) via `:steer_adapter`.
+  # deployment injects a real `SteerAdapter` via `:steer_adapter`.
   @default_steer_adapter Raxol.AgentClientProtocol.Session.SteerAdapter.Unsupported
 
   @registry Raxol.AgentClientProtocol.SessionRegistry
@@ -309,7 +308,7 @@ defmodule Raxol.AgentClientProtocol.Session do
   Redirects the running turn with new user input WITHOUT killing it. Runs the
   injected `SteerAdapter`'s `expected_turn_id` compare-and-swap decision from the
   Session's OWN mailbox — the single-writer serialization
-  `Raxol.Agent.Steer` requires, satisfied by construction (only this process
+  a CAS decision requires, satisfied by construction (only this process
   reads-modifies-writes the CAS state). Returns the honest CAS outcome
   synchronously:
 

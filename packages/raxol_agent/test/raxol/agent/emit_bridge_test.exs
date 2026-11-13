@@ -9,7 +9,6 @@ defmodule Raxol.Agent.EmitBridgeTest do
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.EmitBridge
   alias Raxol.Agent.Journal.FileStore
-  alias Raxol.Agent.Meta
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Core.Runtime.EmitBus
 
@@ -170,7 +169,7 @@ defmodule Raxol.Agent.EmitBridgeTest do
       :ok = FileStore.close(journal)
     end
 
-    test "a non-default branch_id is written AND round-trips off disk; \"main\" is omitted (I2)",
+    test "a non-default branch_id is written; \"main\" is omitted",
          %{streamer: streamer, base: base} do
       # Default branch: the record OMITS branch_id (byte-identity preserved).
       main_session = "sess-main-#{System.unique_integer([:positive])}"
@@ -191,10 +190,9 @@ defmodule Raxol.Agent.EmitBridgeTest do
       refute Map.has_key?(main_record, "branch_id"),
              "a default (\"main\") branch_id must stay implicit on disk (I2)"
 
-      assert {:ok, %Event{branch_id: "main"}} = Meta.decode(main_record)
       :ok = FileStore.close(main_journal)
 
-      # Non-default branch: written AND surfaced back onto the decoded Event.
+      # Non-default branch: written.
       feat_session = "sess-feat-#{System.unique_integer([:positive])}"
       {:ok, feat_journal} = FileStore.open(feat_session, base_dir: base)
 
@@ -214,9 +212,6 @@ defmodule Raxol.Agent.EmitBridgeTest do
 
       {:ok, [feat_record]} = FileStore.read(feat_journal)
       assert feat_record["branch_id"] == "feature-x"
-
-      assert {:ok, %Event{branch_id: "feature-x"}} = Meta.decode(feat_record),
-             "a non-default branch_id must round-trip write -> disk -> decode"
 
       :ok = FileStore.close(feat_journal)
     end
@@ -275,7 +270,6 @@ defmodule Raxol.Agent.EmitBridgeTest do
              },
              "a tainted write generation must stamp taint onto an omitted provenance"
 
-      assert {:ok, %Event{provenance: %{trust: :tainted}}} = Meta.decode(record)
       :ok = FileStore.close(journal)
     end
 
@@ -338,9 +332,6 @@ defmodule Raxol.Agent.EmitBridgeTest do
       # a default event's on-disk bytes stay byte-identical to pre-U11 (I2).
       refute Map.has_key?(record, "provenance"),
              "a default provenance must stay implicit on disk"
-
-      assert {:ok, %Event{provenance: %{source: :primary, trust: :trusted}}} =
-               Meta.decode(record)
 
       :ok = FileStore.close(journal)
     end

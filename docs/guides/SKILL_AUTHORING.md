@@ -101,8 +101,7 @@ A tool call made while following a skill is a tool call like any other. An actio
 `sensitive` is denied unless the context of the call carries a `:tool_authorizer` that
 allows it (see the [Tool Catalog](../reference/TOOL_CATALOG.md#authorization)), on whichever
 [surface](SURFACES.md) the agent is running, so a skill cannot smuggle in a privileged
-action. A turn run by `Raxol.Agent.Turn` records each call in the
-[conversation item-log](../features/AGENT_FRAMEWORK.md#conversation-item-log).
+action.
 
 ## See also
 

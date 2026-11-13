@@ -70,6 +70,7 @@ defmodule Raxol.Agent.Stream do
   Additional options for `react/2`:
 
   - `:actions` -- list of Action modules available as tools
+  - `:context` -- map handed to every tool call (default: `%{}`)
   - `:max_iterations` -- loop guard (default: 10)
   """
 

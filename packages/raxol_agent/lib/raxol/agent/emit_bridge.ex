@@ -120,12 +120,11 @@ defmodule Raxol.Agent.EmitBridge do
   against the optional write-generation provenance context under the
   taint-absorbing meet (see the `:provenance` option and `stamp_provenance/2`):
   a tainted generation force-taints every event it emits, and a module-supplied
-  `:tainted` is never overwritten — the seam can add taint, never remove it. To keep grandfathered
-  records byte-identical (I2), the journal record OMITS any envelope field that
-  equals its frozen default — a record without the key decodes back to that
-  default via the grandfather clause, so only genuinely non-default provenance /
-  scope / actor / branch actually land on disk. A non-default value is never
-  stranded on one path.
+  `:tainted` is never overwritten — the seam can add taint, never remove it. The
+  journal record OMITS any envelope field that equals its default, so a record
+  that carries only defaults keeps the bytes it had before these fields existed,
+  and only non-default provenance / scope / actor / branch land on disk. A
+  non-default value is never stranded on one path.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -211,9 +210,8 @@ defmodule Raxol.Agent.EmitBridge do
       untrusted source — the classification itself is U8 policy) force-taints
       every event in the generation, a module-supplied `:tainted` is never
       overwritten, and an omitted module provenance takes the generation's.
-      Default `nil` — no generation classification; a module omission then
-      decodes to the frozen grandfather default (`:trusted`), which is the
-      frozen §2.1 shape and cannot change here
+      Default `nil` — no generation classification; an event whose module
+      supplied no provenance is then written without the key
     * `:branch_id` — the speculation branch these events belong to (freeze
       §1.1); default `"main"`, which is implicit on the wire (grandfather-safe)
     * `:name` — process name (default anonymous)
@@ -594,12 +592,11 @@ defmodule Raxol.Agent.EmitBridge do
   # `"id"` (= offset) and stringifies keys; replaying reconstructs the same
   # contract-typed event. Payload is already sanitized by the caller.
   #
-  # The U11 envelope-growth fields (scope / provenance / actor / branch_id) are
-  # written ONLY when they are non-default: a record that carries exactly the
-  # frozen defaults omits them and decodes back to those defaults via the
-  # grandfather clause, so a default event's on-disk bytes are byte-identical to
-  # its pre-U11 form (I2 preserved). A non-default value is always persisted —
-  # never stranded on the live path while missing from the journal.
+  # The envelope fields (scope / provenance / actor / branch_id) are written
+  # ONLY when they are non-default: a record that carries exactly the defaults
+  # omits them, so its on-disk bytes are those of a record written before the
+  # fields existed. A non-default value is always persisted — never stranded on
+  # the live path while missing from the journal.
   defp durable_record(neutral) do
     %{
       v: 0,
@@ -625,8 +622,8 @@ defmodule Raxol.Agent.EmitBridge do
     )
   end
 
-  # Add `key` only when the carried value is present and differs from the frozen
-  # default — the grandfather-symmetric write (absent on disk ⇒ default on read).
+  # Add `key` only when the carried value is present and differs from the
+  # default.
   defp put_when_non_default(record, _key, nil, _default), do: record
 
   defp put_when_non_default(record, _key, value, default) when value == default,
@@ -663,8 +660,8 @@ defmodule Raxol.Agent.EmitBridge do
   # the write-generation context — the bridge can only ADD taint, never remove
   # it. An unconditional overwrite here would itself be a laundering machine
   # (a module honestly stamping `:tainted` overwritten by a `:trusted`
-  # generation default). With no generation context the module value flows
-  # unchanged and the read side's fail-closed decode governs.
+  # generation default). With no generation context the module value is
+  # written as supplied.
   defp stamp_provenance(neutral, nil), do: neutral
 
   defp stamp_provenance(neutral, gen_prov) do
@@ -673,8 +670,7 @@ defmodule Raxol.Agent.EmitBridge do
 
   # A wrong-shaped (non-map) module provenance fails CLOSED — replacing it
   # with the generation value could launder garbage into an explicit
-  # `:trusted`; mirroring `Meta.decode_provenance/1`'s wrong-shape arm keeps
-  # the write side and read side agreeing.
+  # `:trusted`.
   defp meet_provenance(module_prov, _gen_prov) when not is_map(module_prov),
     do: %{source: :primary, trust: :tainted}
 

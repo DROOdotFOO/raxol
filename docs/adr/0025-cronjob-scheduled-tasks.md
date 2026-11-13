@@ -14,6 +14,8 @@ delivery), and `Raxol.Core.Stores.Dets` (the shared ETS+DETS store).
 Decision 6, #1320). The `Raxol.Symphony.Orchestrator` poll named in Context and References is
 in the frozen repository; the scheduler decided here does not use it.
 
+Amended, 2026-11-13: `Raxol.Agent.Turn` is removed.
+
 ## Context
 
 Raxol can schedule one thing: `Raxol.Symphony.Orchestrator` polls a tracker on a fixed cadence to

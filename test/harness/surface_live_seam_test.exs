@@ -3,7 +3,9 @@ defmodule Raxol.Harness.SurfaceLiveSeamTest do
   The live-session seam additions to `Raxol.Harness.Surface`: a
   `:command_sink` that makes `:interrupt`/`:steer` LIVE instead of the
   fixture-mode stubs, `append_events/2` (the same reveal path as fixture
-  events), `put_lane_notice/2` (a persistent footer line), `seal_marker/2`
+  events), the `:stream_open` hold with `flush_held/1` and `close_stream/1`
+  (a completed block seals only after its turn bracket has folded),
+  `put_lane_notice/2` (a persistent footer line), `seal_marker/2`
   (an honest loss-notice sealed into history), and `put_stall_verdict/2`
   (the status strip's `:stall_verdict` seam).
 
@@ -92,44 +94,47 @@ defmodule Raxol.Harness.SurfaceLiveSeamTest do
   # A single-turn, single-message event list -- the fixture wire shape
   # (atom top-level fields, string-keyed payload) `Projection.project/2`
   # accepts directly, matching `t13a_surface_test.exs`'s own `bulk_events/1`
-  # convention.
-  defp single_message_events(text) do
+  # convention. `base_id` continues the ids for a later turn of the same
+  # session.
+  defp single_message_events(text, turn_id \\ "t1", base_id \\ 0) do
+    item_id = "i-#{turn_id}"
+
     [
       %{
-        id: 1,
-        turn_id: "t1",
-        ts: 1,
+        id: base_id + 1,
+        turn_id: turn_id,
+        ts: base_id + 1,
         family: :loop,
         type: :turn_started,
         tier: :durable,
         payload: %{"prompt" => "hi"}
       },
       %{
-        id: 2,
-        turn_id: "t1",
-        ts: 2,
+        id: base_id + 2,
+        turn_id: turn_id,
+        ts: base_id + 2,
         family: :loop,
         type: :item_started,
         tier: :durable,
-        payload: %{"item_id" => "i1", "item_type" => "message"}
+        payload: %{"item_id" => item_id, "item_type" => "message"}
       },
       %{
-        id: 3,
-        turn_id: "t1",
-        ts: 3,
+        id: base_id + 3,
+        turn_id: turn_id,
+        ts: base_id + 3,
         family: :loop,
         type: :item_completed,
         tier: :durable,
         payload: %{
-          "item_id" => "i1",
+          "item_id" => item_id,
           "item_type" => "message",
           "content" => text
         }
       },
       %{
-        id: 4,
-        turn_id: "t1",
-        ts: 4,
+        id: base_id + 4,
+        turn_id: turn_id,
+        ts: base_id + 4,
         family: :loop,
         type: :turn_completed,
         tier: :durable,
@@ -141,6 +146,16 @@ defmodule Raxol.Harness.SurfaceLiveSeamTest do
         }
       }
     ]
+  end
+
+  # Applies each event the way a live embedder does: append one, reveal it.
+  defp feed(model, events) do
+    Enum.reduce(events, model, fn event, model ->
+      {model, _status} =
+        model |> Surface.append_events([event]) |> Surface.advance()
+
+      model
+    end)
   end
 
   # ---------------------------------------------------------------------
@@ -233,6 +248,68 @@ defmodule Raxol.Harness.SurfaceLiveSeamTest do
       assert_raise ArgumentError, fn ->
         Surface.append_events(model, ["not a map"])
       end
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # :stream_open, flush_held/1, close_stream/1
+  # ---------------------------------------------------------------------
+
+  describe "the :stream_open hold" do
+    test "a completed item does not seal until its turn bracket has folded" do
+      [started, item_started, item_completed, turn_completed] =
+        single_message_events("ordering probe content")
+
+      {model, device} = new_model([], stream_open: true)
+      model = feed(model, [started, item_started, item_completed])
+
+      # Every event is revealed, yet the block is held: the stream is open
+      # and the turn bracket has not folded.
+      assert model.revealed == length(model.events)
+      refute history_text(raw(device)) =~ "ordering probe content"
+
+      model = model |> feed([turn_completed]) |> Surface.flush_held()
+
+      assert history_text(raw(device)) =~ "ordering probe content"
+      assert model.stream_open?
+    end
+
+    test "a multi-turn session survives its first final turn_completed" do
+      {model, device} = new_model([], stream_open: true)
+
+      model =
+        model
+        |> feed(single_message_events("first answer", "t1", 0))
+        |> Surface.flush_held()
+
+      assert history_text(raw(device)) =~ "first answer"
+
+      # The release was for one seal pass: the second turn's block is held
+      # until its own bracket.
+      [started, item_started, item_completed, turn_completed] =
+        single_message_events("second answer", "t2", 4)
+
+      model = feed(model, [started, item_started, item_completed])
+      refute history_text(raw(device)) =~ "second answer"
+
+      model = model |> feed([turn_completed]) |> Surface.flush_held()
+
+      assert history_text(raw(device)) =~ "second answer"
+      assert model.stream_open?
+    end
+
+    test "close_stream/1 seals a held block whose bracket never arrives" do
+      [started, item_started, item_completed, _turn_completed] =
+        single_message_events("stranded tail")
+
+      {model, device} = new_model([], stream_open: true)
+      model = feed(model, [started, item_started, item_completed])
+      refute history_text(raw(device)) =~ "stranded tail"
+
+      model = Surface.close_stream(model)
+
+      assert history_text(raw(device)) =~ "stranded tail"
+      refute model.stream_open?
     end
   end
 

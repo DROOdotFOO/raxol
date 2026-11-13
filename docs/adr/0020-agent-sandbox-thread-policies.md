@@ -6,6 +6,8 @@ Accepted, 2026-07-22 (implemented in `Raxol.Agent.Sandbox`, `Raxol.Agent.ThreadL
 
 Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.ContextCompactor` and the `compaction_config/0` callback are removed. The passages below on how the ThreadLog interacts with compaction describe code that no longer exists.
 
+Narrowed, 2026-11-13: `Raxol.Agent.Policy` with its `Retry`, `Timeout` and `Cache` structs, `PolicyApplier`, `Raxol.Agent.Cache` and its adapters, `ThreadLogRouter`, the `thread_log/0` callback and `PermissionHook` are removed. What stands is the `Raxol.Agent.Sandbox` protocol with its `Shell`, `SendAgent` and `Async` dimensions, and `Raxol.Agent.ThreadLog` with its Ets and Postgrex adapters, which `Raxol.Agent.Scheduler` writes to.
+
 ## Context
 
 The agent stack today is feature-complete for the prompt-then-react loop. `use Raxol.Agent` gives an author the TEA callbacks (`init/1`, `update/2`, `view/1`, plus agent-specific `handle_message/2`, `handle_tick/1`, `compaction_config/0`, `command_hooks/0`, `memory_provider/0`, `available_actions/0`). Directives (`Raxol.Agent.Directive.Async`, `Shell`, `SendAgent`) emit effects; the framework dispatches them via the `Raxol.Core.Runtime.Directive.Executor` protocol after the `Command` struct deletion. The `CommandHook` behaviour (`packages/raxol_agent/lib/raxol/agent/command_hook.ex:57-75`) gives authors `c:pre_execute/2` + `c:post_execute/3` interception. `PermissionHook` (`packages/raxol_agent/lib/raxol/agent/permission_hook.ex:8-14, 66-82`) ships a five-level mode hierarchy (`:read_only`, `:send_only`, `:workspace_write`, `:full_access`, `:allow`) implemented as a CommandHook.

@@ -301,11 +301,10 @@ defmodule Raxol.Harness.Surface do
 
   ## Precondition #6 -- command bifurcation (fixture mode = honest UI stubs)
 
-  `:interrupt`/`:steer` are the two commands that cross to the agent lane
-  in the future agent-lane surface (`%Command{}`, `raxol_agent`'s
-  channel). This module has no agent lane by design, so both are
-  rendered as honest, visibly-labeled stubs instead of silently doing
-  nothing OR pretending to act:
+  `:interrupt`/`:steer` are the two commands meant for an agent, and they
+  leave only through `:command_sink`. Without one this module has no
+  agent to reach, so both are rendered as honest, visibly-labeled stubs
+  instead of silently doing nothing OR pretending to act:
 
     * `:interrupt` -- sets a one-frame footer notice ("interrupt requested
       (stub -- no agent lane in fixture mode)"), consumed (cleared) after
@@ -743,8 +742,7 @@ defmodule Raxol.Harness.Surface do
       the moduledoc's "Command bifurcation" section). `nil` keeps
       today's honest stubs untouched; a fun receives
       `%{type: :interrupt, payload: %{}}` or `%{type: :steer, payload:
-      %{text: composer_text}}` -- see `Raxol.Harness.SessionLane` for the
-      seam a live implementation dispatches through on the other side.
+      %{text: composer_text}}`.
     * `:stream_open` (default `false`) -- declares that more events may
       still arrive beyond whatever `append_events/2` has delivered so
       far, so the reveal is never treated as finished merely for being
@@ -1094,9 +1092,7 @@ defmodule Raxol.Harness.Surface do
   @doc """
   Appends `events` (event-shaped maps -- the same fixture wire shape
   `advance/2` already consumes) to `model.events`. This is the live-session
-  seam: a `Raxol.Harness.SessionLane` subscriber normalizes each incoming
-  live event through `Raxol.Harness.EventBoundary.normalize/1` upstream of
-  this call, then hands the result here. Appended events are revealed with
+  seam: the caller hands already-normalized live events here. Appended events are revealed with
   `advance/2` exactly like fixture events -- there is no separate reveal
   path for "live" vs. "fixture" once an event has landed in `model.events`.
 
@@ -1105,9 +1101,9 @@ defmodule Raxol.Harness.Surface do
   -- this call changes the constant factor of a growing session's upkeep,
   not its complexity class.
 
-  Raises `ArgumentError` on a non-map element: the boundary normalizer is
-  expected to run upstream of this call, so a non-map element reaching here
-  is a caller bug, not a value this function silently tolerates.
+  Raises `ArgumentError` on a non-map element: the caller hands over
+  event-shaped maps, so a non-map element reaching here is a caller bug,
+  not a value this function silently tolerates.
   """
   @spec append_events(t(), [map()]) :: t()
   def append_events(model, events) when is_list(events) do
@@ -1190,10 +1186,11 @@ defmodule Raxol.Harness.Surface do
   @doc """
   Sets (or clears, with `nil`) the status strip's `:stall_verdict` seam
   (`Raxol.Harness.StatusStrip`'s own documented integration point) and
-  repaints the footer. The strip already renders the `ALERT: <evidence>`
-  segment for a `:stalled`/`:looping` verdict with non-empty evidence; this
-  function is only the model-side plumbing that gets a verdict into
-  `model.status` in the first place.
+  repaints the footer. A verdict is
+  `%{class: class, evidence: %{summary: binary}}`: the strip renders
+  `ALERT: <summary>` when `class` is `:stalled` or `:looping` and the
+  summary is non-empty, and nothing for any other shape. This function is
+  only the model-side plumbing that gets a verdict into `model.status`.
   """
   @spec put_stall_verdict(t(), map() | nil) :: t()
   def put_stall_verdict(model, nil) do
@@ -1779,8 +1776,7 @@ defmodule Raxol.Harness.Surface do
 
   # Live command_sink: dispatch and leave the model otherwise unchanged --
   # no stub notice (the embedder owns pending/ack rendering via
-  # `put_lane_notice/2`; the real acknowledgment is event-observed, see
-  # `Raxol.Harness.SessionLane`'s moduledoc). Must precede the plain
+  # `put_lane_notice/2`; the real acknowledgment is event-observed). Must precede the plain
   # stub clause below, which stays as the `command_sink == nil` fallback.
   defp dispatch_command(%{command_sink: sink} = model, %{type: :interrupt})
        when is_function(sink, 1) do

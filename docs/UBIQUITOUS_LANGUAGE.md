@@ -182,7 +182,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 
 ### Relationships
 
-- An Agent has zero or one Strategy (default: Direct) (1:0..1).
+- An Agent has zero or one Strategy (1:0..1).
 - A Team has exactly one Coordinator and many Workers (1:1, 1:N).
 - An Agent exposes many Actions to its Backend (1:N).
 - An Agent calls one Backend at a time per request (1:1 per request).
@@ -216,7 +216,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 | ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |
 | **TEA Command**  | A side effect returned from `update/2`. Tagged tuple: `:async`, `:shell`, `:send_agent`, etc.      | effect, action, side effect    |
 | **Agent Action** | An LLM-callable tool. Implements the `Raxol.Agent.Action` behaviour.                               | tool, function, skill, command |
-| **Hook**         | A function the framework calls at a defined extension point: CommandHook, PermissionHook, McpHook. | callback, listener, middleware |
+| **Hook**         | A function the framework calls at an extension point: CommandHook, SandboxHook, McpSpendHook.      | callback, listener, middleware |
 | **Plugin**       | A package that adds Components, themes, hooks, or actions via `use Raxol.Plugin`.                  | extension, addon, mod          |
 
 ### Flagged ambiguities
