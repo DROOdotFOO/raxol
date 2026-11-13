@@ -23,10 +23,12 @@ window, and an npm version cannot be reused.
 | `raxol_telegram` | Hex | 0.2.1 |
 | `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.10 |
 
-The following projects remain outside the public Hex train:
-`raxol_agent_client_protocol`, `raxol_gateway`, `raxol_earn`, `raxol_cli`, and
-`raxol_console`. Package-specific gates for the candidates closest to
-publication remain below.
+`raxol_agent` and `raxol_payments` are on Hex and off the train: a root tag
+publishes neither, and `Raxol.Release.PackageCheck.public_packages/0` holds no
+agent-side package (ADR-0043). The following projects are unpublished and
+outside the train: `raxol_agent_client_protocol`, `raxol_gateway`,
+`raxol_earn`, `raxol_cli`, `raxol_console`, `raxol_web3`, and `raxol_broker`.
+Package-specific gates for the candidates closest to publication remain below.
 
 ## Authorization model
 
@@ -85,10 +87,9 @@ reactivating it. Never move a published version tag as routine recovery.
    ```bash
    git tag -a raxol_speech-v0.2.2 -m "raxol_speech 0.2.2"
    git tag -a raxol_watch-v0.2.2 -m "raxol_watch 0.2.2"
-   git tag -a raxol_payments-v0.2.2 -m "raxol_payments 0.2.2"
    git tag -a raxol_telegram-v0.2.2 -m "raxol_telegram 0.2.2"
    git push origin raxol_speech-v0.2.2 raxol_watch-v0.2.2 \
-     raxol_payments-v0.2.2 raxol_telegram-v0.2.2
+     raxol_telegram-v0.2.2
    ```
 
    Create only the tags for packages whose version changed. Framework packages
@@ -191,17 +192,35 @@ raxol-cli-channel latest.json --clobber`.
 
 ### `raxol_gateway` 0.2.0
 
-Nothing external blocks it. `raxol_speech` 0.2.1 and the 2.7 framework line are
-already on Hex, so its registry requirements resolve.
+Publish it after the 2.8.0 train, which publishes the `raxol_core` it
+requires. Its only required dependencies are `raxol_core "~> 2.8"`,
+`telemetry`, and `jason`. Everything else (`raxol "~> 2.8"`,
+`raxol_speech "~> 0.2"`, `gen_smtp`, `mint_web_socket`, `req`) is optional and
+gated at runtime, so a consumer who wants only the Telegram or in-memory
+adapter pulls nothing extra.
 
 Metadata, license, changelog, docs entry point, and the tarball are in place:
 `HEX_BUILD=1 mix hex.build` produces `raxol_gateway-0.2.0.tar` carrying `lib/`,
 `.formatter.exs`, `mix.exs`, `README.md`, `LICENSE.md`, and `CHANGELOG.md`.
 
-Its only required dependencies are `raxol_core "~> 2.7"`, `telemetry`, and
-`jason`. Everything else (`raxol`, `raxol_speech`, `gen_smtp`,
-`mint_web_socket`, `req`) is optional and gated at runtime, so a consumer who
-wants only the Telegram or in-memory adapter pulls nothing extra.
+It is not on the train, so it is published by hand, from the release commit,
+with the steps the train runs for each package. Its docs link to the
+`raxol_gateway-v0.2.0` tag:
+
+```bash
+git tag -a raxol_gateway-v0.2.0 -m "raxol_gateway 0.2.0"
+git push origin raxol_gateway-v0.2.0
+
+cd packages/raxol_gateway
+HEX_BUILD=1 mix deps.get
+HEX_BUILD=1 mix hex.publish --dry-run
+HEX_BUILD=1 mix hex.publish
+git checkout -- mix.lock
+```
+
+`HEX_BUILD=1 mix deps.get` locks the path siblings as Hex packages, which
+`scripts/check_lock_path_shadows.exs` rejects, so the lockfile is restored and
+never committed in that state.
 
 ### `raxol_earn` 0.2.1
 
