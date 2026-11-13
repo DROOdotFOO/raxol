@@ -385,6 +385,18 @@ defmodule Raxol.PackageBoundariesTest do
        def f, do: Application.ensure_all_started(String.to_atom("raxol_agent"))
      end
      """, "raxol_agent", "app"},
+    {"an application atom made from a charlist", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Application.ensure_all_started(List.to_atom('raxol_agent'))
+     end
+     """, "raxol_agent", "app"},
+    {"a hex.pm URL names the application, not a path", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: "https://hex.pm/packages/raxol_agent"
+     end
+     """, "raxol_agent", "app"},
     {"dependencies built from a word sigil", "packages/raxol_core/mix.exs",
      ~S"""
      defmodule RaxolCore.MixProject do

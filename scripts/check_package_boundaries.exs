@@ -929,6 +929,13 @@ defmodule PackageBoundaries do
     {env, acc}
   end
 
+  # A single-quoted charlist arrives as a list of integers.
+  defp walk([char | _] = chars, %{doc: false} = env, acc) when is_integer(char) do
+    if List.ascii_printable?(chars),
+      do: walk(List.to_string(chars), env, acc),
+      else: walk_children(chars, env, acc)
+  end
+
   defp walk(node, env, acc), do: walk_children(node, env, acc)
 
   defp module_name?(text),
@@ -962,10 +969,11 @@ defmodule PackageBoundaries do
     do: Enum.map(String.split(alternation, "|"), &(base <> "." <> &1))
 
   # An agent application's name as a whole word (`raxol_agent`, not
-  # `raxol_agents`), and as a path when `packages/` or `../` leads to it.
+  # `raxol_agents`), and as a path when `packages/` or `../` leads to it. A
+  # hex.pm URL is the name, not a path.
   defp app_refs(text) do
     if String.contains?(text, "raxol_") do
-      "(?<!\\w)(packages/|\\.\\./)?(#{Enum.join(@agent_trees, "|")})(?!\\w)"
+      "(?<!\\w)((?<!hex\\.pm/)packages/|\\.\\./)?(#{Enum.join(@agent_trees, "|")})(?!\\w)"
       |> Regex.compile!()
       |> Regex.scan(text, capture: :all_but_first)
       |> Enum.map(fn
@@ -1335,9 +1343,9 @@ defmodule PackageBoundaries do
 
     The runtime side (the root and #{Enum.join(@runtime_trees -- ["raxol"], ", ")})
     becomes its own repository, where none of these names resolve. Move the
-    code to the side that owns it, or have the application that composes both
-    sides pass the behaviour in. This rule has no allowlist. See
-    docs/PACKAGES.md ("Boundary rule").\
+    code to the side that owns it, have the application that composes both
+    sides pass the behaviour in, or reword a string that only mentions the
+    name. This rule has no allowlist. See docs/PACKAGES.md ("Boundary rule").\
     """)
   end
 
@@ -1400,7 +1408,7 @@ defmodule PackageBoundaries do
     Once the agent packages leave this repository only names tell the two
     sides apart, and nothing marks these as agent-side. Put the module under
     an agent namespace, or add its exact name to @agent_modules in this
-    script.\
+    script (the only choice for a protocol implementation).\
     """)
   end
 
