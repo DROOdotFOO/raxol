@@ -83,6 +83,12 @@ defmodule Raxol.PackageBoundariesTest do
        def f, do: ~w(Raxol.Agent.Team Raxol.Core.Thing)
      end
      """, "Raxol.Agent.Team", "string"},
+    {"a regex over module names", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f(name), do: name =~ ~r/^Raxol\.Payments\./
+     end
+     """, "Raxol.Payments", "string"},
     {"a process name", "lib/raxol/crossing.ex",
      ~S"""
      defmodule Raxol.Crossing do

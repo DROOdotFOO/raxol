@@ -73,7 +73,8 @@
 # The first and third go by name, not by owner, so they hold once the agent
 # trees are gone and nothing here defines those names. Every form the first
 # rule collects counts, and three more: a module name inside a string or
-# sigil (`"Raxol.Agent.Session"`, with or without `Elixir.`), an atom spelled
+# sigil (`"Raxol.Agent.Session"`, with or without `Elixir.`, and
+# `~r/^Raxol\.Agent\./`), an atom spelled
 # as a module name without the `Elixir.` prefix (`:"Raxol.Agent.Registry"`),
 # and the application atoms. Comments are not in the AST. The text of
 # `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated` is skipped;
@@ -758,14 +759,15 @@ defmodule PackageBoundaries do
   end
 
   # Doc text is prose; a string anywhere else may be handed to
-  # `Module.concat/1`, `String.to_existing_atom/1` or a registry.
+  # `Module.concat/1`, `String.to_existing_atom/1` or a registry. The dots may
+  # be escaped, as a regex over module names writes them.
   defp walk(text, %{doc: false} = env, acc) when is_binary(text) do
     if String.contains?(text, ".") do
       acc =
-        ~r/(?<![\w.])(?:Elixir\.)?([A-Z]\w*(?:\.[A-Z]\w*)+)/
+        ~r/(?<![\w.])(?:Elixir\\?\.)?([A-Z]\w*(?:\\?\.[A-Z]\w*)+)/
         |> Regex.scan(text, capture: :all_but_first)
         |> Enum.reduce(acc, fn [mod], acc ->
-          record(acc, mod, [line: env.line], :string)
+          record(acc, String.replace(mod, "\\", ""), [line: env.line], :string)
         end)
 
       {env, acc}
