@@ -409,7 +409,28 @@ defmodule Raxol.PackageBoundariesTest do
              do: {String.to_atom(name), path: Path.join("..", name)}
        end
      end
-     """, "raxol_earn", "app"}
+     """, "raxol_earn", "app"},
+    {"a template that calls an agent module",
+     "packages/raxol_core/lib/raxol/core/page.html.heex",
+     ~S"""
+     <section>
+       <%= Raxol.Agent.Session.info(@id) %>
+     </section>
+     """, "Raxol.Agent.Session", "string"},
+    {"a generator template that depends on an agent application",
+     "priv/templates/mix.exs.eex",
+     ~S"""
+     defp deps do
+       [{:raxol, "~> 2.7"}, {:raxol_agent, "~> 2.7"}]
+     end
+     """, "raxol_agent", "app"},
+    {"an Erlang source that calls an agent module",
+     "packages/raxol_core/src/raxol_core_bridge.erl",
+     ~S"""
+     -module(raxol_core_bridge).
+     -export([total/0]).
+     total() -> 'Elixir.Raxol.Payments.Ledger':total().
+     """, "Raxol.Payments.Ledger", "string"}
   ]
 
   # {label, file, source}
@@ -497,6 +518,17 @@ defmodule Raxol.PackageBoundariesTest do
        ]
        def packages, do: @packages
      end
+     """},
+    {"a template naming only the runtime side",
+     "packages/raxol_core/lib/raxol/core/page.html.heex",
+     ~S"""
+     <%= Raxol.Core.Thing.render(@thing) %>
+     <%= inspect(Raxol.Agent.Journal.Tip) %> raxol_core raxol_agents
+     """},
+    {"an agent package's template",
+     "packages/raxol_cli/priv/templates/app.ex.eex",
+     ~S"""
+     use Raxol.Agent
      """},
     {"a root test", "test/raxol/crossing_test.exs",
      ~S"""

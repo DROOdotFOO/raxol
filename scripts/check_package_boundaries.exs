@@ -56,8 +56,12 @@
 # A second rule draws the line between the two repositories this tree becomes
 # (docs/adr/0043-two-repositories-runtime-and-agent.md). The runtime side is
 # the root and the packages in @runtime_trees; the agent side is @agent_trees.
-# No runtime-side `lib/**/*.ex`, `config/**/*.exs` or `mix.exs` may name
-# agent-side code:
+# "None across the line" covers, in each runtime tree: `lib/**/*.ex`,
+# `config/**/*.exs` and `mix.exs`, parsed; templates (`*.eex`, `*.heex`,
+# `*.leex` under `config/`, `lib/`, `priv/`, `rel/` and `src/`) and Erlang
+# sources (`src/**/*.erl`), read as text. Tests, scripts, `bin/`,
+# `.formatter.exs`, documentation and CI workflows are not read. None of the
+# files that are may name agent-side code:
 #
 #   * a module under an agent namespace (`Raxol.Agent.*`, `Raxol.Payments.*`,
 #     `Raxol.Broker.*`, `Raxol.Earn.*`, `Raxol.Web3.*`, `Raxol.Console.*`,
@@ -278,7 +282,7 @@ defmodule PackageBoundaries do
   ## The runtime/agent line
 
   # {{file, name}, [{line, kind}]} for every agent-side name a runtime-side
-  # source file, config file or mix.exs carries.
+  # source file, config file, mix.exs, template or Erlang source carries.
   defp line_crossings(scanned, trees) do
     runtime = Enum.filter(trees, &(&1 in @runtime_trees))
 
@@ -295,7 +299,12 @@ defmodule PackageBoundaries do
         end
       end
 
-    for {file, refs} <- sources ++ project_files,
+    text_files =
+      for tree <- runtime, file <- text_sources_of(tree) do
+        {file, text_file_refs(file)}
+      end
+
+    for {file, refs} <- sources ++ project_files ++ text_files,
         {name, line, kind} <- refs,
         crosses?(name, kind),
         reduce: %{} do
@@ -309,6 +318,29 @@ defmodule PackageBoundaries do
 
   defp config_of(pkg),
     do: Path.wildcard("packages/#{pkg}/config/**/*.exs") |> Enum.sort()
+
+  defp text_sources_of(tree) do
+    dir = if tree == "raxol", do: "", else: "packages/#{tree}/"
+
+    Enum.sort(
+      Path.wildcard(dir <> "{config,lib,priv,rel,src}/**/*.{eex,heex,leex}") ++
+        Path.wildcard(dir <> "src/**/*.erl")
+    )
+  end
+
+  # No parser for these: every line is text, a comment included.
+  defp text_file_refs(file) do
+    case File.read(file) do
+      {:ok, text} ->
+        for {line, number} <- Enum.with_index(String.split(text, "\n"), 1),
+            {name, kind} <- text_refs(line) do
+          {name, number, kind}
+        end
+
+      {:error, reason} ->
+        fatal(["cannot read #{file}: #{:file.format_error(reason)}"])
+    end
+  end
 
   defp crosses?(_app, :app), do: true
   defp crosses?(mod, _kind), do: agent_side?(mod)
