@@ -50,8 +50,11 @@ defmodule RaxolPlayground.Capabilities do
                  |> Enum.filter(fn {_name, mix} -> File.exists?(mix) end)
                  |> Enum.map(fn {name, mix} ->
                    case Regex.run(~r/@version\s+"([^"]+)"/, File.read!(mix)) do
-                     [_, version] -> %{name: name, version: version}
-                     nil -> raise "#{mix} has no @version for Capabilities to read"
+                     [_, version] ->
+                       %{name: name, version: version}
+
+                     nil ->
+                       raise "#{mix} has no @version for Capabilities to read"
                    end
                  end)
 
@@ -61,9 +64,15 @@ defmodule RaxolPlayground.Capabilities do
 
   @external_resource @root_mix
 
-  @source_version (case Regex.run(~r/@version\s+"([^"]+)"/, File.read!(@root_mix)) do
-                     [_, version] -> version
-                     nil -> raise "#{@root_mix} has no @version for Capabilities to read"
+  @source_version (case Regex.run(
+                          ~r/@version\s+"([^"]+)"/,
+                          File.read!(@root_mix)
+                        ) do
+                     [_, version] ->
+                       version
+
+                     nil ->
+                       raise "#{@root_mix} has no @version for Capabilities to read"
                    end)
 
   # `raxol` is the root project rather than one of `packages/`, so it joins the
@@ -97,7 +106,8 @@ defmodule RaxolPlayground.Capabilities do
                   raise "#{name} is listed as published but has no mix.exs in the repo"
                 end)
 
-              minor = version |> String.split(".") |> Enum.take(2) |> Enum.join(".")
+              minor =
+                version |> String.split(".") |> Enum.take(2) |> Enum.join(".")
 
               %{name: name, version: "~> " <> minor, purpose: purpose}
             end)
@@ -238,9 +248,8 @@ defmodule RaxolPlayground.Capabilities do
   `connectable_backends/0` with each name paired to the registry's own label.
 
   The name is the label's head, which is what a dense row can show, but the
-  head is also the one part that does not say which of two entries is which:
-  `:claude_native` and `:anthropic` both reach Claude and shorten to "Claude"
-  and "Anthropic", telling a reader nothing about subscription versus API key.
+  head drops the qualifier: "Anthropic (Claude)" shortens to "Anthropic" and
+  "Ollama (local)" to "Ollama".
   Callers that have room, like a hover reveal, should show `:label`.
   """
   @spec connectable_providers() :: [%{name: String.t(), label: String.t()}]

@@ -60,9 +60,15 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
   end
 
   defp write(out_dir, files) do
-    Enum.each(files, fn {name, content} -> File.write!(Path.join(out_dir, name), content) end)
+    Enum.each(files, fn {name, content} ->
+      File.write!(Path.join(out_dir, name), content)
+    end)
 
-    sizes = Enum.map_join(files, " and ", fn {name, c} -> "#{name} (#{byte_size(c)} bytes)" end)
+    sizes =
+      Enum.map_join(files, " and ", fn {name, c} ->
+        "#{name} (#{byte_size(c)} bytes)"
+      end)
+
     Mix.shell().info([:green, "wrote ", :reset, sizes, " to web/priv/static/"])
   end
 
@@ -71,7 +77,7 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
   defp build_llms(docs_root) do
     [
       "# Raxol\n",
-      "> Multi-surface runtime for Elixir on OTP. One TEA module renders to a terminal, a browser (LiveView), an SSH session, MCP, Telegram, a watch, and speech. Agents get memory, self-improvement, tools, and agentic commerce.\n",
+      "> Multi-surface runtime for Elixir on OTP. One TEA module renders to a terminal, a browser (LiveView), an SSH session, MCP, Telegram, a watch, and speech. Agents get skills, tools, and agentic commerce.\n",
       quick_start(),
       capability_summary(),
       surfaces_section(),
@@ -118,9 +124,7 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
 
     Raxol is an Elixir framework built on OTP. It uses The Elm Architecture (TEA): init/1, update/2, view/1. The same module renders to these surfaces without modification: #{surfaces}.
 
-    Agent framework: TEA agents (message-driven) and Process agents (tick-driven), teams with coordinator/worker supervision, reasoning strategies (#{strategies}), a Turn driver that wires memory and skills and self-improvement, and a native multi-vendor harness (Claude Code, Cursor) that serves Raxol tools over MCP. Backends: #{backends}.
-
-    Agent learning: a provider-stack memory layer, full-text session recall, a dialectic user model, an after-turn self-improvement loop, and agent-authored skills in the agentskills.io SKILL.md format.
+    Agent framework: TEA agents (message-driven) and Process agents (tick-driven), teams with coordinator/worker supervision, reasoning strategies (#{strategies}), a Turn driver, and skills in the agentskills.io SKILL.md format. Backends: #{backends}.
 
     Agent commerce: autonomous payments (x402, MPP, Xochi cross-chain), spending limits, stealth and shielded settlement, and ZKSAR trust attestations. No other agent runtime ships this.
 

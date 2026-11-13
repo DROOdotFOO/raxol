@@ -21,7 +21,7 @@ Pages, through the `:browser` pipeline:
 | `/gallery` | `GalleryLive` | The catalog index, filterable by category and complexity, each card carrying its committed preview. |
 | `/replay` | `ReplayLive` | The one page that reads a real recorded session. Loads the committed asciicast below, builds a `Raxol.Recording.Index` once per node, and answers each scrub step by replaying the emulator forward from the nearest keyframe. Seeking is server-side here, unlike the frame players, because a `.cast` has no frames to reveal. |
 | `/demos/:demo` | `DemoLive` | One demo per page, running the real catalog demo app through the lifecycle bridge. 30-minute idle timeout. |
-| `/surfaces` `/ssh` `/agents` `/coding-agent` `/payments` `/token` | `TopicLive` | The deep dives the landing page used to stack, one topic per route. Listed individually rather than as `/:topic` so an unknown path 404s in the router. |
+| `/surfaces` `/ssh` `/agents` `/payments` `/token` | `TopicLive` | The deep dives the landing page used to stack, one topic per route. Listed individually rather than as `/:topic` so an unknown path 404s in the router. |
 | `/demos` | `RedirectController` | 301 to `/gallery`, which is the index now. |
 | `/repl` | `RedirectController` | 301 to `/playground`. |
 

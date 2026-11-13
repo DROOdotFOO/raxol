@@ -49,7 +49,6 @@ defmodule RaxolPlaygroundWeb.Router do
     live("/surfaces", TopicLive, :surfaces)
     live("/ssh", TopicLive, :ssh)
     live("/agents", TopicLive, :agent)
-    live("/coding-agent", TopicLive, :coding_agent)
     live("/payments", TopicLive, :payments)
     live("/token", TopicLive, :token)
   end

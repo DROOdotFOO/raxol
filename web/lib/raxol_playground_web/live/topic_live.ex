@@ -31,10 +31,7 @@ defmodule RaxolPlaygroundWeb.TopicLive do
        "Run a Raxol app over SSH with an Erlang daemon, supervised channels, tenant directories, and explicit resource caps."},
     agent:
       {"/agents", "Agents", "Agents",
-       "Build Raxol agents with a terminal UI, tool calls, MCP projection, and OTP process isolation."},
-    coding_agent:
-      {"/coding-agent", "raxol code", "raxol code",
-       "Use raxol code as an interactive coding-agent TUI or headless command with JSON events and MCP tools."},
+       "Build Raxol agents with a terminal UI, tool calls, MCP projection, and OTP process isolation, and serve them to ACP editors."},
     payments:
       {"/payments", "Agent payments", "Payments",
        "See how Raxol agents pay HTTP 402 invoices with ledger-enforced spend gates, signed intents, solver receipts, and stablecoin settlement."},
@@ -43,7 +40,7 @@ defmodule RaxolPlaygroundWeb.TopicLive do
        "Read the project-token facts for Raxol and how the token differs from the stablecoin payment rails agents use."}
   }
 
-  @order [:surfaces, :ssh, :agent, :coding_agent, :payments, :token]
+  @order [:surfaces, :ssh, :agent, :payments, :token]
 
   @doc "Every topic as `{path, label}`, in nav order."
   def links do
@@ -55,7 +52,8 @@ defmodule RaxolPlaygroundWeb.TopicLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {path, title, _label, description} = Map.fetch!(@topics, socket.assigns.live_action)
+    {path, title, _label, description} =
+      Map.fetch!(@topics, socket.assigns.live_action)
 
     {:ok,
      assign(socket,
@@ -76,7 +74,9 @@ defmodule RaxolPlaygroundWeb.TopicLive do
   # mount total put four unrelated pages behind a third-party endpoint's
   # availability; the branch is cheaper than that coupling.
   defp xochi_matrix(:payments) do
-    XochiCapabilities.get(Application.get_env(:raxol_playground, :xochi_capabilities))
+    XochiCapabilities.get(
+      Application.get_env(:raxol_playground, :xochi_capabilities)
+    )
   end
 
   defp xochi_matrix(_topic), do: nil
@@ -124,9 +124,6 @@ defmodule RaxolPlaygroundWeb.TopicLive do
 
   defp topic_body(%{topic: :ssh} = assigns), do: ~H"<.ssh_deep_dive />"
   defp topic_body(%{topic: :agent} = assigns), do: ~H"<.agent_deep_dive />"
-
-  defp topic_body(%{topic: :coding_agent} = assigns),
-    do: ~H"<.coding_agent_deep_dive />"
 
   defp topic_body(%{topic: :payments} = assigns),
     do: ~H"<.payments_deep_dive matrix={@matrix} />"
