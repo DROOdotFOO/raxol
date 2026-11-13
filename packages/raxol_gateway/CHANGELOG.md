@@ -59,7 +59,7 @@ single adapter contract.
 
 ### Notes
 
-- `raxol_core` is the only required dependency. `raxol` (for
+- `raxol_core` is the only required Raxol dependency. `raxol` (for
   `Handler.Lifecycle`), `raxol_speech` (for `Pipeline.Transcribe`),
   `gen_smtp` (for the email adapter), and `mint_web_socket` and `req` (for
   the Discord adapter) are optional; each entry point checks for its

@@ -54,9 +54,8 @@ defmodule RaxolTerminal.MixProject do
 
   defp deps do
     [
-      # 2.7, not 2.6: SixelPalette calls Raxol.Core.Colors.Ansi256, a module
-      # raxol_core gained this release. Under "~> 2.6" a Hex consumer could
-      # resolve raxol_core 2.6.0, which lacks it.
+      # The framework family shares one minor: a Hex consumer must not
+      # resolve a raxol_core older than the code this was built against.
       raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
       {:uuid, "~> 1.1"},
       {:jason, "~> 1.4"},

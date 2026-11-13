@@ -149,6 +149,11 @@ gh workflow run release-hex.yml \
 # Set publish=true only to resume a failed train. Approval is still required.
 ```
 
+"Re-run failed jobs" on the tag's own run resumes the train and keeps the
+`llms.txt` pull request and the GitHub Release. A dispatched resume runs neither:
+afterwards run `gh workflow run llms-sync.yml -f release_ref=v2.8.0` and create
+the Release by hand.
+
 ## Publish the npm CLI
 
 The npm version in `packages/raxol_cli/npm/package.json` and the CLI Mix project
@@ -236,6 +241,8 @@ HEX_BUILD=1 mix deps.get
 HEX_BUILD=1 mix hex.publish --dry-run
 HEX_BUILD=1 mix hex.publish
 git checkout -- mix.lock
+cd ../..
+git switch -
 ```
 
 `HEX_BUILD=1 mix deps.get` locks the path siblings as Hex packages, which
@@ -319,5 +326,5 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
    equivalent in [`docs/PACKAGES.md`](../PACKAGES.md), and the release paragraph
    in [`ROADMAP.md`](../../ROADMAP.md) all name published versions and go stale
    the moment a publish lands.
-4. **Verify the docs.** `https://<package>.hexdocs.pm` should resolve, and a
+4. **Verify the docs.** `https://hexdocs.pm/<package>/<version>/` should resolve, and a
    module source link should land on the `<package>-v<version>` tag you pushed.

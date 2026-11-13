@@ -159,13 +159,27 @@ jobs:
       # PackageCheck owns the public train and its topological order. A failed
       # run is resumable: versions already visible on Hex are skipped.
       #
-      # The list arrives on descriptor 3 and every command in the body reads
-      # /dev/null. On stdin, the first `mix` would take the remaining lines as
-      # its own input and the loop would end after one package.
+      # The list is written to a file first so a failed or empty listing stops
+      # the step. It is read on descriptor 3 and every command in the body
+      # reads /dev/null: on stdin, the first `mix` would take the remaining
+      # lines as its own input and the loop would end after one package.
       - name: Publish packages in dependency order
         id: publish
         run: |
           set -euo pipefail
+
+          list="$(mktemp)"
+          mix run --no-start -e '
+            Raxol.Release.PackageCheck.public_packages()
+            |> Enum.each(fn %{app: app, path: path} ->
+              IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
+            end)
+          ' </dev/null | sed -n 's/^RAXOL_PACKAGE\t//p' > "$list"
+
+          if [[ ! -s "$list" ]]; then
+            echo "::error::PackageCheck listed no packages"
+            exit 1
+          fi
 
           while IFS=$'\t' read -r package path <&3; do
             pushd "$path" >/dev/null
@@ -189,14 +203,7 @@ jobs:
             echo "::endgroup::"
 
             popd >/dev/null
-          done 3< <(
-            mix run --no-start -e '
-              Raxol.Release.PackageCheck.public_packages()
-              |> Enum.each(fn %{app: app, path: path} ->
-                IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
-              end)
-            ' </dev/null | sed -n 's/^RAXOL_PACKAGE\t//p'
-          )
+          done 3< "$list"
 
   verify:
     name: Verify public Hex release
@@ -238,10 +245,25 @@ jobs:
           mix local.rebar --force
           mix deps.get --check-locked
 
-      # Descriptor 3 and /dev/null for the same reason as the publish loop.
+      # The list file, descriptor 3 and /dev/null for the same reasons as the
+      # publish loop. HexDocs answers a versioned URL with a redirect whether
+      # or not the docs exist, so the check follows it.
       - name: Verify registry and documentation
         run: |
           set -euo pipefail
+
+          list="$(mktemp)"
+          mix run --no-start -e '
+            Raxol.Release.PackageCheck.public_packages()
+            |> Enum.each(fn %{app: app, path: path} ->
+              IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
+            end)
+          ' </dev/null | sed -n 's/^RAXOL_PACKAGE\t//p' > "$list"
+
+          if [[ ! -s "$list" ]]; then
+            echo "::error::PackageCheck listed no packages"
+            exit 1
+          fi
 
           while IFS=$'\t' read -r package path <&3; do
             pushd "$path" >/dev/null
@@ -255,7 +277,7 @@ jobs:
 
             docs_url="https://hexdocs.pm/$package/$version/"
             for attempt in {1..60}; do
-              if curl --fail --silent --output /dev/null "$docs_url" </dev/null; then
+              if curl --fail --silent --location --output /dev/null "$docs_url" </dev/null; then
                 echo "$package $version documentation is visible"
                 break
               fi
@@ -266,14 +288,7 @@ jobs:
               echo "Waiting for $package $version documentation ($attempt/60)"
               sleep 10
             done
-          done 3< <(
-            mix run --no-start -e '
-              Raxol.Release.PackageCheck.public_packages()
-              |> Enum.each(fn %{app: app, path: path} ->
-                IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
-              end)
-            ' </dev/null | sed -n 's/^RAXOL_PACKAGE\t//p'
-          )
+          done 3< "$list"
 
       - name: Compile a fresh Hex consumer
         run: |
