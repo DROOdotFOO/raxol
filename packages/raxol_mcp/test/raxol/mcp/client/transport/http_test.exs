@@ -373,6 +373,10 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
       assert %{status: :closed} = Client.status(client)
       assert {:error, {:connect_failed, _}} = Client.list_tools(client)
+
+      # A caller that arrives after the failure gets the same answer at once.
+      assert {:error, {:connect_failed, {:initialization_failed, {:http, 401}}}} =
+               Client.await_ready(client, 30_000)
     end
 
     test "fail_fast answers a throttled handshake at once and still retries" do

@@ -47,6 +47,7 @@
 
 ### Fixed
 
+- **`raxol_mcp`: `Client.await_ready/2` after a rejected credential waited out its budget.** A client whose handshake got a 401 answered the callers already waiting, but one that arrived afterwards waited its whole timeout and got `{:not_ready, :closed}`. It now gets `{:connect_failed, reason}` at once.
 - **`raxol mcp` and `mix mcp.server` corrupted non-ASCII text without a UTF-8
   locale.** `Raxol.MCP.Transport.Stdio` read and wrote through the device's
   encoding. With `LANG` unset or `LC_ALL=C`, `é` in a request arrived as `Ã©`

@@ -377,9 +377,21 @@ defmodule Raxol.MCP.Client do
     {:reply, {:error, {:connect_failed, reason}}, state}
   end
 
+  # So does any client whose credential was rejected: it will not connect
+  # again, so a caller that arrives after the failure has nothing to wait for.
+  def handle_manager_call(
+        {:await_ready, timeout},
+        from,
+        %{status: :closed, error: reason} = state
+      )
+      when not is_nil(reason) do
+    if credential_rejected?(reason),
+      do: {:reply, {:error, {:connect_failed, reason}}, state},
+      else: {:noreply, park(state, from, timeout)}
+  end
+
   def handle_manager_call({:await_ready, timeout}, from, state) do
-    timer = Process.send_after(self(), {:await_timeout, from}, timeout)
-    {:noreply, %{state | waiters: [{from, timer} | state.waiters]}}
+    {:noreply, park(state, from, timeout)}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -556,6 +568,11 @@ defmodule Raxol.MCP.Client do
   defp credential_rejected?({:http, 401}), do: true
   defp credential_rejected?({:initialization_failed, {:http, 401}}), do: true
   defp credential_rejected?(_reason), do: false
+
+  defp park(state, from, timeout) do
+    timer = Process.send_after(self(), {:await_timeout, from}, timeout)
+    %{state | waiters: [{from, timer} | state.waiters]}
+  end
 
   defp answer_waiters(state, reply) do
     Enum.each(state.waiters, fn {from, timer} ->
