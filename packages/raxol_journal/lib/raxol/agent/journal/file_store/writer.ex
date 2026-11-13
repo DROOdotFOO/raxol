@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Journal.FileStore.Writer do
   @moduledoc """
-  The single-writer GenServer for one session's journal (see
-  `docs/harness/architecture.md`, "Journal and projection").
+  The single-writer GenServer for one session's journal (see the package
+  README, "The journal").
 
   Exactly one Writer per session enforces the single-writer invariant. It:
 
@@ -151,10 +151,10 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   @doc """
   The `schema_version` stamped on records written without an explicit override.
 
-  Bumping this is a freeze event: `scripts/check_journal_goldens.exs` refuses a
-  bump that arrives without a frozen golden corpus for the version being left
-  behind, so every historical shape stays replayable by a future
-  upcast-on-read. Freeze one with `scripts/freeze_golden_journal.exs`.
+  Bumping this is a freeze event: a bump must arrive with a frozen golden
+  corpus under `priv/golden/` for the version being left behind, so every
+  historical shape stays replayable by a future upcast-on-read. See the
+  package README, "Frozen golden corpora".
   """
   @spec default_schema_version() :: String.t()
   def default_schema_version, do: @default_schema_version

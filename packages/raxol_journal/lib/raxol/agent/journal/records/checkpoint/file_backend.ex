@@ -62,7 +62,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   ## Model fold (surrogate — re-bind to MS when it lands)
 
-  The Snapshot codec (`Raxol.Agent.Snapshot`, #559) owns serialization; this
+  The Snapshot codec (#559) owns serialization; this
   backend owns only the pointer discipline. The concrete *fold* (applying
   conversational events onto a model) is not yet frozen against the MS codec on
   this branch, so it is the deterministic surrogate the U9-R red suite pins:

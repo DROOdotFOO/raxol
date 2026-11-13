@@ -6,7 +6,7 @@ defmodule Raxol.Agent.Journal.ChainTest do
   alias Raxol.Agent.Journal.FileStore
 
   @moduletag :capture_log
-  @golden Path.expand("../../../invariants/fixtures/golden", __DIR__)
+  @golden Application.app_dir(:raxol_journal, "priv/golden")
 
   setup do
     base = Path.join(System.tmp_dir!(), "raxol_chain_#{System.unique_integer([:positive])}")

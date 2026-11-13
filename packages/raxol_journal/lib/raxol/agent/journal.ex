@@ -1,8 +1,7 @@
 defmodule Raxol.Agent.Journal do
   @moduledoc """
   Behaviour for a session's durable append-only journal — the source of truth
-  for the durable tier of harness events (see `docs/harness/architecture.md`,
-  "Journal and projection").
+  for the durable tier of events (see the package README, "The journal").
 
   A journal is an ordered, append-only log of events. Each appended event is
   assigned a monotonic `offset` (= the event's id) and framed as one complete,
