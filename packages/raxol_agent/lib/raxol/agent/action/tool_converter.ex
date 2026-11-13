@@ -267,162 +267,17 @@ defmodule Raxol.Agent.Action.ToolConverter do
            ],
       do: "[Tool error for #{name}]: invalid arguments"
 
-  # LSP failures are the model's to route around: each says whether to fix the
-  # call, use a different tool, or stop asking. Server names and paths here
-  # are configuration and the model's own arguments, not server output.
-  def public_error(name, :lsp_not_available),
-    do:
-      "[Tool error for #{name}]: no language server is running for this " <>
-        "session. Use grep and read_file instead."
-
-  def public_error(name, :no_server),
-    do:
-      "[Tool error for #{name}]: no language server is configured for that " <>
-        "file type. Use grep and read_file instead."
-
-  def public_error(name, {:not_installed, command}),
-    do:
-      "[Tool error for #{name}]: the language server for that file type " <>
-        "(#{command}) is not installed. Use grep and read_file instead."
-
-  def public_error(name, :diagnostics_timeout),
-    do:
-      "[Tool error for #{name}]: the language server did not report on that " <>
-        "file in time. This is not a clean bill of health — it may still be " <>
-        "indexing. Retry, or verify another way."
-
-  def public_error(name, :line_required),
-    do: "[Tool error for #{name}]: that op needs a 1-based `line` (and usually `column`)."
-
-  def public_error(name, :invalid_position),
-    do: "[Tool error for #{name}]: `line` and `column` are 1-based and must be positive."
-
-  def public_error(name, {:unknown_op, _op}),
-    do:
-      "[Tool error for #{name}]: unknown op. Use diagnostics, symbols, " <>
-        "definition, references, or hover."
-
-  def public_error(name, :rename_not_possible),
-    do:
-      "[Tool error for #{name}]: the language server will not rename that " <>
-        "symbol from that position. Check the position points at the name itself."
-
-  def public_error(name, {:rename_outside_workspace, _path}),
-    do:
-      "[Tool error for #{name}]: the rename would edit a file outside this " <>
-        "workspace, so nothing was written."
-
-  def public_error(name, :invalid_name),
-    do: "[Tool error for #{name}]: that is not a usable symbol name."
-
-  def public_error(name, {:rename_too_broad, count, max}),
-    do:
-      "[Tool error for #{name}]: that rename would edit #{count} files, over " <>
-        "the limit of #{max}. Nothing was written. Check the position names " <>
-        "the symbol you meant; if #{count} files is right, retry with " <>
-        "`max_files` set to at least #{count}."
-
-  # Names what DID land. A caller told only that a write failed cannot tell a
-  # tree that was never touched from one that was half rewritten.
-  def public_error(name, {:partial_write, written, reason}),
-    do:
-      "[Tool error for #{name}]: writing failed (#{inspect(reason)}) after " <>
-        "#{length(written)} file(s) were already written: " <>
-        "#{Enum.join(written, ", ")}. The rename is INCOMPLETE — those files " <>
-        "carry the new name and the rest do not."
-
-  # Edit failures are the model's to correct, so each says what to do next.
-  # Line numbers and anchor hashes are the model's own arguments echoed back
-  # plus the file's current shape at a line it already addressed: no content
-  # and nothing it could not obtain with the read tools it already holds.
-  def public_error(name, {:anchor_mismatch, line, expected, actual}),
-    do:
-      "[Tool error for #{name}]: line #{line} no longer holds the bytes you " <>
-        "anchored (you sent #{expected}, it is now #{actual}). The file " <>
-        "changed since you read it — read_file it again and redo the edit " <>
-        "against the current anchors."
-
-  def public_error(name, {:anchor_out_of_range, line, total}),
-    do:
-      "[Tool error for #{name}]: line #{line} is past the end of the file " <>
-        "(#{total} lines). Re-read the file and use an anchor it printed."
-
-  def public_error(name, {:range_inverted, from, to}),
-    do:
-      "[Tool error for #{name}]: `from` is line #{from} but `to` is line " <>
-        "#{to}; the range must run forwards."
-
-  def public_error(name, :malformed_anchor),
-    do:
-      "[Tool error for #{name}]: an anchor must be the `LINE:HASH` prefix " <>
-        "read_file printed, copied verbatim (for example `12:a3f1c2`)."
-
-  def public_error(name, :ambiguous_addressing),
-    do:
-      "[Tool error for #{name}]: pass either `from`/`to` anchors or " <>
-        "`old_string`, not both."
-
-  def public_error(name, :no_addressing),
-    do:
-      "[Tool error for #{name}]: nothing addressed. Pass `from` (the " <>
-        "`LINE:HASH` prefix read_file printed) or `old_string`."
-
-  def public_error(name, :no_match),
-    do:
-      "[Tool error for #{name}]: `old_string` was not found in the file. It " <>
-        "must match the file byte for byte, including indentation. Read the " <>
-        "file and edit by anchor instead."
-
-  def public_error(name, {:not_unique, count}),
-    do:
-      "[Tool error for #{name}]: `old_string` matches #{count} places. " <>
-        "Address one of them by anchor, or set `replace_all` to change all " <>
-        "#{count}."
-
-  def public_error(name, :no_change),
-    do: "[Tool error for #{name}]: the replacement is identical to what is already there."
-
   def public_error(name, :enoent),
     do: "[Tool error for #{name}]: no such file or directory."
-
-  def public_error(name, {:too_many_prompts, sent, max}),
-    do:
-      "[Tool error for #{name}]: #{sent} prompts is over the limit of " <>
-        "#{max}. Nothing ran — send at most #{max} per call."
-
-  def public_error(name, :ambiguous_prompt),
-    do: "[Tool error for #{name}]: pass either `prompt` or `prompts`, not both."
-
-  def public_error(name, :no_prompt),
-    do: "[Tool error for #{name}]: pass `prompt` for one subtask or `prompts` for several."
-
-  def public_error(name, :blank_prompt),
-    do: "[Tool error for #{name}]: every entry in `prompts` must be a non-empty string."
-
-  def public_error(name, :outside_cwd),
-    do:
-      "[Tool error for #{name}]: that path is outside the working directory " <>
-        "this session is scoped to."
 
   # Network failures are the model's to route around, so each says what to do
   # instead. The host and the status are the model's own argument echoed back
   # and a protocol number — never response content, which is untrusted.
-  def public_error(name, {:web_search_not_configured, hint}) when is_binary(hint),
-    do:
-      "[Tool error for #{name}]: web search is not configured, so no search " <>
-        "ran (this is not an empty result). To enable it, #{hint}."
-
   def public_error(name, {:blocked_address, host}) when is_binary(host),
     do:
       "[Tool error for #{name}]: #{host} resolves to a private, loopback or " <>
         "link-local address, which this tool refuses to reach. Only public " <>
         "internet hosts can be fetched."
-
-  def public_error(name, {:blocked_redirect, host}) when is_binary(host),
-    do:
-      "[Tool error for #{name}]: that URL redirected to #{host}, a private " <>
-        "or link-local address, so nothing was read. Do not try to reach it " <>
-        "another way."
 
   # `Raxol.Core.Outbound.vet/2` reports `{:dns_failed, {host, reason}}`, and the
   # reason decides the remedy: `:nxdomain` is the resolver answering that the
@@ -447,40 +302,10 @@ defmodule Raxol.Agent.Action.ToolConverter do
       "[Tool error for #{name}]: that is not an absolute http:// or https:// " <>
         "URL."
 
-  def public_error(name, :too_many_redirects),
-    do:
-      "[Tool error for #{name}]: that URL redirected too many times. Try the " <>
-        "final address directly if you know it."
-
-  def public_error(name, :redirect_without_location),
-    do:
-      "[Tool error for #{name}]: the server sent a redirect with no target, " <>
-        "so there was nothing to follow."
-
   def public_error(name, {:http_status, status}) when is_integer(status),
     do:
       "[Tool error for #{name}]: the server answered #{status}. The page was " <>
         "not read; do not treat this as an empty page."
-
-  def public_error(name, {:unsupported_content_type, type}) when is_binary(type),
-    do:
-      "[Tool error for #{name}]: that URL serves #{type}, which has no text " <>
-        "to read. Fetch an HTML, plain-text or JSON URL instead."
-
-  def public_error(name, :fetch_timeout),
-    do:
-      "[Tool error for #{name}]: the fetch ran out of time. Nothing was " <>
-        "read — try a more specific URL, or move on."
-
-  def public_error(name, {:search_provider_error, status}) when is_integer(status),
-    do:
-      "[Tool error for #{name}]: the search provider answered #{status}. No " <>
-        "results were returned; this is a provider problem, not an empty web."
-
-  def public_error(name, :search_response_unparsable),
-    do:
-      "[Tool error for #{name}]: the search provider's response could not be " <>
-        "read, so there are no results to report."
 
   # The remedy is the operator's, not the model's, so it says so rather than
   # inviting a retry.
@@ -493,35 +318,6 @@ defmodule Raxol.Agent.Action.ToolConverter do
     do:
       "[Tool error for #{name}]: this build has no HTTP client, so network " <>
         "tools cannot run. Use the local tools instead."
-
-  def public_error(name, {:transport_failed, _reason}),
-    do:
-      "[Tool error for #{name}]: the request could not be completed. Nothing " <>
-        "was read."
-
-  # Background-shell reasons, wording supplied by the action's author.
-  def public_error(name, :job_not_found),
-    do:
-      "[Tool error for #{name}]: no background job with that id (it may have " <>
-        "been reaped); call shell_jobs to list live jobs."
-
-  def public_error(name, :job_limit_reached),
-    do:
-      "[Tool error for #{name}]: too many background jobs are running in this " <>
-        "session; wait for one or shell_kill it before starting another."
-
-  # Distinct from the per-session limit above, because the remedy is not the
-  # model's: killing its own jobs does not help when the host is full.
-  def public_error(name, :host_job_limit_reached),
-    do:
-      "[Tool error for #{name}]: this host is running its maximum number of " <>
-        "background jobs across all sessions. Retry shortly, or run the " <>
-        "command in the foreground with bash."
-
-  def public_error(name, :pty_unavailable),
-    do:
-      "[Tool error for #{name}]: this host has no usable script(1), so " <>
-        "pty: true cannot be honoured; retry without pty."
 
   def public_error(name, _other), do: "[Tool error for #{name}]: tool error"
 

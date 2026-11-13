@@ -944,7 +944,7 @@ defmodule Raxol.Agent.Contract do
   end
 
   # A tool result whose payload carries a before/after image of a file
-  # (write_file / edit_file) is flattened so the surface renders it as a
+  # is flattened so the surface renders it as a
   # foldable ± DIFF block, not an opaque tool row: `path`/`old`/`new`/
   # `language` are lifted to the payload top level (where
   # `Raxol.UI.Components.Harness.Block.extract_diff_content/1` reads them)
