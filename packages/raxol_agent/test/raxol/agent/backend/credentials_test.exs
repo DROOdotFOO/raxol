@@ -183,7 +183,7 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     end
 
     # The read hardening turned into data loss: a refusal folded into `%{}`
-    # by `load/0` was written straight back, so one `/login` replaced every
+    # by `load/0` was written straight back, so one new entry replaced every
     # other provider reference in the file with the new entry (and chmodded
     # it 600 on the way out). A refused store is still writable by its owner;
     # 0664 is what umask 002 produces.

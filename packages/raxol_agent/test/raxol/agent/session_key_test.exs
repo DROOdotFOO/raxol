@@ -1,16 +1,12 @@
 defmodule Raxol.Agent.SessionKeyTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.Agent.Code.ShareToken
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionKey
 
   describe "mint/0" do
-    test "produces a key the journal and the share path both accept" do
-      key = SessionKey.mint()
-
-      assert SessionKey.valid?(key)
-      assert ShareToken.valid_session_id?(key)
+    test "produces a key the journal accepts" do
+      assert SessionKey.valid?(SessionKey.mint())
     end
 
     test "distinguishes two keys minted in the same second" do

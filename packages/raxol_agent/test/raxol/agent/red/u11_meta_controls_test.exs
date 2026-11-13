@@ -330,20 +330,6 @@ defmodule Raxol.Agent.Red.U11MetaControlsTest do
 
       assert globals == [:promote]
     end
-
-    test "the fingerprint exclusion list is exhaustive and seed is INCLUDED" do
-      assert Enum.sort(Raxol.Agent.Fingerprint.excluded_keys()) ==
-               Enum.sort([
-                 :request_id,
-                 :idempotency_key,
-                 :trace_id,
-                 :timestamp,
-                 :ts
-               ])
-
-      refute :seed in Raxol.Agent.Fingerprint.excluded_keys(),
-             "seed is a sampling parameter — replay identity needs it"
-    end
   end
 
   # ===========================================================================

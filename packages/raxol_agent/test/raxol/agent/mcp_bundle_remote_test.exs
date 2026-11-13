@@ -490,7 +490,7 @@ defmodule Raxol.Agent.McpBundleRemoteTest do
 
     test "an untagged spec is the operator's own program, not repository content" do
       # `default_servers/1` and an embedder's list are assembled in code;
-      # every spec parsed out of a repository is tagged by `McpConfig`.
+      # a spec parsed out of a repository is tagged `:workspace` by its parser.
       {loaded, _log} = load([%{name: :catalog, command: "uvx"}])
       assert loaded.failed == []
       assert_receive {:started, _opts}

@@ -321,26 +321,4 @@ defmodule Raxol.Agent.Red.MetaOracle do
       _ -> nil
     end
   end
-
-  # ===========================================================================
-  # Canonical JSON — normative fingerprint serializer (P-U11.7 / P-U11.1)
-  # ===========================================================================
-
-  @doc """
-  Reference canonical serialization: sorted keys, ephemeral keys stripped,
-  `:seed` INCLUDED. The independent oracle for `Raxol.Agent.Fingerprint.canonical_json/1`.
-  """
-  def canonical_json_correct(params) when is_map(params),
-    do: canonical_encode(params)
-
-  # Deterministic, key-sorted encoding independent of Jason map ordering.
-  defp canonical_encode(params) do
-    params
-    |> Map.drop(Raxol.Agent.Fingerprint.excluded_keys())
-    |> Enum.map(fn {k, v} -> {to_string(k), v} end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map(fn {k, v} -> Jason.encode!(k) <> ":" <> Jason.encode!(v) end)
-    |> Enum.join(",")
-    |> then(&("{" <> &1 <> "}"))
-  end
 end

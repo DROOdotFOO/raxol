@@ -5,7 +5,7 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   implemented, against the frozen contract's meta-event vocabulary.
 
   Every test here pins one frozen contour against the REAL seam
-  (`Raxol.Agent.Meta` / `Raxol.Agent.Fingerprint`), which returns
+  (`Raxol.Agent.Meta`), which returns
   `:not_implemented` until U11-I lands — so the suite is RED by construction and
   goes green only when the real algebra is implemented. Each assertion asserts a
   POSITIVE concrete shape (`== {:error, …}`, `{:ok, %Event{}}`, `== oracle`,
@@ -15,7 +15,7 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   every "expected" value; the negative CONTROLS proving each red has teeth live
   in `u11_meta_controls_test.exs` and run in CI.
 
-  U11-I has landed (`Raxol.Agent.Meta` / `Raxol.Agent.Fingerprint`), so this
+  U11-I has landed (`Raxol.Agent.Meta`), so this
   suite now runs GREEN in every regular run — the `:harness_red` exclusion was
   lifted the day the implementation made every contour pass. The negative
   controls stay in CI to guarantee the reds keep their teeth.
@@ -36,7 +36,6 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   @moduletag :capture_log
 
   alias Raxol.Agent.Contract.Event
-  alias Raxol.Agent.Fingerprint
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Meta
   alias Raxol.Agent.Red.MetaJournalGen, as: Gen
@@ -341,10 +340,10 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   end
 
   # ===========================================================================
-  # Fingerprint precedence — P-U11.7 + canonical_json (P-U11.1)
+  # Fingerprint precedence — P-U11.7
   # ===========================================================================
 
-  describe "fingerprint precedence + canonical_json (P-U11.7)" do
+  describe "fingerprint precedence (P-U11.7)" do
     test "what_produced returns the item_completed fingerprint Z, not head X or override Y",
          %{
            seed: seed
@@ -358,43 +357,6 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
       assert Meta.what_produced(records, off) == z,
              "the item_completed fingerprint wins 'what produced this content'. " <>
                dump(seed)
-    end
-
-    test "canonical_json is a byte-stable, key-order-independent serialization with seed INCLUDED",
-         %{seed: seed} do
-      params = %{
-        model: "m",
-        temperature: 0.7,
-        seed: 11,
-        top_p: 1.0,
-        request_id: "REQ-ephemeral"
-      }
-
-      shuffled = %{
-        top_p: 1.0,
-        seed: 11,
-        temperature: 0.7,
-        request_id: "OTHER-ephemeral",
-        model: "m"
-      }
-
-      canon = Fingerprint.canonical_json(params)
-
-      assert is_binary(canon),
-             "canonical_json must produce a binary. " <> dump(seed)
-
-      assert canon == Fingerprint.canonical_json(shuffled),
-             "key order + ephemeral keys must not matter. " <> dump(seed)
-
-      assert canon == Oracle.canonical_json_correct(params),
-             "must match the normative serializer. " <> dump(seed)
-
-      # seed is part of replay identity — changing it MUST change the hash input.
-      with_other_seed = %{params | seed: 999}
-      assert is_binary(Fingerprint.canonical_json(with_other_seed))
-
-      refute canon == Fingerprint.canonical_json(with_other_seed),
-             "seed is INCLUDED in the hash. " <> dump(seed)
     end
   end
 

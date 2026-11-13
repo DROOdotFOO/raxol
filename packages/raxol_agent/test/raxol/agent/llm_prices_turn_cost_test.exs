@@ -275,10 +275,9 @@ defmodule Raxol.Agent.LlmPricesTurnCostTest do
                )
     end
 
-    test "GrokBuild's stamped shape carries its currency" do
-      # Harness.GrokBuild stamps usage["cost"] from total_cost_usd as
-      # %{amount, currency}: the field name asserts USD, and the harness
-      # makes that explicit where the name is known.
+    test "a backend's stamped shape carries its currency" do
+      # A backend stamps usage["cost"] as %{amount, currency}, making the
+      # currency explicit where it is known.
       usage = %{
         "cost" => %{"amount" => 0.42, "currency" => "USD"},
         "prompt_tokens" => 10,

@@ -898,7 +898,7 @@ defmodule Raxol.Agent.ContractTest do
     end
   end
 
-  describe "pump/3 — tool-execution vocabulary (ToolExecutor events)" do
+  describe "pump/3 — tool-execution vocabulary" do
     test "approval events sequence into the run's id stream between tool_use and result" do
       session_id = "contract-appr-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(session_id)

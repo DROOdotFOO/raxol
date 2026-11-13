@@ -113,19 +113,6 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       assert opts[:base_url] == "https://override"
     end
 
-    test "resolves native CLI harnesses to their backends" do
-      assert {:ok, Raxol.Agent.Backend.ClaudeCode, _} =
-               Selector.select(ExecutorConfig.new(harness: :claude_native))
-
-      assert {:ok, Raxol.Agent.Backend.Cursor, _} =
-               Selector.select(ExecutorConfig.new(harness: :cursor))
-    end
-
-    test "codex is reserved (served by Symphony's runner outside this repository)" do
-      cfg = ExecutorConfig.new(harness: :codex)
-      assert {:error, {:backend_not_implemented, :codex}} = Selector.select(cfg)
-    end
-
     test "unknown backend returns an error" do
       cfg = ExecutorConfig.new(harness: :nonsense)
       assert {:error, {:unknown_backend, :nonsense}} = Selector.select(cfg)
@@ -137,7 +124,6 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       supported = Selector.supported_backends()
       assert :anthropic in supported
       assert :mock in supported
-      refute :codex in supported
     end
   end
 
