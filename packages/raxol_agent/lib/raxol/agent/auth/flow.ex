@@ -4,8 +4,7 @@ defmodule Raxol.Agent.Auth.Flow do
   the provider, catch the redirect, exchange the code, store the credential.
 
   This is what ACP calls Agent Auth. `Raxol.Agent.ClientProtocol.StdioAgent`
-  advertises it and calls `run/2`; the flow itself knows nothing about ACP, so
-  the TUI's `/login` and `mix raxol.setup` can drive the same thing.
+  advertises it and calls `run/2`; the flow itself knows nothing about ACP.
 
   Only providers in `providers/0` have a real flow. Asking for any other is
   `{:error, {:no_oauth_flow, provider}}` rather than a wait that never ends --
@@ -24,7 +23,7 @@ defmodule Raxol.Agent.Auth.Flow do
 
   `run(:robinhood, opts)` is the brokerage sign-in `raxol_broker` uses. It is
   deliberately NOT in `providers/0`: that list is the model-provider sign-in
-  ACP clients, `raxol login` and the TUI offer, and none of them should be
+  ACP clients offer, and none of them should be
   able to start a brokerage consent flow. It binds the callback on the
   literal `127.0.0.1` (one redirect string for registration, authorization
   and redemption), verifies discovery against the pins in
@@ -211,7 +210,7 @@ defmodule Raxol.Agent.Auth.Flow do
   @doc "Render a `run/2` failure for a person, without leaking the URL's twin secret."
   @spec describe(term()) :: String.t()
   def describe({:no_oauth_flow, provider}) do
-    "#{provider} has no browser sign-in; connect it with `raxol login #{provider}`"
+    "#{provider} has no browser sign-in; set its API key in the environment"
   end
 
   def describe({:no_browser_opener, tool, url}) do

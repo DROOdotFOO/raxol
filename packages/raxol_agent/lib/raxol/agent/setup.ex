@@ -1,14 +1,12 @@
 defmodule Raxol.Agent.Setup do
   @moduledoc """
-  Non-TUI provider setup: the logic behind `mix raxol.setup`.
+  Provider setup: store a provider's 1Password reference (or turn a raw key
+  into one) and validate it.
 
-  The coding TUI's `/login` is the interactive way to connect an LLM
-  provider, but it needs a terminal. This module is the headless twin —
-  store a provider's 1Password reference (or turn a raw key into one) and
-  validate it — for CI, scripts, and remote/headless boxes where the TUI is
-  not reachable. It reuses the same `Raxol.Agent.Backend.{Credentials,
-  Resolver}` front door, so a provider connected here is picked up
-  identically by every surface that resolves through them.
+  It goes through the same `Raxol.Agent.Backend.{Credentials, Resolver}` front
+  door every surface resolves through, so a provider connected here is picked
+  up identically by all of them. `Raxol.Agent.Auth.OpenRouter` stores the key
+  a browser sign-in mints through `connect_key/3`.
 
   Nothing here holds a secret at rest: a raw key is turned into a
   `op://...` reference via `Credentials.create_item/3` (1Password), and only
@@ -120,8 +118,8 @@ defmodule Raxol.Agent.Setup do
   # so each one silently validated as `:unsupported` and a dead credential
   # reported "stored" instead of failing.
   #
-  # Only the HTTP backend has an auth-check endpoint; Lumo, Native and Mock
-  # have nothing to hit, so they stay honestly unsupported.
+  # Only the HTTP backend has an auth-check endpoint; Lumo and Mock have
+  # nothing to hit, so they stay honestly unsupported.
   defp check_credential(executor) do
     case Selector.select(executor) do
       {:ok, HTTP, opts} -> HTTP.check_auth(opts)
