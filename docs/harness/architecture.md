@@ -215,7 +215,9 @@ that guarantee, and it defaults off until a caller wires a real check.
 ## The safety substrate
 
 Three guarantees live in enforcement layers, outside the model, because a model
-under adversarial input cannot be trusted to enforce them:
+under adversarial input cannot be trusted to enforce them. Each is built and
+tested, and none is in the path of a session started by `raxol acp` or
+`raxol mcp`.
 
 - **Staged supervised interrupt.** `Raxol.Agent.Interrupt.interrupt/3` runs a
   cooperative signal → bounded wait → OS process-group SIGKILL
@@ -225,13 +227,14 @@ under adversarial input cannot be trusted to enforce them:
   (`:interrupt_signaled`, `:interrupt_waited`, `:interrupt_killed` /
   `:interrupt_kill_failed`, `:turn_canceled`). BEAM-native `Port.close` /
   `Process.exit` are insufficient against a wedged child, which is why the OS
-  path exists.
+  path exists. Nothing in the tree calls `interrupt/3`.
 - **Steer as compare-and-swap.** `Raxol.Agent.Steer` carries an
   `expected_turn_id`; a stale-turn rejection changes nothing and is
   non-journaled. Interrupt and steer are deliberately asymmetric: interrupt is
   fire-and-forget and its acknowledgment is the event stream; steer returns a
   synchronous typed decision, because a silently-dropped steer would leave the
   surface unable to tell "accepted" from "lost" (see `Raxol.Harness.SessionLane`).
+  Nothing in the tree calls `Steer.resolve/2`.
 - **Atomic spend and blast-radius gates.** `Raxol.Agent.SpendGate` journals
   `reserve → call → settle` per spend-bearing call, correlated by an opaque
   `cost_ref`, and fails closed: no reserve, no call. raxol_agent does not
@@ -239,11 +242,13 @@ under adversarial input cannot be trusted to enforce them:
   shape rather than importing `Raxol.Payments.Ledger`; its records leave
   through an injected `context.emit` sink, and a raising sink propagates as
   `Raxol.Agent.SpendGate.JournalWriteError` instead of dropping a record on
-  irreversible spend state.
+  irreversible spend state. It runs only where a host puts
+  `Raxol.Agent.McpSpendHook` in a context's `:tool_call_hooks` beside a
+  `:spend_gate`; nothing in the tree does.
   `Raxol.Agent.Authorization.BlastRadiusGate` gates write and destructive
   tools the same way (locked by default, escalate to a human, live approval
   state rebuildable by a fold over `approval_decided` events); it has no
-  non-test caller yet.
+  non-test caller.
   `Raxol.Agent.Authorization.Engine` is the pure ALLOW/ASK/DENY reducer for
   tool calls. A string denylist is
   provably incomplete; enforce typed intent instead.

@@ -46,7 +46,7 @@ session
 
 `mix mcp.server` starts the MCP server on stdio for Claude Code integration. Editors that speak the [Agent Client Protocol](https://agentclientprotocol.com) reach a Raxol agent: `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves one on stdio. The sensitive actions an agent runs past the turn's approver cost a `session/request_permission` round trip. See [Editor ACP](docs/features/EDITOR_ACP.md).
 
-Agent sessions sit on the **Harness**, the agent-session engine: a durable event journal (`Raxol.Agent.Journal`), a typed event/command contract (`Raxol.Agent.Contract`), and surface state that is a pure fold over the event stream (`Raxol.Harness.Projection`), with staged interrupt, steer, and spend/blast-radius gates underneath. See [Harness architecture](docs/harness/architecture.md).
+Agent sessions sit on the **Harness**, the agent-session engine: a durable event journal (`Raxol.Agent.Journal`), a typed event/command contract (`Raxol.Agent.Contract`), and surface state that is a pure fold over the event stream (`Raxol.Harness.Projection`). See [Harness architecture](docs/harness/architecture.md).
 
 The agent subsystems ship as standalone packages:
 
