@@ -17,6 +17,12 @@ defmodule RaxolPlaygroundWeb.DemoLiveTest do
     assert redirected_to(conn, 301) == "/gallery"
   end
 
+  test "GET /coding-agent redirects to the agents page" do
+    conn = get_page("/coding-agent")
+
+    assert redirected_to(conn, 301) == "/agents"
+  end
+
   test "major pages render route-specific metadata" do
     for {path, title, canonical} <- [
           {"/", "Raxol: one Elixir module, every surface", "https://raxol.io/"},
