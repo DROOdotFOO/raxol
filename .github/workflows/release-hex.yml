@@ -37,17 +37,22 @@ jobs:
   validate:
     name: Validate public package train
     runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.ref.outputs.commit }}
     env:
       MIX_ENV: dev
       RAXOL_DEV_PORT: "4000"
     steps:
+      # refs/tags/ so a branch with the tag's name cannot stand in for it.
       - name: Checkout release tag
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.release_ref }}
+          ref: refs/tags/${{ inputs.release_ref }}
           fetch-depth: 0
 
+      # Later jobs check out the commit recorded here, never the tag name.
       - name: Validate immutable release ref
+        id: ref
         env:
           RELEASE_REF: ${{ inputs.release_ref }}
         run: |
@@ -58,32 +63,30 @@ jobs:
             exit 1
           fi
 
-          tag_commit="$(git rev-parse "$RELEASE_REF^{commit}")"
+          tag_commit="$(git rev-parse "refs/tags/$RELEASE_REF^{commit}")"
           head_commit="$(git rev-parse HEAD)"
           if [[ "$tag_commit" != "$head_commit" ]]; then
             echo "::error::$RELEASE_REF does not resolve to the checked-out commit"
             exit 1
           fi
 
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$tag_commit" FETCH_HEAD; then
+            echo "::error::$RELEASE_REF is not on master"
+            exit 1
+          fi
+
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
+
       - name: Set up Erlang and Elixir
         id: beam
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           version-file: mise.toml
           version-type: strict
 
-      - name: Cache release dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            deps
-            _build
-            packages/*/deps
-            packages/*/_build
-          key: hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
-
+      # No dependency cache here or in publish: a fresh `mix deps.get
+      # --check-locked` verifies every checksum against mix.lock.
       - name: Install release tooling
         run: |
           mix local.hex --force
@@ -116,32 +119,19 @@ jobs:
     env:
       MIX_ENV: dev
       RAXOL_DEV_PORT: "4000"
-      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
     steps:
-      - name: Checkout release tag
-        uses: actions/checkout@v7
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.release_ref }}
+          ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
 
       - name: Set up Erlang and Elixir
         id: beam
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           version-file: mise.toml
           version-type: strict
-
-      - name: Cache release dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            deps
-            _build
-            packages/*/deps
-            packages/*/_build
-          key: hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
 
       - name: Install release tooling
         run: |
@@ -149,7 +139,12 @@ jobs:
           mix local.rebar --force
           mix deps.get --check-locked
 
+      # The key is read from the `release` environment when it holds one,
+      # otherwise from the secret the caller passes. Only this step and the
+      # publish step see it.
       - name: Require noninteractive publishing key
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: |
           if [[ -z "${HEX_API_KEY:-}" ]]; then
             echo "::error::HEX_API_KEY is unset or empty."
@@ -159,12 +154,20 @@ jobs:
       # PackageCheck owns the public train and its topological order. A failed
       # run is resumable: versions already visible on Hex are skipped.
       #
+      # hex.pm holds the first release of a new package for approval. With
+      # --wait the publish blocks until the owner approves it on hex.pm (or
+      # exits non-zero if it is rejected or expires); without it, Hex exits 0
+      # and the train would stop at the visibility check below.
+      #
       # The list is written to a file first so a failed or empty listing stops
       # the step. It is read on descriptor 3 and every command in the body
       # reads /dev/null: on stdin, the first `mix` would take the remaining
       # lines as its own input and the loop would end after one package.
       - name: Publish packages in dependency order
         id: publish
+        timeout-minutes: 180
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: |
           set -euo pipefail
 
@@ -197,7 +200,7 @@ jobs:
 
             echo "::group::Publishing $package $version"
             HEX_BUILD=1 mix hex.publish --dry-run --yes </dev/null
-            HEX_BUILD=1 mix hex.publish --yes </dev/null
+            HEX_BUILD=1 mix hex.publish --yes --wait </dev/null
             curl --fail --silent --show-error --output /dev/null \
               --retry 12 --retry-all-errors --retry-delay 5 "$release_url" </dev/null
             echo "::endgroup::"
@@ -207,28 +210,28 @@ jobs:
 
   verify:
     name: Verify public Hex release
-    needs: publish
+    needs: [validate, publish]
     if: inputs.publish == true
     runs-on: ubuntu-latest
     env:
       MIX_ENV: dev
       RAXOL_DEV_PORT: "4000"
     steps:
-      - name: Checkout release tag
-        uses: actions/checkout@v7
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.release_ref }}
+          ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
 
       - name: Set up Erlang and Elixir
         id: beam
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           version-file: mise.toml
           version-type: strict
 
       - name: Cache release dependencies
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps

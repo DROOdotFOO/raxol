@@ -43,14 +43,14 @@ jobs:
       SKIP_TERMBOX2_TESTS: "true"
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.release_ref }}
+          ref: refs/tags/${{ inputs.release_ref }}
           persist-credentials: false
 
       - name: Set up Erlang and Elixir
         id: beam
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           version-file: mise.toml
           version-type: strict
@@ -65,10 +65,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/llms"
           cp priv/static/llms.txt priv/static/llms-full.txt "$RUNNER_TEMP/llms/"
 
+      # Detached, so create-pull-request takes master (its `base`) as the
+      # branch to commit onto; a local branch here would make it reset to a
+      # remote branch of the same name, which does not exist.
       - name: Move the output onto master
         run: |
           git fetch --depth=1 origin master
-          git checkout --force -B llms-sync-base FETCH_HEAD
+          git checkout --force --detach FETCH_HEAD
           cp "$RUNNER_TEMP"/llms/llms.txt "$RUNNER_TEMP"/llms/llms-full.txt web/priv/static/
 
       - name: Open or update sync PR
