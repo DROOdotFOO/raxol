@@ -68,12 +68,6 @@ defmodule Raxol.Agent do
       def sandbox, do: []
 
       @doc """
-      Returns the `Raxol.Agent.ThreadLog` adapter (`{module, config}`
-      or bare module) for durable audit, or `nil` to disable.
-      """
-      def thread_log, do: nil
-
-      @doc """
       Returns the skills provider for this agent, or `nil`.
 
       Override to return a `Raxol.Agent.Skills.Store`-compatible module. When
@@ -108,7 +102,6 @@ defmodule Raxol.Agent do
                      terminate: 2,
                      command_hooks: 0,
                      sandbox: 0,
-                     thread_log: 0,
                      skills_provider: 0,
                      available_actions: 0
 
@@ -185,18 +178,6 @@ defmodule Raxol.Agent do
       [] -> base
       _list -> [Raxol.Agent.SandboxHook | base]
     end
-  end
-
-  @doc """
-  Return the normalized `Raxol.Agent.ThreadLog` adapter tuple from
-  `agent_module.thread_log/0`, or `nil` when the agent doesn't
-  declare one.
-  """
-  @spec thread_log_adapter(module()) :: {module(), map()} | nil
-  def thread_log_adapter(agent_module) when is_atom(agent_module) do
-    agent_module
-    |> safe_call(:thread_log, [], nil)
-    |> Raxol.Agent.ThreadLog.normalize()
   end
 
   defp safe_call(module, fun, args, default) do

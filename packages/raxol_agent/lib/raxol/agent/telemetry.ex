@@ -123,32 +123,13 @@ defmodule Raxol.Agent.Telemetry do
   @spec invariant_events() :: [[atom()]]
   def invariant_events, do: @invariant_events
 
-  # Long enough for every identifier this repo mints -- a session key is
-  # `sess-<epoch>-<int>`, a trace id is 16 hex characters, a UUID is 36 and a
-  # SHA-256 hex digest is exactly 64 -- and short enough that no prompt, tool
-  # argument or file body fits.
+  # Metadata is context, and a host's log or metrics pipeline persists it
+  # verbatim, so `bound/1` passes a binary through only when it is no longer
+  # than an identifier. Long enough for every identifier this repo mints -- a
+  # session key is `sess-<epoch>-<int>`, a trace id is 16 hex characters, a
+  # UUID is 36 and a SHA-256 hex digest is exactly 64 -- and short enough that
+  # no prompt, tool argument or file body fits.
   @max_identifier_bytes 64
-
-  @doc """
-  The largest binary `identifier?/1` accepts, in bytes.
-  """
-  @spec max_identifier_bytes() :: pos_integer()
-  def max_identifier_bytes, do: @max_identifier_bytes
-
-  @doc """
-  Whether `value` is shaped like a correlation identifier: an atom, a number,
-  or a binary of at most `max_identifier_bytes/0` bytes.
-
-  This is the metadata contract's one enforceable rule (ADR-0036). Metadata
-  is context, and a host's log or metrics pipeline persists it verbatim, so a
-  value that is not an identifier is a value that must not be there. Maps,
-  lists, tuples and structs are how content arrives; a binary longer than an
-  identifier is content.
-  """
-  @spec identifier?(term()) :: boolean()
-  def identifier?(value) when is_atom(value) or is_number(value), do: true
-  def identifier?(value) when is_binary(value), do: byte_size(value) <= @max_identifier_bytes
-  def identifier?(_value), do: false
 
   # The digest key lives for one VM run and is never persisted, so a digest
   # is a correlation token inside a run and nothing more: two runs digest the
@@ -203,9 +184,10 @@ defmodule Raxol.Agent.Telemetry do
   @doc """
   A copy of `term` that is safe to put in event metadata.
 
-  Identifiers (`identifier?/1`) pass through. Tuples, lists and maps are
-  walked to a depth of #{@max_bound_depth} and a width of
-  #{@max_bound_elements}, so the shape of an error reason survives:
+  Atoms, numbers and binaries of at most #{@max_identifier_bytes} bytes pass
+  through. Tuples, lists and maps are walked to a depth of
+  #{@max_bound_depth} and a width of #{@max_bound_elements}, so the shape of
+  an error reason survives:
   `{:http_error, 500, body}` still begins `{:http_error, 500, ...}`. Every
   other leaf is replaced by a tag that names its shape and nothing else --
   `{:redacted, :binary, 4096}`, `{:redacted, Req.TransportError}`,

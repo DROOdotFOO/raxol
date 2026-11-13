@@ -152,8 +152,8 @@ defmodule Raxol.Agent.SandboxHook do
   # denies. Those emit a shape tag; the digest still lets a known command be
   # matched. A simple command's first token is what `sh` would exec, so it is
   # a program path, but one carrying `=` is refused too rather than reasoned
-  # about (`./deploy?token=...`). `bound/1` caps the name by bytes, the unit
-  # `identifier?/1` measures in, and redacts rather than splits a long one.
+  # about (`./deploy?token=...`). `bound/1` caps the name by bytes and
+  # redacts rather than splits a long one.
   defp program(command) do
     name = ShellSandbox.binary_name(command)
 

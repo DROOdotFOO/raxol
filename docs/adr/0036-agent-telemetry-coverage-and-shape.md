@@ -35,10 +35,10 @@ with it the tier-1 events it alone emitted (the `[:raxol, :agent, :cost, ...]` a
 `[:raxol, :agent, :budget, :halt, ...]` families). The money path below describes code that no
 longer exists.
 
-Narrowed, 2026-11-13: `PolicyApplier`, `ThreadLogRouter`, `LlmPrices`, `Raxol.Agent.Turn` and
-`Raxol.Agent.Snapshot` are removed, and with them the `[:raxol, :agent, :policy, ...]` family and
-`[:raxol, :agent, :snapshot, :persist_redacted_by_heuristic]`. The registry, its completeness
-test and the metadata rules (`Raxol.Agent.Telemetry.identifier?/1`, `bound/1`) stand.
+Narrowed, 2026-11-13: `PolicyApplier`, `ThreadLogRouter`, `LlmPrices`, `Raxol.Agent.Turn`,
+`Raxol.Agent.Snapshot` and `Telemetry.identifier?/1` are removed, and with them the
+`[:raxol, :agent, :policy, ...]` family and `[:raxol, :agent, :snapshot, :persist_redacted_by_heuristic]`.
+The registry, its completeness test and `Raxol.Agent.Telemetry.bound/1` stand.
 
 ## Context
 

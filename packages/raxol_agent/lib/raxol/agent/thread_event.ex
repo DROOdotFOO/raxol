@@ -8,6 +8,11 @@ defmodule Raxol.Agent.ThreadEvent do
 
   ## Kinds
 
+  The package appends one kind itself: `:cron_fire`, written by
+  `Raxol.Agent.Scheduler` for each fire (payload `%{job_id, prompt, trigger,
+  fired_at}`). A host that appends its own events may use any kind;
+  `canonical_kinds/0` is the set below.
+
   | Kind | Payload shape | Use |
   | --- | --- | --- |
   | `:directive` | the Directive struct emitted | record the agent's intent to fire an effect |
@@ -17,12 +22,11 @@ defmodule Raxol.Agent.ThreadEvent do
   | `:state_snapshot` | the agent state map | a periodic snapshot for audit / replay |
   | `:summary` | a summary string | the marker a host leaves when it summarizes older messages |
   | `:sandbox_deny` | `%{dimension, reason}` | record a sandbox denial |
-  | `:policy_result` | `%{policy, decision, ...}` | record a policy outcome (cache hit, retry attempt, timeout, ...) |
+  | `:policy_result` | `%{policy, decision, ...}` | record a policy outcome |
 
-  Adapters MAY round-trip arbitrary additional kinds; the canonical
-  set above is what the framework emits. An adapter that stores kinds
-  as text returns a custom kind as a string when its atom does not
-  exist in the reading VM.
+  Adapters MAY round-trip arbitrary additional kinds. An adapter that
+  stores kinds as text returns a kind outside the set above as a string
+  when its atom does not exist in the reading VM.
 
   ## Metadata
 
@@ -74,9 +78,9 @@ defmodule Raxol.Agent.ThreadEvent do
   ]
 
   @doc """
-  The canonical kinds the framework emits (see "Kinds"). Adapters that
-  persist kinds as strings decode against this list so the atoms exist
-  regardless of which modules happen to be loaded.
+  The canonical kinds (see "Kinds"). Adapters that persist kinds as strings
+  decode against this list so the atoms exist regardless of which modules
+  happen to be loaded.
   """
   @spec canonical_kinds() :: [atom()]
   def canonical_kinds, do: @canonical_kinds
