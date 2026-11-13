@@ -9,11 +9,11 @@
   ],
   "gates": {
     "credo": {
-      "count": 1130,
+      "count": 1039,
       "command": "mix credo --strict --format json",
       "counts_lines_matching": "length of the .issues array in credo's JSON document",
-      "measured_at": "2026-10-28T20:16:55Z",
-      "measured_at_sha": "52480372f",
+      "measured_at": "2026-11-13T02:47:43Z",
+      "measured_at_sha": "383fc384e",
       "scope": "lib/ src/ test/ web/ apps/ packages/ per .credo.exs",
       "notes": [
         "Measured with --format json, NOT --format flycheck. The JSON document is",
