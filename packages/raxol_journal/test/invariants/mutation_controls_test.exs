@@ -21,24 +21,11 @@ defmodule Raxol.Agent.Invariants.MutationControlsTest do
   """
   use ExUnit.Case, async: true
 
+  import Raxol.Agent.Invariants.MutationAnchor
+
   @moduletag :mutation
 
   @journal_lib Path.expand("../../lib/raxol/agent/journal", __DIR__)
-
-  defp assert_anchor!(path, fragment, mutation, must_fail) do
-    source = File.read!(path)
-
-    assert String.contains?(source, fragment),
-           """
-           mutation-control anchor rotted: #{Path.relative_to_cwd(path)} no longer contains
-
-               #{fragment}
-
-           The guarded line moved or was renamed. Update this control:
-             MUTATION: #{mutation}
-             MUST FAIL: #{must_fail}
-           """
-  end
 
   test "m4/I5 — silently truncate interior corruption" do
     assert_anchor!(
