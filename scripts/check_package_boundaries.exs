@@ -75,15 +75,20 @@
 # All three go by name, not by owner, so they hold once the agent trees are
 # gone and nothing here defines those names. While the trees are here, a
 # module only they define that none of the three names fails the check, so
-# the names stay complete. Every form the first
-# rule collects counts, and three more: a module name inside a string or
-# sigil (`"Raxol.Agent.Session"`, with or without `Elixir.`, and
-# `~r/^Raxol\.Agent\./`), an atom spelled
-# as a module name without the `Elixir.` prefix (`:"Raxol.Agent.Registry"`),
-# and the application names. Comments are not in the AST. The text of
-# `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated` is skipped;
-# code interpolated into it is not. A name assembled at run time
-# (`Module.concat(base, name)`) is invisible to both rules.
+# the names stay complete.
+#
+# Every form the first rule collects counts, and these, which the first rule
+# does not read: a module name inside a string or sigil
+# (`"Raxol.Agent.Session"`, with or without `Elixir.`, and
+# `~r/^Raxol\.Agent\./`), an atom spelled as a module name without the
+# `Elixir.` prefix (`:"Raxol.Agent.Registry"`), the application names, the
+# target of an `alias` whether or not the file uses it, and the literal first
+# argument of `Module.concat/2` or `Module.safe_concat/2`
+# (`Module.concat(Raxol.Agent.Actions, name)`). Comments are not in the AST.
+# The text of `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated`
+# is skipped; code interpolated into it is not. A name assembled at run time
+# from parts that are not literal (`Module.concat(base, name)`) is invisible
+# to both rules.
 #
 # @journal_modules and @root_cli_modules are exempt: raxol_journal, a runtime
 # package, defines the first under `Raxol.Agent.*`, and the root defines the
@@ -108,8 +113,9 @@ defmodule PackageBoundaries do
   @doc_attrs [:moduledoc, :doc, :typedoc, :shortdoc, :deprecated]
 
   # Kinds only the runtime/agent rule reads: a module name in a string, an atom
-  # spelled as one, an agent application atom.
-  @line_kinds [:string, :name, :app]
+  # spelled as one, an agent application's name, the target of an `alias`, the
+  # literal namespace a `Module.concat/2` builds under.
+  @line_kinds [:string, :name, :app, :alias, :prefix]
 
   @runtime_trees ~w(
     raxol raxol_core raxol_gateway raxol_journal raxol_liveview raxol_mcp
@@ -695,12 +701,22 @@ defmodule PackageBoundaries do
     end
   end
 
+  # The target is a reference for the runtime/agent rule alone: an alias
+  # nothing in the file uses may be one a `quote` hands to its caller.
   defp walk({:alias, meta, [target | opts]}, env, acc) do
     as = opts |> List.first([]) |> keyword_or_empty() |> Keyword.get(:as)
 
     case alias_entries(target, as, env) do
-      {:ok, entries} -> {Enum.reduce(entries, env, &add_alias(&2, &1)), acc}
-      :error -> walk_children({:alias, meta, [target | opts]}, env, acc)
+      {:ok, entries} ->
+        acc =
+          Enum.reduce(entries, acc, fn {_short, full}, acc ->
+            record(acc, join(full), meta, :alias)
+          end)
+
+        {Enum.reduce(entries, env, &add_alias(&2, &1)), acc}
+
+      :error ->
+        walk_children({:alias, meta, [target | opts]}, env, acc)
     end
   end
 
@@ -772,6 +788,7 @@ defmodule PackageBoundaries do
       remote?(recv, [:Module], fun, [:concat, :safe_concat]) ->
         # Aliases here are namespace segments (`Module.concat([Raxol, Plugins,
         # name])`), not references; only a fully literal result names a module.
+        # A literal first argument is still the namespace the result lands in.
         {_, acc} =
           walk(
             Enum.reject(List.flatten(args), &match?({:__aliases__, _, _}, &1)),
@@ -779,9 +796,10 @@ defmodule PackageBoundaries do
             acc
           )
 
-        case literal_concat(args, env) do
-          {:ok, mod} -> {env, record(acc, mod, meta, :concat)}
-          :error -> {env, acc}
+        case {literal_concat(args, env), concat_prefix(args, env)} do
+          {{:ok, mod}, _} -> {env, record(acc, mod, meta, :concat)}
+          {:error, {:ok, prefix}} -> {env, record(acc, prefix, meta, :prefix)}
+          {:error, :error} -> {env, acc}
         end
 
       remote?(recv, [:String], fun, [:to_atom, :to_existing_atom]) or
@@ -1026,6 +1044,12 @@ defmodule PackageBoundaries do
         {names, acc}
     end)
   end
+
+  defp concat_prefix([{:__aliases__, _, parts}, _name], env) do
+    with {:ok, full} <- expand(parts, env), do: {:ok, join(full)}
+  end
+
+  defp concat_prefix(_args, _env), do: :error
 
   defp literal_concat([list], env) when is_list(list),
     do: literal_concat(list, env)

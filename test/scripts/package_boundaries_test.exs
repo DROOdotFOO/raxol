@@ -48,7 +48,38 @@ defmodule Raxol.PackageBoundariesTest do
        alias Raxol.Payments.Ledger
        def f, do: Ledger.total()
      end
-     """, "Raxol.Payments.Ledger", "call"},
+     """, "Raxol.Payments.Ledger", "alias, call"},
+    {"an alias nothing in the file uses", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       defmacro __using__(_opts) do
+         quote do
+           alias Raxol.Agent.Session
+         end
+       end
+     end
+     """, "Raxol.Agent.Session", "alias"},
+    {"a multi-alias nothing in the file uses", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       alias Raxol.Payments.{Ledger, Wallet}
+     end
+     """, "Raxol.Payments.Wallet", "alias"},
+    {"Module.concat under a literal agent namespace", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f(name),
+         do: Module.concat(Raxol.Agent.Actions, Macro.camelize(name))
+     end
+     """, "Raxol.Agent.Actions", "prefix"},
+    {"Module.safe_concat under an aliased agent namespace",
+     "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       alias Raxol.Earn, as: Sellers
+       def f(name), do: Module.safe_concat(Sellers, name)
+     end
+     """, "Raxol.Earn", "alias, prefix"},
     {"a capture", "lib/raxol/crossing.ex",
      ~S"""
      defmodule Raxol.Crossing do
@@ -472,6 +503,24 @@ defmodule Raxol.PackageBoundariesTest do
      ~S"""
      defimpl Inspect, for: Raxol.Agent.Journal.Tip do
        def inspect(_tip, _opts), do: "#Tip<>"
+     end
+     """},
+    {"aliases and Module.concat prefixes on the runtime side",
+     "lib/raxol/exempt.ex",
+     ~S"""
+     defmodule Raxol.Exempt do
+       alias Raxol.Agent.Journal
+       alias Raxol.Agent.{Contract, Journal.Tip}
+       def f(name), do: Module.concat(Raxol.Core, name)
+       def g(name), do: Module.concat(Journal, name)
+     end
+     """},
+    {"an alias of an undeclared runtime module that nothing uses",
+     "packages/raxol_core/lib/raxol/core/exempt.ex",
+     ~S"""
+     defmodule Raxol.Core.Exempt do
+       alias Raxol.CLI.Colors
+       def f(name), do: Module.concat(Raxol.Missing, name)
      end
      """}
   ]
