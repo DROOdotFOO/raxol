@@ -6,12 +6,19 @@ defmodule Raxol.CLITest do
   alias Raxol.CLI
 
   describe "main/1 dispatch" do
-    test "help lists every command, including code" do
+    test "help lists every command" do
       out = capture_io(fn -> assert CLI.main(["help"]) == 0 end)
 
-      assert out =~ "code"
-      assert out =~ "coding-agent TUI"
-      assert out =~ "playground"
+      for command <- CLI.commands() do
+        assert out =~ ~r/^\s+#{command}\b/m, "#{command} missing from the help text"
+      end
+    end
+
+    test "bare raxol prints the help" do
+      bare = capture_io(fn -> assert CLI.main([]) == 0 end)
+      help = capture_io(fn -> assert CLI.main(["help"]) == 0 end)
+
+      assert bare == help
     end
 
     test "--version prints the CLI version and returns 0" do
@@ -28,10 +35,8 @@ defmodule Raxol.CLITest do
       assert "acp" in CLI.commands()
     end
 
-    # `login` shipped in the help text but not in `commands/0`, so anything
-    # driving the declared list (completions, docs) could not see it.
     test "every command in the help text is also a declared command" do
-      for command <- ~w(agent code p acp login setup doctor update playground new help) do
+      for command <- ~w(acp mcp doctor update playground new help) do
         assert command in CLI.commands(), "#{command} missing from commands/0"
       end
     end
@@ -53,71 +58,15 @@ defmodule Raxol.CLITest do
     end
   end
 
-  describe "setup subcommand" do
-    test "setup --help prints its own usage, not the agent's" do
-      out = capture_io(fn -> assert CLI.main(["setup", "--help"]) == 0 end)
-
-      assert out =~ "Usage: raxol setup"
-      assert out =~ "--provider"
-    end
-
-    test "setup status prints next actions" do
-      out = capture_io(fn -> assert CLI.main(["setup"]) == 0 end)
-
-      assert out =~ "providers:"
-      assert out =~ "next:"
-      assert out =~ "raxol doctor"
-    end
-
-    test "doctor prints an onboarding next block" do
+  describe "doctor subcommand" do
+    test "doctor prints the install header and a next block" do
       out = capture_io(fn -> assert CLI.main(["doctor"]) == 0 end)
 
       assert out =~ "packaging"
+      assert out =~ "acp surface"
       assert out =~ "next:"
-      assert out =~ "raxol setup"
+      assert out =~ "raxol acp --agent"
       assert out =~ "raxol new counter"
-    end
-
-    # 64 is the usage-error code the Mix task already used; the shared front
-    # end has to keep returning it now that two shims depend on the value.
-    test "an unknown setup option is a usage error, not a crash" do
-      capture_io(:stderr, fn ->
-        assert CLI.main(["setup", "--definitely-not-a-flag"]) == 64
-      end)
-    end
-
-    test "providerless default explains mock mode and connection commands" do
-      with_agent_resolver(:error, fn ->
-        out =
-          capture_io([input: "/exit\n"], fn ->
-            assert CLI.main([]) == 0
-          end)
-
-        assert out =~ "No provider connected. Mock mode is active."
-        assert out =~ "raxol login openrouter"
-
-        assert out =~
-                 "raxol setup --provider anthropic --op op://Vault/Item/api_key"
-
-        assert out =~ "type a prompt, or /exit"
-      end)
-    end
-
-    test "configured providers skip mock mode" do
-      executor =
-        Raxol.Agent.ExecutorConfig.new(
-          harness: :openai,
-          auth: %{api_key: "sk-test"}
-        )
-
-      with_agent_resolver({:ok, executor}, fn ->
-        out =
-          capture_io([input: "/exit\n"], fn ->
-            assert CLI.main([]) == 0
-          end)
-
-        refute out =~ "Mock mode is active"
-      end)
     end
   end
 
@@ -159,45 +108,12 @@ defmodule Raxol.CLITest do
     end
   end
 
-  describe "code subcommand" do
-    test "code --help prints the shared launcher usage" do
-      out = capture_io(fn -> assert CLI.main(["code", "--help"]) == 0 end)
-
-      assert out =~ "Usage: raxol code"
-      assert out =~ "--continue"
-    end
-
-    test "code with a bad backend is a usage error before boot" do
-      stderr =
-        capture_io(:stderr, fn ->
-          assert CLI.main(["code", "--backend", "nonsense"]) == 64
-        end)
-
-      assert stderr =~ ~s(unknown backend "nonsense")
-    end
-
-    test "code without an interactive terminal vetoes with exit 1" do
-      # `interactive?/0` reads this process's GROUP LEADER, not stdin, so
-      # capturing :stderr alone leaves a real tty in place and the full-screen
-      # TUI boots over it. The outer `with_io/1` swaps the group leader for a
-      # StringIO, which is what makes the veto path deterministic whether or
-      # not the suite was launched from a terminal. --backend mock keeps
-      # provider resolution hermetic (keyless).
-      {stderr, _stdout} =
-        with_io(fn ->
-          capture_io(:stderr, fn ->
-            assert CLI.main(["code", "--backend", "mock"]) == 1
-          end)
-        end)
-
-      assert stderr =~ "interactive terminal"
-    end
-
+  describe "interactive?/1" do
     test "the Burrito arm ignores the group leader" do
       # Burrito's launcher puts the BEAM's stdout on a pipe, so the group leader
       # reports a non-terminal on every packaged run. Reading it there vetoed
-      # `raxol code` and `raxol playground` unconditionally -- the packaged
-      # binary could not open either. Under a StringIO group leader, which is
+      # `raxol playground` unconditionally -- the packaged binary could not
+      # open it. Under a StringIO group leader, which is
       # the strongest "no terminal" signal a test can produce, the non-Burrito
       # arm must still veto while the Burrito arm must not consult it at all.
       {{burrito, plain}, _io} =
@@ -205,38 +121,6 @@ defmodule Raxol.CLITest do
 
       refute plain
       assert burrito == (:prim_tty.isatty(:stdin) == true)
-    end
-
-    test "code --ssh is NOT vetoed for a missing tty (serving needs none)" do
-      # Without --authorized-keys the launcher rejects --ssh as a usage error
-      # (64), which proves the tty veto (exit 1, "interactive terminal") did
-      # NOT fire first -- the SSH path skips the local-terminal check. The
-      # group-leader swap is what gives the refute its meaning: under a real
-      # tty the veto could not have fired anyway.
-      {stderr, _stdout} =
-        with_io(fn ->
-          capture_io(:stderr, fn ->
-            assert CLI.main(["code", "--ssh"]) == 64
-          end)
-        end)
-
-      assert stderr =~ "authorized-keys"
-      refute stderr =~ "interactive terminal"
-    end
-  end
-
-  defp with_agent_resolver(result, fun) do
-    previous = Application.get_env(:raxol_cli, :agent_executor_resolver)
-    Application.put_env(:raxol_cli, :agent_executor_resolver, fn -> result end)
-
-    try do
-      fun.()
-    after
-      if previous do
-        Application.put_env(:raxol_cli, :agent_executor_resolver, previous)
-      else
-        Application.delete_env(:raxol_cli, :agent_executor_resolver)
-      end
     end
   end
 end

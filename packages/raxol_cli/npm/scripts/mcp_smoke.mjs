@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Smoke `raxol mcp` the way OMP spawns it: `node bin/launcher.js mcp`, with
 // `initialize` written to stdin before the binary has booted. Run 1: tools/list
-// has raxol_start and no harness_*, TableDemo starts as `t`, list_changed
+// has raxol_start, TableDemo starts as `t`, list_changed
 // arrives, resources/read of its widgets answers. Run 2 (LC_ALL=C): a non-ASCII
 // argument comes back byte-exact. Both exit 0 at end of input with every stdout
 // line JSON-RPC. Time to initialize is printed, never asserted.
@@ -86,7 +86,6 @@ try {
   const one = await handshake("run 1", {});
   const names = (await one.request("tools/list", {})).result.tools.map((t) => t.name);
   if (!names.includes("raxol_start")) fail(`run 1: no raxol_start in ${names}`);
-  if (names.some((n) => n.startsWith("harness_"))) fail(`run 1: harness tools listed: ${names}`);
   console.log(`run 1: tools/list: ${names.join(", ")}`);
   const changed = one.notification("notifications/tools/list_changed");
   const started = await one.request("tools/call", { name: "raxol_start", arguments: { module: "Raxol.Playground.Demos.TableDemo", id: "t" } });

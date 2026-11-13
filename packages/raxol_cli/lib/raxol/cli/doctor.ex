@@ -1,34 +1,22 @@
 defmodule Raxol.CLI.Doctor do
   @moduledoc """
-  `raxol doctor` — what this install actually is, and why it resolves the way
-  it does.
+  `raxol doctor` — what this install actually is.
 
-  Two audiences, one command. Someone who just installed and finds the agent
-  answering with mock text needs to know no provider resolved, and which one it
-  looked for. Someone reporting a bug needs to say which build they are on,
-  which is not answerable from the release version alone: a months-old binary
-  and one built minutes ago both call themselves `0.2.6`.
-
-  The configuration half is `Raxol.Agent.Code.Inspection`, the same snapshot
-  `mix raxol.inspect` and the TUI's `/inspect` render — reused rather than
-  reimplemented, so all three agree. What this adds is the install header:
-  build provenance, packaging, runtime, and whether the ACP surface is
-  compiled into this build (a Hex install of `raxol_agent` has none) and can
-  start an agent on this platform.
+  Someone reporting a bug needs to say which build they are on, which is not
+  answerable from the release version alone: a months-old binary and one built
+  minutes ago both call themselves `0.2.6`. So this prints build provenance,
+  packaging, runtime, and whether the ACP surface is compiled into this build
+  (a Hex install of `raxol_agent` has none) and can start an agent on this
+  platform.
   """
 
   alias Raxol.Agent.ClientProtocol.Serve
-  alias Raxol.Agent.Code.Inspection
   alias Raxol.Agent.McpTools
 
   @doc "Print the install report for `cwd`, returning an exit code."
   @spec run([String.t()]) :: non_neg_integer()
   def run(_args \\ []) do
-    cwd = File.cwd!()
-
-    IO.puts(header(cwd))
-    IO.puts("")
-    IO.puts(Inspection.render(Inspection.gather(cwd)))
+    IO.puts(header(File.cwd!()))
     IO.puts("")
     IO.puts(next_steps())
 
@@ -87,14 +75,11 @@ defmodule Raxol.CLI.Doctor do
   defp next_steps do
     """
     next:
-      connect or inspect providers:
-        raxol setup
+      serve a Raxol agent to an ACP editor:
+        raxol acp --agent <app>
 
-      start the agent:
-        raxol
-
-      coding TUI:
-        raxol code
+      serve Raxol apps as MCP tools:
+        raxol mcp
 
       component catalog:
         raxol playground

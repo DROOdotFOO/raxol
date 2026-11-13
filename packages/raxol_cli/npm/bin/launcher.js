@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Resolves the Burrito-built `raxol` binary for the current platform/arch and
 // execs it, forwarding argv, stdio, and the environment. All subcommands
-// (`raxol`, `raxol agent`, `raxol playground`, `raxol new`, `raxol help`) are
+// (`raxol mcp`, `raxol acp`, `raxol playground`, `raxol new`, `raxol help`) are
 // handled inside the binary.
 "use strict";
 
@@ -70,10 +70,10 @@ function main() {
 
   // `--no-halt --` tames Burrito's `-s elixir start_cli`: `--` makes it treat the
   // subcommand as argv rather than a script it reads from stdin (which would
-  // starve the interactive agent), and `--no-halt` stops it halting the VM. The
+  // starve an interactive command), and `--no-halt` stops it halting the VM. The
   // binary strips the `--no-halt --` prefix when reading its arguments.
   const args = ["--no-halt", "--", ...process.argv.slice(2)];
-  // The interactive agent puts the tty in raw mode; if the BEAM child dies there
+  // The playground puts the tty in raw mode; if the BEAM child dies there
   // (crash, SIGSEGV), restore the shell's line settings so it isn't left wedged.
   const result = withTerminalRestore(() =>
     spawnSync(binary, args, { stdio: "inherit" }),

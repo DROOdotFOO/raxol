@@ -1,12 +1,13 @@
 # @raxol/cli
 
-Interactive AI agent and TUI toolkit in your terminal, as a self-contained
+The Raxol TUI toolkit and agent servers in your terminal, as a self-contained
 binary. No Erlang, Elixir, or Node runtime needed at run time.
 
 ```bash
 npm install -g @raxol/cli
-raxol            # interactive AI agent
-raxol doctor     # what this install resolves: build, providers, config
+raxol mcp        # serve Raxol apps as MCP tools on stdio
+raxol acp        # serve a Raxol agent to ACP editors on stdio
+raxol doctor     # what this install is: build, runtime, ACP surface
 raxol update     # replace this binary with the latest verified release
 raxol playground # component catalog
 raxol new my_app # scaffold an app
@@ -26,25 +27,11 @@ install the GitHub CLI first, then run:
 curl -fsSL https://raxol.io/install | bash -s -- --verify-provenance
 ```
 
-## Connecting a provider
+If something looks wrong, `raxol doctor` reports the build commit, the
+packaging, the runtime, and whether the ACP surface is available.
 
-Without a provider the agent replies with mock output. Connect one:
-
-```bash
-raxol login                                  # browser sign-in where offered
-raxol setup --provider anthropic --op op://Vault/Item/api_key
-raxol setup --status                         # what is connected, and why not
-```
-
-A provider key in the environment (`AI_API_KEY`, or `ANTHROPIC_API_KEY` and
-friends) is also honoured. `raxol setup` writes only 1Password references to
-disk, never a raw key.
-
-If something looks wrong, `raxol doctor` reports the build commit, the runtime,
-every provider it can see, and the config it resolved.
-
-`raxol` checks for a newer `raxol-cli-v*` GitHub Release once per day when
-started interactively and prompts before installing. `raxol update` runs the
+`raxol playground` checks for a newer `raxol-cli-v*` GitHub Release once per
+day when started interactively and prompts before installing. `raxol update` runs the
 same path on demand: it downloads the matching platform binary, verifies it
 against `SHA256SUMS` and the release's Sigstore provenance (signed by this
 repository's release workflow for that tag, checked by `raxol` itself with no

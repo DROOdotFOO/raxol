@@ -122,7 +122,6 @@ defmodule Raxol.CLI.MCPIntegrationTest do
     {list, listed} = read_reply(ctx.server, 2)
     names = Enum.map(list["result"]["tools"], & &1["name"])
     assert "raxol_start" in names
-    assert Enum.filter(names, &String.starts_with?(&1, "harness_")) == []
 
     path_start = %{"path" => "examples/demo.exs", "id" => "p"}
     send_line(ctx.writer, tool_call(3, "raxol_start", path_start))
