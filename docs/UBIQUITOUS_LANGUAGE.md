@@ -176,7 +176,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 | **Coordinator**         | The top-level Agent in a Team that delegates to Workers.                                              | parent agent, master agent, dispatcher |
 | **Worker**              | A specialized Agent supervised by a Coordinator.                                                      | sub-agent, child agent                 |
 | **Action**              | An LLM-callable tool exposed by an Agent: a function described by a name, schema, and handler.        | tool, function, capability, skill      |
-| **Strategy**            | The decision-making style of an Agent: `ReAct` (reason-act-observe loop) is the one shipped.          | mode, behaviour, planner               |
+| **Strategy**            | The decision-making style of an Agent: `Direct` (single-shot) or `ReAct` (reason-act-observe loop).   | mode, behaviour, planner               |
 | **Backend**             | The LLM provider integration: Anthropic, OpenAI, Ollama, Lumo, Kimi, LLM7, Mock.                      | provider, API, vendor, LLM             |
 | **Inter-agent message** | A `{:agent_message, from, payload}` tuple delivered to an Agent via the Agent Registry.               | RPC, IPC, message-pass                 |
 

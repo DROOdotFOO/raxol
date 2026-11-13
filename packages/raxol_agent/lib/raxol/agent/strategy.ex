@@ -5,7 +5,8 @@ defmodule Raxol.Agent.Strategy do
   A strategy controls HOW an agent processes a command (action invocation).
   The agent decides WHAT to do; the strategy decides HOW to execute it.
 
-  Built-in strategy:
+  Built-in strategies:
+  - `Raxol.Agent.Strategy.Direct` -- sequential action execution
   - `Raxol.Agent.Strategy.ReAct` -- LLM reasoning + tool use loop
   """
 
