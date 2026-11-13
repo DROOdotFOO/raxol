@@ -185,7 +185,7 @@ The agent Action surface is `Raxol.Agent.Actions.Web3`, and it lives in
 `raxol_agent` rather than here: `use Raxol.Agent.Action` is that package's
 macro, and defining the tool here would pull the framework and the agent
 runtime underneath a read-only package. It is one tool with an `operation`
-enum rather than thirteen, because an Action sits in a coding agent's toolset
+enum rather than thirteen, because an Action sits in an agent's toolset
 for the whole session and thirteen tool definitions in every prompt is a cost
 paid by every turn, including the turns that never touch a chain.
 

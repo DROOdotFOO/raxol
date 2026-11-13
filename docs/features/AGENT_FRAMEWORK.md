@@ -2,7 +2,7 @@
 
 An agent is a TEA module where input comes from LLMs and tools instead of a keyboard. Same `init/update/view` loop, same OTP supervision, same crash isolation. The "user" is an AI model issuing commands and processing results.
 
-For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md). For the interactive coding agent built on this framework, see [Coding Agent](CODING_AGENT.md). For the learning and recall layers an agent can opt into, see [Self-Improvement](SELF_IMPROVEMENT.md) and [Memory](MEMORY.md).
+For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md).
 
 ## Quick start
 
@@ -211,66 +211,46 @@ The `:deepseek` harness targets DeepSeek's OpenAI-compatible endpoint (`https://
 ## Turn driver
 
 `Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Turn` drives a whole
-self-improving turn: it assembles tool context from the agent module's callbacks, runs the
-reasoning loop, records the turn to a conversation log, then fires the background side
-effects.
+turn: it assembles tool context from the agent module's callbacks, runs the
+reasoning loop, and records the turn to a conversation log.
 
 ```elixir
 {:ok, items} =
   Raxol.Agent.Turn.run(MyAgent, "refactor lib/foo.ex",
     backend: MyBackend,
     log: log_server,
-    conversation_id: cid,
-    agent_id: "my-agent",
-    user_id: "user-123",        # optional, with :user_model
-    user_model: MyApp.UserModel,
-    session_search: MyApp.SessionSearch
+    conversation_id: cid
   )
 ```
 
-- `build_context/2` builds the tool context, each key present only when configured: memory
-  (from `memory_providers`/`memory_provider`), skills (`skills_provider`), user context, and
-  session search.
+- `build_context/2` builds the tool context: `:skills` is present when the agent module's
+  `skills_provider/0` returns a provider.
 - `run/3` runs `Stream.react/2` with that context and records the stream into a
   [Conversation Log](#conversation-item-log).
-- `after_turn/4` fires [self-improvement](SELF_IMPROVEMENT.md), the user-model refresh, and
-  session indexing.
 
-The agent *module* declares which providers it wants through zero-arity callbacks; the
-*caller* supplies the running server instances through opts. Turn is the canonical driver
-other runtimes can adopt.
+The agent *module* declares which provider it wants through a zero-arity callback; the
+*caller* supplies the running server instance through opts.
 
-## Native multi-vendor harness
+## Backends
 
-An agent can run its own reasoning loop, or hand the loop to a vendor CLI (Claude Code,
-Cursor) and expose Raxol's tools to it over MCP. `Raxol.Agent.ExecutorConfig`
-(`%{harness, model, auth, opts}`) plus `Raxol.Agent.Backend.Selector.select/1` map a harness
-atom to a backend:
+`Raxol.Agent.ExecutorConfig` (`%{harness, model, auth, opts}`) plus
+`Raxol.Agent.Backend.Selector.select/1` map a harness atom to a backend:
 
 | Harness | Backend |
 |---------|---------|
 | `:anthropic`, `:openai`, `:kimi`, `:ollama`, `:lm_studio`, `:llm7`, `:longcat`, `:deepseek`, `:openrouter` | `Backend.HTTP` |
 | `:lumo` | `Backend.Lumo` |
-| `:claude_native` | `Backend.ClaudeCode` |
-| `:grok_native` | `Backend.GrokBuild` |
-| `:cursor` | `Backend.Cursor` |
 | `:mock` | `Backend.Mock` |
 
 `Raxol.Agent.Backend.Catalog` is the single declaration this table, the resolver's provider
 registry and `ExecutorConfig.backend()` are all derived from (`Catalog.ids/0` lists every
-backend); see ADR-0034.
-
-A native backend reports `handles_tools_internally?/0` as `true`, which tells the framework
-not to drive the reasoning loop: the CLI runs its own loop and calls Raxol's tools through an
-injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-config`). The
-`:codex` harness is reserved (it speaks a stateful app-server protocol served by
-Symphony's Codex runner outside this repository, not an agent backend), so
-`select/1` returns `{:error, {:backend_not_implemented, :codex}}` for it.
+backend). `select/1` returns `{:error, {:unknown_backend, harness}}` for a harness the
+catalog does not declare.
 
 ## Authorization (ALLOW/ASK/DENY)
 
 `Raxol.Agent.Authorization` is a three-way policy engine, richer than the deny-only
-`PermissionHook`. It is what [`mix raxol.code`](CODING_AGENT.md) gates every mutating tool on.
+`PermissionHook`.
 
 - `Engine` is a pure reducer over a list of policies. It folds with `reduce_while`: a DENY
   short-circuits, an ALLOW merges whitelisted label writes, an ASK escrows writes and
@@ -284,8 +264,7 @@ Symphony's Codex runner outside this repository, not an agent backend), so
 
 ## Conversation item-log
 
-`Raxol.Agent.Conversation` is a durable, append-only record of what an agent did, separate
-from its compacted working memory.
+`Raxol.Agent.Conversation` is a durable, append-only record of what an agent did.
 
 - `Item` is an immutable typed entry (message, tool_call, tool_result, reasoning, error, and
   more) with a stable id `"<conversation_id>:<seq>"` and a monotonic, store-assigned seq.
@@ -297,7 +276,7 @@ from its compacted working memory.
   subscriber in one serialized call, so the snapshot and the live tail partition exactly:
   every item once, no gap, no duplicate. Reconnect with an `:after` cursor.
 - `Recorder` bridges `Stream` events into items (tool_use to tool_call, done to message, and
-  so on). [Session search](MEMORY.md#session-search) indexes this log.
+  so on).
 
 ## Tunnel (reverse co-drive)
 

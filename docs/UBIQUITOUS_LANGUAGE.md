@@ -189,7 +189,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 
 ### Example dialogue
 
-> "The Coordinator dispatches an inter-agent message to the research Worker, which calls the `web_search` Action via the Anthropic Backend."
+> "The Coordinator dispatches an inter-agent message to the research Worker, which calls the `skill_view` Action via the Anthropic Backend."
 > NOT: "The parent bot sends an RPC to the research sub-agent which uses the search tool against the Claude provider."
 
 ### Flagged ambiguities

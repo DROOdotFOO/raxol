@@ -22,39 +22,21 @@ carry no support commitment yet.
 
 ## Scope worth knowing about
 
-- The coding agent's interactive surface (`mix raxol.code`) gates every
-  mutating tool call through an ALLOW/ASK/DENY authorization engine; its
-  headless twin (`mix raxol.p`) denies mutating tools by default and only
-  exposes them behind the explicit `--write` opt-in. File tools scope to
-  the working directory, and raw API keys are never persisted (1Password
-  references only). Findings that bypass any of those properties are in
-  scope and high priority.
+- Provider credentials are stored as 1Password references only
+  (`Raxol.Agent.Backend.Credentials`); a raw API key is never persisted.
+  Findings that bypass that are in scope and high priority.
 - `packages/raxol_payments` and `packages/raxol_earn` move funds on
   mainnets. Anything touching signing, spend limits, or settlement is in
   scope and highest priority.
 - The SSH server (`Raxol.SSH.Server`) is fail-closed by design (no anonymous
   access unless explicitly configured); configuration-dependent findings are
   still welcome.
-- Multi-tenant coding-agent hosting (`--ssh-tenants`, `RAXOL_SSH_CODE`) puts
-  an untrusted principal at the keyboard of a session that holds the host's
-  provider credential. Every tenant runs in one BEAM under one OS uid;
-  per-tenant OS isolation (separate uid, chroot, container) is not
-  implemented. The confinement is `Raxol.Agent.Code.Tenant`'s per-user `work/`
-  cwd jail, enforced by the realpath containment in
-  `Raxol.Agent.Actions.Fs.resolve/2`, plus two refusals in a jailed session:
-  the shell tool unless the deployment wires a `:shell_sandbox`
-  (`Raxol.Agent.Policy.Grants.shell_jail_allow/1`), and workspace-configured
-  commands (`.raxol/hooks.json`, `.mcp.json`). Anything that executes code
-  outside a tenant's `work/` jail, reads another tenant's workspace,
-  sessions, or journal, or spends past that tenant's budget is in scope and
-  high priority. Deployments handling mutually hostile tenants should add
-  OS-level isolation on top.
 - `raxol mcp` serves Raxol apps as MCP tools over stdio to the client that
   spawned it (OMP), so its boundary is that OS process: whoever can write
   its stdin can call every tool it lists. It starts only modules on the
   startable list (the playground demos unless configured), refuses
   `raxol_start`'s `path` argument (starting from a path compiles the file),
-  leaves out the coding-agent harness tools, and serves `resources/read`
+  and serves `resources/read`
   only for the sessions it runs and the journals of the agents its `agent_*`
   tools act on; every other read is denied. Its `agent_*` tools start only the modules on
   `config :raxol_agent, :mcp_spawnable_apps` (a reference counter unless

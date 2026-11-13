@@ -1,6 +1,6 @@
 # Virtual File System
 
-An in-memory filesystem that's purely functional: immutable struct, O(1) path lookups, zero side effects. Good for sandboxed environments, agent workspaces, and poking around in the REPL.
+An in-memory filesystem that's purely functional: immutable struct, O(1) path lookups, zero side effects. Good for sandboxed environments and poking around in the REPL.
 
 ## Core API
 
@@ -59,53 +59,6 @@ Helpers print their output via IO (captured by the evaluator) and return the VFS
 | `stat(vfs, path)` | Print node metadata | No |
 
 The `Evaluator.prelude` field imports VfsHelpers before every eval, which is why bare names like `ls` and `mkdir` work without any aliasing.
-
-## Agent actions
-
-The VFS is also wired up as `Raxol.Agent.Action` modules, so LLMs can call them as tools:
-
-```elixir
-alias Raxol.Agent.Actions.Vfs
-alias Raxol.Agent.Action.ToolConverter
-
-# Generate LLM tool definitions
-tools = ToolConverter.to_tool_definitions(Vfs.actions())
-
-# Dispatch an LLM tool call
-context = %{vfs: model.vfs}
-tool_call = %{"name" => "vfs_write_file", "arguments" => %{"path" => "/app.ex", "content" => "..."}}
-{:ok, result} = ToolConverter.dispatch_tool_call(tool_call, Vfs.actions(), context)
-new_vfs = result.vfs  # mutating actions return the updated VFS
-```
-
-| Action | Tool Name | Returns VFS? |
-|--------|-----------|:---:|
-| `Vfs.ListDir` | `vfs_list_dir` | No |
-| `Vfs.ReadFile` | `vfs_read_file` | No |
-| `Vfs.WriteFile` | `vfs_write_file` | Yes |
-| `Vfs.MakeDir` | `vfs_make_dir` | Yes |
-| `Vfs.Remove` | `vfs_remove` | Yes |
-| `Vfs.ChangeDir` | `vfs_change_dir` | Yes |
-| `Vfs.GetTree` | `vfs_get_tree` | No |
-
-VFS resolution checks `params[:vfs]` first (so Pipeline composition works), then `context[:vfs]`, and falls back to a fresh filesystem if neither exists.
-
-### Pipeline composition
-
-```elixir
-alias Raxol.Agent.Action.Pipeline
-
-{:ok, state, commands} = Pipeline.run(
-  [
-    {Vfs.MakeDir, %{path: "/src"}},
-    {Vfs.WriteFile, %{path: "/src/app.ex", content: "defmodule App do\nend"}}
-  ],
-  %{},
-  %{vfs: FileSystem.new()}
-)
-```
-
-The updated VFS flows through the pipeline on its own: each action's result gets merged into the next action's params.
 
 ## Internals
 

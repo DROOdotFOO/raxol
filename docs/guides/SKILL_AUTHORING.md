@@ -5,9 +5,8 @@ something. Raxol uses the [agentskills.io](https://agentskills.io) `SKILL.md` fo
 skill you write here sits alongside the ones under `~/.agents/skills` and is portable to
 other tools that speak the same format.
 
-Agents author skills on their own (the [self-improvement](../features/SELF_IMPROVEMENT.md)
-reviewer writes them after a successful turn), and you can author them by hand. This guide
-is the hand-authoring contract.
+Agents author skills through the `skill_manage` tool, and you can author them by hand.
+This guide is the hand-authoring contract.
 
 ## The format
 
@@ -43,7 +42,7 @@ Keep the working tree clean before you start; stash or commit first.
 | `description` | no | One line. This is what an agent sees in `skills_list` before opening the skill. |
 | `version` | no | A string. |
 | `category` | no | Groups the skill on disk (`<root>/<category>/<name>/`). |
-| `created_by` | no | `agent` or `user`. Set automatically; only agent-authored skills are curated. |
+| `created_by` | no | `agent` or `user`. Set by the writer: `skill_manage` tags what it creates `user`. |
 
 Any other frontmatter key is preserved under the skill's metadata, so fields another tool
 depends on survive a round trip. Nothing from a `SKILL.md` is ever turned into an atom.
@@ -56,36 +55,45 @@ it focused on one task; a skill that tries to cover everything gets opened for n
 
 ## Where skills live
 
-`Raxol.Agent.Skills.Store` reads from two places:
+`Raxol.Agent.Skill` parses and renders the format. `Raxol.Agent.Skills.Store` is the warm
+index over the files (a supervised GenServer), and reads from two places:
 
 - **Managed root** (writable, default `~/.raxol/skills`): skills the agent or you author
   here. New skills are written here.
-- **External dirs** (read-only, default `~/.agents/skills`): shared skills. A managed skill
-  wins over an external one of the same name.
+- **External dirs** (read-only, default `~/.agents/skills`): shared skills, scanned for
+  `**/SKILL.md`. A managed skill wins over an external one of the same name.
 
-Skill content is re-read from disk on every boot, so disk is the source of truth. Usage
-telemetry (how often a skill is used and viewed, its lifecycle state) is persisted
-separately and survives restarts.
+Skill content is re-read from disk on every boot, so disk is the source of truth and stale
+content cannot outlive its file. Usage telemetry (`use_count`, `view_count`,
+`last_used_at`, `created_at`, `state`, `pinned`) is persisted to DETS and replayed on boot.
+
+Bring the store up under supervision through app config, and return it from the agent
+module's `skills_provider/0`:
+
+```elixir
+config :raxol_agent,
+  skills_provider: Raxol.Agent.Skills.Store,
+  skills_root: "~/.raxol/skills"
+```
 
 ## Authoring from an agent
 
-The three skills tools let an agent manage its own procedures:
+Three tools let an agent manage its own procedures:
 
-| Tool | Purpose |
-|------|---------|
-| `skills_list` | List skills as metadata only (the cheap disclosure level). |
-| `skill_view` | Read a skill's body, or one supporting file inside its directory. |
-| `skill_manage` | Create, patch, or delete a skill. |
+| Tool | Input | Returns |
+|------|-------|---------|
+| `skills_list` | none | skill metadata only (the cheap disclosure level) |
+| `skill_view` | `name`, optional `path` | the `SKILL.md` body, or one supporting file |
+| `skill_manage` | `action` (`create`/`patch`/`edit`/`delete`), `name`, fields | `ok`, `name` |
 
 A supporting-file read through `skill_view` is path-guarded: absolute paths and `..` are
 rejected, so a skill cannot read outside its own directory.
 
-## Curation
+## Lifecycle state
 
-Agent-authored skills are aged by the [Curator](../features/SELF_IMPROVEMENT.md#curator):
-`active` to `stale` (default 30 idle days) to `archived` (default 90). Pin a skill to
-protect it from aging, and note that user-authored and external skills are never curated.
-Every Curator pass writes a backup first and is reversible.
+The store records a lifecycle state per skill (`active`, `stale`, `archived`) and a pin.
+`Skills.Store.set_state/3`, `pin/2`, `archive/2` and `telemetry/1` are what a host uses to
+age skills; nothing in Raxol ages them on its own.
 
 ## The safety dimension
 
@@ -98,6 +106,5 @@ the [conversation item-log](../features/AGENT_FRAMEWORK.md#conversation-item-log
 
 ## See also
 
-- [Self-Improvement](../features/SELF_IMPROVEMENT.md): how agents author and curate skills.
 - [Build Your First Agent](../getting-started/BUILD_AN_AGENT.md): enabling the skills store.
 - [Tool Catalog](../reference/TOOL_CATALOG.md): the built-in tools skills can drive.

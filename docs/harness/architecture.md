@@ -11,14 +11,10 @@ same truth, because the truth was never in the surface.
 
 The harness is the **engine**, not a product you run directly (there is no
 `mix raxol.harness`: the `raxol.harness.*.bless` tasks only regenerate this
-engine's golden/fixture test snapshots). The products are the surfaces built on
-the contract: `mix raxol.code` is the interactive coding-agent TUI and
-`mix raxol.p` is its headless twin, both in the `raxol_agent` package. The same
-contract also lets the engine drive *external* agent CLIs:
-`Raxol.Agent.Backend.ClaudeCode` and `Raxol.Agent.Backend.Cursor` wrap
-`claude` / `cursor-agent` as harness sessions.
-"Harness" here is the session engine; it is unrelated to the `--backend` flag
-(which picks an LLM backend) and to the RATE render-determinism suite.
+engine's golden/fixture test snapshots). Agent sessions run on it: `raxol acp
+--agent` and the `agent_*` MCP tools each start one.
+"Harness" here is the session engine; it is unrelated to an LLM backend and to
+the RATE render-determinism suite.
 
 ## The event contract
 
@@ -243,25 +239,18 @@ under adversarial input cannot be trusted to enforce them:
   shape rather than importing `Raxol.Payments.Ledger`; its records leave
   through an injected `context.emit` sink, and a raising sink propagates as
   `Raxol.Agent.SpendGate.JournalWriteError` instead of dropping a record on
-  irreversible spend state. `Raxol.Agent.Code.CostLedger` is the shipped
-  bridge in the other direction: the coding TUI records LLM cost against a
-  real `Raxol.Payments.Ledger`, and asks `check_budget` twice per turn: at
-  submit, refusing to start the next one, and again as each `turn_completed`
-  folds, interrupting the turn already running. It degrades to a no-op when
-  raxol_payments is absent from the host application.
+  irreversible spend state.
   `Raxol.Agent.Authorization.BlastRadiusGate` gates write and destructive
   tools the same way (locked by default, escalate to a human, live approval
   state rebuildable by a fold over `approval_decided` events); it has no
   non-test caller yet.
-  `Raxol.Agent.Authorization.Engine` is the pure ALLOW/ASK/DENY reducer the
-  coding TUI runs every sensitive tool call through. A string denylist is
+  `Raxol.Agent.Authorization.Engine` is the pure ALLOW/ASK/DENY reducer for
+  tool calls. A string denylist is
   provably incomplete; enforce typed intent instead.
 
 ## The live TUI chain
 
-Two TUI chains sit on the contract, and they do not share a driver.
-
-`Raxol.Harness.LiveSessionDriver` is the harness-native one, a process loop
+`Raxol.Harness.LiveSessionDriver` is the harness-native TUI chain, a process loop
 over the assembled `Raxol.Harness.Surface`. It is built and tested but not yet
 launched: its only caller in the tree is
 `test/harness/live_session_driver_test.exs`, and `Surface` has no consumer
@@ -281,35 +270,11 @@ Raxol.Harness.LiveSessionDriver   (the process loop; input-first receive)
 Raxol.Harness.StallDetector  (pure observer; verdict + evidence to the human)
 ```
 
-`mix raxol.code` is the shipped one, and it drives its own loop.
-`Raxol.Agent.Code.App` is a TEA app: on submit `update/2` spawns a worker that
-subscribes to a `Raxol.Agent.SessionStreamer` session, runs
-`Raxol.Agent.Stream.react/2` through `Raxol.Agent.Contract.pump/3`, and relays
-each contract event back as `{:command_result, {:contract_event, event}}`.
-Those go through the same `EventBoundary.normalize/1` and fold into the same
-`Raxol.Harness.Projection` blocks that `Raxol.UI.Components.Harness.Block`
-renders. It shares the contract and the rendering pieces with the driver
-above, and reaches them by its own path.
-
-`Raxol.Agent.Harness.SessionInbox` is the session runtime on the agent side:
-it consumes the `{:harness_command, action}` messages `Command.route/2`
-delivers, runs one turn at a time (a submit arriving mid-turn is queued for
-the next boundary), parks the tool loop on a `GenServer.call` keyed by
-`request_id` before a consequential tool and replies when the keyboard answer
-arrives, and runs `Interrupt.interrupt/3` against the live shell tool's
-`%{port, os_pid}`. It is written and tested; no non-test module starts one, so
-`mix raxol.code` runs its own equivalents today. `StreamCadence` load-sheds
-rather than applies
+`StreamCadence` load-sheds rather than applies
 backpressure: the newest deltas are the live tail's value, and blocking the
 SSE reader would cascade into transport timeouts, so visibly lossy above the
 watermark beats dead. `StallDetector` never acts on the agent; judgment over
 visible output belongs to the human it reports to.
-
-**External-agent drivers.** `Raxol.Agent.NativeHarness` is the behaviour for a
-CLI that owns its own loop. `Raxol.Agent.Harness.ClaudeCode` drives
-`claude -p --output-format stream-json` with Raxol's tools injected over MCP
-(`--mcp-config`); `Raxol.Agent.Harness.Cursor` is the sibling driver; both
-parse NDJSON through `Raxol.Agent.Harness.StreamJson`.
 
 ## ACP wiring
 

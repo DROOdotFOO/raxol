@@ -247,5 +247,4 @@ package `NOTICE.md`.
 ## See also
 
 - [Agent Commerce Protocol](ACP.md): the unrelated on-chain payments ACP.
-- [Coding Agent](CODING_AGENT.md): Raxol's own terminal coding agent.
 - `scripts/acp_probe.py`: a minimal ACP client for verifying an integration.
