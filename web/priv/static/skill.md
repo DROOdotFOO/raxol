@@ -168,9 +168,9 @@ Raxol.Headless.send_key(session, "q")
 | Add agent payments | `raxol_payments` (0.3 is unpublished; Hex has 0.2) |
 | Use sensor fusion | `{:raxol_sensor, "~> 2.8"}` (zero deps) |
 | Build a plugin | `{:raxol_plugin, "~> 2.8"}` |
-| Add voice commands | `{:raxol_speech, "~> 0.2"}` |
-| Telegram bot surface | `{:raxol_telegram, "~> 0.2"}` |
-| Watch/push surface | `{:raxol_watch, "~> 0.2"}` |
+| Add voice commands | `{:raxol_speech, "~> 0.3"}` |
+| Telegram bot surface | `{:raxol_telegram, "~> 0.3"}` |
+| Watch/push surface | `{:raxol_watch, "~> 0.3"}` |
 
 ## Common pitfalls
 

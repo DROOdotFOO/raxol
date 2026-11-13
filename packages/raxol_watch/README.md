@@ -14,7 +14,7 @@ A 90-day platform digest (HN + GitHub + Reddit) found near-zero developer-facing
 ## Install
 
 ```elixir
-{:raxol_watch, "~> 0.2"}
+{:raxol_watch, "~> 0.3"}
 ```
 
 For production push notifications, add:

@@ -48,7 +48,7 @@ defmodule RaxolGateway.MixProject do
 
       # Voice transcription (optional -- Pipeline.Transcribe's default
       # :recognize_fn; without it voice events are dropped with a warning).
-      raxol_dep(:raxol_speech, "~> 0.2", "../raxol_speech", optional: true),
+      raxol_dep(:raxol_speech, "~> 0.3", "../raxol_speech", optional: true),
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},

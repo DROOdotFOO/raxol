@@ -85,11 +85,11 @@ reactivating it. Never move a published version tag as routine recovery.
    packages. They must point at the release commit:
 
    ```bash
-   git tag -a raxol_speech-v0.2.2 -m "raxol_speech 0.2.2"
-   git tag -a raxol_watch-v0.2.2 -m "raxol_watch 0.2.2"
-   git tag -a raxol_telegram-v0.2.2 -m "raxol_telegram 0.2.2"
-   git push origin raxol_speech-v0.2.2 raxol_watch-v0.2.2 \
-     raxol_telegram-v0.2.2
+   git tag -a raxol_speech-v0.3.0 -m "raxol_speech 0.3.0"
+   git tag -a raxol_watch-v0.3.0 -m "raxol_watch 0.3.0"
+   git tag -a raxol_telegram-v0.3.0 -m "raxol_telegram 0.3.0"
+   git push origin raxol_speech-v0.3.0 raxol_watch-v0.3.0 \
+     raxol_telegram-v0.3.0
    ```
 
    Create only the tags for packages whose version changed. Framework packages
@@ -195,7 +195,7 @@ raxol-cli-channel latest.json --clobber`.
 Publish it after the 2.8.0 train, which publishes the `raxol_core` it
 requires. Its only required dependencies are `raxol_core "~> 2.8"`,
 `telemetry`, and `jason`. Everything else (`raxol "~> 2.8"`,
-`raxol_speech "~> 0.2"`, `gen_smtp`, `mint_web_socket`, `req`) is optional and
+`raxol_speech "~> 0.3"`, `gen_smtp`, `mint_web_socket`, `req`) is optional and
 gated at runtime, so a consumer who wants only the Telegram or in-memory
 adapter pulls nothing extra.
 

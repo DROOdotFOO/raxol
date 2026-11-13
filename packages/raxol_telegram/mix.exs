@@ -1,7 +1,7 @@
 defmodule RaxolTelegram.MixProject do
   use Mix.Project
 
-  @version "0.2.2"
+  @version "0.3.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
