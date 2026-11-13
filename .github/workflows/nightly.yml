@@ -248,7 +248,7 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-  # Windows root suite and the raxol_agent Windows package suite. The matrix
+  # Windows root suite and the Windows package suites. The matrix
   # above already covers macOS, so that leg is off here.
   platform:
     name: Platform

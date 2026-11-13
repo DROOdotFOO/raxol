@@ -265,7 +265,9 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
    [`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex),
    positioned after everything it requires. Until you do, the checker treats it
    as off-train and reports any sibling that depends on it as dropping the
-   requirement.
+   requirement. Add it to `@published` in
+   [`web/lib/raxol_playground/capabilities.ex`](../../web/lib/raxol_playground/capabilities.ex)
+   in the same change; a `web` test holds the two lists equal.
 2. **Declare requirements that used to be dropped.** Once `raxol_gateway` is on
    Hex, `raxol_telegram`'s `gateway_dep/0` can declare
    `raxol_gateway "~> 0.1", optional: true` under `HEX_BUILD` instead of

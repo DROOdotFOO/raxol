@@ -12,6 +12,7 @@ on:
       - "web/**"
       - "lib/raxol/application.ex"
       - "lib/raxol/playground/**"
+      - "lib/raxol/release/package_check.ex"
       - "scripts/gen_landing_frames.exs"
       - "mix.exs"
       - "mix.lock"
@@ -24,6 +25,7 @@ on:
       - "web/**"
       - "lib/raxol/application.ex"
       - "lib/raxol/playground/**"
+      - "lib/raxol/release/package_check.ex"
       - "scripts/gen_landing_frames.exs"
 
 concurrency:

@@ -92,7 +92,8 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   The surrogate performs NO redaction: a JSON-safe model is written
   verbatim (plaintext) to `snapshots/` — the same trust domain and permissions
   as the journal segments, which already persist event payloads in plaintext.
-  The record body itself never carries model content.
+  The record body itself never carries model content. A codec that replaces
+  `dump/1` must bring redaction with it.
   """
 
   require Logger

@@ -248,8 +248,7 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
         # decode — the frame is the whole line, and leaving
         # decodable-but-unterminated bytes in place would concatenate the next
         # append onto the same line, corrupting the journal one write later.
-        # Truncate it, keep the prefix, stay healthy. (Found by the I5
-        # byte-cut fuzz in test/invariants/storage_invariants_test.exs.)
+        # Truncate it, keep the prefix, stay healthy.
         if not terminated? and final?(segments),
           do: torn_tail(entry, acc, ctx),
           else: continue(replay_line(entry, acc, ctx), path, raw, next, segments, ctx)
@@ -286,8 +285,7 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
          # An id gap (or a record without an integer id) means complete
          # records were LOST — a deleted/truncated interior segment. Silently
          # concatenating around the hole would fabricate continuity, so this
-         # is damage, exactly like interior corruption. (Found by the I6
-         # missing-middle-segment invariant.)
+         # is damage, exactly like interior corruption.
          true <- continuous?(acc, record),
          true <- linked?(record, entry.raw, acc, ctx) do
       {:ok, [record | acc]}
@@ -299,8 +297,9 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
   end
 
   # The writer stamps strictly consecutive integer ids, so any healthy journal
-  # replays as prev + 1 steps. The first record anchors the sequence: it need
-  # not be id 1, so a journal whose prefix was truncated still replays.
+  # replays as prev + 1 steps. The first record anchors the sequence: on an
+  # unchained journal it need not be id 1. A chained journal must start at
+  # id 1 (see `linked?/4`).
   defp continuous?([], %{"id" => id}) when is_integer(id), do: true
 
   defp continuous?([%{"id" => prev} | _], %{"id" => id})

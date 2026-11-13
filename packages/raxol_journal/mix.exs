@@ -14,6 +14,7 @@ defmodule RaxolJournal.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
+      dialyzer: [plt_add_apps: [:ex_unit]],
       name: "Raxol Journal",
       source_url: @source_url,
       homepage_url: "https://raxol.io"

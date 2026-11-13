@@ -122,7 +122,7 @@ defmodule Raxol.Agent.Contract do
               # The speculation branch this record belongs to.
               # Optional-with-default "main"; a non-default branch is written to
               # (and read back from) the journal, "main" stays implicit on the
-              # wire (grandfather-safe, byte-identical for default records — I2).
+              # wire (grandfather-safe, byte-identical for default records).
               branch_id: "main"
 
     @typedoc "Provenance — grow-only; later keys (e.g. :model_family) are additive."
