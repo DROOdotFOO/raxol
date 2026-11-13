@@ -11,8 +11,9 @@ an optional hash chain, and checkpoint records. Depends on Jason and
 {:raxol_journal, "~> 2.8"}
 ```
 
-Beside `raxol_agent`, it needs a `raxol_agent` release later than 2.7.0.
-`raxol_agent` 2.7.0 defines the same modules.
+It replaces the journal inside `raxol_agent` 2.7.0, which defines the same
+modules: do not combine the two. Beside `raxol_agent`, it needs a
+`raxol_agent` release later than 2.7.0.
 
 ## Quick start
 
