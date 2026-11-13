@@ -26,13 +26,15 @@ thousand lightweight processes, not a thousand OS threads.
 
 ## Three things Raxol does that the others do not
 
-### Governed execution (ALLOW / ASK / DENY)
+### Governed execution
 
-Every tool call passes through an [authorization engine](features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
-that returns allow, ask, or deny, with per-scope approval memory. This is stronger than a
-binary approve/deny prompt: an agent can be allowed to read anywhere, asked before writing,
-and denied the shell entirely, declaratively. The [Tool Catalog](reference/TOOL_CATALOG.md)
-marks which tools are gated.
+A tool marked `sensitive` is denied unless the context of the call carries a
+`:tool_authorizer` that allows it, so a model cannot reach one just by emitting a tool call.
+Over ACP the agent is handed an authorizer that asks the editor once for each sensitive
+call. `Raxol.Agent.Authorization` is an
+[allow/ask/deny policy reducer](features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
+that a host can wire in; no tool-call path consults it by default. The
+[Tool Catalog](reference/TOOL_CATALOG.md) marks which tools are sensitive.
 
 ### One app, every surface
 

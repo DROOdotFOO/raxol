@@ -97,12 +97,12 @@ age skills; nothing in Raxol ages them on its own.
 
 ## The safety dimension
 
-A skill in Raxol carries more than instructions. When a skill's steps call tools, those
-calls run under the same [ALLOW/ASK/DENY authorization](../features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
-as any other tool call, and across whichever [surface](SURFACES.md) the agent is running
-on. A skill cannot smuggle in a privileged action: writing a file or running a shell
-command from inside a skill is still a sensitive tool call, still gated, still auditable in
-the [conversation item-log](../features/AGENT_FRAMEWORK.md#conversation-item-log).
+A tool call made while following a skill is a tool call like any other. An action marked
+`sensitive` is denied unless the context of the call carries a `:tool_authorizer` that
+allows it (see the [Tool Catalog](../reference/TOOL_CATALOG.md#authorization)), on whichever
+[surface](SURFACES.md) the agent is running, so a skill cannot smuggle in a privileged
+action. A turn run by `Raxol.Agent.Turn` records each call in the
+[conversation item-log](../features/AGENT_FRAMEWORK.md#conversation-item-log).
 
 ## See also
 

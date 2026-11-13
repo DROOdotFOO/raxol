@@ -128,7 +128,7 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
 
     Agent commerce: autonomous payments (x402, MPP, Xochi cross-chain), spending limits, stealth and shielded settlement, and ZKSAR trust attestations. No other agent runtime ships this.
 
-    Governance: an ALLOW/ASK/DENY authorization engine gates every tool call, and a durable conversation item-log records what the agent did.
+    Governance: a tool marked sensitive is denied unless the call's context carries an authorizer that allows it, and a durable conversation item-log records what the agent did.
     """
   end
 

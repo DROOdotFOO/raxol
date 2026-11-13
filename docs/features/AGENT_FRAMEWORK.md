@@ -294,6 +294,10 @@ is what `raxol doctor` prints under `providers`.
   composes the engine into the `CommandHook` chain at the `:tool_call` phase, resolving an
   ASK through a synchronous prompter.
 
+A host wires the engine in: through `Hook`, or through `McpAuthorizer` for an MCP server.
+The LLM tool-call path does not consult it. There a `sensitive` action is denied unless the
+context of the call carries a `:tool_authorizer` (`Raxol.Agent.ToolPolicy`).
+
 ## Conversation item-log
 
 `Raxol.Agent.Conversation` is a durable, append-only record of what an agent did.

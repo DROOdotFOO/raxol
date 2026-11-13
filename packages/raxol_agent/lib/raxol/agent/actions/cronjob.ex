@@ -37,7 +37,7 @@ defmodule Raxol.Agent.Actions.Cronjob do
         "action create: schedule a new job; list: show jobs; update: change one; " <>
         "pause/resume: toggle firing; run: fire now; remove: delete. " <>
         "Pass schedule as a crontab ('0 9 * * 1-5'), interval ('every 2h'), " <>
-        "relative delay ('30m'), or ISO 8601 timestamp -- convert natural language yourself.",
+        "relative delay ('30m'), or ISO 8601 timestamp. Convert natural language yourself.",
     schema: [
       input: [
         action: [

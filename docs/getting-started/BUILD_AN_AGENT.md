@@ -54,8 +54,8 @@ end
 ```
 
 Declare which tools an agent may call with `available_actions/0`. The
-[Tool Catalog](../reference/TOOL_CATALOG.md) lists every built-in tool and its
-authorization tier.
+[Tool Catalog](../reference/TOOL_CATALOG.md) lists every built-in tool and whether
+it is sensitive.
 
 ```elixir
 defmodule MyAgent do
@@ -65,8 +65,10 @@ defmodule MyAgent do
 end
 ```
 
-A tool marked `sensitive: true` is denied by default and gated
-through the [ALLOW/ASK/DENY authorization engine](../features/AGENT_FRAMEWORK.md#authorization-allowaskdeny).
+A tool marked `sensitive: true` is denied unless the context of the call carries a
+`:tool_authorizer` that allows it (`Raxol.Agent.ToolPolicy`). `Turn.run/3` sets none, so
+under it a sensitive tool is always denied; `Raxol.Agent.Stream.react/2` takes one in its
+`:context` option.
 
 ## 3. Reason on a real model
 
