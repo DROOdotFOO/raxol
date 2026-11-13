@@ -36,18 +36,12 @@ os_excludes =
     _ -> [:windows_only]
   end
 
-# :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
-# until their units land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI.
+# :pending_unit — invariant skeletons, visible in the suite but never run.
+# :mutation — negative-control checklists, run on demand, never in regular CI.
 #
-# :harness_red — failing-first red suites (test/raxol/agent/red/) authored
-# BEFORE their units against the freeze contracts; excluded from every
-# regular run so CI stays GREEN while the contract is pinned. A suite loses the
-# tag (and joins CI green) the day its unit implements it. No suite carries
-# the tag at present; it is kept in the exclude list for the next
-# failing-first red. The negative CONTROLS for the same contours are NOT
-# tagged :harness_red — they run in CI to prove each red has teeth
-# (meta-invariant m4).
+# :harness_red — a suite written before the code it pins carries this tag and
+# stays out of regular runs until that code exists. No suite carries it at
+# present.
 ExUnit.start(
   exclude: [
     :slow,

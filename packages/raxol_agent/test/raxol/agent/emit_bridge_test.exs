@@ -169,7 +169,7 @@ defmodule Raxol.Agent.EmitBridgeTest do
       :ok = FileStore.close(journal)
     end
 
-    test "a non-default branch_id is written; \"main\" is omitted (I2)",
+    test "a non-default branch_id is written; \"main\" is omitted",
          %{streamer: streamer, base: base} do
       # Default branch: the record OMITS branch_id (byte-identity preserved).
       main_session = "sess-main-#{System.unique_integer([:positive])}"

@@ -17,8 +17,8 @@ defmodule Raxol.Web3.Cache do
       extends every outstanding TTL by the size of the step. Monotonic
       milliseconds cannot do that.
     * **A bounded table.** This table's owner is the application, so its
-      lifetime is the node's, and "until someone clears it" is not a bound.
-      What replaces it is below.
+      lifetime is the node's, and nothing clears it on its own. What bounds
+      it is below.
 
   ## Keys never come from a URL
 
