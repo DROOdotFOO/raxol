@@ -7,8 +7,6 @@ defmodule Raxol.Test.GeneratedApp do
 
   A generated project fetches raxol from Hex. Compiling its files here, against
   the raxol in this build, is the same compile without the fetch.
-
-  Shared with packages/raxol_cli, whose test paths include this directory.
   """
 
   import ExUnit.Assertions
