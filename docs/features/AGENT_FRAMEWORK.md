@@ -247,6 +247,38 @@ registry and `ExecutorConfig.backend()` are all derived from (`Catalog.ids/0` li
 backend). `select/1` returns `{:error, {:unknown_backend, harness}}` for a harness the
 catalog does not declare.
 
+### Credentials
+
+`Raxol.Agent.Backend.Resolver.resolve/1` turns the environment into an `ExecutorConfig`.
+`Raxol.Agent.Stream` calls it when given `auto_provider: true` and no `:executor`.
+
+- **A named provider** (`harness:` to the resolver, `provider:` to `Stream`). Its key is the
+  first of: the `:api_key` option; a 1Password reference, read with the `op` CLI, from the
+  store or from `RAXOL_<HARNESS>_OP`; the provider's environment variable
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...). With none of them the result is
+  `{:no_key, harness}`. `:ollama`, `:lm_studio`, `:llm7` and `:mock` need no key.
+- **No provider named.** The resolver walks the catalog in order and takes the first provider
+  with a stored reference or an environment key, or a keyless one with an entry in the store.
+  Providers billed in API credits (`:anthropic`, `:openai`, `:kimi`, `:openrouter`,
+  `:longcat`, `:deepseek`) and the generic `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` endpoint
+  are skipped unless `RAXOL_ALLOW_PAID_API` is `1`, `true`, `TRUE` or `yes`. With nothing
+  found the result is `:no_provider`, and `Stream` answers from its `:backend` option, by
+  default `Backend.Mock`.
+
+The store is `~/.raxol/providers.json`, or the file `$RAXOL_PROVIDERS` names. It maps a
+provider to an `op://` reference and an optional model and base URL, never to a key, and is
+written with mode `0600`. A store the account does not own, or that its group or others may
+write, is refused with a logged warning, and resolution continues with environment variables.
+
+```elixir
+Raxol.Agent.Setup.connect_ref(:anthropic, %{op_ref: "op://Vault/Item/api_key"})
+Raxol.Agent.Setup.remove(:anthropic)
+```
+
+`connect_ref/3` stores a reference and reports whether it authorizes. `connect_key/3` first
+puts a raw key into a new 1Password item. `remove/1` deletes a provider's entry. `status/0`
+is what `raxol doctor` prints under `providers`.
+
 ## Authorization (ALLOW/ASK/DENY)
 
 `Raxol.Agent.Authorization` is a three-way policy engine, richer than the deny-only
