@@ -103,6 +103,6 @@ You give up raw microbenchmark speed. You get process isolation, hot reload, dis
 ## Further reading
 
 - [Architecture](core/ARCHITECTURE.md): how the render pipeline works
-- [Agent Framework](features/AGENT_FRAMEWORK.md): AI agents as TEA apps
+- [Agent Framework](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENT_FRAMEWORK.md): AI agents as TEA apps
 - [Distributed Swarm](features/DISTRIBUTED_SWARM.md): CRDTs and node discovery
 - [SSH Deployment](cookbook/SSH_DEPLOYMENT.md): serving apps over SSH

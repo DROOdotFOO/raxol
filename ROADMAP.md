@@ -34,7 +34,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) move in lockstep on the 2.7.x line, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) have their own 0.x line. `raxol_journal` is on the framework line and unpublished until the next train. `raxol_earn`, `raxol_gateway`, `raxol_cli`, `raxol_console`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
+The Hex packages this repository releases track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`/`raxol_journal`) move in lockstep on the 2.8.x line, and the independent surface packages (`raxol_speech`, `raxol_telegram`, `raxol_watch`) have their own 0.x line. `raxol_gateway` is on the 0.x line and is published on its own, outside the train. `raxol_agent` and `raxol_payments` are on Hex and off the train: a root tag publishes neither (ADR-0043). `raxol_earn`, `raxol_cli`, `raxol_console`, `raxol_web3`, `raxol_broker`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |
@@ -61,7 +61,7 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 | Paid skills market | agentskills.io-format serializer + hub pull client + tradeable skills (a `SKILL.md` bundle with an ACP offering, settled on Base) | M | RAILS |
 | Migration on-ramp | `mix raxol.import --from hermes/openclaw`: SOUL.md -> persona, skills, allowlists -> `Sandbox.Shell` | S | CATCH-UP |
 | Windows first-class | Tune the pure-Elixir driver + Windows CI + the PowerShell installer path | M | CATCH-UP |
-| OpenRouter funnel | Run the #414 live smoke with a real key, confirm the `openrouter.ai/apps?url=https://raxol.io` listing, bump site copy to v2.6 / 14 packages | S | Funnel |
+| OpenRouter funnel | Run the OpenRouter live smoke with a real key, confirm the `openrouter.ai/apps?url=https://raxol.io` listing, update the site copy | S | Funnel |
 
 **P2: deliberate laggards** (do when pulled, not pushed)
 
@@ -116,7 +116,7 @@ RATE (Raxol Automated Testing Environment). Model: FFmpeg's FATE (end-to-end ref
 | Real-cluster swarm | Declaratively deploy the BEAM app across the mesh over Tailscale; orchestrate partition and heal; assert CRDT (`ORSet`/`LWWRegister`) convergence and topology re-election across real nodes. | (beyond FATE) |
 | Burrito release matrix | Per-target self-contained binaries (aarch64/x86_64 Linux, Darwin, Windows) cross-compiled via zig; each smoke-tested on its actual silicon over the mesh before it is trusted. | reference run on real hardware |
 
-Substrate: builds on the PR #441 flake. `nix run` / `bin/raxol` exposes both the interactive playground and a headless golden-render entrypoint (`Raxol.Release.golden/0`) reused as the per-arch smoke test.
+Substrate: the Nix flake. `nix run` exposes both the interactive playground and a headless golden-render entrypoint (`Raxol.Release.golden/0`) reused as the per-arch smoke test.
 
 Determinism discipline (the FATE rule, "flaky is deterministic, dig in"): render output must hash-stably. The virtual `Animation.Clock` is already frame-deterministic; the remaining guards are map-ordering leaks, locale-dependent Unicode width, and concurrent-render process ordering. A flaky golden hash is a real bug, not noise.
 

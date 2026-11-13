@@ -8,7 +8,7 @@ Speech surface for Raxol. TTS reads accessibility announcements aloud, STT captu
 ## Install
 
 ```elixir
-{:raxol_speech, "~> 0.2"}
+{:raxol_speech, "~> 0.3"}
 ```
 
 For speech-to-text, add the optional ML dependencies:

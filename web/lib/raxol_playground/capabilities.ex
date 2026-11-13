@@ -84,16 +84,18 @@ defmodule RaxolPlayground.Capabilities do
   # Which packages are ON HEX, and what each is for. This part IS a judgment
   # call and stays written down: `packages/` also holds pre-alpha work nobody
   # can `mix deps.get` yet, and the capability endpoints exist to tell an agent
-  # what it can actually depend on. Only the versions are derived.
+  # what it can actually depend on. Only the versions are derived, so a
+  # package belongs here only while Hex has the minor its `mix.exs` states:
+  # `raxol_payments` is 0.3 in the tree and 0.2 on Hex, and is left out.
   @published [
     {"raxol", "Full framework"},
     {"raxol_agent", "AI agents"},
     {"raxol_mcp", "MCP server"},
-    {"raxol_payments", "Agent commerce"},
     {"raxol_liveview", "LiveView bridge"},
     {"raxol_sensor", "Sensor fusion"},
     {"raxol_terminal", "Terminal emulation"},
     {"raxol_core", "Behaviours, events"},
+    {"raxol_journal", "Session journal"},
     {"raxol_plugin", "Plugin SDK"},
     {"raxol_speech", "TTS/STT"},
     {"raxol_telegram", "Telegram bot"},

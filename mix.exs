@@ -1,7 +1,7 @@
 defmodule Raxol.MixProject do
   use Mix.Project
 
-  @version "2.7.0"
+  @version "2.8.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -208,21 +208,16 @@ defmodule Raxol.MixProject do
 
   defp modular_packages do
     [
-      # The framework family moves to 2.7 together. raxol_core gained a
-      # public module this release (Raxol.Core.Colors.Ansi256, which
-      # Raxol.Style.Colors.Formats.ansi_to_rgb/1 calls), and adding public API
-      # is a MINOR bump: under the old "~> 2.6" a Hex consumer could resolve
-      # raxol_core 2.6.0, which lacks the module, and get an
-      # UndefinedFunctionError on any 256-color render. Expressing the
-      # requirement as a minor bump keeps the one-constraint-form rule that
-      # Raxol.Release.PackageCheck enforces ("~> major.minor" exactly);
-      # patch-pinning "~> 2.6.2" would have violated it.
+      # The framework family shares one minor, and every requirement between
+      # its members names it: Raxol.Release.PackageCheck accepts only
+      # "~> major.minor" of the sibling's version, so a Hex consumer cannot
+      # resolve a sibling older than the code it was built against.
       raxol_dep(:raxol_core, "~> 2.8", "packages/raxol_core"),
-      raxol_dep(:raxol_terminal, "~> 2.7", "packages/raxol_terminal"),
-      raxol_dep(:raxol_sensor, "~> 2.7", "packages/raxol_sensor"),
+      raxol_dep(:raxol_terminal, "~> 2.8", "packages/raxol_terminal"),
+      raxol_dep(:raxol_sensor, "~> 2.8", "packages/raxol_sensor"),
       raxol_dep(:raxol_mcp, "~> 2.8", "packages/raxol_mcp"),
-      raxol_dep(:raxol_liveview, "~> 2.7", "packages/raxol_liveview"),
-      raxol_dep(:raxol_plugin, "~> 2.7", "packages/raxol_plugin")
+      raxol_dep(:raxol_liveview, "~> 2.8", "packages/raxol_liveview"),
+      raxol_dep(:raxol_plugin, "~> 2.8", "packages/raxol_plugin")
     ]
   end
 
@@ -423,8 +418,8 @@ defmodule Raxol.MixProject do
     """
     Multi-surface application runtime for Elixir. One TEA module renders to
     terminal, browser (LiveView), SSH, and MCP (agents). 30+ widgets, flexbox +
-    CSS grid, AI agent runtime, distributed swarm with CRDTs, time-travel
-    debugging, session recording, an AST-checked REPL, and agentic commerce.
+    CSS grid, distributed swarm with CRDTs, time-travel debugging, session
+    recording, and an AST-checked REPL.
     """
   end
 
@@ -527,7 +522,6 @@ defmodule Raxol.MixProject do
         {"docs/features/README.md", [title: "Features", filename: "features"]},
         {"docs/features/FILESYSTEM.md", [title: "Virtual Filesystem"]},
         {"docs/features/CURSOR_EFFECTS.md", [title: "Cursor Effects"]},
-        {"docs/features/AGENT_FRAMEWORK.md", [title: "Agent Framework"]},
         {"docs/features/SENSOR_FUSION.md", [title: "Sensor Fusion"]},
         {"docs/features/DISTRIBUTED_SWARM.md", [title: "Distributed Swarm"]},
         {"docs/features/ADAPTIVE_UI.md", [title: "Adaptive UI"]},
@@ -537,8 +531,6 @@ defmodule Raxol.MixProject do
          [title: "Time-Travel Debugging"]},
         {"docs/WHY_OTP.md", [title: "Why OTP"]},
         {"docs/PACKAGES.md", [title: "Package Ecosystem"]},
-        {"docs/features/AGENTIC_COMMERCE.md", [title: "Agentic Commerce"]},
-        {"docs/features/ACP.md", [title: "Agent Commerce Protocol"]},
         {"docs/features/MCP.md", [title: "MCP"]},
         {"docs/features/PLUGIN_SDK.md", [title: "Plugin SDK"]},
         {"docs/features/SPEECH.md", [title: "Speech"]},
@@ -575,15 +567,12 @@ defmodule Raxol.MixProject do
           docs/features/README.md
           docs/features/FILESYSTEM.md
           docs/features/CURSOR_EFFECTS.md
-          docs/features/AGENT_FRAMEWORK.md
           docs/features/SENSOR_FUSION.md
           docs/features/DISTRIBUTED_SWARM.md
           docs/features/ADAPTIVE_UI.md
           docs/features/RECORDING_REPLAY.md
           docs/features/REPL.md
           docs/features/TIME_TRAVEL_DEBUGGING.md
-          docs/features/AGENTIC_COMMERCE.md
-          docs/features/ACP.md
           docs/features/MCP.md
           docs/features/PLUGIN_SDK.md
           docs/features/SPEECH.md

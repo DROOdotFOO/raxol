@@ -6,29 +6,31 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 
 | Package                                            | Hex                       | What                                  |
 | -------------------------------------------------- | ------------------------- | ------------------------------------- |
-| [`raxol`](https://hex.pm/packages/raxol)           | `{:raxol, "~> 2.7"}`      | Full framework: runtime, UI, examples |
+| [`raxol`](https://hex.pm/packages/raxol)           | `{:raxol, "~> 2.8"}`      | Full framework: runtime, UI, examples |
 
 ## Core
 
 | Package                                                    | Hex                           | What                                       |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------ |
 | [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.8"}`     | Behaviours, events, config, plugins        |
-| [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.7"}` | Terminal emulation, termbox2 NIF           |
+| [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.8"}` | Terminal emulation, termbox2 NIF           |
 | [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.8"}`      | MCP server, client, registry, test harness |
-| [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |
-| [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.7"}`   | Plugin SDK, testing, generator             |
-| [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.7"}`   | Sensor fusion (zero deps)                  |
-| `raxol_journal` (not yet on Hex)                           | `path: "packages/raxol_journal"` | Session journal, event contract         |
+| [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.8"}` | Phoenix LiveView bridge, themes, CSS       |
+| [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.8"}`   | Plugin SDK, testing, generator             |
+| [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.8"}`   | Sensor fusion (zero deps)                  |
+| [`raxol_journal`](https://hex.pm/packages/raxol_journal)   | `{:raxol_journal, "~> 2.8"}`  | Session journal, event contract            |
+
+`raxol_journal` 2.8 holds the journal modules that `raxol_agent` 2.7.0 defines itself; do not add both to one project.
 
 ## Agents
 
 | Package                                                    | Hex                           | What                                        |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
 | [`raxol_agent`](https://hex.pm/packages/raxol_agent)       | `{:raxol_agent, "~> 2.7"}`    | AI agent framework                          |
-| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.3"}` | Agent payments, Xochi cross-chain, stealth  |
+| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | 0.3 here, unpublished; Hex has 0.2 | Agent payments, Xochi cross-chain, stealth  |
 | `raxol_earn` (pre-alpha)                                    | `path: "packages/raxol_earn"`  | Virtuals Agent Commerce Protocol (seller)   |
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
-| `raxol_gateway` (pre-alpha)                                | `path: "packages/raxol_gateway"`  | Unified messaging gateway (multi-platform) |
+| `raxol_gateway`                                            | 0.x, published on its own, outside the train | Unified messaging gateway (multi-platform) |
 | `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command (`acp`, `mcp`, `doctor`, `update`, `playground`, `new`), packaged as a self-contained Burrito binary |
 | `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
 | `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
@@ -42,9 +44,9 @@ The **Harness** is the agent-session engine: the event contract `Raxol.Agent.Con
 
 | Package                                                    | Hex                           | What                                        |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
-| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.2"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
-| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.2"}` | Telegram bot, per-chat sessions, keyboards  |
-| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.2"}`    | APNS/FCM push, glanceable summaries         |
+| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.3"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
+| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.3"}` | Telegram bot, per-chat sessions, keyboards  |
+| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.3"}`    | APNS/FCM push, glanceable summaries         |
 
 ## Dependency graph
 

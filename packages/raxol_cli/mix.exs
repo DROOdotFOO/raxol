@@ -158,7 +158,7 @@ defmodule RaxolCli.MixProject do
       # Main raxol for the terminal runtime + the Playground app; raxol_agent for
       # the `acp` and `mcp` agent surfaces. raxol_agent pulls main raxol transitively, but
       # the direct dep documents the CLI's reliance on Raxol.start_link/Playground.
-      raxol_dep(:raxol, "~> 2.7", "../.."),
+      raxol_dep(:raxol, "~> 2.8", "../.."),
       raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent"),
 
       # Packaging + argv access. Runtime (not build-only) here: the CLI reads the

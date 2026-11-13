@@ -10,7 +10,7 @@ Guide to testing Raxol plugins: unit, integration, and property-based approaches
 # In your plugin's mix.exs
 defp deps do
   [
-    {:raxol, "~> 2.7", only: [:dev, :test]},
+    {:raxol, "~> 2.8", only: [:dev, :test]},
     {:mox, "~> 1.0", only: :test}  # For mocking
   ]
 end

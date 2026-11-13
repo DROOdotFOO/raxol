@@ -1,7 +1,7 @@
 defmodule RaxolTelegram.MixProject do
   use Mix.Project
 
-  @version "0.2.1"
+  @version "0.3.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -44,15 +44,15 @@ defmodule RaxolTelegram.MixProject do
       # Consumer apps must include :raxol in their deps for sessions to work.
       # Path locally (matching raxol_gateway's spec, which points Handler.Lifecycle
       # at the repo root); hex under HEX_BUILD.
-      raxol_dep(:raxol, "~> 2.7", "../..", optional: true),
+      raxol_dep(:raxol, "~> 2.8", "../..", optional: true),
 
       # Telegram Bot API (optional -- only needed at runtime with a bot token)
       {:telegex, "~> 1.8", optional: true, runtime: false},
 
       # Gateway behaviour (optional -- GatewayAdapter compiles only when present).
-      # Source builds include it locally; Hex builds drop it entirely, because
-      # raxol_gateway is pre-alpha and not on Hex, so declaring it would make
-      # the tarball unpublishable.
+      # Source builds include it locally; Hex builds drop it entirely:
+      # raxol_gateway is outside the release train and published after it, so
+      # the train could not resolve a requirement on it.
       #
       # The cost of dropping it rather than declaring it optional: a Hex
       # consumer who adds raxol_gateway themselves gives Mix no ordering hint,

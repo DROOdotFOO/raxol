@@ -5,7 +5,7 @@ Terminal emulation and driver infrastructure for Raxol. Depends on raxol_core fo
 ## Install
 
 ```elixir
-{:raxol_terminal, "~> 2.7"}
+{:raxol_terminal, "~> 2.8"}
 ```
 
 ## What's included
@@ -31,9 +31,8 @@ GenServers defined here are started by the parent application's supervision tree
 ```elixir
 # In your Application supervisor
 children = [
-  Raxol.Terminal.Driver,
-  Raxol.Terminal.Config.TerminalConfigManager
+  Raxol.Terminal.Driver
 ]
 ```
 
-See [main docs](../../README.md) for the full Raxol framework.
+See the [Raxol documentation](https://hexdocs.pm/raxol) for the full framework.

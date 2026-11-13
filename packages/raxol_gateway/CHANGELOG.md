@@ -5,19 +5,7 @@ All notable changes to `raxol_gateway` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - unreleased
-
-### Changed
-
-- **Breaking:** `Raxol.Gateway.Handler.Agent` ships in `raxol_console`, which
-  requires `raxol_gateway ~> 0.2`. This package no longer has an optional
-  dependency on `raxol_agent`.
-- `Raxol.Gateway.SessionRouter`, and so `Raxol.Gateway.Supervisor`, does not
-  start when the `:handler` module cannot be loaded: the start fails with
-  `{:handler_not_available, module}`. Such a handler used to fail one session
-  at a time, on each chat's first message.
-
-## [0.1.0] - unreleased
+## [0.2.0] - 2026-11-13
 
 First release. One supervised daemon fronting many chat platforms behind a
 single adapter contract.
@@ -35,8 +23,9 @@ single adapter contract.
   per-chat cooldown and a max-session limit.
 - `Raxol.Gateway.Handler`: the per-chat behaviour a session runs (`init/2`,
   `handle_event/2`, optional `terminate/2` on clean stops).
-- `Raxol.Gateway.Handler.Agent`: an agent-backed handler, with a per-chat
-  throttle on concurrent agent turns.
+- `Raxol.Gateway.SessionRouter`, and so `Raxol.Gateway.Supervisor`, does not
+  start when the `:handler` module cannot be loaded: the start fails with
+  `{:handler_not_available, module}`.
 - `Raxol.Gateway.Handler.Lifecycle`: a full TEA app per chat under
   `environment: :gateway`. That environment starts no driver and no plugin
   manager and leaves processes unnamed, which is what lets one app module
@@ -63,18 +52,18 @@ single adapter contract.
   stable `conversation_id`; `SessionRouter.handoff/3` rebinds a conversation
   to another platform's route and reuses that id, so the log resumes the same
   history across platforms.
-
-### Fixed
-
-- Delivery failures are no longer discarded or recorded as successful outbound
+- A failed delivery neither crashes the chat session nor enters outbound
   history. `Raxol.Gateway.Session` handles adapter `{:error, reason}` returns,
-  exceptions, and exits without crashing the chat session, logs the failure,
-  and emits `[:raxol_gateway, :session, :delivery_failed]`.
+  exceptions, and exits, logs the failure, and emits
+  `[:raxol_gateway, :session, :delivery_failed]`.
 
 ### Notes
 
-- `raxol_core` is the only required dependency. `raxol` (for
-  `Handler.Lifecycle`), `raxol_agent` (for `Handler.Agent`), `raxol_speech`
-  (for `Pipeline.Transcribe`), and `gen_smtp` (for the email adapter) are all
-  optional; each entry point checks for its dependency before use.
+- `raxol_core` is the only required Raxol dependency. `raxol` (for
+  `Handler.Lifecycle`), `raxol_speech` (for `Pipeline.Transcribe`),
+  `gen_smtp` (for the email adapter), and `mint_web_socket` and `req` (for
+  the Discord adapter) are optional; each entry point checks for its
+  dependency before use.
+- `Raxol.Gateway.Handler.Agent`, an agent-backed handler, ships in
+  `raxol_console`, which requires `raxol_gateway ~> 0.2`.
 - Pre-alpha. The public API may change inside 0.x.

@@ -23,12 +23,15 @@ MCP (Model Context Protocol) server and client for Elixir. JSON-RPC 2.0 protocol
 ## Quick start
 
 ```elixir
-# Register a tool
-Raxol.MCP.Registry.register_tool(%{
-  name: "my_tool",
-  description: "Does a thing",
-  input_schema: %{type: "object", properties: %{}}
-})
+# Register a tool with the default registry
+Raxol.MCP.Registry.register_tools([
+  %{
+    name: "my_tool",
+    description: "Does a thing",
+    inputSchema: %{type: "object", properties: %{}},
+    callback: fn _args -> {:ok, [%{type: "text", text: "done"}]} end
+  }
+])
 
 # Start MCP server on stdio
 mix mcp.server

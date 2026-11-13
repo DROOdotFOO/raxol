@@ -5,7 +5,14 @@ All notable changes to `raxol_watch` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-13
+
+### Changed
+
+- Requires `raxol_core ~> 2.8` (was `~> 2.7`).
+- The optional `pigeon` requirement is `~> 2.1.0` (was `~> 2.0`), and
+  `castore ~> 1.0` is a dependency: Pigeon's HTTP stack needs a CA bundle for
+  TLS verification.
 
 ### Fixed
 

@@ -71,15 +71,20 @@ defmodule RaxolPlayground.CapabilitiesTest do
 
   # On the release train, not yet on Hex. The release that first publishes a
   # package moves it from here to `@published`.
-  @awaiting_first_publish ["raxol_journal"]
+  @awaiting_first_publish []
 
-  test "the published set is the release train, less the packages awaiting a first publish" do
+  # On Hex at the minor its mix.exs states, and released outside this
+  # repository's train. `raxol_payments` is not: Hex has 0.2, the tree 0.3.
+  @off_train ["raxol_agent"]
+
+  test "the published set is the release train, less the packages awaiting a first publish, plus the off-train ones" do
     train =
       Enum.map(Raxol.Release.PackageCheck.public_packages(), &Atom.to_string(&1.app))
 
     assert @awaiting_first_publish -- train == []
+    assert Enum.filter(@off_train, &(&1 in train)) == []
 
     assert Enum.sort(Enum.map(Capabilities.packages(), & &1.name)) ==
-             Enum.sort(train -- @awaiting_first_publish)
+             Enum.sort((train -- @awaiting_first_publish) ++ @off_train)
   end
 end

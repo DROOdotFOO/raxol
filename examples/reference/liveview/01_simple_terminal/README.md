@@ -10,7 +10,7 @@ Minimal example showing how to embed a Raxol terminal in Phoenix LiveView.
 # mix.exs
 def deps do
   [
-    {:raxol, "~> 2.7"}
+    {:raxol, "~> 2.8"}
   ]
 end
 ```

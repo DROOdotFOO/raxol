@@ -9,7 +9,7 @@ Render any TEA app in a browser via Phoenix LiveView, with real-time updates ove
 ```elixir
 # mix.exs
 def deps do
-  [{:raxol_liveview, path: "packages/raxol_liveview"}]
+  [{:raxol_liveview, "~> 2.8"}]
 end
 ```
 

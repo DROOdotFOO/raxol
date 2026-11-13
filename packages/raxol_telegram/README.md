@@ -14,7 +14,7 @@ The Telegram bot ecosystem is moving in three directions at once: bots-as-group-
 ## Install
 
 ```elixir
-{:raxol_telegram, "~> 0.2"}
+{:raxol_telegram, "~> 0.3"}
 ```
 
 For runtime Telegram API access, add:

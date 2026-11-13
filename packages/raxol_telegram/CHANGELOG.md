@@ -5,6 +5,16 @@ All notable changes to `raxol_telegram` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-13
+
+### Changed
+
+- Requires `raxol_core ~> 2.8` (was `~> 2.7`), and the optional `raxol`
+  requirement is `~> 2.8`.
+- `Raxol.Telegram.Guardian.MCPTools.register/1` returns
+  `Raxol.MCP.Registry.register_tools/2`'s `{:error, {:name_collision, _}}`
+  when a tool's client-side name is taken.
+
 ## [0.2.1] - 2026-09-09
 
 ### Added

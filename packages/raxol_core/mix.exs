@@ -55,7 +55,7 @@ defmodule RaxolCore.MixProject do
   defp package do
     [
       name: "raxol_core",
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md),
+      files: ~w(lib test/support/boundary_vectors .formatter.exs mix.exs README.md LICENSE.md),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

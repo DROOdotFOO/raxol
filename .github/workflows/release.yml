@@ -19,7 +19,8 @@ jobs:
     with:
       release_ref: ${{ github.ref_name }}
       publish: true
-    secrets: inherit
+    secrets:
+      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
 
   # raxol.io serves web/priv/static/llms.txt to agents, and its dep lines take
   # their versions from mix.exs. Those are bumped on master before the tag, so
@@ -101,7 +102,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           body_path: ${{ steps.scoreboard.outputs.body_path }}
           generate_release_notes: true
