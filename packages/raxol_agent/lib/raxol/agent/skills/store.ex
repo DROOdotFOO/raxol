@@ -95,13 +95,13 @@ defmodule Raxol.Agent.Skills.Store do
   @spec usage(String.t(), keyword()) :: {:ok, usage()} | {:error, :not_found}
   def usage(name, opts \\ []), do: GenServer.call(server(opts), {:usage, name})
 
-  @doc "Set a skill's lifecycle state (`:active`/`:stale`/`:archived`). Used by the Curator."
+  @doc "Set a skill's lifecycle state (`:active`/`:stale`/`:archived`)."
   @spec set_state(String.t(), skill_state(), keyword()) :: :ok | {:error, :not_found}
   def set_state(name, new_state, opts \\ []) when new_state in [:active, :stale, :archived] do
     GenServer.call(server(opts), {:set_state, name, new_state})
   end
 
-  @doc "Pin a skill so the Curator never ages or rewrites it."
+  @doc "Pin a skill, marking it as one a host must not age or rewrite."
   @spec pin(String.t(), keyword()) :: :ok | {:error, :not_found}
   def pin(name, opts \\ []), do: GenServer.call(server(opts), {:set_pinned, name, true})
 
@@ -118,8 +118,8 @@ defmodule Raxol.Agent.Skills.Store do
   def archive(name, opts \\ []), do: GenServer.call(server(opts), {:archive, name})
 
   @doc """
-  Per-skill telemetry snapshot for every indexed skill, for the Curator to
-  decide lifecycle transitions: `name, created_by, source, state, pinned,
+  Per-skill telemetry snapshot for every indexed skill, enough to decide
+  lifecycle transitions: `name, created_by, source, state, pinned,
   last_used_at, created_at`.
   """
   @spec telemetry(keyword()) :: [map()]

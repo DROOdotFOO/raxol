@@ -2,14 +2,14 @@ defmodule Raxol.Agent.Skills do
   @moduledoc """
   Entry points for the procedural-memory (skills) subsystem.
 
-  Skills are reusable, named procedures an agent can read on demand and, via the
-  curation loop, author itself. They live on disk as agentskills.io `SKILL.md`
+  Skills are reusable, named procedures an agent can read on demand and author
+  itself. They live on disk as agentskills.io `SKILL.md`
   files; `Raxol.Agent.Skills.Store` is the warm index over them, and the three
   `Raxol.Agent.Actions.Skills` actions (`skills_list`, `skill_view`,
   `skill_manage`) are how an agent reaches them.
 
   Provides the configured store and the `{module, opts}` tuple that goes under
-  `context[:skills]`, mirroring `Raxol.Agent.Memory.provider_context/3`.
+  `context[:skills]`.
   """
 
   alias Raxol.Agent.Skills.Store

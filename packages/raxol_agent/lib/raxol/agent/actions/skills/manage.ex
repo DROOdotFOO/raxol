@@ -3,9 +3,8 @@ defmodule Raxol.Agent.Actions.Skills.Manage do
   Create, patch, or delete a managed skill.
 
   Foreground `skill_manage` calls are user-directed, so skills created here are
-  tagged `created_by: :user`. The background curation reviewer authors skills by
-  calling `Raxol.Agent.Skills.Store.create/2` directly with `created_by: :agent`;
-  the Curator only ages and rewrites `:agent` artifacts, never these.
+  tagged `created_by: :user`. A caller that authors skills on the agent's own
+  behalf calls `Raxol.Agent.Skills.Store.create/2` with `created_by: :agent`.
   """
 
   use Raxol.Agent.Action,

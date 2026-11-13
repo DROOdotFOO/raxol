@@ -192,23 +192,13 @@ defmodule Raxol.Agent.Stream do
   # Vendor-owns-loop backends (native CLI harnesses) run their own tool loop with
   # Raxol's tools injected over MCP, so the framework just streams their output.
   defp native_react(messages, backend, backend_opts, opts) do
-    context = Keyword.get(opts, :context, %{})
-
-    messages
-    |> maybe_enrich_memory(context)
-    |> maybe_enrich_user_context(context)
-    |> then(&do_completion(backend, &1, backend_opts, opts))
+    do_completion(backend, messages, backend_opts, opts)
   end
 
   defp framework_react(messages, backend, backend_opts, opts) do
     actions = Keyword.get(opts, :actions, [])
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     context = Keyword.get(opts, :context, %{})
-
-    messages =
-      messages
-      |> maybe_enrich_memory(context)
-      |> maybe_enrich_user_context(context)
 
     tools = ToolConverter.to_tool_definitions(actions)
     tool_opts = Keyword.merge(backend_opts, tools: tools)
@@ -707,29 +697,6 @@ defmodule Raxol.Agent.Stream do
           [%{role: :system, content: sys} | messages]
         end
     end
-  end
-
-  defp maybe_enrich_memory(messages, context) do
-    Raxol.Agent.Memory.Manager.enrich_messages(
-      messages,
-      Map.get(context, :memory),
-      last_user_content(messages)
-    )
-  end
-
-  defp maybe_enrich_user_context(messages, context) do
-    Raxol.Agent.Memory.Manager.enrich_user_context(
-      messages,
-      Map.get(context, :user_context)
-    )
-  end
-
-  defp last_user_content(messages) do
-    messages
-    |> Enum.reverse()
-    |> Enum.find_value("", fn msg ->
-      if Map.get(msg, :role) == :user, do: Map.get(msg, :content)
-    end)
   end
 
   defp format_tool_text(tool_calls) do

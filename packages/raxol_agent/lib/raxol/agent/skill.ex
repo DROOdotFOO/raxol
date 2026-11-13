@@ -13,8 +13,8 @@ defmodule Raxol.Agent.Skill do
   a round trip. `parse(render(skill))` returns an equal struct for the shapes
   real skills use (scalars, lists of scalars, and a one-level metadata map).
 
-  `created_by` is decoded to `:agent`, `:user`, or `nil`; this is what the
-  Curator uses to decide which skills it may age and rewrite. Unknown values
+  `created_by` is decoded to `:agent`, `:user`, or `nil`, so a host can tell
+  the skills an agent wrote from the ones a person did. Unknown values
   decode to `nil` rather than calling `String.to_atom/1` on file content.
   """
 
