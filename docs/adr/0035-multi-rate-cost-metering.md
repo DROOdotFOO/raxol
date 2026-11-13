@@ -13,12 +13,9 @@ exists for. This records the metering model for a provider whose prices do not f
 flat-table one. `AcpStreamAdapter` has since been removed (ADR-0042); the per-turn delta
 rule it implemented stays as written for whatever reads a provider-reported cost next.
 
-Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Code.App` and
-`Harness.GrokBuild` are removed, so nothing in this tree meters a turn through
-`Raxol.Agent.LlmPrices` or reports a cost to it.
-
-Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: `Raxol.Agent.LlmPrices` is removed,
-and with it the price tables and `turn_cost/4`. Nothing in this tree prices a turn.
+Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: `Raxol.Agent.LlmPrices` and its price
+tables are removed. `Raxol.Agent.BenchmarkProfile.cost_usd/2` prices a run at the caller's flat
+rates.
 
 Written against DeepSeek as the forcing case, but the model it breaks was already straining:
 two of the three collision hazards below are live today on OpenRouter and LLM7, and Anthropic's

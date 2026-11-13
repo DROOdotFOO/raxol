@@ -11,18 +11,19 @@ live. Revised on 2026-10-24 after a third pass: agents keep their journal
 across a respawn but not their state, payment limits need durable
 single-owner state, and surfaces need an authenticated user.
 
-Supersedes ADRs 0022, 0024, 0026, 0027 and 0028 and narrows 0021, 0032,
-[0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent seams), 0035,
+Supersedes ADRs 0022, 0024, 0026, 0027, 0028 and 0035 and narrows 0021, 0032,
+[0034](0034-foreign-coding-agent-seams.md) (foreign coding-agent seams),
 0036 and 0037 (table under Consequences); each is marked in its own Status.
 Amends [ADR-0012](0012-mcp-as-rendering-target.md): derived tool names
 become session-scoped and a session's tool set becomes sticky (Decision 2).
 
 2026-11-13: the harness is deleted.
 
-2026-11-13: modules listed below as kept that nothing called are removed:
-`Raxol.Agent.Turn`, `Command`, `Policy`, `Cache`, `LlmPrices`,
-`Raxol.Agent.Harness.SessionLane` and the root `Raxol.Harness.SessionLane`
-behaviour. ADR-0035 is superseded rather than narrowed.
+2026-11-13: `Raxol.Agent.Turn`, `Command`, `Policy`, `Cache`, `LlmPrices`,
+`OMP.Version`, `Raxol.Agent.Harness.SessionLane` and the root
+`Raxol.Harness.SessionLane` behaviour, which nothing called, are removed.
+Decision 4's pricing through `LlmPrices` and Decision 6's `SessionLane` lane
+and `OMP.Version` check name code that no longer exists.
 
 ## Context
 
