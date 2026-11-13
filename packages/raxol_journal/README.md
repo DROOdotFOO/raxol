@@ -8,7 +8,7 @@ an optional hash chain, and checkpoint records. Depends on Jason and
 ## Install
 
 ```elixir
-{:raxol_journal, "~> 2.7"}
+{:raxol_journal, "~> 2.8"}
 ```
 
 Beside `raxol_agent`, it needs a `raxol_agent` release later than 2.7.0.

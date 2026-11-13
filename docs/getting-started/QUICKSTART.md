@@ -18,7 +18,7 @@ Or add to an existing project:
 ```elixir
 # mix.exs
 def deps do
-  [{:raxol, "~> 2.7"}]
+  [{:raxol, "~> 2.8"}]
 end
 ```
 

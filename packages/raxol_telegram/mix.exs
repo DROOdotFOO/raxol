@@ -1,7 +1,7 @@
 defmodule RaxolTelegram.MixProject do
   use Mix.Project
 
-  @version "0.2.1"
+  @version "0.2.2"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -44,7 +44,7 @@ defmodule RaxolTelegram.MixProject do
       # Consumer apps must include :raxol in their deps for sessions to work.
       # Path locally (matching raxol_gateway's spec, which points Handler.Lifecycle
       # at the repo root); hex under HEX_BUILD.
-      raxol_dep(:raxol, "~> 2.7", "../..", optional: true),
+      raxol_dep(:raxol, "~> 2.8", "../..", optional: true),
 
       # Telegram Bot API (optional -- only needed at runtime with a bot token)
       {:telegex, "~> 1.8", optional: true, runtime: false},

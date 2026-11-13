@@ -6,19 +6,19 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 
 | Package                                            | Hex                       | What                                  |
 | -------------------------------------------------- | ------------------------- | ------------------------------------- |
-| [`raxol`](https://hex.pm/packages/raxol)           | `{:raxol, "~> 2.7"}`      | Full framework: runtime, UI, examples |
+| [`raxol`](https://hex.pm/packages/raxol)           | `{:raxol, "~> 2.8"}`      | Full framework: runtime, UI, examples |
 
 ## Core
 
 | Package                                                    | Hex                           | What                                       |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------ |
 | [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.8"}`     | Behaviours, events, config, plugins        |
-| [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.7"}` | Terminal emulation, termbox2 NIF           |
+| [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.8"}` | Terminal emulation, termbox2 NIF           |
 | [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.8"}`      | MCP server, client, registry, test harness |
-| [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.7"}` | Phoenix LiveView bridge, themes, CSS       |
-| [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.7"}`   | Plugin SDK, testing, generator             |
-| [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.7"}`   | Sensor fusion (zero deps)                  |
-| `raxol_journal` (not yet on Hex)                           | `path: "packages/raxol_journal"` | Session journal, event contract         |
+| [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.8"}` | Phoenix LiveView bridge, themes, CSS       |
+| [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.8"}`   | Plugin SDK, testing, generator             |
+| [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.8"}`   | Sensor fusion (zero deps)                  |
+| [`raxol_journal`](https://hex.pm/packages/raxol_journal)   | `{:raxol_journal, "~> 2.8"}`  | Session journal, event contract            |
 
 ## Agents
 

@@ -37,7 +37,7 @@ defmodule RaxolGateway.MixProject do
 
       # TEA runtime (optional -- only Handler.Lifecycle needs it; the path
       # points at the repo root, which carries the :gateway environment).
-      raxol_dep(:raxol, "~> 2.7", "../..", optional: true),
+      raxol_dep(:raxol, "~> 2.8", "../..", optional: true),
 
       # Email adapter (optional -- SMTP submission + MIME composition).
       {:gen_smtp, "~> 1.2", optional: true},
