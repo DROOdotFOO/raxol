@@ -4,10 +4,11 @@ defmodule Raxol.PackageBoundariesTest do
   runtime-side file can name agent-side code fails the check on its own, and
   each exemption passes it.
 
-  Every case is the base tree plus one file. The base tree has a root, two
-  runtime packages (`raxol_core`, and `raxol_journal` defining the exempt
-  modules) and two agent packages (`raxol_agent`, `raxol_cli`). The checker
-  boots a VM per tree, so the trees are checked concurrently, once.
+  Every case is the base tree plus one file. The base tree has a root
+  defining its own `Raxol.CLI` modules, two runtime packages (`raxol_core`,
+  and `raxol_journal` defining the exempt modules) and two agent packages
+  (`raxol_agent`, `raxol_cli`). The checker boots a VM per tree, so the trees
+  are checked concurrently, once.
   """
   use ExUnit.Case, async: true
 
@@ -24,6 +25,13 @@ defmodule Raxol.PackageBoundariesTest do
     Raxol.Agent.Journal.Records.Checkpoint
     Raxol.Agent.Journal.Records.Checkpoint.FileBackend
     Raxol.Agent.Journal.Tip
+  )
+
+  @root_cli_modules ~w(
+    Raxol.CLI.Colors
+    Raxol.CLI.ErrorDisplay
+    Raxol.CLI.ErrorFormatter
+    Raxol.CLI.Spinner
   )
 
   # {label, file, source, reported name, reported kind}
@@ -180,13 +188,31 @@ defmodule Raxol.PackageBoundariesTest do
        def f, do: Raxol.MCP.AgentBridge.actions_to_mcp_tools([])
      end
      """, "Raxol.MCP.AgentBridge", "call"},
-    {"a module only an agent tree defines, outside the namespaces",
-     "lib/raxol/crossing.ex",
+    {"a Raxol.CLI module the root does not define", "lib/raxol/crossing.ex",
      ~S"""
      defmodule Raxol.Crossing do
        def f, do: Raxol.CLI.MCP.authorize(nil)
      end
      """, "Raxol.CLI.MCP", "call"},
+    {"a protocol implementation for an agent module", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f(secret, opts), do: Inspect.Raxol.Payments.Secret.inspect(secret, opts)
+     end
+     """, "Inspect.Raxol.Payments.Secret", "call"},
+    {"an agent Mix task under an application namespace",
+     "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Mix.Tasks.RaxolEarn.Order.run([])
+     end
+     """, "Mix.Tasks.RaxolEarn.Order", "call"},
+    {"an agent Mix task, by exact name", "lib/raxol/crossing.ex",
+     ~S"""
+     defmodule Raxol.Crossing do
+       def f, do: Mix.Tasks.Raxol.Docs.Tools.run([])
+     end
+     """, "Mix.Tasks.Raxol.Docs.Tools", "call"},
     {"a module under an exempt one that raxol_journal does not define",
      "lib/raxol/crossing.ex",
      ~S"""
@@ -440,6 +466,13 @@ defmodule Raxol.PackageBoundariesTest do
        def f, do: [Raxol.Core.Thing, Raxol.Agent.Session, Raxol.Agent.Journal]
        def g, do: Application.get_env(:raxol_payments, :accounting)
      end
+     """},
+    {"a protocol implementation for an exempt module",
+     "packages/raxol_journal/lib/raxol/agent/journal/inspect.ex",
+     ~S"""
+     defimpl Inspect, for: Raxol.Agent.Journal.Tip do
+       def inspect(_tip, _opts), do: "#Tip<>"
+     end
      """}
   ]
 
@@ -566,6 +599,37 @@ defmodule Raxol.PackageBoundariesTest do
       assert output =~
                "packages/raxol_other is on neither side of the runtime/agent line"
     end
+
+    test "a Raxol.CLI module is agent-side with no raxol_cli tree to own it",
+         %{results: results} do
+      assert {output, 1} = results["no raxol_cli tree"]
+
+      assert output =~
+               ~r/^\s+config\/config\.exs:2\s+Raxol\.CLI\.MCP\s+\(value\)$/m
+    end
+
+    test "a runtime tree may not define another Raxol.CLI module",
+         %{results: results} do
+      assert {output, 1} = results["runtime defines another Raxol.CLI module"]
+
+      assert output =~
+               ~r/Raxol\.CLI\.Thing\s+defined in raxol, which is runtime-side/
+    end
+
+    test "a listed root Raxol.CLI module must be defined by a runtime tree",
+         %{results: results} do
+      assert {output, 1} = results["root CLI exemption without a definition"]
+
+      assert output =~
+               ~r/Raxol\.CLI\.Spinner\s+exempt, but no runtime tree defines it/
+    end
+
+    test "an agent tree may not define a module no name rule covers",
+         %{results: results} do
+      assert {output, 1} = results["agent module without an agent-side name"]
+      assert output =~ "agent-side module without an agent-side name"
+      assert output =~ ~r/Raxol\.Tools\.Thing\s+defined in raxol_cli$/m
+    end
   end
 
   # {label, [{file, source}]}; a `nil` source removes the base tree's file.
@@ -585,7 +649,7 @@ defmodule Raxol.PackageBoundariesTest do
       {"exemption without a definition",
        [
          {"packages/raxol_journal/lib/raxol/agent/journal.ex",
-          journal_source(@journal_modules -- ["Raxol.Agent.Journal.Tip"])}
+          modules_source(@journal_modules -- ["Raxol.Agent.Journal.Tip"])}
        ]},
       {"allowlist entry within the runtime side",
        [
@@ -618,13 +682,39 @@ defmodule Raxol.PackageBoundariesTest do
           end
           """}
        ]},
+      {"no raxol_cli tree",
+       [
+         {"packages/raxol_cli/mix.exs", nil},
+         {"packages/raxol_cli/lib/raxol/cli/mcp.ex", nil},
+         {"config/config.exs",
+          """
+          import Config
+          config :raxol, mcp_authorizer: {Raxol.CLI.MCP, :authorize}
+          """}
+       ]},
+      {"runtime defines another Raxol.CLI module",
+       [{"lib/raxol/cli/thing.ex", "defmodule Raxol.CLI.Thing do\nend\n"}]},
+      {"root CLI exemption without a definition",
+       [
+         {"lib/raxol/cli/modules.ex",
+          modules_source(@root_cli_modules -- ["Raxol.CLI.Spinner"])}
+       ]},
+      {"agent module without an agent-side name",
+       [
+         {"packages/raxol_cli/lib/raxol/tools/thing.ex",
+          "defmodule Raxol.Tools.Thing do\nend\n"}
+       ]},
       {"package on neither side",
        [{"packages/raxol_other/mix.exs", mix_source(:raxol_other, [])}]}
     ]
   end
 
   defp build(dir, files) do
-    for {file, source} <- base_tree() ++ files do
+    removed = for {file, nil} <- files, do: file
+
+    for {file, source} <- base_tree() ++ files,
+        source != nil,
+        file not in removed do
       path = Path.join(dir, file)
       File.mkdir_p!(Path.dirname(path))
       File.write!(path, source)
@@ -639,14 +729,14 @@ defmodule Raxol.PackageBoundariesTest do
     [
       {"mix.exs", mix_source(:raxol, raxol_core: "packages/raxol_core")},
       {"config/config.exs", "import Config\n"},
-      {"lib/raxol/cli/colors.ex", "defmodule Raxol.CLI.Colors do\nend\n"},
+      {"lib/raxol/cli/modules.ex", modules_source(@root_cli_modules)},
       {"scripts/.package-boundaries-allowlist", "# none\n"},
       {"packages/raxol_core/mix.exs", mix_source(:raxol_core, [])},
       {"packages/raxol_core/lib/raxol/core/thing.ex",
        "defmodule Raxol.Core.Thing do\nend\n"},
       {"packages/raxol_journal/mix.exs", mix_source(:raxol_journal, [])},
       {"packages/raxol_journal/lib/raxol/agent/journal.ex",
-       journal_source(@journal_modules)},
+       modules_source(@journal_modules)},
       {"packages/raxol_agent/mix.exs",
        mix_source(:raxol_agent,
          raxol: "../..",
@@ -675,7 +765,7 @@ defmodule Raxol.PackageBoundariesTest do
     """
   end
 
-  defp journal_source(modules) do
+  defp modules_source(modules) do
     Enum.map_join(modules, "\n", &"defmodule #{&1} do\nend\n")
   end
 end
