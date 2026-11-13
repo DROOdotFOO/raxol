@@ -100,7 +100,7 @@ defmodule Raxol.MCP.Server do
   and `Raxol.MCP.Registry.static_tools/1`) are left out of the boot check:
   they come and go with a session's view, so a restart of this server with
   live sessions would otherwise refuse to boot. A static tool with a dotted
-  name (`agent.send`), or one whose tool map carries a `:derived` key, is
+  name (`agent.reset`), or one whose tool map carries a `:derived` key, is
   still checked. The `tools/call` refusal covers both.
 
   ## Unknown tools

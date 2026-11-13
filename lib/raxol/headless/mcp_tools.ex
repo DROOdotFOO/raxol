@@ -80,7 +80,9 @@ defmodule Raxol.Headless.McpTools do
       "raxol is this server's key in OMP, which strips a leading raxol_ from " <>
         "tool names, so this session's tools would reach OMP under another " <>
         "session's names",
-    "agent" => "agent.* names are the agent bridge's tools"
+    "agent" =>
+      "agent.* names tools made from agent Actions, which reach OMP as " <>
+        "agent_* names, as this session's tools would"
   }
 
   @doc """
@@ -680,8 +682,9 @@ defmodule Raxol.Headless.McpTools do
   # Two ids that pass the pattern are reserved. `raxol` is this server's key
   # in an OMP config, and OMP strips an exact `<server>_` prefix from a tool
   # name once, so session `raxol`'s `raxol.nav_menu.click` would reach it as
-  # session `nav`'s `nav.menu.click`. `agent.` prefixes the agent
-  # bridge's tools (`agent.list`, `agent.send`).
+  # session `nav`'s `nav.menu.click`. `agent.` prefixes the tools the agent
+  # bridge makes from Actions, and OMP renames `agent.read_file` and session
+  # `agent`'s `agent.read.file` alike.
   defp session_id(%{"id" => id}) when is_map_key(@reserved_session_ids, id),
     do:
       {:error,
