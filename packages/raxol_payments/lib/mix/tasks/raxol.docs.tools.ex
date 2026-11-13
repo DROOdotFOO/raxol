@@ -65,13 +65,7 @@ defmodule Mix.Tasks.Raxol.Docs.Tools do
 
   defp load_actions do
     modules =
-      Raxol.Agent.Actions.Vfs.actions() ++
-        Raxol.Agent.Actions.Fs.all() ++
-        Raxol.Agent.Actions.Code.all() ++
-        Raxol.Agent.Actions.Memory.actions() ++
-        Raxol.Agent.Actions.Skills.actions() ++
-        Raxol.Agent.Actions.Task.all() ++
-        [Raxol.Agent.Actions.SessionSearch] ++
+      Raxol.Agent.Actions.Skills.actions() ++
         Raxol.Payments.Actions.Payments.actions()
 
     modules
@@ -137,8 +131,6 @@ defmodule Mix.Tasks.Raxol.Docs.Tools do
     (`Raxol.Agent.ToolPolicy.deny_sensitive/0`) unless the surface installs a
     `:tool_authorizer`, which resolves it through the ALLOW/ASK/DENY
     [Authorization engine](../features/AGENT_FRAMEWORK.md#authorization-allowaskdeny).
-    The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval UX
-    (allow once / always / deny).
 
     ## Agent tools (`raxol_agent`)
 
