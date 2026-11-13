@@ -433,7 +433,6 @@ The tests an implementation must produce.
   default, the `max_tokens` trap, and the `reasoning_content` channel already handled
 - `packages/raxol_agent/lib/raxol/agent/backend/selector.ex:33-38`: LLM7 hosting DeepSeek names
 - `packages/raxol_agent/lib/raxol/agent/harness/grok_build.ex:98-107`: the dead `usage["cost"]`
-- `docs/features/CODING_AGENT.md:416-423`: the fail-closed behaviour as currently documented
 - `packages/raxol_agent_client_protocol/lib/raxol/agent_client_protocol/schema/session_update.ex:491-616`:
   `UsageUpdate` and `Cost`, the wire shape a foreign agent reports cost in
 - `scripts/acp_probe.py`: used to observe a real `usage_update` frame carrying USD

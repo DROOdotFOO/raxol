@@ -65,7 +65,7 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 
 **P2: deliberate laggards** (do when pulled, not pushed)
 
-- **FLAME** elastic exec on Fly Machines (BEAM-native idle hibernation, replaces Modal/Daytona).
+- **FLAME** elastic exec on Fly Machines (replaces Modal/Daytona).
 - More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
 - i18n: wire the present `gettext` through surface rendering, extract locale files.
 - Agent Client Protocol adapter: shipped. `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves a Raxol agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`: a prompt is one turn of the agent, and a sensitive Action the agent passes to the turn's approver is gated on a `session/request_permission` round trip) for editors that spawn an agent. Distinct from `raxol_earn`.
