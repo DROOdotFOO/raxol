@@ -12,9 +12,9 @@ first: its harness deletion removes about 25k lines that would otherwise move.
 | Decision 3 | The second preparatory PR, Symphony's `omp` runner, is dropped. | Decision 6 |
 | Decision 4 | The backend catalog gains `zkapi`. | Decision 10.2 |
 
-Amended, 2026-11-13: `Raxol.Agent.Policy` and the `SessionLane` behaviour with
-its `raxol_agent` implementation are removed, so Decision 3's `raxol_agent`
-row and Decision 7's prompt-callback follow-up name code that no longer exists.
+Amended, 2026-11-13: `Raxol.Agent.Policy` and the `raxol_agent` implementation
+of the `SessionLane` behaviour are removed, so Decision 3's `raxol_agent` row
+and Decision 7's prompt-callback follow-up name code that no longer exists.
 
 ## Context
 

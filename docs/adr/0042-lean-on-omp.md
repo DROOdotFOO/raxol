@@ -20,10 +20,11 @@ become session-scoped and a session's tool set becomes sticky (Decision 2).
 2026-11-13: the harness is deleted.
 
 2026-11-13: `Raxol.Agent.Turn`, `Command`, `Policy`, `Cache`, `LlmPrices`,
-`OMP.Version`, `Raxol.Agent.Harness.SessionLane` and the root
-`Raxol.Harness.SessionLane` behaviour, which nothing called, are removed.
-Decision 4's pricing through `LlmPrices` and Decision 6's `SessionLane` lane
-and `OMP.Version` check name code that no longer exists.
+`OMP.Version` and `Raxol.Agent.Harness.SessionLane`, which nothing called, are
+removed. The root `Raxol.Harness.SessionLane` behaviour stays for
+`raxol_agent` 2.7.0, which declares it. Decision 4's pricing through
+`LlmPrices` and Decision 6's `SessionLane` lane and `OMP.Version` check name
+code that no longer exists.
 
 ## Context
 
