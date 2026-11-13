@@ -69,7 +69,7 @@ raxol_broker   --> raxol_agent, raxol_journal (+ decimal)
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core (+ raxol/telegex/raxol_gateway optional)
 raxol_watch    --> raxol_core (+ pigeon optional for APNS/FCM)
-raxol_gateway  --> raxol_core (+ raxol_agent optional)
+raxol_gateway  --> raxol_core (+ raxol/raxol_speech optional)
 
 raxol_core     --> telemetry (only external dep)
 raxol_sensor   --> (none)

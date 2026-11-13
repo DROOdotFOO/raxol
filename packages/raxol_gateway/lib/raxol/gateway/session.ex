@@ -124,8 +124,8 @@ defmodule Raxol.Gateway.Session do
   # starts sessions with a synchronous DynamicSupervisor.start_child inside its
   # own handle_call: anything init/1 blocks on blocks the single router process,
   # and with it every other chat's route/3. A handler whose init is a pure map
-  # (Handler.Agent) never made that visible; one that starts a per-chat TEA app
-  # and waits on its first render (Handler.Lifecycle) does.
+  # never made that visible; one that starts a per-chat TEA app and waits on
+  # its first render (Handler.Lifecycle) does.
   #
   # A continue is delivered before any queued message, so a cast that the router
   # sends the instant start_child returns is still handled after this.

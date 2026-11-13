@@ -35,9 +35,6 @@ defmodule RaxolGateway.MixProject do
       {:telemetry, "~> 1.3"},
       {:jason, "~> 1.4"},
 
-      # Per-chat durable history (optional -- only needed to record turns).
-      raxol_dep(:raxol_agent, "~> 2.7", "../raxol_agent", optional: true),
-
       # TEA runtime (optional -- only Handler.Lifecycle needs it; the path
       # points at the repo root, which carries the :gateway environment).
       raxol_dep(:raxol, "~> 2.7", "../..", optional: true),

@@ -348,8 +348,8 @@ defmodule Raxol.Gateway.SessionRouter do
     end
   end
 
-  # A session blocked in a long handler turn (an LLM call in Handler.Agent is
-  # the common case) cannot answer before the call timeout; surface
+  # A session blocked in a long handler turn (an LLM call is the common
+  # case) cannot answer before the call timeout; surface
   # :session_busy instead of letting the exit crash the router and wipe all
   # session tracking.
   defp fetch_conversation_id(pid) do
