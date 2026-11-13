@@ -728,10 +728,14 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
         ] do
       test "a #{label} ref → :malformed_pointer on restore and restore_checkpoint; floor skips it",
            %{base: base} do
-        {j, dir, _older, healthy} = two_checkpoints!(base)
+        {j, dir, older, healthy} = two_checkpoints!(base)
+
+        # The hostile record claims the older tip, so a floor that took it
+        # would differ from the healthy one.
+        assert older["tip_offset"] < healthy["tip_offset"]
 
         CR.inject_single_counter_checkpoint!(dir, %{
-          "tip_offset" => CR.tip_of(dir),
+          "tip_offset" => older["tip_offset"],
           "snapshot_ref" => unquote(hostile_ref),
           "snapshot_hash" => String.duplicate("a", 64),
           "reason" => "manual"
