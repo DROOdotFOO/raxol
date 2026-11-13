@@ -12,6 +12,9 @@ to nine, and Honcho injects its dialectic into the *system prompt* (cache preser
 frozen snapshot), not the user message, so the user-message injection here is framed as a
 deliberate improvement over Honcho rather than parity.
 
+Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: `Raxol.Agent.Memory` and its
+providers, `Raxol.Agent.Memory.SessionSearch` and `Raxol.Agent.UserModel` are removed.
+
 ## Context
 
 Raxol has one memory subsystem and it is already pluggable, but single-layered and lexical-only.

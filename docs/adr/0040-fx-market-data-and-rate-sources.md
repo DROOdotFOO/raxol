@@ -19,6 +19,10 @@ guarded outbound client every request goes through) and
 [ADR-0039](0039-required-callback-set-partial-sources.md) (what a backend is required to
 answer). Nothing in those decisions changes.
 
+Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): of the wiring sites decision 5 lists,
+`Raxol.Agent.Code.App.run_context/2` (1) and `SessionInbox.start_turn/2` (5) are removed.
+`Raxol.Console.Boot.gateway_opts/5` (2) and `Raxol.Agent.Turn.build_context/2` (3) remain.
+
 ## Context
 
 ADR-0033 names an FX dark pool as the product pulling on the web3 read layer. Raxol still

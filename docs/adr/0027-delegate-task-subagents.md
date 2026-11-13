@@ -19,6 +19,8 @@ Tier 2 Hermes-parity ADR
 summary-only contract. Builds on `Raxol.Agent.Session`, `Raxol.Agent.Team`, the omnigent item-log
 (`Raxol.Agent.Conversation.Log`), and `Raxol.Agent.Turn` (ADR-0021's wiring).
 
+Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: `Raxol.Agent.Actions.Task` is removed.
+
 ## Context
 
 A parent agent that needs a self-contained piece of work done has two existing options, neither of

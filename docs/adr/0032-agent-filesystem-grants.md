@@ -29,6 +29,10 @@ mount does not confine a process. See "Alternatives considered".
 Decision 6, #1320). `Raxol.Symphony.Config`, `Raxol.Symphony.PathSafety` and the #920 runner
 are in the frozen repository, so no Symphony path handling is left in this tree to converge.
 
+Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.Actions.Fs` and the file
+tools are removed, so everything below that migrates or binds them is superseded. What stands
+is the `Spawn.wrap` sandbox design, an open follow-up.
+
 ## Context
 
 `Raxol.Agent.Actions.Fs.resolve/2` (`fs.ex:253`) is a single-root jail. It expands a request

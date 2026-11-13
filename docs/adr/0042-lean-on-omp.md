@@ -18,6 +18,9 @@ under Consequences); each is re-marked in the PR that removes its code, not
 before. Amends [ADR-0012](0012-mcp-as-rendering-target.md): derived tool names
 become session-scoped and a session's tool set becomes sticky (Decision 2).
 
+2026-11-13: the harness is deleted. ADRs 0022, 0024, 0026, 0027, 0028 and 0034 are superseded
+and 0021, 0032, 0035, 0036 and 0037 narrowed as of that change, each marked in its own Status.
+
 ## Context
 
 Raxol grew a full coding-agent harness: the coding TUI (`raxol code`,

@@ -6,6 +6,9 @@ Proposed, 2026-06-18. Tier 2 Hermes-parity ADR
 (`execute_code`). Builds on the existing REPL (`Raxol.REPL.Evaluator`, `Raxol.REPL.Sandbox`,
 `Raxol.REPL.VfsHelpers`), the `Raxol.Agent.Action` behaviour, and ADR-0020's authorization seams.
 
+Superseded by [ADR-0042](0042-lean-on-omp.md), 2026-11-13: `execute_code` was never built, and
+the file and shell tools it would have collapsed are removed.
+
 ## Context
 
 An agent calls tools one at a time. To list ten files and grep each, the model emits ten tool calls,

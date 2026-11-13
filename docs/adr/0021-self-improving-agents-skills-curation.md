@@ -15,6 +15,10 @@ Builds on ADR-0020 (Sandbox / ThreadLog / declarative Policies: the `CommandHook
 follow: H1.3 (memory-provider abstraction + full-text recall + dialectic user modeling) and H1.4
 (unified messaging gateway).
 
+Narrowed, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.SelfImprove` and
+`Raxol.Agent.Curator` are removed. What stands is the skill runtime: `Raxol.Agent.Skill`,
+`Raxol.Agent.Skills.Store` and the three skill actions.
+
 ## Context
 
 The agent stack is feature-complete for the prompt-then-react loop. `use Raxol.Agent`

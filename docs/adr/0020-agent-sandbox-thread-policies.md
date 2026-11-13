@@ -4,6 +4,8 @@
 
 Accepted, 2026-07-22 (implemented in `Raxol.Agent.Sandbox`, `Raxol.Agent.ThreadLog`, and `Raxol.Agent.Policy`). Originally proposed 2026-06-16. Symmetric to ADR-0019 (Workflow concurrency) for the agent stack: ADR-0019 scopes the runtime-side parallel-branch primitive, this ADR scopes the agent-side isolation + audit + policy primitive. Together they frame the next 3-6 months of substrate work. Builds on ADR-0012 (MCP as rendering target), ADR-0017 (paused-run query), ADR-0018 (operator-flow contract), and the `Command` struct deletion (leaving `Directive` as the canonical effect shape).
 
+Amended, 2026-11-13 ([ADR-0042](0042-lean-on-omp.md)): `Raxol.Agent.ContextCompactor` and the `compaction_config/0` callback are removed. The passages below on how the ThreadLog interacts with compaction describe code that no longer exists.
+
 ## Context
 
 The agent stack today is feature-complete for the prompt-then-react loop. `use Raxol.Agent` gives an author the TEA callbacks (`init/1`, `update/2`, `view/1`, plus agent-specific `handle_message/2`, `handle_tick/1`, `compaction_config/0`, `command_hooks/0`, `memory_provider/0`, `available_actions/0`). Directives (`Raxol.Agent.Directive.Async`, `Shell`, `SendAgent`) emit effects; the framework dispatches them via the `Raxol.Core.Runtime.Directive.Executor` protocol after the `Command` struct deletion. The `CommandHook` behaviour (`packages/raxol_agent/lib/raxol/agent/command_hook.ex:57-75`) gives authors `c:pre_execute/2` + `c:post_execute/3` interception. `PermissionHook` (`packages/raxol_agent/lib/raxol/agent/permission_hook.ex:8-14, 66-82`) ships a five-level mode hierarchy (`:read_only`, `:send_only`, `:workspace_write`, `:full_access`, `:allow`) implemented as a CommandHook.
