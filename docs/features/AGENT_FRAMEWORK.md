@@ -293,6 +293,23 @@ A host calls `Engine.evaluate/4` itself and holds the engine state; `raxol_broke
 its order policy. The LLM tool-call path does not consult it. There a `sensitive` action is
 denied unless the context of the call carries a `:tool_authorizer` (`Raxol.Agent.ToolPolicy`).
 
+## Conversation item-log
+
+`Raxol.Agent.Conversation` is an append-only item log. Nothing records a turn into it:
+a caller appends, and a `raxol_gateway` session started with
+`log: {Raxol.Agent.Conversation.Log, server}` appends each inbound event and each
+delivered reply.
+
+- `Item` is an immutable typed entry (message, tool_call, tool_result, reasoning, error, and
+  more) with a stable id `"<conversation_id>:<seq>"` and a monotonic, store-assigned seq.
+- `Store` is a behaviour with cursor pagination (`:after`/`:before`/`:limit`/`:order`/`:type`);
+  `Store.ETS` is the shipped adapter (an `ordered_set` keyed `{conversation_id, seq}`). Append
+  is the only writer.
+- `Log` is a GenServer that wraps a store (durability) with in-process subscriber fan-out
+  (liveness) and no replay buffer. `subscribe/3` returns the snapshot and registers the
+  subscriber in one serialized call, so the snapshot and the live tail partition exactly:
+  every item once, no gap, no duplicate. Reconnect with an `:after` cursor.
+
 ## Examples
 
 ```bash

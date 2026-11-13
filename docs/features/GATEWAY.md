@@ -125,7 +125,7 @@ Raxol.Gateway.Supervisor.start_link(
 ```
 
 Per-chat history is kept in the handler state (capped by `:max_history`, default 40
-messages) and, when the session has a `:log`, also recorded there. A
+messages) and, when the session has a `:log`, also recorded to the conversation log. A
 failed turn logs the full reason and replies with a short error message. Turns run
 synchronously inside the per-chat session process, so set `:idle_timeout` comfortably
 above the longest expected turn.
@@ -158,7 +158,7 @@ stops the per-chat Lifecycle so it cannot outlive its chat.
 `Raxol.Gateway.Pipeline.Transcribe` is a feed-loop stage that turns a voice media event
 (`%{media: %{kind: :voice, ref: ..., ...}}`, what `Raxol.Telegram.GatewayAdapter` emits
 for `message.voice` updates) into the ordinary `%{text: transcript}` event before it is
-routed. It runs in the feed loop rather than the session so a session's `:log` records
+routed. It runs in the feed loop rather than the session so the conversation log records
 the transcript (a session logs each inbound event before its handler runs) and so STT
 never blocks a per-chat mailbox. Non-voice events pass through untouched.
 
@@ -218,7 +218,8 @@ process per chat under a `DynamicSupervisor`, keyed by that string, with an idle
 (default 1000). Sessions run a `Raxol.Gateway.Handler` (`init/2` and `handle_event/2`,
 plus an optional `terminate/2` invoked on clean session stops for handlers that own
 linked processes). Each inbound event and each reply can be recorded to an optional log
-keyed by a stable `conversation_id`.
+keyed by a stable `conversation_id`: pass `log: {Raxol.Agent.Conversation.Log, server}`
+([Conversation item-log](AGENT_FRAMEWORK.md#conversation-item-log)).
 
 ## Pairing and authorization
 
@@ -368,4 +369,4 @@ Any module satisfying the `Handler` callbacks works alongside the shipped handle
 
 - [Telegram](TELEGRAM.md), [Watch](WATCH.md), [Speech](SPEECH.md): the existing per-surface
   bridges the gateway generalizes.
-- [Agent Framework](AGENT_FRAMEWORK.md): the turn loop `Handler.Agent` drives.
+- [Agent Framework](AGENT_FRAMEWORK.md): the Conversation log that carries per-chat history.

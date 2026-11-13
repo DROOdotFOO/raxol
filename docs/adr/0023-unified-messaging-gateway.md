@@ -21,9 +21,6 @@ frozen at five callbacks, additions must be optional callbacks), `Route` keying,
 keyed by `conversation_id`), the four-mode `Delivery` router (decision item 4), and
 `SessionRouter.handoff/3` (rebind to an existing `conversation_id` so history follows).
 
-Amended, 2026-11-13: `Raxol.Agent.Conversation.Log` and its stores are removed. A `Session` still
-records through `:log`, any module with `append(server, conversation_id, items)`; none ships.
-
 Handlers: `Handler.Agent`, backed by `Raxol.Agent.Stream` with environment-resolved credentials
 (`auto_provider`), and `Handler.Lifecycle`, which runs a full TEA app per chat under
 `environment: :gateway` (#721). Three platform adapters sit behind the frozen contract:

@@ -56,8 +56,8 @@ defmodule Raxol.Gateway.Session do
       session is killed (default 30 seconds), or `:infinity` to wait forever
     * `:conversation_id` -- a stable id for this chat (default `Route.key/1`)
     * `:log` -- `{module, server}` whose `append(server, conversation_id, items)`
-      records each inbound event and each successfully delivered outbound reply;
-      default none
+      records each inbound event and each successfully delivered outbound reply
+      (e.g. `{Raxol.Agent.Conversation.Log, log_server}`); default none
   """
 
   use GenServer
