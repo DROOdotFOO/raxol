@@ -10,7 +10,8 @@ rows landed keyed to `:deepseek` before any catalog entry carried that id, so th
 unreachable rather than unpriced, and the provider was registered afterwards against rows
 already verified upstream. The halt was never disarmed by a guess, which is what the rule
 exists for. This records the metering model for a provider whose prices do not fit the
-flat-table one.
+flat-table one. `AcpStreamAdapter` has since been removed (ADR-0042); the per-turn delta
+rule it implemented stays as written for whatever reads a provider-reported cost next.
 
 Written against DeepSeek as the forcing case, but the model it breaks was already straining:
 two of the three collision hazards below are live today on OpenRouter and LLM7, and Anthropic's

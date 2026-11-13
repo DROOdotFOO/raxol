@@ -23,6 +23,13 @@ Decision 6, #1320). Symphony's runner, its turn count and `Sandboxes.BudgetCap` 
 question 5) are in the frozen repository, so the `packages/raxol_symphony` test run under
 Validation cannot be repeated from this tree.
 
+Narrowed: the ACP turn runner (`client_protocol/turn_runner.ex`) is removed, and with it
+`[:raxol, :agent, :acp_turn_runner, :interrupt_failed]` and
+`[:raxol, :agent, :acp_turn_runner, :journal_failed]`. `raxol_agent` now declares no
+invariant, and every row below that names `turn_runner.ex` or `acp_turn_runner.*` describes
+code that no longer exists. A `raxol acp --agent` turn is bracketed in the journal by
+`Raxol.Agent.Session` and emits no telemetry of its own.
+
 ## Context
 
 ### What exists

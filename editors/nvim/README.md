@@ -144,23 +144,23 @@ a highlight group.
 
 ## Coding agent
 
-The Raxol coding agent reaches editors over the
-[Agent Client Protocol](https://agentclientprotocol.com), which Zed and its
-ecosystem speak. Point an ACP client at the `bin/raxol-acp` shim in a raxol
-checkout; `mix help raxol.acp` has the Zed `agent_servers` snippet. Turns on that
-surface run the full toolset; every write costs one
-`session/request_permission` round trip, so a client that does not implement
-permissions gets a working read-only agent instead of a broken one.
-
-Without an ACP client, run the full agent TUI in a terminal split:
+Run the coding agent TUI in a terminal split:
 
 ```vim
 :terminal /path/to/raxol/bin/raxol-code
 ```
 
-Both entrypoints need a raxol checkout with deps fetched
+It needs a raxol checkout with deps fetched
 (`cd packages/raxol_agent && mix deps.get`). See
 [`docs/features/CODING_AGENT.md`](../../docs/features/CODING_AGENT.md).
+
+## Raxol agents over ACP
+
+A Raxol agent, not the coding agent, reaches editors over the
+[Agent Client Protocol](https://agentclientprotocol.com), which Zed and its
+ecosystem speak: point an ACP client at `bin/raxol-acp --agent <app>` in the
+same checkout (see
+[`docs/features/EDITOR_ACP.md`](../../docs/features/EDITOR_ACP.md#serving-a-raxol-agent)).
 
 ## Requirements
 

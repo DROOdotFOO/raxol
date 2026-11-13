@@ -41,8 +41,8 @@ defmodule Raxol.Agent.SessionStreamer do
   Two producer vocabularies share this channel: the legacy tuple shape
   documented below (the original `Raxol.Agent.Stream`-mirroring producers),
   and `Raxol.Agent.Contract.Event.t()` (the harness contract's typed
-  envelope — `Contract.pump/3`, `Raxol.Agent.EmitBridge`,
-  `Raxol.Agent.AcpStreamAdapter`). Both flow through `emit/3` and
+  envelope — `Contract.pump/3`, `Raxol.Agent.EmitBridge`). Both flow
+  through `emit/3` and
   `history/2` unchanged; `Raxol.Agent.SessionStreamServer.serialize_event/1`
   has a clause for each.
   """

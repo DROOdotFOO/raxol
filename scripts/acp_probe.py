@@ -13,8 +13,10 @@ implement, so it doubles as the reference to hand a prospective integrator.
 Dependency-free and language-neutral on purpose: it knows nothing about
 Elixir, and should stay that way.
 
-    scripts/acp_probe.py bin/raxol-acp --backend mock
-    scripts/acp_probe.py packages/raxol_cli/burrito_out/raxol_cli_macos acp
+    PROBE_PROMPT=increment scripts/acp_probe.py \
+        bin/raxol-acp --agent Raxol.Agent.Reference.Counter
+    scripts/acp_probe.py packages/raxol_cli/burrito_out/raxol_cli_macos acp \
+        --agent Raxol.Agent.Reference.Counter
 
 Writes `acp_transcript.json` (every frame) and `acp_stderr.log` (the agent's
 stderr) to the current directory. Run it from a scratch directory.
@@ -25,12 +27,6 @@ Environment:
 
 A `__NON_JSON_STDOUT__` entry in the transcript is a WIRE DEFECT, not a probe
 quirk: a strict NDJSON client would fail on that line.
-
-Caveat worth knowing before drawing conclusions from a run: the native-CLI
-backends (`--backend claude_native` and friends) run their own tool loop, so
-raxol's Actions, cwd scoping and permission gating are not exercised at all.
-`raxol acp` warns about this on stderr at boot. Use an API-key backend when
-testing those paths.
 """
 
 from __future__ import annotations
@@ -71,11 +67,13 @@ USAGE = """usage: acp_probe.py <agent command> [args...]
 
 Drives an ACP agent over stdio and records the wire transcript.
 
-  acp_probe.py bin/raxol-acp --backend mock
-  acp_probe.py packages/raxol_cli/burrito_out/raxol_cli_macos acp
+  PROBE_PROMPT=increment acp_probe.py \\
+      bin/raxol-acp --agent Raxol.Agent.Reference.Counter
+  acp_probe.py packages/raxol_cli/burrito_out/raxol_cli_macos acp \\
+      --agent Raxol.Agent.Reference.Counter
 
 Every argument is passed through to the agent verbatim, so the agent's own
-flags (--backend, --model, ...) are written after the command. This script
+flags (--agent <app>[:<id>]) are written after the command. This script
 takes no options of its own beyond -h/--help.
 
 Writes acp_transcript.json and acp_stderr.log to the current directory.

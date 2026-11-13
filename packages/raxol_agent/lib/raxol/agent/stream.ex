@@ -63,9 +63,8 @@ defmodule Raxol.Agent.Stream do
   - `:system_prompt` -- system message (binary) prepended to the conversation.
     Applies to every entry form -- string prompts, pre-built `:messages`, and
     message-list prompts -- unless the list already carries an explicit
-    system message (which then wins; never duplicated). Source specs like
-    `:bonded` are resolved upstream by `Raxol.Agent.SystemPrompt`; this layer
-    takes resolved text only, so no file I/O happens per turn.
+    system message (which then wins; never duplicated). The caller passes
+    the text itself: this layer reads no file per turn.
   - `:messages` -- pre-built message list (overrides prompt)
   - `:stream` -- whether to use streaming backend (default: `true`)
 

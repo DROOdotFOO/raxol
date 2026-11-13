@@ -8,7 +8,8 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   One `GenServer` owns BOTH directions of the pipe:
 
     * **Read** — raw bytes arrive from the OS pipe as `Port` `:data`
-      messages and are fed through
+      messages (`:spawn` mode) or as lines read from the `user` device
+      (`:self` mode) and are fed through
       `Raxol.AgentClientProtocol.Transport.Framer` (byte-splitting only:
       buffers partial data, yields complete NDJSON lines, tolerates
       CRLF, bounds unterminated-line memory). Each complete line is then
@@ -50,13 +51,18 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
 
   ## Modes
 
-    * `start_self/1` — open the BEAM's own fd 0 (stdin) / fd 1 (stdout) as
-      a `Port` (`{:fd, 0, 1}`). Only meaningful when this process's real
-      stdio is dedicated to the ACP wire protocol — e.g. a compiled
-      release or escript entry point, or `mix run --no-halt` invoked
-      non-interactively with stdio piped by the peer. **Never** call this
-      from an interactive `iex` session, or under a test runner — both
-      already have fd 0/1 claimed (ExUnit's own IO capture owns `:user`).
+    * `start_self/1` — read and write the `user` device, which is the
+      BEAM's own stdin and stdout. A `{:fd, 0, 1}` port is not used: under
+      `-noshell` the `user` device already reads fd 0, so a second reader
+      loses whatever arrived before it opened (a client's `initialize`).
+      Only meaningful when this process's real stdio is dedicated to the
+      ACP wire protocol — e.g. a compiled release, or `mix run` with
+      stdio piped by the peer. Not for an interactive `iex` session. Both
+      devices are switched to `encoding: :latin1`, which moves bytes
+      unchanged: the wire is UTF-8 whatever the locale, and a byte that is
+      not UTF-8 reaches the JSON decoder as it was sent. A `unicode` device
+      would transcode by the locale's rules, and falls back to latin1 for
+      good at the first invalid byte it reads.
     * `start_spawn/3` — launch a peer executable via
       `Port.open({:spawn_executable, ...}, ...)` and speak to *its*
       stdin/stdout. The peer's exit is delivered to the owner as
@@ -85,7 +91,9 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
 
   @typep server_state :: %{
            owner: pid() | nil,
-           port: port(),
+           port: port() | nil,
+           reader: pid() | nil,
+           output: IO.device() | nil,
            mode: mode(),
            framer: Framer.t(),
            closed: boolean(),
@@ -95,18 +103,23 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   # -- Construction --------------------------------------------------------
 
   @doc """
-  Open the BEAM's own stdin/stdout (fd 0 / fd 1) as the transport. See the
-  moduledoc's "Modes" section for when this is (and is not) safe to call.
+  Serve the BEAM's own stdin/stdout as the transport. See the moduledoc's
+  "Modes" section for when this is (and is not) safe to call.
 
   `opts`:
 
     * `:owner` — pid to receive inbound `{:acp_transport, ...}` messages;
       defaults to `nil` (adopt later via `set_owner/2`).
+    * `:input`, `:output` — the IO devices read and written (default
+      `:user` for both). Each is sent `:io.setopts(device, encoding:
+      :latin1)`; a device that has no options (`{:error, :enotsup}`) is
+      used as it is.
   """
   @spec start_self(keyword()) :: {:ok, t()}
   def start_self(opts \\ []) do
     owner = Keyword.get(opts, :owner)
-    {:ok, pid} = GenServer.start_link(__MODULE__, {:self, owner})
+    devices = {Keyword.get(opts, :input, :user), Keyword.get(opts, :output, :user)}
+    {:ok, pid} = GenServer.start_link(__MODULE__, {:self, devices, owner})
     {:ok, %__MODULE__{pid: pid}}
   end
 
@@ -180,21 +193,61 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   # -- GenServer callbacks --------------------------------------------------
 
   @impl GenServer
-  @spec init({:self, pid() | nil} | {:spawn, String.t(), [String.t()], keyword(), pid() | nil}) ::
-          {:ok, server_state()}
-  def init({:self, owner}) do
-    port = Port.open({:fd, 0, 1}, [:binary, :eof])
-
-    {:ok,
-     %{owner: owner, port: port, mode: :self, framer: Framer.new(), closed: false, pending: []}}
+  @spec init(
+          {:self, {IO.device(), IO.device()}, pid() | nil}
+          | {:spawn, String.t(), [String.t()], keyword(), pid() | nil}
+        ) :: {:ok, server_state()}
+  def init({:self, {input, output}, owner}) do
+    :ok = byte_transparent(input)
+    :ok = byte_transparent(output)
+    transport = self()
+    reader = spawn_link(fn -> read_lines(input, transport) end)
+    {:ok, %{new_state(:self, owner) | reader: reader, output: output}}
   end
 
   def init({:spawn, path, args, spawn_opts, owner}) do
     port_opts = [:binary, :exit_status, args: args] ++ build_spawn_opts(spawn_opts)
     port = Port.open({:spawn_executable, String.to_charlist(path)}, port_opts)
+    {:ok, %{new_state(:spawn, owner) | port: port}}
+  end
 
-    {:ok,
-     %{owner: owner, port: port, mode: :spawn, framer: Framer.new(), closed: false, pending: []}}
+  defp new_state(mode, owner) do
+    %{
+      owner: owner,
+      port: nil,
+      reader: nil,
+      output: nil,
+      mode: mode,
+      framer: Framer.new(),
+      closed: false,
+      pending: []
+    }
+  end
+
+  # Read and written with `IO.binread/2` and `IO.binwrite/2`, a latin1
+  # device passes every byte through.
+  defp byte_transparent(device) do
+    case :io.setopts(device, encoding: :latin1) do
+      :ok -> :ok
+      {:error, :enotsup} -> :ok
+    end
+  end
+
+  # One line per message, so the transport's mailbox orders them. Linked:
+  # it ends with the transport, and a read blocked on the device ends when
+  # `close/1` kills it.
+  defp read_lines(input, transport) do
+    case IO.binread(input, :line) do
+      :eof ->
+        send(transport, {:stdin, self(), :eof})
+
+      {:error, _reason} ->
+        send(transport, {:stdin, self(), :eof})
+
+      line ->
+        send(transport, {:stdin, self(), {:data, IO.iodata_to_binary(line)}})
+        read_lines(input, transport)
+    end
   end
 
   @spec build_spawn_opts(keyword()) :: keyword()
@@ -222,14 +275,12 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     {:reply, {:error, :closed}, state}
   end
 
-  def handle_call({:send, message}, _from, %{port: port} = state) do
+  def handle_call({:send, message}, _from, state) do
     line = Jason.encode!(message) <> "\n"
 
-    try do
-      Port.command(port, line)
-      {:reply, :ok, state}
-    rescue
-      ArgumentError -> {:reply, {:error, :closed}, %{state | closed: true}}
+    case write(state, line) do
+      :ok -> {:reply, :ok, state}
+      :closed -> {:reply, {:error, :closed}, %{state | closed: true}}
     end
   end
 
@@ -237,21 +288,14 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     {:reply, :ok, state}
   end
 
-  def handle_call(:close, _from, %{port: port} = state) do
-    safe_close_port(port)
+  def handle_call(:close, _from, state) do
+    close_source(state)
     {:reply, :ok, %{state | closed: true}}
   end
 
   @impl GenServer
   def handle_info({port, {:data, data}}, %{port: port, closed: false} = state) do
-    {frames, framer} = Framer.push(state.framer, data)
-
-    state =
-      Enum.reduce(frames, %{state | framer: framer}, fn frame, acc ->
-        emit(acc, frame_payload(frame))
-      end)
-
-    {:noreply, state}
+    {:noreply, push(state, data)}
   end
 
   def handle_info({port, {:data, _data}}, %{port: port, closed: true} = state) do
@@ -260,17 +304,20 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     {:noreply, state}
   end
 
-  # `:self` mode is HALF-closable, and the port was opened with `:eof`
-  # precisely so it is: fd 0 ending says the peer will send nothing more, not
-  # that it has stopped reading fd 1. Marking the transport closed here
-  # refused every subsequent `send_message/2` with `{:error, :closed}`, so a
-  # peer that piped its requests and closed stdin -- a script, a benchmark
-  # harness, anything not holding the pipe open -- got NO replies at all,
-  # including the reply to a request already being handled. The read side is
-  # done; the write side stays open until `close/1` or a failed write.
-  def handle_info({port, :eof}, %{port: port, closed: false, mode: :self} = state) do
+  # Read from the `user` device in `:self` mode.
+  def handle_info({:stdin, reader, {:data, data}}, %{reader: reader, closed: false} = state) do
+    {:noreply, push(state, data)}
+  end
+
+  # `:self` mode is half-closable: end of input says the peer will send
+  # nothing more, not that it has stopped reading. A peer that pipes its
+  # requests and closes stdin still gets its replies, so the write side
+  # stays open until `close/1` or a failed write.
+  def handle_info({:stdin, reader, :eof}, %{reader: reader, closed: false} = state) do
     {:noreply, emit(state, {:closed, :eof})}
   end
+
+  def handle_info({:stdin, _reader, _event}, state), do: {:noreply, state}
 
   def handle_info({port, :eof}, %{port: port, closed: false} = state) do
     state = emit(state, {:closed, :eof})
@@ -297,6 +344,15 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   end
 
   # -- Framing ---------------------------------------------------------------
+
+  @spec push(server_state(), binary()) :: server_state()
+  defp push(state, data) do
+    {frames, framer} = Framer.push(state.framer, data)
+
+    Enum.reduce(frames, %{state | framer: framer}, fn frame, acc ->
+      emit(acc, frame_payload(frame))
+    end)
+  end
 
   # A `Framer.push/2` result is either a complete NDJSON line (still raw
   # text -- decode it) or an oversized-frame error the framer already
@@ -330,8 +386,30 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     state
   end
 
-  @spec safe_close_port(port()) :: :ok
-  defp safe_close_port(port) do
+  # A device that is gone raises; before Elixir 1.20 it answered
+  # `{:error, reason}`, which the match turns into a raise.
+  @spec write(server_state(), String.t()) :: :ok | :closed
+  defp write(%{mode: :self, output: output}, line) do
+    :ok = IO.binwrite(output, line)
+  rescue
+    _error in [ArgumentError, ErlangError, MatchError] -> :closed
+  end
+
+  defp write(%{port: port}, line) do
+    Port.command(port, line)
+    :ok
+  rescue
+    ArgumentError -> :closed
+  end
+
+  @spec close_source(server_state()) :: :ok
+  defp close_source(%{mode: :self, reader: reader}) do
+    Process.unlink(reader)
+    Process.exit(reader, :kill)
+    :ok
+  end
+
+  defp close_source(%{port: port}) do
     Port.close(port)
     :ok
   rescue

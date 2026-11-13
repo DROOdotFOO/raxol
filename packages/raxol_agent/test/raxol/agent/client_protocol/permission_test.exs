@@ -1,163 +1,170 @@
 defmodule Raxol.Agent.ClientProtocol.PermissionTest do
   @moduledoc """
-  The gate that lets the ACP surface hold WRITE tools at all.
-
-  The surface used to be narrowed to read/grep/glob because there was no
-  approval channel. Now the toolset is full and this gate is the only thing
-  standing between a model's `write_file` and the filesystem, so the cases that
-  matter are the refusals: what happens when the client says no, says nothing,
-  says something we never offered, or cannot answer at all.
-
-  `Raxol.AgentClientProtocol.Ctx.request_permission/4` collapses timeout /
-  error / disconnect / cancel into `{:ok, :cancelled}` before we see it, so the
-  Session is stubbed here to return the shapes Ctx can actually produce, plus
-  the one shape it promises never to (asserting we still deny rather than
-  crash).
+  The authorizer alone, against a process standing in for the ACP session:
+  it answers `request_permission` with a chosen outcome (`:hold` for never)
+  and reports every call it receives.
+  `Raxol.AgentClientProtocol.Ctx.request_permission/4` folds a timeout, a
+  client error, a disconnect and a cancel into `{:ok, :cancelled}`, so the
+  outcomes here are the ones it can produce, and one it cannot.
   """
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.ClientProtocol.Permission
-  alias Raxol.Agent.Actions.Code
-  alias Raxol.Agent.Actions.Fs
+  alias Raxol.Agent.Reference.Counter.Increment
+  alias Raxol.Agent.Reference.Counter.Reset
 
   @session_id "sess-1"
 
-  # A stub Session: answers {:request_permission, req} with a canned outcome and
-  # forwards the request so a test can inspect what was actually offered.
-  defp stub_session(outcome, report_to \\ nil) do
-    test = report_to || self()
-
-    spawn_link(fn -> stub_loop(outcome, test) end)
+  defp session(outcome) do
+    test = self()
+    spawn_link(fn -> session_loop(outcome, test) end)
   end
 
-  defp stub_loop(outcome, test) do
+  defp session_loop(outcome, test) do
     receive do
-      {:"$gen_call", from, {:request_permission, req}} ->
-        send(test, {:asked, req})
-        GenServer.reply(from, outcome)
-        stub_loop(outcome, test)
+      {:"$gen_call", from, {:request_permission, request}} ->
+        send(test, {:asked, request})
+        if outcome != :hold, do: GenServer.reply(from, outcome)
+
+      {:"$gen_call", from, {:post_update, notification}} ->
+        send(test, {:posted, notification.update})
+        GenServer.reply(from, :ok)
+    end
+
+    session_loop(outcome, test)
+  end
+
+  defp selected(option_id), do: {:ok, {:selected, %{option_id: option_id}}}
+
+  defp posted do
+    receive do
+      {:posted, update} -> [update | posted()]
+    after
+      0 -> []
     end
   end
 
-  describe "non-sensitive tools" do
-    test "are allowed without any round trip" do
-      # A session that would CRASH if called proves no ask happened.
-      gate = Permission.authorizer(:no_such_session, @session_id)
+  defp statuses do
+    Enum.map(posted(), fn
+      {:tool_call, call} -> {:tool_call, call.tool_call_id, call.status}
+      {:tool_call_update, update} -> {:update, update.tool_call_id, update.fields.status}
+    end)
+  end
 
-      for action <- [Fs.ReadFile, Fs.ListDir, Fs.FileStat, Code.Grep, Code.Glob] do
-        assert gate.(action, %{}, %{}) == :ok
-      end
+  describe "an action that is not sensitive" do
+    test "is allowed without asking, and announced in progress with its params" do
+      gate = Permission.authorizer(session(:never_asked), @session_id)
+
+      assert gate.(Increment, %{by: 2}, %{}) == :ok
+      refute_received {:asked, _request}
+
+      assert [{:tool_call, call}] = posted()
+      assert %{title: "Run `increment`", status: :in_progress, raw_input: %{"by" => 2}} = call
     end
   end
 
-  describe "sensitive tools" do
-    test "write_file is allowed when the client selects the allow option" do
-      session =
-        stub_session({:ok, {:selected, %{option_id: Permission.allow_option_id()}}})
+  describe "a sensitive action" do
+    test "is allowed when the client selects the allow option" do
+      gate = Permission.authorizer(session(selected(Permission.allow_option_id())), @session_id)
 
-      gate = Permission.authorizer(session, @session_id)
+      assert gate.(Reset, %{}, %{}) == :ok
+      assert_received {:asked, request}
+      assert request.session_id == @session_id
 
-      assert gate.(Code.Write, %{}, %{}) == :ok
-      assert_receive {:asked, _req}
+      assert Enum.map(request.options, &{&1.option_id, &1.kind}) == [
+               {Permission.allow_option_id(), :allow_once},
+               {Permission.reject_option_id(), :reject_once}
+             ]
+
+      id = request.tool_call.tool_call_id
+      assert statuses() == [{:tool_call, id, :pending}, {:update, id, :in_progress}]
     end
 
-    test "edit_file and bash are gated too, not just write_file" do
-      session =
-        stub_session({:ok, {:selected, %{option_id: Permission.allow_option_id()}}})
+    test "is denied and marked failed when the client rejects" do
+      gate = Permission.authorizer(session(selected(Permission.reject_option_id())), @session_id)
 
-      gate = Permission.authorizer(session, @session_id)
-
-      for action <- [Code.Edit, Code.Bash] do
-        assert gate.(action, %{}, %{}) == :ok
-        assert_receive {:asked, _}
-      end
+      assert {:deny, {:permission_rejected, "reset"}} = gate.(Reset, %{}, %{})
+      assert [{:tool_call, id, :pending}, {:update, id, :failed}] = statuses()
     end
 
-    test "the ask offers exactly one allow-once and one reject-once option" do
-      session =
-        stub_session({:ok, {:selected, %{option_id: Permission.allow_option_id()}}})
+    test "is denied when the ask ends without a selection" do
+      gate = Permission.authorizer(session({:ok, :cancelled}), @session_id)
 
-      gate = Permission.authorizer(session, @session_id)
-      gate.(Code.Write, %{}, %{})
-
-      assert_receive {:asked, req}
-      assert req.session_id == @session_id
-
-      kinds = Enum.map(req.options, & &1.kind)
-      assert kinds == [:allow_once, :reject_once]
-
-      ids = Enum.map(req.options, & &1.option_id)
-      assert ids == [Permission.allow_option_id(), Permission.reject_option_id()]
-    end
-  end
-
-  describe "refusals" do
-    test "an explicit reject denies" do
-      session =
-        stub_session({:ok, {:selected, %{option_id: Permission.reject_option_id()}}})
-
-      gate = Permission.authorizer(session, @session_id)
-
-      assert {:deny, {:permission_rejected, _}} = gate.(Code.Write, %{}, %{})
+      assert {:deny, {:permission_cancelled, "reset"}} = gate.(Reset, %{}, %{})
     end
 
-    # This is the case Ctx collapses timeout / client error / decode failure /
-    # disconnect / racing-cancel into. All of them arrive here.
-    test "a cancelled outcome denies" do
-      session = stub_session({:ok, :cancelled})
-      gate = Permission.authorizer(session, @session_id)
+    test "is denied when the client selects an option that was not offered" do
+      gate = Permission.authorizer(session(selected("not-offered")), @session_id)
 
-      assert {:deny, {:permission_cancelled, _}} = gate.(Code.Write, %{}, %{})
+      assert {:deny, {:permission_unknown_option, "reset", "not-offered"}} =
+               gate.(Reset, %{}, %{})
     end
 
-    # A client that echoes an optionId we never offered must not get a write.
-    test "an option we never offered denies rather than allowing" do
-      session = stub_session({:ok, {:selected, %{option_id: "attacker-chosen"}}})
-      gate = Permission.authorizer(session, @session_id)
+    test "is denied on an answer of any other shape" do
+      gate = Permission.authorizer(session(:something_else), @session_id)
 
-      assert {:deny, {:permission_unknown_option, _, "attacker-chosen"}} =
-               gate.(Code.Write, %{}, %{})
+      assert {:deny, {:permission_unexpected, "reset", :something_else}} =
+               gate.(Reset, %{}, %{})
     end
 
-    test "a shape Ctx promises never to return still denies instead of crashing" do
-      session = stub_session(:something_else_entirely)
-      gate = Permission.authorizer(session, @session_id)
+    test "gets a tool call id of its own on every call" do
+      gate = Permission.authorizer(session(selected(Permission.allow_option_id())), @session_id)
 
-      assert {:deny, {:permission_unexpected, _, _}} = gate.(Code.Write, %{}, %{})
+      gate.(Reset, %{}, %{})
+      gate.(Reset, %{}, %{})
+
+      assert_received {:asked, first}
+      assert_received {:asked, second}
+      assert first.tool_call.tool_call_id != second.tool_call.tool_call_id
     end
   end
 
-  describe "TurnRunner injection" do
-    alias Raxol.Agent.ClientProtocol.TurnRunner
+  describe "settle/3" do
+    test "closes the calls the authorizer allowed, and only those" do
+      stub = session(selected(Permission.reject_option_id()))
+      gate = Permission.authorizer(stub, @session_id)
 
-    test "the gate lands in the agent context as :tool_authorizer" do
-      opts = TurnRunner.with_permission_gate([], self(), @session_id)
+      assert gate.(Increment, %{}, %{}) == :ok
+      assert {:deny, _reason} = gate.(Reset, %{}, %{})
+      [{:tool_call, allowed, :in_progress} | _denied] = statuses()
 
-      assert is_function(opts[:context][:tool_authorizer], 3)
+      assert Permission.settle(stub, @session_id, :answered) == :ok
+      assert statuses() == [{:update, allowed, :completed}]
+
+      assert Permission.settle(stub, @session_id, :unanswered) == :ok
+      assert statuses() == []
     end
 
-    test "an existing authorizer is NOT replaced" do
-      mine = fn _a, _p, _c -> {:deny, :mine} end
+    test "tells the process that built the authorizer, whichever process runs it" do
+      stub = session(:never_asked)
+      gate = Permission.authorizer(stub, @session_id)
 
-      opts =
-        TurnRunner.with_permission_gate([context: %{tool_authorizer: mine}], self(), @session_id)
+      worker = Task.async(fn -> gate.(Increment, %{}, %{}) end)
+      assert Task.await(worker) == :ok
+      [{:tool_call, id, :in_progress}] = statuses()
 
-      assert opts[:context][:tool_authorizer] == mine
+      assert Permission.settle(stub, @session_id, :unanswered) == :ok
+      assert [{:tool_call_update, %{tool_call_id: ^id, fields: fields}}] = posted()
+      assert fields.status == :failed
+      assert [{:content, %{content: {:text, %{text: note}}}}] = fields.content
+      assert note =~ "may have run"
     end
 
-    # cwd and jail markers ride in the same map; clobbering them would silently
-    # unroot the fs tools.
-    test "other context keys survive injection" do
-      opts =
-        TurnRunner.with_permission_gate(
-          [context: %{cwd: "/w", jail: true}],
-          self(),
-          @session_id
-        )
+    test "closes a call still waiting for permission as failed, with no note" do
+      stub = session(:hold)
+      gate = Permission.authorizer(stub, @session_id)
 
-      assert opts[:context][:cwd] == "/w"
-      assert opts[:context][:jail] == true
-      assert is_function(opts[:context][:tool_authorizer], 3)
+      spawn(fn -> gate.(Reset, %{to: 0}, %{}) end)
+      assert_receive {:asked, request}
+      assert %{title: "Run `reset`", raw_input: %{"to" => 0}} = request.tool_call.fields
+      id = request.tool_call.tool_call_id
+
+      assert Permission.settle(stub, @session_id, :answered) == :ok
+
+      assert [{:tool_call, %{tool_call_id: ^id, status: :pending}}, {:tool_call_update, closing}] =
+               posted()
+
+      assert %{tool_call_id: ^id, fields: %{status: :failed, content: nil}} = closing
     end
   end
 end

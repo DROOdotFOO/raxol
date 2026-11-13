@@ -60,7 +60,7 @@ defmodule Raxol.Agent.Comm do
   The turn contract's `{:acp_cancel, ref}` is unrelated to the bare
   `:acp_cancel` atom of the ACP stack, which
   `Raxol.AgentClientProtocol.Session` sends to the process running a
-  `Raxol.Agent.ClientProtocol.TurnRunner` turn; see `Raxol.Agent.Session`.
+  `Raxol.Agent.ClientProtocol.Turn` turn; see `Raxol.Agent.Session`.
 
   An agent consults `approver`, and runs the actions it gates, in the
   `run_turn/3` process, never inline in `update/2`: an inline ask would

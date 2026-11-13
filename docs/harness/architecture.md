@@ -323,24 +323,24 @@ prefix inside the signed bytes is the algorithm binding): the journal/offset
 model exported onto the ACP wire. It is distinct from `Raxol.Earn`
 (`packages/raxol_earn/`, the unrelated Virtuals commerce protocol).
 
-The coding agent serves that protocol on stdio.
-`Raxol.Agent.ClientProtocol.Serve` parses argv, reroutes logs to stderr before
-the transport binds (a single stray stdout line is a protocol parse error at
-the client), and serves until the peer disconnects, returning an exit code: 0
-on a clean disconnect. It contains no Mix calls, so `mix raxol.acp` and the
-Burrito CLI's `raxol acp` run the same code; `bin/raxol-acp` is the shim an
-editor should point at, because `mix` prints compile output to stdout on first
-run and that would corrupt the wire. `Raxol.Agent.ClientProtocol.StdioAgent`
-is the handler: each `session/new` starts a `Raxol.AgentClientProtocol.Session`
-whose `:turn_runner` is `Raxol.Agent.ClientProtocol.TurnRunner`, and each
-session's file tools scope to the `cwd` the editor sent. Turns run the full
-toolset: `Raxol.Agent.ClientProtocol.Permission.authorizer/2` gates every
-sensitive Action on a `session/request_permission` round trip, injected per
-turn as the context's `:tool_authorizer`. Reads are not gated. The gate is
-fail-closed on the DECISION rather than on the toolset, so a client that
-refuses, times out, disconnects, or answers method-not-found denies the write
-and leaves reads working. The protocol package is a
-dev/test path dependency, so `StdioAgent` compiles only when raxol_agent is
+`raxol acp --agent <app>[:<id>]` serves a Raxol agent over that protocol on
+stdio. `Raxol.Agent.ClientProtocol.Serve` parses argv, moves logs to stderr
+before the transport starts (a stray stdout line is a parse error at the
+client), reads and writes the `user` device, and serves until the peer
+disconnects, returning an exit code: 0 on a clean disconnect. `bin/raxol-acp`
+is the shim for a source checkout, because `mix` prints compile output to
+stdout. `Raxol.Agent.ClientProtocol.StdioAgent` is the handler: each
+`session/new` starts the named app through `Raxol.Agent.McpTools.start_owned/4`
+(a required, locked journal bound to the `cwd` the editor sent and to the app)
+and a `Raxol.AgentClientProtocol.Session` whose `:turn_runner` is
+`Raxol.Agent.ClientProtocol.Turn`. A prompt is one turn of the agent's turn
+contract (`{:acp_prompt, text, approver}`, `Raxol.Agent.Comm`), answered as one
+message chunk; `session/cancel` sends the turn's `{:acp_cancel, ref}`.
+`Raxol.Agent.ClientProtocol.Permission.authorizer/2` is the turn's `approver`:
+it announces each tool call and asks `session/request_permission` for an action
+marked `sensitive`, so a client that refuses, times out, disconnects, or
+answers method-not-found denies it. `session/load` is not offered. The protocol
+package is a path dependency, so `StdioAgent` compiles only when raxol_agent is
 built from source with it present; a Hex install exits 1 with an explanation.
 
 Steer does not bridge. `Raxol.Agent.Harness.SessionLane.steer/2` returns

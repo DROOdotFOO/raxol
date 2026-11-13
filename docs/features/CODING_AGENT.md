@@ -357,7 +357,7 @@ re-read and retry in one turn instead of guessing. `anchors: false` on `read_fil
 the raw bytes for when the exact content is what is wanted.
 
 Every path expands relative to the working directory: the tool context's `:cwd`
-when the surface sets one (an ACP session root, a tenant jail), else
+when the surface sets one (a tenant jail), else
 `RAXOL_CLI_CWD`, else the BEAM cwd. The result must stay under that root, and
 containment is decided on the REAL path: `Raxol.Agent.Actions.Fs.resolve/2`
 canonicalizes both sides component by component (`realpath`), so a symlink cannot
@@ -498,11 +498,9 @@ and marked as truncated in the prompt. Only regular files of valid UTF-8 text ar
 `/inspect` (and `mix raxol.inspect`) lists which files were found and how large they are,
 never their content. The boot status line names them, e.g. `instructions: AGENTS.md`.
 
-The three surfaces differ where their working directory does:
+The two surfaces differ where their working directory does:
 
 - **TUI**: discovers at boot from the session `cwd`.
-- **ACP**: discovers per session from the root the editor names in `session/new`, so two
-  sessions on one server get their own instructions.
 - **Headless (`raxol -p`)**: discovers from the process working directory, except under
   `RAXOL_PROFILE=benchmark`, which withholds them for the reason it withholds skills: an
   attempt must depend on the task, not on what the checkout happens to carry. The profile's
@@ -595,30 +593,9 @@ status line say so rather than reporting an empty config.
 
 ## Editors over ACP
 
-`mix raxol.acp` serves the agent loop over the
-[Agent Client Protocol](https://agentclientprotocol.com) on stdio, so an
-ACP-speaking editor (Zed and its ecosystem) can spawn and drive it: each
-`session/new` gets a real `Raxol.AgentClientProtocol.Session` running
-`Raxol.Agent.ClientProtocol.TurnRunner` over the same provider resolution
-as every other entrypoint. Turns run the full toolset: every sensitive call is
-gated on a `session/request_permission` round trip, and the gate is fail-closed
-on the decision, so a client that refuses, times out, or never implements the
-method denies the write and keeps reading. Each session's file
-tools scope to the `cwd` the editor names in `session/new`, so one server
-handles projects in different directories and every tool call is contained
-under its own session root. Point
-the editor at the `bin/raxol-acp` shim rather than `mix` directly, so Mix
-compile output never reaches the NDJSON wire; `mix help raxol.acp` has the
-Zed `agent_servers` snippet. This is a repo-checkout feature: the protocol
-package is a dev/test path dependency, so a Hex install of raxol_agent is
-built without it and the task exits 1 with an explanation.
-
-`Raxol.Agent.ClientProtocol.Serve` owns every exit code, so `mix raxol.acp`,
-the packaged `raxol acp`, and the shim agree. A clean peer disconnect exits 0:
-the transport reports the close, the connection stops, and the process answers
-with a code instead of dying of the linked exit. The non-zero paths are a usage
-error (64), a build with no ACP support (1), an unresolved provider (1), and a
-connection that ended abnormally (1).
+The coding agent is not served over ACP. `raxol acp --agent` serves a Raxol
+agent to ACP editors: see
+[Editor ACP](EDITOR_ACP.md#serving-a-raxol-agent).
 
 ## Serving over SSH
 

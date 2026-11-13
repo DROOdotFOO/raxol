@@ -1,211 +1,160 @@
 defmodule Raxol.Agent.ClientProtocol.PermissionWireTest do
   @moduledoc """
-  End-to-end proof that the ACP permission gate is real: a sensitive tool call
-  in a LIVE turn puts a `session/request_permission` on the Connection seam,
-  and the client's answer decides whether the filesystem changes.
-
-  `Raxol.Agent.ClientProtocol.PermissionTest` pins the gate function itself
-  against a stubbed Session. This pins the whole path instead — real `Session`,
-  real `TurnRunner`, real `Raxol.Agent.Stream` react loop, real
-  `ToolConverter` dispatch, real `Code.Write` Action, real filesystem — because
-  the wiring being correct at every link is not the same claim as the round
-  trip happening, and only the second one is worth telling anyone.
-
-  The single seam is the LLM: a test-local backend emits one `write_file` tool
-  call and then a closing message, which is what a model would do. Everything
-  downstream of that decision is production code.
-
-  Two claims, both load-bearing:
-
-    1. **The ask reaches the client, and allow writes.** One
-       `session/request_permission` is submitted, naming this session and
-       offering exactly allow-once/reject-once; answering with allow lands the
-       file.
-    2. **The write lands under the SESSION's cwd.** `:cwd` in the agent
-       context roots `Fs.resolve/2`, so a relative path from the model resolves
-       under the directory `session/new` named — not the BEAM's. Two concurrent
-       ACP sessions on one server would otherwise write into each other.
-
-  And the refusal: answering with reject leaves the filesystem untouched.
+  A sensitive action in a live turn, over a connection to the real server
+  loop: the reference agent's `reset` reaches the client as one
+  `session/request_permission`, and the client's answer decides whether the
+  count changes. `Raxol.Agent.Test.TurnProbe` supplies an action called with
+  arguments, and one whose turn outlives the call.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  @moduletag :capture_log
+  @moduletag :unix_only
 
   alias Raxol.Agent.ClientProtocol.Permission
-  alias Raxol.Agent.ClientProtocol.TurnRunner
-  alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptRequest
-  alias Raxol.AgentClientProtocol.Schema.ClientTypes.RequestPermissionResponse
-  alias Raxol.AgentClientProtocol.Schema.ContentBlock
-  alias Raxol.AgentClientProtocol.Session
+  alias Raxol.Agent.Comm
+  alias Raxol.Agent.Session
+  alias Raxol.Agent.Test.AcpPipe
+  alias Raxol.Agent.Test.TurnProbe
 
-  @marker "PERMISSION_WIRE_MARKER.txt"
-  @content "hob"
-
-  # -- seams ------------------------------------------------------------------
-
-  defmodule FakeConn do
-    @moduledoc """
-    Connection seam double, matching the ACP package's own suite. `conn` is the
-    test pid, so every outbound frame arrives in the test's mailbox — including
-    the permission request, which the test answers by sending `owner` the
-    `{:acp_result, tag, _}` the Session parks on.
-    """
-    def delegate_reply(conn, reply_ref, adopter) do
-      send(conn, {:conn_delegated, reply_ref, adopter})
-      :ok
-    end
-
-    def reply(conn, reply_ref, rendered) do
-      send(conn, {:conn_reply, reply_ref, rendered})
-      :ok
-    end
-
-    def notify(conn, method, notification) do
-      send(conn, {:conn_notify, method, notification})
-      :ok
-    end
-
-    def async_request(conn, method, req, owner, tag, _timeout) do
-      send(conn, {:conn_async_request, method, req, owner, tag})
-      :ok
-    end
-
-    def cancel_request(_conn, _tag), do: :ok
-  end
-
-  defmodule WritingBackend do
-    @moduledoc """
-    One `write_file` tool call, then a closing message — the shape a model
-    produces for "create this file". The `:turns` Agent makes the sequence
-    deterministic instead of depending on how the react loop shapes history.
-    """
-    def complete(_messages, opts) do
-      turns = Keyword.fetch!(opts, :turns)
-      path = Keyword.fetch!(opts, :path)
-      body = Keyword.fetch!(opts, :body)
-
-      case Agent.get_and_update(turns, fn n -> {n, n + 1} end) do
-        0 ->
-          {:ok,
-           %{
-             content: "",
-             tool_calls: [
-               %{
-                 "id" => "call-1",
-                 "name" => "write_file",
-                 "arguments" => %{"path" => path, "content" => body}
-               }
-             ],
-             usage: %{}
-           }}
-
-        _later ->
-          {:ok, %{content: "done", usage: %{}}}
-      end
-    end
-
-    def stream(_messages, _opts), do: {:error, :complete_only}
-  end
-
-  # -- harness ----------------------------------------------------------------
+  @counter "Raxol.Agent.Reference.Counter"
+  @probe "Raxol.Agent.Test.TurnProbe"
 
   setup do
-    cwd = Path.join(System.tmp_dir!(), "acp-perm-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(cwd)
-    on_exit(fn -> File.rm_rf(cwd) end)
-
-    turns = start_supervised!({Agent, fn -> 0 end})
-
-    {:ok, cwd: cwd, turns: turns}
+    AcpPipe.start_trees()
+    %{root: AcpPipe.tmp_root("acp_perm"), id: "p#{System.unique_integer([:positive])}"}
   end
 
-  defp start_session!(cwd, turns) do
-    runner =
-      TurnRunner.new(
-        backend: WritingBackend,
-        backend_opts: [turns: turns, path: @marker, body: @content],
-        actions: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all(),
-        # Exactly what `StdioAgent` derives from `session/new`'s cwd.
-        context: %{cwd: cwd}
-      )
-
-    task_sup = start_supervised!(Task.Supervisor)
-    session_id = "sess-#{System.unique_integer([:positive])}"
-
-    session =
-      start_supervised!(
-        {Session,
-         [
-           session_id: session_id,
-           conn: self(),
-           conn_mod: FakeConn,
-           task_sup: task_sup,
-           turn_runner: runner,
-           name: :"perm_wire_#{System.unique_integer([:positive])}"
-         ]},
-        restart: :temporary
-      )
-
-    req = PromptRequest.new(session_id, [ContentBlock.from_string("create the file")])
-    assert :ok = Session.begin_prompt(session, req, make_ref(), 1)
-
-    session_id
+  defp counting(root, id, opts) do
+    pipe = AcpPipe.connect(%{app: @counter, id: id}, opts)
+    {:ok, ^id} = AcpPipe.new_session(pipe, root)
+    {_updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "increment")
+    pipe
   end
 
-  # The Session parks the gate's call until this arrives.
-  defp answer_permission(owner, tag, option_id) do
-    send(
-      owner,
-      {:acp_result, tag,
-       {:ok, %RequestPermissionResponse{outcome: {:selected, %{option_id: option_id}}}}}
-    )
+  defp count(pipe, id) do
+    {updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "get")
+    AcpPipe.reply_text(updates)
   end
 
-  # -- claims -----------------------------------------------------------------
+  defp paying(root, id, opts) do
+    AcpPipe.spawnable([TurnProbe])
+    pipe = AcpPipe.connect(%{app: @probe, id: id}, opts)
+    {:ok, ^id} = AcpPipe.new_session(pipe, root)
+    pipe
+  end
 
-  describe "a sensitive tool call in a live turn" do
-    test "asks the client, and allow writes the file under the session cwd",
-         %{cwd: cwd, turns: turns} do
-      session_id = start_session!(cwd, turns)
+  test "a rejected reset is denied and changes nothing", %{root: root, id: id} do
+    pipe = counting(root, id, permission: Permission.reject_option_id())
 
-      assert_receive {:conn_async_request, "session/request_permission", req, owner, tag}, 5_000
+    assert {updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "reset")
 
-      # The ask names THIS session and offers exactly the two documented options.
-      assert req.session_id == session_id
-      assert Enum.map(req.options, & &1.kind) == [:allow_once, :reject_once]
+    assert_received {:permission_asked, request}
+    assert request.session_id == id
+    assert Enum.map(request.options, & &1.kind) == [:allow_once, :reject_once]
 
-      assert Enum.map(req.options, & &1.option_id) == [
-               Permission.allow_option_id(),
-               Permission.reject_option_id()
-             ]
+    assert AcpPipe.tool_statuses(updates) == [{"Run `reset`", :pending}, {nil, :failed}]
+    assert AcpPipe.reply_text(updates) =~ "[Tool error for reset]: denied"
+    assert count(pipe, id) == "count: 1"
+  end
 
-      # Nothing has touched the filesystem yet: the gate is holding the call.
-      refute File.exists?(Path.join(cwd, @marker))
+  test "an allowed reset runs", %{root: root, id: id} do
+    pipe = counting(root, id, permission: Permission.allow_option_id())
 
-      answer_permission(owner, tag, Permission.allow_option_id())
+    assert {updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "reset")
+    assert_received {:permission_asked, _request}
 
-      assert_receive {:conn_reply, _ref, _rendered}, 5_000
+    assert AcpPipe.tool_statuses(updates) == [
+             {"Run `reset`", :pending},
+             {nil, :in_progress},
+             {nil, :completed}
+           ]
 
-      written = Path.join(cwd, @marker)
-      assert File.exists?(written), "allow did not write the file"
-      assert File.read!(written) == @content
+    assert AcpPipe.reply_text(updates) == "count: 0"
+    assert count(pipe, id) == "count: 0"
+  end
 
-      # The cwd claim, stated as its own assertion rather than implied: a
-      # relative path from the model must NOT resolve against the BEAM's cwd.
-      refute File.exists?(Path.join(File.cwd!(), @marker))
-    end
+  test "an option the client was not offered is denied", %{root: root, id: id} do
+    pipe = counting(root, id, permission: "allow-everything")
 
-    test "reject leaves the filesystem untouched", %{cwd: cwd, turns: turns} do
-      start_session!(cwd, turns)
+    assert {updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "reset")
+    assert AcpPipe.reply_text(updates) =~ "[Tool error for reset]: denied"
+    assert count(pipe, id) == "count: 1"
+  end
 
-      assert_receive {:conn_async_request, "session/request_permission", _req, owner, tag}, 5_000
+  test "a client without session/request_permission is denied", %{root: root, id: id} do
+    pipe = counting(root, id, [])
 
-      answer_permission(owner, tag, Permission.reject_option_id())
+    assert {updates, {:ok, _response}} = AcpPipe.turn(pipe, id, "reset")
+    assert AcpPipe.reply_text(updates) =~ "[Tool error for reset]: denied"
+    assert count(pipe, id) == "count: 1"
+  end
 
-      # The turn still completes — a refusal is an answer, not an error.
-      assert_receive {:conn_reply, _ref, _rendered}, 5_000
+  test "an action that is not sensitive asks nothing", %{root: root, id: id} do
+    pipe = counting(root, id, permission: Permission.reject_option_id())
 
-      refute File.exists?(Path.join(cwd, @marker))
-      refute File.exists?(Path.join(File.cwd!(), @marker))
-    end
+    refute_received {:permission_asked, _request}
+    assert count(pipe, id) == "count: 1"
+  end
+
+  test "the client is asked with the arguments the action is called with",
+       %{root: root, id: id} do
+    pipe = paying(root, id, permission: Permission.reject_option_id())
+
+    assert {updates, {:ok, %{stop_reason: :end_turn}}} = AcpPipe.turn(pipe, id, "pay")
+
+    assert_received {:permission_asked, request}
+    assert %{title: "Run `pay`", raw_input: %{"amount" => 5}} = request.tool_call.fields
+
+    assert [{:tool_call, announced} | _rest] = updates
+    assert %{title: "Run `pay`", status: :pending, raw_input: %{"amount" => 5}} = announced
+    assert announced.tool_call_id == request.tool_call.tool_call_id
+  end
+
+  test "an allowed call is closed with its outcome unknown when the turn is cancelled",
+       %{root: root, id: id} do
+    pipe = paying(root, id, permission: Permission.allow_option_id())
+
+    tag = AcpPipe.prompt(pipe, id, "pay")
+    # Answered once the agent has applied the payment the allowed call made.
+    assert {:ok, 5} = Comm.call(id, "paid", 5_000)
+    :ok = AcpPipe.cancel(pipe, id)
+
+    assert {updates, {:ok, %{stop_reason: :cancelled}}} = AcpPipe.collect(tag)
+
+    assert [{:tool_call, call}, {:tool_call_update, allowed}, {:tool_call_update, closing}] =
+             updates
+
+    assert allowed.fields.status == :in_progress
+    assert closing.tool_call_id == call.tool_call_id
+    assert closing.fields.status == :failed
+    assert [{:content, %{content: {:text, %{text: note}}}}] = closing.fields.content
+    assert note =~ "Outcome unknown"
+    assert note =~ "may have run"
+  end
+
+  test "a turn that ends while the client is asked closes the call and withdraws the request",
+       %{root: root, id: id} do
+    pipe = AcpPipe.connect(%{app: @counter, id: id}, permission: :hold)
+    {:ok, ^id} = AcpPipe.new_session(pipe, root)
+
+    tag = AcpPipe.prompt(pipe, id, "reset")
+    assert_receive {:permission_asked, request}, 5_000
+    assert_receive {:permission_held, asked}, 5_000
+    held = Process.monitor(asked)
+
+    Process.exit(Session.Supervisor.whereis(id), :kill)
+
+    assert {updates, {:error, error}} = AcpPipe.collect(tag)
+    assert %{"tag" => "agent_down"} = error.data
+
+    assert [{:tool_call, %{status: :pending}}, {:tool_call_update, closing}] = updates
+    assert closing.tool_call_id == request.tool_call.tool_call_id
+    assert closing.fields.status == :failed
+    assert closing.fields.content == nil
+
+    # `$/cancel_request` ends the client's handler for the request.
+    assert_receive {:DOWN, ^held, :process, ^asked, :shutdown}, 5_000
+    assert Process.alive?(pipe.conn)
   end
 end

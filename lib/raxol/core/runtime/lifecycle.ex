@@ -10,7 +10,8 @@ defmodule Raxol.Core.Runtime.Lifecycle do
 
   Uses a two-phase readiness pattern: rendering begins only after both
   `dispatcher_ready` and `plugin_manager_ready` flags are set. In dev mode,
-  a CodeReloader is started to watch for source changes and trigger re-renders.
+  a CodeReloader is started to watch for source changes and trigger
+  re-renders, unless `config :raxol, :code_reloader` is `false`.
 
   ## Shutdown & exit trapping
 

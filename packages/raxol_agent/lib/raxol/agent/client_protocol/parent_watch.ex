@@ -5,7 +5,7 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatch do
   Burrito's launcher forks the BEAM and waits, and it does not forward signals.
   Kill the launcher alone -- `Popen.terminate()` in Python, or any client that
   signals a pid rather than a process group -- and the launcher dies while the
-  BEAM keeps running, holding the provider credential, with stdin still open
+  BEAM keeps running, with its agents and their journal locks, stdin still open
   because the client's end of the pipe is untouched. Nothing else notices: a
   group kill reaches the BEAM directly, and a client that exits closes the pipe
   and gives us EOF, but this case has no signal and no EOF.
@@ -25,12 +25,16 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatch do
   @interval_ms 5_000
 
   @doc """
-  Watch the current parent and run `on_orphan` when it changes.
+  Watch the current parent and stop the VM when it changes.
 
   `:ppid_fun` reads the parent pid; the default reads `/proc/self/stat` and
   falls back to `ps` off Linux. Returns `:ignore` when the parent cannot be
   read at all, since a watchdog that cannot see its subject would otherwise
   either fire constantly or never.
+
+  `:stop` is called with exit status 0 when the parent has changed; the
+  default is `System.stop/1`, which takes the applications down in order, so
+  agents are stopped and their journals closed. A test passes its own.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -48,7 +52,7 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatch do
            ppid: ppid,
            ppid_fun: ppid_fun,
            interval: Keyword.get(opts, :interval_ms, @interval_ms),
-           on_orphan: Keyword.get(opts, :on_orphan, &default_orphan/0)
+           stop: Keyword.get(opts, :stop, &System.stop/1)
          }, {:continue, :arm}}
 
       :error ->
@@ -75,12 +79,10 @@ defmodule Raxol.Agent.ClientProtocol.ParentWatch do
 
       {:ok, _orphaned} ->
         Logger.info("[acp] launcher exited; stopping so the BEAM does not outlive it")
-        state.on_orphan.()
+        state.stop.(0)
         {:stop, :normal, state}
     end
   end
-
-  defp default_orphan, do: fn -> System.stop(0) end
 
   @doc false
   @spec read_ppid() :: {:ok, non_neg_integer()} | :error

@@ -59,8 +59,7 @@ defmodule RaxolAgent.MixProject do
   # unpublished, so naming it in the Hex package would make raxol_agent
   # unpublishable. HEX_BUILD therefore drops it entirely, and a Hex install of
   # raxol_agent has no ACP surface (`Raxol.Agent.ClientProtocol.StdioAgent` is
-  # compile-gated on the package's presence), exactly as `mix help raxol.acp`
-  # documents.
+  # compile-gated on the package's presence).
   #
   # A source build takes it in EVERY env, not just dev/test: the packaged
   # `raxol acp` is a :prod build of this package, and a dep edge is what orders

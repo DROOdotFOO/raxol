@@ -52,7 +52,7 @@ MAKEFLAGS=-s mix compile >/dev/null 2>&1 </dev/null || {
 # project loadpaths and honours --no-deps-check; the task still runs
 # `app.start` itself.
 #
-# No -noinput here, unlike bin/raxol-acp: this process's stdio IS the terminal
+# No -noinput here: this process's stdio IS the terminal
 # the UI draws on, and the driver needs fd 0 for keys. Verified interactively
 # through a pty -- the TUI initializes and takes the alternate screen under
 # `mix run` exactly as it did under `mix raxol.code`.

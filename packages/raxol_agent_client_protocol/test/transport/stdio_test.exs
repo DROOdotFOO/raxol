@@ -3,13 +3,9 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
 
   alias Raxol.AgentClientProtocol.Transport.Stdio
 
-  # These tests exercise :spawn mode against tiny, portable peer commands
-  # (`cat`, `printf`, `true`, `false`) that exist on any Unix CI runner.
-  # `:self` mode (owning the BEAM's own fd 0/1) is intentionally NOT
-  # exercised here: opening the real stdin/stdout during a test run would
-  # fight ExUnit's own IO capture over `:user` and is genuinely
-  # sandbox-unrunnable — it belongs in a release/escript entry point, not
-  # a unit test.
+  # `:spawn` mode runs against tiny, portable peer commands (`cat`, `printf`,
+  # `true`, `false`). `:self` mode runs against a `StringIO` device in place
+  # of `user`: the real stdin and stdout belong to the test runner.
 
   describe "round trip through cat (framer + decode)" do
     test "a sent message is echoed back and decodes to the same map" do
@@ -156,6 +152,89 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
       assert_receive {:acp_transport, _ref, {:message, ^msg}}, 2_000
 
       :ok = Stdio.close(transport)
+    end
+  end
+
+  describe "self mode over an IO device" do
+    test "lines read before an owner is set are held, then delivered in order" do
+      {:ok, io} = StringIO.open(~s({"id":1}\n{"id":2}\r\n))
+      {:ok, transport} = Stdio.start_self(input: io, output: io)
+      await_reader(transport)
+
+      :ok = Stdio.set_owner(transport, self())
+
+      # Flushed inside `set_owner/2`, so all of it is here already.
+      assert delivered(transport) == [
+               {:message, %{"id" => 1}},
+               {:message, %{"id" => 2}},
+               {:closed, :eof}
+             ]
+    end
+
+    test "still writes after end of input, one line per message" do
+      {:ok, io} = StringIO.open("")
+      {:ok, transport} = Stdio.start_self(owner: self(), input: io, output: io)
+      assert_receive {:acp_transport, _ref, {:closed, :eof}}, 2_000
+
+      {:ok, transport} = Stdio.send_message(transport, %{"text" => "héllo\nworld"})
+      {:ok, _transport} = Stdio.send_message(transport, %{"seq" => 2})
+
+      assert {"", output} = StringIO.contents(io)
+      assert [first, second] = String.split(output, "\n", trim: true)
+      assert Jason.decode!(first) == %{"text" => "héllo\nworld"}
+      assert Jason.decode!(second) == %{"seq" => 2}
+    end
+
+    test "reports a line that is not a JSON object and keeps reading" do
+      {:ok, io} = StringIO.open(~s(not json\n{"ok":true}\n))
+      {:ok, _transport} = Stdio.start_self(owner: self(), input: io, output: io)
+
+      assert_receive {:acp_transport, _ref, {:decode_error, _reason, "not json"}}, 2_000
+      assert_receive {:acp_transport, _ref, {:message, %{"ok" => true}}}, 2_000
+    end
+
+    test "moves bytes unchanged: a byte that is not UTF-8 is reported, later text is intact" do
+      {:ok, io} = StringIO.open(<<0xFF, "{}\n", ~s({"text":"é中"}\n)::binary>>)
+      {:ok, transport} = Stdio.start_self(owner: self(), input: io, output: io)
+
+      assert_receive {:acp_transport, _ref, {:decode_error, _reason, <<0xFF, "{}">>}}, 2_000
+      assert_receive {:acp_transport, _ref, {:message, %{"text" => "é中"}}}, 2_000
+      assert_receive {:acp_transport, _ref, {:closed, :eof}}, 2_000
+
+      {:ok, _transport} = Stdio.send_message(transport, %{"text" => "é中"})
+      assert StringIO.contents(io) == {"", ~s({"text":"é中"}\n)}
+    end
+
+    test "refuses a send after close" do
+      {:ok, io} = StringIO.open("")
+      {:ok, transport} = Stdio.start_self(owner: self(), input: io, output: io)
+
+      :ok = Stdio.close(transport)
+      assert {:error, :closed} = Stdio.send_message(transport, %{"late" => true})
+      assert :ok = Stdio.close(transport)
+    end
+  end
+
+  # Returns once the transport has taken everything its reader read: the
+  # reader ends at end of input, and what it sent is ahead of the call
+  # below in the transport's mailbox.
+  defp await_reader(transport) do
+    {:links, links} = Process.info(transport.pid, :links)
+
+    for reader <- links -- [self()] do
+      ref = Process.monitor(reader)
+      assert_receive {:DOWN, ^ref, :process, ^reader, _reason}, 2_000
+    end
+
+    _state = :sys.get_state(transport.pid)
+    :ok
+  end
+
+  defp delivered(%{pid: pid} = transport) do
+    receive do
+      {:acp_transport, ^pid, event} -> [event | delivered(transport)]
+    after
+      0 -> []
     end
   end
 end

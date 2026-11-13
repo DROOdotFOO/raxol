@@ -11,6 +11,8 @@ the Console's package/runtime-registration contract.
 Builds on the agent runtime (`Raxol.Agent.Session`, `Raxol.Agent.Stream`), the cron scheduler
 (ADR-0025), the unified messaging gateway (ADR-0023), the agent skill runtime (ADR-0021), the agent
 persona seam (`Raxol.Agent.SystemPrompt`), and the Virtuals ACP stack (`raxol_earn`, ADR-0016/0030).
+`Raxol.Agent.SystemPrompt` has since been removed: nothing called it, and
+`Raxol.Console.RuntimeConfig` builds the persona from the package's `soul.md` and `AGENTS.md` itself.
 
 ## Context
 

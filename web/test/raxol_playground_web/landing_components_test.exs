@@ -630,7 +630,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert hero =~ ~s(data-surface="3")
     refute hero =~ ~s(data-surface="4")
 
-    # ACP is the coding agent's editor protocol, not a surface a TEA chart
+    # ACP is how an editor drives a Raxol agent, not a surface a TEA chart
     # renders to, so the hero may not caption an example module with it.
     refute hero =~ "ACP"
     refute hero =~ "session/prompt"
@@ -1213,7 +1213,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute header =~ "$RAXOL verified"
   end
 
-  test "coding agent section claims ACP membership and prints the four surfaces" do
+  test "coding agent section links the ACP site and prints the four commands" do
     coding = render_component(&LandingComponents.coding_agent_deep_dive/1, %{})
 
     assert coding =~ "agentclientprotocol.com"

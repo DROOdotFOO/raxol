@@ -12,15 +12,14 @@ defmodule Raxol.CLI.Doctor do
   The configuration half is `Raxol.Agent.Code.Inspection`, the same snapshot
   `mix raxol.inspect` and the TUI's `/inspect` render — reused rather than
   reimplemented, so all three agree. What this adds is the install header:
-  build provenance, packaging, runtime, and whether the ACP surface is even
-  compiled into this build (it is a source-build feature, so a Hex install of
-  `raxol_agent` legitimately does not have one, and that is worth saying out
-  loud rather than letting `raxol acp` fail later).
+  build provenance, packaging, runtime, and whether the ACP surface is
+  compiled into this build (a Hex install of `raxol_agent` has none) and can
+  start an agent on this platform.
   """
 
+  alias Raxol.Agent.ClientProtocol.Serve
   alias Raxol.Agent.Code.Inspection
-
-  @acp_agent Raxol.Agent.ClientProtocol.StdioAgent
+  alias Raxol.Agent.McpTools
 
   @doc "Print the install report for `cwd`, returning an exit code."
   @spec run([String.t()]) :: non_neg_integer()
@@ -61,14 +60,27 @@ defmodule Raxol.CLI.Doctor do
 
   defp otp_release, do: List.to_string(:erlang.system_info(:otp_release))
 
-  # A capability question, not a version question: `StdioAgent` is compiled
-  # only when `raxol_agent_client_protocol` was on the code path at build time.
-  defp acp_surface do
-    if Code.ensure_loaded?(@acp_agent) do
-      "available (raxol acp)"
-    else
-      "NOT built in -- needs a source build of raxol_agent with " <>
-        ":raxol_agent_client_protocol"
+  @doc false
+  @spec acp_surface({atom(), atom()}) :: String.t()
+  def acp_surface(os_type \\ :os.type()) do
+    cond do
+      not Serve.available?() ->
+        "NOT built in -- needs a source build of raxol_agent with " <>
+          ":raxol_agent_client_protocol"
+
+      refusal = platform_refusal(os_type) ->
+        "NOT available -- #{refusal}"
+
+      true ->
+        "available (raxol acp --agent <app>)"
+    end
+  end
+
+  # Every `session/new` would be refused with the same words.
+  defp platform_refusal(os_type) do
+    case McpTools.platform_refusal(os_type) do
+      :ok -> nil
+      {:error, message} -> message
     end
   end
 

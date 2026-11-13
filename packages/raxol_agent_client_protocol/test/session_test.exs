@@ -317,6 +317,39 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
     end
   end
 
+  describe "a turn that ends with an ask still parked" do
+    test "denies the asker and withdraws the client's request", ctx do
+      test = self()
+
+      conn =
+        new_conn(
+          perm_responder: fn _req ->
+            send(test, :asked)
+            :decline
+          end
+        )
+
+      # The ask comes from a process outside the turn's task group, so the
+      # root can return while it is parked.
+      runner = fn s, _req ->
+        spawn(fn -> send(test, {:perm, Session.request_permission(s, :perm_req)}) end)
+        send(test, {:runner, self()})
+        receive(do: (:end_turn -> {:stop, :end_turn}))
+      end
+
+      {session, _} = start_session(ctx, conn, turn_runner: runner)
+      {:ok, _} = begin(session)
+      assert_receive {:runner, runner_pid}, 1_000
+      assert_receive :asked, 1_000
+      send(runner_pid, :end_turn)
+
+      assert_receive {:perm, {:ok, :cancelled}}, 1_000
+      reply = wait_for_reply(conn)
+      assert {:reply, _, {:ok, %PromptResponse{stop_reason: :end_turn}}} = reply
+      assert FakeConnection.count(conn, :cancel_request) == 1
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # I6 cancel-of-idle + 6.3 cancel racing prompt dispatch + I16 commutation
   # ---------------------------------------------------------------------------

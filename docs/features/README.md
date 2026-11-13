@@ -5,7 +5,7 @@ Use this page to find a feature; each linked page owns its details.
 | Area | Feature | Purpose |
 | --- | --- | --- |
 | Agents | [Agent framework](AGENT_FRAMEWORK.md) | TEA agents, backends, tools, and teams |
-| Agents | [Coding agent](CODING_AGENT.md) | Interactive, headless, SSH, ACP, and MCP sessions |
+| Agents | [Coding agent](CODING_AGENT.md) | Interactive, headless, SSH, and MCP sessions |
 | Agents | [Memory](MEMORY.md) | Recall providers and the user model |
 | Agents | [Self-improvement](SELF_IMPROVEMENT.md) | After-turn review and skill curation |
 | Protocols | [MCP](MCP.md) | Component trees projected as agent tools |

@@ -38,10 +38,17 @@ defmodule Raxol.Agent.McpTools do
   binary ids); such an id cannot be spawned. A team member is refused by
   `agent_status` and `agent_stop`.
 
+  `start_owned/4` starts an agent under the same rules for another owner,
+  as `raxol acp --agent` does. That agent is not this server's: the tools
+  and the journal resource refuse it, and it shares only the id namespace
+  and, for the same project root, the journal directory.
+
   An agent stopped through `agent_stop` leaves `agent_list` and, if this
   server started it, its id can be spawned again. Its journal stays readable
   until this process restarts: stopped agents are remembered in an ETS table
-  it owns.
+  it owns. While another owner runs an agent under a stopped id, that id is
+  refused like any agent this server did not start: the journal directory
+  then holds the other owner's records.
 
   Spawned ids share the node's agent registry with every other agent: a
   client can take any id nothing is registered under at that moment.
@@ -105,6 +112,14 @@ defmodule Raxol.Agent.McpTools do
            journal_opts: keyword()
          }
 
+  @typedoc "A started agent: `continued` is the number of events its journal already held."
+  @type started :: %{
+          id: String.t(),
+          app: module(),
+          root: Path.t(),
+          continued: non_neg_integer()
+        }
+
   # -- API ----------------------------------------------------------------------
 
   @doc """
@@ -120,14 +135,43 @@ defmodule Raxol.Agent.McpTools do
   Returns the root the journal is bound to and `continued`, the number of
   events the journal already held.
   """
-  @spec spawn_agent(String.t(), String.t()) ::
-          {:ok, %{id: String.t(), app: module(), root: Path.t(), continued: non_neg_integer()}}
-          | {:error, String.t()}
+  @spec spawn_agent(String.t(), String.t()) :: {:ok, started()} | {:error, String.t()}
   def spawn_agent(app, id) when is_binary(app) and is_binary(id), do: call({:spawn, app, id})
 
   @doc "Stop agent `id` if this server started it or it is exposed."
   @spec stop_agent(String.t()) :: :ok | {:error, String.t()}
   def stop_agent(id) when is_binary(id), do: call({:stop, id})
+
+  @doc """
+  Start the allowlisted app named `app` as agent `id` for another owner,
+  under the rules of `spawn_agent/2`, with its journal bound to `root`.
+
+  The session tree's `:owner` is `{owner, %{app: module, root: root,
+  base_dir: dir}}`, so this server does not list, ask, stop or serve the
+  journal of the agent; `agent_spawn` refuses its id as in use while it
+  runs. Runs in the caller, which nothing of the agent is linked to.
+  """
+  @spec start_owned(term(), String.t(), String.t(), Path.t()) ::
+          {:ok, started()} | {:error, String.t()}
+  def start_owned(owner, app, id, root)
+      when owner != __MODULE__ and is_binary(app) and is_binary(id) and is_binary(root) do
+    with {:ok, module} <- admit(app, id),
+         {:ok, owned} <- start(owner, module, id, Path.expand(root)) do
+      {:ok, started(id, owned)}
+    end
+  end
+
+  @doc """
+  Stop agent `id` if `owner` started it with `start_owned/4`. Returns once
+  the id is free.
+  """
+  @spec stop_owned(term(), String.t()) :: :ok | {:error, :not_owned}
+  def stop_owned(owner, id) when owner != __MODULE__ and is_binary(id) do
+    case Session.Supervisor.owner(id) do
+      {:ok, {^owner, _owned}} -> stop_tree(id, id)
+      _other -> {:error, :not_owned}
+    end
+  end
 
   @doc "The names `agent_spawn` accepts as `app`."
   @spec spawnable() :: [String.t()]
@@ -155,7 +199,7 @@ defmodule Raxol.Agent.McpTools do
   def platform_refusal({:win32, _name}),
     do:
       {:error,
-       "agent_spawn is not available on Windows: the journal has no " <>
+       "starting an agent is not available on Windows: the journal has no " <>
          "cross-process writer lock there"}
 
   def platform_refusal(_os_type), do: :ok
@@ -285,11 +329,7 @@ defmodule Raxol.Agent.McpTools do
   def handle_call({:stop, id}, _from, state) do
     case stoppable(id) do
       {:ok, agent} ->
-        _ = Session.Supervisor.stop_session(agent.session_id)
-        # The registry forgets a stopped session a moment after it is gone,
-        # and the id is free only then.
-        Session.await_free(id)
-        Session.await_free({:session_supervisor, agent.session_id})
+        stop_tree(id, agent.session_id)
         remember(id, agent)
         {:reply, :ok, state}
 
@@ -299,14 +339,31 @@ defmodule Raxol.Agent.McpTools do
   end
 
   defp spawn_checked(app, id) do
+    with {:ok, module} <- admit(app, id),
+         {:ok, root} <- project_root(),
+         {:ok, owned} <- start(__MODULE__, module, id, root) do
+      remember(id, agent(id, owned))
+      {:ok, started(id, owned)}
+    end
+  end
+
+  # What every start must pass, whoever owns the agent.
+  defp admit(app, id) do
     with :ok <- platform_refusal(:os.type()),
          :ok <- validate_id(id),
          :ok <- refuse_exposed(id),
          {:ok, module} <- spawnable_app(app),
-         :ok <- id_free(id),
-         {:ok, root} <- project_root() do
-      start(module, id, root)
+         :ok <- id_free(id) do
+      {:ok, module}
     end
+  end
+
+  # The registry forgets a stopped session a moment after it is gone, and the
+  # id is free only then.
+  defp stop_tree(id, session_id) do
+    _ = Session.Supervisor.stop_session(session_id)
+    Session.await_free(id)
+    Session.await_free({:session_supervisor, session_id})
   end
 
   # -- Registration -------------------------------------------------------------
@@ -472,7 +529,7 @@ defmodule Raxol.Agent.McpTools do
 
   # Nothing here reads the journal directory: until the session's bridge has
   # vetted and locked it, it may be anything.
-  defp start(module, id, root) do
+  defp start(owner, module, id, root) do
     owned = %{app: module, root: root, base_dir: journal_base(root)}
 
     started =
@@ -481,18 +538,17 @@ defmodule Raxol.Agent.McpTools do
         session_id: id,
         journal_required: true,
         journal_opts: [base_dir: owned.base_dir, cwd: root, title: inspect(module)],
-        owner: {__MODULE__, owned}
+        owner: {owner, owned}
       )
 
     case started do
-      {:ok, _sup} ->
-        remember(id, agent(id, owned))
-        {:ok, %{id: id, app: module, root: root, continued: continued(id)}}
-
-      {:error, reason} ->
-        {:error, start_refusal(id, owned, reason)}
+      {:ok, _sup} -> {:ok, owned}
+      {:error, reason} -> {:error, start_refusal(id, owned, reason)}
     end
   end
+
+  defp started(id, owned),
+    do: %{id: id, app: owned.app, root: owned.root, continued: continued(id)}
 
   # The offset the journal had reached, as the bridge that opened it found it.
   defp continued(id) do
@@ -571,16 +627,21 @@ defmodule Raxol.Agent.McpTools do
     end
   end
 
-  # An exposed agent's row answers only while its id is still exposed.
   defp stopped(id) do
     case :ets.lookup(@table, id) do
-      [{^id, %{kind: :owned} = agent}] -> {:stopped, agent}
-      [{^id, %{kind: :exposed} = agent}] -> if id in exposed(), do: {:stopped, agent}, else: :none
+      [{^id, agent}] -> if answers?(id, agent), do: {:stopped, agent}, else: :none
       [] -> :none
     end
   rescue
     ArgumentError -> :none
   end
+
+  # A row is read only when nothing of this server's runs under the id. Any
+  # tree running under it now is another owner's, and the row would report
+  # that owner's agent and journal as this server's stopped one.
+  defp answers?(id, %{kind: :owned}), do: Session.Supervisor.owner(id) == :error
+  # An exposed agent's row answers only while its id is still exposed.
+  defp answers?(id, %{kind: :exposed}), do: id in exposed()
 
   defp agent(id, %{app: app, root: root, base_dir: base_dir}),
     do: %{kind: :owned, app: app, root: root, session_id: id, journal_opts: [base_dir: base_dir]}

@@ -286,7 +286,8 @@ marked every EUR asset unpriceable for about twenty hours a day.
   2. `Raxol.Console.Boot.gateway_opts/5`, beside `put_skills_context/2`. This covers the
      gateway and the scheduler.
   3. `Raxol.Agent.Turn.build_context/2`, for self-improve turns and Symphony.
-  4. The ACP `serve.ex` `turn_opts/1`.
+  4. The ACP `serve.ex` `turn_opts/1`. (Removed: `raxol acp --agent` serves a Raxol agent,
+     which builds its own tool context.)
   5. `SessionInbox.start_turn/2`, through the executor's `:context`.
 
   The reader resolves the configuration once, when the `raxol_agent` application boots, and

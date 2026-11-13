@@ -613,7 +613,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # browser pane's URL bar and page furniture are that chrome, and the frame
   # inside them is the recording.
   #
-  # No ACP tab. ACP is the coding agent's editor protocol, not a surface a
+  # No ACP tab. ACP is how an editor drives a Raxol agent, not a surface a
   # TEA module renders to, so a pane captioned "pulse, driven over ACP" would
   # describe a program that does not exist. It has its own page.
   #
@@ -1280,17 +1280,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="coding-agent-title">
       <div class="mb-8">
-        <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol code is an ACP server.</h1>
+        <h1 id="coding-agent-title" class="heading-2xl mb-3">A coding agent, and agents for ACP editors.</h1>
         <p class="body-text max-w-2xl">
-          TUI, headless mode, MCP, and ACP editor sessions share one journal.
-          <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>
-          lists raxol code.
+          TUI, headless mode, and MCP sessions share one journal. raxol acp
+          serves a Raxol agent to editors that speak
+          <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>.
         </p>
       </div>
 
       <div class="space-y-3 mb-6 ch-snap">
         <.copyable_command id="copy-agent-code" command="mix raxol.code" comment="interactive coding-agent TUI" tone={:coral} />
-        <.copyable_command id="copy-agent-acp" command="raxol acp" comment="serve ACP editors" tone={:sky} />
+        <.copyable_command id="copy-agent-acp" command="raxol acp --agent Raxol.Agent.Reference.Counter" comment="serve an agent to ACP editors" tone={:sky} />
         <.copyable_command id="copy-agent-p" command={~S(raxol -p "fix the failing test")} comment="headless, JSON events on stderr" tone={:sky} />
         <.copyable_command id="copy-agent-mcp" command="mix mcp.server" comment="expose the UI itself as agent tools" tone={:sky} />
       </div>
@@ -1307,8 +1307,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <code class="text-axol-coral">--continue</code>, list with
           <code class="text-axol-coral">--sessions</code>, replay with
           <code class="text-axol-coral">--replay ID</code>, rewind with
-          <code class="text-axol-coral">/rewind</code>. ACP reconnects by
-          session id because the id is the directory.
+          <code class="text-axol-coral">/rewind</code>.
         </p>
 
         <h2 class="heading-xl mt-14 mb-3">Metered spend</h2>

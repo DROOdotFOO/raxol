@@ -30,8 +30,7 @@ defmodule Raxol.Agent.CliEntrypointSmokeTest do
       lower the log level, putting the whole startup banner ("Starting in full
       mode", the Endpoint config warning, "Started in ...") on stdout ahead of
       the answer. This test measured that; the task now seeds `:logger` to
-      standard_error at level `:error` before boot, the way
-      `Mix.Tasks.Raxol.Acp` already did.
+      standard_error at level `:error` before boot.
 
   ## How stdout purity is asserted without pinning the answer's wording
 
