@@ -38,6 +38,7 @@ long polling) feeding `normalize_event/1` into the router:
 ```elixir
 {:ok, conn} = Raxol.Telegram.GatewayAdapter.connect(bot_token: token)
 
+# Handler.Agent ships in raxol_console: see "Agent-backed handler" below.
 Raxol.Gateway.Supervisor.start_link(
   handler: {Raxol.Gateway.Handler.Agent, [system_prompt: "..."]},
   adapter: {Raxol.Telegram.GatewayAdapter, conn}
@@ -79,6 +80,7 @@ content arrives empty.
 ```elixir
 {:ok, conn} = Raxol.Gateway.Adapter.Discord.connect(bot_token: token)
 
+# Handler.Agent ships in raxol_console: see "Agent-backed handler" below.
 Raxol.Gateway.Supervisor.start_link(
   handler: {Raxol.Gateway.Handler.Agent, [system_prompt: "..."]},
   adapter: {Raxol.Gateway.Adapter.Discord, conn}

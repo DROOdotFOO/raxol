@@ -10,8 +10,8 @@ defmodule RaxolAgent.Application do
     Raxol.Agent.Web3.load!()
 
     # This application is what starts Raxol.Agent.Supervisor. An example or a
-    # host that started the named subtree itself keeps it: starting it again
-    # here would fail with :already_started.
+    # host that started the named subtree itself keeps it: `start_link/1`
+    # would hand this supervisor a subtree it does not own.
     children =
       if Process.whereis(Raxol.Agent.Supervisor) do
         []
