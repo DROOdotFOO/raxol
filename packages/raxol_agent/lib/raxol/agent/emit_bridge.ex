@@ -17,8 +17,8 @@ defmodule Raxol.Agent.EmitBridge do
     3. maps each neutral map onto a `Raxol.Agent.Contract.Event`, and
     4. re-emits it through `Raxol.Agent.SessionStreamer`,
 
-  so any surface already subscribed to `SessionStreamer` (the `raxol -p` CLI,
-  the TUI, SSE) receives Dispatcher-originated events on the same channel as
+  so any surface already subscribed to `SessionStreamer` (a TUI, SSE)
+  receives Dispatcher-originated events on the same channel as
   `Raxol.Agent.Contract.pump/3` output. Producers differ; the contract does not.
 
   ## The id authority (kills the dual-id landmine)
