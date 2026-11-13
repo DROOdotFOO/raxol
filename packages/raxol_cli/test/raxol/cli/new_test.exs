@@ -1,5 +1,6 @@
 defmodule Raxol.CLI.NewTest do
-  use ExUnit.Case, async: true
+  # Serial: these tests change the working directory, which is global to the VM.
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO
 
