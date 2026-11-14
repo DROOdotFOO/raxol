@@ -99,6 +99,7 @@ defmodule RaxolPlayground.Capabilities do
     {"raxol_plugin", "Plugin SDK"},
     {"raxol_speech", "TTS/STT"},
     {"raxol_telegram", "Telegram bot"},
+    {"raxol_gateway", "Messaging gateway"},
     {"raxol_watch", "Push notifications"}
   ]
 

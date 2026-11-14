@@ -27,8 +27,7 @@ the merge commit), "Publish the public Hex train", and the `raxol_gateway`
 - "Allow GitHub Actions to create and approve pull requests" is on (Settings,
   Actions, General), so `llms-sync` can open its pull request.
 - Your hex.pm account has two-factor authentication: the first release of a
-  new package (`raxol_journal`, `raxol_gateway`) is held until you approve it
-  there.
+  new package is held until you approve it there.
 
 ## Published surfaces
 
@@ -47,13 +46,14 @@ the merge commit), "Publish the public Hex train", and the `raxol_gateway`
 | `raxol_watch` | Hex | 0.2.1 |
 | `raxol_payments` | Hex | 0.2.1 |
 | `raxol_telegram` | Hex | 0.2.1 |
+| `raxol_gateway` | Hex | 0.2.0 |
 | `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.10 |
 
 `raxol_agent` and `raxol_payments` are on Hex and off the train: a root tag
 publishes neither, and `Raxol.Release.PackageCheck.public_packages/0` holds no
 agent-side package (ADR-0043). The following projects are unpublished and
-outside the train: `raxol_agent_client_protocol`, `raxol_gateway`,
-`raxol_earn`, `raxol_cli`, `raxol_console`, `raxol_web3`, and `raxol_broker`.
+outside the train: `raxol_agent_client_protocol`, `raxol_earn`, `raxol_cli`,
+`raxol_console`, `raxol_web3`, and `raxol_broker`.
 Package-specific gates for the candidates closest to publication remain below.
 
 ## Authorization model
@@ -246,26 +246,17 @@ raxol-cli-channel latest.json --clobber`.
 
 ## Package-specific manual gates
 
-### `raxol_gateway` 0.2.0
+### A package outside the train
 
-Publish it after the 2.8.0 train, which publishes the `raxol_core` it
-requires. Its only required dependencies are `raxol_core "~> 2.8"`,
-`telemetry`, and `jason`. Everything else (`raxol "~> 2.8"`,
-`raxol_speech "~> 0.3"`, `gen_smtp`, `mint_web_socket`, `req`) is optional and
-gated at runtime, so a consumer who wants only the Telegram or in-memory
-adapter pulls nothing extra.
+A package that is not on the train is published by hand, from a release
+commit, with the steps the train runs for each package, after every package it
+requires is on Hex. `raxol_gateway` 0.2.0 was published this way, from
+`v2.8.0`, and is now on the train; the commands below are that publish.
 
-Metadata, license, changelog, docs entry point, and the tarball are in place:
-`HEX_BUILD=1 mix hex.build` produces `raxol_gateway-0.2.0.tar` carrying `lib/`,
-`.formatter.exs`, `mix.exs`, `README.md`, `LICENSE.md`, and `CHANGELOG.md`.
-
-It is not on the train, so it is published by hand, from the release commit,
-with the steps the train runs for each package. Its docs link to the
-`raxol_gateway-v0.2.0` tag:
-
-It needs a local Hex login (`mix hex.user auth`) and the tags fetched. It is a
-new package, so hex.pm holds the release until you approve it; `--wait` blocks
-until then:
+It needs a local Hex login (`mix hex.user auth`) and the tags fetched. Its docs
+link to the `<package>-v<version>` tag, so push that first. hex.pm holds the
+first release of a new package until you approve it; `--wait` blocks until
+then:
 
 ```bash
 git fetch origin --tags
@@ -353,13 +344,11 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
    [`web/lib/raxol_playground/capabilities.ex`](../../web/lib/raxol_playground/capabilities.ex)
    in the same change; a `web` test holds `@published` equal to the train,
    less `@awaiting_first_publish`, plus the `@off_train` packages it names.
-2. **Declare requirements that used to be dropped.** Once `raxol_gateway` is on
-   Hex, `raxol_telegram`'s `gateway_dep/0` can declare
-   `raxol_gateway "~> 0.2", optional: true` under `HEX_BUILD` instead of
-   returning `[]`. That removes the documented
-   `mix deps.compile raxol_telegram --force` ordering hazard for consumers who
-   add `raxol_gateway` themselves, and it clears the expected warning from
-   `mix raxol.release.check`.
+2. **Declare requirements that used to be dropped.** A sibling that omits its
+   requirement on the package under `HEX_BUILD`, because Hex could not resolve
+   it, declares it now, optional if the source form is. `raxol_telegram`'s
+   optional `raxol_gateway "~> 0.2"` is the example. `mix raxol.release.check`
+   warns about each dropped requirement.
 3. **Update the state tables.** The table at the top of this file, the
    equivalent in [`docs/PACKAGES.md`](../PACKAGES.md), and the release paragraph
    in [`ROADMAP.md`](../../ROADMAP.md) all name published versions and go stale
@@ -369,6 +358,6 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
 5. **Merge the `llms.txt` pull request.** `bot/llms-sync` is opened with the
    workflow token, which starts no CI: close and reopen it, then merge it once
    green.
-6. **One follow-up pull request** carries items 1 to 3 for `raxol_gateway`.
+6. **One follow-up pull request** carries items 1 to 3 for the package.
    Optionally turn staged publishing off for `raxol_journal` and
    `raxol_gateway` in their hex.pm settings; the workflow waits either way.
