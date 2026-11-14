@@ -34,7 +34,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The Hex packages this repository releases track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`/`raxol_journal`) move in lockstep on the 2.8.x line, and the independent surface packages (`raxol_speech`, `raxol_telegram`, `raxol_watch`) have their own 0.x line. `raxol_gateway` is on the 0.x line and is published on its own, outside the train. `raxol_agent` and `raxol_payments` are on Hex and off the train: a root tag publishes neither (ADR-0043). `raxol_earn`, `raxol_cli`, `raxol_console`, `raxol_web3`, `raxol_broker`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
+The Hex packages this repository releases track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`/`raxol_journal`) move in lockstep on the 2.8.x line, and the independent surface packages (`raxol_speech`, `raxol_telegram`, `raxol_watch`, `raxol_gateway`) have their own 0.x line. `raxol_agent` and `raxol_payments` are on Hex and off the train: a root tag publishes neither (ADR-0043). `raxol_earn`, `raxol_cli`, `raxol_console`, `raxol_web3`, `raxol_broker`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |
@@ -49,7 +49,7 @@ Capabilities a general-purpose agent runtime is expected to have, measured again
 | Item | What | Effort | Tag |
 | ---- | ---- | ------ | --- |
 | Install funnel | `flake.nix` and the Burrito-packaged `raxol` binary (`raxol_cli`, with an npm wrapper in `packages/raxol_cli/npm`) landed, with `raxol doctor` and `raxol update`. Remaining: publishing the binary and the Windows PowerShell installer | M | CATCH-UP |
-| Gateway breadth | Built: the `Gateway.Adapter` behaviour is frozen, Telegram is ported behind it (`Raxol.Telegram.GatewayAdapter`), Discord and Email adapters ship in-gateway, and `Gateway.Pipeline.Transcribe` gives every adapter voice memos through `raxol_speech` STT. Remaining: the first Hex release of `raxol_gateway` | M | SURFACE |
+| Gateway breadth | DONE. The `Gateway.Adapter` behaviour is frozen, Telegram is ported behind it (`Raxol.Telegram.GatewayAdapter`), Discord and Email adapters ship in-gateway, `Gateway.Pipeline.Transcribe` gives every adapter voice memos through `raxol_speech` STT, and `raxol_gateway` is on Hex | M | SURFACE |
 | Cron scheduler | DONE. `Raxol.Agent.Schedule.parse/1` (relative / interval / 5-field cron / ISO) plus `Raxol.Agent.Scheduler`, one timer per job with DETS persistence and boot replay, the `cronjob` Action, and delivery through a `:deliver` closure (`Scheduler.Delivery.local/1` for an in-process callback) | M | SURFACE |
 
 **P1: differentiation**

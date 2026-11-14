@@ -42,6 +42,7 @@ defmodule Raxol.Release.PackageCheck do
     %{app: :raxol_speech, path: "packages/raxol_speech", class: :public},
     %{app: :raxol_watch, path: "packages/raxol_watch", class: :public},
     %{app: :raxol, path: ".", class: :public},
+    %{app: :raxol_gateway, path: "packages/raxol_gateway", class: :public},
     %{app: :raxol_telegram, path: "packages/raxol_telegram", class: :public}
   ]
 
@@ -56,7 +57,6 @@ defmodule Raxol.Release.PackageCheck do
       path: "packages/raxol_agent_client_protocol",
       class: :pre_alpha
     },
-    %{app: :raxol_gateway, path: "packages/raxol_gateway", class: :pre_alpha},
     %{app: :raxol_earn, path: "packages/raxol_earn", class: :pre_alpha},
     %{app: :raxol_cli, path: "packages/raxol_cli", class: :pre_alpha},
     %{app: :raxol_console, path: "packages/raxol_console", class: :pre_alpha},

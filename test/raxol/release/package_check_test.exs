@@ -12,9 +12,9 @@ defmodule Raxol.Release.PackageCheckTest do
       apps = Enum.map(packages, & &1.app)
 
       assert :raxol_core in apps
+      assert :raxol_gateway in apps
       assert :raxol_telegram in apps
       refute :raxol_cli in apps
-      refute :raxol_gateway in apps
     end
 
     # ADR-0043 gives these to the agent repository. A root tag publishes every
@@ -56,7 +56,7 @@ defmodule Raxol.Release.PackageCheckTest do
 
     test "points at --all when the name is a pre-alpha package" do
       assert {:error, errors} =
-               PackageCheck.select_packages(only: ["raxol_gateway"])
+               PackageCheck.select_packages(only: ["raxol_cli"])
 
       assert Enum.any?(errors, &String.contains?(&1, "pass --all"))
     end
@@ -65,10 +65,10 @@ defmodule Raxol.Release.PackageCheckTest do
       assert {:ok, packages} =
                PackageCheck.select_packages(
                  include_pre_alpha: true,
-                 only: ["raxol_gateway"]
+                 only: ["raxol_cli"]
                )
 
-      assert Enum.map(packages, & &1.app) == [:raxol_gateway]
+      assert Enum.map(packages, & &1.app) == [:raxol_cli]
     end
   end
 
@@ -274,12 +274,12 @@ defmodule Raxol.Release.PackageCheckTest do
     end
 
     test "warns when a pre-alpha dependency is dropped from the tarball" do
-      config = [deps: [{:raxol_gateway, "~> 0.1", optional: true}]]
+      config = [deps: [{:raxol_web3, "~> 0.1", optional: true}]]
 
       assert {[], [warning]} =
                PackageCheck.audit_release_deps(config, MapSet.new())
 
-      assert warning =~ "raxol_gateway is dropped from the published tarball"
+      assert warning =~ "raxol_web3 is dropped from the published tarball"
     end
   end
 

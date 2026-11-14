@@ -17,7 +17,7 @@ Use this page to find a feature; each linked page owns its details.
 | Developer tools | [Time-travel debugging](TIME_TRAVEL_DEBUGGING.md) | Snapshot, step, and restore |
 | Developer tools | [REPL](REPL.md) | AST-checked Elixir evaluation |
 | Developer tools | [Virtual filesystem](FILESYSTEM.md) | Pure in-memory filesystem |
-| Surfaces | [Gateway](GATEWAY.md) | Shared adapter for messaging platforms (pre-alpha) |
+| Surfaces | [Gateway](GATEWAY.md) | Shared adapter for messaging platforms |
 | Surfaces | [Telegram](TELEGRAM.md) | TEA apps as Telegram bots |
 | Surfaces | [Speech](SPEECH.md) | TTS, Whisper STT, and voice commands |
 | Surfaces | [Watch](WATCH.md) | APNS/FCM notifications and actions |
