@@ -329,30 +329,21 @@ should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
 
 ## After publishing
 
-1. **Add the package to the release train.** Move its entry from
-   `@pre_alpha_packages` to `@public_packages` in
-   [`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex),
-   positioned after everything it requires, and change its `class:` from
-   `:pre_alpha` to `:public`. Until you do, the checker treats it as off-train
-   and reports any sibling that depends on it as dropping the requirement. Add
-   it to `@published` in
+1. **List the package on the site.** Add it to `@published` in
    [`web/lib/raxol_playground/capabilities.ex`](../../web/lib/raxol_playground/capabilities.ex)
-   in the same change; a `web` test holds `@published` equal to the train,
+   and drop it from `@awaiting_first_publish` in that module's test, which
+   holds `@published` equal to the train in
+   [`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex),
    less `@awaiting_first_publish`, plus the `@off_train` packages it names.
-2. **Declare requirements that used to be dropped.** A sibling that omits its
-   requirement on the package under `HEX_BUILD`, because Hex could not resolve
-   it, declares it now, optional if the source form is. `raxol_telegram`'s
-   optional `raxol_gateway "~> 0.2"` is the example. `mix raxol.release.check`
-   warns about each dropped requirement.
-3. **Update the state tables.** The table at the top of this file, the
+2. **Update the state tables.** The table at the top of this file, the
    equivalent in [`docs/PACKAGES.md`](../PACKAGES.md), and the release paragraph
    in [`ROADMAP.md`](../../ROADMAP.md) all name published versions and go stale
    the moment a publish lands.
-4. **Verify the docs.** `https://hexdocs.pm/<package>/<version>/` should resolve, and a
+3. **Verify the docs.** `https://hexdocs.pm/<package>/<version>/` should resolve, and a
    module source link should land on the `<package>-v<version>` tag you pushed.
-5. **Merge the `llms.txt` pull request.** `bot/llms-sync` is opened with the
+4. **Merge the `llms.txt` pull request.** `bot/llms-sync` is opened with the
    workflow token, which starts no CI: close and reopen it, then merge it once
    green.
-6. **One follow-up pull request** carries items 1 to 3 for the package.
+5. **One follow-up pull request** carries items 1 and 2 for the package.
    Optionally turn staged publishing off for `raxol_journal` and
    `raxol_gateway` in their hex.pm settings; the workflow waits either way.

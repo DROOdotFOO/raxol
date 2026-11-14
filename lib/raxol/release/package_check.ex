@@ -2,9 +2,8 @@ defmodule Raxol.Release.PackageCheck do
   @moduledoc """
   Validates the Hex release train before publishing any package.
 
-  The check is deliberately release-train aware. The repo has package metadata
-  on pre-alpha projects for local builds, but the public Hex train is smaller
-  and ordered by inter-package dependencies.
+  The check is deliberately release-train aware: the public Hex train is
+  ordered by inter-package dependencies.
 
   Three layers run per package:
 
@@ -32,26 +31,21 @@ defmodule Raxol.Release.PackageCheck do
   ]
 
   @public_packages [
-    %{app: :raxol_core, path: "packages/raxol_core", class: :public},
-    %{app: :raxol_sensor, path: "packages/raxol_sensor", class: :public},
-    %{app: :raxol_journal, path: "packages/raxol_journal", class: :public},
-    %{app: :raxol_terminal, path: "packages/raxol_terminal", class: :public},
-    %{app: :raxol_mcp, path: "packages/raxol_mcp", class: :public},
-    %{app: :raxol_liveview, path: "packages/raxol_liveview", class: :public},
-    %{app: :raxol_plugin, path: "packages/raxol_plugin", class: :public},
-    %{app: :raxol_speech, path: "packages/raxol_speech", class: :public},
-    %{app: :raxol_watch, path: "packages/raxol_watch", class: :public},
-    %{app: :raxol, path: ".", class: :public},
-    %{app: :raxol_gateway, path: "packages/raxol_gateway", class: :public},
-    %{app: :raxol_telegram, path: "packages/raxol_telegram", class: :public}
+    %{app: :raxol_core, path: "packages/raxol_core"},
+    %{app: :raxol_sensor, path: "packages/raxol_sensor"},
+    %{app: :raxol_journal, path: "packages/raxol_journal"},
+    %{app: :raxol_terminal, path: "packages/raxol_terminal"},
+    %{app: :raxol_mcp, path: "packages/raxol_mcp"},
+    %{app: :raxol_liveview, path: "packages/raxol_liveview"},
+    %{app: :raxol_plugin, path: "packages/raxol_plugin"},
+    %{app: :raxol_speech, path: "packages/raxol_speech"},
+    %{app: :raxol_watch, path: "packages/raxol_watch"},
+    %{app: :raxol, path: "."},
+    %{app: :raxol_gateway, path: "packages/raxol_gateway"},
+    %{app: :raxol_telegram, path: "packages/raxol_telegram"}
   ]
 
-  @pre_alpha_packages []
-
-  @all_packages @public_packages ++ @pre_alpha_packages
-  @package_apps MapSet.new(@all_packages, & &1.app)
   @public_apps MapSet.new(@public_packages, & &1.app)
-  @pre_alpha_names MapSet.new(@pre_alpha_packages, &Atom.to_string(&1.app))
 
   # Per-process, because the directory is deleted recursively at both ends of a
   # run. Two concurrent runs -- a manual one and the `mix raxol.check` that
@@ -63,14 +57,12 @@ defmodule Raxol.Release.PackageCheck do
 
   @type package_spec :: %{
           required(:app) => atom(),
-          required(:path) => String.t(),
-          required(:class) => :public | :pre_alpha
+          required(:path) => String.t()
         }
 
   @type package_report :: %{
           required(:app) => atom(),
           required(:path) => String.t(),
-          required(:class) => :public | :pre_alpha,
           required(:version) => String.t() | nil,
           required(:deps) => [{atom(), String.t() | nil, keyword()}],
           required(:hex_build?) => boolean(),
@@ -89,10 +81,6 @@ defmodule Raxol.Release.PackageCheck do
   @spec public_packages() :: [package_spec()]
   def public_packages, do: @public_packages
 
-  @doc "Returns every explicitly classified package project."
-  @spec all_packages() :: [package_spec()]
-  def all_packages, do: @all_packages
-
   @doc """
   Selects packages according to the release checker options.
 
@@ -102,11 +90,9 @@ defmodule Raxol.Release.PackageCheck do
   @spec select_packages(keyword()) ::
           {:ok, [package_spec()]} | {:error, [String.t()]}
   def select_packages(opts \\ []) do
-    available = available_packages(opts)
-
     case normalize_only(Keyword.get(opts, :only, [])) do
-      [] -> {:ok, available}
-      only -> resolve_only(only, available)
+      [] -> {:ok, @public_packages}
+      only -> resolve_only(only)
     end
   end
 
@@ -164,7 +150,7 @@ defmodule Raxol.Release.PackageCheck do
     |> Keyword.get(:deps, [])
     |> Enum.flat_map(fn dep ->
       with {name, requirement, opts} <- normalize_dep(dep),
-           true <- MapSet.member?(@package_apps, name),
+           true <- MapSet.member?(@public_apps, name),
            true <- publish_env_dep?(opts) do
         [{name, requirement, opts}]
       else
@@ -175,41 +161,24 @@ defmodule Raxol.Release.PackageCheck do
 
   # --- selection -------------------------------------------------------------
 
-  defp available_packages(opts) do
-    if Keyword.get(opts, :include_pre_alpha, false),
-      do: @all_packages,
-      else: @public_packages
-  end
-
-  defp resolve_only(only, available) do
-    by_name = Map.new(available, &{Atom.to_string(&1.app), &1})
+  defp resolve_only(only) do
+    by_name = Map.new(@public_packages, &{Atom.to_string(&1.app), &1})
     missing = Enum.reject(only, &Map.has_key?(by_name, &1))
 
     if missing == [] do
       {:ok, Enum.map(only, &Map.fetch!(by_name, &1))}
     else
-      {:error, unknown_package_errors(missing, available)}
+      {:error, unknown_package_errors(missing)}
     end
   end
 
-  defp unknown_package_errors(missing, available) do
-    known = Enum.map_join(available, ", ", &Atom.to_string(&1.app))
-
-    hint =
-      case Enum.filter(missing, &MapSet.member?(@pre_alpha_names, &1)) do
-        [] ->
-          []
-
-        pre_alpha ->
-          [
-            "#{Enum.join(pre_alpha, ", ")} is pre-alpha; pass --all to include it"
-          ]
-      end
+  defp unknown_package_errors(missing) do
+    known = Enum.map_join(@public_packages, ", ", &Atom.to_string(&1.app))
 
     [
       "unknown package(s): #{Enum.join(missing, ", ")}",
       "available packages: #{known}"
-    ] ++ hint
+    ]
   end
 
   defp normalize_only(nil), do: []
@@ -282,7 +251,7 @@ defmodule Raxol.Release.PackageCheck do
   # --- run -------------------------------------------------------------------
 
   defp do_run(root, packages, build_root, opts) do
-    release_train = available_packages(opts)
+    release_train = @public_packages
     configs = load_configs(root, release_train)
 
     ctx = %{
@@ -383,7 +352,6 @@ defmodule Raxol.Release.PackageCheck do
     %{
       app: spec.app,
       path: spec.path,
-      class: spec.class,
       version: version,
       deps: deps,
       hex_build?: not ctx.metadata_only?,
@@ -549,7 +517,7 @@ defmodule Raxol.Release.PackageCheck do
       "package maintainers are missing"
     )
     |> require_nonempty_list(package[:licenses], "package licenses are missing")
-    |> require_links(package[:links], spec.class)
+    |> require_links(package[:links])
   end
 
   defp content_errors(
@@ -747,16 +715,16 @@ defmodule Raxol.Release.PackageCheck do
   # --- catalog and order -----------------------------------------------------
 
   @doc """
-  Checks that every project under `packages/` is classified in this module.
+  Checks that every project under `packages/` is on the release train.
 
-  A package that exists on disk but appears in neither train is `unclassified`;
-  a classified package with no project on disk is `missing`. Either one means
-  the release train no longer describes the repo.
+  A package that exists on disk but is not on the train is `unclassified`; a
+  train package with no project on disk is `missing`. Either one means the
+  release train no longer describes the repo.
   """
   @spec validate_catalog(String.t()) :: [String.t()]
   def validate_catalog(root) do
     expected =
-      @all_packages
+      @public_packages
       |> Enum.reject(&(&1.app == :raxol))
       |> MapSet.new(&Atom.to_string(&1.app))
 
@@ -923,7 +891,7 @@ defmodule Raxol.Release.PackageCheck do
   end
 
   defp source_dep_audit(%{source: {:ok, config}}, requirement_names),
-    do: audit_release_deps(config, requirement_names)
+    do: {audit_release_deps(config, requirement_names), []}
 
   defp source_dep_audit(%{source: {:error, reason}}, _requirement_names),
     do:
@@ -938,40 +906,13 @@ defmodule Raxol.Release.PackageCheck do
   is missing from the publish config and from the tarball, so the two agree and
   nothing is reported.
 
-  A public-train dependency that fails to reach the tarball is an error. A
-  pre-alpha one is an intentional drop, but it still changes what Hex consumers
-  get, so it is surfaced as a warning rather than as silence.
+  A train dependency that fails to reach the tarball is an error.
   """
-  @spec audit_release_deps(keyword(), MapSet.t(String.t())) ::
-          {[String.t()], [String.t()]}
+  @spec audit_release_deps(keyword(), MapSet.t(String.t())) :: [String.t()]
   def audit_release_deps(source_config, requirement_names) do
-    source_config
-    |> release_deps()
-    |> Enum.reduce({[], []}, fn {dep, _requirement, _opts}, acc ->
-      collect_dep_audit(dep, requirement_names, acc)
-    end)
-    |> then(fn {errors, warnings} ->
-      {Enum.reverse(errors), Enum.reverse(warnings)}
-    end)
-  end
-
-  defp collect_dep_audit(dep, requirement_names, {errors, warnings}) do
-    cond do
-      MapSet.member?(requirement_names, Atom.to_string(dep)) ->
-        {errors, warnings}
-
-      MapSet.member?(@public_apps, dep) ->
-        {["published tarball omits release dependency #{dep}" | errors],
-         warnings}
-
-      true ->
-        {errors, [dropped_dep_warning(dep) | warnings]}
-    end
-  end
-
-  defp dropped_dep_warning(dep) do
-    "release dependency #{dep} is dropped from the published tarball; " <>
-      "it is not on the public Hex train"
+    for {dep, _requirement, _opts} <- release_deps(source_config),
+        not MapSet.member?(requirement_names, Atom.to_string(dep)),
+        do: "published tarball omits release dependency #{dep}"
   end
 
   defp metadata_string(metadata, key) do
@@ -1061,7 +1002,7 @@ defmodule Raxol.Release.PackageCheck do
     if is_list(value) and value != [], do: errors, else: [message | errors]
   end
 
-  defp require_links(errors, links, :public) when is_map(links) do
+  defp require_links(errors, links) when is_map(links) do
     keys = links |> Map.keys() |> MapSet.new()
 
     if Enum.any?(@required_link_sets, &MapSet.subset?(&1, keys)) do
@@ -1074,11 +1015,7 @@ defmodule Raxol.Release.PackageCheck do
     end
   end
 
-  defp require_links(errors, links, _class)
-       when is_map(links) and map_size(links) > 0,
-       do: errors
-
-  defp require_links(errors, _links, _class),
+  defp require_links(errors, _links),
     do: ["package links are missing" | errors]
 
   # `vX.Y.Z` is the root `raxol` tag, correct for the packages that share that

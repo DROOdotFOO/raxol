@@ -5,14 +5,9 @@ defmodule Mix.Tasks.Raxol.Release.Check do
       mix raxol.release.check
       mix raxol.release.check --metadata-only
       mix raxol.release.check --only raxol_core,raxol_sensor
-      mix raxol.release.check --all
-
-  By default this checks the public Hex train only. `--all` includes pre-alpha
-  projects that carry package metadata but are not part of the public train yet.
 
   ## Options
 
-    * `--all` -- include pre-alpha packages in the train
     * `--metadata-only` -- skip `mix hex.build`, validate metadata only
     * `--only NAMES` -- comma-separated package names
     * `--keep-output` -- leave the unpacked tarballs on disk
@@ -30,7 +25,6 @@ defmodule Mix.Tasks.Raxol.Release.Check do
 
   @shortdoc "Validate the Hex package release train"
   @switches [
-    all: :boolean,
     metadata_only: :boolean,
     only: :string,
     keep_output: :boolean,
@@ -75,7 +69,6 @@ defmodule Mix.Tasks.Raxol.Release.Check do
 
   defp check_options(opts) do
     [
-      include_pre_alpha: Keyword.get(opts, :all, false),
       metadata_only: Keyword.get(opts, :metadata_only, false),
       only: parse_only(opts[:only]),
       keep_output: Keyword.get(opts, :keep_output, false),
