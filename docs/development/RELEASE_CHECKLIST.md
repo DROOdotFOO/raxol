@@ -4,13 +4,8 @@ Release process for the public Hex train and the `@raxol/cli` npm package.
 Publishing is close to irreversible: a new Hex version has a one-hour update
 window, and an npm version cannot be reused.
 
-## State for 2.8.0
-
-The release pull request did steps 1 to 4 of "Prepare the release commit".
-What remains, in order: the one-time prerequisites below, step 5, step 6 (on
-the merge commit), "Publish the public Hex train", and the `raxol_gateway`
-0.2.0 block. npm and the CLI are not part of this release: skip
-"Publish the npm CLI" and the npm half of "Registry verification".
+2.8.0 is published: the Hex train, `raxol_gateway` 0.2.0, and the `v2.8.0`
+GitHub Release.
 
 ## One-time prerequisites
 
@@ -33,19 +28,19 @@ the merge commit), "Publish the public Hex train", and the `raxol_gateway`
 
 | Package | Registry | Current version |
 | --- | --- | --- |
-| `raxol` | Hex | 2.7.0 |
-| `raxol_core` | Hex | 2.7.0 |
-| `raxol_sensor` | Hex | 2.7.0 |
-| `raxol_journal` | Hex | unpublished |
-| `raxol_terminal` | Hex | 2.7.0 |
-| `raxol_mcp` | Hex | 2.7.0 |
-| `raxol_liveview` | Hex | 2.7.0 |
-| `raxol_plugin` | Hex | 2.7.0 |
+| `raxol` | Hex | 2.8.0 |
+| `raxol_core` | Hex | 2.8.0 |
+| `raxol_sensor` | Hex | 2.8.0 |
+| `raxol_journal` | Hex | 2.8.0 |
+| `raxol_terminal` | Hex | 2.8.0 |
+| `raxol_mcp` | Hex | 2.8.0 |
+| `raxol_liveview` | Hex | 2.8.0 |
+| `raxol_plugin` | Hex | 2.8.0 |
 | `raxol_agent` | Hex | 2.7.0 |
-| `raxol_speech` | Hex | 0.2.1 |
-| `raxol_watch` | Hex | 0.2.1 |
+| `raxol_speech` | Hex | 0.3.0 |
+| `raxol_watch` | Hex | 0.3.0 |
 | `raxol_payments` | Hex | 0.2.1 |
-| `raxol_telegram` | Hex | 0.2.1 |
+| `raxol_telegram` | Hex | 0.3.0 |
 | `raxol_gateway` | Hex | 0.2.0 |
 | `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.10 |
 
@@ -161,8 +156,8 @@ git push origin v2.8.0
 4. waits for approval: open the run under Actions, "Review deployments",
    tick `release`, approve;
 5. publishes `Raxol.Release.PackageCheck.public_packages/0` in dependency
-   order, skipping versions already on Hex. At `raxol_journal`, a new
-   package, hex.pm holds the release for approval: the log prints
+   order, skipping versions already on Hex. For a package new to Hex,
+   hex.pm holds the release for approval: the log prints
    "Package staged for approval at <url>". Open it and approve with your
    second factor; the job waits (`--wait`) and continues;
 6. verifies every package through the public Hex API, waits for newly published
