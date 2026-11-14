@@ -46,27 +46,7 @@ defmodule Raxol.Release.PackageCheck do
     %{app: :raxol_telegram, path: "packages/raxol_telegram", class: :public}
   ]
 
-  @pre_alpha_packages [
-    # On Hex, and off this train: ADR-0043 gives their releases to the agent
-    # repository, so a root tag publishes neither. They sit here because this
-    # list is every package the train does not publish.
-    %{app: :raxol_agent, path: "packages/raxol_agent", class: :pre_alpha},
-    %{app: :raxol_payments, path: "packages/raxol_payments", class: :pre_alpha},
-    %{
-      app: :raxol_agent_client_protocol,
-      path: "packages/raxol_agent_client_protocol",
-      class: :pre_alpha
-    },
-    %{app: :raxol_earn, path: "packages/raxol_earn", class: :pre_alpha},
-    %{app: :raxol_cli, path: "packages/raxol_cli", class: :pre_alpha},
-    %{app: :raxol_console, path: "packages/raxol_console", class: :pre_alpha},
-    # ADR-0033 leaves publication of `raxol_web3` open, so it starts at 0.1.0,
-    # standalone and outside the root `modular_packages` list. Pre-alpha is
-    # what that means to this catalog: the package exists on disk and is not
-    # on the public Hex train.
-    %{app: :raxol_web3, path: "packages/raxol_web3", class: :pre_alpha},
-    %{app: :raxol_broker, path: "packages/raxol_broker", class: :pre_alpha}
-  ]
+  @pre_alpha_packages []
 
   @all_packages @public_packages ++ @pre_alpha_packages
   @package_apps MapSet.new(@all_packages, & &1.app)

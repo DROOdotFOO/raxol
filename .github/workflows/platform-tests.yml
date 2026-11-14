@@ -100,17 +100,12 @@ jobs:
   # ci-unified's package matrix runs only on Linux, so the packages whose code
   # has a Windows form of its own run here too.
   #
-  # raxol_agent spawns OS processes through `Raxol.Agent.SpawnedPort`, whose
-  # Windows clause (a direct spawn whose stdin erts opens on NUL) has no
-  # wrapper shell to fall back on. Its `:windows_only` tests
-  # (Credentials.run_executable/3 against native binaries) can run nowhere
-  # else. raxol_journal reads and writes the journal files: segment framing,
+  # raxol_journal reads and writes the journal files: segment framing,
   # torn-tail repair and path handling meet CRLF checkouts and Windows paths
   # only here.
   #
-  # Each package's test_helper drops `:unix_only` on Windows (raxol_agent's
-  # also `:skip_on_windows`), as the root suite does. `--timeout`: same
-  # runner-speed reasoning as the root Windows leg above.
+  # Its test_helper drops `:unix_only` on Windows, as the root suite does.
+  # `--timeout`: same runner-speed reasoning as the root Windows leg above.
   packages-windows:
     name: Package Tests (${{ matrix.package }}, Windows)
     runs-on: windows-2022
@@ -118,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [raxol_agent, raxol_journal]
+        package: [raxol_journal]
     defaults:
       run:
         shell: bash
@@ -159,14 +154,6 @@ jobs:
           mix deps.get --check-locked
           mix compile --warnings-as-errors
 
-      # :skip_on_ci for the same reason as the Linux cell; no live_* tag in
-      # either package is outside its test_helper's own exclusions.
+      # :skip_on_ci for the same reason as the Linux cell.
       - name: Run package tests
         run: mix test --timeout 180000 --exclude skip_on_ci
-
-      # The run above prints dots. Re-run raxol_agent's `:windows_only` tests
-      # by name so the log shows each one ran here; they are the only coverage
-      # of the direct-spawn clause.
-      - name: List Windows-only tests
-        if: matrix.package == 'raxol_agent'
-        run: mix test test/raxol/agent/backend/credentials_test.exs --only windows_only --trace

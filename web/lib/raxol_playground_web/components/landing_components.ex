@@ -368,8 +368,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     # also ACP: the group beside it is Agent CLIENT Protocol editors and this
     # one is the Agent COMMERCE Protocol, so putting the abbreviation on both
     # would have the row name two unrelated things with one word. Hardcoded
-    # rather than derived because raxol_earn is a dev-only frame-generation
-    # dependency and is intentionally absent from the production release.
+    # rather than derived because raxol_earn is not a dependency of this app.
     #
     # "Virtuals Protocol" in full, never "Virtuals" or "$VIRTUAL": their
     # editorial guide names the short forms specifically, and a partner's own
@@ -1329,15 +1328,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # Stables lead, WETH trails; unknown symbols land after, alphabetically.
   @token_order %{"USDC" => 0, "USDT" => 1, "USDG" => 2, "WETH" => 3}
 
-  # From the repository's packages, not the published list: the page
-  # describes the package this site is built against.
-  @payments_version Enum.find_value(Capabilities.repo_packages(), fn
-                      %{name: "raxol_payments", version: v} ->
-                        v |> String.split(".") |> Enum.take(2) |> Enum.join(".")
-
-                      _ ->
-                        nil
-                    end)
+  # From the dependency, not the published list: the page describes the
+  # package this site is built against.
+  @payments_version "raxol_payments"
+                    |> Capabilities.dependency_version()
+                    |> String.split(".")
+                    |> Enum.take(2)
+                    |> Enum.join(".")
 
   attr(:matrix, :map, required: true)
 

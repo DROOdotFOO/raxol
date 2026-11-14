@@ -26,9 +26,7 @@ deps/
 **/test/
 !**/lib/**/test/
 bench/
-# InstallController embeds this one script at compile time.
-scripts/*
-!scripts/install.sh
+scripts/
 
 # Documentation
 docs/

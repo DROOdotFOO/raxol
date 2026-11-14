@@ -6,10 +6,10 @@ defmodule RaxolPlaygroundWeb.InstallController do
   use RaxolPlaygroundWeb, :controller
 
   # Embedded at compile time: the prod release ships without the repo, so a
-  # request-time read cannot work there, and a copy under priv/ would be a
-  # second copy to keep in sync. @external_resource recompiles this module
-  # whenever the script changes, so the repo file stays the single source.
-  @script_path Path.expand("../../../../scripts/install.sh", __DIR__)
+  # request-time read cannot work there. priv/install.sh is a pinned copy of
+  # the installer the agent repository publishes. @external_resource
+  # recompiles this module whenever the copy changes.
+  @script_path Path.expand("../../../priv/install.sh", __DIR__)
   @external_resource @script_path
   @install_script File.read!(@script_path)
 

@@ -47,7 +47,6 @@ allowlist below.
 | `Raxol.DynamicSupervisor` | `lib/raxol/dynamic_supervisor.ex` |
 | `Raxol.Terminal.Supervisor` | `packages/raxol_terminal/lib/raxol/terminal/terminal_supervisor.ex` |
 | `Raxol.Core.Runtime.Plugins.PluginSupervisor` | `packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_supervisor.ex` |
-| `Raxol.Agent.Supervisor` | `packages/raxol_agent/lib/raxol/agent/supervisor.ex` |
 | `Raxol.MCP.Supervisor` | `packages/raxol_mcp/lib/raxol/mcp/supervisor.ex` |
 | `Raxol.Speech.Supervisor` | `packages/raxol_speech/lib/raxol/speech/supervisor.ex` |
 | `Raxol.Telegram.Supervisor` | `packages/raxol_telegram/lib/raxol/telegram/supervisor.ex` |

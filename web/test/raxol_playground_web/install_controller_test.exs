@@ -23,7 +23,7 @@ defmodule RaxolPlaygroundWeb.InstallControllerTest do
            ]
 
     assert conn.resp_body ==
-             File.read!(Path.expand("../../../scripts/install.sh", __DIR__))
+             File.read!(Path.expand("../../priv/install.sh", __DIR__))
 
     assert conn.resp_body =~ "refusing an unverified install"
   end

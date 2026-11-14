@@ -559,18 +559,6 @@ defmodule Raxol.PackageBoundariesTest do
        def g, do: String.to_atom("raxol_earnings")
      end
      """},
-    {"agent application atoms in the release catalog",
-     "lib/raxol/release/package_check.ex",
-     ~S"""
-     defmodule Raxol.Release.PackageCheck do
-       @packages [
-         %{app: :raxol_core, path: "packages/raxol_core"},
-         %{app: :raxol_agent, path: "packages/raxol_agent"},
-         %{app: :raxol_cli, path: "packages/raxol_cli"}
-       ]
-       def packages, do: @packages
-     end
-     """},
     {"a template naming only the runtime side",
      "packages/raxol_core/lib/raxol/core/page.html.heex",
      ~S"""
@@ -776,14 +764,6 @@ defmodule Raxol.PackageBoundariesTest do
                ~r/packages\/raxol_cli\/lib\/raxol\/cli\/mcp\.ex\s+Raxol\.Core\.Thing\traxol_core/
     end
 
-    test "the release catalog's exemption fails once it is unused",
-         %{results: results} do
-      assert {output, 1} = results["release catalog without agent applications"]
-
-      assert output =~
-               "lib/raxol/release/package_check.ex has no row for an agent package"
-    end
-
     test "a package on neither side stops the check", %{results: results} do
       assert {output, 2} = results["package on neither side"]
 
@@ -863,15 +843,6 @@ defmodule Raxol.PackageBoundariesTest do
           """},
          {"scripts/.package-boundaries-allowlist",
           "packages/raxol_cli/lib/raxol/cli/mcp.ex\tRaxol.Core.Thing\traxol_core\n"}
-       ]},
-      {"release catalog without agent applications",
-       [
-         {"lib/raxol/release/package_check.ex",
-          """
-          defmodule Raxol.Release.PackageCheck do
-            def packages, do: [%{app: :raxol_core, path: "packages/raxol_core"}]
-          end
-          """}
        ]},
       {"no raxol_cli tree",
        [

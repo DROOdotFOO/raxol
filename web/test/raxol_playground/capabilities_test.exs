@@ -10,6 +10,9 @@ defmodule RaxolPlayground.CapabilitiesTest do
 
   @repo_root Path.expand("../../..", __DIR__)
 
+  # Published from the agent repository; this app takes them as dependencies.
+  @agent_packages ["raxol_agent", "raxol_payments"]
+
   defp mix_version!(path) do
     [_, version] = Regex.run(~r/@version\s+"([^"]+)"/, File.read!(path))
     version
@@ -49,9 +52,16 @@ defmodule RaxolPlayground.CapabilitiesTest do
   test "published packages carry the minor of their real version" do
     for %{name: name, version: constraint} <- Capabilities.packages() do
       mix =
-        if name == "raxol",
-          do: Path.join(@repo_root, "mix.exs"),
-          else: Path.join([@repo_root, "packages", name, "mix.exs"])
+        cond do
+          name == "raxol" ->
+            Path.join(@repo_root, "mix.exs")
+
+          name in @agent_packages ->
+            Path.join(Mix.Project.deps_paths()[String.to_atom(name)], "mix.exs")
+
+          true ->
+            Path.join([@repo_root, "packages", name, "mix.exs"])
+        end
 
       expected =
         mix |> mix_version!() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
@@ -61,8 +71,8 @@ defmodule RaxolPlayground.CapabilitiesTest do
     end
   end
 
-  test "the published set is a subset of what the repo actually holds" do
-    repo = package_dirs() ++ ["raxol"]
+  test "the published set is a subset of what the repo holds or depends on" do
+    repo = package_dirs() ++ ["raxol"] ++ @agent_packages
 
     for %{name: name} <- Capabilities.packages() do
       assert name in repo, "#{name} is advertised but is not a package in this repo"

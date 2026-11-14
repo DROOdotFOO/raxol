@@ -18,9 +18,6 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 ### Release Workflows
 - **`release.yml`**: Tag-authorized Hex train plus GitHub release for `v*` tags; the release notes get the scoreboard change since the previous `v*` tag
 - **`release-hex.yml`**: Reusable, approval-gated, dependency-ordered Hex publication
-- **`release-raxol-cli.yml`**: Native CLI builds, approval-gated npm
-  publication with provenance, and CLI GitHub releases
-- **`release-raxol-console.yml`**, **`release-raxol-earn.yml`**: Per-binary release builds
 - **`llms-sync.yml`**: Syncs `llms.txt` after a Hex publish
 
 ### Manual

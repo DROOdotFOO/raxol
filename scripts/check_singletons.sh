@@ -32,16 +32,12 @@ roots=(
   lib
   packages/raxol_core/lib
   packages/raxol_terminal/lib
-  packages/raxol_agent/lib
   packages/raxol_mcp/lib
   packages/raxol_liveview/lib
   packages/raxol_plugin/lib
   packages/raxol_speech/lib
   packages/raxol_telegram/lib
   packages/raxol_watch/lib
-  packages/raxol_payments/lib
-  packages/raxol_web3/lib
-  packages/raxol_broker/lib
   packages/raxol_sensor/lib
   packages/raxol_journal/lib
 )

@@ -78,15 +78,15 @@ defmodule Raxol.Release.PackageCheckTest do
         PackageCheck.release_deps(
           deps: [
             {:raxol_core, "~> 2.6"},
-            {:raxol_earn, "~> 0.2", only: :test},
-            {:raxol_agent, "~> 2.6", runtime: false},
+            {:raxol_gateway, "~> 0.2", only: :test},
+            {:raxol_mcp, "~> 2.6", runtime: false},
             {:jason, "~> 1.4"}
           ]
         )
 
       assert deps == [
                {:raxol_core, "~> 2.6", []},
-               {:raxol_agent, "~> 2.6", runtime: false}
+               {:raxol_mcp, "~> 2.6", runtime: false}
              ]
     end
   end

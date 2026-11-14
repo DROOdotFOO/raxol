@@ -25,8 +25,8 @@ defmodule Raxol.WebReleaseDepsTest do
   test "web/mix.exs declares the agent, payments and HTTP dependencies" do
     source = mix_exs()
 
-    assert source =~ ~s({:raxol_agent, path: "../packages/raxol_agent"})
-    assert source =~ ~s({:raxol_payments, path: "../packages/raxol_payments"})
+    assert source =~ ~s[agent_dep(:raxol_agent, ]
+    assert source =~ ~s[agent_dep(:raxol_payments, ]
     assert source =~ ~s({:req, )
   end
 
