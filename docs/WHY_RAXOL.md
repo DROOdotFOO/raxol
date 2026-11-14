@@ -32,9 +32,9 @@ A tool marked `sensitive` is denied unless the context of the call carries a
 `:tool_authorizer` that allows it, so a model cannot reach one just by emitting a tool call.
 Over ACP the agent is handed an authorizer that asks the editor once for each sensitive
 call. `Raxol.Agent.Authorization` is an
-[allow/ask/deny policy reducer](features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
+[allow/ask/deny policy reducer](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
 that a host can wire in; no tool-call path consults it by default. The
-[Tool Catalog](reference/TOOL_CATALOG.md) marks which tools are sensitive.
+[Tool Catalog](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/reference/TOOL_CATALOG.md) marks which tools are sensitive.
 
 ### One app, every surface
 
@@ -46,8 +46,8 @@ Raxol projects one running module. See [Surfaces](guides/SURFACES.md).
 
 Raxol agents can pay and be paid: wallets, ledger-enforced spending limits, transparent
 HTTP 402 auto-pay, cross-chain settlement, stealth and shielded transfers, and ZKSAR trust
-attestations. See [Agentic Commerce](features/AGENTIC_COMMERCE.md) and the
-[Agent Commerce Protocol](features/ACP.md). Neither Hermes nor Omnigent has any of this, and
+attestations. See [Agentic Commerce](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENTIC_COMMERCE.md) and the
+[Agent Commerce Protocol](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/ACP.md). Neither Hermes nor Omnigent has any of this, and
 it is not a feature they can add without a runtime for it.
 
 ## What Raxol is not
@@ -62,4 +62,4 @@ than trusted, or move money. Those are BEAM problems, and Raxol is the runtime f
 
 - [Why OTP](WHY_OTP.md): the TUI-framework comparison.
 - [Philosophy](PHILOSOPHY.md): the design principles behind the runtime.
-- [Build Your First Agent](getting-started/BUILD_AN_AGENT.md): put the runtime to work.
+- [Build Your First Agent](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/getting-started/BUILD_AN_AGENT.md): put the runtime to work.

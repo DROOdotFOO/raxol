@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-10-26. Depends on [ADR-0042](0042-lean-on-omp.md) landing
+Accepted, 2026-10-26. Depends on [ADR-0042](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0042-lean-on-omp.md) landing
 first: its harness deletion removes about 25k lines that would otherwise move.
 
 | Amends ADR-0042 | Change | Here |
@@ -243,10 +243,10 @@ registered only when an agent needs a public one.
 ## References
 
 - [ADR-0012](0012-mcp-as-rendering-target.md),
-  [ADR-0031](0031-console-runtime-integration.md),
-  [ADR-0038](0038-guarded-outbound-client-evm-rest-backend.md),
-  [ADR-0041](0041-agent-client-protocol-package.md),
-  [ADR-0042](0042-lean-on-omp.md).
+  [ADR-0031](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0031-console-runtime-integration.md),
+  [ADR-0038](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0038-guarded-outbound-client-evm-rest-backend.md),
+  [ADR-0041](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0041-agent-client-protocol-package.md),
+  [ADR-0042](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0042-lean-on-omp.md).
 - ERC-8262: <https://eips.ethereum.org/EIPS/eip-8262>; reference
   implementation <https://github.com/xochi-fi/ERC-8262>.
 - zkAPI: <https://blog.ethereum.org/2026/10/01/introducing-zkapi>,

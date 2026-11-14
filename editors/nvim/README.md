@@ -148,7 +148,7 @@ A Raxol agent reaches editors over the
 [Agent Client Protocol](https://agentclientprotocol.com), which Zed and its
 ecosystem speak: point an ACP client at `bin/raxol-acp --agent <app>` in a
 raxol checkout with deps fetched (see
-[`docs/features/EDITOR_ACP.md`](../../docs/features/EDITOR_ACP.md#serving-a-raxol-agent)).
+[`docs/features/EDITOR_ACP.md`](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/EDITOR_ACP.md#serving-a-raxol-agent)).
 
 ## Requirements
 

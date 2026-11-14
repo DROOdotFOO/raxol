@@ -275,7 +275,7 @@ never committed in that state.
 ### `raxol_earn` 0.2.1
 
 **OPERATOR.** Blocked on a live offering on Base mainnet. The full procedure is
-[`packages/raxol_earn/RUNBOOK.md`](../../packages/raxol_earn/RUNBOOK.md), which
+[`packages/raxol_earn/RUNBOOK.md`](https://github.com/DROOdotFOO/raxol-agent/blob/main/packages/raxol_earn/RUNBOOK.md), which
 takes the `custom_console_agent` offering from a clean checkout to a funded,
 registered seller on Base Sepolia (chain 84532) and then promotes it to mainnet
 (8453). In order:
