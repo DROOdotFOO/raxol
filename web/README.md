@@ -5,8 +5,7 @@ serving the same `Raxol.Playground.Catalog` the terminal playground serves.
 
 It takes the framework from the working tree (`{:raxol, path: ".."}`), so a
 framework change shows up here on the next compile, and `raxol_agent` and
-`raxol_payments` from Hex, or from a checkout of the agent repository when
-`RAXOL_AGENT_PATH` names one. Deployment lives in
+`raxol_payments` from Hex. Deployment lives in
 [../docs/deployment/FLY_IO.md](../docs/deployment/FLY_IO.md).
 
 ## Routes
