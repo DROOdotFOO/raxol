@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "commit": "4c071c63bc1f5c6e739e8520cca54d332664cca3",
+  "commit": "ee76a1d3daad90415754a63a3779a6cb2f091bd2",
   "toolchain": {
     "elixir": "1.20.2",
     "otp": "29.0.3",
@@ -17,10 +17,10 @@
     "table.keyframe.bytes": 5918,
     "table.keyframe.reductions": 1766833,
     "table.keystroke.bytes": 1195.6,
-    "table.keystroke.reductions": 1734042,
-    "table.keystroke.work_ratio": 0.981,
+    "table.keystroke.reductions": 1734398,
+    "table.keystroke.work_ratio": 0.982,
     "table.screen.heap_bytes_per_cell": 90.08
   },
-  "recorded_at": "2026-11-13T23:29:53.047Z",
-  "run_id": 43526266496
+  "recorded_at": "2026-11-14T03:35:04.134Z",
+  "run_id": 43551727452
 }
