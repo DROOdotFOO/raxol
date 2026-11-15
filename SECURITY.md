@@ -18,7 +18,8 @@ that were. Check Hex for what is published.
 
 The agent packages (`raxol_agent`, `raxol_payments` and the rest) live in
 [raxol-agent](https://github.com/DROOdotFOO/raxol-agent); report their
-vulnerabilities through the form above as well.
+vulnerabilities through its form:
+[Report a vulnerability](https://github.com/DROOdotFOO/raxol-agent/security/advisories/new).
 
 ## Scope worth knowing about
 
