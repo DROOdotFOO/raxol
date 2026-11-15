@@ -107,7 +107,8 @@ Raxol.Gateway.Adapter.Discord.GatewaySocket.start_link(
 
 `Raxol.Gateway.Handler.Agent` turns any chat into an agent conversation: each inbound
 `%{text: text}` event runs one synchronous turn through `Raxol.Agent.Stream` and replies
-with the collected answer. It ships in `raxol_console`, which depends on both
+with the collected answer. It ships in `raxol_console`
+([raxol-agent](https://github.com/DROOdotFOO/raxol-agent)), which depends on both
 `raxol_gateway` and `raxol_agent`; `raxol_gateway` itself has no agent dependency.
 
 ```elixir
@@ -221,7 +222,7 @@ linked processes). Each inbound event and each reply can be recorded to an optio
 keyed by a stable `conversation_id`: start one with
 `Raxol.Agent.Conversation.Log.start_link(name: MyLog)` and pass
 `router: [log: {Raxol.Agent.Conversation.Log, MyLog}]` to `Raxol.Gateway.Supervisor`
-([Conversation item-log](AGENT_FRAMEWORK.md#conversation-item-log)).
+([Conversation item-log](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENT_FRAMEWORK.md#conversation-item-log)).
 
 ## Pairing and authorization
 
@@ -371,4 +372,4 @@ Any module satisfying the `Handler` callbacks works alongside the shipped handle
 
 - [Telegram](TELEGRAM.md), [Watch](WATCH.md), [Speech](SPEECH.md): the existing per-surface
   bridges the gateway generalizes.
-- [Agent Framework](AGENT_FRAMEWORK.md): the Conversation log that carries per-chat history.
+- [Agent Framework](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENT_FRAMEWORK.md): the Conversation log that carries per-chat history.

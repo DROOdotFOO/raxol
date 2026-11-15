@@ -15,7 +15,7 @@ defmodule Raxol.MCP.Client.SerializedTest do
   # Property-tested because the upstream failure this models is invisible to a
   # single-call test: TronScan answers 500 to BOTH of two parallel calls on one
   # session, reproducibly, and every call in isolation succeeds
-  # (`docs/proposals/web3-upstream-survey.md:72-78`).
+  # (https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/proposals/web3-upstream-survey.md#wire-level-findings-that-constrain-mcp_proxy).
 
   @url "https://mcp.example.test/mcp"
   @public {93, 184, 216, 34}

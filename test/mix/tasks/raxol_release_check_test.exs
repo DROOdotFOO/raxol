@@ -40,23 +40,6 @@ defmodule Mix.Tasks.Raxol.Release.CheckTest do
     end)
   end
 
-  test "a pre-alpha package name is rejected with an --all hint" do
-    stderr =
-      capture_io(:stderr, fn ->
-        assert_raise Mix.Error, fn ->
-          capture_io(fn ->
-            Mix.Tasks.Raxol.Release.Check.run([
-              "--metadata-only",
-              "--only",
-              "raxol_cli"
-            ])
-          end)
-        end
-      end)
-
-    assert stderr =~ "pass --all"
-  end
-
   test "rejects an unknown switch instead of ignoring it" do
     assert_raise Mix.Error, ~r/invalid option/, fn ->
       Mix.Tasks.Raxol.Release.Check.run(["--publish"])

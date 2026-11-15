@@ -21,33 +21,33 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0013](0013-event-dispatch-backpressure.md) | Event-dispatch Backpressure | Implemented | 2026-06-03 |
 | [0014](0014-telegram-ai-guardian.md) | Telegram AI Guardian admin behaviour | Accepted | 2026-06-13 |
 | [0015](0015-workflow-graph.md) | Workflow Graph (`Raxol.Workflow.*`) | Accepted | 2026-06-15 |
-| [0016](0016-acp-job-workflow.md) | raxol_earn Job migration to `Raxol.Workflow` | Superseded (v1->v2) | 2026-06-16 |
-| [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Superseded (v1->v2) | 2026-06-16 |
-| [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
+| [0016](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0016-acp-job-workflow.md) | raxol_earn Job migration to `Raxol.Workflow` | Superseded (v1->v2) | 2026-06-16 |
+| [0017](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Superseded (v1->v2) | 2026-06-16 |
+| [0018](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
 | [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/3`) | Accepted | 2026-06-16 |
-| [0020](0020-agent-sandbox-thread-policies.md) | Agent Sandbox, Thread log, declarative Policies | Accepted (narrowed) | 2026-06-16 |
-| [0021](0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Accepted (narrowed) | 2026-06-17 |
-| [0022](0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Superseded by ADR-0042 | 2026-06-17 |
+| [0020](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0020-agent-sandbox-thread-policies.md) | Agent Sandbox, Thread log, declarative Policies | Accepted (narrowed) | 2026-06-16 |
+| [0021](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Accepted (narrowed) | 2026-06-17 |
+| [0022](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Superseded by ADR-0042 | 2026-06-17 |
 | [0023](0023-unified-messaging-gateway.md) | Unified messaging gateway (`raxol_gateway`) | Accepted | 2026-06-17 |
-| [0024](0024-execution-backends-hibernation.md) | Pluggable execution backends and serverless hibernation | Superseded by ADR-0042 | 2026-06-18 |
-| [0025](0025-cronjob-scheduled-tasks.md) | Cronjob scheduled-task tool | Accepted | 2026-06-18 |
-| [0026](0026-execute-code-pipeline-collapse.md) | `execute_code` programmatic tool-calling | Superseded by ADR-0042 | 2026-06-18 |
-| [0027](0027-delegate-task-subagents.md) | `delegate_task` summary-only subagents | Superseded by ADR-0042 | 2026-06-18 |
-| [0028](0028-auxiliary-model-routing.md) | Auxiliary-model routing | Superseded by ADR-0042 | 2026-06-21 |
+| [0024](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0024-execution-backends-hibernation.md) | Pluggable execution backends and serverless hibernation | Superseded by ADR-0042 | 2026-06-18 |
+| [0025](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0025-cronjob-scheduled-tasks.md) | Cronjob scheduled-task tool | Accepted | 2026-06-18 |
+| [0026](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0026-execute-code-pipeline-collapse.md) | `execute_code` programmatic tool-calling | Superseded by ADR-0042 | 2026-06-18 |
+| [0027](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0027-delegate-task-subagents.md) | `delegate_task` summary-only subagents | Superseded by ADR-0042 | 2026-06-18 |
+| [0028](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0028-auxiliary-model-routing.md) | Auxiliary-model routing | Superseded by ADR-0042 | 2026-06-21 |
 | [0029](0029-the-terminal-cell-model.md) | The Terminal Cell Model | Accepted | 2026-07-14 |
-| [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Accepted | 2026-07-18 |
-| [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
-| [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed (narrowed) | 2026-08-26 |
-| [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
-| [0034](0034-foreign-coding-agent-seams.md) | Foreign coding-agent integration seams | Implemented (narrowed) | 2026-09-04 |
-| [0035](0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Superseded by ADR-0042 | 2026-09-04 |
-| [0036](0036-agent-telemetry-coverage-and-shape.md) | Agent telemetry coverage and shape | Proposed (narrowed) | 2026-09-05 |
+| [0030](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Accepted | 2026-07-18 |
+| [0031](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
+| [0032](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed (narrowed) | 2026-08-26 |
+| [0033](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
+| [0034](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0034-foreign-coding-agent-seams.md) | Foreign coding-agent integration seams | Implemented (narrowed) | 2026-09-04 |
+| [0035](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Superseded by ADR-0042 | 2026-09-04 |
+| [0036](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0036-agent-telemetry-coverage-and-shape.md) | Agent telemetry coverage and shape | Proposed (narrowed) | 2026-09-05 |
 | [0037](0037-remote-mcp-client-transport.md) | Remote transport for the MCP client | Implemented (narrowed) | 2026-09-14 |
-| [0038](0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |
-| [0039](0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
-| [0040](0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
-| [0041](0041-agent-client-protocol-package.md) | raxol_agent_client_protocol: port origin, layering, and license discipline | Accepted | 2026-10-13 |
-| [0042](0042-lean-on-omp.md) | Lean on OMP; Raxol is what agents plug into | Accepted | 2026-10-24 |
+| [0038](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0038-guarded-outbound-client-evm-rest-backend.md) | The guarded outbound client and the EVM REST backend | Implemented | 2026-09-14 |
+| [0039](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0039-required-callback-set-partial-sources.md) | The required callback set, and what a partial source is | Accepted | 2026-09-14 |
+| [0040](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0040-fx-market-data-and-rate-sources.md) | FX market data and rate sources | Accepted | 2026-09-30 |
+| [0041](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0041-agent-client-protocol-package.md) | raxol_agent_client_protocol: port origin, layering, and license discipline | Accepted | 2026-10-13 |
+| [0042](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0042-lean-on-omp.md) | Lean on OMP; Raxol is what agents plug into | Accepted | 2026-10-24 |
 | [0043](0043-two-repositories-runtime-and-agent.md) | Two repositories: the runtime, and the agent built on it | Accepted | 2026-10-26 |
 
 ## Template
@@ -123,37 +123,37 @@ They preserve context for why decisions were made, help new contributors underst
 ### AI & MCP
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
 - [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
-- [0033: Indexer-agnostic web3 data surface (raxol_web3)](0033-web3-data-surface.md)
+- [0033: Indexer-agnostic web3 data surface (raxol_web3)](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0033-web3-data-surface.md)
 - [0037: Remote transport for the MCP client](0037-remote-mcp-client-transport.md)
-- [0038: The guarded outbound client and the EVM REST backend](0038-guarded-outbound-client-evm-rest-backend.md)
-- [0039: The required callback set, and what a partial source is](0039-required-callback-set-partial-sources.md)
-- [0040: FX market data and rate sources](0040-fx-market-data-and-rate-sources.md)
-- [0041: raxol_agent_client_protocol: port origin, layering, and license discipline](0041-agent-client-protocol-package.md)
+- [0038: The guarded outbound client and the EVM REST backend](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0038-guarded-outbound-client-evm-rest-backend.md)
+- [0039: The required callback set, and what a partial source is](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0039-required-callback-set-partial-sources.md)
+- [0040: FX market data and rate sources](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0040-fx-market-data-and-rate-sources.md)
+- [0041: raxol_agent_client_protocol: port origin, layering, and license discipline](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0041-agent-client-protocol-package.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
-- [0016: raxol_earn Job migration to Workflow](0016-acp-job-workflow.md)
-- [0017: Workflow paused-run query and pause-checkpoint contract](0017-acp-workflow-paused-jobs.md)
-- [0018: Operator-flow contract for paused runs](0018-operator-flow-contract.md)
-- [0030: ACP session/update delivery ordering contract](0030-acp-session-update-delivery-ordering.md)
+- [0016: raxol_earn Job migration to Workflow](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0016-acp-job-workflow.md)
+- [0017: Workflow paused-run query and pause-checkpoint contract](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0017-acp-workflow-paused-jobs.md)
+- [0018: Operator-flow contract for paused runs](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0018-operator-flow-contract.md)
+- [0030: ACP session/update delivery ordering contract](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0030-acp-session-update-delivery-ordering.md)
 - [0019: Workflow concurrency (joins + channels)](0019-workflow-concurrency.md)
 
 ### Agent stack
-- [0020: Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
-- [0021: Self-improving agents: runtime skills + background curation](0021-self-improving-agents-skills-curation.md)
-- [0022: Memory provider stack, full-text recall, dialectic user modeling](0022-memory-providers-fulltext-dialectic.md)
+- [0020: Agent Sandbox, Thread log, declarative Policies](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0020-agent-sandbox-thread-policies.md)
+- [0021: Self-improving agents: runtime skills + background curation](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0021-self-improving-agents-skills-curation.md)
+- [0022: Memory provider stack, full-text recall, dialectic user modeling](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0022-memory-providers-fulltext-dialectic.md)
 - [0023: Unified messaging gateway (raxol_gateway)](0023-unified-messaging-gateway.md)
-- [0024: Pluggable execution backends and serverless hibernation](0024-execution-backends-hibernation.md)
-- [0025: Cronjob scheduled-task tool](0025-cronjob-scheduled-tasks.md)
-- [0026: execute_code programmatic tool-calling](0026-execute-code-pipeline-collapse.md)
-- [0027: delegate_task summary-only subagents](0027-delegate-task-subagents.md)
-- [0028: Auxiliary-model routing](0028-auxiliary-model-routing.md)
-- [0031: Raxol as a Virtuals ACP Console runtime](0031-console-runtime-integration.md)
-- [0032: Multi-root filesystem grants for agent sessions](0032-agent-filesystem-grants.md)
-- [0034: Foreign coding-agent integration seams](0034-foreign-coding-agent-seams.md)
-- [0035: Cost metering for multi-rate providers](0035-multi-rate-cost-metering.md)
-- [0036: Agent telemetry coverage and shape](0036-agent-telemetry-coverage-and-shape.md)
-- [0042: Lean on OMP; Raxol is what agents plug into](0042-lean-on-omp.md)
+- [0024: Pluggable execution backends and serverless hibernation](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0024-execution-backends-hibernation.md)
+- [0025: Cronjob scheduled-task tool](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0025-cronjob-scheduled-tasks.md)
+- [0026: execute_code programmatic tool-calling](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0026-execute-code-pipeline-collapse.md)
+- [0027: delegate_task summary-only subagents](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0027-delegate-task-subagents.md)
+- [0028: Auxiliary-model routing](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0028-auxiliary-model-routing.md)
+- [0031: Raxol as a Virtuals ACP Console runtime](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0031-console-runtime-integration.md)
+- [0032: Multi-root filesystem grants for agent sessions](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0032-agent-filesystem-grants.md)
+- [0034: Foreign coding-agent integration seams](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0034-foreign-coding-agent-seams.md)
+- [0035: Cost metering for multi-rate providers](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0035-multi-rate-cost-metering.md)
+- [0036: Agent telemetry coverage and shape](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0036-agent-telemetry-coverage-and-shape.md)
+- [0042: Lean on OMP; Raxol is what agents plug into](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/adr/0042-lean-on-omp.md)
 - [0043: Two repositories: the runtime, and the agent built on it](0043-two-repositories-runtime-and-agent.md)
 
 ## Coverage

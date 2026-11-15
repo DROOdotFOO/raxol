@@ -22,6 +22,10 @@ defmodule RaxolPlayground.SettlementSandbox do
   @intent_id "demo_intent_4812"
   @quote_id "demo_quote_4812"
 
+  # The `@xochi/spec` v3 intent domain: version "3", salt keccak256(version).
+  @intent_version "3"
+  @intent_salt "0x" <> Base.encode16(ExKeccak.hash_256(@intent_version), case: :lower)
+
   defmodule Wallet do
     @moduledoc false
     @signature_key {__MODULE__, :signatures}
@@ -235,9 +239,9 @@ defmodule RaxolPlayground.SettlementSandbox do
     %{
       "domain" => %{
         "name" => "Xochi",
-        "version" => "1",
+        "version" => @intent_version,
         "chainId" => request["from_chain_id"],
-        "salt" => "0x" <> String.duplicate("00", 32)
+        "salt" => @intent_salt
       },
       "primaryType" => "XochiIntent",
       "types" => %{

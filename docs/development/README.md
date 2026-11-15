@@ -238,8 +238,8 @@ barrier cannot trust the lane to report its own readiness.
 ### Package boundaries
 
 The dependency graph between `packages/*` is in [PACKAGES.md](../PACKAGES.md);
-main `raxol` does not depend on `raxol_agent`, `raxol_earn`, `raxol_gateway`,
-or `raxol_agent_client_protocol`. Cross-package references use
+main `raxol` does not depend on `raxol_gateway` or on any agent package.
+Cross-package references use
 `@compile {:no_warn_undefined, Module}` and `Code.ensure_loaded?/1` guards.
 Struct patterns across package boundaries use map patterns (`%{field: x}`)
 instead of struct patterns (`%Struct{field: x}`).

@@ -2,16 +2,16 @@ defmodule Raxol.MCP.Client.SSE do
   @moduledoc """
   A tolerant server-sent-events parser for MCP responses over HTTP.
 
-  ADR-0037 decision 3. Modelled on `Raxol.Earn.Transport.SSE.Parser`, which
-  splits frames and has the caller buffer the remainder
-  (`packages/raxol_earn/lib/raxol/earn/transport/sse/parser.ex:24-32`), with
+  ADR-0037 decision 3. Modelled on `Raxol.Earn.Transport.SSE.Parser` in
+  `raxol_earn`, which splits frames and has the caller buffer the remainder, with
   three deliberate differences. Copying rather than depending is forced by the
   package graph: `raxol_earn` sits above `raxol_payments`, and this package
   depends only on `raxol_core` and `jason`.
 
   1. **`data:` is accepted with and without the following space.** TronGrid
      emits `data: {...}` and TronScan emits `data:{...}`, both measured on live
-     handshakes on 2026-08-31 (`docs/proposals/web3-upstream-survey.md:79-82`).
+     handshakes on 2026-08-31
+     (https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/proposals/web3-upstream-survey.md#wire-level-findings-that-constrain-mcp_proxy).
      A strict parser breaks on one of them.
   2. **`event:` and `id:` are retained, not dropped.** The earn parser
      discards both, which is right for its one-event-type stream and wrong

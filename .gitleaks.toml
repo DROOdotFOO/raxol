@@ -14,8 +14,8 @@
 # top-level `[[allowlists]]` is GLOBAL: a `paths` entry meant to silence
 # entropy hits also switched off `private-key`, `aws-access-token`,
 # `github-pat` and every other inherited rule for that whole subtree. One of
-# those subtrees is `packages/raxol_agent/test/`, which is where the LLM
-# backends' credential handling is exercised -- `ANTHROPIC_API_KEY`,
+# those subtrees was `packages/raxol_agent/test/` (now in raxol-agent), where
+# the LLM backends' credential handling is exercised -- `ANTHROPIC_API_KEY`,
 # `OPENAI_API_KEY`, 1Password `op://` refs, and a live test whose documented
 # invocation is `LONGCAT_API_KEY=<key> mix test --only live_longcat`. That is
 # precisely the tree where a real key gets pasted over a placeholder, and it

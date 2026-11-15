@@ -26,9 +26,7 @@ deps/
 **/test/
 !**/lib/**/test/
 bench/
-# InstallController embeds this one script at compile time.
-scripts/*
-!scripts/install.sh
+scripts/
 
 # Documentation
 docs/
@@ -48,7 +46,7 @@ docs/
 # Elixir artifacts
 *.beam
 /tmp/
-# Recursive: two dumps (web/, packages/raxol_agent/) were 28% of the context.
+# Recursive: a dump lands wherever mix ran (web/, packages/*/).
 **/erl_crash.dump
 
 # NIF build artifacts (must not leak host-platform binaries into Docker).

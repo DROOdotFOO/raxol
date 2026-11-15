@@ -378,7 +378,7 @@ jobs:
             elixir scripts/check_package_boundaries.exs
           fi
 
-      # raxol_agent now has its own package-tests cell, but this guard stays
+      # raxol_journal has its own package-tests cell, but this guard stays
       # here: a schema_version bump that ships without a frozen golden journal
       # is unrecoverable, and this check is dependency-free, so it answers in
       # seconds without waiting on that cell's compile. Deliberately redundant.
@@ -530,55 +530,28 @@ jobs:
     name: Package Tests (${{ matrix.package }})
     needs: setup
     runs-on: ubuntu-latest
-    # A backstop, not a budget. Most suites finish in single-digit minutes; if a
-    # live test ever escapes its exclusion it blocks on a network call, and the
-    # default 6h job timeout would let it sit there. Raised from 20 for
-    # raxol_agent, whose 2426 tests take ~6 minutes on an 8-core dev box on top
-    # of compiling main raxol and the termbox2 NIF, so 20 left no headroom on a
-    # two-core runner. raxol_terminal, the largest package, ran its 2421 tests
-    # in ~25s on that box with deps and the NIF already built. raxol_speech
-    # fetches nothing at test time; on a cache miss its compile downloads the
-    # XLA archive (98 MB for darwin-arm64) from GitHub and builds EXLA's NIF,
-    # which took 69s at -j2 on that box with the archive already on disk, so
-    # the download is not in that figure.
+    # A backstop, not a budget. Most suites finish in single-digit minutes, and
+    # the default 6h job timeout would let a hung one sit there. raxol_terminal,
+    # the largest package, ran its 2421 tests in ~25s on an 8-core dev box with
+    # deps and the NIF already built. raxol_speech fetches nothing at test
+    # time; on a cache miss its compile downloads the XLA archive (98 MB for
+    # darwin-arm64) from GitHub and builds EXLA's NIF, which took 69s at -j2 on
+    # that box with the archive already on disk, so the download is not in
+    # that figure.
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        # raxol_payments and raxol_earn move real money and were the two least
-        # gated packages in the repo: the Sma7702Wallet alias bug (#858) shipped
-        # with a compiler warning nobody could fail on, because nothing here ran
-        # them. Adding them required unbreaking both suites first -- see the PR.
-        #
         # Formatting is NOT what this matrix is for any more. Every package is
         # format-checked by the `format` job, which needs no compile, and the
         # root .formatter.exs delegates `packages/*` by glob -- so a package
         # joins here to get its TESTS run, not to earn a formatter entry.
         #
-        # raxol_console boots agent packages onto the gateway and was ungated for
-        # the same reason the others were: nothing in per-PR CI ran it. It joins
-        # already clean, so this adds a gate rather than fixing drift.
-        #
-        # raxol_core and raxol_agent hold the containment boundaries and were
-        # gated by nothing. Raxol.Core.Boundary.Path is the centralized
-        # path-traversal confinement for the agent's fs tools; its 18 accept and
-        # reject vectors live in packages/raxol_core/test/support/boundary_vectors/
-        # and are copied verbatim into raxol_agent_client_protocol, which is the
-        # only thing that makes the module's own claim -- "drift is a red test,
-        # not a silent fork" -- true. Only the ACP copy had a red test available.
-        # A one-sided corpus is a fork with extra steps.
-        #
-        # The same hole covers the process-kill work now landing in raxol_core
-        # (killing an escaped port's whole process group by negative pgid): a
-        # wrong target there takes the VM or the host down, and its tests would
-        # have shipped unrun. raxol_agent is the package that consumes both, so
-        # both join together.
-        #
-        # raxol_web3 joins with its first module. It is the guarded outbound
-        # client of ADR-0038, so every test it has is a security property: the
-        # SNI and the Host header a pinned dial presents, and the transport
-        # options it refuses. Landing it ungated would repeat exactly the gap
-        # the packages above were added here to close.
+        # raxol_core holds the containment boundaries. Raxol.Core.Boundary.Path
+        # is the centralized path-traversal confinement; its accept and reject
+        # vectors live in packages/raxol_core/test/support/boundary_vectors/.
+        # The process-group kill (an escaped port's whole group, by negative
+        # pgid) is there too: a wrong target takes the VM or the host down.
         #
         # raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor,
         # raxol_speech and raxol_watch were the last six packages nothing in
@@ -599,7 +572,7 @@ jobs:
         # with `^\s*package: \[...\]` until #906 made that test enumerate
         # packages/*/mix.exs instead. Nothing reads it now; one line keeps the
         # whole gated set on the line a grep for any one package lands on.
-        package: [raxol_core, raxol_agent, raxol_mcp, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_web3, raxol_broker, raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor, raxol_speech, raxol_watch, raxol_journal]
+        package: [raxol_core, raxol_mcp, raxol_gateway, raxol_telegram, raxol_terminal, raxol_liveview, raxol_plugin, raxol_sensor, raxol_speech, raxol_watch, raxol_journal]
 
     steps:
       - uses: actions/checkout@v7
@@ -652,34 +625,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tmux
 
-      # raxol_payments' EIP-712 conformance vectors and vendored fee oracle
-      # come from one integrity-pinned @xochi/spec release. The cache key
-      # includes both committed pin files; the fetch script retries only a
-      # cache miss, verifies SHA-512 before extraction, then validates the
-      # package identity and publishes one verified package root.
-      - name: Set up Node (pinned @xochi/spec)
-        if: matrix.package == 'raxol_payments'
-        uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-
-      - name: Cache pinned @xochi/spec
-        if: matrix.package == 'raxol_payments'
-        uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}/xochi-spec-cache
-          key: xochi-spec-${{ runner.os }}-${{ hashFiles('packages/raxol_payments/test/fixtures/XOCHI_SPEC_VERSION', 'packages/raxol_payments/test/fixtures/XOCHI_SPEC_INTEGRITY') }}
-
-      - name: Fetch and verify pinned @xochi/spec
-        if: matrix.package == 'raxol_payments'
-        run: |
-          package_root="$(
-            scripts/fetch_xochi_spec.sh \
-              "$RUNNER_TEMP/xochi-spec-cache" \
-              "$RUNNER_TEMP/xochi-spec/package"
-          )"
-          echo "XOCHI_SPEC_DIR=$package_root" >> "$GITHUB_ENV"
-
       # `--check-locked` rather than a bare `deps.get`: a plain fetch REWRITES
       # a stale mix.lock in place and carries on, so a package whose committed
       # lock does not match what resolution produces builds green in CI and
@@ -700,13 +645,6 @@ jobs:
           mix deps.get --check-locked
           mix compile --warnings-as-errors
 
-      # The exclusions are stated here rather than left to each package's
-      # test_helper. raxol_payments computes its list from env-var PRESENCE, so a
-      # stray XOCHI_LIVE_URL anywhere in the workflow env drops :live_xochi and
-      # the live suite -- which compile-gates on the same one variable -- starts
-      # issuing requests on every PR, forks included. ExUnit unions these with
-      # the helper's list, so nothing here can un-exclude a tag.
-      #
       # :skip_on_ci is the repo-wide "this needs a real workstation" marker, and
       # the root suite honours it whenever SKIP_TERMBOX2_TESTS is set -- which is
       # workflow-global here. raxol_journal's test_helper does not wire it up, so
@@ -717,50 +655,12 @@ jobs:
       # test_helper as well.
       - name: Run package tests
         working-directory: packages/${{ matrix.package }}
-        run: |
-          mix test \
-            --exclude live_xochi \
-            --exclude live_xochi_matrix \
-            --exclude live_xochi_preflight \
-            --exclude live_xochi_order \
-            --exclude live_xochi_order_preflight \
-            --exclude live_xochi_order_settle \
-            --exclude live_relay \
-            --exclude live_property \
-            --exclude live_parity \
-            --exclude live_solver_fee \
-            --exclude live_chain \
-            --exclude live_bundler \
-            --exclude live_acp_dev \
-            --exclude cli_signer \
-            --exclude skip_on_ci
-
-      # `bin/raxol-acp --agent` as an OS process (`:integration`, excluded by
-      # packages/raxol_agent/test/test_helper.exs): the `initialize` written
-      # while the peer boots is answered, a prompt to the counter agent gets
-      # its reply, every stdout line is JSON-RPC, and end of input exits with
-      # the journal on disk. Only a process shows these. Included by file: the
-      # other `:integration` suites in this package need a live Postgres.
-      - name: Run ACP stdio loopback (real peer)
-        if: matrix.package == 'raxol_agent'
-        working-directory: packages/raxol_agent
-        run: mix test --include integration test/raxol/agent/acp_loopback_test.exs
-
-      # `raxol mcp` as an OS process (`:integration`, excluded by
-      # packages/raxol_cli/test/test_helper.exs): end of input exits 0, an
-      # app's OSC output lands on stderr, and every stdout line is JSON-RPC.
-      # Only a process shows a stray byte on the wire. The packaged binary's
-      # boot is smoked separately by mcp-smoke.yml.
-      - name: Run raxol mcp subprocess tests
-        if: matrix.package == 'raxol_cli'
-        working-directory: packages/raxol_cli
-        run: mix test --include integration test/raxol/cli/mcp_integration_test.exs
+        run: mix test --exclude skip_on_ci
 
       # Kept as a per-package backstop, and kept LAST. The `format` job checks
       # every package now, so this is redundant on the happy path -- but this
-      # job is named "Package Tests" and two of its cells move real money, so a
-      # red X here has to mean the tests ran, not that a line was two columns
-      # too wide before compile started.
+      # job is named "Package Tests", so a red X here has to mean the tests
+      # ran, not that a line was two columns too wide before compile started.
       - name: Check formatting
         working-directory: packages/${{ matrix.package }}
         run: mix format --check-formatted

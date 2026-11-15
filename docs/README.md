@@ -5,7 +5,7 @@ Raxol is a multi-surface application runtime for Elixir. One TEA module renders 
 ## Start here
 
 - [Quickstart](getting-started/QUICKSTART.md): build a terminal app
-- [Build Your First Agent](getting-started/BUILD_AN_AGENT.md): add tools and skills
+- [Build Your First Agent](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/getting-started/BUILD_AN_AGENT.md): add tools and skills
 - [Core Concepts](getting-started/CORE_CONCEPTS.md): understand TEA, Components, and the runtime
 - [Component Gallery](getting-started/COMPONENT_GALLERY.md): browse Components and examples
 
@@ -21,8 +21,8 @@ Raxol is a multi-surface application runtime for Elixir. One TEA module renders 
 
 - [Components](getting-started/COMPONENT_GALLERY.md): browse the component catalog and demos
 - [Surfaces](guides/SURFACES.md): render one TEA app to terminal, LiveView, SSH, and MCP
-- [Agents](features/AGENT_FRAMEWORK.md): TEA agents, backends, tools, and teams
-- [Payments](features/AGENTIC_COMMERCE.md): wallets, spend gates, HTTP 402, Xochi, and settlement receipts
+- [Agents](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENT_FRAMEWORK.md): TEA agents, backends, tools, and teams
+- [Payments](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENTIC_COMMERCE.md): wallets, spend gates, HTTP 402, Xochi, and settlement receipts
 - [$RAXOL token facts](https://raxol.io/token): contract addresses and pair link
 
 ## Features
@@ -39,9 +39,9 @@ distributed systems, developer tools, and alternate surfaces.
 ## Reference
 
 - [Architecture](core/ARCHITECTURE.md)
-- [Harness Architecture](harness/architecture.md): the agent-session engine, its contract and journal
+- [Harness Architecture](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/harness/architecture.md): the agent-session engine, its contract and journal
 - [Buffer API](core/BUFFER_API.md)
-- [Tool/Action Catalog](reference/TOOL_CATALOG.md): every LLM-callable tool, generated
+- [Tool/Action Catalog](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/reference/TOOL_CATALOG.md): every LLM-callable tool, generated
 - [Architecture Decisions](adr/)
 - [Ubiquitous Language](UBIQUITOUS_LANGUAGE.md): the domain glossary
 - [Plugin Development](plugins/)
@@ -61,7 +61,7 @@ distributed systems, developer tools, and alternate surfaces.
 | --- | --- |
 | User tasks and concepts | `getting-started/`, `cookbook/`, `guides/` |
 | Capability details | `features/` |
-| Stable internals and API contracts | `core/`, `harness/`, `reference/` |
+| Stable internals and API contracts | `core/`, `harness/` |
 | Accepted design decisions | `adr/` |
 | Current work | [`ROADMAP.md`](../ROADMAP.md) |
 

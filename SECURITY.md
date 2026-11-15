@@ -16,30 +16,25 @@ specific number is named here on purpose: the previous revision said `2.7.x`,
 which was not on Hex, and by exclusion withdrew support from the only versions
 that were. Check Hex for what is published.
 
-Pre-alpha packages (`raxol_earn`, `raxol_cli`, `raxol_console`,
-`raxol_agent_client_protocol`, `raxol_web3`, `raxol_broker`)
-carry no support commitment yet.
+The agent packages (`raxol_agent`, `raxol_payments` and the rest) live in
+[raxol-agent](https://github.com/DROOdotFOO/raxol-agent); report their
+vulnerabilities through its form:
+[Report a vulnerability](https://github.com/DROOdotFOO/raxol-agent/security/advisories/new).
 
 ## Scope worth knowing about
 
-- Provider credentials are stored as 1Password references only
-  (`Raxol.Agent.Backend.Credentials`); a raw API key is never persisted.
-  Findings that bypass that are in scope and high priority.
-- `packages/raxol_payments` and `packages/raxol_earn` move funds on
-  mainnets. Anything touching signing, spend limits, or settlement is in
-  scope and highest priority.
 - The SSH server (`Raxol.SSH.Server`) is fail-closed by design (no anonymous
   access unless explicitly configured); configuration-dependent findings are
   still welcome.
-- `raxol mcp` serves Raxol apps as MCP tools over stdio to the client that
-  spawned it (OMP), so its boundary is that OS process: whoever can write
-  its stdin can call every tool it lists. It starts only modules on the
-  startable list (the playground demos unless configured), refuses
-  `raxol_start`'s `path` argument (starting from a path compiles the file),
-  and serves `resources/read`
-  only for the sessions it runs and the journals of the agents its `agent_*`
-  tools act on; every other read is denied. Its `agent_*` tools start only the modules on
-  `config :raxol_agent, :mcp_spawnable_apps` (a reference counter unless
+- `mix mcp.server` (and `raxol mcp`, which embeds it) serves Raxol apps as MCP
+  tools over stdio to the client that spawned it (OMP), so its boundary is that
+  OS process: whoever can write its stdin can call every tool it lists. It
+  starts only modules on the startable list (the playground demos unless
+  configured), refuses `raxol_start`'s `path` argument (starting from a path
+  compiles the file), and serves `resources/read` only for the sessions it
+  runs and the journals of the agents its `agent_*` tools act on; every other
+  read is denied. With `raxol_agent` loaded, its `agent_*` tools start only the
+  modules on `config :raxol_agent, :mcp_spawnable_apps` (a reference counter unless
   configured) and act only on agents this process started, or those listed
   in `:mcp_exposed_agents` (none unless configured). stdout is the JSON-RPC
   wire and carries nothing else. Anything that runs code a client chose

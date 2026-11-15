@@ -53,23 +53,6 @@ defmodule Raxol.Release.PackageCheckTest do
 
       assert_raise ArgumentError, fn -> String.to_existing_atom(name) end
     end
-
-    test "points at --all when the name is a pre-alpha package" do
-      assert {:error, errors} =
-               PackageCheck.select_packages(only: ["raxol_cli"])
-
-      assert Enum.any?(errors, &String.contains?(&1, "pass --all"))
-    end
-
-    test "accepts a pre-alpha package once --all is set" do
-      assert {:ok, packages} =
-               PackageCheck.select_packages(
-                 include_pre_alpha: true,
-                 only: ["raxol_cli"]
-               )
-
-      assert Enum.map(packages, & &1.app) == [:raxol_cli]
-    end
   end
 
   describe "release_deps/1" do
@@ -78,15 +61,15 @@ defmodule Raxol.Release.PackageCheckTest do
         PackageCheck.release_deps(
           deps: [
             {:raxol_core, "~> 2.6"},
-            {:raxol_earn, "~> 0.2", only: :test},
-            {:raxol_agent, "~> 2.6", runtime: false},
+            {:raxol_gateway, "~> 0.2", only: :test},
+            {:raxol_mcp, "~> 2.6", runtime: false},
             {:jason, "~> 1.4"}
           ]
         )
 
       assert deps == [
                {:raxol_core, "~> 2.6", []},
-               {:raxol_agent, "~> 2.6", runtime: false}
+               {:raxol_mcp, "~> 2.6", runtime: false}
              ]
     end
   end
@@ -150,8 +133,8 @@ defmodule Raxol.Release.PackageCheckTest do
   describe "validate_order/2" do
     setup do
       train = [
-        %{app: :raxol_core, path: "packages/raxol_core", class: :public},
-        %{app: :raxol_agent, path: "packages/raxol_agent", class: :public}
+        %{app: :raxol_core, path: "packages/raxol_core"},
+        %{app: :raxol_agent, path: "packages/raxol_agent"}
       ]
 
       {:ok, train: train}
@@ -261,25 +244,15 @@ defmodule Raxol.Release.PackageCheckTest do
       config = [deps: [{:raxol_core, "~> 2.6"}]]
       requirements = MapSet.new(["raxol_core"])
 
-      assert PackageCheck.audit_release_deps(config, requirements) == {[], []}
+      assert PackageCheck.audit_release_deps(config, requirements) == []
     end
 
-    test "errors when a public-train dependency is missing from the tarball" do
+    test "errors when a train dependency is missing from the tarball" do
       config = [deps: [{:raxol_core, "~> 2.6"}]]
 
-      assert {[error], []} =
-               PackageCheck.audit_release_deps(config, MapSet.new())
+      assert [error] = PackageCheck.audit_release_deps(config, MapSet.new())
 
       assert error =~ "published tarball omits release dependency raxol_core"
-    end
-
-    test "warns when a pre-alpha dependency is dropped from the tarball" do
-      config = [deps: [{:raxol_web3, "~> 0.1", optional: true}]]
-
-      assert {[], [warning]} =
-               PackageCheck.audit_release_deps(config, MapSet.new())
-
-      assert warning =~ "raxol_web3 is dropped from the published tarball"
     end
   end
 
@@ -599,7 +572,7 @@ defmodule Raxol.Release.PackageCheckTest do
 
   # --- fixtures --------------------------------------------------------------
 
-  defp spec, do: %{app: :fixture, path: ".", class: :public}
+  defp spec, do: %{app: :fixture, path: "."}
 
   defp valid_config do
     [

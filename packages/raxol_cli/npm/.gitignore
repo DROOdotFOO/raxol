@@ -1,5 +1,0 @@
-# Built binaries and the per-platform packages generated from them
-# (scripts/pack.sh). Published to npm, never committed.
-vendor/
-platforms/
-*.tgz

@@ -26,18 +26,24 @@ defmodule RaxolPlayground.MixProject do
 
   defp deps do
     [
-      {:raxol, path: ".."},
+      # The site builds against this checkout's runtime. raxol_agent and
+      # raxol_payments ask Hex for raxol, raxol_core and raxol_mcp; the
+      # overrides keep the working tree's copies, the ones the root project
+      # already takes by path, so a runtime change shows up here and one copy
+      # of each package is compiled.
+      {:raxol, path: "..", override: true},
+      {:raxol_core, path: "../packages/raxol_core", override: true},
+      {:raxol_mcp, path: "../packages/raxol_mcp", override: true},
+
       # The site reads the agent framework's provider registry and ACP surface
-      # (RaxolPlayground.Capabilities). Main raxol keeps raxol_agent
-      # optional (no dependency edge), so the deploy app opts in here.
-      {:raxol_agent, path: "../packages/raxol_agent"},
+      # (RaxolPlayground.Capabilities). Main raxol does not depend on
+      # raxol_agent, so the deploy app opts in here. 3.1 is the first release
+      # that compiles the ACP agent from Hex.
+      {:raxol_agent, "~> 3.1"},
 
       # The payments pages and the settlement sandbox call it directly.
-      {:raxol_payments, path: "../packages/raxol_payments"},
+      {:raxol_payments, "~> 0.3"},
 
-      # Frame generation runs in dev; production serves only the committed
-      # recordings and must not boot the commerce supervision tree.
-      {:raxol_earn, path: "../packages/raxol_earn", only: :dev},
       # The HTTP client: RaxolPlayground.ReleaseManifestCache calls it, and
       # it is the client behind every remote provider. raxol_agent declares
       # it optional and optional deps do not propagate.

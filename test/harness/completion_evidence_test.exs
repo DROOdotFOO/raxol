@@ -7,8 +7,8 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
   explicit `%{evidence: :none}` absence marker, NEVER a silent success
   toast ("a 'done' claim is only as good as its evidence").
 
-  Ground truth for the wire shape: `packages/raxol_agent/lib/raxol/agent/
-  stream_pump.ex`'s `gated_done_payload/4` -- `final: true` always, `refs:`
+  Ground truth for the wire shape: `Raxol.Agent.StreamPump.gated_done_payload/4`
+  in `raxol_agent` -- `final: true` always, `refs:`
   present only when the evidence gate accepts (a list of journal event
   ids). Per the frozen offset law, a ref is a SESSION-scoped journal
   offset, not a turn-scoped one -- it may point at an earlier turn's

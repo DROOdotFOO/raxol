@@ -3,9 +3,9 @@
 The Phoenix app behind [raxol.io](https://raxol.io): Raxol's browser surface,
 serving the same `Raxol.Playground.Catalog` the terminal playground serves.
 
-It depends on the working tree, not on Hex (`{:raxol, path: ".."}` plus
-`raxol_agent`, `raxol_payments`, and `raxol_earn` from `../packages/`), so a
-framework or commerce change shows up here on the next compile. Deployment lives in
+It takes the framework from the working tree (`{:raxol, path: ".."}`), so a
+framework change shows up here on the next compile, and `raxol_agent` and
+`raxol_payments` from Hex. Deployment lives in
 [../docs/deployment/FLY_IO.md](../docs/deployment/FLY_IO.md).
 
 ## Routes
@@ -30,7 +30,7 @@ Raw endpoints, with no session, no layout and no CSRF:
 | Path | Module | What |
 | ---- | ------ | ---- |
 | `/health` | `HealthController` | PubSub, memory and SSH checks. Only a dead PubSub or critical memory answers 503, so a memory warning or an absent SSH extra does not take a machine out of rotation. |
-| `/install` | `InstallController` | `scripts/install.sh` as text, for `curl -fsSL https://raxol.io/install \| bash`. Embedded at compile time and served `no-cache`, because it is executable content. |
+| `/install` | `InstallController` | `priv/install.sh`, a pinned copy of the CLI installer, as text, for `curl -fsSL https://raxol.io/install \| bash`. Embedded at compile time and served `no-cache`, because it is executable content. |
 | `/skill.md` | `SkillController` | The agent onboarding skill file from `priv/static/skill.md`. |
 | `/examples/:example` | `ExampleController` | The four landing-hero modules as files that run, each with the two lines that start it. The whole segment is the param because Phoenix allows no suffix after one, so the URL is the filename you save it as. |
 | `/llms.txt` `/llms-full.txt` | `CapabilitiesController` | Project summaries for LLMs, from `priv/static/`. |

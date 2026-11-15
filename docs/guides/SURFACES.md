@@ -67,4 +67,4 @@ person sees. See [MCP as a Rendering Target](../features/MCP.md).
 
 - [Why Raxol](../WHY_RAXOL.md): why one OTP runtime beats per-platform integrations.
 - [Core Concepts](../getting-started/CORE_CONCEPTS.md): the TEA model the surfaces project.
-- [Build Your First Agent](../getting-started/BUILD_AN_AGENT.md): the agent surface in practice.
+- [Build Your First Agent](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/getting-started/BUILD_AN_AGENT.md): the agent surface in practice.

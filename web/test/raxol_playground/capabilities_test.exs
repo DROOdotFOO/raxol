@@ -10,6 +10,9 @@ defmodule RaxolPlayground.CapabilitiesTest do
 
   @repo_root Path.expand("../../..", __DIR__)
 
+  # Published from the agent repository; this app takes them as dependencies.
+  @agent_packages ["raxol_agent", "raxol_payments"]
+
   defp mix_version!(path) do
     [_, version] = Regex.run(~r/@version\s+"([^"]+)"/, File.read!(path))
     version
@@ -43,15 +46,21 @@ defmodule RaxolPlayground.CapabilitiesTest do
              Capabilities.version() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
   end
 
-  # The published set is a judgment call and stays written down -- `packages/`
-  # also holds pre-alpha work nobody can depend on yet. Only its versions are
-  # derived, and this is the assertion that keeps them derived.
+  # The published set is a judgment call and stays written down. Only its
+  # versions are derived, and this is the assertion that keeps them derived.
   test "published packages carry the minor of their real version" do
     for %{name: name, version: constraint} <- Capabilities.packages() do
       mix =
-        if name == "raxol",
-          do: Path.join(@repo_root, "mix.exs"),
-          else: Path.join([@repo_root, "packages", name, "mix.exs"])
+        cond do
+          name == "raxol" ->
+            Path.join(@repo_root, "mix.exs")
+
+          name in @agent_packages ->
+            Path.join(Mix.Project.deps_paths()[String.to_atom(name)], "mix.exs")
+
+          true ->
+            Path.join([@repo_root, "packages", name, "mix.exs"])
+        end
 
       expected =
         mix |> mix_version!() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
@@ -61,8 +70,8 @@ defmodule RaxolPlayground.CapabilitiesTest do
     end
   end
 
-  test "the published set is a subset of what the repo actually holds" do
-    repo = package_dirs() ++ ["raxol"]
+  test "the published set is a subset of what the repo holds or depends on" do
+    repo = package_dirs() ++ ["raxol"] ++ @agent_packages
 
     for %{name: name} <- Capabilities.packages() do
       assert name in repo, "#{name} is advertised but is not a package in this repo"
@@ -73,9 +82,9 @@ defmodule RaxolPlayground.CapabilitiesTest do
   # package moves it from here to `@published`.
   @awaiting_first_publish []
 
-  # On Hex at the minor its mix.exs states, and released outside this
-  # repository's train. `raxol_payments` is not: Hex has 0.2, the tree 0.3.
-  @off_train ["raxol_agent"]
+  # On Hex at the minor its mix.exs states, and released from the agent
+  # repository rather than this repository's train.
+  @off_train ["raxol_agent", "raxol_payments"]
 
   test "the published set is the release train, less the packages awaiting a first publish, plus the off-train ones" do
     train =

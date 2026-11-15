@@ -1,8 +1,7 @@
 # Release checklist
 
-Release process for the public Hex train and the `@raxol/cli` npm package.
-Publishing is close to irreversible: a new Hex version has a one-hour update
-window, and an npm version cannot be reused.
+Release process for the public Hex train. Publishing is close to
+irreversible: a new Hex version has a one-hour update window.
 
 2.8.0 is published: the Hex train, `raxol_gateway` 0.2.0, and the `v2.8.0`
 GitHub Release.
@@ -36,32 +35,24 @@ GitHub Release.
 | `raxol_mcp` | Hex | 2.8.0 |
 | `raxol_liveview` | Hex | 2.8.0 |
 | `raxol_plugin` | Hex | 2.8.0 |
-| `raxol_agent` | Hex | 2.7.0 |
 | `raxol_speech` | Hex | 0.3.0 |
 | `raxol_watch` | Hex | 0.3.0 |
-| `raxol_payments` | Hex | 0.2.1 |
 | `raxol_telegram` | Hex | 0.3.0 |
 | `raxol_gateway` | Hex | 0.2.0 |
-| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.10 |
 
-`raxol_agent` and `raxol_payments` are on Hex and off the train: a root tag
-publishes neither, and `Raxol.Release.PackageCheck.public_packages/0` holds no
-agent-side package (ADR-0043). The following projects are unpublished and
-outside the train: `raxol_agent_client_protocol`, `raxol_earn`, `raxol_cli`,
-`raxol_console`, `raxol_web3`, and `raxol_broker`.
-Package-specific gates for the candidates closest to publication remain below.
+The agent packages, `@raxol/cli` included, release from
+[raxol-agent](https://github.com/DROOdotFOO/raxol-agent);
+`Raxol.Release.PackageCheck.public_packages/0` holds none of them (ADR-0043).
 
 ## Authorization model
 
 The release commit and immutable version tag define what can ship. Registry
 jobs run only after approval in the protected GitHub `release` environment.
-That environment accepts the root `v*` tags, `raxol-cli-v*` tags, and approved
-manual resumes from `master`.
+That environment accepts the root `v*` tags and approved manual resumes from
+`master`.
 
 - Hex uses `HEX_API_KEY` from the `release` environment; keep it scoped to API
   write. Only the key check and the publish step see it.
-- npm uses OIDC-only GitHub Actions trusted publishing and emits provenance.
-  All five packages trust `release-raxol-cli.yml` with environment `release`.
 - Every publisher checks the registry first, so a failed train can resume
   without trying to overwrite versions that already exist.
 
@@ -81,8 +72,7 @@ reactivating it. Never move a published version tag as routine recovery.
      own version, and no earlier tag contains its directory.
    - Move every requirement on it to that version: each dependant's
      `mix.exs`, the install line in its README and its row in
-     `docs/PACKAGES.md`, which also gains the Hex link. For `raxol_journal`
-     the dependants are `raxol_agent` and `raxol_broker`.
+     `docs/PACKAGES.md`, which also gains the Hex link.
    - Add it to `@published` in `web/lib/raxol_playground/capabilities.ex` and
      remove it from `@awaiting_first_publish`, so the `llms.txt` generated
      from the tag lists it.
@@ -181,63 +171,13 @@ gh workflow run release-hex.yml \
 afterwards run `gh workflow run llms-sync.yml -f release_ref=v2.8.0` and create
 the Release by hand.
 
-## Publish the npm CLI
-
-The npm version in `packages/raxol_cli/npm/package.json` and the CLI Mix project
-version must already agree. Create the matching tag:
-
-```bash
-git tag -a raxol-cli-v0.2.10 -m "raxol CLI 0.2.10"
-git push origin raxol-cli-v0.2.10
-```
-
-`.github/workflows/release-raxol-cli.yml` rejects a mismatched tag before doing
-native builds. It builds and smokes Linux x64, Linux arm64, macOS arm64, and
-Windows x64; assembles the npm tarballs; waits for `release` approval; publishes
-the four platform packages and wrapper; and then proves a fresh, isolated npm
-install with signature auditing. The workflow attests the four binaries, uploads
-the checksums, Sigstore bundle, and release manifest to the immutable GitHub
-Release, then updates the separate `raxol-cli-channel` manifest.
-
-A manual workflow run builds tarball artifacts but does not publish. Re-run a
-failed tag job to resume publication; already-published npm versions are skipped
-but the registry smoke still runs.
-
 ## Registry verification
 
 After approval and completion:
 
 ```bash
 mix hex.info raxol 2.8.0
-npm view @raxol/cli@0.2.10 version dist.integrity
-
-tmp="$(mktemp -d)"
-npm install --prefix "$tmp" @raxol/cli@0.2.10
-"$tmp/node_modules/.bin/raxol" --version
-(cd "$tmp" && npm audit signatures)
-
-curl -fsSL https://raxol.io/releases/latest.json
-
-install_dir="$(mktemp -d)"
-curl -fsSL https://raxol.io/install |
-  RAXOL_INSTALL_DIR="$install_dir" bash
-"$install_dir/raxol" --version
-
-verified_dir="$(mktemp -d)"
-curl -fsSL https://raxol.io/install |
-  RAXOL_INSTALL_DIR="$verified_dir" \
-  RAXOL_VERIFY_PROVENANCE=1 bash
-"$verified_dir/raxol" --version
 ```
-
-The default installer always checks SHA-256. Provenance mode additionally
-requires `gh` and verifies the GitHub repository, release workflow, exact tag
-ref, OIDC issuer, and hosted runner before installation.
-
-To roll latest discovery back without changing a version tag, download
-`raxol-cli-manifest.json` from the prior immutable release, rename it
-`latest.json`, and upload it to `raxol-cli-channel` with `gh release upload
-raxol-cli-channel latest.json --clobber`.
 
 ## Package-specific manual gates
 
@@ -272,87 +212,23 @@ git switch -
 `scripts/check_lock_path_shadows.exs` rejects, so the lockfile is restored and
 never committed in that state.
 
-### `raxol_earn` 0.2.1
-
-**OPERATOR.** Blocked on a live offering on Base mainnet. The full procedure is
-[`packages/raxol_earn/RUNBOOK.md`](../../packages/raxol_earn/RUNBOOK.md), which
-takes the `custom_console_agent` offering from a clean checkout to a funded,
-registered seller on Base Sepolia (chain 84532) and then promotes it to mainnet
-(8453). In order:
-
-1. **Identity and funding**, through the Virtuals `acp` CLI and dashboard:
-   `acp configure`, `acp agent create`, `acp agent add-signer`, then fund the
-   wallet (`acp wallet topup --chain-id 84532` plus a Base Sepolia gas faucet).
-   Keys come from `Raxol.Payments.Wallets.Env` or `.Op`, never a literal.
-2. **Configure the seller** from `config/console_offering.example.exs`. Sepolia
-   needs `seller_chain_id: 84_532` explicitly, because the queue defaults to
-   8453.
-3. **Register the offering** and upload the result in the dashboard:
-
-   ```bash
-   cd packages/raxol_earn
-   mix earn.register_offering --offering console --pretty --out console_offering.json
-   ```
-
-4. **Offline rehearsal**, no funds and no network. This is the M1 acceptance
-   gate: both suites inject a crash between handler-return, sign, and mirror,
-   and assert exactly one on-chain submit through to completion.
-
-   ```bash
-   cd packages/raxol_earn
-   MIX_ENV=test mix test test/raxol/earn/console/ \
-     test/raxol/earn/job_session/provider_checkpoint_test.exs \
-     test/raxol/earn/seller/resync_recovery_test.exs
-   mix raxol_earn.bench
-   ```
-
-5. **Live dry-run on Sepolia**, with a scripted mock buyer driving
-   `HookClient.create_job`, `fund`, and `complete` against the registered
-   offering. Kill the BEAM between funded, submit, and complete, restart, and
-   confirm it resumes without a second submit or charge.
-6. **Promote to mainnet**: `seller_chain_id: 8453`, `api.acp.virtuals.io`,
-   canonical Circle USDC (drop the `chain_overrides` block), and a durable
-   checkpoint store with `require_checkpoint: true`. Re-run step 3 against the
-   mainnet dashboard.
-7. Then publish.
-
-Why it cannot be rehearsed: the offline path proves the state machine, the
-checkpoint, and the resync recovery. What only the live run can pin is the
-`get_active_jobs` field names and phase encoding that `Seller.Resync`
-normalizes, and that the job-id form is consistent between the REST API and the
-Socket.IO relayer, which is what makes session keys match across the two
-planes.
-
-Before publishing, confirm the version claims in
-`packages/raxol_earn/README.md` still agree with `mix.exs`: the status line
-should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
-
 ## After publishing
 
-1. **Add the package to the release train.** Move its entry from
-   `@pre_alpha_packages` to `@public_packages` in
-   [`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex),
-   positioned after everything it requires, and change its `class:` from
-   `:pre_alpha` to `:public`. Until you do, the checker treats it as off-train
-   and reports any sibling that depends on it as dropping the requirement. Add
-   it to `@published` in
+1. **List the package on the site.** Add it to `@published` in
    [`web/lib/raxol_playground/capabilities.ex`](../../web/lib/raxol_playground/capabilities.ex)
-   in the same change; a `web` test holds `@published` equal to the train,
+   and drop it from `@awaiting_first_publish` in that module's test, which
+   holds `@published` equal to the train in
+   [`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex),
    less `@awaiting_first_publish`, plus the `@off_train` packages it names.
-2. **Declare requirements that used to be dropped.** A sibling that omits its
-   requirement on the package under `HEX_BUILD`, because Hex could not resolve
-   it, declares it now, optional if the source form is. `raxol_telegram`'s
-   optional `raxol_gateway "~> 0.2"` is the example. `mix raxol.release.check`
-   warns about each dropped requirement.
-3. **Update the state tables.** The table at the top of this file, the
+2. **Update the state tables.** The table at the top of this file, the
    equivalent in [`docs/PACKAGES.md`](../PACKAGES.md), and the release paragraph
    in [`ROADMAP.md`](../../ROADMAP.md) all name published versions and go stale
    the moment a publish lands.
-4. **Verify the docs.** `https://hexdocs.pm/<package>/<version>/` should resolve, and a
+3. **Verify the docs.** `https://hexdocs.pm/<package>/<version>/` should resolve, and a
    module source link should land on the `<package>-v<version>` tag you pushed.
-5. **Merge the `llms.txt` pull request.** `bot/llms-sync` is opened with the
+4. **Merge the `llms.txt` pull request.** `bot/llms-sync` is opened with the
    workflow token, which starts no CI: close and reopen it, then merge it once
    green.
-6. **One follow-up pull request** carries items 1 to 3 for the package.
+5. **One follow-up pull request** carries items 1 and 2 for the package.
    Optionally turn staged publishing off for `raxol_journal` and
    `raxol_gateway` in their hex.pm settings; the workflow waits either way.

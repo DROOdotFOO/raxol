@@ -69,8 +69,8 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   After a turn's blocks are built, `build_turn/3` scans the turn's raw
   events for the LAST `turn_completed` whose payload `final` is `true`
   (string or atom key -- the wire is string-keyed JSON, live producer
-  events are atom-keyed, see `Raxol.Agent.StreamPump.gated_done_payload/4`,
-  read-only ground truth in `packages/raxol_agent`). A non-final turn
+  events are atom-keyed, see `Raxol.Agent.StreamPump.gated_done_payload/4`
+  in `raxol_agent`). A non-final turn
   (no such event) is untouched -- byte-identical output, no `:completion`
   key anywhere.
 

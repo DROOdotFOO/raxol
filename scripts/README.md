@@ -34,17 +34,12 @@ subdirectories hold narrower tooling.
 | `check_refactor_move.exs` | Mechanical proof for move/split PRs: `defp -> def` widenings and normalized-body drift against a base ref |
 | `check_journal_goldens.exs` | Harness journal golden check |
 | `check_domains.sh` | Domain and DNS checks |
-| `install.sh` | The `curl \| bash` installer served from raxol.io |
 | `worktree.sh` | Adds a private 0700 parallel git worktree with transactionally cloned `deps`/`_build` caches. Workstation-only: seeding skips Hex verification, rejects symlinked seed paths, checks lock and path-dependency manifests, and `--fresh` opts out. An explicit path (relative ones resolve against your shell's cwd) is claimed with one `mkdir`, so its parent must already exist |
-| `gen_homebrew_formula.sh` | Emits the Homebrew tap formula |
-| `run_live_gates.sh` | The stablecoin cross-chain go-live matrix |
 | `smoke-test.sh` | Post-deploy smoke test |
 | `scoreboard-backfill.sh` | Measures older master commits with today's scoreboard (records for `gh-pages`), skipping any whose screens differ from the pinned ones; run by `scoreboard-backfill.yml` |
 | `scoreboard-canaries.sh` | Applies each deliberate regression in `bench/scoreboard_canaries/`, measures, reverts, and fails unless the scoreboard flags every one; run by `scoreboard-canaries.yml` |
-| `acp_probe.py` | Drives an ACP agent over stdio and records the wire |
 | `find_missing_moduledocs.exs` | Lists modules without a `@moduledoc` |
 | `gen_landing_frames.exs`, `social_preview.exs` | Web asset generation |
-| `deploy-raxol-solver.sh` | Solver deployment |
 
 ## Directories
 

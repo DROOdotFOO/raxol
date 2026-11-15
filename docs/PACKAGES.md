@@ -1,6 +1,6 @@
 # Packages
 
-Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
+Raxol ships as a main package plus focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
 
 ## Main
 
@@ -20,20 +20,19 @@ Raxol ships as a main package plus 19 focused subsystems. Use the main `raxol` p
 | [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.8"}`   | Sensor fusion (zero deps)                  |
 | [`raxol_journal`](https://hex.pm/packages/raxol_journal)   | `{:raxol_journal, "~> 2.8"}`  | Session journal, event contract            |
 
-`raxol_journal` 2.8 holds the journal modules that `raxol_agent` 2.7.0 defines itself; do not add both to one project.
+`raxol_agent` 3.x takes its journal from `raxol_journal`. `raxol_agent` 2.7.0 defines the same modules itself; do not add it and `raxol_journal` to one project.
 
 ## Agents
 
-| Package                                                    | Hex                           | What                                        |
-| ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
-| [`raxol_agent`](https://hex.pm/packages/raxol_agent)       | `{:raxol_agent, "~> 2.7"}`    | AI agent framework                          |
-| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | 0.3 here, unpublished; Hex has 0.2 | Agent payments, Xochi cross-chain, stealth  |
-| `raxol_earn` (pre-alpha)                                    | `path: "packages/raxol_earn"`  | Virtuals Agent Commerce Protocol (seller)   |
-| `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
-| `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command (`acp`, `mcp`, `doctor`, `update`, `playground`, `new`), packaged as a self-contained Burrito binary |
-| `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
-| `raxol_web3` (pre-alpha)                                   | `path: "packages/raxol_web3"`     | Guarded outbound client, six chain backends, indexer-agnostic reads (ADR-0033, ADR-0038, ADR-0039) |
-| `raxol_broker` (pre-alpha)                                 | `path: "packages/raxol_broker"`   | Fail-closed brokerage policy parsing and initialization |
+The agent packages live in [raxol-agent](https://github.com/DROOdotFOO/raxol-agent) and take the packages above from Hex.
+
+| Package                                                                              | Hex                                        | What                                       |
+| ------------------------------------------------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
+| [`raxol_agent`](https://hex.pm/packages/raxol_agent)                                 | `{:raxol_agent, "~> 3.1"}`                 | AI agent framework                         |
+| [`raxol_payments`](https://hex.pm/packages/raxol_payments)                           | `{:raxol_payments, "~> 0.3"}`              | Agent payments, Xochi cross-chain, stealth |
+| [`raxol_agent_client_protocol`](https://hex.pm/packages/raxol_agent_client_protocol) | `{:raxol_agent_client_protocol, "~> 0.1"}` | Editor<->agent Agent Client Protocol       |
+
+`raxol_earn`, `raxol_cli`, `raxol_console`, `raxol_web3` and `raxol_broker` are pre-alpha and unpublished.
 
 The **Harness** is the agent-session engine: the event contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_journal`, the session processes in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`. The `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
@@ -59,15 +58,6 @@ raxol_mcp      --> raxol_core
 raxol_liveview --> raxol_core (+ phoenix_live_view optional)
 raxol_plugin   --> raxol_core
 
-raxol_agent    --> raxol + raxol_mcp + raxol_journal (+ raxol_web3 optional, for the `web3` tool)
-raxol_payments --> raxol_agent (compile-time only)
-raxol_earn      --> raxol_payments (runtime), raxol_mcp + raxol_agent (compile-time only)
-raxol_agent_client_protocol --> (none; jason only, zero raxol deps)
-raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp --agent`)
-raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
-raxol_web3     --> raxol_core, raxol_mcp (+ mint, castore)
-raxol_broker   --> raxol_agent, raxol_journal (+ decimal)
-
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core (+ raxol/telegex/raxol_gateway optional)
 raxol_watch    --> raxol_core (+ pigeon optional for APNS/FCM)
@@ -78,13 +68,13 @@ raxol_sensor   --> (none)
 raxol_journal  --> jason, telemetry (zero raxol deps)
 ```
 
-The main `raxol` package does not depend on `raxol_journal`, `raxol_agent`, `raxol_broker`, `raxol_earn`, `raxol_agent_client_protocol`, `raxol_gateway`, or any of the surface packages. You opt into those.
+The main `raxol` package does not depend on `raxol_journal`, `raxol_gateway`, the surface packages, or any agent package. You opt into those.
 
 ### Boundary rule
 
 The arrows are the only direction code may call. A package reaches modules in its own tree and in the trees of the packages its `mix.exs` declares (transitively), never in main `raxol` or in a sibling it does not list: `raxol_core` cannot name `Raxol.Terminal.*`, and `raxol_terminal` cannot name anything that lives under the root `lib/`. Each package compiles standalone in CI with `--warnings-as-errors`, so such a call is a compile error there unless the file hides it behind `@compile {:no_warn_undefined, Mod}`, which is how `Raxol.Terminal.Config.Capabilities.optimized_config/0` and `Raxol.Terminal.Theme.Manager.load_from_registry/2` came to raise `UndefinedFunctionError` whenever `raxol_terminal` ran without main `raxol`. `elixir scripts/check_package_boundaries.exs` (the `Check package boundaries` step of CI) parses every file under `packages/*/lib`, resolves each module it names (remote calls and captures, `apply/3`, every form of `no_warn_undefined`, `:"Elixir.X"` atoms, `use`/`import`/`@behaviour`, typespecs, module and process names used as values) to the tree that defines it, and fails on one the package does not declare. Declared means listed in the package's `mix.exs` `deps` without an `only:` that leaves out `:prod`; a dependency named in a comment does not count. The grandfathered sites are in `scripts/.package-boundaries-allowlist`, which only shrinks: a stale entry fails the check, and on a pull request so does an entry the base commit's list does not have. Fix a report by moving the module into the package that owns the concept (`Raxol.Core.Theming.ThemeRegistry` now lives in `raxol_core`), by reading the implementation from application config with an in-package default (`Raxol.Core.UserPreferences` reads its terminal defaults from `:default_terminal_preferences`, which `raxol_terminal` ships in its application env as `{Raxol.Terminal.Config.Defaults, :generate_default_config, []}` and `config :raxol_core, :default_terminal_preferences, ...` overrides), or by deleting the dead call. `Code.ensure_loaded?/1` is not a fix: it is the guard that hid the originals.
 
-The same check draws a second line, between the runtime side (main `raxol`, `raxol_core`, `raxol_terminal`, `raxol_liveview`, `raxol_mcp`, `raxol_plugin`, `raxol_sensor`, `raxol_speech`, `raxol_telegram`, `raxol_watch`, `raxol_gateway`, `raxol_journal`) and the agent side (`raxol_agent`, `raxol_payments`, `raxol_broker`, `raxol_earn`, `raxol_web3`, `raxol_console`, `raxol_cli`, `raxol_agent_client_protocol`). No runtime-side `lib/`, `config/` or `mix.exs`, and no template (`*.eex`, `*.heex`, `*.leex`) under a runtime tree's `config/`, `lib/`, `priv/`, `rel/` or `src/`, or Erlang source under its `src/`, names agent-side code: a module under `Raxol.Agent.*`, `Raxol.Payments.*`, `Raxol.Broker.*`, `Raxol.Earn.*`, `Raxol.Web3.*`, `Raxol.Console.*`, `Raxol.CLI.*` or `Raxol.AgentClientProtocol.*`, an agent-side module outside those namespaces, listed by exact name (`Raxol.Gateway.Handler.Agent`, `Raxol.MCP.AgentBridge` and three Mix tasks), a module whose name ends in one of those (a protocol implementation, a Mix task), or an agent application's name, as an atom or as a whole word in a string. In a `mix.exs` that means a dependency of any kind, and after `packages/` or `../` a path into the agent tree. The rule goes by name alone, so it holds with no agent package present; while they are here, a module only they define that no name covers fails the check. Calls, `apply/3`, atoms, process names, `alias` targets, the literal start of a `Module.concat` and strings that carry a module name all count; comments and the text of `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated` do not. Tests, scripts and `bin/` are not read. The modules `raxol_journal` defines under `Raxol.Agent.Journal` and `Raxol.Agent.Contract`, and the four the root defines under `Raxol.CLI`, are exempt by exact name, and so are the rows of `lib/raxol/release/package_check.ex` for agent packages, because it classifies every directory under `packages/`. This line has no allowlist, and an allowlist entry whose file and owning tree are on different sides fails. The agent side may depend on the runtime side through declared dependencies; where one application needs both, the code that joins them lives on the agent side (`raxol_console` holds the gateway's agent handler and passes the scheduler its delivery closure).
+The same check draws a second line, between the runtime side (main `raxol`, `raxol_core`, `raxol_terminal`, `raxol_liveview`, `raxol_mcp`, `raxol_plugin`, `raxol_sensor`, `raxol_speech`, `raxol_telegram`, `raxol_watch`, `raxol_gateway`, `raxol_journal`) and the agent side (`raxol_agent`, `raxol_payments`, `raxol_broker`, `raxol_earn`, `raxol_web3`, `raxol_console`, `raxol_cli`, `raxol_agent_client_protocol`). No runtime-side `lib/`, `config/` or `mix.exs`, and no template (`*.eex`, `*.heex`, `*.leex`) under a runtime tree's `config/`, `lib/`, `priv/`, `rel/` or `src/`, or Erlang source under its `src/`, names agent-side code: a module under `Raxol.Agent.*`, `Raxol.Payments.*`, `Raxol.Broker.*`, `Raxol.Earn.*`, `Raxol.Web3.*`, `Raxol.Console.*`, `Raxol.CLI.*` or `Raxol.AgentClientProtocol.*`, an agent-side module outside those namespaces, listed by exact name (`Raxol.Gateway.Handler.Agent`, `Raxol.MCP.AgentBridge` and three Mix tasks), a module whose name ends in one of those (a protocol implementation, a Mix task), or an agent application's name, as an atom or as a whole word in a string. In a `mix.exs` that means a dependency of any kind, and after `packages/` or `../` a path into the agent tree. The rule goes by name alone, so it holds with the agent packages in another repository. Calls, `apply/3`, atoms, process names, `alias` targets, the literal start of a `Module.concat` and strings that carry a module name all count; comments and the text of `@moduledoc`, `@doc`, `@typedoc`, `@shortdoc` and `@deprecated` do not. Tests, scripts and `bin/` are not read. The modules `raxol_journal` defines under `Raxol.Agent.Journal` and `Raxol.Agent.Contract`, and the four the root defines under `Raxol.CLI`, are exempt by exact name. This line has no allowlist, and an allowlist entry whose file and owning tree are on different sides fails. The agent side may depend on the runtime side through declared dependencies; where one application needs both, the code that joins them lives on the agent side (`raxol_console` holds the gateway's agent handler and passes the scheduler its delivery closure).
 
 ## Publishing
 
@@ -95,4 +85,4 @@ Run `mix raxol.release.check` before publishing anything. It walks the public tr
 Two failures are worth recognising on sight:
 
 - `packaged file X is not tracked by git`: `mix hex.build` packages the working tree, not the commit, so an untracked file under a packaged directory really would ship. Dotfiles count: `.env`, `.env.*` and `.secrets` are gitignored, which makes them untracked by construction and exactly what this catches. Commit it, ignore it via `:exclude_patterns`, or narrow the `:files` entry. `--allow-untracked` downgrades this to a warning, which is what `mix raxol.check` passes so an unstaged new module does not fail the interactive gate; CI runs without it.
-- `release dependency X is dropped from the published tarball`: a `HEX_BUILD` conditional in that package's `mix.exs` removed a dependency. Intended for pre-alpha packages that are not on the train yet, and reported as a warning so the choice stays visible rather than silent.
+- `published tarball omits release dependency X`: a `HEX_BUILD` conditional in that package's `mix.exs` removed a dependency on a package of the train, so Hex consumers would not get it. Declare the requirement in the published form too.

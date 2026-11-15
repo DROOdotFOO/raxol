@@ -54,8 +54,6 @@ defmodule Raxol.Mix.SiblingDepsTest do
     end
   end
 
-  # Only a project with a `package` config can be installed from Hex;
-  # raxol_web3 has none.
   test "a Hex install takes every sibling from Hex", %{tmp_dir: tmp_dir} do
     for dir <- @project_dirs do
       sandbox = write_sandbox(tmp_dir, dir)
@@ -63,7 +61,7 @@ defmodule Raxol.Mix.SiblingDepsTest do
       config = project_config(dir, sandbox)
       path_siblings = config |> sibling_deps() |> Enum.filter(&path_dep?/1)
 
-      assert config[:package] == nil or path_siblings == [],
+      assert path_siblings == [],
              "#{dir}/mix.exs keeps path deps inside a Hex install: " <>
                inspect(Enum.map(path_siblings, &elem(&1, 0)))
     end

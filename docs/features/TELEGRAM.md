@@ -186,5 +186,5 @@ TEA surface (this package's `Session`); the gateway path is text-first. See
 
 - [Gateway](GATEWAY.md): multi-platform gateway; Telegram is the first adapter behind the frozen contract
 - [Watch](WATCH.md): another push surface for mobile
-- [Agent Framework](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENT_FRAMEWORK.md): if your bot is an agent, use this stack
+- [Agent Framework](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENT_FRAMEWORK.md): if your bot is an agent, use this stack
 - [ADR-0014](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0014-telegram-ai-guardian.md): full Guardian design rationale

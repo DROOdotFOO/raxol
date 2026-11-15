@@ -106,12 +106,6 @@
 # second under `Raxol.CLI.*`, where raxol_cli keeps its own. Both lists are
 # exact and checked both ways: a runtime tree that defines any other
 # agent-side name fails, and so does an entry no runtime tree defines.
-# @train_catalog's rows for agent packages are exempt, each a map with
-# `app: :raxol_agent` and `path: "packages/raxol_agent"`: it classifies every
-# directory under `packages/`, and `mix raxol.release.check` fails when the
-# two disagree, so the rows leave with the directories. Anything else that
-# file names is checked like any other. The check fails once the catalog has
-# no such row, until the exemption is removed here.
 #
 # Nothing on this rule is grandfathered, and an allowlist entry whose file and
 # owning tree sit on different sides of the line fails as well.
@@ -178,8 +172,6 @@ defmodule PackageBoundaries do
 
   @exempt_modules @journal_modules ++ @root_cli_modules
 
-  @train_catalog "lib/raxol/release/package_check.ex"
-
   def main(argv) do
     {base, root} =
       case OptionParser.parse(argv, strict: [base: :string, root: :string]) do
@@ -213,7 +205,7 @@ defmodule PackageBoundaries do
 
     scanned =
       for {tree, file, {:ok, ast}} <- parsed do
-        {tree, file, scan(without_exempt_rows(file, ast))}
+        {tree, file, scan(ast)}
       end
 
     owners =
@@ -255,7 +247,6 @@ defmodule PackageBoundaries do
     misplaced = misplaced_definitions(owners)
     unnamed = unnamed_agent_modules(owners)
     crossing_entries = allowed |> Enum.filter(&crossing_entry?/1) |> Enum.sort()
-    unused = unused_catalog_exemption(parsed)
 
     report_new(new)
     report_stale(stale)
@@ -264,7 +255,6 @@ defmodule PackageBoundaries do
     report_misplaced(misplaced)
     report_unnamed(unnamed)
     report_crossing_entries(crossing_entries)
-    report_unused_exemption(unused)
 
     if Enum.all?(
          [
@@ -274,8 +264,7 @@ defmodule PackageBoundaries do
            crossings,
            misplaced,
            unnamed,
-           crossing_entries,
-           unused
+           crossing_entries
          ],
          &(&1 == [])
        ) do
@@ -412,50 +401,6 @@ defmodule PackageBoundaries do
       {mod, Enum.sort(trees)}
     end
     |> Enum.sort()
-  end
-
-  # The catalog's rows for agent packages are exempt, and nothing else in the
-  # file is: `%{app: :raxol_agent, path: "packages/raxol_agent", ...}` loses
-  # its `app:` and `path:` before the scan.
-  defp without_exempt_rows(@train_catalog, ast),
-    do: ast |> take_catalog_rows() |> elem(0)
-
-  defp without_exempt_rows(_file, ast), do: ast
-
-  # {ast without the agent rows' names, number of agent rows}
-  defp take_catalog_rows(ast) do
-    Macro.prewalk(ast, 0, fn
-      {:%{}, meta, pairs} = node, rows when is_list(pairs) ->
-        if catalog_row?(pairs),
-          do: {{:%{}, meta, Keyword.drop(pairs, [:app, :path])}, rows + 1},
-          else: {node, rows}
-
-      node, rows ->
-        {node, rows}
-    end)
-  end
-
-  defp catalog_row?(pairs) do
-    with true <- Keyword.keyword?(pairs),
-         app when is_atom(app) and app != nil <- pairs[:app],
-         name = Atom.to_string(app),
-         true <- name in @agent_trees do
-      pairs[:path] == "packages/" <> name
-    else
-      _ -> false
-    end
-  end
-
-  # The catalog's exemption lasts as long as the catalog has a row for an
-  # agent package.
-  defp unused_catalog_exemption(parsed) do
-    case List.keyfind(parsed, @train_catalog, 1) do
-      {_tree, file, {:ok, ast}} ->
-        if elem(take_catalog_rows(ast), 1) > 0, do: [], else: [file]
-
-      nil ->
-        []
-    end
   end
 
   defp crossing_entry?({file, mod, owner}) do
@@ -1409,15 +1354,6 @@ defmodule PackageBoundaries do
     sides apart, and nothing marks these as agent-side. Put the module under
     an agent namespace, or add its exact name to @agent_modules in this
     script (the only choice for a protocol implementation).\
-    """)
-  end
-
-  defp report_unused_exemption([]), do: :ok
-
-  defp report_unused_exemption([file]) do
-    err("""
-    ERROR: #{file} has no row for an agent package, so its exemption is unused.
-    Remove @train_catalog from this script.\
     """)
   end
 

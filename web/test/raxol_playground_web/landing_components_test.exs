@@ -36,9 +36,11 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       shown = String.trim(LandingComponents.example_source(name))
       [_, module] = Regex.run(~r/defmodule (\w+)/, shown)
 
+      # A module may sit indented inside a guard (the harness hero is defined
+      # only where raxol_earn loads), so the match keeps its indentation.
       recorded =
-        case Regex.run(~r/^defmodule #{module} do\n.*?\nend$/ms, script) do
-          [block] -> String.trim(block)
+        case Regex.run(~r/^( *)defmodule #{module} do\n.*?\n\1end$/ms, script) do
+          [block, _indent] -> String.trim(block)
           nil -> flunk("gen_landing_frames.exs defines no #{module}")
         end
 

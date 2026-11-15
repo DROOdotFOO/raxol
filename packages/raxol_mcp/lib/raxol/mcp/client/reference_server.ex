@@ -235,7 +235,8 @@ if Code.ensure_loaded?(Plug.Router) do
     # Whether `Accept` names both content types.
     #
     # Mandatory, measured rather than assumed
-    # (`docs/proposals/web3-upstream-survey.md:79-82`), so a server here
+    # (https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/proposals/web3-upstream-survey.md#wire-level-findings-that-constrain-mcp_proxy),
+    # so a server here
     # refuses a POST that omits either with a 406 instead of quietly
     # answering.
     @spec accepts_both?(Plug.Conn.t()) :: boolean()

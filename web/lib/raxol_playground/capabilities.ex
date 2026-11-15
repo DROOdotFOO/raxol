@@ -8,7 +8,7 @@ defmodule RaxolPlayground.Capabilities do
   same facts are never restated in two places.
 
   Backends are read from the agent's own provider registry rather than restated:
-  `web/mix.exs` takes `raxol_agent` as a path dep, so `Backend.Resolver` is on
+  `web/mix.exs` depends on `raxol_agent`, so `Backend.Resolver` is on
   the code path here and the list cannot drift from what the agent resolves.
   """
 
@@ -75,21 +75,35 @@ defmodule RaxolPlayground.Capabilities do
                        raise "#{@root_mix} has no @version for Capabilities to read"
                    end)
 
+  # raxol_agent and raxol_payments are dependencies from the agent repository,
+  # so their versions are read from the dependency this app builds against.
+  @dep_versions (for app <- [:raxol_agent, :raxol_payments], into: %{} do
+                   mix = Path.join(Mix.Project.deps_paths()[app], "mix.exs")
+
+                   case Regex.run(~r/@version\s+"([^"]+)"/, File.read!(mix)) do
+                     [_, version] ->
+                       {Atom.to_string(app), version}
+
+                     nil ->
+                       raise "#{mix} has no @version for Capabilities to read"
+                   end
+                 end)
+
   # `raxol` is the root project rather than one of `packages/`, so it joins the
   # lookup from there.
   @versions @repo_packages
             |> Map.new(&{&1.name, &1.version})
+            |> Map.merge(@dep_versions)
             |> Map.put("raxol", @source_version)
 
   # Which packages are ON HEX, and what each is for. This part IS a judgment
-  # call and stays written down: `packages/` also holds pre-alpha work nobody
-  # can `mix deps.get` yet, and the capability endpoints exist to tell an agent
-  # what it can actually depend on. Only the versions are derived, so a
-  # package belongs here only while Hex has the minor its `mix.exs` states:
-  # `raxol_payments` is 0.3 in the tree and 0.2 on Hex, and is left out.
+  # call and stays written down: the capability endpoints exist to tell an
+  # agent what it can actually depend on. Only the versions are derived, so a
+  # package belongs here only while Hex has the minor its `mix.exs` states.
   @published [
     {"raxol", "Full framework"},
     {"raxol_agent", "AI agents"},
+    {"raxol_payments", "Agent commerce"},
     {"raxol_mcp", "MCP server"},
     {"raxol_liveview", "LiveView bridge"},
     {"raxol_sensor", "Sensor fusion"},
@@ -211,6 +225,13 @@ defmodule RaxolPlayground.Capabilities do
 
   @spec repo_package_count() :: non_neg_integer()
   def repo_package_count, do: length(@repo_packages)
+
+  @doc """
+  The version of an agent-repository package this app is built against, or
+  `nil` for any other name.
+  """
+  @spec dependency_version(String.t()) :: String.t() | nil
+  def dependency_version(name), do: Map.get(@dep_versions, name)
 
   @doc """
   Packages with a ready-to-paste `mix.exs` dep tuple attached, e.g.
