@@ -37,11 +37,9 @@ Each extracted package has its own test suite, run from inside the package direc
 cd packages/raxol_core     && MIX_ENV=test mix test
 cd packages/raxol_terminal && MIX_ENV=test mix test
 cd packages/raxol_sensor   && MIX_ENV=test mix test
-cd packages/raxol_agent    && MIX_ENV=test mix test
-# ... plus raxol_journal, raxol_mcp, raxol_payments, raxol_liveview,
-# raxol_plugin, raxol_speech, raxol_telegram, raxol_watch, raxol_earn,
-# raxol_gateway, raxol_agent_client_protocol, raxol_cli, raxol_console,
-# raxol_web3, raxol_broker
+cd packages/raxol_journal  && MIX_ENV=test mix test
+# ... plus raxol_mcp, raxol_liveview, raxol_plugin, raxol_speech,
+# raxol_telegram, raxol_watch, raxol_gateway
 ```
 
 ### All quality checks
@@ -89,7 +87,6 @@ the rest.
 | `@tag :tmp_dir` | ExUnit's temp-dir fixture; the dir arrives in the test context |
 | `@tag :event_manager` | Touches the global event manager |
 | `@tag :notification` | Touches the global notification manager |
-| `@tag :gpg` | Requires `gpg` on `PATH` (raxol_agent suite) |
 
 Run only a specific tag:
 

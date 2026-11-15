@@ -61,7 +61,7 @@ distributed systems, developer tools, and alternate surfaces.
 | --- | --- |
 | User tasks and concepts | `getting-started/`, `cookbook/`, `guides/` |
 | Capability details | `features/` |
-| Stable internals and API contracts | `core/`, `harness/`, `reference/` |
+| Stable internals and API contracts | `core/`, `harness/` |
 | Accepted design decisions | `adr/` |
 | Current work | [`ROADMAP.md`](../ROADMAP.md) |
 

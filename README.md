@@ -44,17 +44,13 @@ session
 |> stop_session()
 ```
 
-`mix mcp.server` starts the MCP server on stdio for Claude Code integration. Editors that speak the [Agent Client Protocol](https://agentclientprotocol.com) reach a Raxol agent: `raxol acp --agent <app>[:<id>]` (`bin/raxol-acp` from a checkout) serves one on stdio. The sensitive actions an agent runs past the turn's approver cost a `session/request_permission` round trip. See [Editor ACP](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/EDITOR_ACP.md).
+`mix mcp.server` starts the MCP server on stdio for Claude Code integration. Editors that speak the [Agent Client Protocol](https://agentclientprotocol.com) reach a Raxol agent through `raxol acp --agent <app>[:<id>]`. See [Editor ACP](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/EDITOR_ACP.md).
 
 Agent sessions sit on the **Harness**, the agent-session engine: a durable event journal (`Raxol.Agent.Journal`), a typed event contract (`Raxol.Agent.Contract`), and surface state that is a pure fold over the event stream (`Raxol.Harness.Projection`). See [Harness architecture](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/harness/architecture.md).
 
-The agent subsystems ship as standalone packages:
+The agent packages live in [raxol-agent](https://github.com/DROOdotFOO/raxol-agent) and install from Hex: `raxol_agent` (sessions, teams, tools, skills), `raxol_payments` (wallets, ledger-enforced spending limits, HTTP 402 auto-pay) and `raxol_agent_client_protocol` (the editor-to-agent wire protocol). See [Packages](docs/PACKAGES.md#agents).
 
-- **Pay** ([`raxol_payments`](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).
-- **Earn** (`raxol_earn`): the sell side. Declare an offering, implement two callbacks, and a buyer agent discovers it, escrows funds, and settles on-chain through the [Virtuals](https://virtuals.io) ACP job lifecycle (request, negotiation, transaction, evaluation, completed), one supervised process per job. Pre-alpha.
-- **Skills** ([`raxol_agent`](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/guides/SKILL_AUTHORING.md)): reusable `SKILL.md` procedures in the agentskills.io format, which an agent lists, reads, and writes through three tools.
-- **Reach** (`raxol_gateway`): one adapter contract to many chat platforms, process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
-- **Bridge** (`raxol_agent_client_protocol`): Elixir/OTP implementation of the [Agent Client Protocol](https://agentclientprotocol.com): the JSON-RPC 2.0 wire protocol between code editors and AI coding agents (the protocol Zed and a growing ecosystem speak). Bidirectional agent/client roles, pluggable transports (stdio, in-process), and durable resumable sessions (offset-based reattach/replay) as a vendor extension. Zero raxol-internal deps. Pre-alpha.
+`raxol_gateway` gives an agent or app many chat platforms behind one adapter contract: process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
 
 ## Install
 

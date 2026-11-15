@@ -107,7 +107,8 @@ Raxol.Gateway.Adapter.Discord.GatewaySocket.start_link(
 
 `Raxol.Gateway.Handler.Agent` turns any chat into an agent conversation: each inbound
 `%{text: text}` event runs one synchronous turn through `Raxol.Agent.Stream` and replies
-with the collected answer. It ships in `raxol_console`, which depends on both
+with the collected answer. It ships in `raxol_console`
+([raxol-agent](https://github.com/DROOdotFOO/raxol-agent)), which depends on both
 `raxol_gateway` and `raxol_agent`; `raxol_gateway` itself has no agent dependency.
 
 ```elixir

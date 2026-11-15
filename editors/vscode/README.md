@@ -58,7 +58,8 @@ Extension Development Host.
 
 A Raxol agent is served over the
 [Agent Client Protocol](https://agentclientprotocol.com) to a client that
-speaks it: `/path/to/raxol/bin/raxol-acp --agent <app>` (see
+speaks it: `raxol acp --agent <app>`, the `raxol` command from
+[raxol-agent](https://github.com/DROOdotFOO/raxol-agent) (see
 [`docs/features/EDITOR_ACP.md`](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/EDITOR_ACP.md#serving-a-raxol-agent)).
 This extension wires up no ACP client.
 
