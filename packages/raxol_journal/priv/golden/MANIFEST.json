@@ -3,7 +3,7 @@
     "Frozen golden journal corpora, one per schema_version. Pinned by",
     "scripts/check_journal_goldens.exs: a schema_version bump without a new",
     "frozen fixture fails CI, and these bytes are immutable history.",
-    "Freeze a new version with packages/raxol_agent/scripts/freeze_golden_journal.exs, then re-bless."
+    "Freeze a new version with https://github.com/DROOdotFOO/raxol-agent/blob/main/packages/raxol_agent/scripts/freeze_golden_journal.exs, then re-bless."
   ],
   "current_schema_version": "1.2.0",
   "versions": {

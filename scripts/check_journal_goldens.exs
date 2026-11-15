@@ -30,7 +30,9 @@ package = Path.join(repo_root, "packages/raxol_journal")
 writer_path = Path.join(package, "lib/raxol/agent/journal/file_store/writer.ex")
 goldens_dir = Path.join(package, "priv/golden")
 manifest_path = Path.join(goldens_dir, "MANIFEST.json")
-freezer = "packages/raxol_agent/scripts/freeze_golden_journal.exs"
+
+freezer =
+  "https://github.com/DROOdotFOO/raxol-agent/blob/main/packages/raxol_agent/scripts/freeze_golden_journal.exs"
 
 bless? = "--bless" in System.argv()
 
@@ -184,7 +186,9 @@ problems =
         "the writer default is #{default_version} but the manifest pins " <>
           "#{inspect(manifest["current_schema_version"])} as current.\n" <>
           "  A schema_version bump must freeze a corpus for the new version:\n" <>
-          "    (cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs \"#{goldens_dir}\")\n" <>
+          "    in a raxol-agent checkout, against this one:\n" <>
+          "    (cd packages/raxol_agent && export RAXOL_PATH=\"#{repo_root}\" && mix deps.get &&\n" <>
+          "      MIX_ENV=test mix run scripts/freeze_golden_journal.exs \"#{goldens_dir}\")\n" <>
           "    elixir scripts/check_journal_goldens.exs --bless\n" <>
           "  The frozen corpus for every PRIOR version stays exactly as it is —\n" <>
           "  it is the only test material a future upcast-on-read will ever have."
