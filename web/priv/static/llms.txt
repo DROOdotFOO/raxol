@@ -29,7 +29,8 @@ Governance: a tool marked sensitive is denied unless the call's context carries 
 ## Packages
 
 - raxol `{:raxol, "~> 2.8"}`: Full framework
-- raxol_agent `{:raxol_agent, "~> 2.7"}`: AI agents
+- raxol_agent `{:raxol_agent, "~> 3.1"}`: AI agents
+- raxol_payments `{:raxol_payments, "~> 0.3"}`: Agent commerce
 - raxol_mcp `{:raxol_mcp, "~> 2.8"}`: MCP server
 - raxol_liveview `{:raxol_liveview, "~> 2.8"}`: LiveView bridge
 - raxol_sensor `{:raxol_sensor, "~> 2.8"}`: Sensor fusion
@@ -39,23 +40,20 @@ Governance: a tool marked sensitive is denied unless the call's context carries 
 - raxol_plugin `{:raxol_plugin, "~> 2.8"}`: Plugin SDK
 - raxol_speech `{:raxol_speech, "~> 0.3"}`: TTS/STT
 - raxol_telegram `{:raxol_telegram, "~> 0.3"}`: Telegram bot
+- raxol_gateway `{:raxol_gateway, "~> 0.2"}`: Messaging gateway
 - raxol_watch `{:raxol_watch, "~> 0.3"}`: Push notifications
 
 ## Documentation
 
 Full text of every doc, concatenated for single-fetch ingestion: https://raxol.io/llms-full.txt
 
-Start here: https://github.com/DROOdotFOO/raxol/blob/master/docs/getting-started/BUILD_AN_AGENT.md (build an agent), https://github.com/DROOdotFOO/raxol/blob/master/docs/WHY_RAXOL.md (why Raxol vs Python agent stacks).
+Start here: https://github.com/DROOdotFOO/raxol/blob/master/docs/getting-started/QUICKSTART.md (build an app), https://github.com/DROOdotFOO/raxol/blob/master/docs/WHY_RAXOL.md (why Raxol vs Python agent stacks).
 
 Feature docs:
 
-- Agent Commerce Protocol (ACP): https://github.com/DROOdotFOO/raxol/blob/master/docs/features/ACP.md
 - Adaptive UI: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/ADAPTIVE_UI.md
-- Agentic Commerce: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENTIC_COMMERCE.md
-- Agent Framework: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENT_FRAMEWORK.md
 - Cursor Effects: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/CURSOR_EFFECTS.md
 - Distributed Swarm: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/DISTRIBUTED_SWARM.md
-- Editor Agent Client Protocol: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/EDITOR_ACP.md
 - Virtual File System: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/FILESYSTEM.md
 - Unified Messaging Gateway: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/GATEWAY.md
 - MCP as a Rendering Target: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/MCP.md
@@ -68,7 +66,7 @@ Feature docs:
 - Time-Travel Debugging: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/TIME_TRAVEL_DEBUGGING.md
 - Watch Surface: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/WATCH.md
 
-Tool/action catalog (every LLM-callable tool, with its parameters and authorization tier): https://github.com/DROOdotFOO/raxol/blob/master/docs/reference/TOOL_CATALOG.md
+Agent packages: https://github.com/DROOdotFOO/raxol-agent (build an agent: https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/getting-started/BUILD_AN_AGENT.md; every LLM-callable tool, with its parameters and authorization tier: https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/reference/TOOL_CATALOG.md)
 
 API reference (per package): https://hexdocs.pm/raxol
 

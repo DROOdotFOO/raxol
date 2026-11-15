@@ -39,7 +39,6 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
     "PACKAGES.md",
     "features",
     "guides",
-    "reference",
     "core",
     "cookbook",
     "adr/README.md"
@@ -169,13 +168,13 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
 
     Full text of every doc, concatenated for single-fetch ingestion: https://raxol.io/llms-full.txt
 
-    Start here: #{blob}/getting-started/BUILD_AN_AGENT.md (build an agent), #{blob}/WHY_RAXOL.md (why Raxol vs Python agent stacks).
+    Start here: #{blob}/getting-started/QUICKSTART.md (build an app), #{blob}/WHY_RAXOL.md (why Raxol vs Python agent stacks).
 
     Feature docs:
 
     #{features}
 
-    Tool/action catalog (every LLM-callable tool, with its parameters and authorization tier): #{blob}/reference/TOOL_CATALOG.md
+    Agent packages: https://github.com/DROOdotFOO/raxol-agent (build an agent: https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/getting-started/BUILD_AN_AGENT.md; every LLM-callable tool, with its parameters and authorization tier: https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/reference/TOOL_CATALOG.md)
 
     API reference (per package): https://hexdocs.pm/raxol
     """
