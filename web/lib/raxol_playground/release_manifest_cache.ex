@@ -6,7 +6,7 @@ defmodule RaxolPlayground.ReleaseManifestCache do
   alias RaxolPlayground.ReleaseManifest
 
   @table __MODULE__
-  @url "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-channel/latest.json"
+  @url "https://github.com/DROOdotFOO/raxol-agent/releases/download/raxol-cli-channel/latest.json"
   @fresh_ms :timer.seconds(60)
   @stale_ms :timer.minutes(5)
 

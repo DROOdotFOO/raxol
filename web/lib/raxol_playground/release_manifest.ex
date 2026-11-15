@@ -1,8 +1,8 @@
 defmodule RaxolPlayground.ReleaseManifest do
   @moduledoc false
 
-  @repository "DROOdotFOO/raxol"
-  @signer_workflow "DROOdotFOO/raxol/.github/workflows/release-raxol-cli.yml"
+  @repository "DROOdotFOO/raxol-agent"
+  @signer_workflow "DROOdotFOO/raxol-agent/.github/workflows/release-raxol-cli.yml"
   @assets %{
     "darwin-arm64" => "raxol_cli_macos",
     "linux-x64" => "raxol_cli_linux",

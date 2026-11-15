@@ -2,7 +2,7 @@
 # install.sh -- install the `raxol` CLI from an immutable GitHub Release.
 #
 #   curl -fsSL https://raxol.io/install | bash
-#   curl -fsSL https://raxol.io/install | bash -s -- --version 0.2.10
+#   curl -fsSL https://raxol.io/install | bash -s -- --version VERSION
 #   curl -fsSL https://raxol.io/install | bash -s -- --verify-provenance
 #
 # The binary is self-contained (Burrito wraps its own ERTS), so this installs
@@ -18,7 +18,7 @@
 #   RAXOL_VERIFY_PROVENANCE   1 to require GitHub artifact verification
 set -euo pipefail
 
-REPO="DROOdotFOO/raxol"
+REPO="DROOdotFOO/raxol-agent"
 TAG_PREFIX="raxol-cli-v"
 LATEST_MANIFEST_URL="https://raxol.io/releases/latest.json"
 EXPECTED_SIGNER="$REPO/.github/workflows/release-raxol-cli.yml"
