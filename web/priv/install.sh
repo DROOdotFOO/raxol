@@ -18,7 +18,7 @@
 #   RAXOL_VERIFY_PROVENANCE   1 to require GitHub artifact verification
 set -euo pipefail
 
-REPO="DROOdotFOO/raxol"
+REPO="DROOdotFOO/raxol-agent"
 TAG_PREFIX="raxol-cli-v"
 LATEST_MANIFEST_URL="https://raxol.io/releases/latest.json"
 EXPECTED_SIGNER="$REPO/.github/workflows/release-raxol-cli.yml"
