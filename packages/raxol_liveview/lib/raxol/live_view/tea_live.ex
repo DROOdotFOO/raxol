@@ -20,12 +20,19 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
 
           def mount(params, session, socket) do
             Raxol.LiveView.TEALive.mount(params, session, socket,
-              app_module: CounterExample
+              app_module: CounterExample,
+              authenticated_user_key: "user_id"
             )
           end
 
           # Delegate remaining callbacks...
         end
+
+    `:authenticated_user_key` opts into forwarding one identity from the
+    server-authenticated Phoenix session as `context.options[:authenticated_user]`.
+    It must name a nonempty string identity; absent or malformed values grant
+    no identity. Never populate that session key from URL params or an
+    unauthenticated browser value. No other session data is forwarded.
     """
 
     use Phoenix.LiveView
@@ -67,7 +74,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
             environment: :liveview,
             liveview_topic: topic,
             width: 80,
-            height: 24
+            height: 24,
+            authenticated_user: authenticated_user(session, opts)
           )
 
         dispatcher_pid = fetch_dispatcher(lifecycle_pid)
@@ -97,6 +105,17 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
           |> assign(:announcement, nil)
 
         {:ok, socket}
+      end
+    end
+
+    defp authenticated_user(session, opts) do
+      with key when is_binary(key) <- Keyword.get(opts, :authenticated_user_key),
+           user when is_binary(user) and byte_size(user) > 0 and byte_size(user) <= 128 <-
+             Map.get(session, key),
+           true <- String.valid?(user) and not String.contains?(user, ["\n", "\r", "\0"]) do
+        user
+      else
+        _absent_or_invalid -> nil
       end
     end
 

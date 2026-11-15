@@ -32,8 +32,11 @@ defmodule MyAppWeb.TerminalLive do
   use Phoenix.LiveView
   alias Raxol.LiveView.TEALive
 
-  def mount(_params, _session, socket) do
-    TEALive.mount(socket, MyApp.Counter)
+  def mount(params, session, socket) do
+    TEALive.mount(params, session, socket,
+      app_module: MyApp.Counter,
+      authenticated_user_key: "user_id"
+    )
   end
 
   def handle_info(msg, socket), do: TEALive.handle_info(msg, socket)
@@ -45,6 +48,13 @@ end
 `TEALive` resolves and caches the app dispatcher during the connected mount.
 Keyboard events therefore do not synchronously call the lifecycle process; a
 stopped or busy lifecycle cannot crash or stall the LiveView keydown callback.
+
+`authenticated_user_key` is opt-in. Protect the route with your normal
+authentication and set that key only from the authenticated server session.
+The app receives the nonempty string identity in
+`context.options[:authenticated_user]`; it receives neither URL params nor
+the rest of the session. Without a valid identity the app must stay
+read-only. TEALive does not authenticate the user or decide authorization.
 
 Or embed as a component:
 
