@@ -5,8 +5,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     ADR-0037 decision 5, which says explicitly that this transport takes the
     shape ADR-0038 decision 3 and 4 already implement for the REST side
-    (`packages/raxol_web3/lib/raxol/web3/dial.ex`,
-    `packages/raxol_web3/lib/raxol/web3/exchange.ex`). One design in two
+    (`Raxol.Web3.Dial` and `Raxol.Web3.Exchange` in `raxol_web3`). One design in two
     packages rather than two: copying is forced by the package graph, since
     `raxol_web3` depends on `raxol_mcp` and not the other way round.
 

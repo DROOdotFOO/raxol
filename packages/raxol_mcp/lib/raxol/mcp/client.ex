@@ -40,7 +40,8 @@ defmodule Raxol.MCP.Client do
   A `GenServer` serializes calls on entry, which is not the same as bounding
   the requests in flight: two callers used to get two concurrent requests on
   one session, and a TronScan-shaped upstream answers 500 to both
-  (`docs/proposals/web3-upstream-survey.md:72-78`). So the window is explicit
+  (https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/proposals/web3-upstream-survey.md#wire-level-findings-that-constrain-mcp_proxy).
+  So the window is explicit
   (ADR-0037 decision 6). `:concurrency` is `:stateless`, `:pooled` or
   `:serialized`; every policy has a finite in-flight cap, and a `:serialized`
   origin has a cap of one. Excess work waits in a bounded queue that answers

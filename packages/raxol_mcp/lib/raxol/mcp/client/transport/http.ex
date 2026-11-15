@@ -120,7 +120,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     # Measured mandatory, not defensive: a POST without both types is refused
     # by at least one of the servers ADR-0033 probed
-    # (`docs/proposals/web3-upstream-survey.md:79-82`).
+    # (https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/proposals/web3-upstream-survey.md#wire-level-findings-that-constrain-mcp_proxy).
     @accept "application/json, text/event-stream"
 
     @user_agent "raxol_mcp/#{Mix.Project.config()[:version]} (+https://raxol.io)"
