@@ -92,53 +92,58 @@ defmodule Halo do
   end
 end
 
-defmodule Harness do
-  use Raxol.Core.Runtime.Application
-  alias Raxol.Earn.{AssetToken, JobSession}
+# raxol_earn lives in the agent repository and is not a dependency of web/,
+# so the harness hero is recorded only where it can be loaded; elsewhere its
+# committed frames are kept as they are and `--check` reports them skipped.
+if Code.ensure_loaded?(Raxol.Earn.JobSession) do
+  defmodule Harness do
+    use Raxol.Core.Runtime.Application
+    alias Raxol.Earn.{AssetToken, JobSession}
 
-  @mark [
-    "     ▄█▀█▄     ",
-    "▀▀█▄▄█▄▄▄█▄▄  ▀",
-    "    ▀█▄███     ",
-    "     ▀██▀      "
-  ]
-  @states ~w(open budget_set funded submitted completed)a
-  @r Map.new(Enum.with_index(@states))
-  # :recorded events represent chain/SSE observations.
-  @actions [
-    {:call, :set_budget, [AssetToken.usdc(40, 8453)]},
-    {:recorded, :funded},
-    {:call, :submit, [%{patch: "gate"}]},
-    {:recorded, :completed}
-  ]
-  @info ["RECORDED ACP #4812", "gate.ex · 40 USDC", "raxol_earn", ""]
-  def init(_) do
-    {:ok, j} =
-      JobSession.Supervisor.start_session(
-        chain_id: 8453,
-        job_id: 4812,
-        role: :provider
-      )
+    @mark [
+      "     ▄█▀█▄     ",
+      "▀▀█▄▄█▄▄▄█▄▄  ▀",
+      "    ▀█▄███     ",
+      "     ▀██▀      "
+    ]
+    @states ~w(open budget_set funded submitted completed)a
+    @r Map.new(Enum.with_index(@states))
+    # :recorded events represent chain/SSE observations.
+    @actions [
+      {:call, :set_budget, [AssetToken.usdc(40, 8453)]},
+      {:recorded, :funded},
+      {:call, :submit, [%{patch: "gate"}]},
+      {:recorded, :completed}
+    ]
+    @info ["RECORDED ACP #4812", "gate.ex · 40 USDC", "raxol_earn", ""]
+    def init(_) do
+      {:ok, j} =
+        JobSession.Supervisor.start_session(
+          chain_id: 8453,
+          job_id: 4812,
+          role: :provider
+        )
 
-    %{j: j, a: 0, s: JobSession.status(j)}
+      %{j: j, a: 0, s: JobSession.status(j)}
+    end
+
+    def update(:tick, %{j: j, a: a} = m) when a < 4 do
+      {:ok, s} = run(j, Enum.at(@actions, a))
+      {%{m | a: a + 1, s: s}, []}
+    end
+
+    def update(_, m), do: {m, []}
+    def subscribe(_), do: [subscribe_interval(200, :tick)]
+    def view(%{s: s}), do: column(do: head() ++ [text(" ")] ++ rows(s))
+    defp head, do: Enum.zip_with(@mark, @info, &text(&1 <> " " <> &2))
+    defp rows(t), do: Enum.map(@states, &r(&1, t))
+    defp run(j, {:call, f, a}), do: apply(JobSession, f, [j | a])
+
+    defp run(j, {:recorded, s}),
+      do: JobSession.apply_event(j, s, %{source: :recorded_demo})
+
+    defp r(s, t), do: text(if @r[s] <= @r[t], do: "✓ #{s}", else: "○ #{s}")
   end
-
-  def update(:tick, %{j: j, a: a} = m) when a < 4 do
-    {:ok, s} = run(j, Enum.at(@actions, a))
-    {%{m | a: a + 1, s: s}, []}
-  end
-
-  def update(_, m), do: {m, []}
-  def subscribe(_), do: [subscribe_interval(200, :tick)]
-  def view(%{s: s}), do: column(do: head() ++ [text(" ")] ++ rows(s))
-  defp head, do: Enum.zip_with(@mark, @info, &text(&1 <> " " <> &2))
-  defp rows(t), do: Enum.map(@states, &r(&1, t))
-  defp run(j, {:call, f, a}), do: apply(JobSession, f, [j | a])
-
-  defp run(j, {:recorded, s}),
-    do: JobSession.apply_event(j, s, %{source: :recorded_demo})
-
-  defp r(s, t), do: text(if @r[s] <= @r[t], do: "✓ #{s}", else: "○ #{s}")
 end
 
 defmodule Settle do
@@ -328,9 +333,12 @@ defmodule GenLandingFrames do
       |> tree_drift(@preview_dir)
       |> Enum.split_with(exempt?)
 
-    drifted =
-      preview_drift ++
-        Enum.map(tree_drift(hero_scratch, @hero_dir), &("hero/" <> &1))
+    hero_drift =
+      hero_scratch
+      |> tree_drift(@hero_dir)
+      |> Enum.reject(&((&1 |> Path.split() |> hd()) in unrecorded()))
+
+    drifted = preview_drift ++ Enum.map(hero_drift, &("hero/" <> &1))
 
     skipped =
       skipped_paths
@@ -342,6 +350,12 @@ defmodule GenLandingFrames do
     if skipped != [],
       do:
         IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
+
+    if unrecorded() != [],
+      do:
+        IO.puts(
+          "skipped (module not loadable here): #{Enum.join(unrecorded(), ", ")}"
+        )
 
     case drifted do
       [] ->
@@ -391,12 +405,21 @@ defmodule GenLandingFrames do
   #          JobSession call changes the model.
   #   settle five sandbox replay stages; the action results are fixed while the
   #          cursor moves through request, execution, receipt, and denial.
-  @examples [
+  @all_examples [
     {"pulse", Pulse, {62, 13}, 90, 63, 4},
     {"halo", Halo, {70, 14}, 110, 48, 4},
     {"harness", Harness, {56, 11}, 200, 5, 0},
     {"settle", Settle, {54, 9}, 400, 5, 4}
   ]
+
+  # An example whose module is not defined here (harness, without raxol_earn)
+  # is neither recorded nor checked; its committed frames stay as they are.
+  @examples Enum.filter(@all_examples, fn {_, module, _, _, _, _} ->
+              Code.ensure_loaded?(module)
+            end)
+  @unrecorded for {name, _, _, _, _, _} <- @all_examples -- @examples, do: name
+
+  defp unrecorded, do: @unrecorded
 
   defp hero(base \\ @hero_dir) do
     for {name, module, {w, h}, tick_ms, frame_count, start_tick} <- @examples do
