@@ -37,8 +37,9 @@ defmodule RaxolPlayground.MixProject do
 
       # The site reads the agent framework's provider registry and ACP surface
       # (RaxolPlayground.Capabilities). Main raxol does not depend on
-      # raxol_agent, so the deploy app opts in here.
-      {:raxol_agent, "~> 3.0"},
+      # raxol_agent, so the deploy app opts in here. 3.1 is the first release
+      # that compiles the ACP agent from Hex.
+      {:raxol_agent, "~> 3.1"},
 
       # The payments pages and the settlement sandbox call it directly.
       {:raxol_payments, "~> 0.3"},
