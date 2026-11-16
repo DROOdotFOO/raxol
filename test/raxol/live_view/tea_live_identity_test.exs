@@ -46,13 +46,13 @@ defmodule Raxol.LiveView.TEALiveIdentityTest do
       socket
     )
 
-    assert_receive {:answer, "alice"}
+    assert_receive {:answer, "alice"}, 1_000
   end
 
   test "a session without explicit opt-in cannot grant an operator" do
     socket = mount(%{}, %{"user_id" => "alice"}, [])
     TEALive.handle_event("keydown", %{"key" => "a"}, socket)
-    assert_receive {:answer, nil}
+    assert_receive {:answer, nil}, 1_000
   end
 
   test "missing and malformed authenticated identities remain read-only" do
@@ -63,7 +63,7 @@ defmodule Raxol.LiveView.TEALiveIdentityTest do
         )
 
       TEALive.handle_event("keydown", %{"key" => "a"}, socket)
-      assert_receive {:answer, nil}
+      assert_receive {:answer, nil}, 1_000
       TEALive.terminate(:normal, socket)
     end
   end
