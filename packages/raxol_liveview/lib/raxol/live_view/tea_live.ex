@@ -69,14 +69,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
 
         announce_ref = subscribe_announcements()
 
-        {:ok, lifecycle_pid} =
-          Lifecycle.start_link(app_module,
-            environment: :liveview,
-            liveview_topic: topic,
-            width: 80,
-            height: 24,
-            authenticated_user: authenticated_user(session, opts)
-          )
+        {:ok, lifecycle_pid} = start_lifecycle(app_module, session, opts, topic)
 
         dispatcher_pid = fetch_dispatcher(lifecycle_pid)
 
@@ -108,16 +101,32 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       end
     end
 
+    defp start_lifecycle(app_module, session, opts, topic) do
+      Lifecycle.start_link(app_module,
+        environment: :liveview,
+        liveview_topic: topic,
+        width: 80,
+        height: 24,
+        authenticated_user: authenticated_user(session, opts)
+      )
+    end
+
     defp authenticated_user(session, opts) do
       with key when is_binary(key) <- Keyword.get(opts, :authenticated_user_key),
-           user when is_binary(user) and byte_size(user) > 0 and byte_size(user) <= 128 <-
-             Map.get(session, key),
-           true <- String.valid?(user) and not String.contains?(user, ["\n", "\r", "\0"]) do
+           user <- Map.get(session, key),
+           true <- valid_authenticated_user?(user) do
         user
       else
         _absent_or_invalid -> nil
       end
     end
+
+    defp valid_authenticated_user?(user)
+         when is_binary(user) and byte_size(user) > 0 and byte_size(user) <= 128 do
+      String.valid?(user) and not String.contains?(user, ["\n", "\r", "\0"])
+    end
+
+    defp valid_authenticated_user?(_user), do: false
 
     @impl true
     def handle_event("keydown", params, socket) do
