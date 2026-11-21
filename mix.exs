@@ -1,7 +1,7 @@
 defmodule Raxol.MixProject do
   use Mix.Project
 
-  @version "2.8.0"
+  @version "2.9.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -213,11 +213,11 @@ defmodule Raxol.MixProject do
       # "~> major.minor" of the sibling's version, so a Hex consumer cannot
       # resolve a sibling older than the code it was built against.
       raxol_dep(:raxol_core, "~> 2.9", "packages/raxol_core"),
-      raxol_dep(:raxol_terminal, "~> 2.8", "packages/raxol_terminal"),
-      raxol_dep(:raxol_sensor, "~> 2.8", "packages/raxol_sensor"),
-      raxol_dep(:raxol_mcp, "~> 2.8", "packages/raxol_mcp"),
-      raxol_dep(:raxol_liveview, "~> 2.8", "packages/raxol_liveview"),
-      raxol_dep(:raxol_plugin, "~> 2.8", "packages/raxol_plugin")
+      raxol_dep(:raxol_terminal, "~> 2.9", "packages/raxol_terminal"),
+      raxol_dep(:raxol_sensor, "~> 2.9", "packages/raxol_sensor"),
+      raxol_dep(:raxol_mcp, "~> 2.9", "packages/raxol_mcp"),
+      raxol_dep(:raxol_liveview, "~> 2.9", "packages/raxol_liveview"),
+      raxol_dep(:raxol_plugin, "~> 2.9", "packages/raxol_plugin")
     ]
   end
 

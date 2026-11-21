@@ -28,7 +28,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The Hex packages this repository releases track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`/`raxol_journal`) move in lockstep on the 2.8.x line, and the independent surface packages (`raxol_speech`, `raxol_telegram`, `raxol_watch`, `raxol_gateway`) have their own 0.x line. The agent packages release from raxol-agent. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
+The Hex packages this repository releases track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`/`raxol_journal`) move in lockstep on the 2.9.x line, and the independent surface packages (`raxol_speech`, `raxol_telegram`, `raxol_watch`, `raxol_gateway`) have their own 0.x line. The agent packages release from raxol-agent. Exact versions live in each `mix.exs` and are enforced by `scripts/check-lockstep-deps.sh`; do not restate them here, where nothing validates them.
 
 ### Surfaces and reach
 

@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-21
+
 ### Changed
 
+- Requires `raxol_core ~> 2.9` (was `~> 2.8`), and the optional `raxol`
+  requirement is `~> 2.9`.
 - Declares the optional `raxol_gateway "~> 0.2"` requirement in its Hex
   package, so Mix compiles `raxol_gateway` first when a project has both.
 
