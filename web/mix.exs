@@ -48,8 +48,11 @@ defmodule RaxolPlayground.MixProject do
       # it is the client behind every remote provider. raxol_agent declares
       # it optional and optional deps do not propagate.
       {:req, "~> 0.5"},
+      # Floors: the first releases past GHSA-pvfx-rx4x-phrr, GHSA-5vmc-qgf8-rw36
+      # (phoenix 1.8.17) and GHSA-v4p7-3pm2-wq6c (phoenix_live_view 1.2.14; 1.2.15
+      # restores its TypeScript declarations). Lockfiles do not reach Hex users.
       {:phoenix, "~> 1.8.17"},
-      {:phoenix_live_view, "~> 1.2.14"},
+      {:phoenix_live_view, "~> 1.2.15"},
       {:phoenix_html, "~> 4.3"},
       {:phoenix_live_reload, "~> 1.7.0", only: :dev},
       {:phoenix_pubsub, "~> 2.1"},

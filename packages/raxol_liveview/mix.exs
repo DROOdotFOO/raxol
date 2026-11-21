@@ -45,6 +45,9 @@ defmodule RaxolLiveView.MixProject do
       {:jason, "~> 1.4"},
 
       # Phoenix LiveView integration (optional -- module guards with Code.ensure_loaded?)
+      # Deliberately wide: narrowing it would drop LiveView lines in a minor
+      # release. It admits versions with advisories, so the README tells users
+      # to require phoenix ~> 1.8.17 and phoenix_live_view ~> 1.2.15 themselves.
       {:phoenix_live_view, "~> 0.20 or ~> 1.0", optional: true},
       {:phoenix_html, "~> 4.0 or ~> 3.3", optional: true},
 
