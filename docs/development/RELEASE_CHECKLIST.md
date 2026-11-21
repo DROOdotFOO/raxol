@@ -116,17 +116,24 @@ reactivating it. Never move a published version tag as routine recovery.
 
 7. Tag that commit. Create the root tag first, then the package-scoped
    documentation tags of the changed independent-version packages on the same
-   commit, check, and push the package tags by name (never `--tags`). 2.9.0
-   bumps no independent-version package, so it needs the root tag alone. The
-   train skips a version already on Hex, so edits to such a package's
-   `mix.exs` since its last tag (for 2.9.0, the `~> 2.9` requirements of
-   `raxol_speech`, `raxol_watch`, `raxol_telegram` and `raxol_gateway`) reach
-   Hex only when its version is bumped:
+   commit, check, and push the package tags by name (never `--tags`). The
+   train skips a version already on Hex, so edits to an independent-version
+   package's `mix.exs` since its last tag reach Hex only when its version is
+   bumped. 2.9.0 patch-bumps `raxol_speech`, `raxol_watch`, `raxol_telegram`
+   and `raxol_gateway` for their `~> 2.9` requirements:
 
    ```bash
    git tag -a v2.9.0 -m "Raxol 2.9.0" HEAD
+   git tag -a raxol_speech-v0.3.1 -m "raxol_speech 0.3.1" 'v2.9.0^{commit}'
+   git tag -a raxol_watch-v0.3.1 -m "raxol_watch 0.3.1" 'v2.9.0^{commit}'
+   git tag -a raxol_telegram-v0.3.1 -m "raxol_telegram 0.3.1" 'v2.9.0^{commit}'
+   git tag -a raxol_gateway-v0.2.1 -m "raxol_gateway 0.2.1" 'v2.9.0^{commit}'
    git rev-parse 'v2.9.0^{commit}' origin/master   # two identical lines
+   git push origin raxol_speech-v0.3.1 raxol_watch-v0.3.1 raxol_telegram-v0.3.1 raxol_gateway-v0.2.1
    ```
+
+   Push the root tag last: it starts the release workflow, whose HexDocs
+   `source_ref` links need the package tags to exist.
 
    2.8.0 also bumped `raxol_speech`, `raxol_watch` and `raxol_telegram`, and
    tagged each on the root tag's commit before pushing them:
