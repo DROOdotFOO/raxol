@@ -31,7 +31,7 @@ defmodule RaxolGateway.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.9", "../raxol_core"),
       {:telemetry, "~> 1.3"},
       {:jason, "~> 1.4"},
 

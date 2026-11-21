@@ -36,7 +36,7 @@ defmodule RaxolLiveView.MixProject do
       #
       # The framework family shares one minor: a Hex consumer must not
       # resolve a raxol_core older than the code this was built against.
-      raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.9", "../raxol_core"),
 
       # PubSub for LiveView <-> Lifecycle communication
       {:phoenix_pubsub, "~> 2.1"},
