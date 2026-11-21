@@ -132,13 +132,16 @@ defmodule Raxol.Core.ChildEnvTest do
                      AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ETH_PRIVKEY BASE_RPC_URL ETH_RPC MAINNETRPC XRPC_URL
                      OPENAI_APIKEY DATABASE_URL REPO_DATABASE_URL PGPASSWORD PGADMIN_PASSWORD
                      SSH_AUTH_SOCK
-                     RPC_BASE ORDER_RPC_8453 DB_PASSWORD WALLET_MNEMONIC gh_token) do
+                     RPC_BASE ORDER_RPC_8453 DB_PASSWORD WALLET_MNEMONIC gh_token
+                     OPENAI_API_KEY_2 ANTHROPIC_API_KEY_PROD API_KEYS SIGNER_KEY_PEM TOKEN
+                     DATABASE_URL_UNPOOLED POSTGRES_URL REDIS_URL MONGODB_URI MY_PGPASSWORD
+                     SECRETS ssh_auth_sock release_cookie) do
         assert ChildEnv.secret?(name), name
       end
 
       for name <-
-            ~w(HOME PATH KEYBOARD MONKEY TOKENIZER SECRETS GRPC_HOST GRPC_VERBOSITY DATABASE_URL_POOL
-                     DATABASE_URLS SSH_AUTH_SOCKET PGHOST PGUSER TERM) do
+            ~w(HOME PATH PWD OLDPWD KEYBOARD MONKEY TOKENIZER TOKENIZERS_PARALLELISM
+                     GRPC_HOST GRPC_VERBOSITY SSH_AUTH_SOCKET PGHOST PGUSER TERM LESSKEY) do
         refute ChildEnv.secret?(name), name
       end
     end
@@ -162,11 +165,11 @@ defmodule Raxol.Core.ChildEnvTest do
              ]
     end
 
-    test "secret?/1 predicts exactly which of the node's variables a child is denied" do
+    test "secret?/1 agrees with what cmd_env/1 unsets, for the probe names" do
       unset = for {name, nil} <- ChildEnv.cmd_env(), into: MapSet.new(), do: name
 
-      # Only names this module controls: async tests elsewhere may change the
-      # rest of the node's environment between the two reads.
+      # The probes and a few fixed names rather than the whole environment, so
+      # the result does not depend on what the developer's shell exports.
       for name <- Map.keys(@probes) ++ ~w(RAXOL_SLEUTH_API_KEY HOME PATH) do
         assert ChildEnv.secret?(name) == MapSet.member?(unset, name), name
       end
@@ -268,7 +271,10 @@ defmodule Raxol.Core.ChildEnvTest do
             {[pass: "RAXOL_SLEUTH_API_KEY"], ":pass"},
             {[extra_secrets: ["MY KEY"]], ":extra_secrets"},
             {%{pass: ["RAXOL_SLEUTH_API_KEY"]}, nil},
-            {[{"pass", ["RAXOL_SLEUTH_API_KEY"]}], nil}
+            {[{"pass", ["RAXOL_SLEUTH_API_KEY"]}], nil},
+            {[extra_secret: ["RAXOL_SLEUTH_API_KEY"]], ":extra_secret"},
+            {[pass: [], pass: ["RAXOL_SLEUTH_API_KEY"]], ":pass"},
+            {"RAXOL_SLEUTH_API_KEY", nil}
           ] do
         Application.put_env(:raxol_core, ChildEnv, config)
 
@@ -276,6 +282,9 @@ defmodule Raxol.Core.ChildEnvTest do
           error = assert_raise ArgumentError, call
           assert error.message =~ "config :raxol_core, Raxol.Core.ChildEnv"
           if key, do: assert(error.message =~ key)
+          # Whatever the operator put there may be a key itself.
+          refute error.message =~ "SLEUTH"
+          refute error.message =~ "MY KEY"
         end
       end
     end

@@ -14,18 +14,25 @@ defmodule Raxol.Core.ChildEnv do
 
     * every variable set in the node whose name looks like a credential
       (case-insensitive):
-        * a suffix of `_KEY`, `_KEY_ID`, `_TOKEN`, `_PRIVKEY`, `_SECRET`,
-          `_PASSWORD`, `_PASSPHRASE`, `_MNEMONIC`, `_CREDENTIALS` or
-          `_APIKEY` (so `ANTHROPIC_API_KEY`, `GH_TOKEN`,
-          `RAXOL_ACP_AGENT_PRIVATE_KEY`, `AWS_ACCESS_KEY_ID`,
-          `AWS_SECRET_ACCESS_KEY`, `OPENAI_APIKEY`);
-        * `DATABASE_URL`, alone or as a suffix (`REPO_DATABASE_URL`), which
-          carries the database password;
-        * `PGPASSWORD` and any other `PG...PASSWORD` (`PGADMIN_PASSWORD`);
+        * a `_`-separated segment, anywhere in the name, of `KEY`, `KEYS`,
+          `APIKEY`, `APIKEYS`, `PRIVKEY`, `TOKEN`, `TOKENS`, `SECRET`,
+          `SECRETS`, `PASSWORD`, `PASSWD`, `PASSPHRASE`, `MNEMONIC`,
+          `CREDENTIAL` or `CREDENTIALS` (so `ANTHROPIC_API_KEY`,
+          `OPENAI_API_KEY_2`, `GH_TOKEN`, `AWS_ACCESS_KEY_ID`,
+          `SECRET_KEY_BASE`, `OPENAI_APIKEY`, a bare `TOKEN`; not `KEYBOARD`,
+          `TOKENIZERS_PARALLELISM` or the shell's `PWD`);
+        * a database or broker URL, which carries its password:
+          `DATABASE_URL` (also `DATABASE_URL_UNPOOLED`, `REPO_DATABASE_URL`),
+          and the same for `POSTGRES`, `POSTGRESQL`, `MYSQL`, `REDIS`,
+          `MONGO`, `MONGODB`, `AMQP` and `RABBITMQ`, as `_URL` or `_URI`;
+        * `PGPASSWORD` and any other `PG...PASSWORD` (`PGADMIN_PASSWORD`,
+          `MY_PGPASSWORD`);
         * `RPC` anywhere in the name (`ETH_RPC`, `BASE_RPC_URL`, `RPC_BASE`,
           `MAINNETRPC`), since a provider RPC URL embeds its API key -- except
-          as part of `GRPC`, whose variables are gRPC library settings;
-    * the names in `secrets/0`: raxol's own variables, the web endpoint's
+          as part of `GRPC`, whose variables are gRPC library settings (so
+          `JSONRPC_PORT` goes too);
+    * the names in `secrets/0`, matched case-insensitively: raxol's own
+      variables, the web endpoint's
       `SECRET_KEY_BASE`, the release's `RELEASE_COOKIE` (which lets its
       holder join the node over distribution), `SSH_AUTH_SOCK` (which hands
       the child the operator's ssh-agent) and the configured
@@ -52,10 +59,12 @@ defmodule Raxol.Core.ChildEnv do
   ## Configuration
 
   Read when a child is spawned, so a runtime change applies to the next one.
-  The config must be a keyword list and both keys lists of variable names
-  (strings matching `[A-Za-z_][A-Za-z0-9_]*`); anything else raises an
-  `ArgumentError` naming the key at the next spawn, instead of scrubbing less
-  than the operator meant:
+  The config must be a keyword list with no keys but `:pass` and
+  `:extra_secrets`, each at most once, both lists of variable names (strings
+  matching `[A-Za-z_][A-Za-z0-9_]*`); anything else, a misspelt key
+  included, raises an `ArgumentError` naming the key at the next spawn,
+  instead of scrubbing less than the operator meant. The error shows the
+  offending value's type and size, never its contents:
 
       config :raxol_core, Raxol.Core.ChildEnv,
         # More names to unset, e.g. a custom `Wallets.Env` `env_var:` whose
@@ -90,7 +99,7 @@ defmodule Raxol.Core.ChildEnv do
 
   A credential under a name no pattern catches is inherited unless it is in
   `:extra_secrets`: a provider URL with a key in it under another name
-  (`ALCHEMY_URL`), `MYSQL_PWD`, a bare `TOKEN`. A name that is not valid
+  (`ALCHEMY_URL`), `MYSQL_PWD`, `GITHUB_PAT`, `SMTP_PASS`. A name that is not valid
   UTF-8 is also missed: the BEAM reads it re-encoded, so the unset names a
   different variable.
 
@@ -114,24 +123,29 @@ defmodule Raxol.Core.ChildEnv do
     SSH_AUTH_SOCK
   )
 
-  # A name ending like a credential, a `DATABASE_URL`, a `PG...PASSWORD`, or
-  # `RPC` anywhere but in `GRPC`; matched case-insensitively. This is a
-  # superset of the pattern raxol-agent's `Raxol.Agent.ChildEnv` and
-  # `Raxol.AgentClientProtocol.Transport.Stdio` keep (as of raxol_core 2.8.0:
-  # no `_APIKEY`, `DATABASE_URL` or `PG...PASSWORD`, and `RPC` only as an
-  # `RPC_` segment); they move to `credential_pattern/0` when they require
-  # raxol_core ~> 2.9. Held as source and compiled per call (once per spawn,
-  # not per variable), so no compiled regex is baked into the module.
-  @credential_source ~S"(_KEY|_KEY_ID|_TOKEN|_PRIVKEY|_SECRET|_PASSWORD|_PASSPHRASE|_MNEMONIC|_CREDENTIALS|_APIKEY)\z|(\A|_)DATABASE_URL\z|\APG\w*PASSWORD\z|(?<!G)RPC"
+  # Credential words as whole `_`-separated segments anywhere in the name
+  # (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY_2`, `AWS_ACCESS_KEY_ID`, `API_KEYS`,
+  # `GH_TOKEN`, `SECRET_KEY_BASE`), a database or broker URL, a
+  # `PG...PASSWORD`, or `RPC` anywhere but in `GRPC`; case-insensitive. A
+  # superset of the suffix-only pattern raxol-agent's `Raxol.Agent.ChildEnv`
+  # and `Raxol.AgentClientProtocol.Transport.Stdio` kept when this was
+  # written; they can use `credential_pattern/0` once they require
+  # raxol_core ~> 2.9. `PWD`, the shell's working directory, is no segment
+  # here on purpose.
+  @credential ~r/
+    (\A|_)(APIKEYS?|KEYS?|PRIVKEY|TOKENS?|SECRETS?|PASSWORD|PASSWD|PASSPHRASE|MNEMONIC|CREDENTIALS?)(_|\z)
+    | (\A|_)(DATABASE|POSTGRES|POSTGRESQL|MYSQL|REDIS|MONGO|MONGODB|AMQP|RABBITMQ)_UR[LI]
+    | (\A|_)PG\w*PASSWORD
+    | (?<!G)RPC
+  /xi
 
   @doc """
-  The credential-name pattern, compiled with its case-insensitive flag. A
-  package that keeps its own copy (one that cannot depend on `raxol_core` at
-  runtime) checks it against this in a test, comparing `Regex.source/1` and
-  `Regex.opts/1`.
+  The credential-name pattern (case-insensitive). A package that keeps its
+  own copy, because it cannot depend on `raxol_core` at runtime, can check
+  that copy against this one in a test.
   """
   @spec credential_pattern() :: Regex.t()
-  def credential_pattern, do: Regex.compile!(@credential_source, "i")
+  def credential_pattern, do: @credential
 
   @typep config :: %{pass: [String.t()], extra_secrets: [String.t()]}
 
@@ -157,13 +171,16 @@ defmodule Raxol.Core.ChildEnv do
   node for which this is true, plus `secrets/0` whether set or not.
   """
   @spec secret?(String.t()) :: boolean()
-  def secret?(name) when is_binary(name) do
-    config = config!()
-    name in named(config) or (credential?(credential_pattern(), name) and name not in config.pass)
-  end
+  def secret?(name) when is_binary(name), do: denied?(config!(), name)
 
-  @spec credential?(Regex.t(), String.t()) :: boolean()
-  defp credential?(pattern, name), do: Regex.match?(pattern, name)
+  # The named set is matched case-insensitively too, so `ssh_auth_sock` is
+  # denied like `SSH_AUTH_SOCK`; `pass:` stays exact.
+  @spec denied?(config(), String.t()) :: boolean()
+  defp denied?(%{pass: pass} = config, name) do
+    name not in pass and
+      (String.upcase(name) in Enum.map(named(config), &String.upcase/1) or
+         Regex.match?(@credential, name))
+  end
 
   @spec named(config()) :: [String.t()]
   defp named(%{pass: pass, extra_secrets: extra}) do
@@ -173,29 +190,34 @@ defmodule Raxol.Core.ChildEnv do
   end
 
   # Every name a child must not inherit: the named set (`pass:` already out),
-  # plus each of the `present` names (the node's variables) that matches the
-  # pattern and is not passed.
+  # set or not, plus each of the `present` names (the node's variables) that
+  # is denied.
   @spec unset_names(config(), [String.t()]) :: [String.t()]
-  defp unset_names(%{pass: pass} = config, present) do
-    pattern = credential_pattern()
-    matching = Enum.filter(present, &(credential?(pattern, &1) and &1 not in pass))
-    Enum.uniq(named(config) ++ matching)
+  defp unset_names(config, present) do
+    Enum.uniq(named(config) ++ Enum.filter(present, &denied?(config, &1)))
   end
 
   @spec unset_names() :: [String.t()]
   defp unset_names, do: unset_names(config!(), System.get_env() |> Map.keys())
 
-  # The whole config, validated, so every entry point raises on any bad key.
+  @keys [:pass, :extra_secrets]
+
+  # The whole config, validated, so every entry point raises on any bad
+  # value, an unknown key (a misspelt `extra_secret:` would scrub less) or a
+  # repeated one (only the first would be read).
   @spec config!() :: config()
   defp config! do
-    case Application.get_env(:raxol_core, __MODULE__, []) do
-      config when is_list(config) ->
-        if Keyword.keyword?(config),
-          do: %{pass: names!(config, :pass), extra_secrets: names!(config, :extra_secrets)},
-          else: invalid!("must be a keyword list", config)
+    config = Application.get_env(:raxol_core, __MODULE__, [])
 
-      config ->
-        invalid!("must be a keyword list", config)
+    cond do
+      not (is_list(config) and Keyword.keyword?(config)) ->
+        invalid!("must be a keyword list", shape(config))
+
+      (stray = Keyword.keys(config) -- @keys) != [] ->
+        invalid!("unknown or repeated keys (expected #{inspect(@keys)}, once each)", stray)
+
+      true ->
+        %{pass: names!(config, :pass), extra_secrets: names!(config, :extra_secrets)}
     end
   end
 
@@ -207,7 +229,7 @@ defmodule Raxol.Core.ChildEnv do
         names
 
       names ->
-        invalid!("#{inspect(key)} must be a list of variable names", names)
+        invalid!("#{inspect(key)} must be a list of variable names", shape(names))
     end
   end
 
@@ -215,14 +237,19 @@ defmodule Raxol.Core.ChildEnv do
   defp name!(name, key) do
     if is_binary(name) and name =~ ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/,
       do: :ok,
-      else: invalid!("#{inspect(key)} must be a list of variable names", redact(name))
+      else: invalid!("#{inspect(key)} must be a list of variable names", shape(name))
   end
 
-  # A string that is not a variable name may be the value an operator pasted
-  # in its place (a key), so the error names its size, not its contents.
-  @spec redact(term()) :: term()
-  defp redact(name) when is_binary(name), do: {:string, byte_size(name), :bytes}
-  defp redact(name), do: name
+  # What an error shows of the operator's input: its type and size, never its
+  # contents, which may be the key itself pasted where its name belongs. An
+  # error here can reach a log or a model (an MCP spawn returns it).
+  @spec shape(term()) :: term()
+  defp shape(term) when is_binary(term), do: {:string, byte_size(term), :bytes}
+  defp shape(term) when is_list(term), do: {:list, length(term), :items}
+  defp shape(term) when is_map(term), do: {:map, map_size(term), :entries}
+  defp shape(term) when is_tuple(term), do: {:tuple, tuple_size(term), :elements}
+  defp shape(term) when is_atom(term) or is_number(term), do: term
+  defp shape(_term), do: :other
 
   @spec invalid!(String.t(), term()) :: no_return()
   defp invalid!(problem, got) do
