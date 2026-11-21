@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+- Require patched Plug 1.20.4 and LiveView 1.2.14 in standalone runtime locks; the LiveView package also permits patched 1.0.20/1.1.34 branches. Drop vulnerable LiveView 0.20 support. Fix [EEF-CVE-2026-120287](https://cna.erlef.org/cves/CVE-2026-120287.html) and [EEF-CVE-2026-126334](https://cna.erlef.org/cves/CVE-2026-126334.html) without relying on a host application's lock.
+- Require optional hackney `~> 4.11 and >= 4.11.1` for idna 8 and [EEF-CVE-2026-117678](https://cna.erlef.org/cves/CVE-2026-117678.html). Preserve the parent's newer compatible hackney 4.12.1 graph, keep HTTPoison 3 within its declared major-4 constraint, and use no overrides. Invalid IDNs reject earlier; direct WebTransport consumers must account for changed drafts and HTTP/2 TLS 1.3.
+
 ### Added
 
 - **`raxol acp --agent <app>[:<id>]`: a Raxol agent for ACP editors.** Each `session/new` starts the named app (one of `:mcp_spawnable_apps`) with its journal bound to the real path of the request's `cwd`. A prompt is one turn of the agent; its tool calls are announced with their arguments, and a call to a `sensitive` action asks through `session/request_permission`. With `:<id>` a later run continues the journal, one session per server process. See [Editor ACP](https://github.com/DROOdotFOO/raxol-agent/blob/main/docs/features/EDITOR_ACP.md).

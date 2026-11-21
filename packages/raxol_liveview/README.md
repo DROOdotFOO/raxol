@@ -13,6 +13,15 @@ def deps do
 end
 ```
 
+Web hosts must use Plug 1.20.4 or newer on the 1.20 branch and a patched
+LiveView branch: 1.0.20+, 1.1.34+, or 1.2.14+ (within each minor).
+LiveView 0.20 is no longer supported because no fix is published for its
+`live_session` hook bypass
+([EEF-CVE-2026-126334](https://cna.erlef.org/cves/CVE-2026-126334.html)).
+The optional Plug floor also excludes the multipart length-limit bypass
+([EEF-CVE-2026-120287](https://cna.erlef.org/cves/CVE-2026-120287.html));
+it does not install Plug in hosts that do not use it.
+
 ## Modules
 
 | Module | Purpose |

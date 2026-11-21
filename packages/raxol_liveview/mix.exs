@@ -45,7 +45,8 @@ defmodule RaxolLiveView.MixProject do
       {:jason, "~> 1.4"},
 
       # Phoenix LiveView integration (optional -- module guards with Code.ensure_loaded?)
-      {:phoenix_live_view, "~> 0.20 or ~> 1.0", optional: true},
+      {:phoenix_live_view, "~> 1.0.20 or ~> 1.1.34 or ~> 1.2.14", optional: true},
+      {:plug, "~> 1.20.4", optional: true},
       {:phoenix_html, "~> 4.0 or ~> 3.3", optional: true},
 
       # Dev/test only
