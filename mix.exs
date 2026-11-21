@@ -272,10 +272,10 @@ defmodule Raxol.MixProject do
 
   defp phoenix_deps do
     [
-      {:phoenix, "~> 1.8.1"},
+      {:phoenix, "~> 1.8.17"},
       {:phoenix_pubsub, "~> 2.1"},
       {:phoenix_ecto, "~> 4.4", optional: true},
-      {:phoenix_live_view, "~> 1.2.3"},
+      {:phoenix_live_view, "~> 1.2.14"},
       {:phoenix_html, "~> 4.3"},
       {:plug_cowboy, "~> 2.7"},
       # phoenix_live_dashboard is deliberately absent: nothing in lib/, web/ or
