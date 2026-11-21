@@ -110,15 +110,20 @@ reactivating it. Never move a published version tag as routine recovery.
 
 6. Tag that commit. Create the root tag first, then the package-scoped
    documentation tags of the changed independent-version packages on the same
-   commit, check, and push the four tags by name (never `--tags`):
+   commit, check, and push the package tags by name (never `--tags`). 2.9.0
+   changes no independent-version package, so it needs the root tag alone:
 
    ```bash
-   git tag -a v2.8.0 -m "Raxol 2.8.0" HEAD
+   git tag -a v2.9.0 -m "Raxol 2.9.0" HEAD
+   git rev-parse 'v2.9.0^{commit}' origin/master   # two identical lines
+   ```
+
+   2.8.0 also changed `raxol_speech`, `raxol_watch` and `raxol_telegram`, and
+   tagged each on the root tag's commit before pushing them:
+
+   ```bash
    git tag -a raxol_speech-v0.3.0 -m "raxol_speech 0.3.0" 'v2.8.0^{commit}'
-   git tag -a raxol_watch-v0.3.0 -m "raxol_watch 0.3.0" 'v2.8.0^{commit}'
-   git tag -a raxol_telegram-v0.3.0 -m "raxol_telegram 0.3.0" 'v2.8.0^{commit}'
-   git rev-parse 'v2.8.0^{commit}' origin/master   # two identical lines
-   git push origin raxol_speech-v0.3.0 raxol_watch-v0.3.0 raxol_telegram-v0.3.0
+   git push origin raxol_speech-v0.3.0
    ```
 
    Create only the tags for packages whose version changed. Framework packages
@@ -134,12 +139,12 @@ the checker can compare development and publish configurations.
 Push the root tag:
 
 ```bash
-git push origin v2.8.0
+git push origin v2.9.0
 ```
 
 `.github/workflows/release.yml` then:
 
-1. calls the reusable `release-hex.yml` preflight on `refs/tags/v2.8.0`;
+1. calls the reusable `release-hex.yml` preflight on `refs/tags/v2.9.0`;
 2. checks that the tag is on `master` and matches the root Mix project version,
    and records its commit for the later jobs;
 3. runs `mix raxol.release.check`;
@@ -160,7 +165,7 @@ Validate or resume an existing tag manually (after it is pushed):
 
 ```bash
 gh workflow run release-hex.yml \
-  -f release_ref=v2.8.0 \
+  -f release_ref=v2.9.0 \
   -f publish=false
 
 # Set publish=true only to resume a failed train. Approval is still required.
@@ -168,7 +173,7 @@ gh workflow run release-hex.yml \
 
 "Re-run failed jobs" on the tag's own run resumes the train and keeps the
 `llms.txt` pull request and the GitHub Release. A dispatched resume runs neither:
-afterwards run `gh workflow run llms-sync.yml -f release_ref=v2.8.0` and create
+afterwards run `gh workflow run llms-sync.yml -f release_ref=v2.9.0` and create
 the Release by hand.
 
 ## Registry verification
@@ -176,7 +181,7 @@ the Release by hand.
 After approval and completion:
 
 ```bash
-mix hex.info raxol 2.8.0
+mix hex.info raxol 2.9.0
 ```
 
 ## Package-specific manual gates

@@ -57,7 +57,7 @@ The agent packages live in [raxol-agent](https://github.com/DROOdotFOO/raxol-age
 ```elixir
 # mix.exs
 def deps do
-  [{:raxol, "~> 2.8"}]
+  [{:raxol, "~> 2.9"}]
 end
 ```
 

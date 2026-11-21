@@ -9,7 +9,7 @@ Provides the `use Raxol.Plugin` macro, a public API facade, manifest validation,
 ```elixir
 # mix.exs
 def deps do
-  [{:raxol_plugin, "~> 2.8"}]
+  [{:raxol_plugin, "~> 2.9"}]
 end
 ```
 
