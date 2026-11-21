@@ -45,7 +45,8 @@ defmodule RaxolLiveView.MixProject do
       {:jason, "~> 1.4"},
 
       # Phoenix LiveView integration (optional -- module guards with Code.ensure_loaded?)
-      {:phoenix_live_view, "~> 1.0.20 or ~> 1.1.34 or ~> 1.2.14", optional: true},
+      {:phoenix_live_view, "~> 1.0.20 or ~> 1.1.34 or ~> 1.2.14",
+       optional: true},
       {:phoenix, "~> 1.6.18 or ~> 1.7.25 or ~> 1.8.17", optional: true},
       {:plug, "~> 1.20.4", optional: true},
       {:phoenix_html, "~> 4.0 or ~> 3.3", optional: true},
@@ -89,7 +90,8 @@ defmodule RaxolLiveView.MixProject do
       links: %{
         "GitHub" => @source_url,
         "Docs" => "https://hexdocs.pm/raxol_liveview",
-        "Changelog" => "https://github.com/DROOdotFOO/raxol/blob/master/CHANGELOG.md",
+        "Changelog" =>
+          "https://github.com/DROOdotFOO/raxol/blob/master/CHANGELOG.md",
         "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
