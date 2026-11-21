@@ -8,6 +8,10 @@ MCP (Model Context Protocol) server and client for Elixir. JSON-RPC 2.0 protocol
 {:raxol_mcp, "~> 2.8"}
 ```
 
+HTTP/SSE hosts require Plug 1.20.4 or newer within the 1.20 branch for
+[EEF-CVE-2026-120287](https://cna.erlef.org/cves/CVE-2026-120287.html).
+Plug remains optional for stdio-only consumers.
+
 ## Features
 
 - **MCP Server**: GenServer routing tool/resource requests via JSON-RPC 2.0

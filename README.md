@@ -61,6 +61,13 @@ def deps do
 end
 ```
 
+Optional HTTPoison integrations require hackney 4.11.1+ within major 4,
+using idna 8 to reject overlong Punycode labels before decoding
+([EEF-CVE-2026-117678](https://cna.erlef.org/cves/CVE-2026-117678.html)).
+Invalid internationalized hostnames are now refused earlier. Direct hackney
+WebTransport users must account for newer protocol drafts and HTTP/2 TLS 1.3;
+see the [upstream release notes](https://github.com/benoitc/hackney/blob/4.11.1/NEWS.md).
+
 Or generate a new project:
 
 ```bash

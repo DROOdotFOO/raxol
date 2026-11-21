@@ -34,7 +34,7 @@ defmodule RaxolMcp.MixProject do
     [
       raxol_dep(:raxol_core, "~> 2.8", "../raxol_core"),
       {:jason, "~> 1.4"},
-      {:plug, "~> 1.16", optional: true},
+      {:plug, "~> 1.20.4", optional: true},
 
       # The remote MCP client transport (ADR-0037 decision 8). Optional because
       # this package is a dependency of main raxol, and ADR-0033 decision 2

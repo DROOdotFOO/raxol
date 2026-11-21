@@ -272,11 +272,12 @@ defmodule Raxol.MixProject do
 
   defp phoenix_deps do
     [
-      {:phoenix, "~> 1.8.1"},
+      {:phoenix, "~> 1.8.17"},
       {:phoenix_pubsub, "~> 2.1"},
       {:phoenix_ecto, "~> 4.4", optional: true},
-      {:phoenix_live_view, "~> 1.2.3"},
+      {:phoenix_live_view, "~> 1.2.14"},
       {:phoenix_html, "~> 4.3"},
+      {:plug, "~> 1.20.4"},
       {:plug_cowboy, "~> 2.7"},
       # phoenix_live_dashboard is deliberately absent: nothing in lib/, web/ or
       # config/ mounted it or referenced it, so Dependabot regenerated a PR for
@@ -347,6 +348,8 @@ defmodule Raxol.MixProject do
       {:toml, "~> 0.7"},
       # HTTP client (for optional integrations)
       {:httpoison, "~> 3.0", optional: true},
+      # idna 8 fixes EEF-CVE-2026-117678; hackney 4.11 supports that branch.
+      {:hackney, "~> 4.11 and >= 4.11.1", optional: true},
       # Localization
       {:gettext, "~> 1.0"},
       # File system watching
