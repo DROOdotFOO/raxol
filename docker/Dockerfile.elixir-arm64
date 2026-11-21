@@ -1,4 +1,4 @@
-FROM elixir:1.20.3-otp-29@sha256:5159e0bdb2c43dbb0fabc9385c20a236e2e1ad88c32d1b6cc6985e3008739be3
+FROM elixir:1.20.4-otp-29@sha256:c904ce753c35768c76a3be6f16428a83f8237ca0c402355b49bac99d74da2beb
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
