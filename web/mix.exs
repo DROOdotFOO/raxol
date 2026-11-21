@@ -48,16 +48,19 @@ defmodule RaxolPlayground.MixProject do
       # it is the client behind every remote provider. raxol_agent declares
       # it optional and optional deps do not propagate.
       {:req, "~> 0.5"},
-      {:phoenix, "~> 1.8.1"},
-      {:phoenix_live_view, "~> 1.2.3"},
+      {:phoenix, "~> 1.8.17"},
+      {:phoenix_live_view, "~> 1.2.14"},
       {:phoenix_html, "~> 4.3"},
       {:phoenix_live_reload, "~> 1.7.0", only: :dev},
       {:phoenix_pubsub, "~> 2.1"},
       {:jason, "~> 1.4.4"},
+      {:plug, "~> 1.20.4"},
       {:plug_cowboy, "~> 2.7"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.2", runtime: Mix.env() == :dev},
-      {:swoosh, "~> 1.3"},
+      # Swoosh 1.30 supports patched idna without overriding its constraints.
+      {:swoosh, "~> 1.30.0"},
+      {:idna, "~> 8.0"},
       {:finch, "~> 0.13"},
       {:telemetry_metrics, "~> 1.1"},
       {:telemetry_poller, "~> 1.2"},

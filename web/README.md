@@ -8,6 +8,17 @@ framework change shows up here on the next compile, and `raxol_agent` and
 `raxol_payments` from Hex. Deployment lives in
 [../docs/deployment/FLY_IO.md](../docs/deployment/FLY_IO.md).
 
+The web dependency floors are Phoenix 1.8.17, Plug 1.20.4, LiveView 1.2.14
+and idna 8. Swoosh 1.30 supports idna 8 within its declared constraints.
+The November 21 Phoenix patch additionally closes the binary-broadcast and
+Presence tracker denial-of-service advisories
+([EEF-CVE-2026-129344](https://cna.erlef.org/cves/CVE-2026-129344.html),
+[EEF-CVE-2026-128361](https://cna.erlef.org/cves/CVE-2026-128361.html)).
+The earlier Plug, LiveView and idna floors close EEF-CVE-2026-120287,
+EEF-CVE-2026-126334 and EEF-CVE-2026-117678. No dependency override is needed.
+The root's optional HTTPoison/hackney integration is not installed here;
+the web app's idna dependency comes from Swoosh.
+
 ## Routes
 
 Defined in [lib/raxol_playground_web/router.ex](lib/raxol_playground_web/router.ex).

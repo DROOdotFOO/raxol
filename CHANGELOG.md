@@ -2,6 +2,9 @@
 
 - Require patched Plug 1.20.4 and LiveView 1.2.14 in standalone runtime locks; the LiveView package also permits patched 1.0.20/1.1.34 branches. Drop vulnerable LiveView 0.20 support. Fix [EEF-CVE-2026-120287](https://cna.erlef.org/cves/CVE-2026-120287.html) and [EEF-CVE-2026-126334](https://cna.erlef.org/cves/CVE-2026-126334.html) without relying on a host application's lock.
 - Require optional hackney `~> 4.11 and >= 4.11.1` for idna 8 and [EEF-CVE-2026-117678](https://cna.erlef.org/cves/CVE-2026-117678.html). Preserve the parent's newer compatible hackney 4.12.1 graph, keep HTTPoison 3 within its declared major-4 constraint, and use no overrides. Invalid IDNs reject earlier; direct WebTransport consumers must account for changed drafts and HTTP/2 TLS 1.3.
+- Require optional hackney `~> 4.11.1` for idna 8 and [EEF-CVE-2026-117678](https://cna.erlef.org/cves/CVE-2026-117678.html). Update only hackney/idna and required h2/quic/webtransport children; keep HTTPoison 3 and respect its `~> 4.0` constraint without overrides. Invalid IDNs reject earlier; direct WebTransport consumers must account for changed drafts and HTTP/2 TLS 1.3.
+- Review fixes: patch the web app, gateway, Telegram and standalone MCP lockfiles too. Web requires Swoosh 1.30 for its compatible idna 8 range, without dependency overrides; standalone MCP enforces the patched optional Plug floor.
+- Require Phoenix 1.8.17 in root/web and their independent consumer locks for the November 21 [binary-broadcast dispatch](https://cna.erlef.org/cves/CVE-2026-129344.html) and [Presence tracker](https://cna.erlef.org/cves/CVE-2026-128361.html) denial-of-service advisories. LiveView permits only patched supported Phoenix branches (1.6.18, 1.7.25 or 1.8.17 and later patch releases).
 
 ### Added
 

@@ -22,6 +22,12 @@ The optional Plug floor also excludes the multipart length-limit bypass
 ([EEF-CVE-2026-120287](https://cna.erlef.org/cves/CVE-2026-120287.html));
 it does not install Plug in hosts that do not use it.
 
+Phoenix hosts must also use a patched minor branch: 1.6.18+, 1.7.25+,
+or 1.8.17+ (within each minor). These optional floors cover the November 21
+binary-broadcast dispatch and Presence tracker denial-of-service advisories
+([EEF-CVE-2026-129344](https://cna.erlef.org/cves/CVE-2026-129344.html),
+[EEF-CVE-2026-128361](https://cna.erlef.org/cves/CVE-2026-128361.html)).
+
 ## Modules
 
 | Module | Purpose |
