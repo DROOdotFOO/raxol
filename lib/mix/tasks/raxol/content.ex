@@ -15,8 +15,8 @@ defmodule Mix.Raxol.Content do
       }) do
     extra_deps =
       []
-      |> maybe_add(liveview?, ~s|{:phoenix_live_view, "~> 1.0"}|)
-      |> maybe_add(liveview?, ~s|{:phoenix, "~> 1.7"}|)
+      |> maybe_add(liveview?, ~s|{:phoenix_live_view, "~> 1.2.15"}|)
+      |> maybe_add(liveview?, ~s|{:phoenix, "~> 1.8.17"}|)
 
     all_deps = [~s|{:raxol, "~> #{version}"}| | extra_deps]
     deps_lines = Enum.map_join(all_deps, ",\n", &("      " <> &1))

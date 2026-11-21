@@ -272,10 +272,13 @@ defmodule Raxol.MixProject do
 
   defp phoenix_deps do
     [
-      {:phoenix, "~> 1.8.1"},
+      # Floors: the first releases past GHSA-pvfx-rx4x-phrr, GHSA-5vmc-qgf8-rw36
+      # (phoenix 1.8.17) and GHSA-v4p7-3pm2-wq6c (phoenix_live_view 1.2.14; 1.2.15
+      # restores its TypeScript declarations). Lockfiles do not reach Hex users.
+      {:phoenix, "~> 1.8.17"},
       {:phoenix_pubsub, "~> 2.1"},
       {:phoenix_ecto, "~> 4.4", optional: true},
-      {:phoenix_live_view, "~> 1.2.3"},
+      {:phoenix_live_view, "~> 1.2.15"},
       {:phoenix_html, "~> 4.3"},
       {:plug_cowboy, "~> 2.7"},
       # phoenix_live_dashboard is deliberately absent: nothing in lib/, web/ or

@@ -13,6 +13,8 @@ def deps do
 end
 ```
 
+`phoenix_live_view` is an optional dependency here and this package accepts any 0.20 or 1.x release, so require the patched versions yourself: `{:phoenix, "~> 1.8.17"}` and `{:phoenix_live_view, "~> 1.2.15"}` (see the 2.9.0 security notes in the changelog).
+
 ## Modules
 
 | Module | Purpose |
