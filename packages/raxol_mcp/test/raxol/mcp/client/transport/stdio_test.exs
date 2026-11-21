@@ -1,6 +1,7 @@
 defmodule Raxol.MCP.Client.Transport.StdioTest do
-  # RAXOL_WALLET_KEY is set by no other test in this package's VM and read by
-  # nothing in it, so the async run is safe.
+  # RAXOL_WALLET_KEY and the RAXOL_MCP_STDIO_PROBE_* names are set by no other
+  # test in this package's VM and read by nothing in it, so the async run is
+  # safe.
   use ExUnit.Case, async: true
 
   @moduletag :unix_only
@@ -38,5 +39,42 @@ defmodule Raxol.MCP.Client.Transport.StdioTest do
 
   test "a secret the spec's env names explicitly reaches the server" do
     assert server_sees([{"RAXOL_WALLET_KEY", "given"}]) == "given|unset|home"
+  end
+
+  describe "credentials by name" do
+    @probes %{
+      "RAXOL_MCP_STDIO_PROBE_API_KEY" => "sk-probe",
+      "RAXOL_MCP_STDIO_PROBE_TOKEN" => "tok-probe",
+      "RAXOL_MCP_STDIO_PROBE_RPC_URL" => "https://rpc.example/probe-key"
+    }
+
+    setup do
+      Enum.each(@probes, fn {name, value} -> System.put_env(name, value) end)
+      on_exit(fn -> Enum.each(Map.keys(@probes), &System.delete_env/1) end)
+    end
+
+    defp server_sees_probes(env) do
+      script =
+        ~s(printf '%s|%s|%s|%s\\n' "${RAXOL_MCP_STDIO_PROBE_API_KEY-unset}" ) <>
+          ~s("${RAXOL_MCP_STDIO_PROBE_TOKEN-unset}" "${RAXOL_MCP_STDIO_PROBE_RPC_URL-unset}" ) <>
+          ~s("${HOME:+home}")
+
+      assert {:ok, %Stdio{port: port} = handle} =
+               Stdio.connect(%{command: "/bin/sh", args: ["-c", script], env: env})
+
+      assert_receive {^port, {:data, {:eol, _}}} = line, 5_000
+      assert {:messages, [seen], _handle} = Stdio.decode_info(handle, line)
+      assert_receive {^port, {:exit_status, 0}}, 5_000
+      seen
+    end
+
+    test "a server inherits no API key, token or RPC URL from the node" do
+      assert server_sees_probes([]) == "unset|unset|unset|home"
+    end
+
+    test "a credential the spec's env names reaches the server, the others do not" do
+      assert server_sees_probes([{"RAXOL_MCP_STDIO_PROBE_TOKEN", "given"}]) ==
+               "unset|given|unset|home"
+    end
   end
 end

@@ -304,7 +304,11 @@ defmodule Raxol.MCP.Client.Transport.Stdio do
     ]
 
     # A `.mcp.json` server is third-party code: it gets the node's environment
-    # minus raxol's own secrets (`Raxol.Core.ChildEnv`).
+    # minus the credentials in it (`Raxol.Core.ChildEnv`: raxol's own secrets
+    # and every name its pattern matches, such as `*_API_KEY`, `*_TOKEN` or
+    # `BASE_RPC_URL`). A server that
+    # needs one names it in its spec's `env`, which is kept. This must stay the
+    # only `{:env, _}`: Port honours only the last one.
     [{:env, Raxol.Core.ChildEnv.port_env(charlist_env)} | opts]
   end
 
