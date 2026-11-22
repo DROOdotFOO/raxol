@@ -161,7 +161,7 @@ defmodule Raxol.Core.ChildEnvTest do
                      OP_SESSION_my_team OP_SESSION_ABC123 op_session_me
                      BW_SESSION LPASS_SESSION bw_session
                      DB_PASS1 SMTP_PASS2 DB_PASSWORD2 API_KEY2 SEEDPHRASE WALLET_SEEDPHRASE
-                     WALLET_SEED MASTER_SEED HD_SEED TOTP_SEED PASS_THROUGH ODBC_DSN
+                     WALLET_SEED MASTER_SEED HD_SEED TOTP_SEED
                      REDIS_TLS_URL DATABASE_PUBLIC_URL DATABASE_PRIVATE_URL POSTGRES_PRISMA_URL
                      POSTGRES_URL_NON_POOLING HEROKU_POSTGRESQL_ONYX_URL AMQPS_URL CLOUDAMQP_URL
                      REDISCLOUD_URL REDISTOGO_URL CELERY_BROKER_URL READ_DB_URL DB_URL PG_URL
@@ -169,12 +169,13 @@ defmodule Raxol.Core.ChildEnvTest do
                      OPENSEARCH_URL CLICKHOUSE_URL COUCHDB_URL redis_tls_url
                      GITHUB_PAT GH_PAT PAT AZURE_DEVOPS_PAT GITLAB_PAT_2 github_pat
                      MYSQL_PWD DB_PWD MYSQL_PWD2 mysql_pwd
-                     SLACK_WEBHOOK_URL DISCORD_WEBHOOK WEBHOOK_URL TEAMS_WEBHOOKS
+                     SLACK_WEBHOOK_URL DISCORD_WEBHOOK TEAMS_WEBHOOKS
                      ALERTWEBHOOK slack_webhook_url
                      ETH_PRIVATEKEY WALLET_MNEMONICS BW_CLIENTSECRET
                      AZURE_STORAGE_CONNECTION_STRING DB_CONNECTION_STRING
                      MONGOHQ_URL MONGOLAB_URI SMTP_URL MAIL_URL EMAIL_URL
-                     PK DEPLOYER_PK WALLET_PK ETH_PK2) do
+                     PK DEPLOYER_PK WALLET_PK ETH_PK2
+                     NGROK_AUTHTOKEN TS_AUTHKEY CLOUDFLARE_APITOKEN GITLAB_ACCESSTOKEN) do
         assert ChildEnv.secret?(name), name
       end
 
@@ -187,7 +188,8 @@ defmodule Raxol.Core.ChildEnvTest do
                      PATCH_LEVEL PATTERN DISPATCH PWD_HOME XDG_RUNTIME_DIR
                      DATABASE_POOL_SIZE REDIS_HOST DBUS_SESSION_BUS_ADDRESS DB_HOST
                      KAFKA_BROKERS BROKER_HOST DB_HOST_URL PG_ADMIN_UI_URL
-                     BROKER_DASHBOARD_URL PK_COLUMN USER_PK_FIELD CONNECTION) do
+                     BROKER_DASHBOARD_URL PK_COLUMN USER_PK_FIELD CONNECTION
+                     EMAIL_CONFIRMATION_URL MAIL_LOGO_URL SMTP_HOST) do
         refute ChildEnv.secret?(name), name
       end
     end
@@ -243,6 +245,16 @@ defmodule Raxol.Core.ChildEnvTest do
       end
     end
 
+    # The word rules cannot tell these from credentials. Denying them is
+    # the documented cost (moduledoc, 2.9.1 changelog), not a bug to fix:
+    # an operator gives one back through `pass:` or the spawn's `env`.
+    test "some names that hold no secret are denied on purpose" do
+      for name <- ~w(PASS_THROUGH FIRST_PASS ODBC_DSN DSN_TIMEOUT GLOB_PAT ORIG_PWD
+                     WEBHOOK_URL WEBHOOK_PORT RABBITMQ_MANAGEMENT_URL) do
+        assert ChildEnv.secret?(name), name
+      end
+    end
+
     test "an over-long name is denied without matching" do
       long = String.duplicate("DB_", 200) <> "X"
       assert byte_size(long) > 256
@@ -266,6 +278,13 @@ defmodule Raxol.Core.ChildEnvTest do
           do: Application.put_env(:raxol_core, ChildEnv, previous),
           else: Application.delete_env(:raxol_core, ChildEnv)
       end)
+    end
+
+    test "pass: is exact for the named set: another case of a passed name is still denied" do
+      Application.put_env(:raxol_core, ChildEnv, pass: ["SSH_AUTH_SOCK"])
+
+      refute ChildEnv.secret?("SSH_AUTH_SOCK")
+      assert ChildEnv.secret?("ssh_auth_sock")
     end
 
     test "a passed name reaches the child, as a nested raxol node needs its key" do

@@ -120,10 +120,11 @@ reactivating it. Never move a published version tag as routine recovery.
    train skips a version already on Hex, so edits to an independent-version
    package's `mix.exs` since its last tag reach Hex only when its version is
    bumped. 2.9.1 changes only `raxol_core` and `raxol`, so it needs the root
-   tag alone. Push it only once no other release run is publishing (`gh run
-   list --workflow release.yml`): runs are grouped by tag, so a second train
-   would publish the same not-yet-live versions from its own tree and race
-   the first:
+   tag alone, and no package tags. Push the `v2.9.1` tag (see "Publish the
+   public Hex train" below) only once no other release run is publishing
+   (`gh run list --workflow release.yml`): runs are grouped by tag, so a
+   second train would publish the same not-yet-live versions from its own
+   tree and race the first:
 
    ```bash
    git tag -a v2.9.1 -m "Raxol 2.9.1" HEAD
@@ -144,8 +145,9 @@ reactivating it. Never move a published version tag as routine recovery.
    git push origin raxol_speech-v0.3.1 raxol_watch-v0.3.1 raxol_telegram-v0.3.1 raxol_gateway-v0.2.1
    ```
 
-   Push the root tag last: it starts the release workflow, whose HexDocs
-   `source_ref` links need the package tags to exist.
+   When a release does have package tags, push the root tag last: it starts
+   the release workflow, whose HexDocs `source_ref` links need the package
+   tags to exist.
 
    2.8.0 also bumped `raxol_speech`, `raxol_watch` and `raxol_telegram`, and
    tagged each on the root tag's commit before pushing them:
@@ -219,6 +221,16 @@ After approval and completion:
 
 ```bash
 mix hex.info raxol 2.9.1
+mix hex.info raxol_core 2.9.1   # 2.9.1 carries its fix in raxol_core
+```
+
+2.9.1 is a security fix that `mix deps.update raxol` does not pull: the
+family requirement stays `raxol_core ~> 2.9`, so a locked 2.9.0 is kept.
+Once 2.9.1 is live, retire 2.9.0 so every resolver still on it is warned
+(owner, with the Hex key):
+
+```bash
+mix hex.retire raxol_core 2.9.0 security --message "Child processes inherit more credentials; update to 2.9.1"
 ```
 
 ## Package-specific manual gates

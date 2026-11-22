@@ -16,7 +16,8 @@ defmodule Raxol.Core.ChildEnv do
       (case-insensitive):
         * a `_`-separated segment, anywhere in the name, of `KEY`, `KEYS`,
           `APIKEY`, `APIKEYS`, `PRIVKEY`, `TOKEN`, `TOKENS`, `SECRET`,
-          `SECRETS`, `CLIENTSECRET`, `PASSWORD`, `PASSWD`, `PASS`,
+          `SECRETS`, `CLIENTSECRET`, `AUTHTOKEN`, `AUTHKEY`, `APITOKEN`,
+          `ACCESSTOKEN`, `PASSWORD`, `PASSWD`, `PASS`,
           `PASSPHRASE`, `MNEMONIC`, `MNEMONICS`, `SEEDPHRASE`, `DSN`, `PAT`
           (a personal access token), `PRIVATEKEY`, `CREDENTIAL` or
           `CREDENTIALS`, or of the two-word `CONNECTION_STRING`,
@@ -39,8 +40,8 @@ defmodule Raxol.Core.ChildEnv do
           `DISCORD_WEBHOOK`, `WEBHOOKS_SECRET`), since a webhook URL is
           itself the credential that posts to it; settings such as
           `WEBHOOK_PORT`, and an app's own public `WEBHOOK_URL`, go too;
-        * `PK` as the last segment (`DEPLOYER_PK`, `WALLET_PK`, a bare
-          `PK`), a deployer's private key in Foundry and Hardhat setups;
+        * `PK`, optionally followed by digits, as the last segment
+          (`DEPLOYER_PK`, `WALLET_PK`, `ETH_PK2`, a bare `PK`), a deployer's private key in Foundry and Hardhat setups;
         * any name over 256 bytes, which no real variable has;
         * a password-manager session token: 1Password's `OP_SESSION_<account>`
           (at the start of the name), Bitwarden's `BW_SESSION` and LastPass's
@@ -54,11 +55,11 @@ defmodule Raxol.Core.ChildEnv do
           `MONGODB`, `AMQP`, `AMQPS`, `CLOUDAMQP`, `RABBITMQ`,
           `ELASTICSEARCH`, `OPENSEARCH`, `CLICKHOUSE` and `COUCHDB`
           (`REDIS_TLS_URL`, `POSTGRES_PRISMA_URL`,
-          `HEROKU_POSTGRESQL_ONYX_URL`), the legacy `MONGOHQ` and
-          `MONGOLAB`, and the mail URLs `SMTP`, `MAIL` and `EMAIL`
-          (`SMTP_URL`, `MAIL_URL`, which carry `user:pass@`); and `DB`, `PG` or `BROKER`
+          `HEROKU_POSTGRESQL_ONYX_URL`) and the legacy `MONGOHQ` and
+          `MONGOLAB`; and `DB`, `PG`, `BROKER`, `SMTP`, `MAIL` or `EMAIL`
           directly before `_URL` or `_URI` (`READ_DB_URL`, `PG_URL`,
-          `CELERY_BROKER_URL`, but not `DB_HOST_URL`). A long service word
+          `CELERY_BROKER_URL`, `SMTP_URL` and `MAIL_URL`, which carry
+          `user:pass@`; but not `DB_HOST_URL` or `EMAIL_CONFIRMATION_URL`). A long service word
           with any segments after it also catches a URL with no password,
           such as `REDIS_INSIGHT_UI_URL`;
         * `PGPASSWORD` and any other `PG...PASSWORD` (`PGADMIN_PASSWORD`,
@@ -182,12 +183,14 @@ defmodule Raxol.Core.ChildEnv do
   # `OLDPWD`) is the shell's. A bare `SEED` is a random-number seed far more
   # often than a wallet's, so only the wallet shapes are listed. A long
   # service word may have segments before `_URL` (`REDIS_TLS_URL`,
-  # `DATABASE_PUBLIC_URL`); the short `DB`, `PG` and `BROKER` must be
-  # followed by `_URL`/`_URI` directly, so `DB_HOST_URL` is kept. `PK` (a
+  # `DATABASE_PUBLIC_URL`); `DB`, `PG`, `BROKER` and the mail words `SMTP`,
+  # `MAIL`, `EMAIL` must be followed by `_URL`/`_URI` directly, so
+  # `DB_HOST_URL` and `EMAIL_CONFIRMATION_URL` are kept. `PK` (a
   # deployer's private key, `DEPLOYER_PK`) counts only as the last segment,
   # since elsewhere it is usually a primary key.
   @credential ~r/
     (\A|_)(APIKEYS?|KEYS?|PRIVKEY|PRIVATEKEY|TOKENS?|SECRETS?|CLIENTSECRET
+           |AUTHTOKEN|AUTHKEY|APITOKEN|ACCESSTOKEN
            |CREDENTIALS?|DSN|PAT|CONNECTION_STRING
            |PASSWORD|PASSWD|PASSPHRASE|PASS
            |MNEMONICS?|SEEDPHRASE|SEED_PHRASE|(WALLET|MASTER|HD|TOTP)_SEED)(_|\d|\z)
@@ -199,9 +202,8 @@ defmodule Raxol.Core.ChildEnv do
     | (\A|_)(DATABASE|POSTGRES|POSTGRESQL|MYSQL|MARIADB|MSSQL
            |REDIS|REDISCLOUD|REDISTOGO|VALKEY|MEMCACHED|MONGO|MONGODB
            |AMQP|AMQPS|CLOUDAMQP|RABBITMQ
-           |ELASTICSEARCH|OPENSEARCH|CLICKHOUSE|COUCHDB|MONGOHQ|MONGOLAB
-           |SMTP|MAIL|EMAIL)(_\w+)?_UR[LI]
-    | (\A|_)(DB|PG|BROKER)_UR[LI]
+           |ELASTICSEARCH|OPENSEARCH|CLICKHOUSE|COUCHDB|MONGOHQ|MONGOLAB)(_\w+)?_UR[LI]
+    | (\A|_)(DB|PG|BROKER|SMTP|MAIL|EMAIL)_UR[LI]
     | (\A|_)PG\w*PASSWORD
     | (?<!G)RPC
   /xi
@@ -240,18 +242,19 @@ defmodule Raxol.Core.ChildEnv do
   @spec secret?(String.t()) :: boolean()
   def secret?(name) when is_binary(name), do: denied?(config!(), name)
 
-  # The named set is matched case-insensitively too, so `ssh_auth_sock` is
-  # denied like `SSH_AUTH_SOCK`; `pass:` stays exact.
   # A name longer than this is denied without matching: no real variable
   # name is, and the pattern's `\w+` runs make matching a pathological
   # multi-kilobyte name in the launch environment slow on every spawn.
   @max_name 256
 
+  # The named set is matched case-insensitively too, so `ssh_auth_sock` is
+  # denied like `SSH_AUTH_SOCK`; `pass:` stays exact, so passing
+  # `SSH_AUTH_SOCK` does not let `ssh_auth_sock` through.
   @spec denied?(config(), String.t()) :: boolean()
   defp denied?(%{pass: pass} = config, name) do
     name not in pass and
       (byte_size(name) > @max_name or
-         String.upcase(name) in Enum.map(named(config), &String.upcase/1) or
+         String.upcase(name) in Enum.map(@secrets ++ config.extra_secrets, &String.upcase/1) or
          Regex.match?(@credential, name))
   end
 
