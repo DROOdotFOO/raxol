@@ -4,7 +4,7 @@
 
 ## Quick start
 
-    {:raxol, "~> 2.8"}                 # add to mix.exs
+    {:raxol, "~> 2.9"}                 # add to mix.exs
 
 ## Capability summary
 
@@ -28,16 +28,16 @@ Governance: a tool marked sensitive is denied unless the call's context carries 
 
 ## Packages
 
-- raxol `{:raxol, "~> 2.8"}`: Full framework
+- raxol `{:raxol, "~> 2.9"}`: Full framework
 - raxol_agent `{:raxol_agent, "~> 3.1"}`: AI agents
 - raxol_payments `{:raxol_payments, "~> 0.3"}`: Agent commerce
-- raxol_mcp `{:raxol_mcp, "~> 2.8"}`: MCP server
-- raxol_liveview `{:raxol_liveview, "~> 2.8"}`: LiveView bridge
-- raxol_sensor `{:raxol_sensor, "~> 2.8"}`: Sensor fusion
-- raxol_terminal `{:raxol_terminal, "~> 2.8"}`: Terminal emulation
-- raxol_core `{:raxol_core, "~> 2.8"}`: Behaviours, events
-- raxol_journal `{:raxol_journal, "~> 2.8"}`: Session journal
-- raxol_plugin `{:raxol_plugin, "~> 2.8"}`: Plugin SDK
+- raxol_mcp `{:raxol_mcp, "~> 2.9"}`: MCP server
+- raxol_liveview `{:raxol_liveview, "~> 2.9"}`: LiveView bridge
+- raxol_sensor `{:raxol_sensor, "~> 2.9"}`: Sensor fusion
+- raxol_terminal `{:raxol_terminal, "~> 2.9"}`: Terminal emulation
+- raxol_core `{:raxol_core, "~> 2.9"}`: Behaviours, events
+- raxol_journal `{:raxol_journal, "~> 2.9"}`: Session journal
+- raxol_plugin `{:raxol_plugin, "~> 2.9"}`: Plugin SDK
 - raxol_speech `{:raxol_speech, "~> 0.3"}`: TTS/STT
 - raxol_telegram `{:raxol_telegram, "~> 0.3"}`: Telegram bot
 - raxol_gateway `{:raxol_gateway, "~> 0.2"}`: Messaging gateway
