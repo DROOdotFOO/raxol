@@ -3,10 +3,12 @@
 Release process for the public Hex train. Publishing is close to
 irreversible: a new Hex version has a one-hour update window.
 
-2.8.0 is published: the Hex train, `raxol_gateway` 0.2.0, and the `v2.8.0`
-GitHub Release. This line and the table below record what is on Hex, and are
-updated after a publish (see "After publishing"), not when a release is
-prepared.
+2.9.1 is published: `raxol` and `raxol_core` 2.9.1 on top of the 2.9.0
+train (the other framework packages at 2.9.0, `raxol_speech`, `raxol_watch`
+and `raxol_telegram` 0.3.1, `raxol_gateway` 0.2.1), and the `v2.9.0` and
+`v2.9.1` GitHub Releases. This line and the table below record what is on
+Hex, and are updated after a publish (see "After publishing"), not when a
+release is prepared.
 
 ## One-time prerequisites
 
@@ -29,18 +31,18 @@ prepared.
 
 | Package | Registry | Current version |
 | --- | --- | --- |
-| `raxol` | Hex | 2.8.0 |
-| `raxol_core` | Hex | 2.8.0 |
-| `raxol_sensor` | Hex | 2.8.0 |
-| `raxol_journal` | Hex | 2.8.0 |
-| `raxol_terminal` | Hex | 2.8.0 |
-| `raxol_mcp` | Hex | 2.8.0 |
-| `raxol_liveview` | Hex | 2.8.0 |
-| `raxol_plugin` | Hex | 2.8.0 |
-| `raxol_speech` | Hex | 0.3.0 |
-| `raxol_watch` | Hex | 0.3.0 |
-| `raxol_telegram` | Hex | 0.3.0 |
-| `raxol_gateway` | Hex | 0.2.0 |
+| `raxol` | Hex | 2.9.1 |
+| `raxol_core` | Hex | 2.9.1 |
+| `raxol_sensor` | Hex | 2.9.0 |
+| `raxol_journal` | Hex | 2.9.0 |
+| `raxol_terminal` | Hex | 2.9.0 |
+| `raxol_mcp` | Hex | 2.9.0 |
+| `raxol_liveview` | Hex | 2.9.0 |
+| `raxol_plugin` | Hex | 2.9.0 |
+| `raxol_speech` | Hex | 0.3.1 |
+| `raxol_watch` | Hex | 0.3.1 |
+| `raxol_telegram` | Hex | 0.3.1 |
+| `raxol_gateway` | Hex | 0.2.1 |
 
 The agent packages, `@raxol/cli` included, release from
 [raxol-agent](https://github.com/DROOdotFOO/raxol-agent);
