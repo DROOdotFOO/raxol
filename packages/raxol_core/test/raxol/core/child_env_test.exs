@@ -79,6 +79,12 @@ defmodule Raxol.Core.ChildEnvTest do
       "RAXOL_TEST_PROBE_DATABASE_URL" => "ecto://u:probe@db/x",
       "RAXOL_TEST_PROBE_ETH_RPC" => "https://rpc.example/probe-key",
       "RAXOL_TEST_PROBE_MAINNETRPC" => "https://rpc.example/probe-key",
+      "RAXOL_TEST_PROBE_SMTP_PASS" => "pass-probe",
+      "RAXOL_TEST_PROBE_SEED_PHRASE" => "abandon probe",
+      "RAXOL_TEST_PROBE_SENTRY_DSN" => "https://probe@sentry.example/1",
+      "OP_SESSION_RAXOL_TEST_PROBE" => "op-probe",
+      "RAXOL_TEST_PROBE_SSH_ASKPASS" => "kept",
+      "RAXOL_TEST_PROBE_PASSAGE" => "kept",
       "RAXOL_TEST_PROBE_MONKEY" => "kept",
       "RAXOL_TEST_PROBE_GRPC_HOST" => "kept",
       "RAXOL_TEST_PROBE_TOKENIZER" => "kept"
@@ -100,8 +106,11 @@ defmodule Raxol.Core.ChildEnvTest do
                  RAXOL_TEST_PROBE_PASSPHRASE RAXOL_TEST_PROBE_CREDENTIALS
                  RAXOL_TEST_PROBE_APIKEY RAXOL_TEST_PROBE_DATABASE_URL
                  RAXOL_TEST_PROBE_ETH_RPC RAXOL_TEST_PROBE_MAINNETRPC
+                 RAXOL_TEST_PROBE_SMTP_PASS RAXOL_TEST_PROBE_SEED_PHRASE
+                 RAXOL_TEST_PROBE_SENTRY_DSN OP_SESSION_RAXOL_TEST_PROBE
                  raxol_test_probe_lower_token)
-    @kept ~w(RAXOL_TEST_PROBE_MONKEY RAXOL_TEST_PROBE_TOKENIZER RAXOL_TEST_PROBE_GRPC_HOST)
+    @kept ~w(RAXOL_TEST_PROBE_MONKEY RAXOL_TEST_PROBE_TOKENIZER RAXOL_TEST_PROBE_GRPC_HOST
+             RAXOL_TEST_PROBE_SSH_ASKPASS RAXOL_TEST_PROBE_PASSAGE)
 
     test "a child inherits no variable whose name looks like a credential" do
       assert sees(fn -> ChildEnv.cmd_env() end, @scrubbed ++ @kept) ==
@@ -135,13 +144,23 @@ defmodule Raxol.Core.ChildEnvTest do
                      RPC_BASE ORDER_RPC_8453 DB_PASSWORD WALLET_MNEMONIC gh_token
                      OPENAI_API_KEY_2 ANTHROPIC_API_KEY_PROD API_KEYS SIGNER_KEY_PEM TOKEN
                      DATABASE_URL_UNPOOLED POSTGRES_URL REDIS_URL MONGODB_URI MY_PGPASSWORD
-                     SECRETS ssh_auth_sock release_cookie) do
+                     SECRETS ssh_auth_sock release_cookie
+                     SMTP_PASS DB_PASS RAXOL_DB_PASS PASS SMTP_PASS_2 smtp_pass
+                     SEED_PHRASE WALLET_SEED_PHRASE seed_phrase SEED_PHRASE_BACKUP
+                     SENTRY_DSN DSN DATABASE_DSN_RO sentry_dsn
+                     OP_SESSION_my_team OP_SESSION_ABC123 op_session_me
+                     BW_SESSION LPASS_SESSION bw_session
+                     DB_PASS1 SMTP_PASS2 DB_PASSWORD2 API_KEY2 SEEDPHRASE WALLET_SEEDPHRASE
+                     WALLET_SEED MASTER_SEED HD_SEED TOTP_SEED PASS_THROUGH ODBC_DSN) do
         assert ChildEnv.secret?(name), name
       end
 
       for name <-
             ~w(HOME PATH PWD OLDPWD KEYBOARD MONKEY TOKENIZER TOKENIZERS_PARALLELISM
-                     GRPC_HOST GRPC_VERBOSITY SSH_AUTH_SOCKET PGHOST PGUSER TERM LESSKEY) do
+                     GRPC_HOST GRPC_VERBOSITY SSH_AUTH_SOCKET PGHOST PGUSER TERM LESSKEY
+                     SSH_ASKPASS SUDO_ASKPASS GIT_ASKPASS PASSAGE BYPASS_CACHE COMPASS_HOME
+                     SEED RANDOM_SEED SEED_URL PHRASE DSNAME OP_SESSION MY_OP_SESSION_X
+                     BW_SESSIONS SESSION PASSAGE_2) do
         refute ChildEnv.secret?(name), name
       end
     end
@@ -172,6 +191,28 @@ defmodule Raxol.Core.ChildEnvTest do
       # the result does not depend on what the developer's shell exports.
       for name <- Map.keys(@probes) ++ ~w(RAXOL_SLEUTH_API_KEY HOME PATH) do
         assert ChildEnv.secret?(name) == MapSet.member?(unset, name), name
+      end
+    end
+
+    # raxol-agent's `Raxol.Agent.ChildEnv` denies these shapes on top of
+    # raxol_core 2.9.0's pattern (its `@gaps`, a snapshot of raxol-agent main
+    # after its PR #32). Core's pattern alone must match every name they do,
+    # so raxol-agent can drop the list once it requires raxol_core ~> 2.9.1.
+    test "the pattern covers raxol-agent's gap list against raxol_core 2.9.0" do
+      gaps = ~r/(_PASS|_SEED_PHRASE|_DSN)\z|\ASEED_PHRASE\z|\AOP_SESSION_/i
+
+      bare = ~w(SEED_PHRASE OP_SESSION_ OP_SESSION_me OP_SESSION_A_B)
+
+      suffixed =
+        for prefix <- ["A", "X_A", "MY_APP_A", "_", "__", "A1"],
+            suffix <- ~w(_PASS _SEED_PHRASE _DSN),
+            do: prefix <> suffix
+
+      corpus = Enum.flat_map(bare ++ suffixed, &[&1, String.downcase(&1)])
+
+      for name <- corpus do
+        assert Regex.match?(gaps, name), "not a gap-list name: " <> name
+        assert Regex.match?(ChildEnv.credential_pattern(), name), name
       end
     end
 

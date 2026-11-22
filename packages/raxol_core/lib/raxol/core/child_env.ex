@@ -16,11 +16,22 @@ defmodule Raxol.Core.ChildEnv do
       (case-insensitive):
         * a `_`-separated segment, anywhere in the name, of `KEY`, `KEYS`,
           `APIKEY`, `APIKEYS`, `PRIVKEY`, `TOKEN`, `TOKENS`, `SECRET`,
-          `SECRETS`, `PASSWORD`, `PASSWD`, `PASSPHRASE`, `MNEMONIC`,
-          `CREDENTIAL` or `CREDENTIALS` (so `ANTHROPIC_API_KEY`,
-          `OPENAI_API_KEY_2`, `GH_TOKEN`, `AWS_ACCESS_KEY_ID`,
-          `SECRET_KEY_BASE`, `OPENAI_APIKEY`, a bare `TOKEN`; not `KEYBOARD`,
-          `TOKENIZERS_PARALLELISM` or the shell's `PWD`);
+          `SECRETS`, `PASSWORD`, `PASSWD`, `PASS`, `PASSPHRASE`, `MNEMONIC`,
+          `SEEDPHRASE`, `DSN`, `CREDENTIAL` or `CREDENTIALS`, or of the
+          two-word `SEED_PHRASE`, `WALLET_SEED`, `MASTER_SEED`, `HD_SEED` or
+          `TOTP_SEED`; a segment may end in a digit (so
+          `ANTHROPIC_API_KEY`, `OPENAI_API_KEY_2`, `GH_TOKEN`,
+          `AWS_ACCESS_KEY_ID`, `SECRET_KEY_BASE`, `OPENAI_APIKEY`, `SMTP_PASS`,
+          `DB_PASS1`, `WALLET_SEED_PHRASE`, `SENTRY_DSN`, a bare `TOKEN` or
+          `SEED_PHRASE`; not `KEYBOARD`, `TOKENIZERS_PARALLELISM`,
+          `SSH_ASKPASS`, a random-number `SEED` or `RANDOM_SEED`, or the
+          shell's `PWD`). A `PASS` or `DSN` segment also catches names that
+          hold no secret, such as `PASS_THROUGH`, `FIRST_PASS` or an ODBC
+          `ODBC_DSN` naming a data source; give such a variable back through
+          `pass:` or the spawn's `env`;
+        * a password-manager session token: 1Password's `OP_SESSION_<account>`
+          (at the start of the name), Bitwarden's `BW_SESSION` and LastPass's
+          `LPASS_SESSION`, which unlock the operator's vault;
         * a database or broker URL, which carries its password:
           `DATABASE_URL` (also `DATABASE_URL_UNPOOLED`, `REPO_DATABASE_URL`),
           and the same for `POSTGRES`, `POSTGRESQL`, `MYSQL`, `REDIS`,
@@ -99,7 +110,7 @@ defmodule Raxol.Core.ChildEnv do
 
   A credential under a name no pattern catches is inherited unless it is in
   `:extra_secrets`: a provider URL with a key in it under another name
-  (`ALCHEMY_URL`), `MYSQL_PWD`, `GITHUB_PAT`, `SMTP_PASS`. A name that is not valid
+  (`ALCHEMY_URL`), `MYSQL_PWD`, `GITHUB_PAT`. A name that is not valid
   UTF-8 is also missed: the BEAM reads it re-encoded, so the unset names a
   different variable.
 
@@ -125,15 +136,21 @@ defmodule Raxol.Core.ChildEnv do
 
   # Credential words as whole `_`-separated segments anywhere in the name
   # (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY_2`, `AWS_ACCESS_KEY_ID`, `API_KEYS`,
-  # `GH_TOKEN`, `SECRET_KEY_BASE`), a database or broker URL, a
-  # `PG...PASSWORD`, or `RPC` anywhere but in `GRPC`; case-insensitive. A
-  # superset of the suffix-only pattern raxol-agent's `Raxol.Agent.ChildEnv`
-  # and `Raxol.AgentClientProtocol.Transport.Stdio` kept when this was
-  # written; they can use `credential_pattern/0` once they require
-  # raxol_core ~> 2.9. `PWD`, the shell's working directory, is no segment
-  # here on purpose.
+  # `GH_TOKEN`, `SECRET_KEY_BASE`, `SMTP_PASS`, `SENTRY_DSN`), a 1Password CLI
+  # session, a database or broker URL, a `PG...PASSWORD`, or `RPC` anywhere
+  # but in `GRPC`; case-insensitive. A superset of the suffix-only pattern
+  # raxol-agent's `Raxol.AgentClientProtocol.Transport.Stdio` keeps, and,
+  # since 2.9.1, of the `_PASS` / `_SEED_PHRASE` / `_DSN` / `SEED_PHRASE` /
+  # `OP_SESSION_` gaps `Raxol.Agent.ChildEnv` added on top of 2.9.0; it can
+  # drop those once it requires raxol_core ~> 2.9.1. `PWD`, the shell's
+  # working directory, is no segment here on purpose, and `PASS` is a whole
+  # segment, so `SSH_ASKPASS` (a program path) is not matched. A bare `SEED`
+  # is a random-number seed far more often than a wallet's, so only the
+  # wallet shapes are listed. A segment may end in a digit (`DB_PASS1`).
   @credential ~r/
-    (\A|_)(APIKEYS?|KEYS?|PRIVKEY|TOKENS?|SECRETS?|PASSWORD|PASSWD|PASSPHRASE|MNEMONIC|CREDENTIALS?)(_|\z)
+    (\A|_)(APIKEYS?|KEYS?|PRIVKEY|TOKENS?|SECRETS?|PASSWORD|PASSWD|PASS|PASSPHRASE|MNEMONIC|SEEDPHRASE|SEED_PHRASE|(WALLET|MASTER|HD|TOTP)_SEED|DSN|CREDENTIALS?)(_|\d|\z)
+    | \AOP_SESSION_
+    | (\A|_)(BW|LPASS)_SESSION(_|\z)
     | (\A|_)(DATABASE|POSTGRES|POSTGRESQL|MYSQL|REDIS|MONGO|MONGODB|AMQP|RABBITMQ)_UR[LI]
     | (\A|_)PG\w*PASSWORD
     | (?<!G)RPC
