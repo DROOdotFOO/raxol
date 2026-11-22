@@ -83,7 +83,13 @@ defmodule Raxol.Core.ChildEnvTest do
       "RAXOL_TEST_PROBE_SEED_PHRASE" => "abandon probe",
       "RAXOL_TEST_PROBE_SENTRY_DSN" => "https://probe@sentry.example/1",
       "OP_SESSION_RAXOL_TEST_PROBE" => "op-probe",
+      "RAXOL_TEST_PROBE_REDIS_TLS_URL" => "rediss://:probe@redis.example:6380",
+      "RAXOL_TEST_PROBE_DATABASE_PUBLIC_URL" => "postgres://u:probe@db.example/x",
+      "RAXOL_TEST_PROBE_GITHUB_PAT" => "github_pat_probe",
+      "RAXOL_TEST_PROBE_MYSQL_PWD" => "pwd-probe",
+      "RAXOL_TEST_PROBE_SLACK_WEBHOOK_URL" => "https://hooks.slack.example/services/probe",
       "RAXOL_TEST_PROBE_SSH_ASKPASS" => "kept",
+      "RAXOL_TEST_PROBE_PATH_EXTRA" => "kept",
       "RAXOL_TEST_PROBE_PASSAGE" => "kept",
       "RAXOL_TEST_PROBE_MONKEY" => "kept",
       "RAXOL_TEST_PROBE_GRPC_HOST" => "kept",
@@ -108,9 +114,13 @@ defmodule Raxol.Core.ChildEnvTest do
                  RAXOL_TEST_PROBE_ETH_RPC RAXOL_TEST_PROBE_MAINNETRPC
                  RAXOL_TEST_PROBE_SMTP_PASS RAXOL_TEST_PROBE_SEED_PHRASE
                  RAXOL_TEST_PROBE_SENTRY_DSN OP_SESSION_RAXOL_TEST_PROBE
+                 RAXOL_TEST_PROBE_REDIS_TLS_URL RAXOL_TEST_PROBE_DATABASE_PUBLIC_URL
+                 RAXOL_TEST_PROBE_GITHUB_PAT RAXOL_TEST_PROBE_MYSQL_PWD
+                 RAXOL_TEST_PROBE_SLACK_WEBHOOK_URL
                  raxol_test_probe_lower_token)
     @kept ~w(RAXOL_TEST_PROBE_MONKEY RAXOL_TEST_PROBE_TOKENIZER RAXOL_TEST_PROBE_GRPC_HOST
-             RAXOL_TEST_PROBE_SSH_ASKPASS RAXOL_TEST_PROBE_PASSAGE)
+             RAXOL_TEST_PROBE_SSH_ASKPASS RAXOL_TEST_PROBE_PASSAGE
+             RAXOL_TEST_PROBE_PATH_EXTRA)
 
     test "a child inherits no variable whose name looks like a credential" do
       assert sees(fn -> ChildEnv.cmd_env() end, @scrubbed ++ @kept) ==
@@ -151,7 +161,20 @@ defmodule Raxol.Core.ChildEnvTest do
                      OP_SESSION_my_team OP_SESSION_ABC123 op_session_me
                      BW_SESSION LPASS_SESSION bw_session
                      DB_PASS1 SMTP_PASS2 DB_PASSWORD2 API_KEY2 SEEDPHRASE WALLET_SEEDPHRASE
-                     WALLET_SEED MASTER_SEED HD_SEED TOTP_SEED PASS_THROUGH ODBC_DSN) do
+                     WALLET_SEED MASTER_SEED HD_SEED TOTP_SEED PASS_THROUGH ODBC_DSN
+                     REDIS_TLS_URL DATABASE_PUBLIC_URL DATABASE_PRIVATE_URL POSTGRES_PRISMA_URL
+                     POSTGRES_URL_NON_POOLING HEROKU_POSTGRESQL_ONYX_URL AMQPS_URL CLOUDAMQP_URL
+                     REDISCLOUD_URL REDISTOGO_URL CELERY_BROKER_URL READ_DB_URL DB_URL PG_URL
+                     MARIADB_URL MSSQL_URL VALKEY_URL MEMCACHED_URL ELASTICSEARCH_URL
+                     OPENSEARCH_URL CLICKHOUSE_URL COUCHDB_URL redis_tls_url
+                     GITHUB_PAT GH_PAT PAT AZURE_DEVOPS_PAT GITLAB_PAT_2 github_pat
+                     MYSQL_PWD DB_PWD MYSQL_PWD2 mysql_pwd
+                     SLACK_WEBHOOK_URL DISCORD_WEBHOOK WEBHOOK_URL TEAMS_WEBHOOKS
+                     ALERTWEBHOOK slack_webhook_url
+                     ETH_PRIVATEKEY WALLET_MNEMONICS BW_CLIENTSECRET
+                     AZURE_STORAGE_CONNECTION_STRING DB_CONNECTION_STRING
+                     MONGOHQ_URL MONGOLAB_URI SMTP_URL MAIL_URL EMAIL_URL
+                     PK DEPLOYER_PK WALLET_PK ETH_PK2) do
         assert ChildEnv.secret?(name), name
       end
 
@@ -160,7 +183,11 @@ defmodule Raxol.Core.ChildEnvTest do
                      GRPC_HOST GRPC_VERBOSITY SSH_AUTH_SOCKET PGHOST PGUSER TERM LESSKEY
                      SSH_ASKPASS SUDO_ASKPASS GIT_ASKPASS PASSAGE BYPASS_CACHE COMPASS_HOME
                      SEED RANDOM_SEED SEED_URL PHRASE DSNAME OP_SESSION MY_OP_SESSION_X
-                     BW_SESSIONS SESSION PASSAGE_2) do
+                     BW_SESSIONS SESSION PASSAGE_2
+                     PATCH_LEVEL PATTERN DISPATCH PWD_HOME XDG_RUNTIME_DIR
+                     DATABASE_POOL_SIZE REDIS_HOST DBUS_SESSION_BUS_ADDRESS DB_HOST
+                     KAFKA_BROKERS BROKER_HOST DB_HOST_URL PG_ADMIN_UI_URL
+                     BROKER_DASHBOARD_URL PK_COLUMN USER_PK_FIELD CONNECTION) do
         refute ChildEnv.secret?(name), name
       end
     end
@@ -214,6 +241,13 @@ defmodule Raxol.Core.ChildEnvTest do
         assert Regex.match?(gaps, name), "not a gap-list name: " <> name
         assert Regex.match?(ChildEnv.credential_pattern(), name), name
       end
+    end
+
+    test "an over-long name is denied without matching" do
+      long = String.duplicate("DB_", 200) <> "X"
+      assert byte_size(long) > 256
+      assert ChildEnv.secret?(long)
+      refute ChildEnv.secret?(String.duplicate("A", 256))
     end
 
     test "credential_pattern/0 is the case-insensitive pattern" do

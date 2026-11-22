@@ -16,26 +16,51 @@ defmodule Raxol.Core.ChildEnv do
       (case-insensitive):
         * a `_`-separated segment, anywhere in the name, of `KEY`, `KEYS`,
           `APIKEY`, `APIKEYS`, `PRIVKEY`, `TOKEN`, `TOKENS`, `SECRET`,
-          `SECRETS`, `PASSWORD`, `PASSWD`, `PASS`, `PASSPHRASE`, `MNEMONIC`,
-          `SEEDPHRASE`, `DSN`, `CREDENTIAL` or `CREDENTIALS`, or of the
-          two-word `SEED_PHRASE`, `WALLET_SEED`, `MASTER_SEED`, `HD_SEED` or
-          `TOTP_SEED`; a segment may end in a digit (so
+          `SECRETS`, `CLIENTSECRET`, `PASSWORD`, `PASSWD`, `PASS`,
+          `PASSPHRASE`, `MNEMONIC`, `MNEMONICS`, `SEEDPHRASE`, `DSN`, `PAT`
+          (a personal access token), `PRIVATEKEY`, `CREDENTIAL` or
+          `CREDENTIALS`, or of the two-word `CONNECTION_STRING`,
+          `SEED_PHRASE`, `WALLET_SEED`, `MASTER_SEED`, `HD_SEED` or
+          `TOTP_SEED`; a word ends at `_`, the end of the name or a digit (so
           `ANTHROPIC_API_KEY`, `OPENAI_API_KEY_2`, `GH_TOKEN`,
           `AWS_ACCESS_KEY_ID`, `SECRET_KEY_BASE`, `OPENAI_APIKEY`, `SMTP_PASS`,
-          `DB_PASS1`, `WALLET_SEED_PHRASE`, `SENTRY_DSN`, a bare `TOKEN` or
-          `SEED_PHRASE`; not `KEYBOARD`, `TOKENIZERS_PARALLELISM`,
+          `DB_PASS1`, `WALLET_SEED_PHRASE`, `SENTRY_DSN`, `GITHUB_PAT`, a
+          bare `TOKEN` or `SEED_PHRASE`; not `KEYBOARD`, `TOKENIZERS_PARALLELISM`,
           `SSH_ASKPASS`, a random-number `SEED` or `RANDOM_SEED`, or the
-          shell's `PWD`). A `PASS` or `DSN` segment also catches names that
-          hold no secret, such as `PASS_THROUGH`, `FIRST_PASS` or an ODBC
-          `ODBC_DSN` naming a data source; give such a variable back through
-          `pass:` or the spawn's `env`;
+          shell's `PWD`). A `PASS`, `DSN` or `PAT` segment also catches names
+          that hold no secret, such as `PASS_THROUGH`, `FIRST_PASS`, an ODBC
+          `ODBC_DSN` naming a data source, `DSN_TIMEOUT` or a `GLOB_PAT`
+          pattern; give such a variable back through `pass:` or the spawn's
+          `env`;
+        * a `PWD` segment after the first (`MYSQL_PWD`, `DB_PWD`), but not
+          a bare `PWD` or `OLDPWD`, the shell's working directories (a
+          directory under another name, `ORIG_PWD` or `INIT_PWD`, goes too);
+        * `WEBHOOK` anywhere in the name (`SLACK_WEBHOOK_URL`,
+          `DISCORD_WEBHOOK`, `WEBHOOKS_SECRET`), since a webhook URL is
+          itself the credential that posts to it; settings such as
+          `WEBHOOK_PORT`, and an app's own public `WEBHOOK_URL`, go too;
+        * `PK` as the last segment (`DEPLOYER_PK`, `WALLET_PK`, a bare
+          `PK`), a deployer's private key in Foundry and Hardhat setups;
+        * any name over 256 bytes, which no real variable has;
         * a password-manager session token: 1Password's `OP_SESSION_<account>`
           (at the start of the name), Bitwarden's `BW_SESSION` and LastPass's
           `LPASS_SESSION`, which unlock the operator's vault;
-        * a database or broker URL, which carries its password:
-          `DATABASE_URL` (also `DATABASE_URL_UNPOOLED`, `REPO_DATABASE_URL`),
-          and the same for `POSTGRES`, `POSTGRESQL`, `MYSQL`, `REDIS`,
-          `MONGO`, `MONGODB`, `AMQP` and `RABBITMQ`, as `_URL` or `_URI`;
+        * a database or broker URL, which carries its password: a
+          `DATABASE` segment followed, possibly after more segments, by
+          `_URL` or `_URI` (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`,
+          `REPO_DATABASE_URL`, `DATABASE_PUBLIC_URL`), and the same for
+          `POSTGRES`, `POSTGRESQL`, `MYSQL`, `MARIADB`, `MSSQL`, `REDIS`,
+          `REDISCLOUD`, `REDISTOGO`, `VALKEY`, `MEMCACHED`, `MONGO`,
+          `MONGODB`, `AMQP`, `AMQPS`, `CLOUDAMQP`, `RABBITMQ`,
+          `ELASTICSEARCH`, `OPENSEARCH`, `CLICKHOUSE` and `COUCHDB`
+          (`REDIS_TLS_URL`, `POSTGRES_PRISMA_URL`,
+          `HEROKU_POSTGRESQL_ONYX_URL`), the legacy `MONGOHQ` and
+          `MONGOLAB`, and the mail URLs `SMTP`, `MAIL` and `EMAIL`
+          (`SMTP_URL`, `MAIL_URL`, which carry `user:pass@`); and `DB`, `PG` or `BROKER`
+          directly before `_URL` or `_URI` (`READ_DB_URL`, `PG_URL`,
+          `CELERY_BROKER_URL`, but not `DB_HOST_URL`). A long service word
+          with any segments after it also catches a URL with no password,
+          such as `REDIS_INSIGHT_UI_URL`;
         * `PGPASSWORD` and any other `PG...PASSWORD` (`PGADMIN_PASSWORD`,
           `MY_PGPASSWORD`);
         * `RPC` anywhere in the name (`ETH_RPC`, `BASE_RPC_URL`, `RPC_BASE`,
@@ -110,7 +135,10 @@ defmodule Raxol.Core.ChildEnv do
 
   A credential under a name no pattern catches is inherited unless it is in
   `:extra_secrets`: a provider URL with a key in it under another name
-  (`ALCHEMY_URL`), `MYSQL_PWD`, `GITHUB_PAT`. A name that is not valid
+  (`ALCHEMY_URL`), a service URL whose service the list above lacks
+  (`NEO4J_URL`, `KAFKA_URL`), `NPM_CONFIG__AUTH`, `DOCKER_AUTH_CONFIG`, a
+  JWT (`CI_JOB_JWT`), a proxy URL with `user:pass@` in it (`HTTPS_PROXY`).
+  A name that is not valid
   UTF-8 is also missed: the BEAM reads it re-encoded, so the unset names a
   different variable.
 
@@ -136,22 +164,44 @@ defmodule Raxol.Core.ChildEnv do
 
   # Credential words as whole `_`-separated segments anywhere in the name
   # (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY_2`, `AWS_ACCESS_KEY_ID`, `API_KEYS`,
-  # `GH_TOKEN`, `SECRET_KEY_BASE`, `SMTP_PASS`, `SENTRY_DSN`), a 1Password CLI
-  # session, a database or broker URL, a `PG...PASSWORD`, or `RPC` anywhere
-  # but in `GRPC`; case-insensitive. A superset of the suffix-only pattern
-  # raxol-agent's `Raxol.AgentClientProtocol.Transport.Stdio` keeps, and,
-  # since 2.9.1, of the `_PASS` / `_SEED_PHRASE` / `_DSN` / `SEED_PHRASE` /
-  # `OP_SESSION_` gaps `Raxol.Agent.ChildEnv` added on top of 2.9.0; it can
-  # drop those once it requires raxol_core ~> 2.9.1. `PWD`, the shell's
-  # working directory, is no segment here on purpose, and `PASS` is a whole
-  # segment, so `SSH_ASKPASS` (a program path) is not matched. A bare `SEED`
-  # is a random-number seed far more often than a wallet's, so only the
-  # wallet shapes are listed. A segment may end in a digit (`DB_PASS1`).
+  # `GH_TOKEN`, `SECRET_KEY_BASE`, `SMTP_PASS`, `SENTRY_DSN`, `GITHUB_PAT`), a
+  # non-leading `PWD` segment, `WEBHOOK` anywhere, a password-manager session,
+  # a database or broker URL, a `PG...PASSWORD`, or `RPC` anywhere but in
+  # `GRPC`; case-insensitive, one alternative per line (whitespace is
+  # insignificant in an `x` regex).
+  #
+  # A superset of the suffix-only pattern raxol-agent's
+  # `Raxol.AgentClientProtocol.Transport.Stdio` keeps, and, since 2.9.1, of
+  # the `_PASS` / `_SEED_PHRASE` / `_DSN` / `SEED_PHRASE` / `OP_SESSION_` gaps
+  # `Raxol.Agent.ChildEnv` added on top of 2.9.0; it can drop those once it
+  # requires raxol_core ~> 2.9.1.
+  #
+  # A word ends at `_`, the end of the name, or a digit (`DB_PASS1`,
+  # `API_KEY2`). `PASS` is a whole segment, so `SSH_ASKPASS` (a program path)
+  # is not matched. `PWD` needs a segment before it, since a bare `PWD` (and
+  # `OLDPWD`) is the shell's. A bare `SEED` is a random-number seed far more
+  # often than a wallet's, so only the wallet shapes are listed. A long
+  # service word may have segments before `_URL` (`REDIS_TLS_URL`,
+  # `DATABASE_PUBLIC_URL`); the short `DB`, `PG` and `BROKER` must be
+  # followed by `_URL`/`_URI` directly, so `DB_HOST_URL` is kept. `PK` (a
+  # deployer's private key, `DEPLOYER_PK`) counts only as the last segment,
+  # since elsewhere it is usually a primary key.
   @credential ~r/
-    (\A|_)(APIKEYS?|KEYS?|PRIVKEY|TOKENS?|SECRETS?|PASSWORD|PASSWD|PASS|PASSPHRASE|MNEMONIC|SEEDPHRASE|SEED_PHRASE|(WALLET|MASTER|HD|TOTP)_SEED|DSN|CREDENTIALS?)(_|\d|\z)
+    (\A|_)(APIKEYS?|KEYS?|PRIVKEY|PRIVATEKEY|TOKENS?|SECRETS?|CLIENTSECRET
+           |CREDENTIALS?|DSN|PAT|CONNECTION_STRING
+           |PASSWORD|PASSWD|PASSPHRASE|PASS
+           |MNEMONICS?|SEEDPHRASE|SEED_PHRASE|(WALLET|MASTER|HD|TOTP)_SEED)(_|\d|\z)
+    | (\A|_)PK\d*\z
+    | _PWD(_|\d|\z)
+    | WEBHOOK
     | \AOP_SESSION_
     | (\A|_)(BW|LPASS)_SESSION(_|\z)
-    | (\A|_)(DATABASE|POSTGRES|POSTGRESQL|MYSQL|REDIS|MONGO|MONGODB|AMQP|RABBITMQ)_UR[LI]
+    | (\A|_)(DATABASE|POSTGRES|POSTGRESQL|MYSQL|MARIADB|MSSQL
+           |REDIS|REDISCLOUD|REDISTOGO|VALKEY|MEMCACHED|MONGO|MONGODB
+           |AMQP|AMQPS|CLOUDAMQP|RABBITMQ
+           |ELASTICSEARCH|OPENSEARCH|CLICKHOUSE|COUCHDB|MONGOHQ|MONGOLAB
+           |SMTP|MAIL|EMAIL)(_\w+)?_UR[LI]
+    | (\A|_)(DB|PG|BROKER)_UR[LI]
     | (\A|_)PG\w*PASSWORD
     | (?<!G)RPC
   /xi
@@ -192,10 +242,16 @@ defmodule Raxol.Core.ChildEnv do
 
   # The named set is matched case-insensitively too, so `ssh_auth_sock` is
   # denied like `SSH_AUTH_SOCK`; `pass:` stays exact.
+  # A name longer than this is denied without matching: no real variable
+  # name is, and the pattern's `\w+` runs make matching a pathological
+  # multi-kilobyte name in the launch environment slow on every spawn.
+  @max_name 256
+
   @spec denied?(config(), String.t()) :: boolean()
   defp denied?(%{pass: pass} = config, name) do
     name not in pass and
-      (String.upcase(name) in Enum.map(named(config), &String.upcase/1) or
+      (byte_size(name) > @max_name or
+         String.upcase(name) in Enum.map(named(config), &String.upcase/1) or
          Regex.match?(@credential, name))
   end
 

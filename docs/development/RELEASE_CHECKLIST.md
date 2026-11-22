@@ -119,8 +119,20 @@ reactivating it. Never move a published version tag as routine recovery.
    commit, check, and push the package tags by name (never `--tags`). The
    train skips a version already on Hex, so edits to an independent-version
    package's `mix.exs` since its last tag reach Hex only when its version is
-   bumped. 2.9.0 patch-bumps `raxol_speech`, `raxol_watch`, `raxol_telegram`
-   and `raxol_gateway` for their `~> 2.9` requirements:
+   bumped. 2.9.1 changes only `raxol_core` and `raxol`, so it needs the root
+   tag alone. Push it only once no other release run is publishing (`gh run
+   list --workflow release.yml`): runs are grouped by tag, so a second train
+   would publish the same not-yet-live versions from its own tree and race
+   the first:
+
+   ```bash
+   git tag -a v2.9.1 -m "Raxol 2.9.1" HEAD
+   git rev-parse 'v2.9.1^{commit}' origin/master   # two identical lines
+   ```
+
+   For reference (already done; do not rerun), 2.9.0 patch-bumped
+   `raxol_speech`, `raxol_watch`, `raxol_telegram` and `raxol_gateway` for
+   their `~> 2.9` requirements:
 
    ```bash
    git tag -a v2.9.0 -m "Raxol 2.9.0" HEAD
@@ -160,22 +172,26 @@ the checker can compare development and publish configurations.
 Push the root tag:
 
 ```bash
-git push origin v2.9.0
+git push origin v2.9.1
 ```
 
 `.github/workflows/release.yml` then:
 
-1. calls the reusable `release-hex.yml` preflight on `refs/tags/v2.9.0`;
+1. calls the reusable `release-hex.yml` preflight on `refs/tags/v2.9.1`;
 2. checks that the tag is on `master` and matches the root Mix project version,
    and records its commit for the later jobs;
 3. runs `mix raxol.release.check`;
 4. waits for approval: open the run under Actions, "Review deployments",
    tick `release`, approve;
 5. publishes `Raxol.Release.PackageCheck.public_packages/0` in dependency
-   order, skipping versions already on Hex. For a package new to Hex,
-   hex.pm holds the release for approval: the log prints
-   "Package staged for approval at <url>". Open it and approve with your
-   second factor; the job waits (`--wait`) and continues;
+   order, skipping versions already on Hex. hex.pm can hold a release for
+   approval, a package new to Hex or not (`raxol_journal` 2.9.0 was held,
+   with 2.8.0 already published): the log prints "Package staged for approval
+   at <url>", but GitHub shows a running job's log only after it ends, so
+   keep `https://hex.pm/dashboard/staged-releases` open while the train
+   publishes. Approve with your second factor; the job waits (`--wait`) and
+   continues. Unapproved, it waits out the step's 180-minute timeout and
+   fails;
 6. verifies every package through the public Hex API, waits for newly published
    HexDocs, and compiles a clean consumer against the released root package;
 7. creates the GitHub Release only after consumer verification succeeds; and
@@ -186,7 +202,7 @@ Validate or resume an existing tag manually (after it is pushed):
 
 ```bash
 gh workflow run release-hex.yml \
-  -f release_ref=v2.9.0 \
+  -f release_ref=v2.9.1 \
   -f publish=false
 
 # Set publish=true only to resume a failed train. Approval is still required.
@@ -194,7 +210,7 @@ gh workflow run release-hex.yml \
 
 "Re-run failed jobs" on the tag's own run resumes the train and keeps the
 `llms.txt` pull request and the GitHub Release. A dispatched resume runs neither:
-afterwards run `gh workflow run llms-sync.yml -f release_ref=v2.9.0` and create
+afterwards run `gh workflow run llms-sync.yml -f release_ref=v2.9.1` and create
 the Release by hand.
 
 ## Registry verification
@@ -202,7 +218,7 @@ the Release by hand.
 After approval and completion:
 
 ```bash
-mix hex.info raxol 2.9.0
+mix hex.info raxol 2.9.1
 ```
 
 ## Package-specific manual gates

@@ -154,7 +154,8 @@ jobs:
       # PackageCheck owns the public train and its topological order. A failed
       # run is resumable: versions already visible on Hex are skipped.
       #
-      # hex.pm holds the first release of a new package for approval. With
+      # hex.pm can hold any release for approval (the first release of a new
+      # package, and raxol_journal 2.9.0 with 2.8.0 already out). With
       # --wait the publish blocks until the owner approves it on hex.pm (or
       # exits non-zero if it is rejected or expires); without it, Hex exits 0
       # and the train would stop at the visibility check below.
